@@ -50,7 +50,6 @@ export default function RegisterPage() {
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteFirstName, setInviteFirstName] = useState("");
   const [inviteLastName, setInviteLastName] = useState("");
-  const [invitePhone, setInvitePhone] = useState("");
   const [inviteRelationship, setInviteRelationship] = useState("");
   const [inviting, setInviting] = useState(false);
   const [inviteSuccess, setInviteSuccess] = useState("");
@@ -107,7 +106,6 @@ export default function RegisterPage() {
           email: inviteEmail,
           first_name: inviteFirstName,
           last_name: inviteLastName,
-          phone: invitePhone,
           relationship: inviteRelationship,
         }),
       });
@@ -116,7 +114,6 @@ export default function RegisterPage() {
         setInviteEmail("");
         setInviteFirstName("");
         setInviteLastName("");
-        setInvitePhone("");
         setInviteRelationship("");
         await fetchFamily();
       } else {
@@ -297,25 +294,14 @@ export default function RegisterPage() {
                     required
                   />
                 </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="grid gap-2">
-                    <Label htmlFor="invite_phone">Phone</Label>
-                    <Input
-                      id="invite_phone"
-                      type="tel"
-                      value={invitePhone}
-                      onChange={(e) => setInvitePhone(e.target.value)}
-                    />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="invite_relationship">Relationship</Label>
-                    <Input
-                      id="invite_relationship"
-                      placeholder="e.g. Mother, Father, Guardian"
-                      value={inviteRelationship}
-                      onChange={(e) => setInviteRelationship(e.target.value)}
-                    />
-                  </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="invite_relationship">Relationship</Label>
+                  <Input
+                    id="invite_relationship"
+                    placeholder="e.g. Mother, Father, Guardian"
+                    value={inviteRelationship}
+                    onChange={(e) => setInviteRelationship(e.target.value)}
+                  />
                 </div>
               </div>
             </CardContent>

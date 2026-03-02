@@ -8,7 +8,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { email, first_name, last_name, phone, relationship } =
+  const { email, first_name, last_name, relationship } =
     await req.json();
 
   if (!email || typeof email !== "string") {
@@ -36,14 +36,12 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const cleanPhone = String(phone ?? "").replace(/\D/g, "");
-
   const newParent = await xano.parents.create({
     clerk_user_id: "",
     first_name: first_name ?? "",
     last_name: last_name ?? "",
     email,
-    phone: cleanPhone,
+    phone: "",
     relationship: relationship ?? "",
     invite_status: "pending",
   });
@@ -59,7 +57,6 @@ export async function POST(req: NextRequest) {
     const signUpParams = new URLSearchParams();
     if (first_name) signUpParams.set("firstName", first_name);
     if (last_name) signUpParams.set("lastName", last_name);
-    if (phone) signUpParams.set("phone", String(phone));
     if (email) signUpParams.set("email", email);
     const qs = signUpParams.toString();
     await clerk.invitations.createInvitation({

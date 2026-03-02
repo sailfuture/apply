@@ -19,7 +19,6 @@ function SignUpForm() {
       initialValues={{
         firstName: params.get("firstName") ?? undefined,
         lastName: params.get("lastName") ?? undefined,
-        phoneNumber: params.get("phone") ?? undefined,
         emailAddress: params.get("email") ?? undefined,
       }}
     />
