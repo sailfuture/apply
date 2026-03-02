@@ -2,7 +2,6 @@
 
 import * as React from "react";
 import { useUser } from "@clerk/nextjs";
-import { PhoneNumberResource } from "@clerk/types";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -35,9 +34,8 @@ export default function AddPhonePage() {
   const [successful, setSuccessful] = React.useState(false);
   const [error, setError] = React.useState("");
   const [submitting, setSubmitting] = React.useState(false);
-  const [phoneObj, setPhoneObj] = React.useState<
-    PhoneNumberResource | undefined
-  >();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [phoneObj, setPhoneObj] = React.useState<any>(undefined);
 
   const pageHeader = (
     <header className="flex h-16 shrink-0 items-center gap-2">
