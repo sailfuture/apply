@@ -2,7 +2,30 @@ import { NextRequest, NextResponse } from "next/server";
 import { Resend } from "resend";
 import { WelcomeInquiryEmail } from "@/lib/emails/welcome-inquiry";
 
+const ALLOWED_ORIGINS = [
+  "https://www.sailfuture.org",
+  "https://sailfuture.org",
+];
+
+function corsHeaders(origin: string | null) {
+  const headers: Record<string, string> = {
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+  };
+  if (origin && ALLOWED_ORIGINS.includes(origin)) {
+    headers["Access-Control-Allow-Origin"] = origin;
+  }
+  return headers;
+}
+
+export async function OPTIONS(req: NextRequest) {
+  const origin = req.headers.get("origin");
+  return new NextResponse(null, { status: 204, headers: corsHeaders(origin) });
+}
+
 export async function POST(req: NextRequest) {
+  const origin = req.headers.get("origin");
+  const cors = corsHeaders(origin);
   const resend = new Resend(process.env.RESEND_API_KEY);
   try {
     const body = await req.json();
@@ -24,7 +47,7 @@ export async function POST(req: NextRequest) {
     if (!primary_email || !primary_first_name) {
       return NextResponse.json(
         { error: "primary_email and primary_first_name are required" },
-        { status: 400 }
+        { status: 400, headers: cors }
       );
     }
 
@@ -32,7 +55,7 @@ export async function POST(req: NextRequest) {
     if (!xanoBaseUrl) {
       return NextResponse.json(
         { error: "Server configuration error" },
-        { status: 500 }
+        { status: 500, headers: cors }
       );
     }
 
@@ -59,7 +82,7 @@ export async function POST(req: NextRequest) {
       console.error("Xano error:", errText);
       return NextResponse.json(
         { error: "Failed to save inquiry" },
-        { status: 502 }
+        { status: 502, headers: cors }
       );
     }
 
@@ -88,19 +111,19 @@ export async function POST(req: NextRequest) {
           id: inquiry.id,
           emailError,
         },
-        { status: 201 }
+        { status: 201, headers: cors }
       );
     }
 
     return NextResponse.json(
       { message: "Inquiry received", id: inquiry.id, emailId: emailData?.id },
-      { status: 201 }
+      { status: 201, headers: cors }
     );
   } catch (err) {
     console.error("Inquiry error:", err);
     return NextResponse.json(
       { error: "Failed to process inquiry" },
-      { status: 500 }
+      { status: 500, headers: cors }
     );
   }
 }
