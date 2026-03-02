@@ -68,7 +68,7 @@ export async function POST(req: NextRequest) {
     const appUrl =
       process.env.NEXT_PUBLIC_APP_URL ?? "https://apply.sailfutureacademy.org";
 
-    const { error: emailError } = await resend.emails.send({
+    const { data: emailData, error: emailError } = await resend.emails.send({
       from: "SailFuture Academy Admissions <admissions@sailfutureacademy.org>",
       to: primary_email,
       subject: `Welcome to SailFuture Academy, ${primary_first_name}!`,
@@ -81,11 +81,19 @@ export async function POST(req: NextRequest) {
     });
 
     if (emailError) {
-      console.error("Resend error:", emailError);
+      console.error("Resend error:", JSON.stringify(emailError));
+      return NextResponse.json(
+        {
+          message: "Inquiry saved but email failed",
+          id: inquiry.id,
+          emailError,
+        },
+        { status: 201 }
+      );
     }
 
     return NextResponse.json(
-      { message: "Inquiry received", id: inquiry.id },
+      { message: "Inquiry received", id: inquiry.id, emailId: emailData?.id },
       { status: 201 }
     );
   } catch (err) {
