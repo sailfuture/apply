@@ -1,13 +1,12 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono, Public_Sans } from "next/font/google";
+import { Geist, Geist_Mono } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import "./globals.css";
-
-const publicSans = Public_Sans({ subsets: ["latin"], variable: "--font-sans" });
+import { cn } from "@/lib/utils";
 
 const geistSans = Geist({
-  variable: "--font-geist-sans",
+  variable: "--font-sans",
   subsets: ["latin"],
 });
 
@@ -28,7 +27,7 @@ export default function RootLayout({
 }>) {
   return (
     <ClerkProvider>
-      <html lang="en" className={publicSans.variable}>
+      <html lang="en" className={cn("font-sans", geistSans.variable)}>
         <body
           className={`${geistSans.variable} ${geistMono.variable} antialiased`}
         >

@@ -1,6 +1,5 @@
 import { auth, clerkClient, currentUser } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
-import Link from "next/link";
 import { xano, ensureParentRecord } from "@/lib/xano";
 import {
   Breadcrumb,
@@ -35,8 +34,6 @@ export default async function Page() {
     familyId = family.id;
   }
 
-  const hasPhone = user.phoneNumbers.length > 0;
-
   return (
     <>
       <header className="flex h-16 shrink-0 items-center gap-2">
@@ -56,24 +53,6 @@ export default async function Page() {
         </div>
       </header>
       <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
-        {!hasPhone && (
-          <Link
-            href="/account/add-phone"
-            className="flex items-center justify-between rounded-lg border border-yellow-200 bg-yellow-50 px-4 py-3 dark:border-yellow-900/50 dark:bg-yellow-900/20"
-          >
-            <div>
-              <p className="font-medium text-yellow-800 dark:text-yellow-200">
-                Add your phone number
-              </p>
-              <p className="text-sm text-yellow-700 dark:text-yellow-300">
-                Add a phone number to your account so we can reach you.
-              </p>
-            </div>
-            <span className="text-sm font-medium text-yellow-800 dark:text-yellow-200">
-              Add now &rarr;
-            </span>
-          </Link>
-        )}
         <div className="grid auto-rows-min gap-4 md:grid-cols-3">
           <div className="bg-muted/50 aspect-video rounded-xl" />
           <div className="bg-muted/50 aspect-video rounded-xl" />

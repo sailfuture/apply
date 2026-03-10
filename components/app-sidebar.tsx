@@ -18,13 +18,12 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import {
   Home01Icon,
   UserMultipleIcon,
-  StudentIcon,
   File01Icon,
   Settings05Icon,
   ChartRingIcon,
   SentIcon,
-  AnchorIcon,
 } from "@hugeicons/core-free-icons"
+import Image from "next/image"
 
 const data = {
   navMain: [
@@ -40,37 +39,22 @@ const data = {
       icon: <HugeiconsIcon icon={UserMultipleIcon} strokeWidth={2} />,
       items: [
         {
-          title: "Family Profile",
+          title: "Members & Students",
           url: "/family",
-        },
-        {
-          title: "Parents & Guardians",
-          url: "/family",
-        },
-      ],
-    },
-    {
-      title: "Students",
-      url: "/students",
-      icon: <HugeiconsIcon icon={StudentIcon} strokeWidth={2} />,
-      items: [
-        {
-          title: "Student Profiles",
-          url: "/students",
         },
       ],
     },
     {
       title: "Application",
-      url: "#",
+      url: "/apply",
       icon: <HugeiconsIcon icon={File01Icon} strokeWidth={2} />,
       items: [
         {
-          title: "Status",
-          url: "#",
+          title: "School Years",
+          url: "/apply",
         },
         {
-          title: "Documents",
+          title: "Status",
           url: "#",
         },
       ],
@@ -113,11 +97,13 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" asChild>
               <a href="/">
-                <div className="bg-sidebar-primary text-sidebar-primary-foreground flex aspect-square size-8 items-center justify-center rounded-lg">
-                  <HugeiconsIcon
-                    icon={AnchorIcon}
-                    strokeWidth={2}
-                    className="size-4"
+                <div className="flex aspect-square size-8 items-center justify-center overflow-hidden rounded-full">
+                  <Image
+                    src="/logo.svg"
+                    alt="SailFuture Academy"
+                    width={32}
+                    height={32}
+                    className="size-8 object-cover"
                   />
                 </div>
                 <div className="grid flex-1 text-left text-sm leading-tight">
