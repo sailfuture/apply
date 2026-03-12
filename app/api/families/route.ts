@@ -57,6 +57,7 @@ export async function POST(req: NextRequest) {
     isAccepted: false,
     registration_parents_id: [parent.id],
     registration_students_id: [],
+    registration_fee_waiver_id: null,
   });
 
   const clerk = await clerkClient();
