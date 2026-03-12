@@ -929,7 +929,7 @@ export default function ScholarshipPage() {
               className={`gap-0 py-0 transition-colors ${
                 scholarshipChoice === "none"
                   ? "border-primary ring-2 ring-primary/20"
-                  : scholarshipChoice && scholarshipChoice !== "none"
+                  : isChoiceLocked
                     ? "opacity-50 pointer-events-none"
                     : "cursor-pointer hover:border-primary"
               }`}
@@ -962,7 +962,7 @@ export default function ScholarshipPage() {
               className={`gap-0 py-0 transition-colors ${
                 scholarshipChoice === "snap"
                   ? "border-primary ring-2 ring-primary/20"
-                  : scholarshipChoice && scholarshipChoice !== "snap"
+                  : isChoiceLocked
                     ? "opacity-50 pointer-events-none"
                     : "cursor-pointer hover:border-primary"
               }`}
@@ -995,7 +995,7 @@ export default function ScholarshipPage() {
               className={`gap-0 py-0 transition-colors ${
                 scholarshipChoice === "full"
                   ? "border-primary ring-2 ring-primary/20"
-                  : scholarshipChoice && scholarshipChoice !== "full"
+                  : isChoiceLocked
                     ? "opacity-50 pointer-events-none"
                     : "cursor-pointer hover:border-primary"
               }`}
