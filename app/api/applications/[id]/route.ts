@@ -68,3 +68,40 @@ export async function PATCH(
     );
   }
 }
+
+export async function DELETE(
+  _req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { userId } = await auth();
+  if (!userId) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const user = await currentUser();
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const familyId = user.publicMetadata.registration_families_id as
+    | number
+    | undefined;
+
+  const { id } = await params;
+
+  try {
+    const existing = await xano.applications.getById(Number(id));
+    if (!existing || existing.registration_families_id !== familyId) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+
+    await xano.applications.delete(Number(id));
+    return NextResponse.json({ success: true }, { status: 200 });
+  } catch (err) {
+    console.error("Failed to delete application:", err);
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Delete failed" },
+      { status: 500 }
+    );
+  }
+}

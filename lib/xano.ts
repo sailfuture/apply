@@ -133,7 +133,6 @@ export interface XanoScholarship {
   registration_school_years_id: number;
   household_adults: number;
   household_children: number;
-  household_contributing_adult: number;
   no_contributing_member: boolean;
   business_income_monthly: number;
   capital_gains_monthly: number;
@@ -158,10 +157,7 @@ export interface XanoScholarship {
   scholarship_advocacy_letter: string;
   signature: Record<string, unknown> | null;
   termination_letter: Record<string, unknown> | null;
-  registration_opportunity_scholarship_benefits_id: number[];
-  registration_opportunity_scholarship_contributing_members_id: number[];
-  registration_opportunity_scholarship_home_id: number[];
-  registration_opportunity_scholarship_vehicles_id: number[];
+  last_edited: number | null;
 }
 
 export interface XanoScholarshipBenefit {
@@ -185,9 +181,8 @@ export interface XanoScholarshipContributingMember {
   state: string;
   zipcode: string;
   estimated_annual_income: number;
-  income_verification_type: string;
-  is_w2: boolean;
-  is_pay_stubs: boolean;
+  isW2: boolean;
+  isPayStubs: boolean;
   w2: Record<string, unknown> | null;
   paystub_1: Record<string, unknown> | null;
   paystub_2: Record<string, unknown> | null;
@@ -514,6 +509,13 @@ export const xano = {
       return all.find(
         (a) => a.registration_students_id === studentId && a.registration_school_years_id === schoolYearId
       ) ?? null;
+    },
+
+    async delete(id: number): Promise<void> {
+      const res = await fetch(`${getBaseUrl()}/registration_application/${id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
     },
   },
 

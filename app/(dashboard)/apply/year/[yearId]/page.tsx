@@ -152,7 +152,7 @@ export default function YearDetailPage() {
   const [scholarshipExists, setScholarshipExists] = useState(false);
   const [loading, setLoading] = useState(true);
   const [familyId, setFamilyId] = useState<number | null>(null);
-  const [isAccepted, setIsAccepted] = useState(false);
+
 
   const [signingLoading, setSigningLoading] = useState<string | null>(null);
   const [resetConfirm, setResetConfirm] = useState<"liability_waiver" | "enrollment_agreement" | null>(null);
@@ -175,7 +175,6 @@ export default function YearDetailPage() {
         if (fam?.id) {
           fId = fam.id;
           setFamilyId(fId);
-          setIsAccepted(fam.isAccepted ?? false);
           fetchedParents = fam.parents ?? [];
           setParents(fetchedParents);
         }
@@ -422,7 +421,6 @@ export default function YearDetailPage() {
     );
   }
 
-  const appDeadlinePassed = isDeadlinePassed(schoolYear.application_deadline);
   const scholarshipDeadlinePassed = isDeadlinePassed(schoolYear.scholarship_deadline);
 
   const studentsWithApps = applications
@@ -508,8 +506,8 @@ export default function YearDetailPage() {
     },
     {
       number: 3,
-      title: "Scholarships",
-      description: "Complete the family opportunity scholarship application",
+      title: "Financial Aid",
+      description: "Opportunity scholarship and financial aid documents",
       status: getStatus(scholarshipComplete, false),
       detail: scholarshipComplete
         ? "Submitted"
@@ -577,222 +575,120 @@ export default function YearDetailPage() {
           </p>
         </div>
 
-        {/* Status Banner */}
-        {!isAccepted && (
-          <Card className="border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30 gap-0 py-0">
-            <CardContent className="py-4 flex items-start gap-3">
-              <svg
-                className="size-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5"
-                viewBox="0 0 20 20"
-                fill="currentColor"
-              >
-                <path
-                  fillRule="evenodd"
-                  d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a.75.75 0 000 1.5h.253a.25.25 0 01.244.304l-.459 2.066A1.75 1.75 0 0010.747 15H11a.75.75 0 000-1.5h-.253a.25.25 0 01-.244-.304l.459-2.066A1.75 1.75 0 009.253 9H9z"
-                  clipRule="evenodd"
-                />
-              </svg>
-              <div>
-                <p className="text-sm font-medium text-amber-800 dark:text-amber-300">
-                  Pending Acceptance
-                </p>
-                <p className="text-xs text-amber-700 dark:text-amber-400 mt-0.5">
-                  Complete and submit your application below. You will be notified once an acceptance determination has been made.
-                </p>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {isAccepted && (
-          <Card className="border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-950/30 gap-0 py-0">
-            <CardContent className="py-4 flex items-start gap-3">
-              <svg
-                className="size-5 text-green-600 dark:text-green-400 shrink-0 mt-0.5"
-                viewBox="0 0 20 20"
-                fill="currentColor"
-              >
-                <path
-                  fillRule="evenodd"
-                  d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z"
-                  clipRule="evenodd"
-                />
-              </svg>
-              <div>
-                <p className="text-sm font-medium text-green-800 dark:text-green-300">
-                  Accepted
-                </p>
-                <p className="text-xs text-green-700 dark:text-green-400 mt-0.5">
-                  Congratulations! Your family has been accepted for {schoolYear.year_name}. Review your application details below.
-                </p>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Application Checklist */}
-        <div>
-          <h2 className="text-lg font-semibold mb-1">
-            {isAccepted ? "Application Details" : "Application Checklist"}
-          </h2>
-          <p className="text-muted-foreground text-sm mb-4">
-            {isAccepted
-              ? `Review your completed application for ${schoolYear.year_name}.`
-              : `Complete each step to finish your application for ${schoolYear.year_name}.`}
+        <div className="max-w-3xl space-y-2">
+          <p className="text-sm text-muted-foreground">
+            Welcome to the SailFuture Academy enrollment application process! We are delighted that you are considering our school for your student&apos;s education.
           </p>
-          <div className="grid gap-3">
-            {steps.map((step) => {
-              if (step.signingType) {
-                const isSigning = signingLoading === step.signingType;
-                const isSigned = step.status === "complete";
-                const isSent = step.status === "in_progress";
+          <p className="text-sm text-muted-foreground">
+            Please keep in mind that we only open 30 spots per academic year, and acceptance is first come, first served.
+          </p>
+          <p className="text-sm text-muted-foreground">
+            If you require assistance with your application, please contact us at{" "}
+            <a href="mailto:tward@sailfuture.org" className="text-primary underline underline-offset-2">tward@sailfuture.org</a>{" "}
+            or call{" "}
+            <a href="tel:+17279001436" className="text-primary underline underline-offset-2">(727) 900-1436</a>.
+          </p>
+        </div>
 
-                return (
-                  <div
-                    key={step.number}
-                    className="flex w-full items-center gap-4 rounded-md border px-4 py-4"
-                  >
+        {/* Section Cards */}
+        <div className="grid gap-4 sm:grid-cols-2">
+          {steps.filter(s => !s.signingType).map((step) => (
+            <Card
+              key={step.number}
+              className="gap-0 py-0 cursor-pointer transition-colors hover:border-primary/50"
+              onClick={() => step.href && router.push(step.href)}
+            >
+              <CardContent className="py-5">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-start gap-3">
                     <StepNumber number={step.number} status={step.status} />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium">{step.title}</p>
-                      <p className="text-muted-foreground text-xs mt-0.5 truncate">
-                        {step.description}
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-3 shrink-0">
-                      <span
-                        className={`text-xs font-medium ${
-                          step.status === "complete"
-                            ? "text-green-600 dark:text-green-400"
-                            : step.status === "in_progress"
-                              ? "text-amber-600 dark:text-amber-400"
-                              : "text-muted-foreground"
-                        }`}
-                      >
-                        {step.detail}
-                      </span>
-                      {isSigned ? (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => viewDocument(step.signingType!)}
-                        >
-                          View Document
-                        </Button>
-                      ) : (
-                        <>
-                          {isSent && (
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              disabled={isSigning}
-                              onClick={() => setResetConfirm(step.signingType!)}
-                            >
-                              Start Over
-                            </Button>
-                          )}
-                          <Button
-                            size="sm"
-                            disabled={isSigning || applications.length === 0}
-                            onClick={() => handleSign(step.signingType!)}
-                          >
-                            {isSent
-                              ? "Resume Signing"
-                              : "Sign Document"}
-                          </Button>
-                        </>
-                      )}
+                    <div>
+                      <p className="font-semibold">{step.title}</p>
+                      <p className="text-muted-foreground text-xs mt-1">{step.description}</p>
                     </div>
                   </div>
-                );
-              }
+                  <svg className="size-5 shrink-0 text-muted-foreground mt-0.5" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clipRule="evenodd" />
+                  </svg>
+                </div>
+                <div className="mt-3 ml-11">
+                  <span
+                    className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                      step.status === "complete"
+                        ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
+                        : step.status === "in_progress"
+                          ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
+                          : "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400"
+                    }`}
+                  >
+                    {step.detail}
+                  </span>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
 
-              return (
-                <Button
-                  key={step.number}
-                  variant="outline"
-                  className="h-auto w-full justify-start gap-4 px-4 py-4 text-left"
-                  onClick={() => step.href && router.push(step.href)}
-                >
-                  <StepNumber number={step.number} status={step.status} />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium">{step.title}</p>
-                    <p className="text-muted-foreground text-xs mt-0.5 font-normal truncate">
-                      {step.description}
-                    </p>
+          {steps.filter(s => s.signingType).map((step) => {
+            const isSigned = step.status === "complete";
+            const isSent = step.status === "in_progress";
+            const isSigning = signingLoading === step.signingType;
+
+            return (
+              <Card
+                key={step.number}
+                className="gap-0 py-0 cursor-pointer transition-colors hover:border-primary/50"
+                onClick={() => {
+                  if (isSigned) {
+                    viewDocument(step.signingType!);
+                  } else {
+                    handleSign(step.signingType!);
+                  }
+                }}
+              >
+                <CardContent className="py-5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-start gap-3">
+                      <StepNumber number={step.number} status={step.status} />
+                      <div>
+                        <p className="font-semibold">{step.title}</p>
+                        <p className="text-muted-foreground text-xs mt-1">{step.description}</p>
+                      </div>
+                    </div>
+                    <svg className="size-5 shrink-0 text-muted-foreground mt-0.5" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clipRule="evenodd" />
+                    </svg>
                   </div>
-                  <div className="flex items-center gap-3 shrink-0">
+                  <div className="mt-3 ml-11 flex items-center gap-2">
                     <span
-                      className={`text-xs font-medium ${
+                      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${
                         step.status === "complete"
-                          ? "text-green-600 dark:text-green-400"
+                          ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
                           : step.status === "in_progress"
-                            ? "text-blue-600 dark:text-blue-400"
-                            : "text-muted-foreground"
+                            ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
+                            : "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400"
                       }`}
                     >
                       {step.detail}
                     </span>
-                    <svg
-                      className="size-4 text-muted-foreground"
-                      viewBox="0 0 20 20"
-                      fill="currentColor"
-                    >
-                      <path
-                        fillRule="evenodd"
-                        d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z"
-                        clipRule="evenodd"
-                      />
-                    </svg>
+                    {isSent && !isSigning && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-6 text-xs px-2"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setResetConfirm(step.signingType!);
+                        }}
+                      >
+                        Start Over
+                      </Button>
+                    )}
                   </div>
-                </Button>
-              );
-            })}
-          </div>
+                </CardContent>
+              </Card>
+            );
+          })}
         </div>
-
-        {/* Deadlines */}
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Card>
-            <CardContent className="pt-6">
-              <p className="text-xs text-muted-foreground uppercase tracking-wider">
-                Application Deadline
-              </p>
-              <p
-                className={`text-sm font-medium mt-1 ${appDeadlinePassed ? "text-red-600 dark:text-red-400" : ""}`}
-              >
-                {schoolYear.application_deadline
-                  ? formatDate(schoolYear.application_deadline)
-                  : "No deadline"}
-                {appDeadlinePassed && (
-                  <span className="ml-1.5 text-[10px] font-normal uppercase">
-                    Closed
-                  </span>
-                )}
-              </p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-6">
-              <p className="text-xs text-muted-foreground uppercase tracking-wider">
-                Scholarship Deadline
-              </p>
-              <p
-                className={`text-sm font-medium mt-1 ${scholarshipDeadlinePassed ? "text-red-600 dark:text-red-400" : ""}`}
-              >
-                {schoolYear.scholarship_deadline
-                  ? formatDate(schoolYear.scholarship_deadline)
-                  : "No deadline"}
-                {scholarshipDeadlinePassed && (
-                  <span className="ml-1.5 text-[10px] font-normal uppercase">
-                    Closed
-                  </span>
-                )}
-              </p>
-            </CardContent>
-          </Card>
-        </div>
-
       </div>
 
         <Dialog open={!!signingSession} onOpenChange={(open) => { if (!open) handleSigningClose(); }}>

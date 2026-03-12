@@ -55,7 +55,6 @@ export async function POST(req: NextRequest) {
     registration_school_years_id,
     household_adults: 0,
     household_children: 0,
-    household_contributing_adult: 0,
     no_contributing_member: false,
     business_income_monthly: 0,
     capital_gains_monthly: 0,
@@ -79,10 +78,6 @@ export async function POST(req: NextRequest) {
     family_contribution_per_month: 0,
     scholarship_advocacy_letter: "",
     signature: null,
-    registration_opportunity_scholarship_benefits_id: [],
-    registration_opportunity_scholarship_contributing_members_id: [],
-    registration_opportunity_scholarship_home_id: [],
-    registration_opportunity_scholarship_vehicles_id: [],
   });
 
   return NextResponse.json(scholarship, { status: 201 });

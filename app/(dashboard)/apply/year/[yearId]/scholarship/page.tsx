@@ -57,7 +57,8 @@ import {
   EmptyDescription,
   EmptyContent,
 } from "@/components/ui/empty";
-import { toast } from "sonner";
+
+import { AnimatePresence, motion } from "framer-motion";
 import SignatureCanvas from "react-signature-canvas";
 import {
   FileUpload,
@@ -81,7 +82,6 @@ interface Scholarship {
   registration_school_years_id: number;
   household_adults: number;
   household_children: number;
-  household_contributing_adult: number;
   no_contributing_member: boolean;
   business_income_monthly: number;
   capital_gains_monthly: number;
@@ -102,8 +102,21 @@ interface Scholarship {
   government_benefits: boolean;
   family_contribution_per_month: number;
   scholarship_advocacy_letter: string;
+  snap_benefits: Record<string, unknown> | null;
   signature: Record<string, unknown> | null;
   termination_letter: Record<string, unknown> | null;
+  last_edited: number | null;
+  isNotParticipating: boolean;
+  isSNAPBenefits: boolean;
+  isOpportunityScholarship: boolean;
+}
+
+interface FullScholarshipResponse {
+  opportunity_scholarship: Scholarship;
+  homes: Home[];
+  vehicles: Vehicle[];
+  contributing_members: ContributingMember[];
+  benefits: Benefit[];
 }
 
 interface ContributingMember {
@@ -117,9 +130,8 @@ interface ContributingMember {
   state: string;
   zipcode: string;
   estimated_annual_income: number;
-  income_verification_type: string;
-  is_w2: boolean;
-  is_pay_stubs: boolean;
+  isW2: boolean;
+  isPayStubs: boolean;
   w2: Record<string, unknown> | null;
   paystub_1: Record<string, unknown> | null;
   paystub_2: Record<string, unknown> | null;
@@ -161,6 +173,17 @@ function formatCurrencyDisplay(value: number): string {
     minimumFractionDigits: 0,
     maximumFractionDigits: 0,
   }).format(value);
+}
+
+function formatRelativeTime(date: Date): string {
+  const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (seconds < 5) return "just now";
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return date.toLocaleDateString();
 }
 
 function LocalInput({
@@ -266,6 +289,9 @@ export default function ScholarshipPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [scholarshipChoice, setScholarshipChoice] = useState<"none" | "snap" | "full" | null>(null);
+  const [notParticipatingConfirm, setNotParticipatingConfirm] = useState(false);
+  const [snapModalOpen, setSnapModalOpen] = useState(false);
+  const [resetChoiceConfirm, setResetChoiceConfirm] = useState(false);
 
   const [members, setMembers] = useState<ContributingMember[]>([]);
   const [homes, setHomes] = useState<Home[]>([]);
@@ -274,7 +300,6 @@ export default function ScholarshipPage() {
 
   const [householdAdults, setHouseholdAdults] = useState(0);
   const [householdChildren, setHouseholdChildren] = useState(0);
-  const [householdContributing, setHouseholdContributing] = useState(0);
   const [noContributing, setNoContributing] = useState(false);
 
   const [businessIncome, setBusinessIncome] = useState(0);
@@ -302,9 +327,15 @@ export default function ScholarshipPage() {
   const [signatureMeta, setSignatureMeta] = useState<Record<string, unknown> | null>(null);
   const [signatureLocalUrl, setSignatureLocalUrl] = useState<string | null>(null);
   const [signatureUploading, setSignatureUploading] = useState(false);
+  const [snapBenefitsFile, setSnapBenefitsFile] = useState<Record<string, unknown> | null>(null);
   const [terminationLetter, setTerminationLetter] = useState<Record<string, unknown> | null>(null);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
+  const [, setTick] = useState(0);
   const savedSnapshotRef = useRef<string>("");
+  const initialSnapshotRef = useRef<string>("");
+  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const savingRef = useRef(false);
+  const handleSaveRef = useRef<() => Promise<void>>();
 
   const [pendingDelete, setPendingDelete] = useState<{
     type: "member" | "benefit" | "home" | "vehicle";
@@ -317,7 +348,7 @@ export default function ScholarshipPage() {
 
   function buildSnapshot() {
     return JSON.stringify({
-      householdAdults, householdChildren, householdContributing, noContributing,
+      householdAdults, householdChildren, noContributing,
       businessIncome, capitalGains, childSupport, alimony, trustsIncome,
       otherIncome, describeOtherIncome, assetsChecking, assetsSavings,
       assetsRetirement, assetsStocks, assetsTrusts, assetsBusiness,
@@ -353,12 +384,69 @@ export default function ScholarshipPage() {
       }
 
       if (scholarshipRes.ok) {
-        const data = await scholarshipRes.json();
+        const data: Scholarship | null = await scholarshipRes.json();
         if (data) {
-          setScholarship(data);
-          populateForm(data);
-          setScholarshipChoice("full");
-          await loadChildData(data.id);
+          const fullRes = await fetch(`/api/scholarship/${data.id}`);
+          if (fullRes.ok) {
+            const resp: FullScholarshipResponse = await fullRes.json();
+            const s = resp.opportunity_scholarship;
+            setScholarship(s);
+            populateForm(s);
+            if (s.isNotParticipating) {
+              setScholarshipChoice("none");
+            } else if (s.isSNAPBenefits) {
+              setScholarshipChoice("snap");
+            } else if (s.isOpportunityScholarship) {
+              setScholarshipChoice("full");
+            }
+            const loadedMembers = resp.contributing_members ?? [];
+            const loadedHomes = resp.homes ?? [];
+            const loadedVehicles = resp.vehicles ?? [];
+            const loadedBenefits = resp.benefits ?? [];
+            setMembers(loadedMembers);
+            setHomes(loadedHomes);
+            setVehicles(loadedVehicles);
+            setBenefits(loadedBenefits);
+            initialSnapshotRef.current = JSON.stringify({
+              householdAdults: s.household_adults ?? 0,
+              householdChildren: s.household_children ?? 0,
+              noContributing: s.no_contributing_member ?? false,
+              businessIncome: s.business_income_monthly ?? 0,
+              capitalGains: s.capital_gains_monthly ?? 0,
+              childSupport: s.child_support_monthly ?? 0,
+              alimony: s.alimony_monthly ?? 0,
+              trustsIncome: s.trusts_monthly ?? 0,
+              otherIncome: s.other_income_monthly ?? 0,
+              describeOtherIncome: s.describe_other_income ?? "",
+              assetsChecking: s.assets_checking ?? 0,
+              assetsSavings: s.assets_savings ?? 0,
+              assetsRetirement: s.assets_retirement_savings ?? 0,
+              assetsStocks: s.assets_stocks_bonds_securities ?? 0,
+              assetsTrusts: s.assets_trusts_inheritance ?? 0,
+              assetsBusiness: s.assets_business ?? 0,
+              debtsCreditCards: s.debts_credit_cards ?? 0,
+              debtsStudentLoans: s.debts_student_loans ?? 0,
+              debtsPersonalLoans: s.debts_personal_loans ?? 0,
+              govBenefits: s.government_benefits ?? false,
+              familyContribution: s.family_contribution_per_month ?? 0,
+              advocacyLetter: s.scholarship_advocacy_letter ?? "",
+              signatureMeta: (() => {
+                if (!s.signature) return null;
+                let sig: Record<string, unknown>;
+                if (typeof s.signature === "string") {
+                  try { sig = JSON.parse(s.signature); } catch { sig = {}; }
+                } else {
+                  sig = s.signature as Record<string, unknown>;
+                }
+                return Object.keys(sig).length > 0 ? sig : null;
+              })(),
+              terminationLetter: s.termination_letter ?? null,
+              members: loadedMembers,
+              homes: loadedHomes,
+              vehicles: loadedVehicles,
+              benefits: loadedBenefits,
+            });
+          }
         }
       }
     } catch (err) {
@@ -369,29 +457,29 @@ export default function ScholarshipPage() {
   }, [yearId]);
 
   function populateForm(s: Scholarship) {
-    setHouseholdAdults(s.household_adults);
-    setHouseholdChildren(s.household_children);
-    setHouseholdContributing(s.household_contributing_adult);
-    setNoContributing(s.no_contributing_member);
-    setBusinessIncome(s.business_income_monthly);
-    setCapitalGains(s.capital_gains_monthly);
-    setChildSupport(s.child_support_monthly);
-    setAlimony(s.alimony_monthly);
-    setTrustsIncome(s.trusts_monthly);
-    setOtherIncome(s.other_income_monthly);
-    setDescribeOtherIncome(s.describe_other_income);
-    setAssetsChecking(s.assets_checking);
-    setAssetsSavings(s.assets_savings);
-    setAssetsRetirement(s.assets_retirement_savings);
-    setAssetsStocks(s.assets_stocks_bonds_securities);
-    setAssetsTrusts(s.assets_trusts_inheritance);
-    setAssetsBusiness(s.assets_business);
-    setDebtsCreditCards(s.debts_credit_cards);
-    setDebtsStudentLoans(s.debts_student_loans);
-    setDebtsPersonalLoans(s.debts_personal_loans);
-    setGovBenefits(s.government_benefits);
-    setFamilyContribution(s.family_contribution_per_month);
-    setAdvocacyLetter(s.scholarship_advocacy_letter);
+    setHouseholdAdults(s.household_adults ?? 0);
+    setHouseholdChildren(s.household_children ?? 0);
+    setNoContributing(s.no_contributing_member ?? false);
+    setBusinessIncome(s.business_income_monthly ?? 0);
+    setCapitalGains(s.capital_gains_monthly ?? 0);
+    setChildSupport(s.child_support_monthly ?? 0);
+    setAlimony(s.alimony_monthly ?? 0);
+    setTrustsIncome(s.trusts_monthly ?? 0);
+    setOtherIncome(s.other_income_monthly ?? 0);
+    setDescribeOtherIncome(s.describe_other_income ?? "");
+    setAssetsChecking(s.assets_checking ?? 0);
+    setAssetsSavings(s.assets_savings ?? 0);
+    setAssetsRetirement(s.assets_retirement_savings ?? 0);
+    setAssetsStocks(s.assets_stocks_bonds_securities ?? 0);
+    setAssetsTrusts(s.assets_trusts_inheritance ?? 0);
+    setAssetsBusiness(s.assets_business ?? 0);
+    setDebtsCreditCards(s.debts_credit_cards ?? 0);
+    setDebtsStudentLoans(s.debts_student_loans ?? 0);
+    setDebtsPersonalLoans(s.debts_personal_loans ?? 0);
+    setGovBenefits(s.government_benefits ?? false);
+    setFamilyContribution(s.family_contribution_per_month ?? 0);
+    setAdvocacyLetter(s.scholarship_advocacy_letter ?? "");
+    if (s.last_edited) setLastSaved(new Date(s.last_edited));
     if (s.signature) {
       let sig: Record<string, unknown>;
       if (typeof s.signature === "string") {
@@ -409,22 +497,12 @@ export default function ScholarshipPage() {
         }
       }
     }
+    if (s.snap_benefits) {
+      setSnapBenefitsFile(s.snap_benefits as Record<string, unknown>);
+    }
     if (s.termination_letter) {
       setTerminationLetter(s.termination_letter as Record<string, unknown>);
     }
-  }
-
-  async function loadChildData(scholarshipId: number) {
-    const [membersRes, homesRes, vehiclesRes, benefitsRes] = await Promise.all([
-      fetch(`/api/scholarship/${scholarshipId}/contributing-members`),
-      fetch(`/api/scholarship/${scholarshipId}/homes`),
-      fetch(`/api/scholarship/${scholarshipId}/vehicles`),
-      fetch(`/api/scholarship/${scholarshipId}/benefits`),
-    ]);
-    if (membersRes.ok) setMembers(await membersRes.json());
-    if (homesRes.ok) setHomes(await homesRes.json());
-    if (vehiclesRes.ok) setVehicles(await vehiclesRes.json());
-    if (benefitsRes.ok) setBenefits(await benefitsRes.json());
   }
 
   useEffect(() => {
@@ -432,47 +510,53 @@ export default function ScholarshipPage() {
   }, [loadData]);
 
   useEffect(() => {
-    if (!loading && savedSnapshotRef.current === "") {
-      setTimeout(() => captureSnapshot(), 0);
+    if (!loading && initialSnapshotRef.current && savedSnapshotRef.current === "") {
+      savedSnapshotRef.current = initialSnapshotRef.current;
     }
   }, [loading]);
 
   useEffect(() => {
-    if (scholarshipChoice !== "full" || sigRestoredRef.current) return;
-    if (!signatureLocalUrl) return;
+    if (!lastSaved) return;
+    const id = setInterval(() => setTick((t) => t + 1), 15000);
+    return () => clearInterval(id);
+  }, [lastSaved]);
 
-    let cancelled = false;
-    const timer = setTimeout(async () => {
-      if (!sigCanvasRef.current) return;
+  const sigDataUrlRef = useRef<string | null>(null);
 
-      let urlToLoad = signatureLocalUrl;
+  async function restoreSignatureToCanvas() {
+    if (!sigCanvasRef.current || sigRestoredRef.current) return;
+    const url = sigDataUrlRef.current;
+    if (!url) return;
 
-      if (!signatureLocalUrl.startsWith("data:")) {
-        try {
-          const res = await fetch(signatureLocalUrl);
-          const blob = await res.blob();
-          urlToLoad = await new Promise<string>((resolve) => {
-            const reader = new FileReader();
-            reader.onloadend = () => resolve(reader.result as string);
-            reader.readAsDataURL(blob);
-          });
-        } catch {
-          return;
-        }
+    let dataUrl = url;
+    if (!url.startsWith("data:")) {
+      try {
+        const res = await fetch(url);
+        const blob = await res.blob();
+        dataUrl = await new Promise<string>((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result as string);
+          reader.readAsDataURL(blob);
+        });
+      } catch {
+        return;
       }
+    }
 
-      if (!cancelled && sigCanvasRef.current) {
-        sigCanvasRef.current.fromDataURL(urlToLoad);
-        sigRestoredRef.current = true;
-      }
-    }, 200);
+    sigCanvasRef.current.fromDataURL(dataUrl);
+    sigRestoredRef.current = true;
+  }
 
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
+  useEffect(() => {
+    sigDataUrlRef.current = signatureLocalUrl;
+  }, [signatureLocalUrl]);
+
+  useEffect(() => {
+    if (scholarshipChoice !== "full") return;
+    const timer = setTimeout(() => restoreSignatureToCanvas(), 300);
+    return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scholarshipChoice, signatureLocalUrl]);
+  }, [scholarshipChoice]);
 
   async function ensureScholarship(): Promise<number | null> {
     if (scholarship) return scholarship.id;
@@ -494,6 +578,7 @@ export default function ScholarshipPage() {
 
   async function handleSave() {
     setSaving(true);
+    savingRef.current = true;
     try {
       const sid = await ensureScholarship();
       if (!sid) return;
@@ -504,7 +589,6 @@ export default function ScholarshipPage() {
         body: JSON.stringify({
           household_adults: householdAdults,
           household_children: householdChildren,
-          household_contributing_adult: householdContributing,
           no_contributing_member: noContributing,
           business_income_monthly: businessIncome,
           capital_gains_monthly: capitalGains,
@@ -525,8 +609,10 @@ export default function ScholarshipPage() {
           government_benefits: govBenefits,
           family_contribution_per_month: familyContribution,
           scholarship_advocacy_letter: advocacyLetter,
+          snap_benefits: snapBenefitsFile,
           signature: signatureMeta,
           termination_letter: terminationLetter,
+          last_edited: Date.now(),
         }),
       });
 
@@ -544,9 +630,8 @@ export default function ScholarshipPage() {
             state: m.state,
             zipcode: m.zipcode,
             estimated_annual_income: m.estimated_annual_income,
-            income_verification_type: m.income_verification_type,
-            is_w2: m.is_w2,
-            is_pay_stubs: m.is_pay_stubs,
+            isW2: m.isW2,
+            isPayStubs: m.isPayStubs,
             w2: m.w2,
             paystub_1: m.paystub_1,
             paystub_2: m.paystub_2,
@@ -608,18 +693,40 @@ export default function ScholarshipPage() {
         ...benefitPatches,
       ]);
 
-      if (scholarshipRes.ok) setScholarship(await scholarshipRes.json());
-
-      setLastSaved(new Date());
+      if (scholarshipRes.ok) {
+        const saved: Scholarship = await scholarshipRes.json();
+        setScholarship(saved);
+        setLastSaved(saved.last_edited ? new Date(saved.last_edited) : new Date());
+      } else {
+        setLastSaved(new Date());
+      }
       captureSnapshot();
-      toast.success("Scholarship application saved");
     } catch (err) {
       console.error("Save failed:", err);
-      toast.error("Failed to save. Please try again.");
     } finally {
       setSaving(false);
+      savingRef.current = false;
     }
   }
+
+  handleSaveRef.current = handleSave;
+
+  const currentSnapshot = buildSnapshot();
+
+  useEffect(() => {
+    if (savedSnapshotRef.current === "" || savingRef.current) return;
+    if (currentSnapshot === savedSnapshotRef.current) return;
+
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    autoSaveTimerRef.current = setTimeout(() => {
+      if (!savingRef.current) handleSaveRef.current?.();
+    }, 4000);
+
+    return () => {
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentSnapshot]);
 
   function patchMemberLocal(id: number, data: Partial<ContributingMember>) {
     setMembers((prev) =>
@@ -764,7 +871,40 @@ export default function ScholarshipPage() {
     );
   }
 
-  if (!scholarshipChoice) {
+  const isChoiceLocked = scholarshipChoice === "none" || scholarshipChoice === "snap" || scholarshipChoice === "full";
+
+  async function saveScholarshipChoice(choice: "none" | "snap" | "full") {
+    const sid = await ensureScholarship();
+    if (!sid) return;
+    await fetch(`/api/scholarship/${sid}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        isNotParticipating: choice === "none",
+        isSNAPBenefits: choice === "snap",
+        isOpportunityScholarship: choice === "full",
+        last_edited: Date.now(),
+      }),
+    });
+  }
+
+  async function resetScholarshipChoice() {
+    setScholarshipChoice(null);
+    if (scholarship?.id) {
+      await fetch(`/api/scholarship/${scholarship.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          isNotParticipating: false,
+          isSNAPBenefits: false,
+          isOpportunityScholarship: false,
+          last_edited: Date.now(),
+        }),
+      });
+    }
+  }
+
+  if (scholarshipChoice !== "full") {
     return (
       <>
         <StepHeader
@@ -786,10 +926,16 @@ export default function ScholarshipPage() {
 
           <div className="grid gap-4 sm:grid-cols-1 max-w-2xl">
             <Card
-              className="cursor-pointer gap-0 py-0 transition-colors hover:border-primary"
+              className={`gap-0 py-0 transition-colors ${
+                scholarshipChoice === "none"
+                  ? "border-primary ring-2 ring-primary/20"
+                  : scholarshipChoice && scholarshipChoice !== "none"
+                    ? "opacity-50 pointer-events-none"
+                    : "cursor-pointer hover:border-primary"
+              }`}
               onClick={() => {
-                setScholarshipChoice("none");
-                router.push(`/apply/year/${yearId}`);
+                if (isChoiceLocked) return;
+                setNotParticipatingConfirm(true);
               }}
             >
               <CardContent className="py-4 flex items-center gap-4">
@@ -798,18 +944,32 @@ export default function ScholarshipPage() {
                     <path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z" />
                   </svg>
                 </div>
-                <div>
+                <div className="flex-1">
                   <p className="text-sm font-medium">Choose not to participate</p>
                   <p className="text-xs text-muted-foreground mt-0.5">
                     I do not wish to apply for the SailFuture Opportunity Scholarship.
                   </p>
                 </div>
+                {scholarshipChoice === "none" && (
+                  <svg className="size-5 shrink-0 text-primary" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clipRule="evenodd" />
+                  </svg>
+                )}
               </CardContent>
             </Card>
 
             <Card
-              className="cursor-pointer gap-0 py-0 transition-colors hover:border-primary"
-              onClick={() => setScholarshipChoice("snap")}
+              className={`gap-0 py-0 transition-colors ${
+                scholarshipChoice === "snap"
+                  ? "border-primary ring-2 ring-primary/20"
+                  : scholarshipChoice && scholarshipChoice !== "snap"
+                    ? "opacity-50 pointer-events-none"
+                    : "cursor-pointer hover:border-primary"
+              }`}
+              onClick={() => {
+                if (isChoiceLocked) return;
+                setSnapModalOpen(true);
+              }}
             >
               <CardContent className="py-4 flex items-center gap-4">
                 <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30">
@@ -817,20 +977,32 @@ export default function ScholarshipPage() {
                     <path fillRule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clipRule="evenodd" />
                   </svg>
                 </div>
-                <div>
+                <div className="flex-1">
                   <p className="text-sm font-medium">I receive SNAP benefits</p>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    If you receive SNAP benefits, you pre-qualify for the SailFuture Academy Scholarship. Upload your valid SNAP benefits award letter below.
+                    If you receive SNAP benefits, you pre-qualify for the SailFuture Academy Scholarship.
                   </p>
                 </div>
+                {scholarshipChoice === "snap" && (
+                  <svg className="size-5 shrink-0 text-primary" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clipRule="evenodd" />
+                  </svg>
+                )}
               </CardContent>
             </Card>
 
             <Card
-              className="cursor-pointer gap-0 py-0 transition-colors hover:border-primary"
+              className={`gap-0 py-0 transition-colors ${
+                scholarshipChoice === "full"
+                  ? "border-primary ring-2 ring-primary/20"
+                  : scholarshipChoice && scholarshipChoice !== "full"
+                    ? "opacity-50 pointer-events-none"
+                    : "cursor-pointer hover:border-primary"
+              }`}
               onClick={async () => {
+                if (isChoiceLocked) return;
                 setScholarshipChoice("full");
-                await ensureScholarship();
+                await saveScholarshipChoice("full");
               }}
             >
               <CardContent className="py-4 flex items-center gap-4">
@@ -840,32 +1012,75 @@ export default function ScholarshipPage() {
                     <path d="M3.5 5.75c0-.69.56-1.25 1.25-1.25H10A.75.75 0 0010 3H4.75A2.75 2.75 0 002 5.75v9.5A2.75 2.75 0 004.75 18h9.5A2.75 2.75 0 0017 15.25V10a.75.75 0 00-1.5 0v5.25c0 .69-.56 1.25-1.25 1.25h-9.5c-.69 0-1.25-.56-1.25-1.25v-9.5z" />
                   </svg>
                 </div>
-                <div>
-                  <p className="text-sm font-medium">Complete the SailFuture Opportunity Scholarship</p>
+                <div className="flex-1">
+                  <p className="text-sm font-medium">
+                    {scholarship ? "Continue the SailFuture Opportunity Scholarship" : "Complete the SailFuture Opportunity Scholarship"}
+                  </p>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    Fill out the full scholarship application with household and financial information.
+                    {scholarship
+                      ? "Resume where you left off on your scholarship application."
+                      : "Fill out the full scholarship application with household and financial information."}
                   </p>
                 </div>
               </CardContent>
             </Card>
           </div>
 
+          {isChoiceLocked && (
+            <div className="max-w-2xl">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setResetChoiceConfirm(true)}
+              >
+                Change Selection
+              </Button>
+            </div>
+          )}
+
+          {scholarshipChoice === "none" && (
+            <div className="max-w-2xl rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-800 dark:bg-amber-950/30">
+              <p className="text-sm text-amber-800 dark:text-amber-300">
+                You have chosen not to participate in the scholarship program.
+              </p>
+            </div>
+          )}
+
           {scholarshipChoice === "snap" && (
             <Card className="max-w-2xl gap-0 py-0">
               <CardContent className="py-5 space-y-4">
                 <div>
-                  <p className="text-sm font-medium">Upload SNAP Benefits Award Letter</p>
+                  <p className="text-sm font-medium">SNAP Benefits Award Letter</p>
                   <p className="text-xs text-muted-foreground mt-1">
-                    Please upload a copy of your valid SNAP benefits award letter to pre-qualify.
+                    Upload your valid SNAP benefits award letter below.
                   </p>
                 </div>
-                <Input type="file" accept=".pdf,.jpg,.jpeg,.png" />
-                <Button
-                  className="w-full"
-                  onClick={() => router.push(`/apply/year/${yearId}`)}
-                >
-                  Submit &amp; Return to Checklist
-                </Button>
+                <IncomeFileUpload
+                  label="Drop SNAP award letter here or click to upload"
+                  existingFile={snapBenefitsFile as XanoFileMetadata | null}
+                  onUploaded={async (meta) => {
+                    setSnapBenefitsFile(meta);
+                    const sid = scholarship?.id ?? await ensureScholarship();
+                    if (sid) {
+                      await fetch(`/api/scholarship/${sid}`, {
+                        method: "PATCH",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ snap_benefits: meta, last_edited: Date.now() }),
+                      });
+                    }
+                  }}
+                  onRemoved={async () => {
+                    setSnapBenefitsFile(null);
+                    const sid = scholarship?.id ?? await ensureScholarship();
+                    if (sid) {
+                      await fetch(`/api/scholarship/${sid}`, {
+                        method: "PATCH",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ snap_benefits: {}, last_edited: Date.now() }),
+                      });
+                    }
+                  }}
+                />
               </CardContent>
             </Card>
           )}
@@ -873,16 +1088,76 @@ export default function ScholarshipPage() {
           <div className="h-20" />
         </div>
 
-        <div className="fixed bottom-0 left-0 right-0 z-50 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 md:left-[var(--sidebar-width)]">
-          <div className="flex h-16 items-center justify-between px-4 sm:px-6">
-            <Button
-              variant="outline"
-              onClick={() => router.push(`/apply/year/${yearId}`)}
-            >
-              &larr; Back to Checklist
-            </Button>
-          </div>
-        </div>
+        {/* Not Participating Warning Modal */}
+        <AlertDialog open={notParticipatingConfirm} onOpenChange={setNotParticipatingConfirm}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Choose Not to Participate?</AlertDialogTitle>
+              <AlertDialogDescription>
+                Are you sure you do not wish to apply for the SailFuture Opportunity Scholarship? This selection can be changed later by contacting the school.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={async () => {
+                  setScholarshipChoice("none");
+                  setNotParticipatingConfirm(false);
+                  await saveScholarshipChoice("none");
+                }}
+              >
+                Yes, I Do Not Wish to Participate
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        {/* SNAP Benefits Modal */}
+        <AlertDialog open={snapModalOpen} onOpenChange={setSnapModalOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>SNAP Benefits Pre-Qualification</AlertDialogTitle>
+              <AlertDialogDescription>
+                If you receive SNAP benefits, you pre-qualify for the SailFuture Academy Scholarship. If applicable, please upload your SNAP benefits award letter below.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={async () => {
+                  setScholarshipChoice("snap");
+                  setSnapModalOpen(false);
+                  await saveScholarshipChoice("snap");
+                }}
+              >
+                I Receive SNAP Benefits
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        {/* Reset Selection Warning Modal */}
+        <AlertDialog open={resetChoiceConfirm} onOpenChange={setResetChoiceConfirm}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Change Scholarship Selection?</AlertDialogTitle>
+              <AlertDialogDescription>
+                Are you sure you want to change your scholarship selection? Your current choice will be cleared and you will need to select a new option. Any previously uploaded documents will remain saved.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Keep Current Selection</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={async () => {
+                  setResetChoiceConfirm(false);
+                  await resetScholarshipChoice();
+                }}
+              >
+                Yes, Change Selection
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </>
     );
   }
@@ -954,49 +1229,44 @@ export default function ScholarshipPage() {
                     disabled={isReadonly}
                   />
                 </Field>
-                <Field>
-                  <FieldLabel className="text-xs">
-                    Contributing Adults
-                  </FieldLabel>
-                  <Input
-                    type="number"
-                    min={0}
-                    value={householdContributing || ""}
-                    onChange={(e) =>
-                      setHouseholdContributing(Number(e.target.value) || 0)
-                    }
-                    disabled={isReadonly}
-                  />
-                </Field>
               </div>
-              <div className="mt-4 flex items-center gap-2">
+              <label htmlFor="no_contributing" className="mt-4 inline-flex w-auto cursor-pointer items-center gap-3">
                 <input
                   type="checkbox"
                   id="no_contributing"
                   checked={noContributing}
                   onChange={(e) => setNoContributing(e.target.checked)}
                   disabled={isReadonly}
-                  className="size-4 rounded border"
+                  className="size-5 cursor-pointer rounded accent-primary"
                 />
-                <Label htmlFor="no_contributing" className="font-normal">
-                  No contributing members in the household
-                </Label>
-              </div>
+                <span className="text-sm select-none">No contributing members in the household</span>
+              </label>
+              <AnimatePresence initial={false}>
               {noContributing && (
-                <div className="mt-4">
-                  <p className="text-sm text-muted-foreground mb-3">
-                    You have selected that you have no persons who are currently employed or have a contributing income to the household. If this is accurate, please upload proof of unemployment or termination.
-                  </p>
-                  <p className="text-xs font-medium mb-2">Termination / Unemployment Letter</p>
-                  <IncomeFileUpload
-                    label="Drop termination letter here or click to upload"
-                    disabled={isReadonly}
-                    existingFile={terminationLetter as XanoFileMetadata | null}
-                    onUploaded={(meta) => setTerminationLetter(meta)}
-                    onRemoved={() => setTerminationLetter({})}
-                  />
-                </div>
+                <motion.div
+                  key="no-contributing-section"
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: "auto" }}
+                  exit={{ opacity: 0, height: 0 }}
+                  transition={{ duration: 0.22, ease: "easeInOut" }}
+                  className="overflow-hidden"
+                >
+                  <div className="mt-4">
+                    <p className="text-sm text-muted-foreground mb-3">
+                      You have selected that you have no persons who are currently employed or have a contributing income to the household. If this is accurate, please upload proof of unemployment or termination.
+                    </p>
+                    <p className="text-xs font-medium mb-2">Termination / Unemployment Letter</p>
+                    <IncomeFileUpload
+                      label="Drop termination letter here or click to upload"
+                      disabled={isReadonly}
+                      existingFile={terminationLetter as XanoFileMetadata | null}
+                      onUploaded={(meta) => setTerminationLetter(meta)}
+                      onRemoved={() => setTerminationLetter({})}
+                    />
+                  </div>
+                </motion.div>
               )}
+              </AnimatePresence>
             </section>
 
             {/* Monthly Income */}
@@ -1078,20 +1348,27 @@ export default function ScholarshipPage() {
               <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
                 Government Benefits
               </h3>
-              <div className="flex items-center gap-2">
+              <label htmlFor="gov_benefits" className="inline-flex w-auto cursor-pointer items-center gap-3">
                 <input
                   type="checkbox"
                   id="gov_benefits"
                   checked={govBenefits}
                   onChange={(e) => setGovBenefits(e.target.checked)}
                   disabled={isReadonly}
-                  className="size-4 rounded border"
+                  className="size-5 cursor-pointer rounded accent-primary"
                 />
-                <Label htmlFor="gov_benefits" className="font-normal">
-                  My household receives government benefits
-                </Label>
-              </div>
+                <span className="text-sm select-none">My household receives government benefits</span>
+              </label>
+              <AnimatePresence initial={false}>
               {govBenefits && (
+                <motion.div
+                  key="gov-benefits-section"
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: "auto" }}
+                  exit={{ opacity: 0, height: 0 }}
+                  transition={{ duration: 0.22, ease: "easeInOut" }}
+                  className="overflow-hidden"
+                >
                 <div className="mt-4">
                   <div className="flex items-center justify-between mb-3 border-b pb-3">
                     <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
@@ -1108,10 +1385,16 @@ export default function ScholarshipPage() {
                       No benefits listed.
                     </p>
                   ) : (
-                    <div className="space-y-3">
+                    <motion.div layout className="space-y-3">
+                      <AnimatePresence initial={false}>
                       {benefits.map((benefit) => (
-                        <div
+                        <motion.div
                           key={benefit.id}
+                          layout
+                          initial={{ opacity: 0, y: -8 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: -8, height: 0, marginBottom: 0 }}
+                          transition={{ duration: 0.18 }}
                           className="flex items-end gap-3"
                         >
                           <Field className="flex-1">
@@ -1160,18 +1443,30 @@ export default function ScholarshipPage() {
                             <Trash2 className="size-4" />
                           </Button>
                         )}
-                        </div>
+                        </motion.div>
                       ))}
-                    </div>
+                      </AnimatePresence>
+                    </motion.div>
                   )}
                 </div>
+                </motion.div>
               )}
+              </AnimatePresence>
             </section>
           </CardContent>
         </Card>
 
         {/* Contributing Members */}
+        <AnimatePresence initial={false}>
         {!noContributing && (
+          <motion.div
+            key="contributing-members-card"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.25, ease: "easeInOut" }}
+            className="overflow-hidden"
+          >
           <Card className="overflow-hidden gap-0 py-0">
             <CardHeader className="border-b py-3 !pb-3">
               <CardTitle className="text-lg">Contributing Members</CardTitle>
@@ -1196,17 +1491,26 @@ export default function ScholarshipPage() {
                   )}
                 </Empty>
               ) : (
-                <div className="space-y-4">
+                <motion.div layout className="space-y-4">
+                  <AnimatePresence initial={false}>
                   {members.map((member, idx) => (
-                    <div key={member.id} className="rounded-lg border bg-background p-4">
-                      <div className="-mx-4 mb-3 flex items-center justify-between border-b px-4 pb-3">
+                    <motion.div
+                      key={member.id}
+                      layout
+                      initial={{ opacity: 0, y: -10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -10, height: 0, marginBottom: 0 }}
+                      transition={{ duration: 0.2 }}
+                      className="rounded-xl bg-card p-4 shadow-xs ring-1 ring-foreground/10"
+                    >
+                      <div className="-mx-4 mb-3 flex items-center justify-between border-b border-foreground/10 px-4 pb-3">
                         <p className="text-sm font-semibold">
                           Contributing Member {idx + 1}
                         </p>
                         {!isReadonly && (
                           <div className="flex items-center gap-2">
                             <Button
-                              variant="outline"
+                              variant={idx === members.length - 1 ? "default" : "outline"}
                               size="sm"
                               onClick={addMember}
                               disabled={idx !== members.length - 1}
@@ -1228,7 +1532,7 @@ export default function ScholarshipPage() {
                         <Field>
                           <FieldLabel className="text-xs">First Name</FieldLabel>
                           <LocalInput
-                            value={member.first_name}
+                            value={member.first_name ?? ""}
                             onBlurSave={(val) => patchMemberLocal(member.id, { first_name: val })}
                             disabled={isReadonly}
                           />
@@ -1236,7 +1540,7 @@ export default function ScholarshipPage() {
                         <Field>
                           <FieldLabel className="text-xs">Last Name</FieldLabel>
                           <LocalInput
-                            value={member.last_name}
+                            value={member.last_name ?? ""}
                             onBlurSave={(val) => patchMemberLocal(member.id, { last_name: val })}
                             disabled={isReadonly}
                           />
@@ -1317,76 +1621,105 @@ export default function ScholarshipPage() {
 
                         <div>
                           <FieldLabel className="text-xs mb-2">Income Verification</FieldLabel>
-                          <div className="flex items-center gap-4">
-                            <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-5">
+                            <label htmlFor={`w2-${member.id}`} className="inline-flex w-auto cursor-pointer items-center gap-2.5">
                               <input
-                                type="radio"
+                                type="checkbox"
                                 id={`w2-${member.id}`}
-                                name={`verification-${member.id}`}
-                                checked={member.income_verification_type === "w2"}
-                                onChange={() => {
-                                  patchMemberLocal(member.id, { income_verification_type: "w2", is_w2: true, is_pay_stubs: false });
+                                checked={!!member.isW2}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    patchMemberLocal(member.id, { isW2: true, isPayStubs: false });
+                                  } else {
+                                    patchMemberLocal(member.id, { isW2: false });
+                                  }
                                 }}
                                 disabled={isReadonly}
-                                className="size-4"
+                                className="size-5 cursor-pointer rounded accent-primary"
                               />
-                              <Label htmlFor={`w2-${member.id}`} className="font-normal text-sm">W-2 Form</Label>
-                            </div>
-                            <div className="flex items-center gap-2">
+                              <span className="text-sm select-none">W-2 Form</span>
+                            </label>
+                            <label htmlFor={`paystubs-${member.id}`} className="inline-flex w-auto cursor-pointer items-center gap-2.5">
                               <input
-                                type="radio"
+                                type="checkbox"
                                 id={`paystubs-${member.id}`}
-                                name={`verification-${member.id}`}
-                                checked={member.income_verification_type === "paystubs"}
-                                onChange={() => {
-                                  patchMemberLocal(member.id, { income_verification_type: "paystubs", is_w2: false, is_pay_stubs: true });
+                                checked={!!member.isPayStubs}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    patchMemberLocal(member.id, { isPayStubs: true, isW2: false });
+                                  } else {
+                                    patchMemberLocal(member.id, { isPayStubs: false });
+                                  }
                                 }}
                                 disabled={isReadonly}
-                                className="size-4"
+                                className="size-5 cursor-pointer rounded accent-primary"
                               />
-                              <Label htmlFor={`paystubs-${member.id}`} className="font-normal text-sm">Last 4 Pay Stubs</Label>
-                            </div>
+                              <span className="text-sm select-none">Last 4 Pay Stubs</span>
+                            </label>
                           </div>
-                          {member.income_verification_type === "w2" && (
-                            <div className="mt-3">
-                              <p className="text-xs font-medium mb-2">Upload W-2 Form</p>
-                              <IncomeFileUpload
-                                label="Drop W-2 here or click to upload"
-                                disabled={isReadonly}
-                                existingFile={member.w2 as XanoFileMetadata | null}
-                                onUploaded={(meta) => patchMemberLocal(member.id, { w2: meta })}
-                                onRemoved={() => patchMemberLocal(member.id, { w2: {} })}
-                              />
-                            </div>
+                          <AnimatePresence initial={false} mode="wait">
+                          {member.isW2 && (
+                            <motion.div
+                              key={`w2-upload-${member.id}`}
+                              initial={{ opacity: 0, height: 0 }}
+                              animate={{ opacity: 1, height: "auto" }}
+                              exit={{ opacity: 0, height: 0 }}
+                              transition={{ duration: 0.2, ease: "easeInOut" }}
+                              className="overflow-hidden"
+                            >
+                              <div className="mt-3">
+                                <p className="text-xs font-medium mb-2">Upload W-2 Form</p>
+                                <IncomeFileUpload
+                                  label="Drop W-2 here or click to upload"
+                                  disabled={isReadonly}
+                                  existingFile={member.w2 as XanoFileMetadata | null}
+                                  onUploaded={(meta) => patchMemberLocal(member.id, { w2: meta })}
+                                  onRemoved={() => patchMemberLocal(member.id, { w2: {} })}
+                                />
+                              </div>
+                            </motion.div>
                           )}
-                          {member.income_verification_type === "paystubs" && (
-                            <div className="mt-3 space-y-3">
-                              {([1, 2, 3, 4] as const).map((num) => {
-                                const field = `paystub_${num}` as keyof ContributingMember;
-                                return (
-                                  <div key={num}>
-                                    <p className="text-xs font-medium mb-2">Pay Stub {num}</p>
-                                    <IncomeFileUpload
-                                      label={`Drop pay stub ${num} here or click to upload`}
-                                      disabled={isReadonly}
-                                      existingFile={member[field] as XanoFileMetadata | null}
-                                      onUploaded={(meta) => patchMemberLocal(member.id, { [field]: meta as Record<string, unknown> })}
-                                      onRemoved={() => patchMemberLocal(member.id, { [field]: {} as Record<string, unknown> })}
-                                    />
-                                  </div>
-                                );
-                              })}
-                            </div>
+                          {member.isPayStubs && (
+                            <motion.div
+                              key={`paystubs-upload-${member.id}`}
+                              initial={{ opacity: 0, height: 0 }}
+                              animate={{ opacity: 1, height: "auto" }}
+                              exit={{ opacity: 0, height: 0 }}
+                              transition={{ duration: 0.2, ease: "easeInOut" }}
+                              className="overflow-hidden"
+                            >
+                              <div className="mt-3 space-y-3">
+                                {([1, 2, 3, 4] as const).map((num) => {
+                                  const field = `paystub_${num}` as keyof ContributingMember;
+                                  return (
+                                    <div key={num}>
+                                      <p className="text-xs font-medium mb-2">Pay Stub {num}</p>
+                                      <IncomeFileUpload
+                                        label={`Drop pay stub ${num} here or click to upload`}
+                                        disabled={isReadonly}
+                                        existingFile={member[field] as XanoFileMetadata | null}
+                                        onUploaded={(meta) => patchMemberLocal(member.id, { [field]: meta as Record<string, unknown> })}
+                                        onRemoved={() => patchMemberLocal(member.id, { [field]: {} as Record<string, unknown> })}
+                                      />
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </motion.div>
                           )}
+                          </AnimatePresence>
                         </div>
                       </div>
-                    </div>
+                    </motion.div>
                   ))}
-                </div>
+                  </AnimatePresence>
+                </motion.div>
               )}
             </CardContent>
           </Card>
+          </motion.div>
         )}
+        </AnimatePresence>
 
         {/* Family Household Assets */}
         <Card className="overflow-hidden gap-0 py-0">
@@ -1524,17 +1857,26 @@ export default function ScholarshipPage() {
                   )}
                 </Empty>
               ) : (
-                <div className="space-y-4">
+                <motion.div layout className="space-y-4">
+                  <AnimatePresence initial={false}>
                   {homes.map((home, idx) => (
-                    <div key={home.id} className="rounded-lg border bg-background p-4">
-                      <div className="-mx-4 mb-3 flex items-center justify-between border-b px-4 pb-3">
+                    <motion.div
+                      key={home.id}
+                      layout
+                      initial={{ opacity: 0, y: -10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -10, height: 0, marginBottom: 0 }}
+                      transition={{ duration: 0.2 }}
+                      className="rounded-xl bg-card p-4 shadow-xs ring-1 ring-foreground/10"
+                    >
+                      <div className="-mx-4 mb-3 flex items-center justify-between border-b border-foreground/10 px-4 pb-3">
                         <p className="text-sm font-semibold">
                           Property {idx + 1}
                         </p>
                         {!isReadonly && (
                           <div className="flex items-center gap-2">
                             <Button
-                              variant="outline"
+                              variant={idx === homes.length - 1 ? "default" : "outline"}
                               size="sm"
                               onClick={addHome}
                               disabled={idx !== homes.length - 1}
@@ -1556,7 +1898,7 @@ export default function ScholarshipPage() {
                         <Field>
                           <FieldLabel className="text-xs">Type</FieldLabel>
                           <Select
-                            value={home.type}
+                            value={home.type ?? ""}
                             onValueChange={(val) => {
                               patchHomeLocal(home.id, { type: val });
                             }}
@@ -1643,7 +1985,7 @@ export default function ScholarshipPage() {
                             Total Value
                           </FieldLabel>
                           <CurrencyInput
-                            value={home.total_value}
+                            value={home.total_value ?? 0}
                             onChange={(val) => patchHomeLocal(home.id, { total_value: val })}
                             disabled={isReadonly}
                           />
@@ -1653,15 +1995,16 @@ export default function ScholarshipPage() {
                             Outstanding Debt
                           </FieldLabel>
                           <CurrencyInput
-                            value={home.outstanding_debt}
+                            value={home.outstanding_debt ?? 0}
                             onChange={(val) => patchHomeLocal(home.id, { outstanding_debt: val })}
                             disabled={isReadonly}
                           />
                         </Field>
                       </div>
-                    </div>
+                    </motion.div>
                   ))}
-                </div>
+                  </AnimatePresence>
+                </motion.div>
               )}
             </section>
 
@@ -1690,17 +2033,26 @@ export default function ScholarshipPage() {
                   )}
                 </Empty>
               ) : (
-                <div className="space-y-4">
+                <motion.div layout className="space-y-4">
+                  <AnimatePresence initial={false}>
                   {vehicles.map((vehicle, idx) => (
-                    <div key={vehicle.id} className="rounded-lg border bg-background p-4">
-                      <div className="-mx-4 mb-3 flex items-center justify-between border-b px-4 pb-3">
+                    <motion.div
+                      key={vehicle.id}
+                      layout
+                      initial={{ opacity: 0, y: -10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -10, height: 0, marginBottom: 0 }}
+                      transition={{ duration: 0.2 }}
+                      className="rounded-xl bg-card p-4 shadow-xs ring-1 ring-foreground/10"
+                    >
+                      <div className="-mx-4 mb-3 flex items-center justify-between border-b border-foreground/10 px-4 pb-3">
                         <p className="text-sm font-semibold">
                           Vehicle {idx + 1}
                         </p>
                         {!isReadonly && (
                           <div className="flex items-center gap-2">
                             <Button
-                              variant="outline"
+                              variant={idx === vehicles.length - 1 ? "default" : "outline"}
                               size="sm"
                               onClick={addVehicle}
                               disabled={idx !== vehicles.length - 1}
@@ -1722,7 +2074,7 @@ export default function ScholarshipPage() {
                         <Field>
                           <FieldLabel className="text-xs">Type</FieldLabel>
                           <Select
-                            value={vehicle.type}
+                            value={vehicle.type ?? ""}
                             onValueChange={(val) => {
                               patchVehicleLocal(vehicle.id, { type: val });
                             }}
@@ -1746,7 +2098,7 @@ export default function ScholarshipPage() {
                         <Field>
                           <FieldLabel className="text-xs">Year</FieldLabel>
                           <LocalInput
-                            value={vehicle.car_year}
+                            value={vehicle.car_year ?? ""}
                             onBlurSave={(val) => patchVehicleLocal(vehicle.id, { car_year: val })}
                             disabled={isReadonly}
                             placeholder="e.g. 2020"
@@ -1755,7 +2107,7 @@ export default function ScholarshipPage() {
                         <Field>
                           <FieldLabel className="text-xs">Make</FieldLabel>
                           <LocalInput
-                            value={vehicle.car_make}
+                            value={vehicle.car_make ?? ""}
                             onBlurSave={(val) => patchVehicleLocal(vehicle.id, { car_make: val })}
                             disabled={isReadonly}
                             placeholder="e.g. Toyota"
@@ -1764,7 +2116,7 @@ export default function ScholarshipPage() {
                         <Field>
                           <FieldLabel className="text-xs">Model</FieldLabel>
                           <LocalInput
-                            value={vehicle.car_model}
+                            value={vehicle.car_model ?? ""}
                             onBlurSave={(val) => patchVehicleLocal(vehicle.id, { car_model: val })}
                             disabled={isReadonly}
                             placeholder="e.g. Camry"
@@ -1775,7 +2127,7 @@ export default function ScholarshipPage() {
                             Total Value
                           </FieldLabel>
                           <CurrencyInput
-                            value={vehicle.total_value}
+                            value={vehicle.total_value ?? 0}
                             onChange={(val) => patchVehicleLocal(vehicle.id, { total_value: val })}
                             disabled={isReadonly}
                           />
@@ -1785,15 +2137,16 @@ export default function ScholarshipPage() {
                             Remaining Debt
                           </FieldLabel>
                           <CurrencyInput
-                            value={vehicle.remaining_debt}
+                            value={vehicle.remaining_debt ?? 0}
                             onChange={(val) => patchVehicleLocal(vehicle.id, { remaining_debt: val })}
                             disabled={isReadonly}
                           />
                         </Field>
                       </div>
-                    </div>
+                    </motion.div>
                   ))}
-                </div>
+                  </AnimatePresence>
+                </motion.div>
               )}
             </section>
           </CardContent>
@@ -1908,13 +2261,11 @@ export default function ScholarshipPage() {
           </Button>
           {!isReadonly && (
             <div className="flex items-center gap-3">
-              {lastSaved && (
-                <span className="text-xs text-muted-foreground">
-                  Last saved {lastSaved.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
-                </span>
-              )}
+              <span className="text-xs text-muted-foreground">
+                {saving ? "Saving..." : lastSaved ? `Last saved ${formatRelativeTime(lastSaved)}` : ""}
+              </span>
               <Button onClick={handleSave} disabled={saving || !isDirty}>
-                {saving ? "Saving..." : "Save Section"}
+                Save Scholarship Application
               </Button>
             </div>
           )}
@@ -2060,7 +2411,7 @@ function IncomeFileUpload({
         onValueChange={handleFilesChange}
         disabled={disabled || uploading}
       >
-        <FileUploadDropzone className="flex-row gap-3 px-4 py-3">
+        <FileUploadDropzone className="flex-row gap-3 px-4 py-3 cursor-pointer">
           {uploading ? (
             <Loader2 className="size-5 text-muted-foreground animate-spin" />
           ) : (
@@ -2112,17 +2463,19 @@ function StepHeader({
         <Breadcrumb>
           <BreadcrumbList>
             <BreadcrumbItem className="hidden md:block">
-              <BreadcrumbLink href="/">Dashboard</BreadcrumbLink>
+              <BreadcrumbLink href={`/apply/year/${yearId}`}>
+                {yearName || "Overview"}
+              </BreadcrumbLink>
             </BreadcrumbItem>
             <BreadcrumbSeparator className="hidden md:block" />
             <BreadcrumbItem className="hidden md:block">
-              <BreadcrumbLink href={`/apply/year/${yearId}`}>
-                {yearName || "Application"}
+              <BreadcrumbLink href={`/apply/year/${yearId}/scholarship`}>
+                Financial Aid
               </BreadcrumbLink>
             </BreadcrumbItem>
             <BreadcrumbSeparator className="hidden md:block" />
             <BreadcrumbItem>
-              <BreadcrumbPage>Scholarships</BreadcrumbPage>
+              <BreadcrumbPage>Opportunity Scholarship</BreadcrumbPage>
             </BreadcrumbItem>
           </BreadcrumbList>
         </Breadcrumb>

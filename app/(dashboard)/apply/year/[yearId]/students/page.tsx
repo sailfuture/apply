@@ -57,6 +57,16 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Switch } from "@/components/ui/switch";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Trash2, FileUp, X, Loader2, CheckCircle2 } from "lucide-react";
+import {
+  FileUpload,
+  FileUploadDropzone,
+  FileUploadItem,
+  FileUploadItemDelete,
+  FileUploadItemMetadata,
+  FileUploadItemPreview,
+  FileUploadList,
+} from "@/components/ui/file-upload";
 
 interface Parent {
   id: number;
@@ -162,6 +172,8 @@ export default function StudentsStepPage() {
 
   const [scheduleDialogOpen, setScheduleDialogOpen] = useState(false);
   const [uploadingPhotoId, setUploadingPhotoId] = useState<number | null>(null);
+  const [savingAppId, setSavingAppId] = useState<number | null>(null);
+  const [pendingDeleteStudent, setPendingDeleteStudent] = useState<{ appId: number; name: string } | null>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
   const photoTargetStudentId = useRef<number | null>(null);
 
@@ -250,6 +262,19 @@ export default function StudentsStepPage() {
     } finally {
       setAddingStudentId(null);
     }
+  }
+
+  async function handleRemoveStudent(appId: number) {
+    try {
+      const res = await fetch(`/api/applications/${appId}`, { method: "DELETE" });
+      if (res.ok) {
+        setApplications((prev) => prev.filter((a) => a.id !== appId));
+        setSavedApplications((prev) => prev.filter((a) => a.id !== appId));
+      }
+    } catch (err) {
+      console.error("Failed to remove student:", err);
+    }
+    setPendingDeleteStudent(null);
   }
 
   function isAppComplete(app: Application): boolean {
@@ -430,17 +455,14 @@ export default function StudentsStepPage() {
               testing.
             </p>
           </div>
-          <div className="flex items-center gap-3">
-            {isDirty && (
-              <span className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400">
-                <svg className="size-3.5" viewBox="0 0 20 20" fill="currentColor">
-                  <path fillRule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 6a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 6zm0 9a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
-                </svg>
-                Unsaved changes
-              </span>
-            )}
-            <Button onClick={() => setAddDialogOpen(true)}>Add Student</Button>
-          </div>
+          {isDirty && (
+            <span className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400">
+              <svg className="size-3.5" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 6a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 6zm0 9a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
+              </svg>
+              Unsaved changes
+            </span>
+          )}
         </div>
 
         {enrolled.length === 0 ? (
@@ -452,7 +474,7 @@ export default function StudentsStepPage() {
           </div>
         ) : (
           <div className="space-y-6">
-            {enrolled.map(({ app, student }) => (
+            {enrolled.map(({ app, student }, idx) => (
               <Card key={student.id} className="overflow-hidden gap-0 py-0">
                 <CardHeader
                   className={`py-3 !pb-3 cursor-pointer ${collapsedCards.has(student.id) ? "" : "border-b"}`}
@@ -509,6 +531,25 @@ export default function StudentsStepPage() {
                           Incomplete
                         </span>
                       )}
+                      <Button
+                        variant={idx === enrolled.length - 1 ? "default" : "outline"}
+                        size="sm"
+                        onClick={(e) => { e.stopPropagation(); setAddDialogOpen(true); }}
+                        disabled={idx !== enrolled.length - 1}
+                      >
+                        Add Another Student
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="size-8 text-muted-foreground hover:text-red-600"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setPendingDeleteStudent({ appId: app.id, name: `${student.first_name} ${student.last_name}` });
+                        }}
+                      >
+                        <Trash2 className="size-4" />
+                      </Button>
                       <span className={`inline-flex items-center justify-center size-7 rounded-md border border-input text-muted-foreground transition-all hover:bg-muted ${collapsedCards.has(student.id) ? "" : "rotate-180"}`}>
                         <svg className="size-4" viewBox="0 0 20 20" fill="currentColor">
                           <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
@@ -849,33 +890,52 @@ export default function StudentsStepPage() {
                       NWEA Testing &amp; Records
                     </h3>
                     <div className="space-y-4">
-                      {app.test_scores && (
-                        <div className="rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-800 dark:border-green-800 dark:bg-green-900/20 dark:text-green-400">
-                          Test records have been uploaded.
-                        </div>
-                      )}
+                      <div className="space-y-2 text-sm text-muted-foreground">
+                        <p>
+                          All applying students must complete an NWEA screening in both Reading and Math. The assessment duration for each test ranges from 15 to 30 minutes, for a total time between 60–90 minutes.
+                        </p>
+                        <p>
+                          Assessments are conducted on weekdays, from Tuesday to Friday, between 2:30 p.m. and 4 p.m. Please select a time slot within this period that is convenient for your student to take the test.
+                        </p>
+                      </div>
                       <div className="grid gap-4 sm:grid-cols-2">
-                        <div className="flex flex-col justify-end">
-                          <p className="text-xs text-muted-foreground mb-2">
-                            Don&apos;t have recent test scores?
-                          </p>
-                          <Button
-                            className="w-full"
+                        <Field>
+                          <FieldLabel className="text-xs">
+                            Schedule an NWEA screening session
+                          </FieldLabel>
+                          <button
+                            type="button"
+                            className="flex w-full cursor-pointer items-center gap-3 rounded-md border border-dashed border-input bg-background px-4 py-3 text-left transition-colors hover:bg-muted/50"
                             onClick={() => setScheduleDialogOpen(true)}
                           >
-                            Schedule NWEA Testing
-                          </Button>
-                        </div>
+                            <svg className="size-5 shrink-0 text-muted-foreground" viewBox="0 0 20 20" fill="currentColor">
+                              <path fillRule="evenodd" d="M5.75 2a.75.75 0 01.75.75V4h7V2.75a.75.75 0 011.5 0V4h.25A2.75 2.75 0 0118 6.75v8.5A2.75 2.75 0 0115.25 18H4.75A2.75 2.75 0 012 15.25v-8.5A2.75 2.75 0 014.75 4H5V2.75A.75.75 0 015.75 2zm-1 5.5c-.69 0-1.25.56-1.25 1.25v6.5c0 .69.56 1.25 1.25 1.25h10.5c.69 0 1.25-.56 1.25-1.25v-6.5c0-.69-.56-1.25-1.25-1.25H4.75z" clipRule="evenodd" />
+                            </svg>
+                            <div className="flex-1">
+                              <p className="text-sm font-medium">Schedule NWEA Testing</p>
+                              <p className="text-xs text-muted-foreground">Don&apos;t have recent test scores? Schedule a session.</p>
+                            </div>
+                          </button>
+                        </Field>
                         <Field>
                           <FieldLabel className="text-xs">
                             Upload NWEA test scores from the past academic year
                           </FieldLabel>
-                          <Input
-                            type="file"
-                            accept=".pdf,.jpg,.jpeg,.png"
-                            onChange={(e) => {
-                              const file = e.target.files?.[0];
-                              if (file) handleFileUpload(app.id, file);
+                          <NweaFileUpload
+                            existingFile={app.test_scores}
+                            uploading={savingAppId === app.id}
+                            onUpload={(file) => handleFileUpload(app.id, file)}
+                            onRemove={() => {
+                              setApplications((prev) =>
+                                prev.map((a) =>
+                                  a.id === app.id ? { ...a, test_scores: null } : a
+                                )
+                              );
+                              fetch(`/api/applications/${app.id}`, {
+                                method: "PATCH",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ test_scores: null }),
+                              });
                             }}
                           />
                         </Field>
@@ -1096,15 +1156,15 @@ export default function StudentsStepPage() {
 
       {/* Schedule NWEA Testing Dialog */}
       <Dialog open={scheduleDialogOpen} onOpenChange={setScheduleDialogOpen}>
-        <DialogContent className="sm:max-w-2xl max-h-[90vh]">
-          <DialogHeader>
+        <DialogContent className="sm:max-w-[95vw] w-[95vw] h-[90vh] p-0 flex flex-col overflow-hidden">
+          <DialogHeader className="px-6 pt-6 pb-2 shrink-0">
             <DialogTitle>Schedule NWEA Testing</DialogTitle>
             <DialogDescription>
               Select a date and time to complete NWEA testing at SailFuture
               Academy.
             </DialogDescription>
           </DialogHeader>
-          <div className="w-full overflow-hidden rounded-lg border" style={{ height: "500px" }}>
+          <div className="flex-1 m-6 mt-0 overflow-hidden rounded-lg border">
             <iframe
               src="https://calendar.app.google/FsBaobZrsRToxuGq9"
               className="h-full w-full border-0"
@@ -1113,6 +1173,23 @@ export default function StudentsStepPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={!!pendingDeleteStudent} onOpenChange={(open) => { if (!open) setPendingDeleteStudent(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will remove {pendingDeleteStudent?.name} from this year&apos;s application. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => pendingDeleteStudent && handleRemoveStudent(pendingDeleteStudent.appId)}>
+              Remove
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog open={!!pendingNavPath} onOpenChange={(open) => { if (!open) setPendingNavPath(null); }}>
         <AlertDialogContent>
@@ -1148,6 +1225,109 @@ export default function StudentsStepPage() {
         </AlertDialogContent>
       </AlertDialog>
     </>
+  );
+}
+
+function NweaFileUpload({
+  existingFile,
+  uploading,
+  onUpload,
+  onRemove,
+}: {
+  existingFile: Record<string, unknown> | null;
+  uploading: boolean;
+  onUpload: (file: File) => void;
+  onRemove: () => void;
+}) {
+  const [files, setFiles] = useState<File[]>([]);
+  const hasFile = existingFile && Object.keys(existingFile).length > 0;
+  const [confirmRemove, setConfirmRemove] = useState(false);
+
+  function handleFilesChange(newFiles: File[]) {
+    setFiles(newFiles);
+    if (newFiles.length === 0) {
+      if (hasFile) setConfirmRemove(true);
+      return;
+    }
+    onUpload(newFiles[0]);
+  }
+
+  if (hasFile && files.length === 0) {
+    const name = (existingFile as Record<string, unknown>).name as string | undefined;
+    return (
+      <>
+        <div className="flex items-center gap-3 rounded-md border border-input bg-background px-4 py-3">
+          <CheckCircle2 className="size-5 text-green-600 shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium truncate">{name || "Uploaded file"}</p>
+            <p className="text-xs text-muted-foreground">Uploaded successfully</p>
+          </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-7 shrink-0"
+            onClick={() => setConfirmRemove(true)}
+          >
+            <X className="size-4" />
+          </Button>
+        </div>
+        <AlertDialog open={confirmRemove} onOpenChange={setConfirmRemove}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Remove uploaded file?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This will remove the uploaded test scores. You can upload a new file afterwards.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={() => { setConfirmRemove(false); onRemove(); }}>
+                Remove
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </>
+    );
+  }
+
+  return (
+    <FileUpload
+      maxFiles={1}
+      maxSize={10 * 1024 * 1024}
+      accept=".pdf,.jpg,.jpeg,.png"
+      className="w-full"
+      value={files}
+      onValueChange={handleFilesChange}
+      disabled={uploading}
+    >
+      <FileUploadDropzone className="flex-row gap-3 px-4 py-3 cursor-pointer">
+        {uploading ? (
+          <Loader2 className="size-5 text-muted-foreground animate-spin" />
+        ) : (
+          <FileUp className="size-5 text-muted-foreground" />
+        )}
+        <div className="flex-1 text-left">
+          <p className="text-sm font-medium">
+            {uploading ? "Uploading..." : "Drop test scores here or click to upload"}
+          </p>
+          <p className="text-xs text-muted-foreground">PDF, JPG, or PNG (max 10MB)</p>
+        </div>
+      </FileUploadDropzone>
+      <FileUploadList>
+        {files.map((file, i) => (
+          <FileUploadItem key={i} value={file}>
+            <FileUploadItemPreview />
+            <FileUploadItemMetadata />
+            <FileUploadItemDelete asChild>
+              <Button variant="ghost" size="icon" className="size-7">
+                <X className="size-4" />
+              </Button>
+            </FileUploadItemDelete>
+          </FileUploadItem>
+        ))}
+      </FileUploadList>
+    </FileUpload>
   );
 }
 

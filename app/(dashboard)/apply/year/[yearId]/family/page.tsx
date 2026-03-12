@@ -27,6 +27,16 @@ import {
   SheetTitle,
   SheetDescription,
 } from "@/components/ui/sheet";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
   Field,
@@ -40,6 +50,7 @@ import {
   ComboboxItem,
   ComboboxEmpty,
 } from "@/components/ui/combobox";
+import { Trash2 } from "lucide-react";
 import { US_STATES } from "@/lib/us-states";
 
 interface Parent {
@@ -157,6 +168,20 @@ export default function FamilyStepPage() {
     }
   }
 
+  const [pendingDeleteParent, setPendingDeleteParent] = useState<{ id: number; name: string } | null>(null);
+
+  async function handleDeleteParent(parentId: number) {
+    try {
+      const res = await fetch(`/api/parents/${parentId}`, { method: "DELETE" });
+      if (res.ok) {
+        setParents((prev) => prev.filter((p) => p.id !== parentId));
+      }
+    } catch (err) {
+      console.error("Failed to delete parent:", err);
+    }
+    setPendingDeleteParent(null);
+  }
+
   async function handleInvite(e: React.FormEvent) {
     e.preventDefault();
     setInviting(true);
@@ -205,22 +230,12 @@ export default function FamilyStepPage() {
     <>
       <StepHeader yearId={yearId} yearName={yearName} />
       <div className="flex flex-1 flex-col gap-6 p-4 pt-0">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold">Family Information</h1>
-            <p className="text-muted-foreground text-sm mt-1">
-              Manage contact information and addresses for all parents and
-              guardians.
-            </p>
-          </div>
-          <Button
-            onClick={() => {
-              setInviteError("");
-              setInviteSheetOpen(true);
-            }}
-          >
-            Add Parent
-          </Button>
+        <div>
+          <h1 className="text-2xl font-semibold">Family Information</h1>
+          <p className="text-muted-foreground text-sm mt-1">
+            Manage contact information and addresses for all parents and
+            guardians.
+          </p>
         </div>
 
         {parents.length === 0 ? (
@@ -231,18 +246,41 @@ export default function FamilyStepPage() {
           </div>
         ) : (
           <div className="space-y-6">
-            {parents.map((parent) => (
+            {parents.map((parent, idx) => (
               <Card key={parent.id} className="overflow-hidden gap-0 py-0">
                 <CardHeader className="border-b py-3 !pb-3">
-                  <div className="flex items-center gap-3">
-                    <Avatar className="size-10">
-                      <AvatarFallback className="bg-muted text-muted-foreground text-sm font-medium">
-                        {getInitials(parent.first_name, parent.last_name)}
-                      </AvatarFallback>
-                    </Avatar>
-                    <CardTitle className="text-lg">
-                      {parent.first_name} {parent.last_name}
-                    </CardTitle>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <Avatar className="size-10">
+                        <AvatarFallback className="bg-muted text-muted-foreground text-sm font-medium">
+                          {getInitials(parent.first_name, parent.last_name)}
+                        </AvatarFallback>
+                      </Avatar>
+                      <CardTitle className="text-lg">
+                        {parent.first_name} {parent.last_name}
+                      </CardTitle>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant={idx === parents.length - 1 ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => {
+                          setInviteError("");
+                          setInviteSheetOpen(true);
+                        }}
+                        disabled={idx !== parents.length - 1}
+                      >
+                        Add Parent/Guardian
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="size-8 text-muted-foreground hover:text-red-600"
+                        onClick={() => setPendingDeleteParent({ id: parent.id, name: `${parent.first_name} ${parent.last_name}` })}
+                      >
+                        <Trash2 className="size-4" />
+                      </Button>
+                    </div>
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-6 py-5 bg-gray-50 dark:bg-muted/50">
@@ -426,6 +464,23 @@ export default function FamilyStepPage() {
           </Button>
         </div>
       </div>
+
+      <AlertDialog open={!!pendingDeleteParent} onOpenChange={(open) => { if (!open) setPendingDeleteParent(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently remove {pendingDeleteParent?.name}. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => pendingDeleteParent && handleDeleteParent(pendingDeleteParent.id)}>
+              Remove
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Add Parent Sheet */}
       <Sheet open={inviteSheetOpen} onOpenChange={setInviteSheetOpen}>

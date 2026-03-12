@@ -39,7 +39,6 @@ export async function POST(req: NextRequest) {
     registration_school_years_id,
     household_adults: source.household_adults,
     household_children: source.household_children,
-    household_contributing_adult: source.household_contributing_adult,
     no_contributing_member: source.no_contributing_member,
     business_income_monthly: source.business_income_monthly,
     capital_gains_monthly: source.capital_gains_monthly,
@@ -63,10 +62,6 @@ export async function POST(req: NextRequest) {
     family_contribution_per_month: source.family_contribution_per_month,
     scholarship_advocacy_letter: source.scholarship_advocacy_letter,
     signature: null,
-    registration_opportunity_scholarship_benefits_id: [],
-    registration_opportunity_scholarship_contributing_members_id: [],
-    registration_opportunity_scholarship_home_id: [],
-    registration_opportunity_scholarship_vehicles_id: [],
   });
 
   const newId = newScholarship.id;
