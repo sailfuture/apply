@@ -28,7 +28,6 @@ export async function POST(
     registration_opportunity_scholarship_id: Number(id),
     first_name: body.first_name ?? "",
     last_name: body.last_name ?? "",
-    address: body.address ?? "",
     address_1: body.address_1 ?? "",
     address_2: body.address_2 ?? "",
     city: body.city ?? "",

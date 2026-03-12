@@ -27,7 +27,6 @@ export async function POST(
   const home = await xano.scholarshipHomes.create({
     registration_opportunity_scholarship_id: Number(id),
     type: body.type ?? "",
-    address: body.address ?? "",
     address_1: body.address_1 ?? "",
     address_2: body.address_2 ?? "",
     city: body.city ?? "",
