@@ -335,7 +335,7 @@ export default function ScholarshipPage() {
   const initialSnapshotRef = useRef<string>("");
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const savingRef = useRef(false);
-  const handleSaveRef = useRef<() => Promise<void>>();
+  const handleSaveRef = useRef<(() => Promise<void>) | undefined>(undefined);
 
   const [pendingDelete, setPendingDelete] = useState<{
     type: "member" | "benefit" | "home" | "vehicle";
