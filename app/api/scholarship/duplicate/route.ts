@@ -62,6 +62,11 @@ export async function POST(req: NextRequest) {
     family_contribution_per_month: source.family_contribution_per_month,
     scholarship_advocacy_letter: source.scholarship_advocacy_letter,
     signature: null,
+    termination_letter: source.termination_letter ?? null,
+    last_edited: Date.now(),
+    isNotParticipating: source.isNotParticipating ?? false,
+    isSNAPBenefits: source.isSNAPBenefits ?? false,
+    isOpportunityScholarship: source.isOpportunityScholarship ?? false,
   });
 
   const newId = newScholarship.id;

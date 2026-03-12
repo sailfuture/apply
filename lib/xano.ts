@@ -158,6 +158,9 @@ export interface XanoScholarship {
   signature: Record<string, unknown> | null;
   termination_letter: Record<string, unknown> | null;
   last_edited: number | null;
+  isNotParticipating: boolean;
+  isSNAPBenefits: boolean;
+  isOpportunityScholarship: boolean;
 }
 
 export interface XanoScholarshipBenefit {
