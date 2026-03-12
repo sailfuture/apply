@@ -53,7 +53,7 @@ interface SchoolYear {
   isNextYear: boolean;
   isFuture: boolean;
   application_deadline: string | null;
-  scholarship_deadline: string | null;
+  opportunity_scholarship_deadline: string | null;
 }
 
 function isDeadlinePassed(deadline: string | null): boolean {

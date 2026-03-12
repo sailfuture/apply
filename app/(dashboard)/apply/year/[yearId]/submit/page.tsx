@@ -124,7 +124,7 @@ export default function SubmitPage() {
   const yearId = Number(params.yearId);
 
   const [yearName, setYearName] = useState("");
-  const [schoolYear, setSchoolYear] = useState<SchoolYear & { scholarship_deadline?: string | null } | null>(null);
+  const [schoolYear, setSchoolYear] = useState<SchoolYear & { opportunity_scholarship_deadline?: string | null } | null>(null);
   const [parents, setParents] = useState<Parent[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
   const [applications, setApplications] = useState<Application[]>([]);
@@ -417,7 +417,7 @@ export default function SubmitPage() {
   const studentsDetailComplete = studentsComplete && allHaveNwea;
   const studentsDetailStarted = studentsStarted || someHaveNwea;
 
-  const scholarshipDeadlinePassed = isDeadlinePassed((schoolYear as Record<string, string | null> | null)?.scholarship_deadline ?? null);
+  const scholarshipDeadlinePassed = isDeadlinePassed((schoolYear as Record<string, string | null> | null)?.opportunity_scholarship_deadline ?? null);
 
   const liabilityDoc = getDocField("liability_waiver");
   const enrollmentDoc = getDocField("enrollment_agreement");

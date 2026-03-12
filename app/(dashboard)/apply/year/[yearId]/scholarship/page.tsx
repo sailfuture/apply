@@ -73,7 +73,7 @@ import {
 interface SchoolYear {
   id: number;
   year_name: string;
-  scholarship_deadline: string | null;
+  opportunity_scholarship_deadline: string | null;
 }
 
 interface Scholarship {
@@ -123,7 +123,6 @@ interface ContributingMember {
   id: number;
   first_name: string;
   last_name: string;
-  address: string;
   address_1: string;
   address_2: string;
   city: string;
@@ -142,7 +141,6 @@ interface ContributingMember {
 interface Home {
   id: number;
   type: string;
-  address: string;
   address_1: string;
   address_2: string;
   city: string;
@@ -623,7 +621,6 @@ export default function ScholarshipPage() {
           body: JSON.stringify({
             first_name: m.first_name,
             last_name: m.last_name,
-            address: m.address,
             address_1: m.address_1,
             address_2: m.address_2,
             city: m.city,
@@ -647,7 +644,6 @@ export default function ScholarshipPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             type: h.type,
-            address: h.address,
             address_1: h.address_1,
             address_2: h.address_2,
             city: h.city,
@@ -816,7 +812,7 @@ export default function ScholarshipPage() {
   }
 
   const deadlinePassed = isDeadlinePassed(
-    schoolYear?.scholarship_deadline ?? null
+    schoolYear?.opportunity_scholarship_deadline ?? null
   );
   const isReadonly = deadlinePassed;
 

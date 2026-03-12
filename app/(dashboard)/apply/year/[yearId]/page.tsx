@@ -45,7 +45,7 @@ interface SchoolYear {
   isNextYear: boolean;
   isFuture: boolean;
   application_deadline: string | null;
-  scholarship_deadline: string | null;
+  opportunity_scholarship_deadline: string | null;
 }
 
 interface Parent {
@@ -421,7 +421,7 @@ export default function YearDetailPage() {
     );
   }
 
-  const scholarshipDeadlinePassed = isDeadlinePassed(schoolYear.scholarship_deadline);
+  const scholarshipDeadlinePassed = isDeadlinePassed(schoolYear.opportunity_scholarship_deadline);
 
   const studentsWithApps = applications
     .map((app) => ({

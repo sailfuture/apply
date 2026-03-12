@@ -30,6 +30,7 @@ export interface XanoFamily {
   isAccepted: boolean;
   registration_students_id: (number | Record<string, unknown> | unknown[])[];
   registration_parents_id: (number | Record<string, unknown> | unknown[])[];
+  registration_fee_waiver_id: number | null;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -92,6 +93,9 @@ export interface XanoApplication {
   current_grade: string;
   nwea_testing_complete: boolean;
   test_scores: Record<string, unknown> | null;
+  isSubmitted: boolean;
+  isOffered: boolean;
+  isAccepted: boolean;
 }
 
 export interface XanoApplicationStatus {
@@ -123,7 +127,7 @@ export interface XanoSchoolYear {
   isNextYear: boolean;
   isFuture: boolean;
   application_deadline: string | null;
-  scholarship_deadline: string | null;
+  opportunity_scholarship_deadline: string | null;
 }
 
 export interface XanoScholarship {
@@ -177,7 +181,6 @@ export interface XanoScholarshipContributingMember {
   registration_opportunity_scholarship_id: number;
   first_name: string;
   last_name: string;
-  address: string;
   address_1: string;
   address_2: string;
   city: string;
@@ -198,7 +201,6 @@ export interface XanoScholarshipHome {
   created_at: number;
   registration_opportunity_scholarship_id: number;
   type: string;
-  address: string;
   address_1: string;
   address_2: string;
   city: string;
