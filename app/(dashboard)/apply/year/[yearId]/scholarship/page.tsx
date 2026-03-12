@@ -993,11 +993,9 @@ export default function ScholarshipPage() {
 
             <Card
               className={`gap-0 py-0 transition-colors ${
-                scholarshipChoice === "full"
-                  ? "border-primary ring-2 ring-primary/20"
-                  : isChoiceLocked
-                    ? "opacity-50 pointer-events-none"
-                    : "cursor-pointer hover:border-primary"
+                isChoiceLocked
+                  ? "opacity-50 pointer-events-none"
+                  : "cursor-pointer hover:border-primary"
               }`}
               onClick={async () => {
                 if (isChoiceLocked) return;
