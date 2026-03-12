@@ -78,6 +78,11 @@ export async function POST(req: NextRequest) {
     family_contribution_per_month: 0,
     scholarship_advocacy_letter: "",
     signature: null,
+    termination_letter: null,
+    last_edited: null,
+    isNotParticipating: false,
+    isSNAPBenefits: false,
+    isOpportunityScholarship: false,
   });
 
   return NextResponse.json(scholarship, { status: 201 });
