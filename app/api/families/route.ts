@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const { family_name } = await req.json();
+  const { family_name, address_line_1, address_line_2, city, state, zip: zipcode } = await req.json();
   if (!family_name || typeof family_name !== "string") {
     return NextResponse.json(
       { error: "family_name is required" },
@@ -41,8 +41,20 @@ export async function POST(req: NextRequest) {
 
   const parent = await ensureParentRecord(userId, user);
 
+  if (address_line_1 || address_line_2 || city || state || zipcode) {
+    await xano.parents.update(parent.id, {
+      address_line_1: address_line_1 || parent.address_line_1,
+      address_line_2: address_line_2 ?? parent.address_line_2,
+      city: city || parent.city,
+      state: state || parent.state,
+      zipcode: zipcode || parent.zipcode,
+    });
+  }
+
   const family = await xano.families.create({
     family_name,
+    bus_transportation: false,
+    isAccepted: false,
     registration_parents_id: [parent.id],
     registration_students_id: [],
   });

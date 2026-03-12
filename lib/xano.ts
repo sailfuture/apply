@@ -15,12 +15,19 @@ export interface XanoParent {
   phone: string;
   relationship: string;
   invite_status: string;
+  address_line_1: string;
+  address_line_2: string;
+  city: string;
+  state: string;
+  zipcode: string;
 }
 
 export interface XanoFamily {
   id: number;
   created_at: number;
   family_name: string;
+  bus_transportation: boolean;
+  isAccepted: boolean;
   registration_students_id: (number | Record<string, unknown> | unknown[])[];
   registration_parents_id: (number | Record<string, unknown> | unknown[])[];
 }
@@ -52,8 +59,9 @@ export interface XanoStudent {
   date_of_birth: string;
   gender: string;
   ethnicity: string;
+  photo: string | null;
   registration_families_id: number;
-  registration_school_years_id: number;
+  registration_school_years_id: number[];
   isArchived: boolean;
 }
 
@@ -64,15 +72,26 @@ export interface XanoApplication {
   registration_families_id: number;
   registration_application_status_id: number;
   registration_school_years_id: number;
+  registration_parents_id: number;
   type: string;
-  liability_waiver: Record<string, unknown> | null;
+  liability_waiver_pandadoc_id: string | null;
+  liability_waiver_status: string | null;
+  liability_waiver_sent_at: string | null;
+  enrollment_agreement_pandadoc_id: string | null;
+  enrollment_agreement_status: string | null;
+  enrollment_agreement_sent_at: string | null;
+  liability_waiver_pdf_url: string | null;
+  enrollment_agreement_pdf_url: string | null;
   sufs_award_id: number;
-  sufs_scholarship_type: string;
-  annual_fee_waived: boolean;
-  bus_transportation: string;
+  is_bus_transportation: boolean;
+  bus_stop: string;
   current_previous_school: string;
   describe_student_strengths: string;
   describe_student_opportunities_for_growth: string;
+  last_grade_completed: string;
+  current_grade: string;
+  nwea_testing_complete: boolean;
+  test_scores: Record<string, unknown> | null;
 }
 
 export interface XanoApplicationStatus {
@@ -138,6 +157,7 @@ export interface XanoScholarship {
   family_contribution_per_month: number;
   scholarship_advocacy_letter: string;
   signature: Record<string, unknown> | null;
+  termination_letter: Record<string, unknown> | null;
   registration_opportunity_scholarship_benefits_id: number[];
   registration_opportunity_scholarship_contributing_members_id: number[];
   registration_opportunity_scholarship_home_id: number[];
@@ -159,6 +179,15 @@ export interface XanoScholarshipContributingMember {
   first_name: string;
   last_name: string;
   address: string;
+  address_1: string;
+  address_2: string;
+  city: string;
+  state: string;
+  zipcode: string;
+  estimated_annual_income: number;
+  income_verification_type: string;
+  is_w2: boolean;
+  is_pay_stubs: boolean;
   w2: Record<string, unknown> | null;
   paystub_1: Record<string, unknown> | null;
   paystub_2: Record<string, unknown> | null;
@@ -172,6 +201,11 @@ export interface XanoScholarshipHome {
   registration_opportunity_scholarship_id: number;
   type: string;
   address: string;
+  address_1: string;
+  address_2: string;
+  city: string;
+  state: string;
+  zipcode: string;
   total_value: number;
   outstanding_debt: number;
 }
@@ -186,6 +220,15 @@ export interface XanoScholarshipVehicle {
   car_year: string;
   total_value: number;
   remaining_debt: number;
+}
+
+export interface XanoBusStop {
+  id: number;
+  created_at: number;
+  name: string;
+  pick_up_time: number;
+  drop_off_time: number;
+  address: string;
 }
 
 const pendingEnsure = new Map<string, Promise<XanoParent>>();
@@ -259,6 +302,11 @@ async function _doEnsureParentRecord(
     phone: cleanPhone,
     relationship: "",
     invite_status: "active",
+    address_line_1: "",
+    address_line_2: "",
+    city: "",
+    state: "",
+    zipcode: "",
   });
 }
 
@@ -401,6 +449,16 @@ export const xano = {
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
       return res.json();
+    },
+
+    async update(id: number, data: Partial<Omit<XanoStudent, "id" | "created_at">>) {
+      const res = await fetch(`${getBaseUrl()}/registration_students/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json() as Promise<XanoStudent>;
     },
 
     async getByFamilyId(familyId: number): Promise<XanoStudent[]> {
@@ -710,6 +768,16 @@ export const xano = {
     async getByScholarshipId(scholarshipId: number): Promise<XanoScholarshipVehicle[]> {
       const all = await this.getAll();
       return all.filter((v) => v.registration_opportunity_scholarship_id === scholarshipId);
+    },
+  },
+
+  busStops: {
+    async getAll(): Promise<XanoBusStop[]> {
+      const res = await fetch(`${getBaseUrl()}/registration_bus`, {
+        cache: "no-store",
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
     },
   },
 };

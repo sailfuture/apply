@@ -10,7 +10,6 @@ import {
   CardTitle,
   CardDescription,
   CardContent,
-  CardFooter,
 } from "@/components/ui/card";
 import {
   Breadcrumb,
@@ -109,8 +108,6 @@ export default function FamilyPage() {
   const [family, setFamily] = useState<Family | null>(null);
   const [students, setStudents] = useState<Student[]>([]);
   const [loading, setLoading] = useState(true);
-  const [familyName, setFamilyName] = useState("");
-  const [creatingFamily, setCreatingFamily] = useState(false);
 
   // Invite parent sheet
   const [inviteSheetOpen, setInviteSheetOpen] = useState(false);
@@ -150,26 +147,6 @@ export default function FamilyPage() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
-
-  async function handleCreateFamily(e: React.FormEvent) {
-    e.preventDefault();
-    setCreatingFamily(true);
-    try {
-      const res = await fetch("/api/families", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ family_name: familyName }),
-      });
-      if (res.ok) {
-        await fetchData();
-        setFamilyName("");
-      }
-    } catch (err) {
-      console.error("Failed to create family:", err);
-    } finally {
-      setCreatingFamily(false);
-    }
-  }
 
   async function handleInvite(e: React.FormEvent) {
     e.preventDefault();
@@ -276,37 +253,14 @@ export default function FamilyPage() {
   }
 
   if (!family) {
+    if (typeof window !== "undefined") {
+      window.location.href = "/welcome";
+    }
     return (
       <>
         {pageHeader}
-        <div className="mx-auto max-w-lg px-4 py-12">
-          <Card>
-            <CardHeader>
-              <CardTitle>Create Your Family</CardTitle>
-              <CardDescription>
-                Set up your family to start the registration process.
-              </CardDescription>
-            </CardHeader>
-            <form onSubmit={handleCreateFamily}>
-              <CardContent>
-                <div className="grid gap-2">
-                  <Label htmlFor="family_name">Family Name</Label>
-                  <Input
-                    id="family_name"
-                    placeholder='e.g. "The Walsh Family"'
-                    value={familyName}
-                    onChange={(e) => setFamilyName(e.target.value)}
-                    required
-                  />
-                </div>
-              </CardContent>
-              <CardFooter>
-                <Button type="submit" disabled={creatingFamily}>
-                  {creatingFamily ? "Creating..." : "Create Family"}
-                </Button>
-              </CardFooter>
-            </form>
-          </Card>
+        <div className="flex min-h-[60vh] items-center justify-center">
+          <p className="text-muted-foreground">Redirecting...</p>
         </div>
       </>
     );

@@ -1,14 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
-import {
-  Card,
-  CardHeader,
-  CardTitle,
-  CardDescription,
-  CardContent,
-} from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -20,14 +14,14 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Button } from "@/components/ui/button";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-  SheetDescription,
-} from "@/components/ui/sheet";
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 interface SchoolYear {
   id: number;
@@ -54,11 +48,36 @@ interface SchoolYear {
   scholarship_deadline: string | null;
 }
 
-function isDeadlinePassed(deadline: string | null): boolean {
-  if (!deadline) return false;
-  const now = new Date();
-  const dl = new Date(deadline + "T23:59:59");
-  return now > dl;
+interface Parent {
+  id: number;
+  first_name: string;
+  last_name: string;
+  email: string;
+  phone: string;
+  address_line_1: string;
+  city: string;
+  state: string;
+  zipcode: string;
+}
+
+interface Application {
+  id: number;
+  registration_students_id: number;
+  registration_families_id: number;
+  registration_application_status_id: number;
+  registration_school_years_id: number;
+  is_bus_transportation: boolean;
+  bus_stop: string;
+  nwea_testing_complete: boolean;
+  test_scores: Record<string, unknown> | null;
+  liability_waiver_pandadoc_id: string | null;
+  liability_waiver_status: string | null;
+  liability_waiver_sent_at: string | null;
+  enrollment_agreement_pandadoc_id: string | null;
+  enrollment_agreement_status: string | null;
+  enrollment_agreement_sent_at: string | null;
+  liability_waiver_pdf_url: string | null;
+  enrollment_agreement_pdf_url: string | null;
 }
 
 interface Student {
@@ -70,47 +89,7 @@ interface Student {
   ethnicity: string;
 }
 
-interface Application {
-  id: number;
-  registration_students_id: number;
-  registration_families_id: number;
-  registration_application_status_id: number;
-  registration_school_years_id: number;
-  sufs_award_id: number;
-  sufs_scholarship_type: string;
-  annual_fee_waived: boolean;
-  bus_transportation: string;
-  current_previous_school: string;
-}
 
-const SUFS_TYPES: Record<string, string> = {
-  fes_eo_8: "FES-EO (Grade 8)",
-  fes_eo_9: "FES-EO (Grade 9)",
-  ftc_8: "FTC (Grade 8)",
-  ftc_9: "FTC (Grade 9)",
-  fes_ua_8_ese_1_3: "FES-UA ESE 1-3 (Grade 8)",
-  fes_ua_9_ese_1_3: "FES-UA ESE 1-3 (Grade 9)",
-  fes_ua_ese_4: "FES-UA ESE 4",
-  fes_ua_ese_5: "FES-UA ESE 5",
-};
-
-function getSufsAmount(type: string, year: SchoolYear): number {
-  const key = type as keyof SchoolYear;
-  if (key && key in year) {
-    const val = year[key];
-    if (typeof val === "number") return val;
-  }
-  return 0;
-}
-
-function formatCurrency(value: number): string {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  }).format(value);
-}
 
 function formatDate(date: string | null): string {
   if (!date) return "TBD";
@@ -121,85 +100,45 @@ function formatDate(date: string | null): string {
   });
 }
 
-function formatDateShort(date: string | null): string {
-  if (!date) return "TBD";
-  return new Date(date + "T00:00:00").toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
+function isDeadlinePassed(deadline: string | null): boolean {
+  if (!deadline) return false;
+  return new Date() > new Date(deadline + "T23:59:59");
 }
 
-function getInitials(first: string, last: string): string {
-  return `${first.charAt(0)}${last.charAt(0)}`.toUpperCase();
+type StepStatus = "complete" | "in_progress" | "not_started";
+
+interface Step {
+  number: number;
+  title: string;
+  description: string;
+  status: StepStatus;
+  detail: string;
+  href?: string;
+  signingType?: "liability_waiver" | "enrollment_agreement";
 }
 
-const avatarColors = [
-  "bg-blue-500",
-  "bg-emerald-500",
-  "bg-violet-500",
-  "bg-amber-500",
-  "bg-rose-500",
-  "bg-cyan-500",
-  "bg-indigo-500",
-  "bg-teal-500",
-];
-
-function getAvatarColor(id: number): string {
-  return avatarColors[id % avatarColors.length];
-}
-
-function formatAge(dob: string): string {
-  const birth = new Date(dob);
-  const today = new Date();
-  let age = today.getFullYear() - birth.getFullYear();
-  const monthDiff = today.getMonth() - birth.getMonth();
-  if (
-    monthDiff < 0 ||
-    (monthDiff === 0 && today.getDate() < birth.getDate())
-  ) {
-    age--;
+function StepNumber({ number, status }: { number: number; status: StepStatus }) {
+  if (status === "complete") {
+    return (
+      <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30">
+        <svg className="size-4 text-green-600 dark:text-green-400" viewBox="0 0 20 20" fill="currentColor">
+          <path fillRule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clipRule="evenodd" />
+        </svg>
+      </div>
+    );
   }
-  return `${age}`;
+  const bg =
+    status === "in_progress"
+      ? "bg-primary text-primary-foreground"
+      : "bg-muted text-muted-foreground";
+  return (
+    <div
+      className={`flex size-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${bg}`}
+    >
+      {number}
+    </div>
+  );
 }
-
-function getYearTypeBadge(year: SchoolYear) {
-  if (year.isActive) {
-    return {
-      label: "Active",
-      className:
-        "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400",
-    };
-  }
-  if (year.isNextYear) {
-    return {
-      label: "Next Year",
-      className:
-        "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400",
-    };
-  }
-  if (year.isPast) {
-    return {
-      label: "Past",
-      className:
-        "bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-400",
-    };
-  }
-  return null;
-}
-
-const statusColors: Record<string, string> = {
-  Draft: "bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-400",
-  Submitted:
-    "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400",
-  "Under Review":
-    "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400",
-  Accepted:
-    "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400",
-  Denied: "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400",
-  Waitlisted:
-    "bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400",
-};
 
 export default function YearDetailPage() {
   const params = useParams();
@@ -207,31 +146,38 @@ export default function YearDetailPage() {
   const yearId = Number(params.yearId);
 
   const [schoolYear, setSchoolYear] = useState<SchoolYear | null>(null);
-  const [allYears, setAllYears] = useState<SchoolYear[]>([]);
+  const [parents, setParents] = useState<Parent[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
   const [applications, setApplications] = useState<Application[]>([]);
-  const [statuses, setStatuses] = useState<Record<number, string>>({});
   const [scholarshipExists, setScholarshipExists] = useState(false);
   const [loading, setLoading] = useState(true);
   const [familyId, setFamilyId] = useState<number | null>(null);
+  const [isAccepted, setIsAccepted] = useState(false);
 
-  const [addingStudentId, setAddingStudentId] = useState<number | null>(null);
-
-  const [startSheetOpen, setStartSheetOpen] = useState(false);
-  const [priorScholarships, setPriorScholarships] = useState<
-    { id: number; year_name: string; registration_school_years_id: number }[]
-  >([]);
-  const [duplicating, setDuplicating] = useState(false);
+  const [signingLoading, setSigningLoading] = useState<string | null>(null);
+  const [resetConfirm, setResetConfirm] = useState<"liability_waiver" | "enrollment_agreement" | null>(null);
+  const [resetting, setResetting] = useState(false);
+  const [signingSession, setSigningSession] = useState<{
+    sessionId: string;
+    documentId: string;
+    type: "liability_waiver" | "enrollment_agreement";
+    applicationId: number;
+  } | null>(null);
+  const pollingRef = useRef<NodeJS.Timeout | null>(null);
 
   const fetchData = useCallback(async () => {
     try {
       const familyRes = await fetch("/api/families");
       let fId: number | null = null;
+      let fetchedParents: Parent[] = [];
       if (familyRes.ok) {
         const fam = await familyRes.json();
         if (fam?.id) {
           fId = fam.id;
           setFamilyId(fId);
+          setIsAccepted(fam.isAccepted ?? false);
+          fetchedParents = fam.parents ?? [];
+          setParents(fetchedParents);
         }
       }
 
@@ -239,7 +185,6 @@ export default function YearDetailPage() {
         fetch("/api/school-years"),
         fetch("/api/students"),
         fetch("/api/applications"),
-        fetch("/api/application-statuses"),
       ];
       if (fId) {
         fetches.push(
@@ -247,12 +192,11 @@ export default function YearDetailPage() {
         );
       }
 
-      const [yearsRes, studentsRes, appsRes, statusesRes, scholarshipRes] =
+      const [yearsRes, studentsRes, appsRes, scholarshipRes] =
         await Promise.all(fetches);
 
       if (yearsRes.ok) {
         const years: SchoolYear[] = await yearsRes.json();
-        setAllYears(years);
         const found = years.find((y) => y.id === yearId);
         if (found) setSchoolYear(found);
       }
@@ -264,14 +208,6 @@ export default function YearDetailPage() {
         setApplications(
           allApps.filter((a) => a.registration_school_years_id === yearId)
         );
-      }
-
-      if (statusesRes.ok) {
-        const statusList: { id: number; status_name: string }[] =
-          await statusesRes.json();
-        const map: Record<number, string> = {};
-        statusList.forEach((s) => (map[s.id] = s.status_name));
-        setStatuses(map);
       }
 
       if (scholarshipRes?.ok) {
@@ -289,107 +225,179 @@ export default function YearDetailPage() {
     fetchData();
   }, [fetchData]);
 
-  function getStudent(studentId: number): Student | undefined {
-    return students.find((s) => s.id === studentId);
-  }
+  useEffect(() => {
+    return () => {
+      if (pollingRef.current) clearInterval(pollingRef.current);
+    };
+  }, []);
 
-  function getStatusName(statusId: number): string {
-    return statuses[statusId] ?? "Unknown";
-  }
+  const signingInstanceRef = useRef<{ destroy: () => void } | null>(null);
 
-  // Students that have an application for this year
-  const studentsWithApps = applications
-    .map((app) => ({
-      app,
-      student: getStudent(app.registration_students_id),
-    }))
-    .filter(
-      (item): item is { app: Application; student: Student } =>
-        !!item.student
-    );
+  useEffect(() => {
+    if (!signingSession) return;
 
-  // Students that don't yet have an application for this year
-  const studentsWithoutApps = students.filter(
-    (s) =>
-      !applications.some((a) => a.registration_students_id === s.id)
-  );
+    let cancelled = false;
 
-  async function handleStartScholarship() {
-    if (!familyId) return;
+    const init = async () => {
+      await new Promise((r) => setTimeout(r, 400));
+      if (cancelled) return;
 
-    const res = await fetch(`/api/scholarship?familyId=${familyId}`);
-    if (res.ok) {
-      const allScholarships: {
-        id: number;
-        registration_school_years_id: number;
-      }[] = await res.json();
+      const wrapper = document.getElementById("pandadoc-signing-wrapper");
+      if (!wrapper) return;
 
-      const otherYearScholarships = allScholarships
-        .filter((s) => s.registration_school_years_id !== yearId)
-        .map((s) => {
-          const yr = allYears.find((y) => y.id === s.registration_school_years_id);
-          return {
-            id: s.id,
-            year_name: yr?.year_name ?? `Year #${s.registration_school_years_id}`,
-            registration_school_years_id: s.registration_school_years_id,
-          };
+      wrapper.innerHTML = '<div id="pandadoc-signing-embed"></div>';
+
+      const { Signing } = await import("pandadoc-signing");
+      if (cancelled) return;
+
+      if (signingInstanceRef.current) {
+        signingInstanceRef.current.destroy();
+        signingInstanceRef.current = null;
+      }
+
+      const signing = new Signing(
+        "pandadoc-signing-embed",
+        { debugMode: true },
+      );
+
+      signing
+        .on("document.loaded", () => {
+          console.log("PandaDoc: document loaded");
+        })
+        .on("document.completed", () => {
+          fetchData();
+        })
+        .on("document.exception", (payload: unknown) => {
+          console.error("PandaDoc signing exception:", payload);
         });
 
-      setPriorScholarships(otherYearScholarships);
-    }
+      signingInstanceRef.current = signing;
 
-    setStartSheetOpen(true);
+      await signing.open({ sessionId: signingSession.sessionId });
+    };
+
+    init();
+
+    return () => {
+      cancelled = true;
+      if (signingInstanceRef.current) {
+        signingInstanceRef.current.destroy();
+        signingInstanceRef.current = null;
+      }
+    };
+  }, [signingSession, fetchData]);
+
+  function getDocField(type: "liability_waiver" | "enrollment_agreement") {
+    if (applications.length === 0) return { pandadocId: null, status: null, pdfUrl: null };
+    const app = applications[0];
+    if (type === "liability_waiver") {
+      return {
+        pandadocId: app.liability_waiver_pandadoc_id,
+        status: app.liability_waiver_status,
+        pdfUrl: app.liability_waiver_pdf_url,
+      };
+    }
+    return {
+      pandadocId: app.enrollment_agreement_pandadoc_id,
+      status: app.enrollment_agreement_status,
+      pdfUrl: app.enrollment_agreement_pdf_url,
+    };
   }
 
-  async function handleDuplicate(sourceScholarshipId: number) {
-    if (!familyId) return;
-    setDuplicating(true);
+  function viewDocument(type: "liability_waiver" | "enrollment_agreement") {
+    if (applications.length === 0) return;
+    const app = applications[0];
+    const docId = type === "liability_waiver"
+      ? app.liability_waiver_pandadoc_id
+      : app.enrollment_agreement_pandadoc_id;
+    if (!docId) return;
+    window.open(`/api/pandadoc/download?documentId=${docId}&applicationId=${app.id}`, "_blank");
+  }
+
+  async function handleSign(type: "liability_waiver" | "enrollment_agreement") {
+    if (applications.length === 0) return;
+    const app = applications[0];
+
+    setSigningLoading(type);
     try {
-      const res = await fetch("/api/scholarship/duplicate", {
+      const res = await fetch("/api/pandadoc/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          source_scholarship_id: sourceScholarshipId,
-          registration_families_id: familyId,
-          registration_school_years_id: yearId,
-        }),
+        body: JSON.stringify({ type, applicationId: app.id }),
       });
-      if (res.ok) {
-        setStartSheetOpen(false);
-        router.push(`/apply/year/${yearId}/scholarship`);
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        console.error("Signing error:", body?.error ?? res.statusText);
+        return;
       }
+
+      const { documentId, sessionId } = await res.json();
+      setSigningSession({ sessionId, documentId, type, applicationId: app.id });
+      startPolling(documentId, type, app.id);
     } catch (err) {
-      console.error("Duplicate failed:", err);
+      console.error("Failed to initiate signing:", err);
     } finally {
-      setDuplicating(false);
+      setSigningLoading(null);
     }
   }
 
-  function handleStartFresh() {
-    setStartSheetOpen(false);
-    router.push(`/apply/year/${yearId}/scholarship`);
+  function handleSigningClose() {
+    setSigningSession(null);
   }
 
-  async function handleAddStudent(studentId: number) {
-    setAddingStudentId(studentId);
+  async function handleResetConfirmed() {
+    if (!resetConfirm || applications.length === 0) return;
+    const app = applications[0];
+
+    setResetting(true);
     try {
-      const res = await fetch("/api/applications", {
+      const res = await fetch("/api/pandadoc/reset", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          registration_students_id: studentId,
-          registration_school_years_id: yearId,
-        }),
+        body: JSON.stringify({ type: resetConfirm, applicationId: app.id }),
       });
-      if (res.ok) {
-        const newApp = await res.json();
-        setApplications((prev) => [...prev, newApp]);
+
+      if (!res.ok) {
+        console.error("Reset failed");
+        return;
       }
+
+      await fetchData();
     } catch (err) {
-      console.error("Failed to add student:", err);
+      console.error("Failed to reset document:", err);
     } finally {
-      setAddingStudentId(null);
+      setResetting(false);
+      setResetConfirm(null);
     }
+  }
+
+  function startPolling(
+    documentId: string,
+    type: "liability_waiver" | "enrollment_agreement",
+    applicationId: number
+  ) {
+    if (pollingRef.current) clearInterval(pollingRef.current);
+
+    pollingRef.current = setInterval(async () => {
+      try {
+        const res = await fetch(
+          `/api/pandadoc/status?documentId=${documentId}&applicationId=${applicationId}&type=${type}`
+        );
+        if (!res.ok) return;
+        const data = await res.json();
+
+        if (data.status === "completed" || data.status === "viewed") {
+          await fetchData();
+          if (data.status === "completed" && pollingRef.current) {
+            clearInterval(pollingRef.current);
+            pollingRef.current = null;
+          }
+        }
+      } catch {
+        // polling errors are non-critical
+      }
+    }, 5000);
   }
 
   if (loading) {
@@ -414,669 +422,466 @@ export default function YearDetailPage() {
     );
   }
 
-  const badge = getYearTypeBadge(schoolYear);
   const appDeadlinePassed = isDeadlinePassed(schoolYear.application_deadline);
-  const scholarshipDeadlinePassed = isDeadlinePassed(
-    schoolYear.scholarship_deadline
+  const scholarshipDeadlinePassed = isDeadlinePassed(schoolYear.scholarship_deadline);
+
+  const studentsWithApps = applications
+    .map((app) => ({
+      app,
+      student: students.find((s) => s.id === app.registration_students_id),
+    }))
+    .filter(
+      (item): item is { app: Application; student: Student } => !!item.student
+    );
+
+  // -- Derive step completion --
+
+  const parentComplete = parents.some(
+    (p) => p.address_line_1 && p.phone && p.email
   );
+  const parentStarted = parents.length > 0;
+
+  const studentsEnrolled = studentsWithApps.length;
+  const studentsTotal = students.length;
+  const studentsComplete = studentsEnrolled > 0;
+  const studentsStarted = studentsTotal > 0;
+
+  const scholarshipComplete = scholarshipExists;
+
+  
+
+  const allHaveNwea =
+    studentsEnrolled > 0 &&
+    studentsWithApps.every(
+      ({ app }) => app.nwea_testing_complete || app.test_scores !== null
+    );
+  const someHaveNwea = studentsWithApps.some(
+    ({ app }) => app.nwea_testing_complete || app.test_scores !== null
+  );
+
+  function getStatus(complete: boolean, started: boolean): StepStatus {
+    if (complete) return "complete";
+    if (started) return "in_progress";
+    return "not_started";
+  }
+
+  const studentsDetailComplete =
+    studentsComplete && allHaveNwea;
+  const studentsDetailStarted =
+    studentsStarted || someHaveNwea;
+
+  const liabilityDoc = getDocField("liability_waiver");
+  const enrollmentDoc = getDocField("enrollment_agreement");
+
+  const liabilityComplete = liabilityDoc.status === "completed";
+  const liabilitySent = !!liabilityDoc.pandadocId;
+  const enrollmentComplete = enrollmentDoc.status === "completed";
+  const enrollmentSent = !!enrollmentDoc.pandadocId;
+
+  const steps: Step[] = [
+    {
+      number: 1,
+      title: "Family",
+      description: "Contact information, addresses, and parents",
+      status: getStatus(parentComplete, parentStarted),
+      detail: parentComplete
+        ? "Complete"
+        : parentStarted
+          ? "Address or contact missing"
+          : "Not started",
+      href: `/apply/year/${yearId}/family`,
+    },
+    {
+      number: 2,
+      title: "Students",
+      description:
+        "Enroll students, transportation, scholarships, and NWEA testing",
+      status: getStatus(studentsDetailComplete, studentsDetailStarted),
+      detail: studentsDetailComplete
+        ? `${studentsEnrolled} student${studentsEnrolled !== 1 ? "s" : ""} — complete`
+        : studentsComplete
+          ? `${studentsEnrolled} enrolled — details pending`
+          : studentsStarted
+            ? `${studentsTotal} student${studentsTotal !== 1 ? "s" : ""} available`
+            : "No students added",
+      href: `/apply/year/${yearId}/students`,
+    },
+    {
+      number: 3,
+      title: "Scholarships",
+      description: "Complete the family opportunity scholarship application",
+      status: getStatus(scholarshipComplete, false),
+      detail: scholarshipComplete
+        ? "Submitted"
+        : scholarshipDeadlinePassed
+          ? "Deadline passed"
+          : "Not started",
+      href: `/apply/year/${yearId}/scholarship`,
+    },
+    {
+      number: 4,
+      title: "Liability Waiver",
+      description: "Review and sign the liability waiver",
+      status: getStatus(liabilityComplete, liabilitySent),
+      detail: liabilityComplete
+        ? "Signed"
+        : liabilitySent
+          ? "Awaiting signature"
+          : "Not started",
+      signingType: "liability_waiver",
+    },
+    {
+      number: 5,
+      title: "Enrollment Agreement",
+      description: "Review and sign the enrollment agreement",
+      status: getStatus(enrollmentComplete, enrollmentSent),
+      detail: enrollmentComplete
+        ? "Signed"
+        : enrollmentSent
+          ? "Awaiting signature"
+          : "Not started",
+      signingType: "enrollment_agreement",
+    },
+  ];
 
   return (
     <>
+      {signingLoading && (
+        <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-background/80 backdrop-blur-sm">
+          <svg
+            className="size-10 animate-spin text-primary mb-4"
+            xmlns="http://www.w3.org/2000/svg"
+            fill="none"
+            viewBox="0 0 24 24"
+          >
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+          </svg>
+          <p className="text-lg font-medium">Preparing Document</p>
+          <p className="text-sm text-muted-foreground mt-1">This may take a few moments...</p>
+        </div>
+      )}
       <PageHeader yearName={schoolYear.year_name} />
       <div className="flex flex-1 flex-col gap-6 p-4 pt-0">
         {/* Year Overview */}
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="flex items-center gap-3">
-              <h1 className="text-2xl font-semibold">
-                {schoolYear.year_name}
-              </h1>
-              {badge && (
-                <span
-                  className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${badge.className}`}
-                >
-                  {badge.label}
-                </span>
-              )}
-            </div>
-            <p className="text-muted-foreground text-sm">
-              {formatDate(schoolYear.start_date)} &mdash;{" "}
-              {formatDate(schoolYear.end_date)}
-            </p>
+        <div>
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl font-semibold">
+              {schoolYear.year_name}
+            </h1>
+            <YearBadge year={schoolYear} />
           </div>
+          <p className="text-muted-foreground text-sm">
+            {formatDate(schoolYear.start_date)} &mdash;{" "}
+            {formatDate(schoolYear.end_date)}
+          </p>
         </div>
 
-        {/* Year Details Card */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Year Details</CardTitle>
-            <CardDescription>
-              Tuition, fees, and deadline information for this school year.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-3 lg:grid-cols-5">
+        {/* Status Banner */}
+        {!isAccepted && (
+          <Card className="border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30 gap-0 py-0">
+            <CardContent className="py-4 flex items-start gap-3">
+              <svg
+                className="size-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5"
+                viewBox="0 0 20 20"
+                fill="currentColor"
+              >
+                <path
+                  fillRule="evenodd"
+                  d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a.75.75 0 000 1.5h.253a.25.25 0 01.244.304l-.459 2.066A1.75 1.75 0 0010.747 15H11a.75.75 0 000-1.5h-.253a.25.25 0 01-.244-.304l.459-2.066A1.75 1.75 0 009.253 9H9z"
+                  clipRule="evenodd"
+                />
+              </svg>
               <div>
-                <p className="text-muted-foreground text-xs">Tuition</p>
-                <p className="font-medium">
-                  {formatCurrency(schoolYear.tuition)}
+                <p className="text-sm font-medium text-amber-800 dark:text-amber-300">
+                  Pending Acceptance
                 </p>
-              </div>
-              <div>
-                <p className="text-muted-foreground text-xs">Annual Fees</p>
-                <p className="font-medium">
-                  {formatCurrency(schoolYear.annual_fees)}
+                <p className="text-xs text-amber-700 dark:text-amber-400 mt-0.5">
+                  Complete and submit your application below. You will be notified once an acceptance determination has been made.
                 </p>
-              </div>
-              <div>
-                <p className="text-muted-foreground text-xs">Transportation</p>
-                <p className="font-medium">
-                  {formatCurrency(schoolYear.transportation_fees)}
-                </p>
-              </div>
-              <div>
-                <p className="text-muted-foreground text-xs">
-                  Application Deadline
-                </p>
-                <p
-                  className={`font-medium ${appDeadlinePassed ? "text-red-600 dark:text-red-400" : ""}`}
-                >
-                  {schoolYear.application_deadline
-                    ? formatDate(schoolYear.application_deadline)
-                    : "No deadline"}
-                  {appDeadlinePassed && (
-                    <span className="ml-1.5 text-[10px] font-normal uppercase">
-                      Closed
-                    </span>
-                  )}
-                </p>
-              </div>
-              <div>
-                <p className="text-muted-foreground text-xs">
-                  Scholarship Deadline
-                </p>
-                <p
-                  className={`font-medium ${scholarshipDeadlinePassed ? "text-red-600 dark:text-red-400" : ""}`}
-                >
-                  {schoolYear.scholarship_deadline
-                    ? formatDate(schoolYear.scholarship_deadline)
-                    : "No deadline"}
-                  {scholarshipDeadlinePassed && (
-                    <span className="ml-1.5 text-[10px] font-normal uppercase">
-                      Closed
-                    </span>
-                  )}
-                </p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Opportunity Scholarship */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Opportunity Scholarship</CardTitle>
-            <CardDescription>
-              Family scholarship submission for {schoolYear.year_name}.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <span
-                  className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                    scholarshipExists
-                      ? "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400"
-                      : "bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-400"
-                  }`}
-                >
-                  {scholarshipExists ? "In Progress" : "Not Started"}
-                </span>
-                <p className="text-muted-foreground text-sm">
-                  {scholarshipDeadlinePassed
-                    ? "The scholarship deadline has passed for this year."
-                    : scholarshipExists
-                      ? "Your scholarship application is in progress."
-                      : "No scholarship application has been started for this year."}
-                </p>
-              </div>
-              {scholarshipDeadlinePassed ? (
-                scholarshipExists ? (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() =>
-                      router.push(`/apply/year/${yearId}/scholarship`)
-                    }
-                  >
-                    View Application
-                  </Button>
-                ) : (
-                  <Button variant="outline" size="sm" disabled>
-                    Deadline Passed
-                  </Button>
-                )
-              ) : !schoolYear.isPast ? (
-                scholarshipExists ? (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() =>
-                      router.push(`/apply/year/${yearId}/scholarship`)
-                    }
-                  >
-                    Continue Application
-                  </Button>
-                ) : (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleStartScholarship}
-                  >
-                    Start Application
-                  </Button>
-                )
-              ) : null}
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Annual Cost Breakdown */}
-        {studentsWithApps.length > 0 && (
-          <Card>
-            <CardHeader>
-              <CardTitle>Annual Cost Breakdown</CardTitle>
-              <CardDescription>
-                Estimated costs based on student preferences and scholarship
-                awards for {schoolYear.year_name}.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="rounded-lg border">
-                <table className="w-full">
-                  <thead>
-                    <tr className="border-b">
-                      <th className="text-muted-foreground px-4 py-3 text-left text-xs font-medium uppercase tracking-wider">
-                        Description
-                      </th>
-                      <th className="text-muted-foreground px-4 py-3 text-right text-xs font-medium uppercase tracking-wider">
-                        Amount
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y">
-                    {/* Costs & Fees */}
-                    <tr className="bg-muted/20">
-                      <td
-                        colSpan={2}
-                        className="px-4 py-2 text-xs font-semibold uppercase tracking-wider"
-                      >
-                        Costs &amp; Fees
-                      </td>
-                    </tr>
-                    {studentsWithApps.map(({ app, student }) => {
-                      const hasTransport =
-                        app.bus_transportation?.toLowerCase() === "yes";
-                      const name = `${student.first_name} ${student.last_name}`;
-
-                      return (
-                        <CostFeeRows
-                          key={student.id}
-                          studentName={name}
-                          tuition={schoolYear.tuition}
-                          annualFee={schoolYear.annual_fees}
-                          annualFeeWaived={app.annual_fee_waived}
-                          transportationFee={schoolYear.transportation_fees}
-                          hasTransport={hasTransport}
-                        />
-                      );
-                    })}
-
-                    {/* Scholarships & Deductions */}
-                    <tr className="bg-muted/20">
-                      <td
-                        colSpan={2}
-                        className="px-4 py-2 text-xs font-semibold uppercase tracking-wider"
-                      >
-                        Scholarships &amp; Deductions
-                      </td>
-                    </tr>
-                    {studentsWithApps.map(({ app, student }) => {
-                      const sufsAmt = app.sufs_scholarship_type
-                        ? getSufsAmount(
-                            app.sufs_scholarship_type,
-                            schoolYear
-                          )
-                        : 0;
-                      const name = `${student.first_name} ${student.last_name}`;
-                      const hasSufs =
-                        !!app.sufs_scholarship_type &&
-                        app.sufs_scholarship_type !== "none";
-
-                      return (
-                        <tr key={student.id}>
-                          <td className="px-4 py-2 text-sm">
-                            <div className="flex items-center gap-2">
-                              <div>
-                                <span className="font-medium">{name}</span>
-                                <span className="text-muted-foreground">
-                                  {" — "}
-                                  {hasSufs
-                                    ? (SUFS_TYPES[
-                                        app.sufs_scholarship_type
-                                      ] ?? "SUFS Scholarship")
-                                    : "Step Up for Students Scholarship"}
-                                </span>
-                              </div>
-                              {!hasSufs && (
-                                <span
-                                  className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-400"
-                                  title="No SUFS scholarship type selected"
-                                >
-                                  <svg
-                                    className="size-3"
-                                    viewBox="0 0 20 20"
-                                    fill="currentColor"
-                                  >
-                                    <path
-                                      fillRule="evenodd"
-                                      d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 6a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 6zm0 9a1 1 0 100-2 1 1 0 000 2z"
-                                      clipRule="evenodd"
-                                    />
-                                  </svg>
-                                  Missing
-                                </span>
-                              )}
-                            </div>
-                          </td>
-                          <td className="px-4 py-2 text-right text-sm">
-                            {sufsAmt > 0 ? (
-                              <span className="text-green-600 dark:text-green-400">
-                                -{formatCurrency(sufsAmt)}
-                              </span>
-                            ) : (
-                              <span className="text-muted-foreground">$0</span>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-
-                    <tr>
-                      <td className="px-4 py-2 text-sm">
-                        <div className="flex items-center gap-2">
-                          <div>
-                            <span className="font-medium">
-                              SailFuture Opportunity Scholarship Award
-                            </span>
-                          </div>
-                          {!scholarshipExists && (
-                            <span
-                              className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-400"
-                              title="No opportunity scholarship application"
-                            >
-                              <svg
-                                className="size-3"
-                                viewBox="0 0 20 20"
-                                fill="currentColor"
-                              >
-                                <path
-                                  fillRule="evenodd"
-                                  d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 6a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 6zm0 9a1 1 0 100-2 1 1 0 000 2z"
-                                  clipRule="evenodd"
-                                />
-                              </svg>
-                              Not Started
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-4 py-2 text-right text-sm">
-                        <div className="flex items-center justify-end gap-2">
-                          {scholarshipExists &&
-                          schoolYear.opportunity_scholarship_award > 0 ? (
-                            <span className="font-medium text-green-600 dark:text-green-400">
-                              -{formatCurrency(schoolYear.opportunity_scholarship_award)}
-                            </span>
-                          ) : (
-                            <span className="text-muted-foreground">$0</span>
-                          )}
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-7 px-2 text-xs"
-                            onClick={() =>
-                              router.push(
-                                `/apply/year/${yearId}/scholarship`
-                              )
-                            }
-                          >
-                            {scholarshipExists ? "View" : "Apply"} &rarr;
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-
-                    {/* Total */}
-                    <tr className="bg-muted/30 font-semibold">
-                      <td className="px-4 py-3 text-sm">
-                        Estimated Annual Total
-                      </td>
-                      <td className="px-4 py-3 text-right text-sm">
-                        {(() => {
-                          let total = 0;
-                          studentsWithApps.forEach(({ app }) => {
-                            total += schoolYear.tuition ?? 0;
-
-                            if (app.sufs_scholarship_type) {
-                              total -= getSufsAmount(
-                                app.sufs_scholarship_type,
-                                schoolYear
-                              );
-                            }
-
-                            if (!app.annual_fee_waived) {
-                              total += schoolYear.annual_fees ?? 0;
-                            }
-
-                            if (
-                              app.bus_transportation?.toLowerCase() === "yes"
-                            ) {
-                              total += schoolYear.transportation_fees ?? 0;
-                            }
-                          });
-
-                          if (
-                            scholarshipExists &&
-                            schoolYear.opportunity_scholarship_award > 0
-                          ) {
-                            total -= schoolYear.opportunity_scholarship_award;
-                          }
-
-                          return formatCurrency(Math.max(total, 0));
-                        })()}
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
               </div>
             </CardContent>
           </Card>
         )}
 
-        {/* Student Applications */}
+        {isAccepted && (
+          <Card className="border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-950/30 gap-0 py-0">
+            <CardContent className="py-4 flex items-start gap-3">
+              <svg
+                className="size-5 text-green-600 dark:text-green-400 shrink-0 mt-0.5"
+                viewBox="0 0 20 20"
+                fill="currentColor"
+              >
+                <path
+                  fillRule="evenodd"
+                  d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z"
+                  clipRule="evenodd"
+                />
+              </svg>
+              <div>
+                <p className="text-sm font-medium text-green-800 dark:text-green-300">
+                  Accepted
+                </p>
+                <p className="text-xs text-green-700 dark:text-green-400 mt-0.5">
+                  Congratulations! Your family has been accepted for {schoolYear.year_name}. Review your application details below.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Application Checklist */}
         <div>
-          <div className="mb-4 flex items-center justify-between">
-            <div>
-              <h2 className="text-lg font-semibold">Student Applications</h2>
-              <p className="text-muted-foreground text-sm">
-                Select which students to include in this year&apos;s
-                application.
-              </p>
-            </div>
-          </div>
+          <h2 className="text-lg font-semibold mb-1">
+            {isAccepted ? "Application Details" : "Application Checklist"}
+          </h2>
+          <p className="text-muted-foreground text-sm mb-4">
+            {isAccepted
+              ? `Review your completed application for ${schoolYear.year_name}.`
+              : `Complete each step to finish your application for ${schoolYear.year_name}.`}
+          </p>
+          <div className="grid gap-3">
+            {steps.map((step) => {
+              if (step.signingType) {
+                const isSigning = signingLoading === step.signingType;
+                const isSigned = step.status === "complete";
+                const isSent = step.status === "in_progress";
 
-          {students.length === 0 ? (
-            <div className="flex min-h-[20vh] items-center justify-center rounded-lg border">
-              <p className="text-muted-foreground text-sm">
-                No students in your family yet. Add students from the{" "}
-                <button
-                  type="button"
-                  onClick={() => router.push("/family")}
-                  className="text-primary underline"
-                >
-                  Family
-                </button>{" "}
-                page.
-              </p>
-            </div>
-          ) : (
-            <div className="rounded-lg border">
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b">
-                    <th className="text-muted-foreground px-4 py-3 text-left text-xs font-medium uppercase tracking-wider">
-                      Student
-                    </th>
-                    <th className="text-muted-foreground hidden px-4 py-3 text-left text-xs font-medium uppercase tracking-wider sm:table-cell">
-                      Date of Birth
-                    </th>
-                    <th className="text-muted-foreground hidden px-4 py-3 text-left text-xs font-medium uppercase tracking-wider md:table-cell">
-                      Age
-                    </th>
-                    <th className="text-muted-foreground px-4 py-3 text-left text-xs font-medium uppercase tracking-wider">
-                      Status
-                    </th>
-                    <th className="px-4 py-3 text-right text-xs font-medium">
-                      <span className="sr-only">Action</span>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y">
-                  {students.map((student) => {
-                    const appMatch = applications.find(
-                      (a) => a.registration_students_id === student.id
-                    );
-                    const isEnrolled = !!appMatch;
-                    const canApply =
-                      !schoolYear.isPast && !appDeadlinePassed;
-                    const status = isEnrolled
-                      ? getStatusName(
-                          appMatch.registration_application_status_id
-                        )
-                      : null;
-                    const colorClass = status
-                      ? statusColors[status] ??
-                        "bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-400"
-                      : "";
-
-                    return (
-                      <tr
-                        key={student.id}
-                        onClick={() =>
-                          isEnrolled &&
-                          router.push(`/apply/${student.id}`)
-                        }
-                        className={`transition-colors ${
-                          isEnrolled
-                            ? "hover:bg-muted/50 cursor-pointer"
-                            : ""
+                return (
+                  <div
+                    key={step.number}
+                    className="flex w-full items-center gap-4 rounded-md border px-4 py-4"
+                  >
+                    <StepNumber number={step.number} status={step.status} />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium">{step.title}</p>
+                      <p className="text-muted-foreground text-xs mt-0.5 truncate">
+                        {step.description}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-3 shrink-0">
+                      <span
+                        className={`text-xs font-medium ${
+                          step.status === "complete"
+                            ? "text-green-600 dark:text-green-400"
+                            : step.status === "in_progress"
+                              ? "text-amber-600 dark:text-amber-400"
+                              : "text-muted-foreground"
                         }`}
                       >
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-3">
-                            <Avatar size="default">
-                              <AvatarFallback
-                                className={`${getAvatarColor(student.id)} text-xs font-medium text-white`}
-                              >
-                                {getInitials(
-                                  student.first_name,
-                                  student.last_name
-                                )}
-                              </AvatarFallback>
-                            </Avatar>
-                            <div>
-                              <p className="text-sm font-medium">
-                                {student.first_name} {student.last_name}
-                              </p>
-                              {student.ethnicity && (
-                                <p className="text-muted-foreground text-xs">
-                                  {student.ethnicity}
-                                </p>
-                              )}
-                            </div>
-                          </div>
-                        </td>
-                        <td className="text-muted-foreground hidden px-4 py-3 text-sm sm:table-cell">
-                          {student.date_of_birth
-                            ? formatDateShort(student.date_of_birth)
-                            : "—"}
-                        </td>
-                        <td className="text-muted-foreground hidden px-4 py-3 text-sm md:table-cell">
-                          {student.date_of_birth
-                            ? formatAge(student.date_of_birth)
-                            : "—"}
-                        </td>
-                        <td className="px-4 py-3">
-                          {isEnrolled ? (
-                            <span
-                              className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${colorClass}`}
-                            >
-                              {status}
-                            </span>
-                          ) : appDeadlinePassed ? (
-                            <span className="text-muted-foreground text-xs">
-                              Deadline passed
-                            </span>
-                          ) : (
-                            <span className="text-muted-foreground text-xs">
-                              Not added
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3 text-right">
-                          {isEnrolled ? (
-                            <span className="text-muted-foreground text-xs">
-                              View &rarr;
-                            </span>
-                          ) : canApply ? (
+                        {step.detail}
+                      </span>
+                      {isSigned ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => viewDocument(step.signingType!)}
+                        >
+                          View Document
+                        </Button>
+                      ) : (
+                        <>
+                          {isSent && (
                             <Button
-                              variant="outline"
                               size="sm"
-                              className="h-7 px-3 text-xs"
-                              disabled={addingStudentId === student.id}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleAddStudent(student.id);
-                              }}
+                              variant="ghost"
+                              disabled={isSigning}
+                              onClick={() => setResetConfirm(step.signingType!)}
                             >
-                              {addingStudentId === student.id
-                                ? "Adding..."
-                                : "Add to Application"}
+                              Start Over
                             </Button>
-                          ) : null}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
+                          )}
+                          <Button
+                            size="sm"
+                            disabled={isSigning || applications.length === 0}
+                            onClick={() => handleSign(step.signingType!)}
+                          >
+                            {isSent
+                              ? "Resume Signing"
+                              : "Sign Document"}
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                );
+              }
+
+              return (
+                <Button
+                  key={step.number}
+                  variant="outline"
+                  className="h-auto w-full justify-start gap-4 px-4 py-4 text-left"
+                  onClick={() => step.href && router.push(step.href)}
+                >
+                  <StepNumber number={step.number} status={step.status} />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium">{step.title}</p>
+                    <p className="text-muted-foreground text-xs mt-0.5 font-normal truncate">
+                      {step.description}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-3 shrink-0">
+                    <span
+                      className={`text-xs font-medium ${
+                        step.status === "complete"
+                          ? "text-green-600 dark:text-green-400"
+                          : step.status === "in_progress"
+                            ? "text-blue-600 dark:text-blue-400"
+                            : "text-muted-foreground"
+                      }`}
+                    >
+                      {step.detail}
+                    </span>
+                    <svg
+                      className="size-4 text-muted-foreground"
+                      viewBox="0 0 20 20"
+                      fill="currentColor"
+                    >
+                      <path
+                        fillRule="evenodd"
+                        d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z"
+                        clipRule="evenodd"
+                      />
+                    </svg>
+                  </div>
+                </Button>
+              );
+            })}
+          </div>
         </div>
+
+        {/* Deadlines */}
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Card>
+            <CardContent className="pt-6">
+              <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                Application Deadline
+              </p>
+              <p
+                className={`text-sm font-medium mt-1 ${appDeadlinePassed ? "text-red-600 dark:text-red-400" : ""}`}
+              >
+                {schoolYear.application_deadline
+                  ? formatDate(schoolYear.application_deadline)
+                  : "No deadline"}
+                {appDeadlinePassed && (
+                  <span className="ml-1.5 text-[10px] font-normal uppercase">
+                    Closed
+                  </span>
+                )}
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="pt-6">
+              <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                Scholarship Deadline
+              </p>
+              <p
+                className={`text-sm font-medium mt-1 ${scholarshipDeadlinePassed ? "text-red-600 dark:text-red-400" : ""}`}
+              >
+                {schoolYear.scholarship_deadline
+                  ? formatDate(schoolYear.scholarship_deadline)
+                  : "No deadline"}
+                {scholarshipDeadlinePassed && (
+                  <span className="ml-1.5 text-[10px] font-normal uppercase">
+                    Closed
+                  </span>
+                )}
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+
       </div>
 
-      {/* Start Scholarship Sheet */}
-      <Sheet open={startSheetOpen} onOpenChange={setStartSheetOpen}>
-        <SheetContent>
-          <SheetHeader>
-            <SheetTitle>Start Scholarship Application</SheetTitle>
-            <SheetDescription>
-              Choose how you&apos;d like to begin your opportunity scholarship
-              application for {schoolYear?.year_name}.
-            </SheetDescription>
-          </SheetHeader>
-          <div className="flex flex-col gap-4 p-4">
-            <Button onClick={handleStartFresh} variant="default">
-              Start from Scratch
-            </Button>
+        <Dialog open={!!signingSession} onOpenChange={(open) => { if (!open) handleSigningClose(); }}>
+            <DialogContent className="sm:max-w-[95vw] w-[95vw] h-[90vh] p-0 flex flex-col overflow-hidden">
+            <DialogHeader className="px-6 pt-6 pb-2 shrink-0">
+              <DialogTitle>
+                {signingSession?.type === "liability_waiver"
+                  ? "Sign Liability Waiver"
+                  : "Sign Enrollment Agreement"}
+              </DialogTitle>
+              <DialogDescription>
+                Review and sign the document below.
+              </DialogDescription>
+            </DialogHeader>
+            {/* eslint-disable-next-line react/no-unknown-property */}
+            <style>{`
+              #pandadoc-signing-wrapper {
+                position: relative;
+              }
+              #pandadoc-signing-wrapper iframe {
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 100% !important;
+                height: 100% !important;
+                border: none;
+              }
+            `}</style>
+            <div
+              id="pandadoc-signing-wrapper"
+              className="flex-1 m-6 mt-0"
+            />
+          </DialogContent>
+        </Dialog>
 
-            {priorScholarships.length > 0 && (
-              <>
-                <div className="relative">
-                  <div className="absolute inset-0 flex items-center">
-                    <span className="w-full border-t" />
-                  </div>
-                  <div className="relative flex justify-center text-xs uppercase">
-                    <span className="bg-background text-muted-foreground px-2">
-                      or copy from a previous year
-                    </span>
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  {priorScholarships.map((ps) => (
-                    <Button
-                      key={ps.id}
-                      variant="outline"
-                      className="w-full justify-start"
-                      disabled={duplicating}
-                      onClick={() => handleDuplicate(ps.id)}
-                    >
-                      {duplicating
-                        ? "Copying..."
-                        : `Copy from ${ps.year_name}`}
-                    </Button>
-                  ))}
-                </div>
-              </>
-            )}
-          </div>
-        </SheetContent>
-      </Sheet>
+        <Dialog open={!!resetConfirm} onOpenChange={(open) => { if (!open) setResetConfirm(null); }}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Start Over?</DialogTitle>
+              <DialogDescription>
+                This will discard the current{" "}
+                {resetConfirm === "liability_waiver"
+                  ? "liability waiver"
+                  : "enrollment agreement"}{" "}
+                and create a new document from scratch. This action cannot be undone.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setResetConfirm(null)}
+                disabled={resetting}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={handleResetConfirmed}
+                disabled={resetting}
+              >
+                {resetting ? "Resetting..." : "Yes, Start Over"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
     </>
   );
 }
 
-function CostFeeRows({
-  studentName,
-  tuition,
-  annualFee,
-  annualFeeWaived,
-  transportationFee,
-  hasTransport,
-}: {
-  studentName: string;
-  tuition: number;
-  annualFee: number;
-  annualFeeWaived: boolean;
-  transportationFee: number;
-  hasTransport: boolean;
-}) {
+
+function YearBadge({ year }: { year: SchoolYear }) {
+  let label = "";
+  let className = "";
+  if (year.isActive) {
+    label = "Active";
+    className = "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400";
+  } else if (year.isNextYear) {
+    label = "Next Year";
+    className = "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400";
+  } else if (year.isPast) {
+    label = "Past";
+    className = "bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-400";
+  } else {
+    return null;
+  }
   return (
-    <>
-      <tr>
-        <td className="px-4 py-2 text-sm">
-          <span className="font-medium">{studentName}</span>
-          <span className="text-muted-foreground"> — Tuition</span>
-        </td>
-        <td className="px-4 py-2 text-right text-sm">
-          {tuition ? formatCurrency(tuition) : "—"}
-        </td>
-      </tr>
-
-      <tr>
-        <td className="px-4 py-2 text-sm">
-          <span className="font-medium">{studentName}</span>
-          <span className="text-muted-foreground"> — Annual Fee</span>
-        </td>
-        <td className="px-4 py-2 text-right text-sm">
-          {annualFeeWaived ? (
-            <span className="text-green-600 dark:text-green-400 italic">
-              Waived
-            </span>
-          ) : annualFee ? (
-            formatCurrency(annualFee)
-          ) : (
-            "—"
-          )}
-        </td>
-      </tr>
-
-      <tr>
-        <td className="px-4 py-2 text-sm">
-          <span className="font-medium">{studentName}</span>
-          <span className="text-muted-foreground"> — Transportation Fee</span>
-        </td>
-        <td className="px-4 py-2 text-right text-sm">
-          {hasTransport && transportationFee ? (
-            formatCurrency(transportationFee)
-          ) : (
-            <span className="text-muted-foreground">$0</span>
-          )}
-        </td>
-      </tr>
-    </>
+    <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${className}`}>
+      {label}
+    </span>
   );
 }
 
@@ -1100,9 +905,7 @@ function PageHeader({ yearName }: { yearName: string }) {
             </BreadcrumbItem>
             <BreadcrumbSeparator className="hidden md:block" />
             <BreadcrumbItem>
-              <BreadcrumbPage>
-                {yearName || "School Year"}
-              </BreadcrumbPage>
+              <BreadcrumbPage>{yearName || "School Year"}</BreadcrumbPage>
             </BreadcrumbItem>
           </BreadcrumbList>
         </Breadcrumb>

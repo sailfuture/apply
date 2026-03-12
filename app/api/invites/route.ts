@@ -44,6 +44,11 @@ export async function POST(req: NextRequest) {
     phone: "",
     relationship: relationship ?? "",
     invite_status: "pending",
+    address_line_1: "",
+    address_line_2: "",
+    city: "",
+    state: "",
+    zipcode: "",
   });
 
   const existingIds = xano.families.getParentIds(family);

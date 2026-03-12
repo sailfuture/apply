@@ -49,14 +49,22 @@ export async function PATCH(
     | undefined;
 
   const { id } = await params;
-  const existing = await xano.applications.getById(Number(id));
 
-  if (!existing || existing.registration_families_id !== familyId) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  try {
+    const existing = await xano.applications.getById(Number(id));
+
+    if (!existing || existing.registration_families_id !== familyId) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+
+    const body = await req.json();
+    const updated = await xano.applications.update(Number(id), body);
+    return NextResponse.json(updated, { status: 200 });
+  } catch (err) {
+    console.error("Failed to update application:", err);
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Update failed" },
+      { status: 500 }
+    );
   }
-
-  const body = await req.json();
-  const updated = await xano.applications.update(Number(id), body);
-
-  return NextResponse.json(updated, { status: 200 });
 }

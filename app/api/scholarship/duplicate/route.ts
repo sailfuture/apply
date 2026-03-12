@@ -86,6 +86,11 @@ export async function POST(req: NextRequest) {
         first_name: m.first_name,
         last_name: m.last_name,
         address: m.address,
+        w2: m.w2,
+        paystub_1: m.paystub_1,
+        paystub_2: m.paystub_2,
+        paystub_3: m.paystub_3,
+        paystub_4: m.paystub_4,
       })
     ),
     ...sourceHomes.map((h) =>

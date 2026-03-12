@@ -28,6 +28,11 @@ export async function POST(
     registration_opportunity_scholarship_id: Number(id),
     type: body.type ?? "",
     address: body.address ?? "",
+    address_1: body.address_1 ?? "",
+    address_2: body.address_2 ?? "",
+    city: body.city ?? "",
+    state: body.state ?? "",
+    zipcode: body.zipcode ?? "",
     total_value: body.total_value ?? 0,
     outstanding_debt: body.outstanding_debt ?? 0,
   });

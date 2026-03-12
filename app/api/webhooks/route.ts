@@ -46,6 +46,11 @@ export async function POST(req: NextRequest) {
           phone: primaryPhone,
           relationship: "",
           invite_status: "active",
+          address_line_1: "",
+          address_line_2: "",
+          city: "",
+          state: "",
+          zipcode: "",
         });
         console.log(`Created new parent record for Clerk user ${id}`);
       }

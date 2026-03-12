@@ -70,12 +70,13 @@ interface Application {
   registration_application_status_id: number;
   registration_school_years_id: number;
   sufs_award_id: number;
-  sufs_scholarship_type: string;
-  annual_fee_waived: boolean;
-  bus_transportation: string;
+  is_bus_transportation: boolean;
+  bus_stop: string;
   current_previous_school: string;
   describe_student_strengths: string;
   describe_student_opportunities_for_growth: string;
+  last_grade_completed: string;
+  current_grade: string;
 }
 
 function formatCurrency(value: number): string {
@@ -135,8 +136,8 @@ export default function ApplyPage() {
   const [saving, setSaving] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  const [sufsScholarshipType, setSufsScholarshipType] = useState("");
-  const [busTransportation, setBusTransportation] = useState("");
+  const [sufsAwardId, setSufsAwardId] = useState(0);
+  const [busTransportation, setBusTransportation] = useState("No");
   const [previousSchool, setPreviousSchool] = useState("");
   const [strengths, setStrengths] = useState("");
   const [growthAreas, setGrowthAreas] = useState("");
@@ -178,8 +179,8 @@ export default function ApplyPage() {
         if (existing) {
           setApplication(existing);
           setSelectedYearId(existing.registration_school_years_id);
-          setSufsScholarshipType(existing.sufs_scholarship_type || "");
-          setBusTransportation(existing.bus_transportation || "");
+          setSufsAwardId(existing.sufs_award_id ?? 0);
+          setBusTransportation(existing.is_bus_transportation ? "Yes" : "No");
           setPreviousSchool(existing.current_previous_school || "");
           setStrengths(existing.describe_student_strengths || "");
           setGrowthAreas(
@@ -236,8 +237,8 @@ export default function ApplyPage() {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          sufs_scholarship_type: sufsScholarshipType,
-          bus_transportation: busTransportation,
+          sufs_award_id: sufsAwardId,
+          is_bus_transportation: busTransportation === "Yes",
           current_previous_school: previousSchool,
           describe_student_strengths: strengths,
           describe_student_opportunities_for_growth: growthAreas,
@@ -270,8 +271,8 @@ export default function ApplyPage() {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          sufs_scholarship_type: sufsScholarshipType,
-          bus_transportation: busTransportation,
+          sufs_award_id: sufsAwardId,
+          is_bus_transportation: busTransportation === "Yes",
           current_previous_school: previousSchool,
           describe_student_strengths: strengths,
           describe_student_opportunities_for_growth: growthAreas,
@@ -543,6 +544,31 @@ export default function ApplyPage() {
           </CardContent>
         </Card>
 
+        {/* Step Up for Students Scholarship */}
+        <Card
+          className={!hasApplication ? "pointer-events-none opacity-50" : ""}
+        >
+          <CardHeader>
+            <CardTitle>Step Up for Students Scholarship</CardTitle>
+            <CardDescription>
+              Enter the student&apos;s Step Up for Students scholarship award ID if applicable.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="max-w-sm grid gap-2">
+              <Label htmlFor="sufs_award_id">SUFS Award ID</Label>
+              <Input
+                id="sufs_award_id"
+                type="number"
+                placeholder="0"
+                value={sufsAwardId || ""}
+                onChange={(e) => setSufsAwardId(Number(e.target.value) || 0)}
+                disabled={isReadonly || !hasApplication}
+              />
+            </div>
+          </CardContent>
+        </Card>
+
         {/* Student Details */}
         <Card
           className={!hasApplication ? "pointer-events-none opacity-50" : ""}
@@ -582,44 +608,6 @@ export default function ApplyPage() {
                   disabled={isReadonly || !hasApplication}
                 />
               </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Step Up for Students Scholarship */}
-        <Card
-          className={!hasApplication ? "pointer-events-none opacity-50" : ""}
-        >
-          <CardHeader>
-            <CardTitle>Step Up for Students Scholarship</CardTitle>
-            <CardDescription>
-              If the student has a Step Up for Students scholarship, select
-              the type below.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="max-w-sm grid gap-2">
-              <Label htmlFor="sufs_type">Scholarship Type</Label>
-              <Select
-                value={sufsScholarshipType}
-                onValueChange={setSufsScholarshipType}
-                disabled={isReadonly || !hasApplication}
-              >
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="No scholarship" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">No scholarship</SelectItem>
-                  <SelectItem value="fes_eo_8">FES-EO (Grade 8)</SelectItem>
-                  <SelectItem value="fes_eo_9">FES-EO (Grade 9)</SelectItem>
-                  <SelectItem value="ftc_8">FTC (Grade 8)</SelectItem>
-                  <SelectItem value="ftc_9">FTC (Grade 9)</SelectItem>
-                  <SelectItem value="fes_ua_8_ese_1_3">FES-UA ESE 1-3 (Grade 8)</SelectItem>
-                  <SelectItem value="fes_ua_9_ese_1_3">FES-UA ESE 1-3 (Grade 9)</SelectItem>
-                  <SelectItem value="fes_ua_ese_4">FES-UA ESE 4</SelectItem>
-                  <SelectItem value="fes_ua_ese_5">FES-UA ESE 5</SelectItem>
-                </SelectContent>
-              </Select>
             </div>
           </CardContent>
         </Card>

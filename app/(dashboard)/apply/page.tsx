@@ -75,12 +75,35 @@ export default function ApplyIndexPage() {
   const router = useRouter();
   const [schoolYears, setSchoolYears] = useState<SchoolYear[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isAccepted, setIsAccepted] = useState<boolean | null>(null);
 
   const fetchData = useCallback(async () => {
     try {
-      const res = await fetch("/api/school-years");
-      if (res.ok) {
-        const allYears: SchoolYear[] = await res.json();
+      const [familyRes, yearsRes] = await Promise.all([
+        fetch("/api/families"),
+        fetch("/api/school-years"),
+      ]);
+
+      let accepted = false;
+      if (familyRes.ok) {
+        const fam = await familyRes.json();
+        if (fam?.id) accepted = fam.isAccepted ?? false;
+      }
+      setIsAccepted(accepted);
+
+      if (yearsRes.ok) {
+        const allYears: SchoolYear[] = await yearsRes.json();
+
+        if (!accepted) {
+          const upcoming = allYears.find((y) => y.isNextYear);
+          const active = allYears.find((y) => y.isActive);
+          const target = upcoming ?? active;
+          if (target) {
+            router.replace(`/apply/year/${target.id}`);
+            return;
+          }
+        }
+
         const visible = allYears.filter((y) => !y.isFuture);
         visible.sort((a, b) => {
           const aStart = a.start_date ? new Date(a.start_date).getTime() : 0;
@@ -94,11 +117,41 @@ export default function ApplyIndexPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [router]);
 
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  if (loading || isAccepted === null) {
+    return (
+      <>
+        <header className="flex h-16 shrink-0 items-center gap-2">
+          <div className="flex items-center gap-2 px-4">
+            <SidebarTrigger className="-ml-1" />
+            <Separator
+              orientation="vertical"
+              className="mr-2 data-vertical:h-4 data-vertical:self-auto"
+            />
+            <Breadcrumb>
+              <BreadcrumbList>
+                <BreadcrumbItem className="hidden md:block">
+                  <BreadcrumbLink href="/">Dashboard</BreadcrumbLink>
+                </BreadcrumbItem>
+                <BreadcrumbSeparator className="hidden md:block" />
+                <BreadcrumbItem>
+                  <BreadcrumbPage>Applications</BreadcrumbPage>
+                </BreadcrumbItem>
+              </BreadcrumbList>
+            </Breadcrumb>
+          </div>
+        </header>
+        <div className="flex min-h-[40vh] items-center justify-center">
+          <p className="text-muted-foreground">Loading...</p>
+        </div>
+      </>
+    );
+  }
 
   return (
     <>
@@ -116,7 +169,7 @@ export default function ApplyIndexPage() {
               </BreadcrumbItem>
               <BreadcrumbSeparator className="hidden md:block" />
               <BreadcrumbItem>
-                <BreadcrumbPage>Applications</BreadcrumbPage>
+                <BreadcrumbPage>School Years</BreadcrumbPage>
               </BreadcrumbItem>
             </BreadcrumbList>
           </Breadcrumb>
@@ -125,17 +178,13 @@ export default function ApplyIndexPage() {
 
       <div className="flex flex-1 flex-col gap-6 p-4 pt-0">
         <div>
-          <h1 className="text-2xl font-semibold">Applications</h1>
+          <h1 className="text-2xl font-semibold">School Years</h1>
           <p className="text-muted-foreground text-sm">
-            Select a school year to view and manage applications.
+            Select a school year to view enrollment and application details.
           </p>
         </div>
 
-        {loading ? (
-          <div className="flex min-h-[40vh] items-center justify-center">
-            <p className="text-muted-foreground">Loading...</p>
-          </div>
-        ) : schoolYears.length === 0 ? (
+        {schoolYears.length === 0 ? (
           <div className="flex min-h-[40vh] items-center justify-center">
             <p className="text-muted-foreground">
               No school years available. Please contact the school.

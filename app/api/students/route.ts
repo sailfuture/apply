@@ -63,8 +63,9 @@ export async function POST(req: NextRequest) {
     date_of_birth: date_of_birth || null,
     gender: gender || "",
     ethnicity: ethnicity || "",
+    photo: null,
     registration_families_id: familyId,
-    registration_school_years_id: 0,
+    registration_school_years_id: [],
     isArchived: false,
   });
 
