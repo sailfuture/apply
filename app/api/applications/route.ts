@@ -109,6 +109,9 @@ export async function POST(req: NextRequest) {
     current_grade: "",
     nwea_testing_complete: false,
     test_scores: null,
+    isSubmitted: false,
+    isOffered: false,
+    isAccepted: false,
   });
 
   try {
