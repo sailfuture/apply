@@ -86,6 +86,7 @@ export default function FamilyStepPage() {
   } = useApplicationFlow();
 
   const [parents, setParents] = useState<Parent[]>([]);
+  const [familyName, setFamilyName] = useState("");
   const [yearName, setYearName] = useState("");
   const [loading, setLoading] = useState(true);
 
@@ -131,6 +132,7 @@ export default function FamilyStepPage() {
       if (familyRes.ok) {
         const fam = await familyRes.json();
         setParents(fam.parents ?? []);
+        if (fam.family_name) setFamilyName(fam.family_name);
       }
       if (yearsRes.ok) {
         const years: SchoolYear[] = await yearsRes.json();
@@ -301,7 +303,9 @@ export default function FamilyStepPage() {
     <>
       <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
         <div className="text-center">
-          <h1 className="text-2xl font-semibold">Family Information</h1>
+          <h1 className="text-2xl font-semibold">
+            {familyName ? `${familyName} Family` : "Family Information"}
+          </h1>
           <p className="text-muted-foreground text-sm mt-1">
             Manage contact information and addresses for all parents and
             guardians.

@@ -279,21 +279,25 @@ export default function YearOverviewPage() {
 
   /* ────────── Stage 1: Start the Application ────────── */
   return (
-    <div className="flex min-h-[calc(100vh-3.5rem)] items-center justify-center px-4 bg-gray-50 dark:bg-background">
+    <div className="flex min-h-screen items-center justify-center px-4 bg-gray-50 dark:bg-background">
       <div className="w-full max-w-2xl py-8">
         {/* Heading */}
         <div className="text-center mb-8">
           <div className="flex justify-center mb-4">
-            <Image
-              src="/logo.svg"
-              alt="SailFuture Academy"
-              width={64}
-              height={64}
-              className="size-16 rounded-full"
-            />
+            <div className="rounded-full border-[6px] border-white dark:border-background shadow-sm">
+              <Image
+                src="/logo.svg"
+                alt="SailFuture Academy"
+                width={64}
+                height={64}
+                className="size-16 rounded-full"
+              />
+            </div>
           </div>
           <h1 className="text-2xl font-semibold">
-            {firstName ? `${firstName}, let\u2019s get started on your application for ${yearName}.` : `Let\u2019s get started on your application for ${yearName}.`}
+            {firstName ? `${firstName}, let\u2019s get started` : "Let\u2019s get started"}
+            <br />
+            on your application for {yearName}.
           </h1>
           <p className="text-muted-foreground text-sm mt-3 max-w-lg mx-auto">
             SailFuture Academy accepts 30 students each academic year on a rolling basis. Complete the application below and our admissions team will follow up personally.

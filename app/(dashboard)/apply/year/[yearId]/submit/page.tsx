@@ -271,8 +271,9 @@ export default function SubmitPage() {
       );
       if (!submittedStatus) throw new Error("Submitted status not found");
 
-      await Promise.all(
-        applications.map((app) =>
+      await Promise.all([
+        // Mark all applications as submitted
+        ...applications.map((app) =>
           fetch(`/api/applications/${app.id}`, {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
@@ -281,11 +282,20 @@ export default function SubmitPage() {
               isSubmitted: true,
             }),
           })
-        )
-      );
+        ),
+        // Mark the family as submitted
+        fetch("/api/families", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ isSubmitted: true }),
+        }),
+      ]);
 
-      // Revalidate the applications cache so the overview page picks up isSubmitted
-      await mutate("/api/applications");
+      // Revalidate caches so the overview page picks up isSubmitted
+      await Promise.all([
+        mutate("/api/applications"),
+        mutate("/api/families"),
+      ]);
       setSubmitted(true);
     } catch (err) {
       console.error("Failed to submit:", err);

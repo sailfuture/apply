@@ -325,8 +325,10 @@ export function useApplicationSteps(yearId: number) {
   const completedCount = steps.filter((s) => s.status === "complete").length;
   const allComplete = completedCount === steps.length;
 
-  // Application stage flags (from first app for this year)
-  const isSubmitted = yearApps.some((a) => (a as { isSubmitted?: boolean }).isSubmitted);
+  // Application stage flags (from first app for this year OR family-level flag)
+  const isSubmitted =
+    familyData?.isSubmitted === true ||
+    yearApps.some((a) => (a as { isSubmitted?: boolean }).isSubmitted);
   const isOffered = yearApps.some((a) => (a as { isOffered?: boolean }).isOffered);
   const isAccepted = yearApps.some((a) => (a as { isAccepted?: boolean }).isAccepted);
   const familyAccepted = familyData?.isAccepted ?? false;

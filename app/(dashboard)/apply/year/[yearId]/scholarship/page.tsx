@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
+import Image from "next/image";
 import { useUser } from "@clerk/nextjs";
 import { useApplicationFlow } from "@/contexts/application-flow-context";
 import {
@@ -1019,6 +1020,20 @@ export default function ScholarshipPage() {
       <div className="flex min-h-[calc(100vh-8.5rem)] flex-col items-center justify-center px-4 bg-gray-50 dark:bg-background">
           <div className="w-full max-w-2xl py-8">
           <div className="text-center mb-8">
+            <div className="flex justify-center mb-4">
+              <div className="rounded-full border-[6px] border-white dark:border-background shadow-sm">
+                <Image
+                  src="/logo.svg"
+                  alt="SailFuture Academy"
+                  width={64}
+                  height={64}
+                  className="size-16 rounded-full"
+                />
+              </div>
+            </div>
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground mb-1">
+              SailFuture Opportunity Scholarship
+            </p>
             <h1 className="text-2xl font-semibold">
               {firstName ? `${firstName}, See` : "See"} If Your Family Qualifies for Up to $14,000 in Tuition Assistance
             </h1>
@@ -1172,6 +1187,19 @@ export default function ScholarshipPage() {
             </div>
           </div>
 
+          <div className="text-center mt-6">
+            <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground mb-2">
+              Nationally Recognized and Scholarships Funded By:
+            </p>
+            <div className="flex items-center justify-center gap-4">
+              <Image src="/logos/yass-prize.png" alt="The Yass Prize" width={36} height={36} className="size-9 rounded-full" />
+              <Image src="/logos/google.png" alt="Google" width={36} height={36} className="size-9" />
+              <Image src="/logos/linkedin.png" alt="LinkedIn" width={36} height={36} className="size-9 rounded-full" />
+              <Image src="/logos/stand-together.png" alt="Stand Together" width={36} height={36} className="size-9 rounded-full" />
+              <Image src="/logos/att.png" alt="AT&T" width={36} height={36} className="size-9 rounded-full" />
+            </div>
+          </div>
+
           {isChoiceLocked && (
             <div className="flex justify-center mt-4">
               <Button
@@ -1184,13 +1212,6 @@ export default function ScholarshipPage() {
             </div>
           )}
 
-          {scholarshipChoice === "none" && (
-            <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-800 dark:bg-amber-950/30">
-              <p className="text-sm text-amber-800 dark:text-amber-300">
-                You have chosen not to participate in the scholarship program.
-              </p>
-            </div>
-          )}
 
         </div>
 

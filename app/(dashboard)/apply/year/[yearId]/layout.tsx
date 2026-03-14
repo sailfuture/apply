@@ -78,7 +78,7 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
             </div>
 
             {/* Center: step navigation */}
-            <nav className="flex-1 flex items-center justify-center gap-1 overflow-x-auto scrollbar-hide">
+            <nav className="hidden md:flex flex-1 items-center justify-center gap-1 overflow-x-auto scrollbar-hide">
               {FORM_STEPS.map((step) => {
                 const isActive = activeSegment === step.segment;
                 return (

@@ -28,6 +28,7 @@ export interface XanoFamily {
   family_name: string;
   bus_transportation: boolean;
   isAccepted: boolean;
+  isSubmitted: boolean;
   registration_students_id: (number | Record<string, unknown> | unknown[])[];
   registration_parents_id: (number | Record<string, unknown> | unknown[])[];
   registration_fee_waiver_id: number | null;
