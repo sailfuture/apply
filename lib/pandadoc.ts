@@ -158,5 +158,10 @@ export function getTemplateId(
       : "PANDADOC_ENROLLMENT_TEMPLATE_ID";
   const id = process.env[envVar];
   if (!id) throw new Error(`${envVar} is not set`);
+  if (id.startsWith("your_")) {
+    throw new Error(
+      `${envVar} is still set to a placeholder value. Please update it with your actual PandaDoc template ID.`
+    );
+  }
   return id;
 }

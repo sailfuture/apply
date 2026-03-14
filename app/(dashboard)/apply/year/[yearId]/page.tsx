@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
+import { useFamily, useSchoolYears, useStudents, useApplications, useScholarship, mutateApplications } from "@/hooks/use-api";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   Breadcrumb,
@@ -145,14 +146,29 @@ export default function YearDetailPage() {
   const router = useRouter();
   const yearId = Number(params.yearId);
 
-  const [schoolYear, setSchoolYear] = useState<SchoolYear | null>(null);
-  const [parents, setParents] = useState<Parent[]>([]);
-  const [students, setStudents] = useState<Student[]>([]);
-  const [applications, setApplications] = useState<Application[]>([]);
-  const [scholarshipExists, setScholarshipExists] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [familyId, setFamilyId] = useState<number | null>(null);
+  const { data: familyData, mutate: mutateFamily } = useFamily();
+  const { data: yearsData } = useSchoolYears();
+  const { data: studentsData } = useStudents();
+  const { data: appsData, mutate: mutateApps } = useApplications();
 
+  const familyId = familyData?.id ?? null;
+  const parents: Parent[] = familyData?.parents ?? [];
+  const students: Student[] = studentsData ?? [];
+
+  const schoolYear: SchoolYear | null = useMemo(() => {
+    if (!yearsData) return null;
+    return (yearsData as SchoolYear[]).find((y) => y.id === yearId) ?? null;
+  }, [yearsData, yearId]);
+
+  const applications: Application[] = useMemo(() => {
+    if (!appsData) return [];
+    return (appsData as Application[]).filter((a) => a.registration_school_years_id === yearId);
+  }, [appsData, yearId]);
+
+  const { data: scholarshipData } = useScholarship(familyId, yearId);
+  const scholarshipExists = !!(scholarshipData && scholarshipData.id);
+
+  const loading = !familyData || !yearsData || !studentsData || !appsData;
 
   const [signingLoading, setSigningLoading] = useState<string | null>(null);
   const [resetConfirm, setResetConfirm] = useState<"liability_waiver" | "enrollment_agreement" | null>(null);
@@ -166,67 +182,12 @@ export default function YearDetailPage() {
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
 
   const fetchData = useCallback(async () => {
-    try {
-      const familyRes = await fetch("/api/families");
-      let fId: number | null = null;
-      let fetchedParents: Parent[] = [];
-      if (familyRes.ok) {
-        const fam = await familyRes.json();
-        if (fam?.id) {
-          fId = fam.id;
-          setFamilyId(fId);
-          fetchedParents = fam.parents ?? [];
-          setParents(fetchedParents);
-        }
-      }
-
-      const fetches: Promise<Response>[] = [
-        fetch("/api/school-years"),
-        fetch("/api/students"),
-        fetch("/api/applications"),
-      ];
-      if (fId) {
-        fetches.push(
-          fetch(`/api/scholarship?familyId=${fId}&yearId=${yearId}`)
-        );
-      }
-
-      const [yearsRes, studentsRes, appsRes, scholarshipRes] =
-        await Promise.all(fetches);
-
-      if (yearsRes.ok) {
-        const years: SchoolYear[] = await yearsRes.json();
-        const found = years.find((y) => y.id === yearId);
-        if (found) setSchoolYear(found);
-      }
-
-      if (studentsRes.ok) setStudents(await studentsRes.json());
-
-      if (appsRes.ok) {
-        const allApps: Application[] = await appsRes.json();
-        setApplications(
-          allApps.filter((a) => a.registration_school_years_id === yearId)
-        );
-      }
-
-      if (scholarshipRes?.ok) {
-        const data = await scholarshipRes.json();
-        if (data && data.id) setScholarshipExists(true);
-      }
-    } catch (err) {
-      console.error("Failed to fetch data:", err);
-    } finally {
-      setLoading(false);
-    }
-  }, [yearId]);
-
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+    await Promise.all([mutateFamily(), mutateApps(), mutateApplications()]);
+  }, [mutateFamily, mutateApps]);
 
   useEffect(() => {
     return () => {
-      if (pollingRef.current) clearInterval(pollingRef.current);
+      if (pollingRef.current) clearTimeout(pollingRef.current);
     };
   }, []);
 
@@ -376,27 +337,40 @@ export default function YearDetailPage() {
     type: "liability_waiver" | "enrollment_agreement",
     applicationId: number
   ) {
-    if (pollingRef.current) clearInterval(pollingRef.current);
+    if (pollingRef.current) clearTimeout(pollingRef.current);
 
-    pollingRef.current = setInterval(async () => {
+    let delay = 3000;
+    const maxDelay = 30000;
+
+    async function poll() {
       try {
         const res = await fetch(
           `/api/pandadoc/status?documentId=${documentId}&applicationId=${applicationId}&type=${type}`
         );
-        if (!res.ok) return;
+        if (!res.ok) {
+          delay = Math.min(delay * 1.5, maxDelay);
+          pollingRef.current = setTimeout(poll, delay);
+          return;
+        }
         const data = await res.json();
 
         if (data.status === "completed" || data.status === "viewed") {
           await fetchData();
-          if (data.status === "completed" && pollingRef.current) {
-            clearInterval(pollingRef.current);
+          if (data.status === "completed") {
             pollingRef.current = null;
+            return;
           }
         }
+
+        delay = Math.min(delay * 1.2, maxDelay);
+        pollingRef.current = setTimeout(poll, delay);
       } catch {
-        // polling errors are non-critical
+        delay = Math.min(delay * 1.5, maxDelay);
+        pollingRef.current = setTimeout(poll, delay);
       }
-    }, 5000);
+    }
+
+    pollingRef.current = setTimeout(poll, delay);
   }
 
   if (loading) {
