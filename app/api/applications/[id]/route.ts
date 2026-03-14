@@ -2,6 +2,13 @@ import { auth, currentUser } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
 import { xano } from "@/lib/xano";
 
+/** Normalize Clerk metadata value to a number (it may be stored as string) */
+function toNumber(val: unknown): number {
+  if (typeof val === "number") return val;
+  if (typeof val === "string") return Number(val);
+  return NaN;
+}
+
 export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -16,14 +23,12 @@ export async function GET(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const familyId = user.publicMetadata.registration_families_id as
-    | number
-    | undefined;
+  const familyId = toNumber(user.publicMetadata.registration_families_id);
 
   const { id } = await params;
   const application = await xano.applications.getById(Number(id));
 
-  if (!application || application.registration_families_id !== familyId) {
+  if (!application || toNumber(application.registration_families_id) !== familyId) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
@@ -44,16 +49,14 @@ export async function PATCH(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const familyId = user.publicMetadata.registration_families_id as
-    | number
-    | undefined;
+  const familyId = toNumber(user.publicMetadata.registration_families_id);
 
   const { id } = await params;
 
   try {
     const existing = await xano.applications.getById(Number(id));
 
-    if (!existing || existing.registration_families_id !== familyId) {
+    if (!existing || toNumber(existing.registration_families_id) !== familyId) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
@@ -83,19 +86,26 @@ export async function DELETE(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const familyId = user.publicMetadata.registration_families_id as
-    | number
-    | undefined;
+  const familyId = toNumber(user.publicMetadata.registration_families_id);
 
   const { id } = await params;
+  const appId = Number(id);
 
   try {
-    const existing = await xano.applications.getById(Number(id));
-    if (!existing || existing.registration_families_id !== familyId) {
+    // Verify the application belongs to this family
+    const familyApps = await xano.applications.getByFamilyId(familyId);
+    const owns = familyApps.some((a) => a.id === appId);
+
+    if (!owns) {
+      console.log("[DELETE /api/applications] ownership check failed", {
+        appId,
+        familyId,
+        familyAppIds: familyApps.map((a) => a.id),
+      });
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
-    await xano.applications.delete(Number(id));
+    await xano.applications.delete(appId);
     return NextResponse.json({ success: true }, { status: 200 });
   } catch (err) {
     console.error("Failed to delete application:", err);

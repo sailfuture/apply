@@ -3,26 +3,19 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
 import { useParams, useRouter } from "next/navigation";
+import { useApplicationFlow } from "@/contexts/application-flow-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Field, FieldLabel } from "@/components/ui/field";
+import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Card,
   CardHeader,
   CardTitle,
   CardContent,
 } from "@/components/ui/card";
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
-} from "@/components/ui/breadcrumb";
-import { Separator } from "@/components/ui/separator";
-import { SidebarTrigger } from "@/components/ui/sidebar";
 import {
   Select,
   SelectContent,
@@ -57,7 +50,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Switch } from "@/components/ui/switch";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Trash2, FileUp, X, Loader2, CheckCircle2 } from "lucide-react";
+import { Trash2, FileUp, X, Loader2, CheckCircle2, Plus } from "lucide-react";
 import {
   FileUpload,
   FileUploadDropzone,
@@ -86,7 +79,7 @@ interface Student {
   date_of_birth: string;
   gender: string;
   ethnicity: string;
-  photo: string | null;
+  photo: string | { url: string } | null;
 }
 
 interface Application {
@@ -133,6 +126,13 @@ function formatDob(dob: string): string {
   });
 }
 
+function getPhotoUrl(photo: string | { url: string } | null): string | undefined {
+  if (!photo) return undefined;
+  if (typeof photo === "string") return photo;
+  if (typeof photo === "object" && photo.url) return photo.url;
+  return undefined;
+}
+
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -146,6 +146,15 @@ export default function StudentsStepPage() {
   const params = useParams();
   const router = useRouter();
   const yearId = Number(params.yearId);
+
+  const {
+    setPageTitle,
+    registerSaveHandler,
+    unregisterSaveHandler,
+    updateSaveOptions,
+    registerBackGuard,
+    unregisterBackGuard,
+  } = useApplicationFlow();
 
   const [parents, setParents] = useState<Parent[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
@@ -218,12 +227,25 @@ export default function StudentsStepPage() {
         const found = years.find((y: { id: number }) => y.id === yearId);
         if (found) setYearName(found.year_name);
       }
-      if (studentsRes.ok) setStudents(await studentsRes.json());
+      let loadedStudents: Student[] = [];
+      if (studentsRes.ok) {
+        loadedStudents = await studentsRes.json();
+        setStudents(loadedStudents);
+      }
       if (appsRes.ok) {
         const allApps: Application[] = await appsRes.json();
         const yearApps = allApps.filter((a) => a.registration_school_years_id === yearId);
         setApplications(yearApps);
         setSavedApplications(yearApps);
+        // Auto-collapse complete student cards
+        const completeIds = new Set<number>();
+        for (const app of yearApps) {
+          if (isAppComplete(app)) {
+            const student = loadedStudents.find((s) => s.id === app.registration_students_id);
+            if (student) completeIds.add(student.id);
+          }
+        }
+        if (completeIds.size > 0) setCollapsedCards(completeIds);
       }
       if (busRes.ok) setBusStops(await busRes.json());
     } catch (err) {
@@ -253,6 +275,12 @@ export default function StudentsStepPage() {
         const newApp = await res.json();
         setApplications((prev) => [...prev, newApp]);
         setSavedApplications((prev) => [...prev, newApp]);
+        // Ensure the new student's card starts expanded
+        setCollapsedCards((prev) => {
+          const next = new Set(prev);
+          next.delete(studentId);
+          return next;
+        });
       } else {
         const body = await res.json().catch(() => null);
         setAddError(body?.error ?? `Failed to add student (${res.status})`);
@@ -264,17 +292,18 @@ export default function StudentsStepPage() {
     }
   }
 
-  async function handleRemoveStudent(appId: number) {
-    try {
-      const res = await fetch(`/api/applications/${appId}`, { method: "DELETE" });
-      if (res.ok) {
-        setApplications((prev) => prev.filter((a) => a.id !== appId));
-        setSavedApplications((prev) => prev.filter((a) => a.id !== appId));
-      }
-    } catch (err) {
-      console.error("Failed to remove student:", err);
-    }
+  function handleRemoveStudent(appId: number) {
+    setApplications((prev) => prev.filter((a) => a.id !== appId));
+    setSavedApplications((prev) => prev.filter((a) => a.id !== appId));
     setPendingDeleteStudent(null);
+    fetch(`/api/applications/${appId}`, { method: "DELETE" })
+      .then(async (res) => {
+        if (!res.ok) {
+          const body = await res.text();
+          console.error("Delete failed:", res.status, res.statusText, body);
+        }
+      })
+      .catch((err) => console.error("Failed to remove student:", err));
   }
 
   function isAppComplete(app: Application): boolean {
@@ -284,6 +313,7 @@ export default function StudentsStepPage() {
     if (!app.describe_student_strengths) return false;
     if (!app.describe_student_opportunities_for_growth) return false;
     if (app.is_bus_transportation && (!app.registration_parents_id || !app.bus_stop)) return false;
+    if (!app.nwea_testing_complete && !app.test_scores) return false;
     return true;
   }
 
@@ -382,6 +412,35 @@ export default function StudentsStepPage() {
     }
   }
 
+  const handleSaveAllAppsRef = useRef(handleSaveAllApps);
+  handleSaveAllAppsRef.current = handleSaveAllApps;
+
+  useEffect(() => {
+    setPageTitle("Students & Information");
+    registerSaveHandler(() => handleSaveAllAppsRef.current(), { label: "Save" });
+    return () => {
+      unregisterSaveHandler();
+      unregisterBackGuard();
+    };
+  }, [setPageTitle, registerSaveHandler, unregisterSaveHandler, unregisterBackGuard]);
+
+  useEffect(() => {
+    updateSaveOptions({ saving: savingAll });
+  }, [savingAll, updateSaveOptions]);
+
+  const isDirtyRef = useRef(isDirty);
+  isDirtyRef.current = isDirty;
+
+  useEffect(() => {
+    registerBackGuard(() => {
+      if (isDirtyRef.current) {
+        setPendingNavPath(`/apply/year/${yearId}`);
+        return false;
+      }
+      return true;
+    });
+  }, [registerBackGuard, yearId]);
+
   async function handleCreateStudent(e: React.FormEvent) {
     e.preventDefault();
     setCreating(true);
@@ -432,21 +491,36 @@ export default function StudentsStepPage() {
 
   if (loading) {
     return (
-      <>
-        <StepHeader yearId={String(yearId)} yearName="" />
-        <div className="flex min-h-[60vh] items-center justify-center">
-          <p className="text-muted-foreground">Loading...</p>
+      <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
+        <div className="flex items-center justify-between">
+          <Skeleton className="h-6 w-48" />
+          <Skeleton className="h-9 w-32 rounded-md" />
         </div>
-      </>
+        {Array.from({ length: 2 }).map((_, i) => (
+          <div key={i} className="rounded-lg border p-6">
+            <div className="flex items-center justify-between mb-4">
+              <Skeleton className="h-5 w-36" />
+              <Skeleton className="h-5 w-5 rounded" />
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {Array.from({ length: 8 }).map((_, j) => (
+                <div key={j}>
+                  <Skeleton className="h-4 w-24 mb-2" />
+                  <Skeleton className="h-10 w-full rounded-md" />
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
     );
   }
 
   return (
     <>
-      <StepHeader yearId={String(yearId)} yearName={yearName} />
-      <div className="flex flex-1 flex-col gap-6 p-4 pt-0">
+      <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
         <div className="flex items-center justify-between">
-          <div>
+          <div className="flex-1 text-center">
             <h1 className="text-2xl font-semibold">
               Students &amp; Information
             </h1>
@@ -493,9 +567,9 @@ export default function StudentsStepPage() {
                         }}
                       >
                         <Avatar className="size-10">
-                          {student.photo ? (
+                          {getPhotoUrl(student.photo) ? (
                             <AvatarImage
-                              src={student.photo}
+                              src={getPhotoUrl(student.photo)}
                               alt={`${student.first_name} ${student.last_name}`}
                             />
                           ) : null}
@@ -516,29 +590,6 @@ export default function StudentsStepPage() {
                       </CardTitle>
                     </div>
                     <div className="flex items-center gap-2">
-                      {isAppComplete(app) ? (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700 dark:bg-green-900/30 dark:text-green-400">
-                          <svg className="size-3" viewBox="0 0 20 20" fill="currentColor">
-                            <path fillRule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clipRule="evenodd" />
-                          </svg>
-                          Complete
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
-                          <svg className="size-3" viewBox="0 0 20 20" fill="currentColor">
-                            <path fillRule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 6a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 6zm0 9a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
-                          </svg>
-                          Incomplete
-                        </span>
-                      )}
-                      <Button
-                        variant={idx === enrolled.length - 1 ? "default" : "outline"}
-                        size="sm"
-                        onClick={(e) => { e.stopPropagation(); setAddDialogOpen(true); }}
-                        disabled={idx !== enrolled.length - 1}
-                      >
-                        Add Another Student
-                      </Button>
                       <Button
                         variant="outline"
                         size="icon"
@@ -916,6 +967,40 @@ export default function StudentsStepPage() {
                               <p className="text-xs text-muted-foreground">Don&apos;t have recent test scores? Schedule a session.</p>
                             </div>
                           </button>
+                          <label className={`flex items-start gap-3 mt-2 cursor-pointer rounded-md border px-4 py-3 transition-colors ${!app.nwea_testing_complete && !app.test_scores ? "border-red-400" : "border-input"}`}>
+                            <input
+                              type="checkbox"
+                              className="size-5 mt-0.5 cursor-pointer rounded accent-primary"
+                              checked={app.nwea_testing_complete}
+                              onChange={() => {
+                                const newVal = !app.nwea_testing_complete;
+                                setApplications((prev) =>
+                                  prev.map((a) =>
+                                    a.id === app.id
+                                      ? { ...a, nwea_testing_complete: newVal }
+                                      : a
+                                  )
+                                );
+                                fetch(`/api/applications/${app.id}`, {
+                                  method: "PATCH",
+                                  headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({ nwea_testing_complete: newVal }),
+                                }).catch((err) => {
+                                  console.error("Failed to save:", err);
+                                  setApplications((prev) =>
+                                    prev.map((a) =>
+                                      a.id === app.id
+                                        ? { ...a, nwea_testing_complete: !newVal }
+                                        : a
+                                    )
+                                  );
+                                });
+                              }}
+                            />
+                            <span className="text-sm font-medium">
+                              Yes, I&apos;ve scheduled NWEA testing for my child at the SailFuture Academy.
+                            </span>
+                          </label>
                         </Field>
                         <Field>
                           <FieldLabel className="text-xs">
@@ -946,30 +1031,17 @@ export default function StudentsStepPage() {
                 )}
               </Card>
             ))}
+            <Button
+              variant="outline"
+              className="w-full"
+              onClick={() => setAddDialogOpen(true)}
+            >
+              <Plus className="size-4 mr-1.5" />
+              Add Another Student
+            </Button>
           </div>
         )}
 
-        <div className="h-20" />
-      </div>
-
-      <div className="fixed bottom-0 left-0 right-0 z-50 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 md:left-[var(--sidebar-width)]">
-        <div className="flex h-16 items-center justify-between px-4 sm:px-6">
-          <Button
-            variant="outline"
-            onClick={() => {
-              if (isDirty) {
-                setPendingNavPath(`/apply/year/${yearId}`);
-              } else {
-                router.push(`/apply/year/${yearId}`);
-              }
-            }}
-          >
-            &larr; Back to Checklist
-          </Button>
-          <Button onClick={handleSaveAllApps} disabled={savingAll}>
-            {savingAll ? "Saving..." : "Save Section"}
-          </Button>
-        </div>
       </div>
 
       {/* Add Student Dialog */}
@@ -1331,39 +1403,3 @@ function NweaFileUpload({
   );
 }
 
-function StepHeader({
-  yearId,
-  yearName,
-}: {
-  yearId: string;
-  yearName: string;
-}) {
-  return (
-    <header className="flex h-16 shrink-0 items-center gap-2">
-      <div className="flex items-center gap-2 px-4">
-        <SidebarTrigger className="-ml-1" />
-        <Separator
-          orientation="vertical"
-          className="mr-2 data-vertical:h-4 data-vertical:self-auto"
-        />
-        <Breadcrumb>
-          <BreadcrumbList>
-            <BreadcrumbItem className="hidden md:block">
-              <BreadcrumbLink href="/">Dashboard</BreadcrumbLink>
-            </BreadcrumbItem>
-            <BreadcrumbSeparator className="hidden md:block" />
-            <BreadcrumbItem className="hidden md:block">
-              <BreadcrumbLink href={`/apply/year/${yearId}`}>
-                {yearName || "Application"}
-              </BreadcrumbLink>
-            </BreadcrumbItem>
-            <BreadcrumbSeparator className="hidden md:block" />
-            <BreadcrumbItem>
-              <BreadcrumbPage>Students</BreadcrumbPage>
-            </BreadcrumbItem>
-          </BreadcrumbList>
-        </Breadcrumb>
-      </div>
-    </header>
-  );
-}

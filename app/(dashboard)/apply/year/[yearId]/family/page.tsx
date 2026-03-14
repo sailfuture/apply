@@ -1,7 +1,9 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { useParams } from "next/navigation";
+import { useUser } from "@clerk/nextjs";
+import { useApplicationFlow } from "@/contexts/application-flow-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -10,16 +12,8 @@ import {
   CardTitle,
   CardContent,
 } from "@/components/ui/card";
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
-} from "@/components/ui/breadcrumb";
 import { Separator } from "@/components/ui/separator";
-import { SidebarTrigger } from "@/components/ui/sidebar";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Sheet,
   SheetContent,
@@ -50,7 +44,8 @@ import {
   ComboboxItem,
   ComboboxEmpty,
 } from "@/components/ui/combobox";
-import { Trash2 } from "lucide-react";
+import { Trash2, Plus } from "lucide-react";
+import { AnimatePresence, motion } from "framer-motion";
 import { US_STATES } from "@/lib/us-states";
 
 interface Parent {
@@ -79,10 +74,19 @@ function getInitials(first: string, last: string): string {
 
 export default function FamilyStepPage() {
   const params = useParams();
-  const router = useRouter();
   const yearId = params.yearId as string;
+  const { user: clerkUser } = useUser();
+  const currentUserEmail = clerkUser?.primaryEmailAddress?.emailAddress ?? "";
+
+  const {
+    setPageTitle,
+    registerSaveHandler,
+    unregisterSaveHandler,
+    updateSaveOptions,
+  } = useApplicationFlow();
 
   const [parents, setParents] = useState<Parent[]>([]);
+  const [familyName, setFamilyName] = useState("");
   const [yearName, setYearName] = useState("");
   const [loading, setLoading] = useState(true);
 
@@ -93,6 +97,31 @@ export default function FamilyStepPage() {
   const [inviteRelationship, setInviteRelationship] = useState("");
   const [inviting, setInviting] = useState(false);
   const [inviteError, setInviteError] = useState("");
+  const [openParents, setOpenParents] = useState<Set<number>>(new Set());
+  const initialCollapseRef = useRef(false);
+
+  function isParentComplete(p: Parent): boolean {
+    return !!(
+      p.first_name &&
+      p.last_name &&
+      p.email &&
+      p.phone &&
+      p.relationship &&
+      p.address_line_1 &&
+      p.city &&
+      p.state &&
+      p.zipcode
+    );
+  }
+
+  function toggleParent(id: number) {
+    setOpenParents((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   const fetchData = useCallback(async () => {
     try {
@@ -103,6 +132,7 @@ export default function FamilyStepPage() {
       if (familyRes.ok) {
         const fam = await familyRes.json();
         setParents(fam.parents ?? []);
+        if (fam.family_name) setFamilyName(fam.family_name);
       }
       if (yearsRes.ok) {
         const years: SchoolYear[] = await yearsRes.json();
@@ -119,6 +149,19 @@ export default function FamilyStepPage() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // Auto-collapse complete parents on initial load, open incomplete ones
+  useEffect(() => {
+    if (loading || initialCollapseRef.current || parents.length === 0) return;
+    initialCollapseRef.current = true;
+    const openIds = new Set<number>();
+    parents.forEach((p) => {
+      if (!isParentComplete(p)) openIds.add(p.id);
+    });
+    // If all are complete, open the first one
+    if (openIds.size === 0 && parents.length > 0) openIds.add(parents[0].id);
+    setOpenParents(openIds);
+  }, [loading, parents]);
 
   function updateParentLocal(parentId: number, field: string, value: string) {
     setParents((prev) =>
@@ -168,18 +211,28 @@ export default function FamilyStepPage() {
     }
   }
 
+  const handleSaveAllRef = useRef(handleSaveAll);
+  handleSaveAllRef.current = handleSaveAll;
+
+  useEffect(() => {
+    setPageTitle("Family Information");
+    registerSaveHandler(() => handleSaveAllRef.current(), { label: "Save" });
+    return () => unregisterSaveHandler();
+  }, [setPageTitle, registerSaveHandler, unregisterSaveHandler]);
+
+  useEffect(() => {
+    updateSaveOptions({ saving });
+  }, [saving, updateSaveOptions]);
+
   const [pendingDeleteParent, setPendingDeleteParent] = useState<{ id: number; name: string } | null>(null);
 
-  async function handleDeleteParent(parentId: number) {
-    try {
-      const res = await fetch(`/api/parents/${parentId}`, { method: "DELETE" });
-      if (res.ok) {
-        setParents((prev) => prev.filter((p) => p.id !== parentId));
-      }
-    } catch (err) {
-      console.error("Failed to delete parent:", err);
-    }
+  function handleDeleteParent(parentId: number) {
+    // Optimistic: remove from UI immediately, fire API in background
+    setParents((prev) => prev.filter((p) => p.id !== parentId));
     setPendingDeleteParent(null);
+    fetch(`/api/parents/${parentId}`, { method: "DELETE" }).catch((err) =>
+      console.error("Failed to delete parent:", err)
+    );
   }
 
   async function handleInvite(e: React.FormEvent) {
@@ -217,21 +270,42 @@ export default function FamilyStepPage() {
 
   if (loading) {
     return (
-      <>
-        <StepHeader yearId={yearId} yearName="" />
-        <div className="flex min-h-[60vh] items-center justify-center">
-          <p className="text-muted-foreground">Loading...</p>
+      <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
+        {/* Parent card skeleton */}
+        <div className="rounded-lg border p-6">
+          <Skeleton className="h-5 w-40 mb-4" />
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i}>
+                <Skeleton className="h-4 w-24 mb-2" />
+                <Skeleton className="h-10 w-full rounded-md" />
+              </div>
+            ))}
+          </div>
         </div>
-      </>
+        {/* Second parent card skeleton */}
+        <div className="rounded-lg border p-6">
+          <Skeleton className="h-5 w-40 mb-4" />
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i}>
+                <Skeleton className="h-4 w-24 mb-2" />
+                <Skeleton className="h-10 w-full rounded-md" />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
     );
   }
 
   return (
     <>
-      <StepHeader yearId={yearId} yearName={yearName} />
-      <div className="flex flex-1 flex-col gap-6 p-4 pt-0">
-        <div>
-          <h1 className="text-2xl font-semibold">Family Information</h1>
+      <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
+        <div className="text-center">
+          <h1 className="text-2xl font-semibold">
+            {familyName ? `${familyName} Family` : "Family Information"}
+          </h1>
           <p className="text-muted-foreground text-sm mt-1">
             Manage contact information and addresses for all parents and
             guardians.
@@ -247,8 +321,11 @@ export default function FamilyStepPage() {
         ) : (
           <div className="space-y-6">
             {parents.map((parent, idx) => (
-              <Card key={parent.id} className="overflow-hidden gap-0 py-0">
-                <CardHeader className="border-b py-3 !pb-3">
+              <Card key={parent.id} className="overflow-hidden gap-0 py-0 ring-0 border">
+                <CardHeader
+                  className="border-b py-3 !pb-3 cursor-pointer select-none"
+                  onClick={() => toggleParent(parent.id)}
+                >
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
                       <Avatar className="size-10">
@@ -261,28 +338,36 @@ export default function FamilyStepPage() {
                       </CardTitle>
                     </div>
                     <div className="flex items-center gap-2">
-                      <Button
-                        variant={idx === parents.length - 1 ? "default" : "outline"}
-                        size="sm"
-                        onClick={() => {
-                          setInviteError("");
-                          setInviteSheetOpen(true);
-                        }}
-                        disabled={idx !== parents.length - 1}
+                      {parent.email !== currentUserEmail && (
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          className="size-8 text-muted-foreground hover:text-red-600"
+                          onClick={(e) => { e.stopPropagation(); setPendingDeleteParent({ id: parent.id, name: `${parent.first_name} ${parent.last_name}` }); }}
+                        >
+                          <Trash2 className="size-4" />
+                        </Button>
+                      )}
+                      <div
+                        className="flex size-8 items-center justify-center rounded-md border border-input text-muted-foreground hover:bg-muted/50 transition-colors"
+                        onClick={(e) => { e.stopPropagation(); toggleParent(parent.id); }}
                       >
-                        Add Parent/Guardian
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="icon"
-                        className="size-8 text-muted-foreground hover:text-red-600"
-                        onClick={() => setPendingDeleteParent({ id: parent.id, name: `${parent.first_name} ${parent.last_name}` })}
-                      >
-                        <Trash2 className="size-4" />
-                      </Button>
+                        <svg className={`size-4 transition-transform duration-200 ${openParents.has(parent.id) ? "rotate-180" : ""}`} viewBox="0 0 20 20" fill="currentColor">
+                          <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
+                        </svg>
+                      </div>
                     </div>
                   </div>
                 </CardHeader>
+                <AnimatePresence initial={false}>
+                {openParents.has(parent.id) && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: "auto", opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={{ duration: 0.25, ease: "easeInOut" }}
+                    className="overflow-hidden"
+                  >
                 <CardContent className="space-y-6 py-5 bg-gray-50 dark:bg-muted/50">
                   {/* Contact Information */}
                   <section>
@@ -306,8 +391,7 @@ export default function FamilyStepPage() {
                       </Field>
                       <Field>
                         <FieldLabel className="text-xs">
-                          Phone <span className="text-destructive">*</span>
-                        </FieldLabel>
+                          Phone                        </FieldLabel>
                         <Input
                           className={!parent.phone ? "border-red-400" : ""}
                           placeholder="(555) 555-5555"
@@ -321,8 +405,10 @@ export default function FamilyStepPage() {
                         />
                       </Field>
                       <Field>
-                        <FieldLabel className="text-xs">Relationship</FieldLabel>
+                        <FieldLabel className="text-xs">
+                          Relationship                        </FieldLabel>
                         <Input
+                          className={!parent.relationship ? "border-red-400" : ""}
                           placeholder="e.g. Mother"
                           value={parent.relationship || ""}
                           onChange={(e) =>
@@ -348,8 +434,7 @@ export default function FamilyStepPage() {
                         <Field>
                           <FieldLabel className="text-xs">
                             Street Address{" "}
-                            <span className="text-destructive">*</span>
-                          </FieldLabel>
+                                                     </FieldLabel>
                           <Input
                             className={!parent.address_line_1 ? "border-red-400" : ""}
                             placeholder="123 Main Street"
@@ -381,8 +466,7 @@ export default function FamilyStepPage() {
                       <div className="grid gap-4 grid-cols-1 sm:grid-cols-[2fr_1fr_1fr]">
                         <Field>
                           <FieldLabel className="text-xs">
-                            City <span className="text-destructive">*</span>
-                          </FieldLabel>
+                            City                          </FieldLabel>
                           <Input
                             className={!parent.city ? "border-red-400" : ""}
                             placeholder="St. Petersburg"
@@ -397,8 +481,7 @@ export default function FamilyStepPage() {
                         </Field>
                         <Field>
                           <FieldLabel className="text-xs">
-                            State <span className="text-destructive">*</span>
-                          </FieldLabel>
+                            State                          </FieldLabel>
                           <Combobox
                             value={parent.state || ""}
                             onValueChange={(v) => {
@@ -425,8 +508,7 @@ export default function FamilyStepPage() {
                         <Field>
                           <FieldLabel className="text-xs">
                             Zip Code{" "}
-                            <span className="text-destructive">*</span>
-                          </FieldLabel>
+                                                     </FieldLabel>
                           <Input
                             className={!parent.zipcode ? "border-red-400" : ""}
                             placeholder="33701"
@@ -443,26 +525,25 @@ export default function FamilyStepPage() {
                     </div>
                   </section>
                 </CardContent>
+                  </motion.div>
+                )}
+                </AnimatePresence>
               </Card>
             ))}
+            <Button
+              variant="outline"
+              className="w-full"
+              onClick={() => {
+                setInviteError("");
+                setInviteSheetOpen(true);
+              }}
+            >
+              <Plus className="size-4 mr-1.5" />
+              Add Parent/Guardian
+            </Button>
           </div>
         )}
 
-        <div className="h-20" />
-      </div>
-
-      <div className="fixed bottom-0 left-0 right-0 z-50 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 md:left-[var(--sidebar-width)]">
-        <div className="flex h-16 items-center justify-between px-4 sm:px-6">
-          <Button
-            variant="outline"
-            onClick={() => router.push(`/apply/year/${yearId}`)}
-          >
-            &larr; Back to Checklist
-          </Button>
-          <Button onClick={handleSaveAll} disabled={saving}>
-            {saving ? "Saving..." : "Save Section"}
-          </Button>
-        </div>
       </div>
 
       <AlertDialog open={!!pendingDeleteParent} onOpenChange={(open) => { if (!open) setPendingDeleteParent(null); }}>
@@ -541,39 +622,3 @@ export default function FamilyStepPage() {
   );
 }
 
-function StepHeader({
-  yearId,
-  yearName,
-}: {
-  yearId: string;
-  yearName: string;
-}) {
-  return (
-    <header className="flex h-16 shrink-0 items-center gap-2">
-      <div className="flex items-center gap-2 px-4">
-        <SidebarTrigger className="-ml-1" />
-        <Separator
-          orientation="vertical"
-          className="mr-2 data-vertical:h-4 data-vertical:self-auto"
-        />
-        <Breadcrumb>
-          <BreadcrumbList>
-            <BreadcrumbItem className="hidden md:block">
-              <BreadcrumbLink href="/">Dashboard</BreadcrumbLink>
-            </BreadcrumbItem>
-            <BreadcrumbSeparator className="hidden md:block" />
-            <BreadcrumbItem className="hidden md:block">
-              <BreadcrumbLink href={`/apply/year/${yearId}`}>
-                {yearName || "Application"}
-              </BreadcrumbLink>
-            </BreadcrumbItem>
-            <BreadcrumbSeparator className="hidden md:block" />
-            <BreadcrumbItem>
-              <BreadcrumbPage>Family</BreadcrumbPage>
-            </BreadcrumbItem>
-          </BreadcrumbList>
-        </Breadcrumb>
-      </div>
-    </header>
-  );
-}

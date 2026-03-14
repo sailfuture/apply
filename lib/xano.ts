@@ -28,6 +28,7 @@ export interface XanoFamily {
   family_name: string;
   bus_transportation: boolean;
   isAccepted: boolean;
+  isSubmitted: boolean;
   registration_students_id: (number | Record<string, unknown> | unknown[])[];
   registration_parents_id: (number | Record<string, unknown> | unknown[])[];
   registration_fee_waiver_id: number | null;
@@ -349,13 +350,42 @@ export const xano = {
     },
 
     async findByClerkId(clerkUserId: string): Promise<XanoParent | null> {
-      const all = await this.getAll();
-      return all.find((p) => p.clerk_user_id === clerkUserId) ?? null;
+      try {
+        const res = await fetch(
+          `${getBaseUrl()}/registration_parents?clerk_user_id=${encodeURIComponent(clerkUserId)}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) {
+          // Fallback to full scan if query param not supported
+          const all = await this.getAll();
+          return all.find((p) => p.clerk_user_id === clerkUserId) ?? null;
+        }
+        const results: XanoParent[] = await res.json();
+        const items = Array.isArray(results) ? results : [];
+        return items.find((p) => p.clerk_user_id === clerkUserId) ?? null;
+      } catch {
+        const all = await this.getAll();
+        return all.find((p) => p.clerk_user_id === clerkUserId) ?? null;
+      }
     },
 
     async findByEmail(email: string): Promise<XanoParent | null> {
-      const all = await this.getAll();
-      return all.find((p) => p.email === email) ?? null;
+      try {
+        const res = await fetch(
+          `${getBaseUrl()}/registration_parents?email=${encodeURIComponent(email)}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) {
+          const all = await this.getAll();
+          return all.find((p) => p.email === email) ?? null;
+        }
+        const results: XanoParent[] = await res.json();
+        const items = Array.isArray(results) ? results : [];
+        return items.find((p) => p.email === email) ?? null;
+      } catch {
+        const all = await this.getAll();
+        return all.find((p) => p.email === email) ?? null;
+      }
     },
 
     async delete(id: number): Promise<void> {
@@ -404,11 +434,22 @@ export const xano = {
     },
 
     async findByParentId(parentId: number): Promise<XanoFamily | null> {
-      const all = await this.getAll();
-      return (
-        all.find((f) => extractIds(f.registration_parents_id).includes(parentId)) ??
-        null
-      );
+      try {
+        const res = await fetch(
+          `${getBaseUrl()}/registration_families?registration_parents_id=${parentId}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) {
+          const all = await this.getAll();
+          return all.find((f) => extractIds(f.registration_parents_id).includes(parentId)) ?? null;
+        }
+        const results: XanoFamily[] = await res.json();
+        const items = Array.isArray(results) ? results : [];
+        return items.find((f) => extractIds(f.registration_parents_id).includes(parentId)) ?? null;
+      } catch {
+        const all = await this.getAll();
+        return all.find((f) => extractIds(f.registration_parents_id).includes(parentId)) ?? null;
+      }
     },
 
     getParentIds(family: XanoFamily): number[] {
@@ -462,8 +503,22 @@ export const xano = {
     },
 
     async getByFamilyId(familyId: number): Promise<XanoStudent[]> {
-      const all = await this.getAll();
-      return all.filter((s) => s.registration_families_id === familyId && !s.isArchived);
+      try {
+        const res = await fetch(
+          `${getBaseUrl()}/registration_students?registration_families_id=${familyId}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) {
+          const all = await this.getAll();
+          return all.filter((s) => s.registration_families_id === familyId && !s.isArchived);
+        }
+        const results: XanoStudent[] = await res.json();
+        const items = Array.isArray(results) ? results : [];
+        return items.filter((s) => !s.isArchived);
+      } catch {
+        const all = await this.getAll();
+        return all.filter((s) => s.registration_families_id === familyId && !s.isArchived);
+      }
     },
   },
 
@@ -505,15 +560,46 @@ export const xano = {
     },
 
     async getByFamilyId(familyId: number): Promise<XanoApplication[]> {
-      const all = await this.getAll();
-      return all.filter((a) => a.registration_families_id === familyId);
+      try {
+        const res = await fetch(
+          `${getBaseUrl()}/registration_application?registration_families_id=${familyId}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) {
+          const all = await this.getAll();
+          return all.filter((a) => a.registration_families_id === familyId);
+        }
+        const results: XanoApplication[] = await res.json();
+        return Array.isArray(results) ? results : [];
+      } catch {
+        const all = await this.getAll();
+        return all.filter((a) => a.registration_families_id === familyId);
+      }
     },
 
     async getByStudentAndYear(studentId: number, schoolYearId: number): Promise<XanoApplication | null> {
-      const all = await this.getAll();
-      return all.find(
-        (a) => a.registration_students_id === studentId && a.registration_school_years_id === schoolYearId
-      ) ?? null;
+      try {
+        const res = await fetch(
+          `${getBaseUrl()}/registration_application?registration_students_id=${studentId}&registration_school_years_id=${schoolYearId}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) {
+          const all = await this.getAll();
+          return all.find(
+            (a) => a.registration_students_id === studentId && a.registration_school_years_id === schoolYearId
+          ) ?? null;
+        }
+        const results: XanoApplication[] = await res.json();
+        const items = Array.isArray(results) ? results : [];
+        return items.find(
+          (a) => a.registration_students_id === studentId && a.registration_school_years_id === schoolYearId
+        ) ?? null;
+      } catch {
+        const all = await this.getAll();
+        return all.find(
+          (a) => a.registration_students_id === studentId && a.registration_school_years_id === schoolYearId
+        ) ?? null;
+      }
     },
 
     async delete(id: number): Promise<void> {
@@ -542,8 +628,22 @@ export const xano = {
     },
 
     async findByName(name: string): Promise<XanoApplicationStatus | null> {
-      const all = await this.getAll();
-      return all.find((s) => s.status_name.toLowerCase() === name.toLowerCase()) ?? null;
+      try {
+        const res = await fetch(
+          `${getBaseUrl()}/registration_application_status?status_name=${encodeURIComponent(name)}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) {
+          const all = await this.getAll();
+          return all.find((s) => s.status_name.toLowerCase() === name.toLowerCase()) ?? null;
+        }
+        const results: XanoApplicationStatus[] = await res.json();
+        const items = Array.isArray(results) ? results : [];
+        return items.find((s) => s.status_name.toLowerCase() === name.toLowerCase()) ?? null;
+      } catch {
+        const all = await this.getAll();
+        return all.find((s) => s.status_name.toLowerCase() === name.toLowerCase()) ?? null;
+      }
     },
   },
 
@@ -603,10 +703,28 @@ export const xano = {
     },
 
     async getByFamilyAndYear(familyId: number, yearId: number): Promise<XanoScholarship | null> {
-      const all = await this.getAll();
-      return all.find(
-        (s) => s.registration_families_id === familyId && s.registration_school_years_id === yearId
-      ) ?? null;
+      try {
+        const res = await fetch(
+          `${getBaseUrl()}/registration_opportunity_scholarship?registration_families_id=${familyId}&registration_school_years_id=${yearId}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) {
+          const all = await this.getAll();
+          return all.find(
+            (s) => s.registration_families_id === familyId && s.registration_school_years_id === yearId
+          ) ?? null;
+        }
+        const results: XanoScholarship[] = await res.json();
+        const items = Array.isArray(results) ? results : [];
+        return items.find(
+          (s) => s.registration_families_id === familyId && s.registration_school_years_id === yearId
+        ) ?? null;
+      } catch {
+        const all = await this.getAll();
+        return all.find(
+          (s) => s.registration_families_id === familyId && s.registration_school_years_id === yearId
+        ) ?? null;
+      }
     },
   },
 
@@ -647,8 +765,21 @@ export const xano = {
     },
 
     async getByScholarshipId(scholarshipId: number): Promise<XanoScholarshipBenefit[]> {
-      const all = await this.getAll();
-      return all.filter((b) => b.registration_opportunity_scholarship_id === scholarshipId);
+      try {
+        const res = await fetch(
+          `${getBaseUrl()}/registration_opportunity_scholarship_benefits?registration_opportunity_scholarship_id=${scholarshipId}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) {
+          const all = await this.getAll();
+          return all.filter((b) => b.registration_opportunity_scholarship_id === scholarshipId);
+        }
+        const results: XanoScholarshipBenefit[] = await res.json();
+        return Array.isArray(results) ? results : [];
+      } catch {
+        const all = await this.getAll();
+        return all.filter((b) => b.registration_opportunity_scholarship_id === scholarshipId);
+      }
     },
   },
 
@@ -689,8 +820,21 @@ export const xano = {
     },
 
     async getByScholarshipId(scholarshipId: number): Promise<XanoScholarshipContributingMember[]> {
-      const all = await this.getAll();
-      return all.filter((m) => m.registration_opportunity_scholarship_id === scholarshipId);
+      try {
+        const res = await fetch(
+          `${getBaseUrl()}/registration_opportunity_scholarship_contributing_members?registration_opportunity_scholarship_id=${scholarshipId}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) {
+          const all = await this.getAll();
+          return all.filter((m) => m.registration_opportunity_scholarship_id === scholarshipId);
+        }
+        const results: XanoScholarshipContributingMember[] = await res.json();
+        return Array.isArray(results) ? results : [];
+      } catch {
+        const all = await this.getAll();
+        return all.filter((m) => m.registration_opportunity_scholarship_id === scholarshipId);
+      }
     },
   },
 
@@ -731,8 +875,21 @@ export const xano = {
     },
 
     async getByScholarshipId(scholarshipId: number): Promise<XanoScholarshipHome[]> {
-      const all = await this.getAll();
-      return all.filter((h) => h.registration_opportunity_scholarship_id === scholarshipId);
+      try {
+        const res = await fetch(
+          `${getBaseUrl()}/registration_opportunity_scholarship_home?registration_opportunity_scholarship_id=${scholarshipId}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) {
+          const all = await this.getAll();
+          return all.filter((h) => h.registration_opportunity_scholarship_id === scholarshipId);
+        }
+        const results: XanoScholarshipHome[] = await res.json();
+        return Array.isArray(results) ? results : [];
+      } catch {
+        const all = await this.getAll();
+        return all.filter((h) => h.registration_opportunity_scholarship_id === scholarshipId);
+      }
     },
   },
 
@@ -773,8 +930,21 @@ export const xano = {
     },
 
     async getByScholarshipId(scholarshipId: number): Promise<XanoScholarshipVehicle[]> {
-      const all = await this.getAll();
-      return all.filter((v) => v.registration_opportunity_scholarship_id === scholarshipId);
+      try {
+        const res = await fetch(
+          `${getBaseUrl()}/registration_opportunity_scholarship_vehicles?registration_opportunity_scholarship_id=${scholarshipId}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) {
+          const all = await this.getAll();
+          return all.filter((v) => v.registration_opportunity_scholarship_id === scholarshipId);
+        }
+        const results: XanoScholarshipVehicle[] = await res.json();
+        return Array.isArray(results) ? results : [];
+      } catch {
+        const all = await this.getAll();
+        return all.filter((v) => v.registration_opportunity_scholarship_id === scholarshipId);
+      }
     },
   },
 
