@@ -87,7 +87,13 @@ export async function GET() {
     try {
       const family = await xano.families.getById(familyId);
       const parents = await resolveParents(family);
-      return NextResponse.json({ ...family, parents }, { status: 200 });
+      // Flatten expanded relation arrays to just IDs to reduce payload size
+      return NextResponse.json({
+        ...family,
+        registration_students_id: xano.families.getStudentIds(family),
+        registration_parents_id: xano.families.getParentIds(family),
+        parents,
+      }, { status: 200 });
     } catch {
       return NextResponse.json(null, { status: 200 });
     }
@@ -109,5 +115,11 @@ export async function GET() {
   });
 
   const parents = await resolveParents(family);
-  return NextResponse.json({ ...family, parents }, { status: 200 });
+  // Flatten expanded relation arrays to just IDs to reduce payload size
+  return NextResponse.json({
+    ...family,
+    registration_students_id: xano.families.getStudentIds(family),
+    registration_parents_id: xano.families.getParentIds(family),
+    parents,
+  }, { status: 200 });
 }

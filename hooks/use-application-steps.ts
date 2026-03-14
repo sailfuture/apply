@@ -139,6 +139,7 @@ export function useApplicationSteps(yearId: number) {
       if (!a.describe_student_strengths) return false;
       if (!a.describe_student_opportunities_for_growth) return false;
       if (a.is_bus_transportation && (!a.registration_parents_id || !a.bus_stop)) return false;
+      if (!a.nwea_testing_complete && !a.test_scores) return false;
       return true;
     });
   }, [yearApps]);

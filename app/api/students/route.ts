@@ -22,7 +22,19 @@ export async function GET() {
   }
 
   const students = await xano.students.getByFamilyId(familyId);
-  return NextResponse.json(students, { status: 200 });
+  // Strip large photo data from list response to reduce payload size.
+  // Keep only the URL if photo is a Xano file object, otherwise null.
+  const trimmed = students.map((s) => {
+    let photo: string | { url: string } | null = null;
+    if (s.photo && typeof s.photo === "object" && (s.photo as { url?: string }).url) {
+      photo = { url: (s.photo as { url: string }).url };
+    } else if (typeof s.photo === "string" && s.photo.startsWith("http")) {
+      photo = s.photo;
+    }
+    // Drop base64 photo strings — too large for list responses
+    return { ...s, photo };
+  });
+  return NextResponse.json(trimmed, { status: 200 });
 }
 
 export async function POST(req: NextRequest) {

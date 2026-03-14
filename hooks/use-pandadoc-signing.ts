@@ -52,9 +52,6 @@ export function usePandaDocSigning(
     let cancelled = false;
 
     const init = async () => {
-      await new Promise((r) => setTimeout(r, 400));
-      if (cancelled) return;
-
       const wrapper = document.getElementById("pandadoc-signing-wrapper");
       if (!wrapper) return;
 

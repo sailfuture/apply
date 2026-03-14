@@ -35,6 +35,7 @@ interface Application {
   nwea_math: number;
   nwea_reading: number;
   test_scores: Record<string, unknown> | null;
+  nwea_testing_complete: boolean;
 }
 
 const avatarColors = [
@@ -395,6 +396,43 @@ export default function NweaStepPage() {
                               admissions@sailfuture.org
                             </p>
                           </div>
+                          <label className="flex items-start gap-3 pt-2 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              className="size-5 mt-0.5 cursor-pointer rounded accent-primary"
+                              checked={app.nwea_testing_complete}
+                              disabled={savingAppId === app.id}
+                              onChange={async () => {
+                                const newVal = !app.nwea_testing_complete;
+                                setApplications((prev) =>
+                                  prev.map((a) =>
+                                    a.id === app.id
+                                      ? { ...a, nwea_testing_complete: newVal }
+                                      : a
+                                  )
+                                );
+                                try {
+                                  await fetch(`/api/applications/${app.id}`, {
+                                    method: "PATCH",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({ nwea_testing_complete: newVal }),
+                                  });
+                                } catch (err) {
+                                  console.error("Failed to save:", err);
+                                  setApplications((prev) =>
+                                    prev.map((a) =>
+                                      a.id === app.id
+                                        ? { ...a, nwea_testing_complete: !newVal }
+                                        : a
+                                    )
+                                  );
+                                }
+                              }}
+                            />
+                            <span className="text-sm font-medium">
+                              Yes, I&apos;ve scheduled NWEA testing for my child at the SailFuture Academy.
+                            </span>
+                          </label>
                         </div>
                       </TabsContent>
                     </Tabs>

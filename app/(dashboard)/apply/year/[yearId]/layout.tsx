@@ -10,6 +10,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
 import { useMemo, useCallback, useState } from "react";
 import {
   ApplicationFlowProvider,
@@ -33,15 +34,19 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
   const basePath = `/apply/year/${yearId}`;
   const isOverview = pathname === basePath || pathname === `${basePath}/`;
 
-  const { saveHandler, saveOptions, backGuard } =
+  const { saveHandler, saveOptions, backGuard, onBack, hideChrome } =
     useApplicationFlow();
 
   const [helpOpen, setHelpOpen] = useState(false);
 
   const handleBack = useCallback(() => {
     if (backGuard && !backGuard()) return;
+    if (onBack) {
+      onBack();
+      return;
+    }
     router.push(basePath);
-  }, [backGuard, router, basePath]);
+  }, [backGuard, onBack, router, basePath]);
 
   // Determine which step segment is currently active
   const activeSegment = useMemo(() => {
@@ -51,8 +56,8 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex min-h-screen flex-col">
-      {/* Fixed Header — hidden on overview */}
-      {!isOverview && (
+      {/* Fixed Header — hidden on overview and when hideChrome is set */}
+      {!isOverview && !hideChrome && (
         <header className="fixed top-0 left-0 right-0 z-40 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
           <div className="mx-auto w-full max-w-4xl flex h-14 items-center px-4">
             {/* Left: SFA logo — links back to checklist */}
@@ -123,42 +128,64 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
               If you require assistance with your application, please contact us.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4 py-2">
-            <div className="flex items-center gap-3">
-              <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-primary/10">
-                <svg className="size-5 text-primary" viewBox="0 0 20 20" fill="currentColor">
-                  <path d="M3 4a2 2 0 00-2 2v1.161l8.441 4.221a1.25 1.25 0 001.118 0L19 7.162V6a2 2 0 00-2-2H3z" />
-                  <path d="M19 8.839l-7.831 3.916a2.75 2.75 0 01-2.338 0L1 8.839V14a2 2 0 002 2h14a2 2 0 002-2V8.839z" />
-                </svg>
-              </div>
-              <div>
-                <p className="text-sm font-medium">Email</p>
-                <a
-                  href="mailto:tward@sailfuture.org"
-                  className="text-sm text-primary underline underline-offset-2"
-                >
-                  tward@sailfuture.org
-                </a>
+          <div className="space-y-5 py-2">
+            {/* Mrs. Tessa Ward */}
+            <div>
+              <p className="text-sm font-semibold">Mrs. Tessa Ward</p>
+              <p className="text-xs text-muted-foreground">Dean of Students</p>
+              <div className="mt-2 space-y-1.5">
+                <div className="flex items-center gap-2.5">
+                  <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted">
+                    <svg className="size-4 text-muted-foreground" viewBox="0 0 20 20" fill="currentColor">
+                      <path d="M3 4a2 2 0 00-2 2v1.161l8.441 4.221a1.25 1.25 0 001.118 0L19 7.162V6a2 2 0 00-2-2H3z" />
+                      <path d="M19 8.839l-7.831 3.916a2.75 2.75 0 01-2.338 0L1 8.839V14a2 2 0 002 2h14a2 2 0 002-2V8.839z" />
+                    </svg>
+                  </div>
+                  <a href="mailto:tward@sailfuture.org" className="text-sm underline underline-offset-2">
+                    tward@sailfuture.org
+                  </a>
+                </div>
+                <div className="flex items-center gap-2.5">
+                  <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted">
+                    <svg className="size-4 text-muted-foreground" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M2 3.5A1.5 1.5 0 013.5 2h1.148a1.5 1.5 0 011.465 1.175l.716 3.223a1.5 1.5 0 01-1.052 1.767l-.933.267c-.41.117-.643.555-.48.95a11.542 11.542 0 006.254 6.254c.395.163.833-.07.95-.48l.267-.933a1.5 1.5 0 011.767-1.052l3.223.716A1.5 1.5 0 0118 15.352V16.5a1.5 1.5 0 01-1.5 1.5H15c-1.149 0-2.263-.15-3.326-.43A13.022 13.022 0 012.43 8.326 13.019 13.019 0 012 5V3.5z" clipRule="evenodd" />
+                    </svg>
+                  </div>
+                  <a href="tel:+17279001436" className="text-sm underline underline-offset-2">
+                    (727) 900-1436
+                  </a>
+                </div>
               </div>
             </div>
-            <div className="flex items-center gap-3">
-              <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-primary/10">
-                <svg className="size-5 text-primary" viewBox="0 0 20 20" fill="currentColor">
-                  <path
-                    fillRule="evenodd"
-                    d="M2 3.5A1.5 1.5 0 013.5 2h1.148a1.5 1.5 0 011.465 1.175l.716 3.223a1.5 1.5 0 01-1.052 1.767l-.933.267c-.41.117-.643.555-.48.95a11.542 11.542 0 006.254 6.254c.395.163.833-.07.95-.48l.267-.933a1.5 1.5 0 011.767-1.052l3.223.716A1.5 1.5 0 0118 15.352V16.5a1.5 1.5 0 01-1.5 1.5H15c-1.149 0-2.263-.15-3.326-.43A13.022 13.022 0 012.43 8.326 13.019 13.019 0 012 5V3.5z"
-                    clipRule="evenodd"
-                  />
-                </svg>
-              </div>
-              <div>
-                <p className="text-sm font-medium">Phone</p>
-                <a
-                  href="tel:+17279001436"
-                  className="text-sm text-primary underline underline-offset-2"
-                >
-                  (727) 900-1436
-                </a>
+
+            <Separator />
+
+            {/* Ms. Laura Manke */}
+            <div>
+              <p className="text-sm font-semibold">Ms. Laura Manke</p>
+              <p className="text-xs text-muted-foreground">Assistant Head of School</p>
+              <div className="mt-2 space-y-1.5">
+                <div className="flex items-center gap-2.5">
+                  <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted">
+                    <svg className="size-4 text-muted-foreground" viewBox="0 0 20 20" fill="currentColor">
+                      <path d="M3 4a2 2 0 00-2 2v1.161l8.441 4.221a1.25 1.25 0 001.118 0L19 7.162V6a2 2 0 00-2-2H3z" />
+                      <path d="M19 8.839l-7.831 3.916a2.75 2.75 0 01-2.338 0L1 8.839V14a2 2 0 002 2h14a2 2 0 002-2V8.839z" />
+                    </svg>
+                  </div>
+                  <a href="mailto:lmanke@sailfuture.org" className="text-sm underline underline-offset-2">
+                    lmanke@sailfuture.org
+                  </a>
+                </div>
+                <div className="flex items-center gap-2.5">
+                  <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted">
+                    <svg className="size-4 text-muted-foreground" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M2 3.5A1.5 1.5 0 013.5 2h1.148a1.5 1.5 0 011.465 1.175l.716 3.223a1.5 1.5 0 01-1.052 1.767l-.933.267c-.41.117-.643.555-.48.95a11.542 11.542 0 006.254 6.254c.395.163.833-.07.95-.48l.267-.933a1.5 1.5 0 011.767-1.052l3.223.716A1.5 1.5 0 0118 15.352V16.5a1.5 1.5 0 01-1.5 1.5H15c-1.149 0-2.263-.15-3.326-.43A13.022 13.022 0 012.43 8.326 13.019 13.019 0 012 5V3.5z" clipRule="evenodd" />
+                    </svg>
+                  </div>
+                  <a href="tel:+18135053539" className="text-sm underline underline-offset-2">
+                    (813) 505-3539
+                  </a>
+                </div>
               </div>
             </div>
           </div>
@@ -166,12 +193,12 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
       </Dialog>
 
       {/* Scrollable Content */}
-      <main className={`flex-1 overflow-y-auto ${isOverview ? "" : "pt-14 pb-20"}`}>
+      <main className={`flex-1 overflow-y-auto ${isOverview || hideChrome ? "" : "pt-14 pb-20"}`}>
         {children}
       </main>
 
-      {/* Fixed Bottom Nav — form pages only */}
-      {!isOverview && (
+      {/* Fixed Bottom Nav — form pages only, hidden when hideChrome is set */}
+      {!isOverview && !hideChrome && (
         <div className="fixed bottom-0 left-0 right-0 z-40 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
           <div className="mx-auto w-full max-w-4xl flex items-center gap-3 px-4 py-3">
             <button

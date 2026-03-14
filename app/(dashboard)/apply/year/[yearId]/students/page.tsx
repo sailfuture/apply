@@ -50,7 +50,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Switch } from "@/components/ui/switch";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Trash2, FileUp, X, Loader2, CheckCircle2 } from "lucide-react";
+import { Trash2, FileUp, X, Loader2, CheckCircle2, Plus } from "lucide-react";
 import {
   FileUpload,
   FileUploadDropzone,
@@ -79,7 +79,7 @@ interface Student {
   date_of_birth: string;
   gender: string;
   ethnicity: string;
-  photo: string | null;
+  photo: string | { url: string } | null;
 }
 
 interface Application {
@@ -124,6 +124,13 @@ function formatDob(dob: string): string {
     day: "numeric",
     year: "numeric",
   });
+}
+
+function getPhotoUrl(photo: string | { url: string } | null): string | undefined {
+  if (!photo) return undefined;
+  if (typeof photo === "string") return photo;
+  if (typeof photo === "object" && photo.url) return photo.url;
+  return undefined;
 }
 
 function fileToBase64(file: File): Promise<string> {
@@ -268,6 +275,12 @@ export default function StudentsStepPage() {
         const newApp = await res.json();
         setApplications((prev) => [...prev, newApp]);
         setSavedApplications((prev) => [...prev, newApp]);
+        // Ensure the new student's card starts expanded
+        setCollapsedCards((prev) => {
+          const next = new Set(prev);
+          next.delete(studentId);
+          return next;
+        });
       } else {
         const body = await res.json().catch(() => null);
         setAddError(body?.error ?? `Failed to add student (${res.status})`);
@@ -279,17 +292,18 @@ export default function StudentsStepPage() {
     }
   }
 
-  async function handleRemoveStudent(appId: number) {
-    try {
-      const res = await fetch(`/api/applications/${appId}`, { method: "DELETE" });
-      if (res.ok) {
-        setApplications((prev) => prev.filter((a) => a.id !== appId));
-        setSavedApplications((prev) => prev.filter((a) => a.id !== appId));
-      }
-    } catch (err) {
-      console.error("Failed to remove student:", err);
-    }
+  function handleRemoveStudent(appId: number) {
+    setApplications((prev) => prev.filter((a) => a.id !== appId));
+    setSavedApplications((prev) => prev.filter((a) => a.id !== appId));
     setPendingDeleteStudent(null);
+    fetch(`/api/applications/${appId}`, { method: "DELETE" })
+      .then(async (res) => {
+        if (!res.ok) {
+          const body = await res.text();
+          console.error("Delete failed:", res.status, res.statusText, body);
+        }
+      })
+      .catch((err) => console.error("Failed to remove student:", err));
   }
 
   function isAppComplete(app: Application): boolean {
@@ -299,6 +313,7 @@ export default function StudentsStepPage() {
     if (!app.describe_student_strengths) return false;
     if (!app.describe_student_opportunities_for_growth) return false;
     if (app.is_bus_transportation && (!app.registration_parents_id || !app.bus_stop)) return false;
+    if (!app.nwea_testing_complete && !app.test_scores) return false;
     return true;
   }
 
@@ -552,9 +567,9 @@ export default function StudentsStepPage() {
                         }}
                       >
                         <Avatar className="size-10">
-                          {student.photo ? (
+                          {getPhotoUrl(student.photo) ? (
                             <AvatarImage
-                              src={student.photo}
+                              src={getPhotoUrl(student.photo)}
                               alt={`${student.first_name} ${student.last_name}`}
                             />
                           ) : null}
@@ -575,14 +590,6 @@ export default function StudentsStepPage() {
                       </CardTitle>
                     </div>
                     <div className="flex items-center gap-2">
-                      <Button
-                        variant={idx === enrolled.length - 1 ? "default" : "outline"}
-                        size="sm"
-                        onClick={(e) => { e.stopPropagation(); setAddDialogOpen(true); }}
-                        disabled={idx !== enrolled.length - 1}
-                      >
-                        Add Another Student
-                      </Button>
                       <Button
                         variant="outline"
                         size="icon"
@@ -960,6 +967,40 @@ export default function StudentsStepPage() {
                               <p className="text-xs text-muted-foreground">Don&apos;t have recent test scores? Schedule a session.</p>
                             </div>
                           </button>
+                          <label className={`flex items-start gap-3 mt-2 cursor-pointer rounded-md border px-4 py-3 transition-colors ${!app.nwea_testing_complete && !app.test_scores ? "border-red-400" : "border-input"}`}>
+                            <input
+                              type="checkbox"
+                              className="size-5 mt-0.5 cursor-pointer rounded accent-primary"
+                              checked={app.nwea_testing_complete}
+                              onChange={() => {
+                                const newVal = !app.nwea_testing_complete;
+                                setApplications((prev) =>
+                                  prev.map((a) =>
+                                    a.id === app.id
+                                      ? { ...a, nwea_testing_complete: newVal }
+                                      : a
+                                  )
+                                );
+                                fetch(`/api/applications/${app.id}`, {
+                                  method: "PATCH",
+                                  headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({ nwea_testing_complete: newVal }),
+                                }).catch((err) => {
+                                  console.error("Failed to save:", err);
+                                  setApplications((prev) =>
+                                    prev.map((a) =>
+                                      a.id === app.id
+                                        ? { ...a, nwea_testing_complete: !newVal }
+                                        : a
+                                    )
+                                  );
+                                });
+                              }}
+                            />
+                            <span className="text-sm font-medium">
+                              Yes, I&apos;ve scheduled NWEA testing for my child at the SailFuture Academy.
+                            </span>
+                          </label>
                         </Field>
                         <Field>
                           <FieldLabel className="text-xs">
@@ -990,6 +1031,14 @@ export default function StudentsStepPage() {
                 )}
               </Card>
             ))}
+            <Button
+              variant="outline"
+              className="w-full"
+              onClick={() => setAddDialogOpen(true)}
+            >
+              <Plus className="size-4 mr-1.5" />
+              Add Another Student
+            </Button>
           </div>
         )}
 

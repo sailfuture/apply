@@ -33,6 +33,15 @@ interface ApplicationFlowContextValue {
   backGuard: (() => boolean) | null;
   registerBackGuard: (guard: () => boolean) => void;
   unregisterBackGuard: () => void;
+
+  // Back override (form pages can intercept back to handle sub-navigation)
+  onBack: (() => void) | null;
+  registerOnBack: (handler: () => void) => void;
+  unregisterOnBack: () => void;
+
+  // Hide layout chrome (header + bottom bar) for full-page sub-views
+  hideChrome: boolean;
+  setHideChrome: (hide: boolean) => void;
 }
 
 const ApplicationFlowContext = createContext<ApplicationFlowContextValue | null>(
@@ -46,6 +55,8 @@ export function ApplicationFlowProvider({ children }: { children: ReactNode }) {
   >(null);
   const [saveOptions, setSaveOptions] = useState<SaveHandlerOptions>({});
   const [backGuard, setBackGuard] = useState<(() => boolean) | null>(null);
+  const [onBack, setOnBack] = useState<(() => void) | null>(null);
+  const [hideChrome, setHideChrome] = useState(false);
 
   const registerSaveHandler = useCallback(
     (handler: () => Promise<void> | void, options?: SaveHandlerOptions) => {
@@ -75,6 +86,14 @@ export function ApplicationFlowProvider({ children }: { children: ReactNode }) {
     setBackGuard(null);
   }, []);
 
+  const registerOnBack = useCallback((handler: () => void) => {
+    setOnBack(() => handler);
+  }, []);
+
+  const unregisterOnBack = useCallback(() => {
+    setOnBack(null);
+  }, []);
+
   return (
     <ApplicationFlowContext.Provider
       value={{
@@ -88,6 +107,11 @@ export function ApplicationFlowProvider({ children }: { children: ReactNode }) {
         backGuard,
         registerBackGuard,
         unregisterBackGuard,
+        onBack,
+        registerOnBack,
+        unregisterOnBack,
+        hideChrome,
+        setHideChrome,
       }}
     >
       {children}

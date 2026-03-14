@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams } from "next/navigation";
+import { useUser } from "@clerk/nextjs";
 import { useApplicationFlow } from "@/contexts/application-flow-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -43,7 +44,7 @@ import {
   ComboboxItem,
   ComboboxEmpty,
 } from "@/components/ui/combobox";
-import { Trash2 } from "lucide-react";
+import { Trash2, Plus } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import { US_STATES } from "@/lib/us-states";
 
@@ -74,6 +75,8 @@ function getInitials(first: string, last: string): string {
 export default function FamilyStepPage() {
   const params = useParams();
   const yearId = params.yearId as string;
+  const { user: clerkUser } = useUser();
+  const currentUserEmail = clerkUser?.primaryEmailAddress?.emailAddress ?? "";
 
   const {
     setPageTitle,
@@ -331,27 +334,16 @@ export default function FamilyStepPage() {
                       </CardTitle>
                     </div>
                     <div className="flex items-center gap-2">
-                      {idx === parents.length - 1 && (
+                      {parent.email !== currentUserEmail && (
                         <Button
-                          variant="default"
-                          size="sm"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setInviteError("");
-                            setInviteSheetOpen(true);
-                          }}
+                          variant="outline"
+                          size="icon"
+                          className="size-8 text-muted-foreground hover:text-red-600"
+                          onClick={(e) => { e.stopPropagation(); setPendingDeleteParent({ id: parent.id, name: `${parent.first_name} ${parent.last_name}` }); }}
                         >
-                          Add Parent/Guardian
+                          <Trash2 className="size-4" />
                         </Button>
                       )}
-                      <Button
-                        variant="outline"
-                        size="icon"
-                        className="size-8 text-muted-foreground hover:text-red-600"
-                        onClick={(e) => { e.stopPropagation(); setPendingDeleteParent({ id: parent.id, name: `${parent.first_name} ${parent.last_name}` }); }}
-                      >
-                        <Trash2 className="size-4" />
-                      </Button>
                       <div
                         className="flex size-8 items-center justify-center rounded-md border border-input text-muted-foreground hover:bg-muted/50 transition-colors"
                         onClick={(e) => { e.stopPropagation(); toggleParent(parent.id); }}
@@ -534,6 +526,17 @@ export default function FamilyStepPage() {
                 </AnimatePresence>
               </Card>
             ))}
+            <Button
+              variant="outline"
+              className="w-full"
+              onClick={() => {
+                setInviteError("");
+                setInviteSheetOpen(true);
+              }}
+            >
+              <Plus className="size-4 mr-1.5" />
+              Add Parent/Guardian
+            </Button>
           </div>
         )}
 

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
+import { useUser } from "@clerk/nextjs";
 import { useApplicationFlow } from "@/contexts/application-flow-context";
 import {
   Card,
@@ -274,6 +275,8 @@ function isDeadlinePassed(deadline: string | null): boolean {
 export default function ScholarshipPage() {
   const params = useParams();
   const router = useRouter();
+  const { user } = useUser();
+  const firstName = user?.firstName ?? "";
   const yearId = Number(params.yearId);
 
   const {
@@ -281,6 +284,8 @@ export default function ScholarshipPage() {
     registerSaveHandler,
     unregisterSaveHandler,
     updateSaveOptions,
+    registerOnBack,
+    unregisterOnBack,
   } = useApplicationFlow();
 
   const [schoolYear, setSchoolYear] = useState<SchoolYear | null>(null);
@@ -336,6 +341,8 @@ export default function ScholarshipPage() {
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const savingRef = useRef(false);
   const handleSaveRef = useRef<(() => Promise<void>) | undefined>(undefined);
+
+  const [showForm, setShowForm] = useState(false);
 
   const [pendingDelete, setPendingDelete] = useState<{
     type: "member" | "benefit" | "home" | "vehicle";
@@ -595,26 +602,24 @@ export default function ScholarshipPage() {
   }, [signatureLocalUrl]);
 
   useEffect(() => {
-    if (scholarshipChoice !== "full") return;
+    if (!showForm) return;
+    sigRestoredRef.current = false;
     const timer = setTimeout(() => restoreSignatureToCanvas(), 300);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scholarshipChoice]);
+  }, [showForm]);
 
+  // When inside the scholarship form, back button returns to selection page
   useEffect(() => {
-    if (loading || scholarshipChoice !== "full") return;
-    const timer = setTimeout(() => {
-      setOpenSections(prev => {
-        const next = new Set(prev);
-        if (incomeComplete) next.delete("income");
-        if (membersComplete) next.delete("members");
-        if (assetsComplete) next.delete("assets");
-        if (contributionComplete) next.delete("contribution");
-        return next;
-      });
-    }, 100);
-    return () => clearTimeout(timer);
-  }, [loading, scholarshipChoice]); // eslint-disable-line
+    if (showForm) {
+      registerOnBack(() => setShowForm(false));
+    } else {
+      unregisterOnBack();
+    }
+    return () => unregisterOnBack();
+  }, [showForm, registerOnBack, unregisterOnBack]);
+
+  // Keep all sections open — no auto-collapse on completion
 
   async function ensureScholarship(): Promise<number | null> {
     if (scholarship) return scholarship.id;
@@ -949,20 +954,25 @@ export default function ScholarshipPage() {
 
   if (loading) {
     return (
-      <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
-        <div className="rounded-lg border p-6">
-          <Skeleton className="h-6 w-48 mb-2 mx-auto" />
-          <Skeleton className="h-4 w-72 mb-6 mx-auto" />
-          <div className="space-y-4">
-            {Array.from({ length: 3 }).map((_, i) => (
-              <div key={i} className="flex items-center gap-3 rounded-lg border p-4">
-                <Skeleton className="size-5 rounded-full" />
-                <div className="flex-1">
-                  <Skeleton className="h-4 w-32" />
-                  <Skeleton className="h-3 w-56 mt-1.5" />
-                </div>
+      <div className="flex flex-1 flex-col items-center justify-center px-4">
+        <div className="w-full max-w-2xl py-8">
+          <div className="text-center mb-8">
+            <Skeleton className="h-7 w-80 mx-auto mb-3" />
+            <Skeleton className="h-4 w-96 max-w-full mx-auto" />
+            <Skeleton className="h-4 w-72 mx-auto mt-2" />
+          </div>
+          <div className="rounded-xl bg-background p-1.5 shadow-sm border">
+            <div className="overflow-hidden rounded-lg border">
+              <div className="divide-y">
+                {Array.from({ length: 3 }).map((_, i) => (
+                  <div key={i} className="flex items-center px-4 py-4 gap-4">
+                    <Skeleton className="size-8 shrink-0 rounded-full" />
+                    <Skeleton className="h-4 w-48 flex-1" />
+                    <Skeleton className="size-7 shrink-0 rounded-md" />
+                  </div>
+                ))}
               </div>
-            ))}
+            </div>
           </div>
         </div>
       </div>
@@ -970,6 +980,7 @@ export default function ScholarshipPage() {
   }
 
   const isChoiceLocked = scholarshipChoice === "none" || scholarshipChoice === "snap" || scholarshipChoice === "full";
+  const isScholarshipFormComplete = incomeComplete && membersComplete && assetsComplete && contributionComplete && !!signatureMeta;
 
   async function saveScholarshipChoice(choice: "none" | "snap" | "full") {
     const sid = await ensureScholarship();
@@ -988,6 +999,7 @@ export default function ScholarshipPage() {
 
   async function resetScholarshipChoice() {
     setScholarshipChoice(null);
+    setShowForm(false);
     if (scholarship?.id) {
       await fetch(`/api/scholarship/${scholarship.id}`, {
         method: "PATCH",
@@ -1002,124 +1014,166 @@ export default function ScholarshipPage() {
     }
   }
 
-  if (scholarshipChoice !== "full") {
+  if (!showForm) {
     return (
-      <>
-        <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
-          <div className="text-center">
+      <div className="flex min-h-[calc(100vh-8.5rem)] flex-col items-center justify-center px-4 bg-gray-50 dark:bg-background">
+          <div className="w-full max-w-2xl py-8">
+          <div className="text-center mb-8">
             <h1 className="text-2xl font-semibold">
-              Welcome to the SailFuture Opportunity Scholarship Application
+              {firstName ? `${firstName}, See` : "See"} If Your Family Qualifies for Up to $14,000 in Tuition Assistance
             </h1>
-            <p className="text-muted-foreground text-sm mt-3 max-w-3xl mx-auto">
+            <p className="text-muted-foreground text-sm mt-3 max-w-lg mx-auto">
               The SailFuture Academy Scholarship is designed to support students who exhibit financial need, academic promise, and a strong commitment to their education. This scholarship is awarded on a sliding scale, with the amount determined by the applicant&apos;s household income and assets.
-            </p>
-            <p className="text-muted-foreground text-sm mt-3 max-w-3xl mx-auto">
-              The SailFuture Scholarship Fund is made possible through generous contributions from supporters, including national grants, individual donors, corporations, and organizations dedicated to expanding educational opportunities for students in need.
             </p>
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-1">
-            <Card
-              className={`gap-0 py-0 transition-colors ${
-                scholarshipChoice === "none"
-                  ? "border-primary ring-2 ring-primary/20"
-                  : isChoiceLocked
-                    ? "opacity-50 pointer-events-none"
-                    : "cursor-pointer hover:border-primary"
-              }`}
-              onClick={() => {
-                if (isChoiceLocked) return;
-                setNotParticipatingConfirm(true);
-              }}
-            >
-              <CardContent className="py-4 flex items-center gap-4">
-                <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-muted">
-                  <svg className="size-5 text-muted-foreground" viewBox="0 0 20 20" fill="currentColor">
-                    <path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z" />
-                  </svg>
-                </div>
-                <div className="flex-1">
-                  <p className="text-sm font-medium">Choose not to participate</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    I do not wish to apply for the SailFuture Opportunity Scholarship.
-                  </p>
-                </div>
-                {scholarshipChoice === "none" && (
-                  <svg className="size-5 shrink-0 text-primary" viewBox="0 0 20 20" fill="currentColor">
-                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clipRule="evenodd" />
-                  </svg>
-                )}
-              </CardContent>
-            </Card>
+          <div className="rounded-xl bg-background p-1.5 shadow-sm border">
+            <div className="overflow-hidden rounded-lg border">
+              <table className="w-full text-sm">
+                <tbody className="divide-y">
+                  {/* Choose not to participate */}
+                  <tr
+                    className={`transition-colors ${
+                      scholarshipChoice === "none"
+                        ? "bg-gray-50 dark:bg-muted/30"
+                        : scholarshipChoice === "full" || scholarshipChoice === "snap"
+                          ? "opacity-50 pointer-events-none"
+                          : "cursor-pointer hover:bg-muted/30"
+                    }`}
+                    onClick={() => {
+                      if (isChoiceLocked) return;
+                      setNotParticipatingConfirm(true);
+                    }}
+                  >
+                    <td className="px-4 py-4 w-12">
+                      <div className={`flex size-8 shrink-0 items-center justify-center rounded-full ${
+                        scholarshipChoice === "none"
+                          ? "bg-green-500 text-white"
+                          : "bg-muted text-muted-foreground"
+                      }`}>
+                        {scholarshipChoice === "none" ? (
+                          <svg className="size-4" viewBox="0 0 20 20" fill="currentColor">
+                            <path fillRule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clipRule="evenodd" />
+                          </svg>
+                        ) : (
+                          <span className="text-xs font-semibold">1</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-2 py-4">
+                      <p className="font-medium">Choose not to participate</p>
+                    </td>
+                    <td className="px-4 py-4 w-10 text-muted-foreground">
+                      <div className="flex size-7 items-center justify-center rounded-md border border-border">
+                        <ArrowRight className="size-3.5" />
+                      </div>
+                    </td>
+                  </tr>
 
-            <Card
-              className={`gap-0 py-0 transition-colors ${
-                scholarshipChoice === "snap"
-                  ? "border-primary ring-2 ring-primary/20"
-                  : isChoiceLocked
-                    ? "opacity-50 pointer-events-none"
-                    : "cursor-pointer hover:border-primary"
-              }`}
-              onClick={() => {
-                if (isChoiceLocked) return;
-                setSnapModalOpen(true);
-              }}
-            >
-              <CardContent className="py-4 flex items-center gap-4">
-                <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30">
-                  <svg className="size-5 text-green-600 dark:text-green-400" viewBox="0 0 20 20" fill="currentColor">
-                    <path fillRule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clipRule="evenodd" />
-                  </svg>
-                </div>
-                <div className="flex-1">
-                  <p className="text-sm font-medium">I receive SNAP benefits</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    If you receive SNAP benefits, you pre-qualify for the SailFuture Academy Scholarship.
-                  </p>
-                </div>
-                {scholarshipChoice === "snap" && (
-                  <svg className="size-5 shrink-0 text-primary" viewBox="0 0 20 20" fill="currentColor">
-                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clipRule="evenodd" />
-                  </svg>
-                )}
-              </CardContent>
-            </Card>
+                  {/* SNAP benefits */}
+                  <tr
+                    className={`transition-colors ${
+                      scholarshipChoice === "snap"
+                        ? "bg-gray-50 dark:bg-muted/30"
+                        : scholarshipChoice === "full" || scholarshipChoice === "none"
+                          ? "opacity-50 pointer-events-none"
+                          : "cursor-pointer hover:bg-muted/30"
+                    }`}
+                    onClick={() => {
+                      if (isChoiceLocked) return;
+                      setSnapModalOpen(true);
+                    }}
+                  >
+                    <td className="px-4 py-4 w-12">
+                      <div className={`flex size-8 shrink-0 items-center justify-center rounded-full ${
+                        scholarshipChoice === "snap" && snapBenefitsFile
+                          ? "bg-green-500 text-white"
+                          : scholarshipChoice === "snap"
+                            ? "bg-amber-500 text-white"
+                            : "bg-muted text-muted-foreground"
+                      }`}>
+                        {scholarshipChoice === "snap" && snapBenefitsFile ? (
+                          <svg className="size-4" viewBox="0 0 20 20" fill="currentColor">
+                            <path fillRule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clipRule="evenodd" />
+                          </svg>
+                        ) : scholarshipChoice === "snap" ? (
+                          <svg className="size-4" viewBox="0 0 20 20" fill="currentColor">
+                            <path d="M5.433 13.917l1.262-3.155A4 4 0 017.58 9.42l6.92-6.918a2.121 2.121 0 013 3l-6.92 6.918c-.383.383-.84.685-1.343.886l-3.154 1.262a.5.5 0 01-.65-.65z" />
+                            <path d="M3.5 5.75c0-.69.56-1.25 1.25-1.25H10A.75.75 0 0010 3H4.75A2.75 2.75 0 002 5.75v9.5A2.75 2.75 0 004.75 18h9.5A2.75 2.75 0 0017 15.25V10a.75.75 0 00-1.5 0v5.25c0 .69-.56 1.25-1.25 1.25h-9.5c-.69 0-1.25-.56-1.25-1.25v-9.5z" />
+                          </svg>
+                        ) : (
+                          <span className="text-xs font-semibold">2</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-2 py-4">
+                      <p className="font-medium">I receive SNAP benefits</p>
+                    </td>
+                    <td className="px-4 py-4 w-10 text-muted-foreground">
+                      <div className="flex size-7 items-center justify-center rounded-md border border-border">
+                        <ArrowRight className="size-3.5" />
+                      </div>
+                    </td>
+                  </tr>
 
-            <Card
-              className={`gap-0 py-0 transition-colors ${
-                isChoiceLocked
-                  ? "opacity-50 pointer-events-none"
-                  : "cursor-pointer hover:border-primary"
-              }`}
-              onClick={async () => {
-                if (isChoiceLocked) return;
-                setScholarshipChoice("full");
-                await saveScholarshipChoice("full");
-              }}
-            >
-              <CardContent className="py-4 flex items-center gap-4">
-                <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-blue-100 dark:bg-blue-900/30">
-                  <svg className="size-5 text-blue-600 dark:text-blue-400" viewBox="0 0 20 20" fill="currentColor">
-                    <path d="M5.433 13.917l1.262-3.155A4 4 0 017.58 9.42l6.92-6.918a2.121 2.121 0 013 3l-6.92 6.918c-.383.383-.84.685-1.343.886l-3.154 1.262a.5.5 0 01-.65-.65z" />
-                    <path d="M3.5 5.75c0-.69.56-1.25 1.25-1.25H10A.75.75 0 0010 3H4.75A2.75 2.75 0 002 5.75v9.5A2.75 2.75 0 004.75 18h9.5A2.75 2.75 0 0017 15.25V10a.75.75 0 00-1.5 0v5.25c0 .69-.56 1.25-1.25 1.25h-9.5c-.69 0-1.25-.56-1.25-1.25v-9.5z" />
-                  </svg>
-                </div>
-                <div className="flex-1">
-                  <p className="text-sm font-medium">
-                    {scholarship ? "Continue the SailFuture Opportunity Scholarship" : "Complete the SailFuture Opportunity Scholarship"}
-                  </p>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    {scholarship
-                      ? "Resume where you left off on your scholarship application."
-                      : "Fill out the full scholarship application with household and financial information."}
-                  </p>
-                </div>
-              </CardContent>
-            </Card>
+                  {/* Continue scholarship */}
+                  <tr
+                    className={`transition-colors ${
+                      scholarshipChoice === "full"
+                        ? "bg-gray-50 dark:bg-muted/30 cursor-pointer hover:bg-gray-100 dark:hover:bg-muted/50"
+                        : scholarshipChoice === "none" || scholarshipChoice === "snap"
+                          ? "opacity-50 pointer-events-none"
+                          : "cursor-pointer hover:bg-muted/30"
+                    }`}
+                    onClick={async () => {
+                      if (scholarshipChoice === "none" || scholarshipChoice === "snap") return;
+                      if (scholarshipChoice !== "full") {
+                        setScholarshipChoice("full");
+                        await saveScholarshipChoice("full");
+                      }
+                      setShowForm(true);
+                    }}
+                  >
+                    <td className="px-4 py-4 w-12">
+                      <div className={`flex size-8 shrink-0 items-center justify-center rounded-full ${
+                        scholarshipChoice === "full" && isScholarshipFormComplete
+                          ? "bg-green-500 text-white"
+                          : scholarshipChoice === "full"
+                            ? "bg-amber-500 text-white"
+                            : "bg-muted text-muted-foreground"
+                      }`}>
+                        {scholarshipChoice === "full" && isScholarshipFormComplete ? (
+                          <svg className="size-4" viewBox="0 0 20 20" fill="currentColor">
+                            <path fillRule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clipRule="evenodd" />
+                          </svg>
+                        ) : scholarshipChoice === "full" ? (
+                          <svg className="size-4" viewBox="0 0 20 20" fill="currentColor">
+                            <path d="M5.433 13.917l1.262-3.155A4 4 0 017.58 9.42l6.92-6.918a2.121 2.121 0 013 3l-6.92 6.918c-.383.383-.84.685-1.343.886l-3.154 1.262a.5.5 0 01-.65-.65z" />
+                            <path d="M3.5 5.75c0-.69.56-1.25 1.25-1.25H10A.75.75 0 0010 3H4.75A2.75 2.75 0 002 5.75v9.5A2.75 2.75 0 004.75 18h9.5A2.75 2.75 0 0017 15.25V10a.75.75 0 00-1.5 0v5.25c0 .69-.56 1.25-1.25 1.25h-9.5c-.69 0-1.25-.56-1.25-1.25v-9.5z" />
+                          </svg>
+                        ) : (
+                          <span className="text-xs font-semibold">3</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-2 py-4">
+                      <p className="font-medium">
+                        {scholarship ? "Continue the SailFuture Opportunity Scholarship" : "Complete the SailFuture Opportunity Scholarship"}
+                      </p>
+                    </td>
+                    <td className="px-4 py-4 w-10 text-muted-foreground">
+                      <div className="flex size-7 items-center justify-center rounded-md border border-border">
+                        <ArrowRight className="size-3.5" />
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </div>
 
           {isChoiceLocked && (
-            <div>
+            <div className="flex justify-center mt-4">
               <Button
                 variant="outline"
                 size="sm"
@@ -1131,50 +1185,11 @@ export default function ScholarshipPage() {
           )}
 
           {scholarshipChoice === "none" && (
-            <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-800 dark:bg-amber-950/30">
+            <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-800 dark:bg-amber-950/30">
               <p className="text-sm text-amber-800 dark:text-amber-300">
                 You have chosen not to participate in the scholarship program.
               </p>
             </div>
-          )}
-
-          {scholarshipChoice === "snap" && (
-            <Card className="gap-0 py-0">
-              <CardContent className="py-5 space-y-4">
-                <div>
-                  <p className="text-sm font-medium">SNAP Benefits Award Letter</p>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Upload your valid SNAP benefits award letter below.
-                  </p>
-                </div>
-                <IncomeFileUpload
-                  label="Drop SNAP award letter here or click to upload"
-                  existingFile={snapBenefitsFile as XanoFileMetadata | null}
-                  onUploaded={async (meta) => {
-                    setSnapBenefitsFile(meta);
-                    const sid = scholarship?.id ?? await ensureScholarship();
-                    if (sid) {
-                      await fetch(`/api/scholarship/${sid}`, {
-                        method: "PATCH",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ snap_benefits: meta, last_edited: Date.now() }),
-                      });
-                    }
-                  }}
-                  onRemoved={async () => {
-                    setSnapBenefitsFile(null);
-                    const sid = scholarship?.id ?? await ensureScholarship();
-                    if (sid) {
-                      await fetch(`/api/scholarship/${sid}`, {
-                        method: "PATCH",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ snap_benefits: {}, last_edited: Date.now() }),
-                      });
-                    }
-                  }}
-                />
-              </CardContent>
-            </Card>
           )}
 
         </div>
@@ -1209,9 +1224,37 @@ export default function ScholarshipPage() {
             <AlertDialogHeader>
               <AlertDialogTitle>SNAP Benefits Pre-Qualification</AlertDialogTitle>
               <AlertDialogDescription>
-                If you receive SNAP benefits, you pre-qualify for the SailFuture Academy Scholarship. If applicable, please upload your SNAP benefits award letter below.
+                If you receive SNAP benefits, you pre-qualify for the SailFuture Academy Scholarship. Please upload your SNAP benefits award letter below.
               </AlertDialogDescription>
             </AlertDialogHeader>
+            <div className="py-2">
+              <IncomeFileUpload
+                label="Drop SNAP award letter here or click to upload"
+                existingFile={snapBenefitsFile as XanoFileMetadata | null}
+                onUploaded={async (meta) => {
+                  setSnapBenefitsFile(meta);
+                  const sid = scholarship?.id ?? await ensureScholarship();
+                  if (sid) {
+                    await fetch(`/api/scholarship/${sid}`, {
+                      method: "PATCH",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ snap_benefits: meta, last_edited: Date.now() }),
+                    });
+                  }
+                }}
+                onRemoved={async () => {
+                  setSnapBenefitsFile(null);
+                  const sid = scholarship?.id ?? await ensureScholarship();
+                  if (sid) {
+                    await fetch(`/api/scholarship/${sid}`, {
+                      method: "PATCH",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ snap_benefits: {}, last_edited: Date.now() }),
+                    });
+                  }
+                }}
+              />
+            </div>
             <AlertDialogFooter>
               <AlertDialogCancel>Cancel</AlertDialogCancel>
               <AlertDialogAction
@@ -1249,7 +1292,7 @@ export default function ScholarshipPage() {
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
-      </>
+      </div>
     );
   }
 
@@ -1275,14 +1318,14 @@ export default function ScholarshipPage() {
         {/* Annual Household Income Documentation */}
         <Card className="overflow-hidden gap-0 py-0 ring-0 border">
           <CardHeader className="border-b py-3 !pb-3 cursor-pointer select-none" onClick={() => toggleSection("income")}>
-            <div className="flex items-center justify-between">
-              <div>
+            <div className="flex items-center justify-between gap-4">
+              <div className="min-w-0">
                 <CardTitle className="text-lg">Annual Household Income Documentation</CardTitle>
-                <p className="text-sm text-muted-foreground mt-1">
+                <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
                   To process your application, we need to collect some information about the family of the applicant(s).
                 </p>
               </div>
-              <div className="flex size-8 items-center justify-center rounded-md border border-input text-muted-foreground hover:bg-muted/50 transition-colors">
+              <div className="flex size-8 shrink-0 items-center justify-center rounded-md border border-input text-muted-foreground hover:bg-muted/50 transition-colors">
                   <svg className={`size-4 transition-transform duration-200 ${openSections.has("income") ? "rotate-180" : ""}`} viewBox="0 0 20 20" fill="currentColor">
                     <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
                   </svg>
@@ -1590,19 +1633,17 @@ export default function ScholarshipPage() {
           >
           <Card className="overflow-hidden gap-0 py-0 ring-0 border">
             <CardHeader className="border-b py-3 !pb-3 cursor-pointer select-none" onClick={() => toggleSection("members")}>
-              <div className="flex items-center justify-between">
-                <div>
+              <div className="flex items-center justify-between gap-4">
+                <div className="min-w-0">
                   <CardTitle className="text-lg">Contributing Members</CardTitle>
-                  <p className="text-sm text-muted-foreground mt-1">
+                  <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
                     Identify each person in your household who provides or is responsible for any portion of the family&apos;s income.
                   </p>
                 </div>
-                <div className="flex items-center gap-2">
-                  <div className="flex size-8 items-center justify-center rounded-md border border-input text-muted-foreground hover:bg-muted/50 transition-colors">
-                    <svg className={`size-4 transition-transform duration-200 ${openSections.has("members") ? "rotate-180" : ""}`} viewBox="0 0 20 20" fill="currentColor">
-                      <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
-                    </svg>
-                  </div>
+                <div className="flex size-8 shrink-0 items-center justify-center rounded-md border border-input text-muted-foreground hover:bg-muted/50 transition-colors">
+                  <svg className={`size-4 transition-transform duration-200 ${openSections.has("members") ? "rotate-180" : ""}`} viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
+                  </svg>
                 </div>
               </div>
             </CardHeader>
@@ -1886,14 +1927,14 @@ export default function ScholarshipPage() {
         {/* Family Household Assets */}
         <Card className="overflow-hidden gap-0 py-0 ring-0 border">
           <CardHeader className="border-b py-3 !pb-3 cursor-pointer select-none" onClick={() => toggleSection("assets")}>
-            <div className="flex items-center justify-between">
-              <div>
+            <div className="flex items-center justify-between gap-4">
+              <div className="min-w-0">
                 <CardTitle className="text-lg">Family Household Assets</CardTitle>
-                <p className="text-sm text-muted-foreground mt-1">
-                  In this section, briefly outline all financial resources available to your household. These may include cash in checking or savings accounts, investments (stocks, bonds, mutual funds), retirement accounts, real estate holdings, and any other items of substantial value. Indicate approximate market values and note whether the assets are liquid (easily converted to cash). This clarity helps the scholarship committee accurately gauge your overall financial picture.
+                <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
+                  Briefly outline all financial resources available to your household, including checking/savings accounts, investments, retirement accounts, and real estate holdings.
                 </p>
               </div>
-              <div className="flex size-8 items-center justify-center rounded-md border border-input text-muted-foreground hover:bg-muted/50 transition-colors">
+              <div className="flex size-8 shrink-0 items-center justify-center rounded-md border border-input text-muted-foreground hover:bg-muted/50 transition-colors">
                   <svg className={`size-4 transition-transform duration-200 ${openSections.has("assets") ? "rotate-180" : ""}`} viewBox="0 0 20 20" fill="currentColor">
                     <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
                   </svg>
@@ -2370,13 +2411,13 @@ export default function ScholarshipPage() {
         {/* Family Contribution & Advocacy */}
         <Card className="overflow-hidden gap-0 py-0 ring-0 border">
           <CardHeader className="border-b py-3 !pb-3 cursor-pointer select-none" onClick={() => toggleSection("contribution")}>
-            <div className="flex items-center justify-between">
-              <div>
+            <div className="flex items-center justify-between gap-4">
+              <div className="min-w-0">
                 <CardTitle className="text-lg">
                   Contribution &amp; Advocacy
                 </CardTitle>
               </div>
-              <div className="flex size-8 items-center justify-center rounded-md border border-input text-muted-foreground hover:bg-muted/50 transition-colors">
+              <div className="flex size-8 shrink-0 items-center justify-center rounded-md border border-input text-muted-foreground hover:bg-muted/50 transition-colors">
                   <svg className={`size-4 transition-transform duration-200 ${openSections.has("contribution") ? "rotate-180" : ""}`} viewBox="0 0 20 20" fill="currentColor">
                     <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
                   </svg>
