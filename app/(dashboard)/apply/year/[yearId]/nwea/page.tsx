@@ -1,10 +1,12 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
+import { useApplicationFlow } from "@/contexts/application-flow-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field, FieldLabel } from "@/components/ui/field";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Card,
   CardHeader,
@@ -12,16 +14,6 @@ import {
   CardDescription,
   CardContent,
 } from "@/components/ui/card";
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
-} from "@/components/ui/breadcrumb";
-import { Separator } from "@/components/ui/separator";
-import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
   Tabs,
@@ -62,6 +54,13 @@ export default function NweaStepPage() {
   const params = useParams();
   const router = useRouter();
   const yearId = Number(params.yearId);
+
+  const {
+    setPageTitle,
+    registerSaveHandler,
+    unregisterSaveHandler,
+    updateSaveOptions,
+  } = useApplicationFlow();
 
   const [students, setStudents] = useState<Student[]>([]);
   const [applications, setApplications] = useState<Application[]>([]);
@@ -179,6 +178,28 @@ export default function NweaStepPage() {
     });
   }
 
+  const handleSaveScoresRef = useRef(handleSaveScores);
+  handleSaveScoresRef.current = handleSaveScores;
+
+  useEffect(() => {
+    setPageTitle("NWEA Testing");
+    registerSaveHandler(
+      async () => {
+        const apps = applicationsRef.current;
+        await Promise.all(apps.map((app) => handleSaveScoresRef.current(app.id)));
+      },
+      { label: "Save" }
+    );
+    return () => unregisterSaveHandler();
+  }, [setPageTitle, registerSaveHandler, unregisterSaveHandler]);
+
+  const applicationsRef = useRef(applications);
+  applicationsRef.current = applications;
+
+  useEffect(() => {
+    updateSaveOptions({ saving: savingAppId !== null });
+  }, [savingAppId, updateSaveOptions]);
+
   const enrolled = applications
     .map((app) => ({
       app,
@@ -188,20 +209,29 @@ export default function NweaStepPage() {
 
   if (loading) {
     return (
-      <>
-        <StepHeader yearId={String(yearId)} yearName="" />
-        <div className="flex min-h-[60vh] items-center justify-center">
-          <p className="text-muted-foreground">Loading...</p>
-        </div>
-      </>
+      <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
+        <Skeleton className="h-6 w-40 mx-auto" />
+        {Array.from({ length: 2 }).map((_, i) => (
+          <div key={i} className="rounded-lg border p-6">
+            <Skeleton className="h-5 w-36 mb-4" />
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {Array.from({ length: 4 }).map((_, j) => (
+                <div key={j}>
+                  <Skeleton className="h-4 w-24 mb-2" />
+                  <Skeleton className="h-10 w-full rounded-md" />
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
     );
   }
 
   return (
     <>
-      <StepHeader yearId={String(yearId)} yearName={yearName} />
-      <div className="flex flex-1 flex-col gap-6 p-4 pt-0">
-        <div>
+      <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
+        <div className="text-center">
           <h1 className="text-2xl font-semibold">
             NWEA Testing &amp; Records
           </h1>
@@ -375,64 +405,8 @@ export default function NweaStepPage() {
           </div>
         )}
 
-        <div className="h-20" />
-      </div>
-
-      <div className="fixed bottom-0 left-0 right-0 z-50 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 md:left-[var(--sidebar-width)]">
-        <div className="flex h-16 items-center justify-between px-4 sm:px-6">
-          <Button
-            variant="outline"
-            onClick={() => router.push(`/apply/year/${yearId}`)}
-          >
-            &larr; Back to Checklist
-          </Button>
-          <Button
-            onClick={async () => {
-              await Promise.all(enrolled.map(({ app }) => handleSaveScores(app.id)));
-            }}
-            disabled={savingAppId !== null}
-          >
-            {savingAppId !== null ? "Saving..." : "Save Section"}
-          </Button>
-        </div>
       </div>
     </>
   );
 }
 
-function StepHeader({
-  yearId,
-  yearName,
-}: {
-  yearId: string;
-  yearName: string;
-}) {
-  return (
-    <header className="flex h-16 shrink-0 items-center gap-2">
-      <div className="flex items-center gap-2 px-4">
-        <SidebarTrigger className="-ml-1" />
-        <Separator
-          orientation="vertical"
-          className="mr-2 data-vertical:h-4 data-vertical:self-auto"
-        />
-        <Breadcrumb>
-          <BreadcrumbList>
-            <BreadcrumbItem className="hidden md:block">
-              <BreadcrumbLink href="/">Dashboard</BreadcrumbLink>
-            </BreadcrumbItem>
-            <BreadcrumbSeparator className="hidden md:block" />
-            <BreadcrumbItem className="hidden md:block">
-              <BreadcrumbLink href={`/apply/year/${yearId}`}>
-                {yearName || "Application"}
-              </BreadcrumbLink>
-            </BreadcrumbItem>
-            <BreadcrumbSeparator className="hidden md:block" />
-            <BreadcrumbItem>
-              <BreadcrumbPage>NWEA Testing</BreadcrumbPage>
-            </BreadcrumbItem>
-          </BreadcrumbList>
-        </Breadcrumb>
-      </div>
-    </header>
-  );
-}

@@ -1,23 +1,12 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { useFamily, useSchoolYears, useStudents, useApplications, useScholarship, mutateApplications } from "@/hooks/use-api";
+import { useApplicationFlow } from "@/contexts/application-flow-context";
+import { useFamily, useSchoolYears, useStudents, useApplications, useScholarship } from "@/hooks/use-api";
+import { mutate } from "swr";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-} from "@/components/ui/card";
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
-} from "@/components/ui/breadcrumb";
-import { Separator } from "@/components/ui/separator";
-import { SidebarTrigger } from "@/components/ui/sidebar";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -28,14 +17,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 
 interface SchoolYear {
   id: number;
@@ -87,8 +68,7 @@ interface Step {
   description: string;
   status: StepStatus;
   detail: string;
-  href?: string;
-  signingType?: "liability_waiver" | "enrollment_agreement";
+  href: string;
 }
 
 function StepNumber({ number, status }: { number: number; status: StepStatus }) {
@@ -124,10 +104,16 @@ export default function SubmitPage() {
   const router = useRouter();
   const yearId = Number(params.yearId);
 
-  const { data: familyData, mutate: mutateFamily } = useFamily();
+  const { setPageTitle } = useApplicationFlow();
+
+  useEffect(() => {
+    setPageTitle("Submit Application");
+  }, [setPageTitle]);
+
+  const { data: familyData } = useFamily();
   const { data: yearsData } = useSchoolYears();
   const { data: studentsData } = useStudents();
-  const { data: appsData, mutate: mutateApps } = useApplications();
+  const { data: appsData } = useApplications();
 
   const familyId = familyData?.id ?? null;
   const parents: Parent[] = familyData?.parents ?? [];
@@ -155,208 +141,6 @@ export default function SubmitPage() {
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
-
-  const [signingLoading, setSigningLoading] = useState<string | null>(null);
-  const [resetConfirm, setResetConfirm] = useState<"liability_waiver" | "enrollment_agreement" | null>(null);
-  const [resetting, setResetting] = useState(false);
-  const [signingSession, setSigningSession] = useState<{
-    sessionId: string;
-    documentId: string;
-    type: "liability_waiver" | "enrollment_agreement";
-    applicationId: number;
-  } | null>(null);
-  const pollingRef = useRef<NodeJS.Timeout | null>(null);
-  const signingInstanceRef = useRef<{ destroy: () => void } | null>(null);
-
-  const fetchData = useCallback(async () => {
-    await Promise.all([mutateFamily(), mutateApps(), mutateApplications()]);
-  }, [mutateFamily, mutateApps]);
-
-  useEffect(() => {
-    return () => {
-      if (pollingRef.current) clearTimeout(pollingRef.current);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!signingSession) return;
-
-    let cancelled = false;
-
-    const init = async () => {
-      await new Promise((r) => setTimeout(r, 400));
-      if (cancelled) return;
-
-      const wrapper = document.getElementById("pandadoc-signing-wrapper");
-      if (!wrapper) return;
-
-      wrapper.innerHTML = '<div id="pandadoc-signing-embed"></div>';
-
-      const { Signing } = await import("pandadoc-signing");
-      if (cancelled) return;
-
-      if (signingInstanceRef.current) {
-        signingInstanceRef.current.destroy();
-        signingInstanceRef.current = null;
-      }
-
-      const signing = new Signing(
-        "pandadoc-signing-embed",
-        { debugMode: true },
-      );
-
-      signing
-        .on("document.loaded", () => {
-          console.log("PandaDoc: document loaded");
-        })
-        .on("document.completed", () => {
-          fetchData();
-        })
-        .on("document.exception", (payload: unknown) => {
-          console.error("PandaDoc signing exception:", payload);
-        });
-
-      signingInstanceRef.current = signing;
-
-      await signing.open({ sessionId: signingSession.sessionId });
-    };
-
-    init();
-
-    return () => {
-      cancelled = true;
-      if (signingInstanceRef.current) {
-        signingInstanceRef.current.destroy();
-        signingInstanceRef.current = null;
-      }
-    };
-  }, [signingSession, fetchData]);
-
-  function getDocField(type: "liability_waiver" | "enrollment_agreement") {
-    if (applications.length === 0) return { pandadocId: null, status: null, pdfUrl: null };
-    const app = applications[0];
-    if (type === "liability_waiver") {
-      return {
-        pandadocId: app.liability_waiver_pandadoc_id,
-        status: app.liability_waiver_status,
-        pdfUrl: app.liability_waiver_pdf_url,
-      };
-    }
-    return {
-      pandadocId: app.enrollment_agreement_pandadoc_id,
-      status: app.enrollment_agreement_status,
-      pdfUrl: app.enrollment_agreement_pdf_url,
-    };
-  }
-
-  function viewDocument(type: "liability_waiver" | "enrollment_agreement") {
-    if (applications.length === 0) return;
-    const app = applications[0];
-    const docId = type === "liability_waiver"
-      ? app.liability_waiver_pandadoc_id
-      : app.enrollment_agreement_pandadoc_id;
-    if (!docId) return;
-    window.open(`/api/pandadoc/download?documentId=${docId}&applicationId=${app.id}`, "_blank");
-  }
-
-  async function handleSign(type: "liability_waiver" | "enrollment_agreement") {
-    if (applications.length === 0) return;
-    const app = applications[0];
-
-    setSigningLoading(type);
-    try {
-      const res = await fetch("/api/pandadoc/create", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type, applicationId: app.id }),
-      });
-
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        console.error("Signing error:", body?.error ?? res.statusText);
-        return;
-      }
-
-      const { documentId, sessionId } = await res.json();
-      setSigningSession({ sessionId, documentId, type, applicationId: app.id });
-      startPolling(documentId, type, app.id);
-    } catch (err) {
-      console.error("Failed to initiate signing:", err);
-    } finally {
-      setSigningLoading(null);
-    }
-  }
-
-  function handleSigningClose() {
-    setSigningSession(null);
-  }
-
-  async function handleResetConfirmed() {
-    if (!resetConfirm || applications.length === 0) return;
-    const app = applications[0];
-
-    setResetting(true);
-    try {
-      const res = await fetch("/api/pandadoc/reset", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: resetConfirm, applicationId: app.id }),
-      });
-
-      if (!res.ok) {
-        console.error("Reset failed");
-        return;
-      }
-
-      await fetchData();
-    } catch (err) {
-      console.error("Failed to reset document:", err);
-    } finally {
-      setResetting(false);
-      setResetConfirm(null);
-    }
-  }
-
-  function startPolling(
-    documentId: string,
-    type: "liability_waiver" | "enrollment_agreement",
-    applicationId: number
-  ) {
-    if (pollingRef.current) clearTimeout(pollingRef.current);
-
-    let delay = 3000;
-    const maxDelay = 30000;
-
-    async function poll() {
-      try {
-        const res = await fetch(
-          `/api/pandadoc/status?documentId=${documentId}&applicationId=${applicationId}&type=${type}`
-        );
-        if (!res.ok) {
-          delay = Math.min(delay * 1.5, maxDelay);
-          pollingRef.current = setTimeout(poll, delay);
-          return;
-        }
-        const data = await res.json();
-
-        if (data.status === "completed" || data.status === "viewed") {
-          await fetchData();
-          if (data.status === "completed") {
-            pollingRef.current = null;
-            return;
-          }
-        }
-
-        delay = Math.min(delay * 1.2, maxDelay);
-        pollingRef.current = setTimeout(poll, delay);
-      } catch {
-        delay = Math.min(delay * 1.5, maxDelay);
-        pollingRef.current = setTimeout(poll, delay);
-      }
-    }
-
-    pollingRef.current = setTimeout(poll, delay);
-  }
 
   const enrolled = applications
     .map((app) => ({
@@ -403,12 +187,11 @@ export default function SubmitPage() {
 
   const scholarshipDeadlinePassed = isDeadlinePassed((schoolYear as Record<string, string | null> | null)?.opportunity_scholarship_deadline ?? null);
 
-  const liabilityDoc = getDocField("liability_waiver");
-  const enrollmentDoc = getDocField("enrollment_agreement");
-  const liabilityComplete = liabilityDoc.status === "completed";
-  const liabilitySent = !!liabilityDoc.pandadocId;
-  const enrollmentComplete = enrollmentDoc.status === "completed";
-  const enrollmentSent = !!enrollmentDoc.pandadocId;
+  const firstApp = applications[0] as Application | undefined;
+  const liabilityComplete = firstApp?.liability_waiver_status === "completed";
+  const liabilitySent = !!firstApp?.liability_waiver_pandadoc_id;
+  const enrollmentComplete = firstApp?.enrollment_agreement_status === "completed";
+  const enrollmentSent = !!firstApp?.enrollment_agreement_pandadoc_id;
 
   const steps: Step[] = [
     {
@@ -459,7 +242,7 @@ export default function SubmitPage() {
         : liabilitySent
           ? "Awaiting signature"
           : "Not started",
-      signingType: "liability_waiver",
+      href: `/apply/year/${yearId}/waiver`,
     },
     {
       number: 5,
@@ -471,7 +254,7 @@ export default function SubmitPage() {
         : enrollmentSent
           ? "Awaiting signature"
           : "Not started",
-      signingType: "enrollment_agreement",
+      href: `/apply/year/${yearId}/agreement`,
     },
   ];
 
@@ -495,11 +278,14 @@ export default function SubmitPage() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               registration_application_status_id: submittedStatus.id,
+              isSubmitted: true,
             }),
           })
         )
       );
 
+      // Revalidate the applications cache so the overview page picks up isSubmitted
+      await mutate("/api/applications");
       setSubmitted(true);
     } catch (err) {
       console.error("Failed to submit:", err);
@@ -511,66 +297,44 @@ export default function SubmitPage() {
 
   if (loading) {
     return (
-      <>
-        <PageHeader yearName="" />
-        <div className="flex min-h-[60vh] items-center justify-center">
-          <p className="text-muted-foreground">Loading...</p>
+      <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
+        <div className="text-center">
+          <Skeleton className="h-7 w-48 mx-auto" />
+          <Skeleton className="h-4 w-64 mx-auto mt-2" />
         </div>
-      </>
+        <div className="overflow-hidden rounded-lg border">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="flex items-center px-4 py-3 border-b last:border-b-0">
+              <Skeleton className="size-5 rounded-full shrink-0" />
+              <Skeleton className="h-4 w-36 ml-3 flex-1" />
+              <Skeleton className="h-5 w-16 rounded-full" />
+            </div>
+          ))}
+        </div>
+        <Skeleton className="h-10 w-full rounded-md" />
+      </div>
     );
   }
 
   if (submitted) {
+    // Redirect to overview which now shows the "Under Review" stage
+    router.push(`/apply/year/${yearId}`);
     return (
-      <>
-        <PageHeader yearName={yearName} />
-        <div className="flex flex-1 flex-col items-center justify-center gap-4 p-4 pt-0 text-center min-h-[60vh]">
-          <div className="flex size-16 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30">
-            <svg className="size-8 text-green-600 dark:text-green-400" viewBox="0 0 20 20" fill="currentColor">
-              <path fillRule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clipRule="evenodd" />
-            </svg>
-          </div>
-          <h1 className="text-2xl font-semibold">Application Submitted!</h1>
-          <p className="text-muted-foreground text-sm max-w-md">
-            Thank you for submitting your application for {yearName}. You will be notified once an acceptance determination has been made.
-          </p>
-          <p className="text-muted-foreground text-sm max-w-md">
-            If you have any questions, please contact us at{" "}
-            <a href="mailto:tward@sailfuture.org" className="text-primary underline underline-offset-2">tward@sailfuture.org</a>{" "}
-            or call{" "}
-            <a href="tel:+17279001436" className="text-primary underline underline-offset-2">(727) 900-1436</a>.
-          </p>
-          <Button
-            className="mt-4"
-            onClick={() => router.push(`/apply/year/${yearId}`)}
-          >
-            Return to Overview
-          </Button>
+      <div className="flex flex-1 flex-col items-center justify-center gap-4 p-6 text-center min-h-[60vh]">
+        <div className="flex size-16 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30">
+          <svg className="size-8 text-green-600 dark:text-green-400" viewBox="0 0 20 20" fill="currentColor">
+            <path fillRule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clipRule="evenodd" />
+          </svg>
         </div>
-      </>
+        <p className="text-muted-foreground text-sm">Redirecting...</p>
+      </div>
     );
   }
 
   return (
     <>
-      {signingLoading && (
-        <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-background/80 backdrop-blur-sm">
-          <svg
-            className="size-10 animate-spin text-primary mb-4"
-            xmlns="http://www.w3.org/2000/svg"
-            fill="none"
-            viewBox="0 0 24 24"
-          >
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-          </svg>
-          <p className="text-lg font-medium">Preparing Document</p>
-          <p className="text-sm text-muted-foreground mt-1">This may take a few moments...</p>
-        </div>
-      )}
-      <PageHeader yearName={yearName} />
-      <div className="flex flex-1 flex-col gap-6 p-4 pt-0">
-        <div>
+      <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
+        <div className="text-center">
           <h1 className="text-2xl font-semibold">Submit Application</h1>
           <p className="text-muted-foreground text-sm mt-1">
             Review the checklist below to ensure all sections are complete before submitting your application for {yearName}.
@@ -589,12 +353,7 @@ export default function SubmitPage() {
               </tr>
             </thead>
             <tbody className="divide-y">
-              {steps.map((step) => {
-                const isSigning = step.signingType ? signingLoading === step.signingType : false;
-                const isSigned = step.signingType && step.status === "complete";
-                const isSent = step.signingType && step.status === "in_progress";
-
-                return (
+              {steps.map((step) => (
                   <tr key={step.number} className="hover:bg-muted/30 transition-colors">
                     <td className="px-4 py-3">
                       <StepNumber number={step.number} status={step.status} />
@@ -617,54 +376,19 @@ export default function SubmitPage() {
                       </span>
                     </td>
                     <td className="px-4 py-3 text-right">
-                      {step.signingType ? (
-                        <div className="flex items-center justify-end gap-2">
-                          {isSigned ? (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => viewDocument(step.signingType!)}
-                            >
-                              View Document
-                            </Button>
-                          ) : (
-                            <>
-                              {isSent && (
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  disabled={isSigning}
-                                  onClick={() => setResetConfirm(step.signingType!)}
-                                >
-                                  Start Over
-                                </Button>
-                              )}
-                              <Button
-                                size="sm"
-                                disabled={isSigning || applications.length === 0}
-                                onClick={() => handleSign(step.signingType!)}
-                              >
-                                {isSent ? "Resume Signing" : "Sign Document"}
-                              </Button>
-                            </>
-                          )}
-                        </div>
-                      ) : (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => step.href && router.push(step.href)}
-                        >
-                          {step.status === "complete" ? "Review" : "Continue"}
-                          <svg className="size-4 ml-1" viewBox="0 0 20 20" fill="currentColor">
-                            <path fillRule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clipRule="evenodd" />
-                          </svg>
-                        </Button>
-                      )}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => router.push(step.href)}
+                      >
+                        {step.status === "complete" ? "Review" : "Continue"}
+                        <svg className="size-4 ml-1" viewBox="0 0 20 20" fill="currentColor">
+                          <path fillRule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clipRule="evenodd" />
+                        </svg>
+                      </Button>
                     </td>
                   </tr>
-                );
-              })}
+                ))}
             </tbody>
           </table>
         </div>
@@ -711,95 +435,6 @@ export default function SubmitPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-
-      <Dialog open={!!signingSession} onOpenChange={(open) => { if (!open) handleSigningClose(); }}>
-        <DialogContent className="sm:max-w-[95vw] w-[95vw] h-[90vh] p-0 flex flex-col overflow-hidden">
-          <DialogHeader className="px-6 pt-6 pb-2 shrink-0">
-            <DialogTitle>
-              {signingSession?.type === "liability_waiver"
-                ? "Sign Liability Waiver"
-                : "Sign Enrollment Agreement"}
-            </DialogTitle>
-            <DialogDescription>
-              Review and sign the document below.
-            </DialogDescription>
-          </DialogHeader>
-          {/* eslint-disable-next-line react/no-unknown-property */}
-          <style>{`
-            #pandadoc-signing-wrapper {
-              position: relative;
-            }
-            #pandadoc-signing-wrapper iframe {
-              position: absolute;
-              top: 0;
-              left: 0;
-              width: 100% !important;
-              height: 100% !important;
-              border: none;
-            }
-          `}</style>
-          <div
-            id="pandadoc-signing-wrapper"
-            className="flex-1 m-6 mt-0"
-          />
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={!!resetConfirm} onOpenChange={(open) => { if (!open) setResetConfirm(null); }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Start Over?</DialogTitle>
-            <DialogDescription>
-              This will discard the current{" "}
-              {resetConfirm === "liability_waiver"
-                ? "liability waiver"
-                : "enrollment agreement"}{" "}
-              and create a new document from scratch. This action cannot be undone.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setResetConfirm(null)}
-              disabled={resetting}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={handleResetConfirmed}
-              disabled={resetting}
-            >
-              {resetting ? "Resetting..." : "Yes, Start Over"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </>
-  );
-}
-
-function PageHeader({ yearName }: { yearName: string }) {
-  return (
-    <header className="flex h-16 shrink-0 items-center gap-2">
-      <div className="flex items-center gap-2 px-4">
-        <SidebarTrigger className="-ml-1" />
-        <Separator
-          orientation="vertical"
-          className="mr-2 data-vertical:h-4 data-vertical:self-auto"
-        />
-        <Breadcrumb>
-          <BreadcrumbList>
-            <BreadcrumbItem className="hidden md:block">
-              <BreadcrumbLink href="/">Overview</BreadcrumbLink>
-            </BreadcrumbItem>
-            <BreadcrumbSeparator className="hidden md:block" />
-            <BreadcrumbItem>
-              <BreadcrumbPage>Submit Application</BreadcrumbPage>
-            </BreadcrumbItem>
-          </BreadcrumbList>
-        </Breadcrumb>
-      </div>
-    </header>
   );
 }
