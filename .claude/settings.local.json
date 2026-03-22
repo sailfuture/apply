@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /c/Users/hunte/GitHub/apply -type d \\\\\\(-name api -o -name app -o -name pages \\\\\\) ! -path */node_modules/* ! -path */.next/*)",
+      "Bash(find /c/Users/hunte/GitHub/apply -maxdepth 2 -name prisma.ts -o -name schema.prisma -o -name *schema* -type f)"
+    ]
+  }
+}
