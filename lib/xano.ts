@@ -65,6 +65,7 @@ export interface XanoStudent {
   registration_families_id: number;
   registration_school_years_id: number[];
   isArchived: boolean;
+  isAccepted: boolean;
 }
 
 export interface XanoApplication {
@@ -129,6 +130,16 @@ export interface XanoSchoolYear {
   isFuture: boolean;
   application_deadline: string | null;
   opportunity_scholarship_deadline: string | null;
+}
+
+export interface XanoFamilyPayment {
+  id: number;
+  created_at: number;
+  registration_families_id: number;
+  registration_school_years_id: number;
+  tuition_reviewed: boolean;
+  tuition_reviewed_at: number | null;
+  tuition_reviewed_by: string; // typed name
 }
 
 export interface XanoScholarship {
@@ -952,6 +963,47 @@ export const xano = {
     async getAll(): Promise<XanoBusStop[]> {
       const res = await fetch(`${getBaseUrl()}/registration_bus`, {
         cache: "no-store",
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+  },
+
+  familyPayments: {
+    async getByFamilyAndYear(familyId: number, yearId: number): Promise<XanoFamilyPayment | null> {
+      try {
+        const res = await fetch(
+          `${getBaseUrl()}/registration_families_payment?registration_families_id=${familyId}&registration_school_years_id=${yearId}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) return null;
+        const results = await res.json();
+        const items = Array.isArray(results) ? results : [results];
+        return items.find(
+          (p: XanoFamilyPayment) =>
+            p.registration_families_id === familyId &&
+            p.registration_school_years_id === yearId
+        ) ?? null;
+      } catch {
+        return null;
+      }
+    },
+
+    async create(data: Omit<XanoFamilyPayment, "id" | "created_at">): Promise<XanoFamilyPayment> {
+      const res = await fetch(`${getBaseUrl()}/registration_families_payment`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async update(id: number, data: Partial<Omit<XanoFamilyPayment, "id" | "created_at">>): Promise<XanoFamilyPayment> {
+      const res = await fetch(`${getBaseUrl()}/registration_families_payment/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
       return res.json();

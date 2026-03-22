@@ -182,7 +182,7 @@ export default function SufsStepPage() {
   return (
     <>
       <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
-        <div className="text-center">
+        <div className="text-center xl:text-left">
           <h1 className="text-2xl font-semibold">
             Step Up for Students Scholarship
           </h1>

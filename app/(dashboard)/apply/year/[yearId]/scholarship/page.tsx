@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
+import { useSWRConfig } from "swr";
 import Image from "next/image";
 import { useUser } from "@clerk/nextjs";
 import { useApplicationFlow } from "@/contexts/application-flow-context";
@@ -276,6 +277,7 @@ function isDeadlinePassed(deadline: string | null): boolean {
 export default function ScholarshipPage() {
   const params = useParams();
   const router = useRouter();
+  const { mutate } = useSWRConfig();
   const { user } = useUser();
   const firstName = user?.firstName ?? "";
   const yearId = Number(params.yearId);
@@ -287,6 +289,7 @@ export default function ScholarshipPage() {
     updateSaveOptions,
     registerOnBack,
     unregisterOnBack,
+    setHideBottomBar,
   } = useApplicationFlow();
 
   const [schoolYear, setSchoolYear] = useState<SchoolYear | null>(null);
@@ -765,6 +768,7 @@ export default function ScholarshipPage() {
       captureSnapshot();
     } catch (err) {
       console.error("Save failed:", err);
+      throw err;
     } finally {
       setSaving(false);
       savingRef.current = false;
@@ -785,6 +789,12 @@ export default function ScholarshipPage() {
   useEffect(() => {
     updateSaveOptions({ saving, disabled: !isDirty || saving });
   }, [saving, isDirty, updateSaveOptions]);
+
+  // Hide bottom bar on the choice selection page, show it on the form
+  useEffect(() => {
+    setHideBottomBar(!showForm);
+    return () => setHideBottomBar(false);
+  }, [showForm, setHideBottomBar]);
 
   useEffect(() => {
     if (savedSnapshotRef.current === "" || savingRef.current) return;
@@ -996,6 +1006,9 @@ export default function ScholarshipPage() {
         last_edited: Date.now(),
       }),
     });
+    // Revalidate SWR caches so side nav + overview table update immediately
+    mutate(`/api/scholarship/${sid}`);
+    if (familyId) mutate(`/api/scholarship?familyId=${familyId}&yearId=${yearId}`);
   }
 
   async function resetScholarshipChoice() {
@@ -1012,34 +1025,49 @@ export default function ScholarshipPage() {
           last_edited: Date.now(),
         }),
       });
+      // Revalidate SWR caches
+      mutate(`/api/scholarship/${scholarship.id}`);
+      if (familyId) mutate(`/api/scholarship?familyId=${familyId}&yearId=${yearId}`);
     }
   }
 
   if (!showForm) {
     return (
-      <div className="flex min-h-[calc(100vh-8.5rem)] flex-col items-center justify-center px-4 bg-gray-50 dark:bg-background">
-          <div className="w-full max-w-2xl py-8">
-          <div className="text-center mb-8">
-            <div className="flex justify-center mb-4">
-              <div className="rounded-full border-[6px] border-white dark:border-background shadow-sm">
-                <Image
-                  src="/logo.svg"
-                  alt="SailFuture Academy"
-                  width={64}
-                  height={64}
-                  className="size-16 rounded-full"
-                />
-              </div>
-            </div>
+      <div className="flex flex-col px-4 py-8 mx-auto w-full max-w-4xl">
+          <div className="w-full">
+          <div className="text-center xl:text-left mb-8">
             <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground mb-1">
               SailFuture Opportunity Scholarship
             </p>
             <h1 className="text-2xl font-semibold">
               {firstName ? `${firstName}, See` : "See"} If Your Family Qualifies for Up to $14,000 in Tuition Assistance
             </h1>
-            <p className="text-muted-foreground text-sm mt-3 max-w-lg mx-auto">
+            <p className="text-muted-foreground text-sm mt-3 max-w-lg xl:mx-0 mx-auto">
               The SailFuture Academy Scholarship is designed to support students who exhibit financial need, academic promise, and a strong commitment to their education. This scholarship is awarded on a sliding scale, with the amount determined by the applicant&apos;s household income and assets.
             </p>
+            {isChoiceLocked && (
+              <div className="mt-4">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setResetChoiceConfirm(true)}
+                >
+                  Change Selection
+                </Button>
+              </div>
+            )}
+            <div className="mt-6">
+              <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground mb-2">
+                Nationally Recognized and Scholarships Funded By:
+              </p>
+              <div className="flex items-center justify-center xl:justify-start gap-4">
+                <Image src="/logos/yass-prize.png" alt="The Yass Prize" width={36} height={36} className="size-9 rounded-full" />
+                <Image src="/logos/google.png" alt="Google" width={36} height={36} className="size-9" />
+                <Image src="/logos/linkedin.png" alt="LinkedIn" width={36} height={36} className="size-9 rounded-full" />
+                <Image src="/logos/stand-together.png" alt="Stand Together" width={36} height={36} className="size-9 rounded-full" />
+                <Image src="/logos/att.png" alt="AT&T" width={36} height={36} className="size-9 rounded-full" />
+              </div>
+            </div>
           </div>
 
           <div className="rounded-xl bg-background p-1.5 shadow-sm border">
@@ -1187,31 +1215,6 @@ export default function ScholarshipPage() {
             </div>
           </div>
 
-          <div className="text-center mt-6">
-            <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground mb-2">
-              Nationally Recognized and Scholarships Funded By:
-            </p>
-            <div className="flex items-center justify-center gap-4">
-              <Image src="/logos/yass-prize.png" alt="The Yass Prize" width={36} height={36} className="size-9 rounded-full" />
-              <Image src="/logos/google.png" alt="Google" width={36} height={36} className="size-9" />
-              <Image src="/logos/linkedin.png" alt="LinkedIn" width={36} height={36} className="size-9 rounded-full" />
-              <Image src="/logos/stand-together.png" alt="Stand Together" width={36} height={36} className="size-9 rounded-full" />
-              <Image src="/logos/att.png" alt="AT&T" width={36} height={36} className="size-9 rounded-full" />
-            </div>
-          </div>
-
-          {isChoiceLocked && (
-            <div className="flex justify-center mt-4">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setResetChoiceConfirm(true)}
-              >
-                Change Selection
-              </Button>
-            </div>
-          )}
-
 
         </div>
 
@@ -1320,7 +1323,7 @@ export default function ScholarshipPage() {
   return (
     <>
       <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
-        <div className="text-center">
+        <div className="text-center xl:text-left">
           <h1 className="text-2xl font-semibold">Scholarships</h1>
           <p className="text-muted-foreground text-sm mt-1">
             Complete the opportunity scholarship application for{" "}

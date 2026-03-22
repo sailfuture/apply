@@ -81,6 +81,13 @@ export function useApplicationSteps(yearId: number) {
   const familyId = familyData?.id ?? null;
   const { data: scholarshipData } = useScholarship(familyId, yearId);
 
+  // Fetch payment record for tuition review status
+  const { data: paymentRecord } = useSWR(
+    familyId && yearId ? `/api/family-payment?yearId=${yearId}` : null,
+    fetcher,
+    { revalidateOnFocus: false, dedupingInterval: 10000 }
+  );
+
   const loading = !familyData || !yearsData || !appsData;
 
   const schoolYear = useMemo(() => {
@@ -153,6 +160,10 @@ export function useApplicationSteps(yearId: number) {
     fetcher,
     { revalidateOnFocus: false, dedupingInterval: 10000 }
   );
+
+  // Full loading state — includes scholarship data settling
+  // Used by side nav to avoid showing grey circles that then flip to green
+  const stepsLoading = loading || (!!scholarshipId && !fullScholarship);
 
   const scholarshipComplete = useMemo(() => {
     if (!fullScholarship?.opportunity_scholarship) return false;
@@ -325,6 +336,47 @@ export function useApplicationSteps(yearId: number) {
   const completedCount = steps.filter((s) => s.status === "complete").length;
   const allComplete = completedCount === steps.length;
 
+  // Post-acceptance registration steps
+  const tuitionReviewed = paymentRecord?.tuition_reviewed === true;
+  const postEnrollmentSigned = false; // TODO: wire to real data
+  const registrationComplete = false; // TODO: wire to real data
+  const canBeginRegistration = tuitionReviewed && postEnrollmentSigned;
+
+  const registrationSteps: StepDef[] = useMemo(
+    () => [
+      {
+        number: 1,
+        title: "Review Tuition & Scholarship Award",
+        description: "Review your financial aid award and tuition details.",
+        status: getStatus(tuitionReviewed, false),
+        detail: tuitionReviewed ? "Reviewed" : "Not started",
+        href: `${base}/tuition`,
+      },
+      {
+        number: 2,
+        title: "Sign Enrollment Agreement",
+        description: "Review and sign the enrollment agreement for the upcoming year.",
+        status: getStatus(postEnrollmentSigned, false),
+        detail: postEnrollmentSigned ? "Signed" : "Not started",
+        href: `${base}/enrollment-signing`,
+      },
+      {
+        number: 3,
+        title: "Begin Registration Process",
+        description: "Complete the final registration steps to confirm your student\u2019s seat.",
+        status: canBeginRegistration
+          ? getStatus(registrationComplete, false)
+          : "not_started" as StepStatus,
+        detail: registrationComplete ? "Complete" : canBeginRegistration ? "Not started" : "Locked",
+        href: `${base}/registration`,
+      },
+    ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [base, tuitionReviewed, postEnrollmentSigned, registrationComplete, canBeginRegistration]
+  );
+
+  const registrationCompletedCount = registrationSteps.filter((s) => s.status === "complete").length;
+
   // Application stage flags (from first app for this year OR family-level flag)
   const isSubmitted =
     familyData?.isSubmitted === true ||
@@ -343,9 +395,12 @@ export function useApplicationSteps(yearId: number) {
 
   return {
     steps,
+    registrationSteps,
+    registrationCompletedCount,
     completedCount,
     allComplete,
     loading,
+    stepsLoading: !!stepsLoading,
     schoolYear,
     yearApps,
     stage,

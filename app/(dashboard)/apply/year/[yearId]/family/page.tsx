@@ -46,6 +46,7 @@ import {
 } from "@/components/ui/combobox";
 import { Trash2, Plus } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
+import { useSWRConfig } from "swr";
 import { US_STATES } from "@/lib/us-states";
 
 interface Parent {
@@ -84,6 +85,7 @@ export default function FamilyStepPage() {
     unregisterSaveHandler,
     updateSaveOptions,
   } = useApplicationFlow();
+  const { mutate } = useSWRConfig();
 
   const [parents, setParents] = useState<Parent[]>([]);
   const [familyName, setFamilyName] = useState("");
@@ -204,8 +206,10 @@ export default function FamilyStepPage() {
           })
         )
       );
+      mutate("/api/families");
     } catch (err) {
       console.error("Failed to save:", err);
+      throw err;
     } finally {
       setSaving(false);
     }
@@ -302,7 +306,7 @@ export default function FamilyStepPage() {
   return (
     <>
       <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
-        <div className="text-center">
+        <div className="text-center xl:text-left">
           <h1 className="text-2xl font-semibold">
             {familyName ? `${familyName} Family` : "Family Information"}
           </h1>

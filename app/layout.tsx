@@ -3,6 +3,8 @@ import { Geist, Geist_Mono } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
+import { GlobalHeader } from "@/components/global-header";
+import { GlobalFooter } from "@/components/global-footer";
 import "./globals.css";
 import { cn } from "@/lib/utils";
 
@@ -30,9 +32,13 @@ export default function RootLayout({
     <ClerkProvider>
       <html lang="en" className={cn("font-sans", geistSans.variable)}>
         <body
-          className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+          className={`${geistSans.variable} ${geistMono.variable} antialiased bg-gray-50`}
         >
-          <TooltipProvider>{children}</TooltipProvider>
+          <GlobalHeader />
+          <main className="pt-14 pb-16 min-h-screen">
+            <TooltipProvider>{children}</TooltipProvider>
+          </main>
+          <GlobalFooter />
           <Toaster />
         </body>
       </html>

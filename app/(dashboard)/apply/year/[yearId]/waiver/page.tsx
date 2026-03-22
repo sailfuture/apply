@@ -80,7 +80,7 @@ export default function WaiverPage() {
   if (loading) {
     return (
       <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
-        <div className="text-center">
+        <div className="text-center xl:text-left">
           <Skeleton className="h-7 w-48 mx-auto mb-2" />
           <Skeleton className="h-4 w-72 mx-auto" />
         </div>
@@ -92,7 +92,7 @@ export default function WaiverPage() {
   if (applications.length === 0) {
     return (
       <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
-        <div className="text-center">
+        <div className="text-center xl:text-left">
           <h1 className="text-2xl font-semibold">Liability Waiver</h1>
           <p className="text-muted-foreground text-sm mt-1">
             Please enroll a student before signing the liability waiver.
@@ -105,7 +105,7 @@ export default function WaiverPage() {
   return (
     <>
       <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
-        <div className="text-center">
+        <div className="text-center xl:text-left">
           <h1 className="text-2xl font-semibold">Liability Waiver</h1>
           <p className="text-muted-foreground text-sm mt-1">
             {isCompleted
@@ -116,14 +116,10 @@ export default function WaiverPage() {
           </p>
         </div>
 
-        {/* Signing Loading State */}
+        {/* Signing Loading State — skeleton placeholder */}
         {signing.signingLoading === "liability_waiver" && (
-          <div className="flex flex-col items-center justify-center py-20">
-            <Loader2 className="size-10 animate-spin text-primary mb-4" />
-            <p className="text-lg font-medium">Preparing Document</p>
-            <p className="text-sm text-muted-foreground mt-1">
-              This may take a few moments...
-            </p>
+          <div className="relative rounded-lg border overflow-hidden" style={{ height: "70vh" }}>
+            <Skeleton className="absolute inset-0 rounded-none" />
           </div>
         )}
 
@@ -131,9 +127,8 @@ export default function WaiverPage() {
         {isCompleted && pdfUrl && (
           <div className="relative rounded-lg border overflow-hidden" style={{ height: "70vh" }}>
             {!pdfLoaded && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center gap-4">
-                <Loader2 className="size-8 animate-spin text-muted-foreground" />
-                <p className="text-sm text-muted-foreground">Loading document...</p>
+              <div className="absolute inset-0">
+                <Skeleton className="absolute inset-0 rounded-none" />
               </div>
             )}
             <iframe
@@ -176,7 +171,7 @@ export default function WaiverPage() {
           !signing.signingLoading &&
           !signing.signingSession &&
           !isSent && (
-            <div className="flex flex-col items-center justify-center py-20">
+            <div>
               <p className="text-sm text-muted-foreground mb-4">
                 Click below to prepare and sign the liability waiver.
               </p>
@@ -191,7 +186,7 @@ export default function WaiverPage() {
           !isCompleted &&
           !signing.signingLoading &&
           !signing.signingSession && (
-            <div className="flex flex-col items-center justify-center py-20">
+            <div>
               <p className="text-sm text-muted-foreground mb-4">
                 A liability waiver has been prepared and is awaiting your signature.
               </p>

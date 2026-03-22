@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
 import { useParams, useRouter } from "next/navigation";
+import Image from "next/image";
 import { useApplicationFlow } from "@/contexts/application-flow-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -50,7 +51,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Switch } from "@/components/ui/switch";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Trash2, FileUp, X, Loader2, CheckCircle2, Plus } from "lucide-react";
+import { Trash2, FileUp, X, Loader2, CheckCircle2, Plus, ExternalLink } from "lucide-react";
+import { useSWRConfig } from "swr";
 import {
   FileUpload,
   FileUploadDropzone,
@@ -155,6 +157,7 @@ export default function StudentsStepPage() {
     registerBackGuard,
     unregisterBackGuard,
   } = useApplicationFlow();
+  const { mutate } = useSWRConfig();
 
   const [parents, setParents] = useState<Parent[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
@@ -180,6 +183,7 @@ export default function StudentsStepPage() {
   const [createError, setCreateError] = useState("");
 
   const [scheduleDialogOpen, setScheduleDialogOpen] = useState(false);
+  const [stepUpDialogOpen, setStepUpDialogOpen] = useState(false);
   const [uploadingPhotoId, setUploadingPhotoId] = useState<number | null>(null);
   const [savingAppId, setSavingAppId] = useState<number | null>(null);
   const [pendingDeleteStudent, setPendingDeleteStudent] = useState<{ appId: number; name: string } | null>(null);
@@ -403,10 +407,12 @@ export default function StudentsStepPage() {
         )
       );
       setSavedApplications(applications.map((a) => ({ ...a })));
+      mutate("/api/applications");
       toast.success("Section saved successfully");
     } catch (err) {
       console.error("Failed to save:", err);
       toast.error("Failed to save — please try again");
+      throw err;
     } finally {
       setSavingAll(false);
     }
@@ -520,7 +526,7 @@ export default function StudentsStepPage() {
     <>
       <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
         <div className="flex items-center justify-between">
-          <div className="flex-1 text-center">
+          <div className="flex-1 text-center xl:text-left">
             <h1 className="text-2xl font-semibold">
               Students &amp; Information
             </h1>
@@ -540,11 +546,14 @@ export default function StudentsStepPage() {
         </div>
 
         {enrolled.length === 0 ? (
-          <div className="flex min-h-[20vh] items-center justify-center rounded-lg border">
+          <div className="flex min-h-[20vh] flex-col items-center justify-center gap-4 rounded-lg border px-4 py-8">
             <p className="text-muted-foreground text-sm">
-              No students enrolled yet. Click &quot;Add Student&quot; to get
-              started.
+              No students enrolled yet. Add a student to get started.
             </p>
+            <Button onClick={() => setAddDialogOpen(true)}>
+              <Plus className="size-4 mr-1.5" />
+              Add Student
+            </Button>
           </div>
         ) : (
           <div className="space-y-6">
@@ -750,9 +759,29 @@ export default function StudentsStepPage() {
 
                   {/* Step Up for Students Scholarship */}
                   <section>
-                    <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
-                      Step Up for Students Scholarship
-                    </h3>
+                    <div className="flex items-center gap-3 mb-2">
+                      <Image
+                        src="/logos/step-up.png"
+                        alt="Step Up for Students"
+                        width={36}
+                        height={36}
+                        className="size-9 rounded"
+                      />
+                      <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                        Step Up for Students Scholarship
+                      </h3>
+                    </div>
+                    <p className="text-sm text-muted-foreground mb-3 max-w-2xl">
+                      Available to all Florida students eligible for K-12 public school, regardless of household income. <span className="font-semibold text-foreground">$8,000</span> average scholarship for private school tuition and related fees. If your student has been awarded a Step Up scholarship, enter their Award ID below.{" "}
+                      <button
+                        type="button"
+                        onClick={() => setStepUpDialogOpen(true)}
+                        className="inline-flex items-center gap-1 text-primary underline underline-offset-2 hover:text-primary/80 transition-colors"
+                      >
+                        Visit Step Up for Students
+                        <ExternalLink className="size-3" />
+                      </button>
+                    </p>
                     <div className="max-w-xs">
                       <Field>
                         <FieldLabel className="text-xs">SUFS Award ID</FieldLabel>
@@ -776,6 +805,14 @@ export default function StudentsStepPage() {
                         />
                       </Field>
                     </div>
+                    <Button
+                      variant="outline"
+                      className="mt-4 w-full max-w-xs"
+                      onClick={() => setStepUpDialogOpen(true)}
+                    >
+                      <ExternalLink className="size-4 mr-1.5" />
+                      Apply for the Step Up for Students Scholarship
+                    </Button>
                   </section>
 
                   <Separator />
@@ -1241,6 +1278,25 @@ export default function StudentsStepPage() {
               src="https://calendar.app.google/FsBaobZrsRToxuGq9"
               className="h-full w-full border-0"
               title="Schedule NWEA Testing"
+            />
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Step Up for Students Dialog */}
+      <Dialog open={stepUpDialogOpen} onOpenChange={setStepUpDialogOpen}>
+        <DialogContent className="sm:max-w-[95vw] w-[95vw] h-[90vh] p-0 flex flex-col overflow-hidden">
+          <DialogHeader className="px-6 pt-6 pb-2 shrink-0">
+            <DialogTitle>Step Up for Students</DialogTitle>
+            <DialogDescription>
+              Log in or create an account to manage your Step Up for Students scholarship.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex-1 m-6 mt-0 overflow-hidden rounded-lg border">
+            <iframe
+              src="https://www.stepupforstudents.org/scholarships/logins/"
+              className="h-full w-full border-0"
+              title="Step Up for Students"
             />
           </div>
         </DialogContent>

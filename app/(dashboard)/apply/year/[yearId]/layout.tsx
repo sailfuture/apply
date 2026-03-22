@@ -1,7 +1,6 @@
 "use client";
 
 import { useParams, usePathname, useRouter } from "next/navigation";
-import Image from "next/image";
 import {
   Dialog,
   DialogContent,
@@ -16,14 +15,7 @@ import {
   ApplicationFlowProvider,
   useApplicationFlow,
 } from "@/contexts/application-flow-context";
-
-const FORM_STEPS = [
-  { label: "Family", segment: "family", stepIndex: 0 },
-  { label: "Students", segment: "students", stepIndex: 1 },
-  { label: "Financial Aid", segment: "scholarship", stepIndex: 2 },
-  { label: "Waiver", segment: "waiver", stepIndex: 3 },
-  { label: "Agreement", segment: "agreement", stepIndex: 4 },
-] as const;
+import { ApplicationSideNav } from "@/components/application-side-nav";
 
 function LayoutInner({ children }: { children: React.ReactNode }) {
   const params = useParams();
@@ -34,7 +26,7 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
   const basePath = `/apply/year/${yearId}`;
   const isOverview = pathname === basePath || pathname === `${basePath}/`;
 
-  const { saveHandler, saveOptions, backGuard, onBack, hideChrome } =
+  const { saveHandler, saveOptions, backGuard, onBack, hideChrome, hideBottomBar } =
     useApplicationFlow();
 
   const [helpOpen, setHelpOpen] = useState(false);
@@ -48,77 +40,23 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
     router.push(basePath);
   }, [backGuard, onBack, router, basePath]);
 
-  // Determine which step segment is currently active
-  const activeSegment = useMemo(() => {
-    const after = pathname.replace(basePath, "").replace(/^\//, "").split("/")[0];
-    return after || null;
-  }, [pathname, basePath]);
+  const handleSaveAndRedirect = useCallback(async () => {
+    if (!saveHandler) return;
+    try {
+      await saveHandler();
+      router.push(basePath);
+    } catch {
+      // Save failed — stay on page, error toast handled by the page
+    }
+  }, [saveHandler, router, basePath]);
+
+  // Show side nav on form pages (not overview, not hideChrome)
+  const showSideNav = !isOverview && !hideChrome;
+  // Show bottom bar on form pages (not overview, not hideChrome, not hideBottomBar)
+  const showBottomBar = !isOverview && !hideChrome && !hideBottomBar;
 
   return (
-    <div className="flex min-h-screen flex-col">
-      {/* Fixed Header — hidden on overview and when hideChrome is set */}
-      {!isOverview && !hideChrome && (
-        <header className="fixed top-0 left-0 right-0 z-40 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
-          <div className="mx-auto w-full max-w-4xl flex h-14 items-center px-4">
-            {/* Left: SFA logo — links back to checklist */}
-            <div className="w-10 shrink-0">
-              <button
-                onClick={handleBack}
-                className="focus:outline-none"
-                aria-label="Back to checklist"
-              >
-                <Image
-                  src="/logo.svg"
-                  alt="SailFuture Academy"
-                  width={28}
-                  height={28}
-                  className="size-7 rounded-full"
-                />
-              </button>
-            </div>
-
-            {/* Center: step navigation */}
-            <nav className="hidden md:flex flex-1 items-center justify-center gap-1 overflow-x-auto scrollbar-hide">
-              {FORM_STEPS.map((step) => {
-                const isActive = activeSegment === step.segment;
-                return (
-                  <button
-                    key={step.label}
-                    onClick={() => {
-                      if (backGuard && !backGuard()) return;
-                      router.push(`${basePath}/${step.segment}`);
-                    }}
-                    className={`whitespace-nowrap rounded-md px-3 py-1.5 text-sm transition-colors ${
-                      isActive
-                        ? "font-semibold text-foreground"
-                        : "text-muted-foreground/60 hover:text-foreground hover:bg-muted/50"
-                    }`}
-                  >
-                    {step.label}
-                  </button>
-                );
-              })}
-            </nav>
-
-            {/* Right: help / question mark button */}
-            <div className="w-10 shrink-0 flex justify-end">
-              <button
-                onClick={() => setHelpOpen(true)}
-                className="flex size-8 items-center justify-center rounded-full border border-input text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
-              >
-                <svg className="size-4" viewBox="0 0 20 20" fill="currentColor">
-                  <path
-                    fillRule="evenodd"
-                    d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zM8.94 6.94a.75.75 0 11-1.061-1.061 3 3 0 112.871 5.026v.345a.75.75 0 01-1.5 0v-.5c0-.72.57-1.172 1.081-1.287A1.5 1.5 0 108.94 6.94zM10 15a1 1 0 100-2 1 1 0 000 2z"
-                    clipRule="evenodd"
-                  />
-                </svg>
-              </button>
-            </div>
-          </div>
-        </header>
-      )}
-
+    <div className="min-h-[calc(100vh-7.5rem)] flex flex-col">
       {/* Help / Contact Info Modal */}
       <Dialog open={helpOpen} onOpenChange={setHelpOpen}>
         <DialogContent className="sm:max-w-md">
@@ -192,14 +130,26 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
         </DialogContent>
       </Dialog>
 
-      {/* Scrollable Content */}
-      <main className={`flex-1 overflow-y-auto ${isOverview || hideChrome ? "" : "pt-14 pb-20"}`}>
-        {children}
-      </main>
+      {/* Side Nav (left) + Content — centered together */}
+      <div
+        className={`flex-1 flex justify-center px-4 lg:px-6 ${
+          showBottomBar ? "pb-[72px]" : ""
+        }`}
+      >
+        <div className={`flex w-full gap-6 ${showSideNav ? "max-w-[980px]" : "max-w-2xl"}`}>
+          {/* Side Navigation — left of content */}
+          {showSideNav && <ApplicationSideNav yearId={Number(yearId)} />}
 
-      {/* Fixed Bottom Nav — form pages only, hidden when hideChrome is set */}
-      {!isOverview && !hideChrome && (
-        <div className="fixed bottom-0 left-0 right-0 z-40 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+          {/* Main scrollable content */}
+          <main className="flex-1 min-w-0">
+            {children}
+          </main>
+        </div>
+      </div>
+
+      {/* Fixed Bottom Nav — flush above footer */}
+      {showBottomBar && (
+        <div className="fixed bottom-[37px] left-0 right-0 z-50 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
           <div className="mx-auto w-full max-w-4xl flex items-center gap-3 px-4 py-3">
             <button
               onClick={handleBack}
@@ -221,7 +171,7 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
             {saveHandler ? (
               <Button
                 className="flex-1 py-2.5"
-                onClick={saveHandler}
+                onClick={handleSaveAndRedirect}
                 disabled={saveOptions.disabled || saveOptions.saving}
               >
                 {saveOptions.saving ? "Saving..." : "Save Section"}

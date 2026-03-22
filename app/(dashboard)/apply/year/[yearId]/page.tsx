@@ -3,9 +3,12 @@
 import { useParams, useRouter } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
 import { useApplicationSteps, type StepStatus } from "@/hooks/use-application-steps";
+import { useStudents } from "@/hooks/use-api";
 import { ArrowRight, Clock, CheckCircle2, Lock } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import Image from "next/image";
+import { useEffect, useRef } from "react";
+import confetti from "canvas-confetti";
 
 function StepCircle({ number, status }: { number: number; status: StepStatus }) {
   if (status === "complete") {
@@ -71,6 +74,96 @@ function AcceptanceStepCircle({
   );
 }
 
+/* ── Accepted Stage View ── */
+function AcceptedView({ firstName, yearId, registrationSteps }: { firstName: string; yearId: number; registrationSteps: { number: number; title: string; description: string; status: StepStatus; href: string }[] }) {
+  const router = useRouter();
+
+  return (
+    <div className="flex min-h-[calc(100vh-7.5rem)] items-center justify-center px-4 bg-gray-50 dark:bg-background">
+      <div className="w-full max-w-2xl py-8">
+        {/* Heading */}
+        <div className="text-center mb-8">
+          <div className="flex justify-center mb-4">
+            <div className="flex size-16 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30">
+              <CheckCircle2 className="size-8 text-green-600 dark:text-green-400" />
+            </div>
+          </div>
+          <h1 className="text-2xl font-semibold">
+            Congratulations{firstName ? `, ${firstName}` : ""} &mdash; your student has been accepted! Welcome to the SailFuture Academy.
+          </h1>
+          <p className="text-muted-foreground text-sm mt-3 max-w-lg mx-auto">
+            On behalf of everyone at SailFuture Academy, <span className="font-semibold text-foreground">we are thrilled to congratulate you on your acceptance to SailFuture Academy and warmly welcome you to the 2025&ndash;2026 academic year!</span>
+          </p>
+          <p className="text-muted-foreground text-sm mt-3 max-w-lg mx-auto">
+            We are excited to embark on this educational journey with you and your family and present a new and unique opportunity for growth, discovery, and adventure that goes far beyond the traditional boundaries of education. To secure your spot, all new students must complete the student registration form as soon as possible. <span className="font-semibold text-foreground">The deadline for registration is June 1st, 2026.</span> If the new student registration form is not completed by the deadline, your spot will be opened to our current waitlist.
+          </p>
+        </div>
+
+        {/* Post-acceptance step table */}
+        <div className="rounded-xl bg-background p-1.5 shadow-sm border">
+          <div className="overflow-hidden rounded-lg border">
+            <table className="w-full text-sm">
+              <tbody className="divide-y">
+                {registrationSteps.map((step) => {
+                  const isComplete = step.status === "complete";
+                  return (
+                    <tr
+                      key={step.number}
+                      className={`transition-colors cursor-pointer ${
+                        isComplete
+                          ? "bg-green-50 dark:bg-green-950/20 hover:bg-green-100 dark:hover:bg-green-950/30"
+                          : "hover:bg-muted/30"
+                      }`}
+                      onClick={() => router.push(step.href)}
+                    >
+                      <td className="px-4 py-4 w-12">
+                        <AcceptanceStepCircle
+                          number={step.number}
+                          status={isComplete ? "complete" : "pending"}
+                        />
+                      </td>
+                      <td className="px-2 py-4">
+                        <p className="font-medium">{step.title}</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          {step.description}
+                        </p>
+                      </td>
+                      <td className="px-4 py-4 w-10 text-muted-foreground">
+                        <div className="flex size-7 items-center justify-center rounded-md border border-border">
+                          <ArrowRight className="size-3.5" />
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Contact info */}
+        <p className="text-xs text-muted-foreground text-center mt-6">
+          If you have any questions, please contact us at{" "}
+          <a
+            href="mailto:tward@sailfuture.org"
+            className="text-primary underline underline-offset-2"
+          >
+            tward@sailfuture.org
+          </a>{" "}
+          or call{" "}
+          <a
+            href="tel:+17279001436"
+            className="text-primary underline underline-offset-2"
+          >
+            (727) 900-1436
+          </a>
+          .
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export default function YearOverviewPage() {
   const params = useParams();
   const router = useRouter();
@@ -79,13 +172,60 @@ export default function YearOverviewPage() {
   const { user } = useUser();
   const firstName = user?.firstName ?? "";
 
-  const { steps, allComplete, loading, stage, schoolYear } =
+  const { steps, registrationSteps, registrationCompletedCount, allComplete, loading, stage, schoolYear } =
     useApplicationSteps(yearId);
+  const { data: students } = useStudents();
   const yearName = schoolYear?.year_name ?? "next year";
+
+  // When family is accepted, sync isAccepted=true on all family students
+  const acceptanceSynced = useRef(false);
+  useEffect(() => {
+    if (stage !== "accepted" || acceptanceSynced.current || !students) return;
+    acceptanceSynced.current = true;
+    const unaccepted = (students as { id: number; isAccepted?: boolean }[])
+      .filter((s) => !s.isAccepted);
+    for (const student of unaccepted) {
+      fetch(`/api/students/${student.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isAccepted: true }),
+      }).catch(() => {});
+    }
+  }, [stage, students]);
+
+  // Confetti for accepted stage — hooks must be called before any early returns
+  const confettiFired = useRef(false);
+  useEffect(() => {
+    if (stage === "accepted" && !confettiFired.current && registrationCompletedCount === 0) {
+      confettiFired.current = true;
+
+      confetti({
+        particleCount: 80,
+        spread: 70,
+        origin: { x: 0.1, y: 0.6 },
+        colors: ["#0D2446", "#1a3a6b", "#fbbf24", "#f59e0b", "#fcd34d"],
+      });
+      confetti({
+        particleCount: 80,
+        spread: 70,
+        origin: { x: 0.9, y: 0.6 },
+        colors: ["#0D2446", "#1a3a6b", "#fbbf24", "#f59e0b", "#fcd34d"],
+      });
+
+      setTimeout(() => {
+        confetti({
+          particleCount: 50,
+          spread: 100,
+          origin: { x: 0.5, y: 0.4 },
+          colors: ["#0D2446", "#1a3a6b", "#fbbf24", "#f59e0b", "#fcd34d"],
+        });
+      }, 300);
+    }
+  }, [stage]);
 
   if (loading) {
     return (
-      <div className="flex min-h-[calc(100vh-3.5rem)] items-center justify-center px-4">
+      <div className="flex min-h-[calc(100vh-7.5rem)] items-center justify-center px-4">
         <div className="w-full max-w-2xl py-8">
           <div className="text-center mb-8">
             <Skeleton className="size-16 rounded-full mx-auto mb-4" />
@@ -113,7 +253,7 @@ export default function YearOverviewPage() {
   /* ────────── Stage 2: Under Review ────────── */
   if (stage === "review") {
     return (
-      <div className="flex min-h-[calc(100vh-3.5rem)] items-center justify-center px-4 bg-gray-50 dark:bg-background">
+      <div className="flex min-h-[calc(100vh-7.5rem)] items-center justify-center px-4 bg-gray-50 dark:bg-background">
         <div className="w-full max-w-2xl py-8">
           <div className="text-center mb-8">
             <div className="flex justify-center mb-4">
@@ -157,129 +297,12 @@ export default function YearOverviewPage() {
 
   /* ────────── Stage 3: Accepted ────────── */
   if (stage === "accepted") {
-    // Post-acceptance steps: Review Scholarship Costs → Sign Enrollment Agreement → Begin Registration
-    // Steps 1 & 2 are disabled (admin-driven). Step 3 unlocks when first two are complete.
-    // For now, all three are disabled since this is admin-initiated.
-    const scholarshipCostReviewed = false; // TODO: wire to real data when available
-    const enrollmentSigned = false; // TODO: wire to real data when available
-    const canBeginRegistration = scholarshipCostReviewed && enrollmentSigned;
-
-    const acceptanceSteps = [
-      {
-        number: 1,
-        title: "Review Scholarship Costs",
-        description: "Review your financial aid award and tuition details.",
-        status: scholarshipCostReviewed ? "complete" as const : "pending" as const,
-        disabled: true,
-      },
-      {
-        number: 2,
-        title: "Sign Enrollment Agreement",
-        description: "Review and sign the enrollment agreement for the upcoming year.",
-        status: enrollmentSigned ? "complete" as const : "pending" as const,
-        disabled: true,
-      },
-      {
-        number: 3,
-        title: "Begin Registration Process",
-        description: "Complete the final registration steps to confirm your student\u2019s seat.",
-        status: canBeginRegistration ? "pending" as const : "locked" as const,
-        disabled: !canBeginRegistration,
-      },
-    ];
-
-    return (
-      <div className="flex min-h-[calc(100vh-3.5rem)] items-center justify-center px-4 bg-gray-50 dark:bg-background">
-        <div className="w-full max-w-2xl py-8">
-          {/* Heading */}
-          <div className="text-center mb-8">
-            <div className="flex justify-center mb-4">
-              <div className="flex size-16 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30">
-                <CheckCircle2 className="size-8 text-green-600 dark:text-green-400" />
-              </div>
-            </div>
-            <h1 className="text-2xl font-semibold">
-              Congratulations{firstName ? `, ${firstName}` : ""} &mdash; your student has been accepted!
-            </h1>
-            <p className="text-muted-foreground text-sm mt-3 max-w-lg mx-auto">
-              Your student has been offered one of 30 seats at SailFuture Academy for the 2026&ndash;2027 school year. Please complete the steps below to confirm enrollment.
-            </p>
-          </div>
-
-          {/* Post-acceptance step table */}
-          <div className="rounded-xl bg-background p-1.5 shadow-sm border">
-            <div className="overflow-hidden rounded-lg border">
-              <table className="w-full text-sm">
-                <tbody className="divide-y">
-                  {acceptanceSteps.map((step) => {
-                    const isDisabled = step.disabled;
-                    return (
-                      <tr
-                        key={step.number}
-                        className={`transition-colors ${
-                          isDisabled
-                            ? "opacity-50 cursor-not-allowed"
-                            : "cursor-pointer hover:bg-muted/30"
-                        } ${
-                          step.status === "complete"
-                            ? "bg-green-50 dark:bg-green-950/20"
-                            : ""
-                        }`}
-                      >
-                        <td className="px-4 py-4 w-12">
-                          <AcceptanceStepCircle
-                            number={step.number}
-                            status={step.status}
-                            disabled={isDisabled}
-                          />
-                        </td>
-                        <td className="px-2 py-4">
-                          <p className="font-medium">{step.title}</p>
-                          <p className="text-xs text-muted-foreground mt-0.5">
-                            {step.description}
-                          </p>
-                        </td>
-                        <td className="px-4 py-4 w-10 text-muted-foreground">
-                          {!isDisabled && (
-                            <div className="flex size-7 items-center justify-center rounded-md border border-border">
-                              <ArrowRight className="size-3.5" />
-                            </div>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          {/* Contact info */}
-          <p className="text-xs text-muted-foreground text-center mt-6">
-            If you have any questions, please contact us at{" "}
-            <a
-              href="mailto:tward@sailfuture.org"
-              className="text-primary underline underline-offset-2"
-            >
-              tward@sailfuture.org
-            </a>{" "}
-            or call{" "}
-            <a
-              href="tel:+17279001436"
-              className="text-primary underline underline-offset-2"
-            >
-              (727) 900-1436
-            </a>
-            .
-          </p>
-        </div>
-      </div>
-    );
+    return <AcceptedView firstName={firstName} yearId={yearId} registrationSteps={registrationSteps} />;
   }
 
   /* ────────── Stage 1: Start the Application ────────── */
   return (
-    <div className="flex min-h-screen items-center justify-center px-4 bg-gray-50 dark:bg-background">
+    <div className="flex min-h-[calc(100vh-7.5rem)] items-center justify-center px-4 bg-gray-50 dark:bg-background">
       <div className="w-full max-w-2xl py-8">
         {/* Heading */}
         <div className="text-center mb-8">

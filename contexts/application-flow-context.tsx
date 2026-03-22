@@ -42,6 +42,10 @@ interface ApplicationFlowContextValue {
   // Hide layout chrome (header + bottom bar) for full-page sub-views
   hideChrome: boolean;
   setHideChrome: (hide: boolean) => void;
+
+  // Hide just the bottom bar (back/save) while keeping side nav visible
+  hideBottomBar: boolean;
+  setHideBottomBar: (hide: boolean) => void;
 }
 
 const ApplicationFlowContext = createContext<ApplicationFlowContextValue | null>(
@@ -57,6 +61,7 @@ export function ApplicationFlowProvider({ children }: { children: ReactNode }) {
   const [backGuard, setBackGuard] = useState<(() => boolean) | null>(null);
   const [onBack, setOnBack] = useState<(() => void) | null>(null);
   const [hideChrome, setHideChrome] = useState(false);
+  const [hideBottomBar, setHideBottomBar] = useState(false);
 
   const registerSaveHandler = useCallback(
     (handler: () => Promise<void> | void, options?: SaveHandlerOptions) => {
@@ -112,6 +117,8 @@ export function ApplicationFlowProvider({ children }: { children: ReactNode }) {
         unregisterOnBack,
         hideChrome,
         setHideChrome,
+        hideBottomBar,
+        setHideBottomBar,
       }}
     >
       {children}

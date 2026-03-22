@@ -344,7 +344,7 @@ export default function SubmitPage() {
   return (
     <>
       <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
-        <div className="text-center">
+        <div className="text-center xl:text-left">
           <h1 className="text-2xl font-semibold">Submit Application</h1>
           <p className="text-muted-foreground text-sm mt-1">
             Review the checklist below to ensure all sections are complete before submitting your application for {yearName}.

@@ -27,7 +27,7 @@ function SignUpForm() {
 
 export default function Page() {
   return (
-    <div className="flex min-h-screen items-center justify-center">
+    <div className="flex min-h-[calc(100vh-7.5rem)] items-center justify-center">
       <Suspense>
         <SignUpForm />
       </Suspense>
