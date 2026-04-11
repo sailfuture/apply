@@ -79,6 +79,7 @@ export async function POST(req: NextRequest) {
     registration_families_id: familyId,
     registration_school_years_id: [],
     isArchived: false,
+    isAccepted: false,
   });
 
   const family = await xano.families.getById(familyId);
