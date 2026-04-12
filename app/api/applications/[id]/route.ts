@@ -49,15 +49,28 @@ export async function PATCH(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const familyId = toNumber(user.publicMetadata.registration_families_id);
+  const familyId = Number(user.publicMetadata.registration_families_id);
+  if (!familyId) {
+    return NextResponse.json({ error: "No family found" }, { status: 400 });
+  }
 
   const { id } = await params;
 
   try {
-    const existing = await xano.applications.getById(Number(id));
+    let existing;
+    try {
+      existing = await xano.applications.getById(Number(id));
+    } catch {
+      return NextResponse.json({ error: "Application not found" }, { status: 404 });
+    }
 
-    if (!existing || toNumber(existing.registration_families_id) !== familyId) {
+    if (!existing) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+
+    // Verify ownership — compare as numbers
+    if (Number(existing.registration_families_id) !== familyId) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
     const body = await req.json();
