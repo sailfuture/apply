@@ -942,7 +942,7 @@ export default function RegistrationPage() {
       }
 
       // 3. Student registrations: POST new, PATCH existing
-      for (const [, reg] of registrations) {
+      for (const reg of Object.values(registrations)) {
         const payload = { ...reg };
         delete (payload as Record<string, unknown>)["id"];
 
