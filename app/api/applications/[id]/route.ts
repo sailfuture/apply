@@ -64,36 +64,17 @@ export async function PATCH(
   }
 
   const { id } = await params;
+  const appId = Number(id);
 
   try {
-    let existing;
-    try {
-      existing = await xano.applications.getById(Number(id));
-    } catch {
-      return NextResponse.json({ error: "Application not found" }, { status: 404 });
-    }
-
-    if (!existing) {
+    // Verify ownership by checking the family's application list
+    const familyApps = await xano.applications.getByFamilyId(familyId);
+    if (!familyApps.some((a) => a.id === appId)) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
-    // Verify ownership — handle both plain ID and expanded object
-    const existingFamilyId = typeof existing.registration_families_id === "object" && existing.registration_families_id !== null
-      ? Number((existing.registration_families_id as { id?: number }).id ?? existing.registration_families_id)
-      : Number(existing.registration_families_id);
-
-    if (existingFamilyId !== familyId) {
-      console.error("[PATCH /api/applications] ownership mismatch", {
-        appId: id,
-        existingFamilyId,
-        clerkFamilyId: familyId,
-        rawExisting: existing.registration_families_id,
-      });
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    }
-
     const body = await req.json();
-    const updated = await xano.applications.update(Number(id), body);
+    const updated = await xano.applications.update(appId, body);
     return NextResponse.json(updated, { status: 200 });
   } catch (err) {
     console.error("Failed to update application:", err);
