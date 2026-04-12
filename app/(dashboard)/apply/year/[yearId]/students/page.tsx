@@ -463,11 +463,9 @@ export default function StudentsStepPage() {
       toast.error("Please add at least one student before completing this section.");
       throw new Error("Validation failed");
     }
-    // Save first, then validate with latest state
-    await handleSaveAllAppsRef.current();
-
-    // Re-check with current applications after save
-    for (const app of applications) {
+    // Validate with current local state before saving
+    const enrolled = applications.filter((a) => a.registration_school_years_id === Number(yearId));
+    for (const app of enrolled) {
       const student = students.find((s) => s.id === app.registration_students_id);
       const name = student ? `${student.first_name} ${student.last_name}` : "Student";
       if (!app.current_previous_school) { toast.error(`${name}: Please enter current/previous school.`); throw new Error("Validation failed"); }
@@ -478,6 +476,8 @@ export default function StudentsStepPage() {
       if (app.is_bus_transportation && !app.bus_stop) { toast.error(`${name}: Please select a bus stop.`); throw new Error("Validation failed"); }
       if (app.is_bus_transportation && !app.registration_parents_id) { toast.error(`${name}: Please select a parent/guardian for bus pickup.`); throw new Error("Validation failed"); }
     }
+    // Validation passed — save
+    await handleSaveAllAppsRef.current();
     setStudentsLocked(true);
     toast.success("Students section completed.");
   };

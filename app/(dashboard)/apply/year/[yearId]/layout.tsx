@@ -189,13 +189,8 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
           <div className="mx-auto w-full max-w-4xl flex items-center gap-2 px-4 py-3">
             {/* Back */}
             <button
-              onClick={isFirstStep && !onBack ? undefined : () => handleBack()}
-              disabled={isFirstStep && !onBack}
-              className={`flex items-center justify-center gap-1.5 rounded-md border border-input px-3 py-2.5 text-sm font-medium transition-colors ${
-                isFirstStep
-                  ? "bg-muted text-muted-foreground/40 cursor-not-allowed"
-                  : "bg-white text-muted-foreground hover:text-foreground hover:bg-gray-50"
-              }`}
+              onClick={() => handleBack()}
+              className="flex items-center justify-center gap-1.5 rounded-md border border-input px-3 py-2.5 text-sm font-medium transition-colors bg-white text-muted-foreground hover:text-foreground hover:bg-gray-50"
             >
               <svg className="size-4" viewBox="0 0 20 20" fill="currentColor">
                 <path fillRule="evenodd" d="M12.79 5.23a.75.75 0 01-.02 1.06L8.832 10l3.938 3.71a.75.75 0 11-1.04 1.08l-4.5-4.25a.75.75 0 010-1.08l4.5-4.25a.75.75 0 011.06.02z" clipRule="evenodd" />
