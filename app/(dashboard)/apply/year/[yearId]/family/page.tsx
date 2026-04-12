@@ -532,7 +532,7 @@ export default function FamilyStepPage() {
                           >
                             <ComboboxInput
                               placeholder="Search state..."
-                              className={`w-full ${!parent.state ? "!border-red-400" : ""}`}
+                              className="w-full" aria-invalid={!parent.state || undefined}
                             />
                             <ComboboxContent>
                               <ComboboxList>

@@ -1279,7 +1279,8 @@ export default function RegistrationPage() {
                                   >
                                     <ComboboxInput
                                       placeholder="Search state..."
-                                      className={`w-full ${!parent.state ? "!border-red-400" : ""}`}
+                                      className="w-full"
+                                      aria-invalid={!parent.state || undefined}
                                     />
                                     <ComboboxContent>
                                       <ComboboxList>
@@ -1480,7 +1481,8 @@ export default function RegistrationPage() {
                                   >
                                     <ComboboxInput
                                       placeholder="Search state..."
-                                      className={`w-full ${showValidation && !ec.state ? "!border-red-400" : ""}`}
+                                      className="w-full"
+                                      aria-invalid={(showValidation && !ec.state) || undefined}
                                     />
                                     <ComboboxContent>
                                       <ComboboxList>
