@@ -544,7 +544,7 @@ export default function TuitionPage() {
                     </p>
                   </div>
                 </div>
-                {signatureMeta?.path && (
+                {!!(signatureMeta?.path) && (
                   <div className="mt-4 rounded-md border border-input bg-white p-3">
                     <p className="text-xs text-muted-foreground mb-2">Signature</p>
                     <div className="w-full" style={{ height: 100 }}>
