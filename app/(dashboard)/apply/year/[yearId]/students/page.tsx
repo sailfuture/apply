@@ -463,12 +463,20 @@ export default function StudentsStepPage() {
       toast.error("Please add at least one student before completing this section.");
       throw new Error("Validation failed");
     }
-    const incomplete = applications.some((app) => !isAppComplete(app));
-    if (incomplete) {
+    // Save first, then validate with latest state
+    await handleSaveAllAppsRef.current();
+
+    // Re-check with current applications after save
+    const stillIncomplete = applications.some((app) => {
+      if (!app.current_previous_school || !app.last_grade_completed || !app.current_grade) return true;
+      if (!app.describe_student_strengths || !app.describe_student_opportunities_for_growth) return true;
+      if (app.is_bus_transportation && (!app.registration_parents_id || !app.bus_stop)) return true;
+      return false;
+    });
+    if (stillIncomplete) {
       toast.error("Please fill out all required fields for each student.");
       throw new Error("Validation failed");
     }
-    await handleSaveAllAppsRef.current();
     setStudentsLocked(true);
     toast.success("Students section completed.");
   };
