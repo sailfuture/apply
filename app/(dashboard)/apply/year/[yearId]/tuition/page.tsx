@@ -15,7 +15,7 @@ import SignatureCanvas from "react-signature-canvas";
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
-/** Maps sufs_scholarship_type to the corresponding SchoolYear field */
+/** Maps sufs_type to the corresponding SchoolYear field */
 const SUFS_FIELDS: Record<string, string> = {
   fes_eo_8: "fes_eo_8",
   fes_eo_9: "fes_eo_9",
@@ -211,7 +211,7 @@ export default function TuitionPage() {
       is_bus_transportation?: boolean;
       bus_stop?: string;
       sufs_status?: string;
-      sufs_scholarship_type?: string;
+      sufs_type?: string;
       opportunity_scholarship_award_amount?: number;
     }[]).filter((a) => a.registration_school_years_id === yearId);
 
@@ -228,7 +228,7 @@ export default function TuitionPage() {
       const transportFees = (sy.transportation_fees as number) ?? 0;
 
       // SUFS amount: look up SchoolYear field based on scholarship type
-      const sufsType = app.sufs_scholarship_type ?? "";
+      const sufsType = app.sufs_type ?? "";
       const sufsField = SUFS_FIELDS[sufsType];
       const stepUpAmount = sufsField && sy[sufsField] ? (sy[sufsField] as number) : 0;
 

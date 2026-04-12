@@ -86,8 +86,8 @@ export interface XanoApplication {
   liability_waiver_pdf_url: string | null;
   enrollment_agreement_pdf_url: string | null;
   sufs_award_id: number;
+  sufs_type: string;
   sufs_status: string;
-  sufs_scholarship_type: string;
   opportunity_scholarship_award_amount: number;
   is_bus_transportation: boolean;
   bus_stop: string;
@@ -97,6 +97,7 @@ export interface XanoApplication {
   last_grade_completed: string;
   current_grade: string;
   nwea_testing_complete: boolean;
+  nwea_testing_scheduled: boolean;
   test_scores: Record<string, unknown> | null;
   isSubmitted: boolean;
   isOffered: boolean;

@@ -33,7 +33,7 @@ interface Application {
   id: number;
   registration_students_id: number;
   registration_school_years_id: number;
-  sufs_scholarship_type?: string;
+  sufs_type?: string;
 }
 
 interface SchoolYear {
@@ -138,7 +138,7 @@ export default function SufsStepPage() {
       const res = await fetch(`/api/applications/${appId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sufs_scholarship_type: value }),
+        body: JSON.stringify({ sufs_type: value }),
       });
       if (res.ok) {
         const updated = await res.json();
@@ -202,7 +202,7 @@ export default function SufsStepPage() {
           <div className="space-y-4">
             {enrolled.map(({ app, student }) => {
               const selectedOption = SUFS_OPTIONS.find(
-                (o) => o.value === app.sufs_scholarship_type
+                (o) => o.value === app.sufs_type
               );
               const amount =
                 selectedOption && selectedOption.value !== "none" && schoolYear
@@ -229,7 +229,7 @@ export default function SufsStepPage() {
                             Scholarship Type
                           </FieldLabel>
                           <Select
-                            value={app.sufs_scholarship_type || ""}
+                            value={app.sufs_type || ""}
                             disabled={savingAppId === app.id}
                             onValueChange={(v) =>
                               handleSufsChange(app.id, v)
