@@ -457,7 +457,7 @@ export default function RegistrationPage() {
   // Local state
   const [parents, setParents] = useState<Parent[]>([]);
   const [emergencyContacts, setEmergencyContacts] = useState<EmergencyContact[]>([]);
-  const [registrations, setRegistrations] = useState<Map<number, StudentRegistration>>(new Map());
+  const [registrations, setRegistrations] = useState<Record<number, StudentRegistration>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [openSections, setOpenSections] = useState<Set<string>>(new Set());
@@ -726,11 +726,11 @@ export default function RegistrationPage() {
 
       const existingIds = new Set<number>();
       setRegistrations((prev) => {
-        const next = new Map(prev);
+        const next = { ...prev };
         enrolledStudents.forEach((s, i) => {
-          const existing = next.get(s.id);
+          const existing = next[s.id];
           if (!existing) {
-            next.set(s.id, results[i] ?? emptyRegistration(s.id));
+            next[s.id] = results[i] ?? emptyRegistration(s.id);
           }
           // Auto-select students that have existing registration records
           if (results[i] && results[i]!.id) {
@@ -862,9 +862,9 @@ export default function RegistrationPage() {
 
   function updateRegistration(studentId: number, field: string, value: unknown) {
     setRegistrations((prev) => {
-      const next = new Map(prev);
-      const reg = next.get(studentId) ?? emptyRegistration(studentId);
-      next.set(studentId, { ...reg, [field]: value });
+      const next = { ...prev };
+      const reg = next[studentId] ?? emptyRegistration(studentId);
+      next[studentId] = { ...reg, [field]: value };
       return next;
     });
   }
@@ -964,8 +964,8 @@ export default function RegistrationPage() {
               if (res.ok) {
                 const created = await res.json();
                 setRegistrations((prev) => {
-                  const next = new Map(prev);
-                  next.set(reg.registration_students_id, created);
+                  const next = { ...prev };
+                  next[reg.registration_students_id] = created;
                   return next;
                 });
               }
@@ -1558,7 +1558,7 @@ export default function RegistrationPage() {
               {enrolledStudents.filter((s) => selectedStudentIds.has(s.id)).map((student) => {
                 const sectionKey = `student-${student.id}`;
                 const isOpen = openSections.has(sectionKey);
-                const reg = registrations.get(student.id) ?? emptyRegistration(student.id);
+                const reg = registrations[student.id] ?? emptyRegistration(student.id);
 
                 return (
                   <Card key={student.id} className="overflow-hidden gap-0 py-0 ring-0 border">
@@ -2085,9 +2085,9 @@ export default function RegistrationPage() {
                       });
                       // Initialize registration if not exists
                       setRegistrations((prev) => {
-                        const next = new Map(prev);
-                        if (!next.has(student.id)) {
-                          next.set(student.id, emptyRegistration(student.id));
+                        const next = { ...prev };
+                        if (!next[student.id]) {
+                          next[student.id] = emptyRegistration(student.id);
                         }
                         return next;
                       });
