@@ -155,6 +155,10 @@ interface StudentRegistration {
   interested_in_counseling_services: string;
   other_adults_approved_for_pickup: string;
   prohibited_adults: string;
+  liability_waiver_pandadoc_id: string;
+  liability_waiver_status: string;
+  liability_wavier_sent_at: string | null;
+  liability_waiver_pdf_url: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -274,6 +278,10 @@ function emptyRegistration(studentId: number): StudentRegistration {
     interested_in_counseling_services: "",
     other_adults_approved_for_pickup: "",
     prohibited_adults: "",
+    liability_waiver_pandadoc_id: "",
+    liability_waiver_status: "",
+    liability_wavier_sent_at: null,
+    liability_waiver_pdf_url: "",
   };
 }
 
