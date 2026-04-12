@@ -76,11 +76,16 @@ export async function POST(req: NextRequest) {
     medicaid_number: body.medicaid_number ?? 0,
     medicaid_provider: body.medicaid_provider ?? "",
     carry_epi_pen: body.carry_epi_pen ?? false,
+    epipen_explainer: body.epipen_explainer ?? "",
     permission_for_acetaminophen: body.permission_for_acetaminophen ?? "",
     additional_health_information: body.additional_health_information ?? "",
     interested_in_counseling_services: body.interested_in_counseling_services ?? "",
     other_adults_approved_for_pickup: body.other_adults_approved_for_pickup ?? "",
     prohibited_adults: body.prohibited_adults ?? "",
+    liability_waiver_pandadoc_id: body.liability_waiver_pandadoc_id ?? "",
+    liability_waiver_status: body.liability_waiver_status ?? "",
+    liability_wavier_sent_at: body.liability_wavier_sent_at ?? null,
+    liability_waiver_pdf_url: body.liability_waiver_pdf_url ?? "",
   });
 
   return NextResponse.json(registration, { status: 201 });
