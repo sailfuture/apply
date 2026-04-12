@@ -10,7 +10,7 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-  const isApplicationFlow = /^\/apply\/year\/\d+/.test(pathname);
+  const isApplicationFlow = pathname === "/" || /^\/apply\/year\/\d+/.test(pathname);
 
   if (isApplicationFlow) {
     return <>{children}</>;
