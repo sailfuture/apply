@@ -62,11 +62,11 @@ export default function AgreementPage() {
   useEffect(() => {
     if (loading || autoInitRef.current) return;
     if (applications.length === 0) return;
-    if (!isSent && !isCompleted && !signing.signingLoading && !signing.signingSession) {
+    if (!isCompleted && !signing.signingLoading && !signing.signingSession) {
       autoInitRef.current = true;
       signing.handleSign("enrollment_agreement");
     }
-  }, [loading, applications.length, isSent, isCompleted, signing]);
+  }, [loading, applications.length, isCompleted, signing]);
 
   const pdfUrl = useMemo(() => {
     if (!isCompleted || applications.length === 0) return null;
@@ -102,16 +102,28 @@ export default function AgreementPage() {
 
   return (
     <>
-      <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
-        <div className="text-center xl:text-left">
-          <h1 className="text-2xl font-semibold">Enrollment Agreement</h1>
-          <p className="text-muted-foreground text-sm mt-1">
-            {isCompleted
-              ? "This document has been signed and completed."
-              : isSent
-                ? "Please review and sign the enrollment agreement below."
-                : "Preparing your enrollment agreement for signing..."}
-          </p>
+      <div className="flex flex-1 flex-col gap-6 p-6 pb-0 mx-auto w-full max-w-4xl">
+        <div className="flex items-start justify-between gap-4">
+          <div className="text-center xl:text-left">
+            <h1 className="text-2xl font-semibold">Enrollment Agreement</h1>
+            <p className="text-muted-foreground text-sm mt-1">
+              {isCompleted
+                ? "This document has been signed and completed."
+                : isSent
+                  ? "An enrollment agreement has been prepared and is awaiting your signature."
+                  : "Preparing your enrollment agreement for signing..."}
+            </p>
+          </div>
+          {isCompleted && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="shrink-0"
+              onClick={() => signing.setResetConfirm("enrollment_agreement")}
+            >
+              Re-Sign Document
+            </Button>
+          )}
         </div>
 
         {/* Signing Loading State — skeleton placeholder */}
@@ -163,44 +175,6 @@ export default function AgreementPage() {
             />
           </>
         )}
-
-        {/* Not started and not loading — show sign button */}
-        {!isCompleted &&
-          !signing.signingLoading &&
-          !signing.signingSession &&
-          !isSent && (
-            <div>
-              <p className="text-sm text-muted-foreground mb-4">
-                Click below to prepare and sign the enrollment agreement.
-              </p>
-              <Button onClick={() => signing.handleSign("enrollment_agreement")}>
-                Sign Enrollment Agreement
-              </Button>
-            </div>
-          )}
-
-        {/* Already sent but not in signing session — show re-sign button */}
-        {isSent &&
-          !isCompleted &&
-          !signing.signingLoading &&
-          !signing.signingSession && (
-            <div>
-              <p className="text-sm text-muted-foreground mb-4">
-                An enrollment agreement has been prepared and is awaiting your signature.
-              </p>
-              <div className="flex gap-3">
-                <Button onClick={() => signing.handleSign("enrollment_agreement")}>
-                  Sign Now
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => signing.setResetConfirm("enrollment_agreement")}
-                >
-                  Start Over
-                </Button>
-              </div>
-            </div>
-          )}
       </div>
 
       {/* Reset Confirmation Dialog */}

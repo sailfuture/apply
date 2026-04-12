@@ -765,7 +765,7 @@ export default function StudentsStepPage() {
                         alt="Step Up for Students"
                         width={36}
                         height={36}
-                        className="size-9 rounded"
+                        className="size-9 rounded-full border-4 border-gray-200"
                       />
                       <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                         Step Up for Students Scholarship
@@ -807,11 +807,11 @@ export default function StudentsStepPage() {
                     </div>
                     <Button
                       variant="outline"
-                      className="mt-4 w-full max-w-xs"
+                      className="mt-4 w-full"
                       onClick={() => setStepUpDialogOpen(true)}
                     >
-                      <ExternalLink className="size-4 mr-1.5" />
-                      Apply for the Step Up for Students Scholarship
+                      <ExternalLink className="size-4 mr-1.5 shrink-0" />
+                      <span className="truncate">Apply for the Step Up for Students Scholarship</span>
                     </Button>
                   </section>
 

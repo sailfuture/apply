@@ -308,7 +308,7 @@ export default function FamilyStepPage() {
       <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
         <div className="text-center xl:text-left">
           <h1 className="text-2xl font-semibold">
-            {familyName ? `${familyName} Family` : "Family Information"}
+            {familyName || "Family Information"}
           </h1>
           <p className="text-muted-foreground text-sm mt-1">
             Manage contact information and addresses for all parents and

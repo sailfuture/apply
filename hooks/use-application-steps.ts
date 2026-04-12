@@ -21,7 +21,7 @@ interface FullScholarshipResponse {
     isNotParticipating: boolean;
     isSNAPBenefits: boolean;
     isOpportunityScholarship: boolean;
-    snap_benefits: Record<string, unknown> | null;
+    snap_benefits: Record<string, unknown>[];
   };
   contributing_members: {
     first_name: string;
@@ -79,7 +79,7 @@ export function useApplicationSteps(yearId: number) {
   const { data: yearsData } = useSchoolYears();
   const { data: appsData } = useApplications();
   const familyId = familyData?.id ?? null;
-  const { data: scholarshipData } = useScholarship(familyId, yearId);
+  const { data: scholarshipData, isLoading: scholarshipLoading } = useScholarship(familyId, yearId);
 
   // Fetch payment record for tuition review status
   const { data: paymentRecord } = useSWR(
@@ -161,9 +161,9 @@ export function useApplicationSteps(yearId: number) {
     { revalidateOnFocus: false, dedupingInterval: 10000 }
   );
 
-  // Full loading state — includes scholarship data settling
+  // Full loading state — includes all scholarship waterfall steps settling
   // Used by side nav to avoid showing grey circles that then flip to green
-  const stepsLoading = loading || (!!scholarshipId && !fullScholarship);
+  const stepsLoading = loading || scholarshipLoading || (!!scholarshipId && !fullScholarship);
 
   const scholarshipComplete = useMemo(() => {
     if (!fullScholarship?.opportunity_scholarship) return false;
@@ -172,8 +172,8 @@ export function useApplicationSteps(yearId: number) {
     // Opted out of financial aid — counts as complete
     if (s.isNotParticipating) return true;
 
-    // SNAP benefits path — complete if documentation uploaded
-    if (s.isSNAPBenefits) return !!s.snap_benefits;
+    // SNAP benefits path — complete if at least one document uploaded
+    if (s.isSNAPBenefits) return Array.isArray(s.snap_benefits) && s.snap_benefits.length > 0;
 
     // Full application path — must have chosen to participate
     if (!s.isOpportunityScholarship) return false;

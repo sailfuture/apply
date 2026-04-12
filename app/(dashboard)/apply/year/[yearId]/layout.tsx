@@ -153,7 +153,7 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
           <div className="mx-auto w-full max-w-4xl flex items-center gap-3 px-4 py-3">
             <button
               onClick={handleBack}
-              className="flex-1 flex items-center justify-center gap-2 rounded-md border border-input px-4 py-2.5 text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+              className="flex-1 flex items-center justify-center gap-2 rounded-md border border-input px-4 py-2.5 text-sm font-medium text-foreground hover:bg-muted/50 transition-colors"
             >
               <svg
                 className="size-4"

@@ -44,7 +44,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Trash2, FileUp, X, Loader2, CheckCircle2, Users, Home, Car, ArrowRight } from "lucide-react";
+import { Trash2, FileUp, X, Loader2, CheckCircle2, Users, Home, Car, ArrowRight, ExternalLink } from "lucide-react";
 import {
   Empty,
   EmptyHeader,
@@ -98,7 +98,8 @@ interface Scholarship {
   government_benefits: boolean;
   family_contribution_per_month: number;
   scholarship_advocacy_letter: string;
-  snap_benefits: Record<string, unknown> | null;
+  snap_benefits: Record<string, unknown>[];
+  other_benefits: Record<string, unknown>[];
   signature: Record<string, unknown> | null;
   termination_letter: Record<string, unknown> | null;
   last_edited: number | null;
@@ -336,7 +337,8 @@ export default function ScholarshipPage() {
   const [signatureMeta, setSignatureMeta] = useState<Record<string, unknown> | null>(null);
   const [signatureLocalUrl, setSignatureLocalUrl] = useState<string | null>(null);
   const [signatureUploading, setSignatureUploading] = useState(false);
-  const [snapBenefitsFile, setSnapBenefitsFile] = useState<Record<string, unknown> | null>(null);
+  const [snapBenefitsFiles, setSnapBenefitsFiles] = useState<Record<string, unknown>[]>([]);
+  const [otherBenefitsFiles, setOtherBenefitsFiles] = useState<Record<string, unknown>[]>([]);
   const [terminationLetter, setTerminationLetter] = useState<Record<string, unknown> | null>(null);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
   const [, setTick] = useState(0);
@@ -551,8 +553,11 @@ export default function ScholarshipPage() {
         }
       }
     }
-    if (s.snap_benefits) {
-      setSnapBenefitsFile(s.snap_benefits as Record<string, unknown>);
+    if (Array.isArray(s.snap_benefits) && s.snap_benefits.length > 0) {
+      setSnapBenefitsFiles(s.snap_benefits as Record<string, unknown>[]);
+    }
+    if (Array.isArray(s.other_benefits) && s.other_benefits.length > 0) {
+      setOtherBenefitsFiles(s.other_benefits as Record<string, unknown>[]);
     }
     if (s.termination_letter) {
       setTerminationLetter(s.termination_letter as Record<string, unknown>);
@@ -676,7 +681,8 @@ export default function ScholarshipPage() {
           government_benefits: govBenefits,
           family_contribution_per_month: familyContribution,
           scholarship_advocacy_letter: advocacyLetter,
-          snap_benefits: snapBenefitsFile,
+          snap_benefits: snapBenefitsFiles,
+          other_benefits: otherBenefitsFiles,
           signature: signatureMeta,
           termination_letter: terminationLetter,
           last_edited: Date.now(),
@@ -1117,25 +1123,29 @@ export default function ScholarshipPage() {
                   <tr
                     className={`transition-colors ${
                       scholarshipChoice === "snap"
-                        ? "bg-gray-50 dark:bg-muted/30"
+                        ? "bg-gray-50 dark:bg-muted/30 cursor-pointer hover:bg-gray-100 dark:hover:bg-muted/50"
                         : scholarshipChoice === "full" || scholarshipChoice === "none"
                           ? "opacity-50 pointer-events-none"
                           : "cursor-pointer hover:bg-muted/30"
                     }`}
                     onClick={() => {
+                      if (scholarshipChoice === "snap") {
+                        setSnapModalOpen(true);
+                        return;
+                      }
                       if (isChoiceLocked) return;
                       setSnapModalOpen(true);
                     }}
                   >
                     <td className="px-4 py-4 w-12">
                       <div className={`flex size-8 shrink-0 items-center justify-center rounded-full ${
-                        scholarshipChoice === "snap" && snapBenefitsFile
+                        scholarshipChoice === "snap" && snapBenefitsFiles.length > 0
                           ? "bg-green-500 text-white"
                           : scholarshipChoice === "snap"
                             ? "bg-amber-500 text-white"
                             : "bg-muted text-muted-foreground"
                       }`}>
-                        {scholarshipChoice === "snap" && snapBenefitsFile ? (
+                        {scholarshipChoice === "snap" && snapBenefitsFiles.length > 0 ? (
                           <svg className="size-4" viewBox="0 0 20 20" fill="currentColor">
                             <path fillRule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clipRule="evenodd" />
                           </svg>
@@ -1244,42 +1254,70 @@ export default function ScholarshipPage() {
 
         {/* SNAP Benefits Modal */}
         <AlertDialog open={snapModalOpen} onOpenChange={setSnapModalOpen}>
-          <AlertDialogContent>
+          <AlertDialogContent className="max-w-2xl max-h-[90vh] flex flex-col overflow-hidden">
             <AlertDialogHeader>
               <AlertDialogTitle>SNAP Benefits Pre-Qualification</AlertDialogTitle>
               <AlertDialogDescription>
-                If you receive SNAP benefits, you pre-qualify for the SailFuture Academy Scholarship. Please upload your SNAP benefits award letter below.
+                If you receive SNAP benefits, you pre-qualify for the SailFuture Academy Scholarship. Upload your Florida SNAP benefits award letter below.
               </AlertDialogDescription>
             </AlertDialogHeader>
-            <div className="py-2">
-              <IncomeFileUpload
-                label="Drop SNAP award letter here or click to upload"
-                existingFile={snapBenefitsFile as XanoFileMetadata | null}
-                onUploaded={async (meta) => {
-                  setSnapBenefitsFile(meta);
-                  const sid = scholarship?.id ?? await ensureScholarship();
-                  if (sid) {
-                    await fetch(`/api/scholarship/${sid}`, {
-                      method: "PATCH",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ snap_benefits: meta, last_edited: Date.now() }),
-                    });
-                  }
-                }}
-                onRemoved={async () => {
-                  setSnapBenefitsFile(null);
-                  const sid = scholarship?.id ?? await ensureScholarship();
-                  if (sid) {
-                    await fetch(`/api/scholarship/${sid}`, {
-                      method: "PATCH",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ snap_benefits: {}, last_edited: Date.now() }),
-                    });
-                  }
-                }}
-              />
+
+            <div className="flex-1 overflow-y-auto space-y-4 pr-1">
+              <div>
+                <IncomeFileUpload
+                  label="Drop SNAP award letter here or click to upload"
+                  multiple
+                  existingFiles={snapBenefitsFiles as XanoFileMetadata[]}
+                  onFilesChanged={async (files) => {
+                    setSnapBenefitsFiles(files);
+                    const sid = scholarship?.id ?? await ensureScholarship();
+                    if (sid) {
+                      await fetch(`/api/scholarship/${sid}`, {
+                        method: "PATCH",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ snap_benefits: files, last_edited: Date.now() }),
+                      });
+                      mutate(`/api/scholarship/${sid}`);
+                      if (familyId) mutate(`/api/scholarship?familyId=${familyId}&yearId=${yearId}`);
+                    }
+                  }}
+                />
+              </div>
+
+              {/* What is a SNAP Award Letter */}
+              <div className="rounded-lg border bg-muted/30 p-4 space-y-3">
+                <h4 className="text-sm font-semibold">What is a SNAP Award Letter?</h4>
+                <p className="text-sm text-muted-foreground">
+                  The SNAP (Supplemental Nutrition Assistance Program) award letter is a &quot;Notice of Case Action&quot; issued by the Florida Department of Children and Families (DCF). It confirms your household&apos;s eligibility for Food Assistance benefits and lists each eligible household member along with your benefit amount.
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  You can access your award letter by logging into your{" "}
+                  <a
+                    href="https://www.myflorida.com/accessflorida/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary underline underline-offset-2 hover:text-primary/80"
+                  >
+                    MyACCESS Florida account
+                  </a>
+                  , or by contacting your local DCF office. If you received a physical copy in the mail, you can scan or photograph it for upload.
+                </p>
+                <div className="rounded-md border overflow-hidden bg-white">
+                  <Image
+                    src="/1.webp"
+                    alt="Example Florida SNAP Benefits Award Letter - Notice of Case Action"
+                    width={600}
+                    height={776}
+                    className="w-full h-auto"
+                  />
+                  <p className="text-xs text-muted-foreground text-center py-2 bg-muted/20">
+                    Example: Florida DCF &quot;Notice of Case Action&quot; letter
+                  </p>
+                </div>
+              </div>
             </div>
-            <AlertDialogFooter>
+
+            <AlertDialogFooter className="shrink-0">
               <AlertDialogCancel>Cancel</AlertDialogCancel>
               <AlertDialogAction
                 onClick={async () => {
@@ -1633,6 +1671,35 @@ export default function ScholarshipPage() {
                       )}
                     </div>
                   )}
+                </div>
+
+                {/* Other Benefits Documentation */}
+                <div className="mt-6">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+                    Supporting Documentation
+                  </p>
+                  <p className="text-sm text-muted-foreground mb-3">
+                    Upload any supporting documents for your government benefits (award letters, approval notices, etc.)
+                  </p>
+                  <IncomeFileUpload
+                    label="Drop benefit documents here or click to upload"
+                    multiple
+                    disabled={isReadonly}
+                    existingFiles={otherBenefitsFiles as XanoFileMetadata[]}
+                    onFilesChanged={async (files) => {
+                      setOtherBenefitsFiles(files);
+                      const sid = scholarship?.id ?? await ensureScholarship();
+                      if (sid) {
+                        await fetch(`/api/scholarship/${sid}`, {
+                          method: "PATCH",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ other_benefits: files, last_edited: Date.now() }),
+                        });
+                        mutate(`/api/scholarship/${sid}`);
+                        if (familyId) mutate(`/api/scholarship?familyId=${familyId}&yearId=${yearId}`);
+                      }
+                    }}
+                  />
                 </div>
                 </motion.div>
               )}
@@ -2589,6 +2656,51 @@ function IncomeFileUpload({
   existingFile,
   onUploaded,
   onRemoved,
+  multiple,
+  existingFiles,
+  onFilesChanged,
+}: {
+  label: string;
+  disabled?: boolean;
+  /** Single-file mode */
+  existingFile?: XanoFileMetadata | null;
+  onUploaded?: (metadata: XanoFileMetadata) => void;
+  onRemoved?: () => void;
+  /** Multi-file mode */
+  multiple?: boolean;
+  existingFiles?: XanoFileMetadata[];
+  onFilesChanged?: (files: XanoFileMetadata[]) => void;
+}) {
+  // Multi-file mode
+  if (multiple) {
+    return (
+      <MultiFileUpload
+        label={label}
+        disabled={disabled}
+        existingFiles={existingFiles ?? []}
+        onFilesChanged={onFilesChanged ?? (() => {})}
+      />
+    );
+  }
+
+  // Single-file mode (original behavior)
+  return (
+    <SingleFileUpload
+      label={label}
+      disabled={disabled}
+      existingFile={existingFile}
+      onUploaded={onUploaded}
+      onRemoved={onRemoved}
+    />
+  );
+}
+
+function SingleFileUpload({
+  label,
+  disabled,
+  existingFile,
+  onUploaded,
+  onRemoved,
 }: {
   label: string;
   disabled?: boolean;
@@ -2651,6 +2763,19 @@ function IncomeFileUpload({
             <p className="text-sm font-medium truncate">{uploaded.name || "Uploaded file"}</p>
             <p className="text-xs text-muted-foreground">Uploaded successfully</p>
           </div>
+          {uploaded.path && (
+            <a
+              href={
+                uploaded.url ??
+                `${process.env.NEXT_PUBLIC_XANO_BASE ?? "https://xsc3-mvx7-r86m.n7e.xano.io"}${uploaded.path}`
+              }
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center justify-center size-7 shrink-0 rounded-md hover:bg-muted transition-colors"
+            >
+              <ExternalLink className="size-4 text-muted-foreground" />
+            </a>
+          )}
           {!disabled && (
             <Button
               variant="ghost"
@@ -2722,6 +2847,137 @@ function IncomeFileUpload({
         <p className="text-xs text-red-600 mt-1">{error}</p>
       )}
     </div>
+  );
+}
+
+function MultiFileUpload({
+  label,
+  disabled,
+  existingFiles,
+  onFilesChanged,
+}: {
+  label: string;
+  disabled?: boolean;
+  existingFiles: XanoFileMetadata[];
+  onFilesChanged: (files: XanoFileMetadata[]) => void;
+}) {
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [removeIndex, setRemoveIndex] = useState<number | null>(null);
+
+  async function handleNewFiles(newFiles: File[]) {
+    setPendingFiles(newFiles);
+    setError(null);
+    if (newFiles.length === 0) return;
+
+    const file = newFiles[0];
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch("/api/upload", { method: "POST", body: formData });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error ?? `Upload failed (${res.status})`);
+      }
+      const metadata: XanoFileMetadata = await res.json();
+      onFilesChanged([...existingFiles, metadata]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Upload failed");
+    } finally {
+      setPendingFiles([]);
+      setUploading(false);
+    }
+  }
+
+  function doRemove(index: number) {
+    const updated = existingFiles.filter((_, i) => i !== index);
+    onFilesChanged(updated);
+    setRemoveIndex(null);
+  }
+
+  return (
+    <>
+      <div className="space-y-2">
+        {existingFiles.map((file, index) => (
+          <div key={index} className="flex items-center gap-3 rounded-md border border-input bg-background px-4 py-3">
+            <CheckCircle2 className="size-5 text-green-600 shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium truncate">{file.name || "Uploaded file"}</p>
+              <p className="text-xs text-muted-foreground">Uploaded successfully</p>
+            </div>
+            {file.path && (
+              <a
+                href={
+                  file.url ??
+                  `${process.env.NEXT_PUBLIC_XANO_BASE ?? "https://xsc3-mvx7-r86m.n7e.xano.io"}${file.path}`
+                }
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center justify-center size-7 shrink-0 rounded-md hover:bg-muted transition-colors"
+              >
+                <ExternalLink className="size-4 text-muted-foreground" />
+              </a>
+            )}
+            {!disabled && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-7 shrink-0"
+                onClick={() => setRemoveIndex(index)}
+              >
+                <X className="size-4" />
+              </Button>
+            )}
+          </div>
+        ))}
+
+        {/* Upload dropzone for adding more files */}
+        <FileUpload
+          maxFiles={1}
+          maxSize={10 * 1024 * 1024}
+          accept=".pdf,.jpg,.jpeg,.png"
+          className="w-full"
+          value={pendingFiles}
+          onValueChange={handleNewFiles}
+          disabled={disabled || uploading}
+        >
+          <FileUploadDropzone className="flex-row gap-3 px-4 py-3 cursor-pointer">
+            {uploading ? (
+              <Loader2 className="size-5 text-muted-foreground animate-spin" />
+            ) : (
+              <FileUp className="size-5 text-muted-foreground" />
+            )}
+            <div className="flex-1 text-left">
+              <p className="text-sm font-medium">
+                {uploading ? "Uploading..." : label}
+              </p>
+              <p className="text-xs text-muted-foreground">PDF, JPG, or PNG (max 10MB)</p>
+            </div>
+          </FileUploadDropzone>
+        </FileUpload>
+
+        {error && (
+          <p className="text-xs text-red-600 mt-1">{error}</p>
+        )}
+      </div>
+
+      <AlertDialog open={removeIndex !== null} onOpenChange={(open) => { if (!open) setRemoveIndex(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove uploaded file?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will remove the uploaded file. You can upload a new one afterwards.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => removeIndex !== null && doRemove(removeIndex)}>Remove</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }
 

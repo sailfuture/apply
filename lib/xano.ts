@@ -167,8 +167,8 @@ export interface XanoScholarship {
   debts_student_loans: number;
   debts_personal_loans: number;
   government_benefits: boolean;
-  snap_benefits: Record<string, unknown> | null;
-  other_benefits: Record<string, unknown> | null;
+  snap_benefits: Record<string, unknown>[];
+  other_benefits: Record<string, unknown>[];
   family_contribution_per_month: number;
   scholarship_advocacy_letter: string;
   signature: Record<string, unknown> | null;
