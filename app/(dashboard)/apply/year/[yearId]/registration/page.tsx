@@ -1279,7 +1279,7 @@ export default function RegistrationPage() {
                                   >
                                     <ComboboxInput
                                       placeholder="Search state..."
-                                      className={`w-full ${!parent.state ? "border-red-400" : ""}`}
+                                      className={`w-full ${!parent.state ? "!border-red-400" : ""}`}
                                     />
                                     <ComboboxContent>
                                       <ComboboxList>
@@ -1480,7 +1480,7 @@ export default function RegistrationPage() {
                                   >
                                     <ComboboxInput
                                       placeholder="Search state..."
-                                      className="w-full"
+                                      className={`w-full ${showValidation && !ec.state ? "!border-red-400" : ""}`}
                                     />
                                     <ComboboxContent>
                                       <ComboboxList>

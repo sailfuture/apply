@@ -1914,7 +1914,7 @@ export default function ScholarshipPage() {
                             value={member.state || ""}
                             onValueChange={(v) => patchMemberLocal(member.id, { state: v as string })}
                           >
-                            <ComboboxInput placeholder="Search state..." className={`w-full ${!(member.state || "").trim() ? "ring-1 ring-red-400" : ""}`} disabled={isReadonly} />
+                            <ComboboxInput placeholder="Search state..." className={`w-full ${!(member.state || "").trim() ? "!border-red-400" : ""}`} disabled={isReadonly} />
                             <ComboboxContent>
                               <ComboboxList>
                                 {US_STATES.map((s) => (
@@ -2335,7 +2335,7 @@ export default function ScholarshipPage() {
                             value={home.state || ""}
                             onValueChange={(v) => patchHomeLocal(home.id, { state: v as string })}
                           >
-                            <ComboboxInput placeholder="Select state" className={!(home.state || "").trim() ? "ring-1 ring-red-400" : ""} disabled={isReadonly} />
+                            <ComboboxInput placeholder="Select state" className={!(home.state || "").trim() ? "!border-red-400" : ""} disabled={isReadonly} />
                             <ComboboxContent>
                               <ComboboxList>
                                 {US_STATES.map((s) => (
