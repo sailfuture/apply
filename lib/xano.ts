@@ -77,31 +77,23 @@ export interface XanoApplication {
   registration_school_years_id: number;
   registration_parents_id: number;
   type: string;
-  liability_waiver_pandadoc_id: string | null;
-  liability_waiver_status: string | null;
-  liability_waiver_sent_at: string | null;
-  enrollment_agreement_pandadoc_id: string | null;
-  enrollment_agreement_status: string | null;
-  enrollment_agreement_sent_at: string | null;
-  liability_waiver_pdf_url: string | null;
-  enrollment_agreement_pdf_url: string | null;
-  sufs_award_id: number;
+  current_previous_school: string;
+  describe_student_opportunities_for_growth: string;
+  describe_student_strengths: string;
   sufs_type: string;
   sufs_status: string;
-  opportunity_scholarship_award_amount: number;
+  sufs_award_id: number;
   is_bus_transportation: boolean;
   bus_stop: string;
-  current_previous_school: string;
-  describe_student_strengths: string;
-  describe_student_opportunities_for_growth: string;
-  last_grade_completed: string;
-  current_grade: string;
+  test_scores: Record<string, unknown> | null;
   nwea_testing_complete: boolean;
   nwea_testing_scheduled: boolean;
-  test_scores: Record<string, unknown> | null;
+  last_grade_completed: string;
+  current_grade: string;
   isSubmitted: boolean;
   isOffered: boolean;
   isAccepted: boolean;
+  opportunity_scholarship_award_amount: number;
 }
 
 export interface XanoApplicationStatus {

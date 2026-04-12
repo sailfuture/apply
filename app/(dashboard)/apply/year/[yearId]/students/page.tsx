@@ -421,9 +421,9 @@ export default function StudentsStepPage() {
   async function handleSaveAllApps() {
     setSavingAll(true);
     try {
-      await Promise.all(
-        applications.map((app) =>
-          fetch(`/api/applications/${app.id}`, {
+      const results = await Promise.all(
+        applications.map(async (app) => {
+          const res = await fetch(`/api/applications/${app.id}`, {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -438,9 +438,17 @@ export default function StudentsStepPage() {
               describe_student_opportunities_for_growth:
                 app.describe_student_opportunities_for_growth,
             }),
-          })
-        )
+          });
+          if (!res.ok) {
+            const body = await res.json().catch(() => null);
+            console.error(`Failed to save application ${app.id}:`, res.status, body);
+          }
+          return res;
+        })
       );
+      if (results.some((r) => !r.ok)) {
+        throw new Error("Some applications failed to save");
+      }
       setSavedApplications(applications.map((a) => ({ ...a })));
       mutate("/api/applications");
     } catch (err) {
@@ -463,20 +471,23 @@ export default function StudentsStepPage() {
       toast.error("Please add at least one student before completing this section.");
       throw new Error("Validation failed");
     }
-    // Validate with current local state before saving
-    const enrolled = applications.filter((a) => a.registration_school_years_id === Number(yearId));
-    for (const app of enrolled) {
-      const student = students.find((s) => s.id === app.registration_students_id);
+    // Validate using the same function as the status icon
+    const incomplete = applications.filter((app) => !isAppComplete(app));
+    if (incomplete.length > 0) {
+      const student = students.find((s) => s.id === incomplete[0].registration_students_id);
       const name = student ? `${student.first_name} ${student.last_name}` : "Student";
-      if (!app.current_previous_school) { toast.error(`${name}: Please enter current/previous school.`); throw new Error("Validation failed"); }
-      if (!app.last_grade_completed) { toast.error(`${name}: Please select last grade completed.`); throw new Error("Validation failed"); }
-      if (!app.current_grade) { toast.error(`${name}: Please select current grade.`); throw new Error("Validation failed"); }
-      if (!app.describe_student_strengths) { toast.error(`${name}: Please describe student strengths.`); throw new Error("Validation failed"); }
-      if (!app.describe_student_opportunities_for_growth) { toast.error(`${name}: Please describe opportunities for growth.`); throw new Error("Validation failed"); }
-      if (app.is_bus_transportation && !app.bus_stop) { toast.error(`${name}: Please select a bus stop.`); throw new Error("Validation failed"); }
-      if (app.is_bus_transportation && !app.registration_parents_id) { toast.error(`${name}: Please select a parent/guardian for bus pickup.`); throw new Error("Validation failed"); }
+      toast.error(`${name}: Please fill out all required fields.`);
+      // Open the incomplete card
+      if (student) {
+        setCollapsedCards((prev) => {
+          const next = new Set(prev);
+          next.delete(student.id);
+          return next;
+        });
+      }
+      throw new Error("Validation failed");
     }
-    // Validation passed — save
+    // Save
     await handleSaveAllAppsRef.current();
     setStudentsLocked(true);
     toast.success("Students section completed.");
