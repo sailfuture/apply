@@ -25,6 +25,7 @@ export default function AgreementPage() {
     setPageTitle,
     registerSaveHandler,
     unregisterSaveHandler,
+    updateSaveOptions,
   } = useApplicationFlow();
 
   useEffect(() => {
@@ -55,6 +56,28 @@ export default function AgreementPage() {
   const isCompleted = docField.status === "completed";
   const isSent = !!docField.pandadocId;
   const loading = !appsData;
+
+  const [agreementUnlocked, setAgreementUnlocked] = useState(false);
+
+  useEffect(() => {
+    if (isCompleted && !agreementUnlocked) {
+      updateSaveOptions({
+        completed: true,
+        completedLabel: "Enrollment Agreement Signed",
+        onUnlock: () => {
+          setAgreementUnlocked(true);
+          signing.handleSign("enrollment_agreement");
+        },
+      });
+    } else {
+      updateSaveOptions({
+        label: "Please Sign Enrollment Agreement",
+        disabled: true,
+        completed: false,
+        isUnlocked: agreementUnlocked,
+      });
+    }
+  }, [isCompleted, agreementUnlocked, updateSaveOptions]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [pdfLoaded, setPdfLoaded] = useState(false);
   const autoInitRef = useRef(false);
@@ -157,9 +180,15 @@ export default function AgreementPage() {
       {/* PandaDoc Signing Modal */}
       <Dialog
         open={!!signing.signingSession && signing.signingSession.type === "enrollment_agreement"}
-        onOpenChange={() => {}}
+        onOpenChange={(open) => {
+          if (!open) {
+            signing.handleSigningClose();
+            mutateApps();
+            mutateApplications();
+          }
+        }}
       >
-        <DialogContent className="max-w-4xl h-[90vh] flex flex-col p-0 gap-0 [&>button]:hidden">
+        <DialogContent className="max-w-[95vw] sm:max-w-[95vw] w-full h-[90vh] flex flex-col p-0 gap-0">
           <DialogHeader className="px-6 py-4 border-b shrink-0">
             <DialogTitle>Sign Enrollment Agreement</DialogTitle>
             <DialogDescription>

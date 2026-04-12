@@ -379,7 +379,7 @@ export default function EnrollmentSigningPage() {
           }
         }}
       >
-        <DialogContent className="max-w-[95vw] w-full h-[90vh] flex flex-col p-0 gap-0">
+        <DialogContent className="max-w-[95vw] sm:max-w-[95vw] w-full h-[90vh] flex flex-col p-0 gap-0">
           <DialogHeader className="px-6 py-4 border-b shrink-0">
             <DialogTitle>Sign Enrollment Agreement</DialogTitle>
             <DialogDescription>

@@ -51,7 +51,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Switch } from "@/components/ui/switch";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Trash2, FileUp, X, Loader2, CheckCircle2, Plus, ExternalLink } from "lucide-react";
+import { Trash2, FileUp, X, Loader2, CheckCircle2, Plus, ExternalLink, HelpCircle } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useSWRConfig } from "swr";
 import {
   FileUpload,
@@ -317,8 +318,29 @@ export default function StudentsStepPage() {
     if (!app.describe_student_strengths) return false;
     if (!app.describe_student_opportunities_for_growth) return false;
     if (app.is_bus_transportation && (!app.registration_parents_id || !app.bus_stop)) return false;
+    if (!app.sufs_award_id) return false;
     if (!app.nwea_testing_complete && !app.test_scores) return false;
     return true;
+  }
+
+  function StudentStatusIcon({ complete }: { complete: boolean }) {
+    if (complete) {
+      return (
+        <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-green-500 text-white">
+          <svg className="size-4" viewBox="0 0 20 20" fill="currentColor">
+            <path fillRule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clipRule="evenodd" />
+          </svg>
+        </div>
+      );
+    }
+    return (
+      <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-amber-500 text-white">
+        <svg className="size-4" viewBox="0 0 20 20" fill="currentColor">
+          <path d="M5.433 13.917l1.262-3.155A4 4 0 017.58 9.42l6.92-6.918a2.121 2.121 0 013 3l-6.92 6.918c-.383.383-.84.685-1.343.886l-3.154 1.262a.5.5 0 01-.65-.65z" />
+          <path d="M3.5 5.75c0-.69.56-1.25 1.25-1.25H10A.75.75 0 0010 3H4.75A2.75 2.75 0 002 5.75v9.5A2.75 2.75 0 004.75 18h9.5A2.75 2.75 0 0017 15.25V10a.75.75 0 00-1.5 0v5.25c0 .69-.56 1.25-1.25 1.25h-9.5c-.69 0-1.25-.56-1.25-1.25v-9.5z" />
+        </svg>
+      </div>
+    );
   }
 
   function toggleCard(studentId: number) {
@@ -433,12 +455,50 @@ export default function StudentsStepPage() {
   const handleSaveAllAppsRef = useRef(handleSaveAllApps);
   handleSaveAllAppsRef.current = handleSaveAllApps;
 
+  const [studentsLocked, setStudentsLocked] = useState(false);
+
+  const handleCompleteStudentsRef = useRef<() => Promise<void>>(() => Promise.resolve());
+  handleCompleteStudentsRef.current = async () => {
+    if (applications.length === 0) {
+      toast.error("Please add at least one student before completing this section.");
+      throw new Error("Validation failed");
+    }
+    const incomplete = applications.some((app) => {
+      if (!app.current_previous_school || !app.last_grade_completed || !app.current_grade) return true;
+      if (!app.describe_student_strengths || !app.describe_student_opportunities_for_growth) return true;
+      if (app.is_bus_transportation && (!app.registration_parents_id || !app.bus_stop)) return true;
+      if (!app.sufs_award_id) return true;
+      return false;
+    });
+    if (incomplete) {
+      toast.error("Please fill out all required fields for each student.");
+      throw new Error("Validation failed");
+    }
+    await handleSaveAllAppsRef.current();
+    setStudentsLocked(true);
+    toast.success("Students section completed.");
+  };
+
   useEffect(() => {
     setPageTitle("Students & Information");
+    registerSaveHandler(() => handleCompleteStudentsRef.current(), { label: "Complete Students Section" });
     return () => {
+      unregisterSaveHandler();
       unregisterBackGuard();
     };
-  }, [setPageTitle, unregisterBackGuard]);
+  }, [setPageTitle, registerSaveHandler, unregisterSaveHandler, unregisterBackGuard]);
+
+  useEffect(() => {
+    if (studentsLocked) {
+      updateSaveOptions({
+        completed: true,
+        completedLabel: "Students Section Completed",
+        onUnlock: () => setStudentsLocked(false),
+      });
+    } else {
+      updateSaveOptions({ label: "Complete Students Section" });
+    }
+  }, [studentsLocked, updateSaveOptions]);
 
   // Auto-save on changes (debounced)
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -618,6 +678,7 @@ export default function StudentsStepPage() {
                       </CardTitle>
                     </div>
                     <div className="flex items-center gap-2">
+                      <StudentStatusIcon complete={isAppComplete(app)} />
                       <Button
                         variant="outline"
                         size="icon"
@@ -803,13 +864,36 @@ export default function StudentsStepPage() {
                     </p>
                     <div className="max-w-xs">
                       <Field>
-                        <FieldLabel className="text-xs">SUFS Award ID</FieldLabel>
+                        <FieldLabel className="text-xs">
+                          <span className="inline-flex items-center gap-1.5">
+                            SUFS Award ID <span className="text-red-400">*</span>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <button type="button" className="inline-flex text-muted-foreground/50 hover:text-muted-foreground transition-colors">
+                                  <HelpCircle className="size-3.5" />
+                                </button>
+                              </TooltipTrigger>
+                              <TooltipContent side="top" className="max-w-xs">
+                                <p className="text-xs mb-2">Your SUFS Award ID is a unique identifier assigned by Step Up for Students. You can find it in your Step Up for Students parent portal under your student&apos;s scholarship details.</p>
+                                <div className="rounded border overflow-hidden">
+                                  <Image
+                                    src="/1.webp"
+                                    alt="Example showing where to find your SUFS Award ID"
+                                    width={300}
+                                    height={200}
+                                    className="w-full h-auto"
+                                  />
+                                </div>
+                              </TooltipContent>
+                            </Tooltip>
+                          </span>
+                        </FieldLabel>
                         <Input
                           inputMode="numeric"
                           pattern="[0-9]*"
                           maxLength={6}
                           placeholder="000000"
-                          className="[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                          className={`[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${!app.sufs_award_id ? "border-red-400" : ""}`}
                           value={app.sufs_award_id || ""}
                           onChange={(e) => {
                             const raw = e.target.value.replace(/\D/g, "").slice(0, 6);

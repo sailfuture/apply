@@ -185,7 +185,8 @@ export default function NweaStepPage() {
 
   useEffect(() => {
     setPageTitle("NWEA Testing");
-  }, [setPageTitle]);
+    updateSaveOptions({ label: "Complete NWEA Section" });
+  }, [setPageTitle, updateSaveOptions]);
 
   const applicationsRef = useRef(applications);
   applicationsRef.current = applications;

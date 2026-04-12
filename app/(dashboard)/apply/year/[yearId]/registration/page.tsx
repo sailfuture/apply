@@ -226,7 +226,7 @@ function isEmergencyContactComplete(c: EmergencyContact): boolean {
 function StatusIcon({ complete }: { complete: boolean }) {
   if (complete) {
     return (
-      <div className="flex size-8 shrink-0 items-center justify-center rounded-full border-2 border-green-500 text-green-500">
+      <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-green-500 text-white">
         <svg className="size-4" viewBox="0 0 20 20" fill="currentColor">
           <path fillRule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clipRule="evenodd" />
         </svg>
@@ -234,7 +234,7 @@ function StatusIcon({ complete }: { complete: boolean }) {
     );
   }
   return (
-    <div className="flex size-8 shrink-0 items-center justify-center rounded-full border-2 border-amber-400 text-amber-400">
+    <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-amber-500 text-white">
       <svg className="size-4" viewBox="0 0 20 20" fill="currentColor">
         <path d="M5.433 13.917l1.262-3.155A4 4 0 017.58 9.42l6.92-6.918a2.121 2.121 0 013 3l-6.92 6.918c-.383.383-.84.685-1.343.886l-3.154 1.262a.5.5 0 01-.65-.65z" />
         <path d="M3.5 5.75c0-.69.56-1.25 1.25-1.25H10A.75.75 0 0010 3H4.75A2.75 2.75 0 002 5.75v9.5A2.75 2.75 0 004.75 18h9.5A2.75 2.75 0 0017 15.25V10a.75.75 0 00-1.5 0v5.25c0 .69-.56 1.25-1.25 1.25h-9.5c-.69 0-1.25-.56-1.25-1.25v-9.5z" />
@@ -455,6 +455,8 @@ export default function RegistrationPage() {
   const [openSections, setOpenSections] = useState<Set<string>>(new Set());
   const [pendingDeleteContact, setPendingDeleteContact] = useState<{ id: number; name: string } | null>(null);
   const [showValidation, setShowValidation] = useState(false);
+  const [addStudentOpen, setAddStudentOpen] = useState(false);
+  const [selectedStudentIds, setSelectedStudentIds] = useState<Set<number>>(new Set());
   const initialCollapseRef = useRef(false);
 
   // PandaDoc signing state for per-student liability waivers
@@ -714,17 +716,28 @@ export default function RegistrationPage() {
         })
       );
 
+      const existingIds = new Set<number>();
       setRegistrations((prev) => {
         const next = new Map(prev);
         enrolledStudents.forEach((s, i) => {
           const existing = next.get(s.id);
-          // Only set if we don't already have local edits
           if (!existing) {
             next.set(s.id, results[i] ?? emptyRegistration(s.id));
+          }
+          // Auto-select students that have existing registration records
+          if (results[i] && results[i]!.id) {
+            existingIds.add(s.id);
           }
         });
         return next;
       });
+      if (existingIds.size > 0) {
+        setSelectedStudentIds((prev) => {
+          const next = new Set(prev);
+          existingIds.forEach((id) => next.add(id));
+          return next;
+        });
+      }
     } catch (err) {
       console.error("Failed to fetch student registrations:", err);
     }
@@ -754,7 +767,7 @@ export default function RegistrationPage() {
     emergencyContacts.forEach((ec) => {
       if (!isEmergencyContactComplete(ec)) openIds.add(`ec-${ec.id}`);
     });
-    enrolledStudents.forEach((s) => {
+    enrolledStudents.filter((s) => selectedStudentIds.has(s.id)).forEach((s) => {
       const reg = registrations[s.id];
       if (!reg || !isRegistrationComplete(reg)) openIds.add(`student-${s.id}`);
     });
@@ -976,9 +989,9 @@ export default function RegistrationPage() {
   handleSaveAllRef.current = handleSaveAll;
 
   // Check if all registrations are complete
-  const allRegistrationsComplete = enrolledStudents.length > 0 &&
-    enrolledStudents.every((s) => {
-      const reg = registrations[s.id];
+  const allRegistrationsComplete = selectedStudentIds.size > 0 &&
+    [...selectedStudentIds].every((id) => {
+      const reg = registrations[id];
       return reg && isRegistrationComplete(reg);
     }) &&
     emergencyContacts.length > 0 &&
@@ -1049,7 +1062,8 @@ export default function RegistrationPage() {
 
   const parentCards = parents.map((p) => isParentComplete(p));
   const ecCards = emergencyContacts.map((ec) => isEmergencyContactComplete(ec));
-  const studentCards = enrolledStudents.map((s) => {
+  const selectedStudents = enrolledStudents.filter((s) => selectedStudentIds.has(s.id));
+  const studentCards = selectedStudents.map((s) => {
     const reg = registrations[s.id];
     return reg ? isRegistrationComplete(reg) : false;
   });
@@ -1510,10 +1524,30 @@ export default function RegistrationPage() {
 
         {enrolledStudents.length > 0 && (
           <div>
-            <h2 className="text-lg font-semibold mb-4">Student Registration</h2>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold">Student Registration</h2>
+              {enrolledStudents.some((s) => !selectedStudentIds.has(s.id)) && (
+                <Button variant="outline" size="sm" onClick={() => setAddStudentOpen(true)}>
+                  <Plus className="size-4 mr-1.5" />
+                  Add Student
+                </Button>
+              )}
+            </div>
+
+            {selectedStudentIds.size === 0 && (
+              <div className="rounded-lg border bg-white px-6 py-12 text-center">
+                <p className="text-muted-foreground text-sm mb-4">
+                  Select a student to begin their registration.
+                </p>
+                <Button onClick={() => setAddStudentOpen(true)}>
+                  <Plus className="size-4 mr-1.5" />
+                  Add Student to Registration
+                </Button>
+              </div>
+            )}
 
             <div className="space-y-4">
-              {enrolledStudents.map((student) => {
+              {enrolledStudents.filter((s) => selectedStudentIds.has(s.id)).map((student) => {
                 const sectionKey = `student-${student.id}`;
                 const isOpen = openSections.has(sectionKey);
                 const reg = registrations.get(student.id) ?? emptyRegistration(student.id);
@@ -2006,6 +2040,71 @@ export default function RegistrationPage() {
         </AlertDialogContent>
       </AlertDialog>
 
+      {/* Add Student to Registration Dialog */}
+      <Dialog open={addStudentOpen} onOpenChange={setAddStudentOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Add Student to Registration</DialogTitle>
+            <DialogDescription>
+              Select a student from your family to add to the registration.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="rounded-lg border divide-y">
+            {enrolledStudents
+              .filter((s) => !selectedStudentIds.has(s.id))
+              .map((student) => (
+                <div
+                  key={student.id}
+                  className="flex items-center justify-between px-4 py-3"
+                >
+                  <div className="flex items-center gap-3">
+                    <Avatar className="size-10">
+                      <AvatarFallback className="bg-muted text-muted-foreground text-sm font-medium">
+                        {getInitials(student.first_name, student.last_name)}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div>
+                      <p className="text-sm font-medium">{student.first_name} {student.last_name}</p>
+                    </div>
+                  </div>
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      setSelectedStudentIds((prev) => {
+                        const next = new Set(prev);
+                        next.add(student.id);
+                        return next;
+                      });
+                      // Initialize registration if not exists
+                      setRegistrations((prev) => {
+                        const next = new Map(prev);
+                        if (!next.has(student.id)) {
+                          next.set(student.id, emptyRegistration(student.id));
+                        }
+                        return next;
+                      });
+                      // Auto-open the new card
+                      setOpenSections((prev) => {
+                        const next = new Set(prev);
+                        next.add(`student-${student.id}`);
+                        return next;
+                      });
+                      setAddStudentOpen(false);
+                    }}
+                  >
+                    Add
+                  </Button>
+                </div>
+              ))}
+            {enrolledStudents.filter((s) => !selectedStudentIds.has(s.id)).length === 0 && (
+              <div className="px-4 py-6 text-center text-sm text-muted-foreground">
+                All students have been added to registration.
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* PandaDoc Signing Modal */}
       <Dialog
         open={!!signingSession}
@@ -2026,7 +2125,7 @@ export default function RegistrationPage() {
           }
         }}
       >
-        <DialogContent className="max-w-[95vw] w-full h-[90vh] flex flex-col p-0 gap-0">
+        <DialogContent className="max-w-[95vw] sm:max-w-[95vw] w-full h-[90vh] flex flex-col p-0 gap-0">
           <DialogHeader className="px-6 py-4 border-b shrink-0">
             <DialogTitle>
               Sign Liability Waiver

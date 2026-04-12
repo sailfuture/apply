@@ -217,11 +217,9 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
                 onClick={saveHandler && !saveOptions.disabled ? handleSave : undefined}
                 disabled={saveHandler ? (saveOptions.disabled || saveOptions.saving) : false}
               >
-                {saveOptions.isUnlocked && (
-                  <svg className="size-4 mr-1.5" viewBox="0 0 20 20" fill="currentColor">
-                    <path fillRule="evenodd" d="M14.5 1A4.5 4.5 0 0010 5.5V9H3a2 2 0 00-2 2v6a2 2 0 002 2h10a2 2 0 002-2v-6a2 2 0 00-2-2h-.5V5.5a3 3 0 116 0v2.75a.75.75 0 01-1.5 0V5.5A4.5 4.5 0 0014.5 1z" clipRule="evenodd" />
-                  </svg>
-                )}
+                <svg className="size-4 mr-1.5" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M14.5 1A4.5 4.5 0 0010 5.5V9H3a2 2 0 00-2 2v6a2 2 0 002 2h10a2 2 0 002-2v-6a2 2 0 00-2-2h-.5V5.5a3 3 0 116 0v2.75a.75.75 0 01-1.5 0V5.5A4.5 4.5 0 0014.5 1z" clipRule="evenodd" />
+                </svg>
                 {saveOptions.saving ? "Saving..." : saveOptions.label}
               </Button>
             ) : (

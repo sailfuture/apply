@@ -294,27 +294,11 @@ export function useApplicationSteps(yearId: number) {
       },
       {
         number: 4,
-        title: "Liability Waiver",
+        title: "Submit Application",
         description: "",
-        status: getStatus(liabilityComplete, liabilitySent),
-        detail: liabilityComplete
-          ? "Signed"
-          : liabilitySent
-            ? "Awaiting signature"
-            : "Not started",
-        href: `${base}/waiver`,
-      },
-      {
-        number: 5,
-        title: "Enrollment Agreement",
-        description: "",
-        status: getStatus(enrollmentComplete, enrollmentSent),
-        detail: enrollmentComplete
-          ? "Signed"
-          : enrollmentSent
-            ? "Awaiting signature"
-            : "Not started",
-        href: `${base}/agreement`,
+        status: (familyComplete && studentsComplete && scholarshipComplete) ? "in_progress" as StepStatus : "not_started" as StepStatus,
+        detail: (familyComplete && studentsComplete && scholarshipComplete) ? "Ready to submit" : "Locked",
+        href: `#`,
       },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -326,15 +310,11 @@ export function useApplicationSteps(yearId: number) {
       studentsStarted,
       scholarshipComplete,
       scholarshipStarted,
-      liabilityComplete,
-      liabilitySent,
-      enrollmentComplete,
-      enrollmentSent,
     ]
   );
 
-  const completedCount = steps.filter((s) => s.status === "complete").length;
-  const allComplete = completedCount === steps.length;
+  const completedCount = steps.filter((s) => s.status === "complete" && s.title !== "Submit Application").length;
+  const allComplete = steps.filter((s) => s.title !== "Submit Application").every((s) => s.status === "complete");
 
   // Post-acceptance registration steps
   const tuitionReviewed = paymentRecord?.tuition_reviewed === true || paymentRecord?.isFamilyAccepted === true;

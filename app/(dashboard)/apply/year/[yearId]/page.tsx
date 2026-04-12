@@ -66,7 +66,7 @@ function AcceptanceStepCircle({
 }) {
   if (status === "complete") {
     return (
-      <div className="flex size-8 shrink-0 items-center justify-center rounded-full border-2 border-green-500 text-green-500">
+      <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-green-500 text-white">
         <svg className="size-4" viewBox="0 0 20 20" fill="currentColor">
           <path fillRule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clipRule="evenodd" />
         </svg>
@@ -75,14 +75,14 @@ function AcceptanceStepCircle({
   }
   if (status === "locked" || disabled) {
     return (
-      <div className="flex size-8 shrink-0 items-center justify-center rounded-full border-2 border-muted-foreground/30 text-muted-foreground">
+      <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
         <Lock className="size-3.5" />
       </div>
     );
   }
   // Pending — show edit icon
   return (
-    <div className="flex size-8 shrink-0 items-center justify-center rounded-full border-2 border-amber-400 text-amber-400">
+    <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-amber-500 text-white">
       <svg className="size-4" viewBox="0 0 20 20" fill="currentColor">
         <path d="M5.433 13.917l1.262-3.155A4 4 0 017.58 9.42l6.92-6.918a2.121 2.121 0 013 3l-6.92 6.918c-.383.383-.84.685-1.343.886l-3.154 1.262a.5.5 0 01-.65-.65z" />
         <path d="M3.5 5.75c0-.69.56-1.25 1.25-1.25H10A.75.75 0 0010 3H4.75A2.75 2.75 0 002 5.75v9.5A2.75 2.75 0 004.75 18h9.5A2.75 2.75 0 0017 15.25V10a.75.75 0 00-1.5 0v5.25c0 .69-.56 1.25-1.25 1.25h-9.5c-.69 0-1.25-.56-1.25-1.25v-9.5z" />
@@ -149,7 +149,7 @@ function AcceptedView({ firstName, yearId, registrationSteps, allSectionsComplet
                       key={step.number}
                       className={`transition-colors cursor-pointer ${
                         isComplete
-                          ? "bg-green-50 dark:bg-green-950/20 hover:bg-green-100 dark:hover:bg-green-950/30"
+                          ? "hover:bg-muted/30"
                           : "hover:bg-muted/30"
                       }`}
                       onClick={() => router.push(step.href)}
@@ -424,17 +424,13 @@ export default function YearOverviewPage() {
           <div className="overflow-hidden rounded-lg border">
             <table className="w-full text-sm">
               <tbody className="divide-y">
-                {steps.map((step) => {
+                {steps.filter((s) => s.title !== "Submit Application").map((step) => {
                   const isComplete = step.status === "complete";
 
                   return (
                     <tr
                       key={step.number}
-                      className={`transition-colors cursor-pointer ${
-                        isComplete
-                          ? "bg-green-50 dark:bg-green-950/20 hover:bg-green-100 dark:hover:bg-green-950/30"
-                          : "hover:bg-muted/30"
-                      }`}
+                      className="transition-colors cursor-pointer hover:bg-muted/30"
                       onClick={() => router.push(step.href)}
                     >
                       <td className="px-4 py-4 w-12">

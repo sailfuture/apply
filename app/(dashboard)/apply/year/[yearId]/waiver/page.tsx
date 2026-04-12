@@ -25,6 +25,7 @@ export default function WaiverPage() {
     setPageTitle,
     registerSaveHandler,
     unregisterSaveHandler,
+    updateSaveOptions,
   } = useApplicationFlow();
 
   useEffect(() => {
@@ -55,6 +56,29 @@ export default function WaiverPage() {
   const isCompleted = docField.status === "completed";
   const isSent = !!docField.pandadocId;
   const loading = !appsData;
+
+  const [waiverUnlocked, setWaiverUnlocked] = useState(false);
+
+  useEffect(() => {
+    if (isCompleted && !waiverUnlocked) {
+      updateSaveOptions({
+        completed: true,
+        completedLabel: "Liability Waiver Signed",
+        onUnlock: () => {
+          setWaiverUnlocked(true);
+          autoInitRef.current = false;
+          signing.handleSign("liability_waiver");
+        },
+      });
+    } else {
+      updateSaveOptions({
+        label: "Please Sign Liability Waiver",
+        disabled: true,
+        completed: false,
+        isUnlocked: waiverUnlocked,
+      });
+    }
+  }, [isCompleted, waiverUnlocked, updateSaveOptions]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-initiate signing if document exists but not completed
   const [pdfLoaded, setPdfLoaded] = useState(false);
@@ -169,9 +193,15 @@ export default function WaiverPage() {
       {/* PandaDoc Signing Modal */}
       <Dialog
         open={!!signing.signingSession && signing.signingSession.type === "liability_waiver"}
-        onOpenChange={() => {}}
+        onOpenChange={(open) => {
+          if (!open) {
+            signing.handleSigningClose();
+            mutateApps();
+            mutateApplications();
+          }
+        }}
       >
-        <DialogContent className="max-w-4xl h-[90vh] flex flex-col p-0 gap-0 [&>button]:hidden">
+        <DialogContent className="max-w-[95vw] sm:max-w-[95vw] w-full h-[90vh] flex flex-col p-0 gap-0">
           <DialogHeader className="px-6 py-4 border-b shrink-0">
             <DialogTitle>Sign Liability Waiver</DialogTitle>
             <DialogDescription>

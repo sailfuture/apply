@@ -52,8 +52,14 @@ export function usePandaDocSigning(
     let cancelled = false;
 
     const init = async () => {
-      const wrapper = document.getElementById("pandadoc-signing-wrapper");
-      if (!wrapper) return;
+      // Wait for Dialog to render the wrapper div
+      let wrapper: HTMLElement | null = null;
+      for (let i = 0; i < 20; i++) {
+        wrapper = document.getElementById("pandadoc-signing-wrapper");
+        if (wrapper) break;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      if (!wrapper || cancelled) return;
 
       wrapper.innerHTML = '<div id="pandadoc-signing-embed"></div>';
 
