@@ -467,15 +467,16 @@ export default function StudentsStepPage() {
     await handleSaveAllAppsRef.current();
 
     // Re-check with current applications after save
-    const stillIncomplete = applications.some((app) => {
-      if (!app.current_previous_school || !app.last_grade_completed || !app.current_grade) return true;
-      if (!app.describe_student_strengths || !app.describe_student_opportunities_for_growth) return true;
-      if (app.is_bus_transportation && (!app.registration_parents_id || !app.bus_stop)) return true;
-      return false;
-    });
-    if (stillIncomplete) {
-      toast.error("Please fill out all required fields for each student.");
-      throw new Error("Validation failed");
+    for (const app of applications) {
+      const student = students.find((s) => s.id === app.registration_students_id);
+      const name = student ? `${student.first_name} ${student.last_name}` : "Student";
+      if (!app.current_previous_school) { toast.error(`${name}: Please enter current/previous school.`); throw new Error("Validation failed"); }
+      if (!app.last_grade_completed) { toast.error(`${name}: Please select last grade completed.`); throw new Error("Validation failed"); }
+      if (!app.current_grade) { toast.error(`${name}: Please select current grade.`); throw new Error("Validation failed"); }
+      if (!app.describe_student_strengths) { toast.error(`${name}: Please describe student strengths.`); throw new Error("Validation failed"); }
+      if (!app.describe_student_opportunities_for_growth) { toast.error(`${name}: Please describe opportunities for growth.`); throw new Error("Validation failed"); }
+      if (app.is_bus_transportation && !app.bus_stop) { toast.error(`${name}: Please select a bus stop.`); throw new Error("Validation failed"); }
+      if (app.is_bus_transportation && !app.registration_parents_id) { toast.error(`${name}: Please select a parent/guardian for bus pickup.`); throw new Error("Validation failed"); }
     }
     setStudentsLocked(true);
     toast.success("Students section completed.");
