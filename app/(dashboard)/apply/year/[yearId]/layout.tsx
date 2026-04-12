@@ -70,8 +70,12 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
       onBack();
       return;
     }
-    router.push(basePath);
-  }, [backGuard, onBack, router, basePath]);
+    if (prevStep) {
+      router.push(prevStep.href);
+    } else {
+      router.push(basePath);
+    }
+  }, [backGuard, onBack, prevStep, router, basePath]);
 
   const handleSave = useCallback(async () => {
     if (!saveHandler) return;
@@ -185,8 +189,8 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
           <div className="mx-auto w-full max-w-4xl flex items-center gap-2 px-4 py-3">
             {/* Back */}
             <button
-              onClick={isFirstStep ? undefined : (prevStep ? () => router.push(prevStep.href) : handleBack)}
-              disabled={isFirstStep}
+              onClick={isFirstStep && !onBack ? undefined : () => handleBack()}
+              disabled={isFirstStep && !onBack}
               className={`flex items-center justify-center gap-1.5 rounded-md border border-input px-3 py-2.5 text-sm font-medium transition-colors ${
                 isFirstStep
                   ? "bg-muted text-muted-foreground/40 cursor-not-allowed"
