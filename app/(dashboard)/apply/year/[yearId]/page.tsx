@@ -7,7 +7,18 @@ import { useStudents } from "@/hooks/use-api";
 import { ArrowRight, Clock, CheckCircle2, Lock } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import Image from "next/image";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { toast } from "sonner";
 import confetti from "canvas-confetti";
 
 function StepCircle({ number, status }: { number: number; status: StepStatus }) {
@@ -55,28 +66,49 @@ function AcceptanceStepCircle({
 }) {
   if (status === "complete") {
     return (
-      <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30">
-        <CheckCircle2 className="size-4 text-green-600 dark:text-green-400" />
+      <div className="flex size-8 shrink-0 items-center justify-center rounded-full border-2 border-green-500 text-green-500">
+        <svg className="size-4" viewBox="0 0 20 20" fill="currentColor">
+          <path fillRule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clipRule="evenodd" />
+        </svg>
       </div>
     );
   }
   if (status === "locked" || disabled) {
     return (
-      <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
+      <div className="flex size-8 shrink-0 items-center justify-center rounded-full border-2 border-muted-foreground/30 text-muted-foreground">
         <Lock className="size-3.5" />
       </div>
     );
   }
+  // Pending — show edit icon
   return (
-    <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary text-xs font-semibold">
-      {number}
+    <div className="flex size-8 shrink-0 items-center justify-center rounded-full border-2 border-amber-400 text-amber-400">
+      <svg className="size-4" viewBox="0 0 20 20" fill="currentColor">
+        <path d="M5.433 13.917l1.262-3.155A4 4 0 017.58 9.42l6.92-6.918a2.121 2.121 0 013 3l-6.92 6.918c-.383.383-.84.685-1.343.886l-3.154 1.262a.5.5 0 01-.65-.65z" />
+        <path d="M3.5 5.75c0-.69.56-1.25 1.25-1.25H10A.75.75 0 0010 3H4.75A2.75 2.75 0 002 5.75v9.5A2.75 2.75 0 004.75 18h9.5A2.75 2.75 0 0017 15.25V10a.75.75 0 00-1.5 0v5.25c0 .69-.56 1.25-1.25 1.25h-9.5c-.69 0-1.25-.56-1.25-1.25v-9.5z" />
+      </svg>
     </div>
   );
 }
 
 /* ── Accepted Stage View ── */
-function AcceptedView({ firstName, yearId, registrationSteps }: { firstName: string; yearId: number; registrationSteps: { number: number; title: string; description: string; status: StepStatus; href: string }[] }) {
+function AcceptedView({ firstName, yearId, registrationSteps, allSectionsComplete }: { firstName: string; yearId: number; registrationSteps: { number: number; title: string; description: string; status: StepStatus; href: string }[]; allSectionsComplete: boolean }) {
   const router = useRouter();
+  const [submitOpen, setSubmitOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+
+  async function handleSubmitRegistration() {
+    setSubmitting(true);
+    try {
+      // TODO: Call API to mark registration as submitted
+      toast.success("Registration submitted successfully!");
+      setSubmitOpen(false);
+    } catch {
+      toast.error("Failed to submit registration. Please try again.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   return (
     <div className="flex min-h-[calc(100vh-7.5rem)] items-center justify-center px-4 bg-gray-50 dark:bg-background">
@@ -84,8 +116,14 @@ function AcceptedView({ firstName, yearId, registrationSteps }: { firstName: str
         {/* Heading */}
         <div className="text-center mb-8">
           <div className="flex justify-center mb-4">
-            <div className="flex size-16 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30">
-              <CheckCircle2 className="size-8 text-green-600 dark:text-green-400" />
+            <div className="flex size-20 items-center justify-center overflow-hidden rounded-full border-4 border-primary/20 shadow-md bg-white">
+              <Image
+                src="/logo.svg"
+                alt="SailFuture Academy"
+                width={80}
+                height={80}
+                className="size-20 object-cover"
+              />
             </div>
           </div>
           <h1 className="text-2xl font-semibold">
@@ -104,7 +142,7 @@ function AcceptedView({ firstName, yearId, registrationSteps }: { firstName: str
           <div className="overflow-hidden rounded-lg border">
             <table className="w-full text-sm">
               <tbody className="divide-y">
-                {registrationSteps.map((step) => {
+                {registrationSteps.filter((s) => s.number <= 3).map((step) => {
                   const isComplete = step.status === "complete";
                   return (
                     <tr
@@ -136,10 +174,64 @@ function AcceptedView({ firstName, yearId, registrationSteps }: { firstName: str
                     </tr>
                   );
                 })}
+
+                {/* Submit Registration row */}
+                <tr
+                  className={`transition-colors ${
+                    allSectionsComplete
+                      ? "bg-blue-600 hover:bg-blue-700 cursor-pointer"
+                      : "bg-blue-600/40 cursor-not-allowed"
+                  }`}
+                  onClick={() => {
+                    if (allSectionsComplete) setSubmitOpen(true);
+                  }}
+                >
+                  <td className="px-4 py-4 w-12">
+                    <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-white/20">
+                      <ArrowRight className="size-4 text-white" />
+                    </div>
+                  </td>
+                  <td className="px-2 py-4">
+                    <p className="font-medium text-white">
+                      Submit Registration
+                      <span className="ml-1.5 text-white/70 text-xs font-normal">
+                        ({registrationSteps.filter((s) => s.number <= 3 && s.status === "complete").length}/{registrationSteps.filter((s) => s.number <= 3).length})
+                      </span>
+                    </p>
+                    {!allSectionsComplete && (
+                      <p className="text-xs text-white/60 mt-0.5">
+                        Complete all sections above to submit
+                      </p>
+                    )}
+                  </td>
+                  <td className="px-4 py-4 w-10">
+                    <div className="flex size-7 items-center justify-center rounded-md border border-white/30">
+                      <ArrowRight className="size-3.5 text-white" />
+                    </div>
+                  </td>
+                </tr>
               </tbody>
             </table>
           </div>
         </div>
+
+        {/* Submit confirmation dialog */}
+        <AlertDialog open={submitOpen} onOpenChange={setSubmitOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Submit Registration?</AlertDialogTitle>
+              <AlertDialogDescription>
+                Are you sure you&apos;re ready to submit your registration? By submitting, you confirm that all registration information is accurate and complete.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={submitting}>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={handleSubmitRegistration} disabled={submitting}>
+                {submitting ? "Submitting..." : "Yes, Submit Registration"}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
 
         {/* Contact info */}
         <p className="text-xs text-muted-foreground text-center mt-6">
@@ -172,7 +264,7 @@ export default function YearOverviewPage() {
   const { user } = useUser();
   const firstName = user?.firstName ?? "";
 
-  const { steps, registrationSteps, registrationCompletedCount, allComplete, loading, stage, schoolYear } =
+  const { steps, registrationSteps, registrationCompletedCount, allRegistrationSectionsComplete, allComplete, loading, stage, schoolYear } =
     useApplicationSteps(yearId);
   const { data: students } = useStudents();
   const yearName = schoolYear?.year_name ?? "next year";
@@ -297,7 +389,7 @@ export default function YearOverviewPage() {
 
   /* ────────── Stage 3: Accepted ────────── */
   if (stage === "accepted") {
-    return <AcceptedView firstName={firstName} yearId={yearId} registrationSteps={registrationSteps} />;
+    return <AcceptedView firstName={firstName} yearId={yearId} registrationSteps={registrationSteps} allSectionsComplete={allRegistrationSectionsComplete} />;
   }
 
   /* ────────── Stage 1: Start the Application ────────── */

@@ -352,6 +352,19 @@ export default function StudentsStepPage() {
     return () => window.removeEventListener("beforeunload", handler);
   }, [isDirty]);
 
+  // Auto-save a single application field on blur
+  async function autoSaveAppField(appId: number, field: string, value: unknown) {
+    try {
+      await fetch(`/api/applications/${appId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ [field]: value }),
+      });
+    } catch (err) {
+      console.error(`Auto-save failed for ${field}:`, err);
+    }
+  }
+
   async function handleFileUpload(appId: number, file: File) {
     setSavingAppId(appId);
     try {
@@ -408,7 +421,6 @@ export default function StudentsStepPage() {
       );
       setSavedApplications(applications.map((a) => ({ ...a })));
       mutate("/api/applications");
-      toast.success("Section saved successfully");
     } catch (err) {
       console.error("Failed to save:", err);
       toast.error("Failed to save — please try again");
@@ -423,16 +435,23 @@ export default function StudentsStepPage() {
 
   useEffect(() => {
     setPageTitle("Students & Information");
-    registerSaveHandler(() => handleSaveAllAppsRef.current(), { label: "Save" });
     return () => {
-      unregisterSaveHandler();
       unregisterBackGuard();
     };
-  }, [setPageTitle, registerSaveHandler, unregisterSaveHandler, unregisterBackGuard]);
+  }, [setPageTitle, unregisterBackGuard]);
 
+  // Auto-save on changes (debounced)
+  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    updateSaveOptions({ saving: savingAll });
-  }, [savingAll, updateSaveOptions]);
+    if (!isDirty || savingAll) return;
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    autoSaveTimerRef.current = setTimeout(() => {
+      handleSaveAllAppsRef.current();
+    }, 2000);
+    return () => {
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    };
+  }, [isDirty, savingAll]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const isDirtyRef = useRef(isDirty);
   isDirtyRef.current = isDirty;
@@ -619,7 +638,7 @@ export default function StudentsStepPage() {
                   </div>
                 </CardHeader>
                 {!collapsedCards.has(student.id) && (
-                <CardContent className="space-y-6 py-5 bg-gray-50 dark:bg-muted/50">
+                <CardContent className="space-y-6 py-5 bg-white dark:bg-background">
                   {/* Student Information */}
                   <section>
                     <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">

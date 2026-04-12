@@ -12,6 +12,10 @@ export interface SaveHandlerOptions {
   label?: string;
   disabled?: boolean;
   saving?: boolean;
+  completed?: boolean;
+  completedLabel?: string;
+  onUnlock?: () => void;
+  isUnlocked?: boolean;
 }
 
 interface ApplicationFlowContextValue {

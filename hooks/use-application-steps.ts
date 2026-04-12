@@ -337,10 +337,18 @@ export function useApplicationSteps(yearId: number) {
   const allComplete = completedCount === steps.length;
 
   // Post-acceptance registration steps
-  const tuitionReviewed = paymentRecord?.tuition_reviewed === true;
-  const postEnrollmentSigned = false; // TODO: wire to real data
-  const registrationComplete = false; // TODO: wire to real data
-  const canBeginRegistration = tuitionReviewed && postEnrollmentSigned;
+  const tuitionReviewed = paymentRecord?.tuition_reviewed === true || paymentRecord?.isFamilyAccepted === true;
+
+  // Enrollment signing: check family payment record
+  const postEnrollmentSigned = paymentRecord?.is_enrollment_agreement_signed === true || paymentRecord?.enrollment_agreement_status === "completed";
+  const postEnrollmentStarted = !!paymentRecord?.enrollment_agreement_pandadoc_id;
+
+  // Registration: in progress once the user has visited / started filling out the form
+  // For now, mark as started if tuition is reviewed (prerequisite met)
+  const registrationStarted = tuitionReviewed;
+  const registrationComplete = false; // TODO: wire to real completion check
+
+  const allRegistrationSectionsComplete = tuitionReviewed && postEnrollmentSigned && registrationComplete;
 
   const registrationSteps: StepDef[] = useMemo(
     () => [
@@ -348,31 +356,37 @@ export function useApplicationSteps(yearId: number) {
         number: 1,
         title: "Review Tuition & Scholarship Award",
         description: "Review your financial aid award and tuition details.",
-        status: getStatus(tuitionReviewed, false),
-        detail: tuitionReviewed ? "Reviewed" : "Not started",
+        status: getStatus(tuitionReviewed, true),
+        detail: tuitionReviewed ? "Reviewed" : "In progress",
         href: `${base}/tuition`,
       },
       {
         number: 2,
         title: "Sign Enrollment Agreement",
         description: "Review and sign the enrollment agreement for the upcoming year.",
-        status: getStatus(postEnrollmentSigned, false),
-        detail: postEnrollmentSigned ? "Signed" : "Not started",
+        status: getStatus(postEnrollmentSigned, true),
+        detail: postEnrollmentSigned ? "Signed" : "In progress",
         href: `${base}/enrollment-signing`,
       },
       {
         number: 3,
         title: "Begin Registration Process",
         description: "Complete the final registration steps to confirm your student\u2019s seat.",
-        status: canBeginRegistration
-          ? getStatus(registrationComplete, false)
-          : "not_started" as StepStatus,
-        detail: registrationComplete ? "Complete" : canBeginRegistration ? "Not started" : "Locked",
+        status: getStatus(registrationComplete, true),
+        detail: registrationComplete ? "Complete" : "In progress",
         href: `${base}/registration`,
+      },
+      {
+        number: 4,
+        title: "Submit Registration",
+        description: "Review and submit your completed registration.",
+        status: allRegistrationSectionsComplete ? "in_progress" as StepStatus : "not_started" as StepStatus,
+        detail: allRegistrationSectionsComplete ? "Ready to submit" : "Locked",
+        href: `#`, // No page — triggers modal from overview
       },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [base, tuitionReviewed, postEnrollmentSigned, registrationComplete, canBeginRegistration]
+    [base, tuitionReviewed, postEnrollmentSigned, registrationComplete, allRegistrationSectionsComplete]
   );
 
   const registrationCompletedCount = registrationSteps.filter((s) => s.status === "complete").length;
@@ -397,6 +411,7 @@ export function useApplicationSteps(yearId: number) {
     steps,
     registrationSteps,
     registrationCompletedCount,
+    allRegistrationSectionsComplete,
     completedCount,
     allComplete,
     loading,

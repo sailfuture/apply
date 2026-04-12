@@ -1403,7 +1403,7 @@ export default function ScholarshipPage() {
               transition={{ duration: 0.25, ease: "easeInOut" }}
               className="overflow-hidden"
             >
-          <CardContent className="space-y-6 py-5 bg-gray-50 dark:bg-muted/50">
+          <CardContent className="space-y-6 py-5 bg-white dark:bg-background">
             <section>
               <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
                 Household Size
@@ -1747,7 +1747,7 @@ export default function ScholarshipPage() {
                 transition={{ duration: 0.25, ease: "easeInOut" }}
                 className="overflow-hidden"
               >
-            <CardContent className="space-y-6 py-5 bg-gray-50 dark:bg-muted/50">
+            <CardContent className="space-y-6 py-5 bg-white dark:bg-background">
               {members.length === 0 && !addingMember ? (
                 <Empty className="border rounded-lg py-10">
                   <EmptyHeader>
@@ -2041,7 +2041,7 @@ export default function ScholarshipPage() {
               transition={{ duration: 0.25, ease: "easeInOut" }}
               className="overflow-hidden"
             >
-          <CardContent className="space-y-6 py-5 bg-gray-50 dark:bg-muted/50">
+          <CardContent className="space-y-6 py-5 bg-white dark:bg-background">
             {/* Assets */}
             <section>
               <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
@@ -2524,7 +2524,7 @@ export default function ScholarshipPage() {
               transition={{ duration: 0.25, ease: "easeInOut" }}
               className="overflow-hidden"
             >
-          <CardContent className="space-y-6 py-5 bg-gray-50 dark:bg-muted/50">
+          <CardContent className="space-y-6 py-5 bg-white dark:bg-background">
             <section>
               <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
                 Family Contribution

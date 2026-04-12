@@ -9,7 +9,11 @@ export async function GET(req: NextRequest) {
   }
 
   const user = await currentUser();
-  const familyId = (user?.publicMetadata as { familyId?: number })?.familyId;
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const familyId = user.publicMetadata.registration_families_id as number | undefined;
   if (!familyId) {
     return NextResponse.json(null);
   }
@@ -31,7 +35,11 @@ export async function POST(req: NextRequest) {
   }
 
   const user = await currentUser();
-  const familyId = (user?.publicMetadata as { familyId?: number })?.familyId;
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const familyId = user.publicMetadata.registration_families_id as number | undefined;
   if (!familyId) {
     return NextResponse.json({ error: "No family found" }, { status: 400 });
   }
@@ -39,19 +47,31 @@ export async function POST(req: NextRequest) {
   const body = await req.json();
   const yearId = body.registration_school_years_id;
 
-  if (!yearId || !body.tuition_reviewed_by) {
-    return NextResponse.json({ error: "yearId and tuition_reviewed_by required" }, { status: 400 });
+  if (!yearId) {
+    return NextResponse.json({ error: "registration_school_years_id is required" }, { status: 400 });
   }
 
   // Check if one already exists
   const existing = await xano.familyPayments.getByFamilyAndYear(familyId, yearId);
   if (existing) {
-    // Update existing
-    const updated = await xano.familyPayments.update(existing.id, {
-      tuition_reviewed: true,
-      tuition_reviewed_at: Date.now(),
-      tuition_reviewed_by: body.tuition_reviewed_by,
-    });
+    // Update existing — only update fields that are provided
+    const updateData: Record<string, unknown> = {};
+    if (body.tuition_reviewed_by) {
+      updateData.tuition_reviewed = true;
+      updateData.tuition_reviewed_at = Date.now();
+      updateData.tuition_reviewed_by = body.tuition_reviewed_by;
+    }
+    if (body.isFamilyAccepted !== undefined) updateData.isFamilyAccepted = body.isFamilyAccepted;
+    if (body.signature) updateData.signature = body.signature;
+    if (body.signature_data) updateData.signature_data = body.signature_data;
+    if (body.name) updateData.name = body.name;
+    if (body.monthly_tuition_payment !== undefined) updateData.monthly_tuition_payment = body.monthly_tuition_payment;
+    if (body.enrollment_agreement_pandadoc_id !== undefined) updateData.enrollment_agreement_pandadoc_id = body.enrollment_agreement_pandadoc_id;
+    if (body.enrollment_agreement_status !== undefined) updateData.enrollment_agreement_status = body.enrollment_agreement_status;
+    if (body.enrollment_agreement_sent_at !== undefined) updateData.enrollment_agreement_sent_at = body.enrollment_agreement_sent_at;
+    if (body.is_enrollment_agreement_signed !== undefined) updateData.is_enrollment_agreement_signed = body.is_enrollment_agreement_signed;
+
+    const updated = await xano.familyPayments.update(existing.id, updateData);
     return NextResponse.json(updated);
   }
 
@@ -59,9 +79,20 @@ export async function POST(req: NextRequest) {
   const payment = await xano.familyPayments.create({
     registration_families_id: familyId,
     registration_school_years_id: yearId,
-    tuition_reviewed: true,
-    tuition_reviewed_at: Date.now(),
-    tuition_reviewed_by: body.tuition_reviewed_by,
+    isFamilyAccepted: body.isFamilyAccepted ?? false,
+    signature: body.signature ?? {},
+    name: body.name ?? body.tuition_reviewed_by ?? "",
+    signature_data: body.signature_data ?? null,
+    registration_fee_waiver_id: null,
+    monthly_tuition_payment: body.monthly_tuition_payment ?? 0,
+    tuition_reviewed: !!body.tuition_reviewed_by,
+    tuition_reviewed_at: body.tuition_reviewed_by ? Date.now() : null,
+    tuition_reviewed_by: body.tuition_reviewed_by ?? "",
+    enrollment_agreement_pandadoc_id: body.enrollment_agreement_pandadoc_id ?? "",
+    enrollment_agreement_status: body.enrollment_agreement_status ?? "",
+    enrollment_agreement_sent_at: body.enrollment_agreement_sent_at ?? null,
+    enrollment_agreement_pdf_url: "",
+    is_enrollment_agreement_signed: body.is_enrollment_agreement_signed ?? false,
   });
 
   return NextResponse.json(payment);

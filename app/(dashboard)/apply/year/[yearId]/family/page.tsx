@@ -372,7 +372,7 @@ export default function FamilyStepPage() {
                     transition={{ duration: 0.25, ease: "easeInOut" }}
                     className="overflow-hidden"
                   >
-                <CardContent className="space-y-6 py-5 bg-gray-50 dark:bg-muted/50">
+                <CardContent className="space-y-6 py-5 bg-white dark:bg-background">
                   {/* Contact Information */}
                   <section>
                     <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">

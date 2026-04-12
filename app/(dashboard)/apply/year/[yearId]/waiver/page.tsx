@@ -117,23 +117,26 @@ export default function WaiverPage() {
             </p>
           </div>
           {isCompleted && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="shrink-0"
-              onClick={() => signing.setResetConfirm("liability_waiver")}
-            >
-              Re-Sign Document
-            </Button>
+            <div className="flex gap-2 shrink-0">
+              {pdfUrl && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => window.open(pdfUrl, "_blank")}
+                >
+                  View Document
+                </Button>
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => signing.setResetConfirm("liability_waiver")}
+              >
+                Re-Sign Document
+              </Button>
+            </div>
           )}
         </div>
-
-        {/* Signing Loading State — skeleton placeholder */}
-        {signing.signingLoading === "liability_waiver" && (
-          <div className="relative rounded-lg border overflow-hidden" style={{ height: "70vh" }}>
-            <Skeleton className="absolute inset-0 rounded-none" />
-          </div>
-        )}
 
         {/* Completed: Show PDF */}
         {isCompleted && pdfUrl && (
@@ -154,31 +157,43 @@ export default function WaiverPage() {
           </div>
         )}
 
-        {/* Signing Embed */}
-        {signing.signingSession?.type === "liability_waiver" && (
-          <>
+        {/* Loading state */}
+        {signing.signingLoading === "liability_waiver" && (
+          <div className="flex items-center justify-center py-12">
+            <Loader2 className="size-6 animate-spin text-muted-foreground" />
+            <span className="ml-2 text-sm text-muted-foreground">Preparing document...</span>
+          </div>
+        )}
+      </div>
+
+      {/* PandaDoc Signing Modal */}
+      <Dialog
+        open={!!signing.signingSession && signing.signingSession.type === "liability_waiver"}
+        onOpenChange={() => {}}
+      >
+        <DialogContent className="max-w-4xl h-[90vh] flex flex-col p-0 gap-0 [&>button]:hidden">
+          <DialogHeader className="px-6 py-4 border-b shrink-0">
+            <DialogTitle>Sign Liability Waiver</DialogTitle>
+            <DialogDescription>
+              Review and sign the liability waiver below.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex-1 relative overflow-hidden">
             <style>{`
               #pandadoc-signing-wrapper {
-                position: relative;
+                position: absolute;
+                inset: 0;
               }
               #pandadoc-signing-wrapper iframe {
-                position: absolute;
-                top: 0;
-                left: 0;
                 width: 100% !important;
                 height: 100% !important;
                 border: none;
               }
             `}</style>
-            <div
-              id="pandadoc-signing-wrapper"
-              className="rounded-lg border overflow-hidden"
-              style={{ height: "70vh" }}
-            />
-          </>
-        )}
-
-      </div>
+            <div id="pandadoc-signing-wrapper" className="absolute inset-0" />
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Reset Confirmation Dialog */}
       <Dialog

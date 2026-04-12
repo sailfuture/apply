@@ -185,15 +185,7 @@ export default function NweaStepPage() {
 
   useEffect(() => {
     setPageTitle("NWEA Testing");
-    registerSaveHandler(
-      async () => {
-        const apps = applicationsRef.current;
-        await Promise.all(apps.map((app) => handleSaveScoresRef.current(app.id)));
-      },
-      { label: "Save" }
-    );
-    return () => unregisterSaveHandler();
-  }, [setPageTitle, registerSaveHandler, unregisterSaveHandler]);
+  }, [setPageTitle]);
 
   const applicationsRef = useRef(applications);
   applicationsRef.current = applications;

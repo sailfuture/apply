@@ -4,6 +4,32 @@
 
 @custom-variant dark (&:is(.dark *));
 
+html {
+  scrollbar-gutter: stable;
+}
+
+/* Prevent layout shift when Radix UI locks scroll */
+body[data-scroll-locked] {
+  margin-right: 0 !important;
+  padding-right: 0 !important;
+}
+
+/* Ensure form inputs and file uploads have white backgrounds */
+input,
+textarea,
+select,
+[data-slot="file-upload-dropzone"] {
+  background-color: white !important;
+}
+
+/* Print styles — hide chrome, show only content */
+@media print {
+  header, footer, aside, [data-slot="sidebar"],
+  .fixed { display: none !important; }
+  main { opacity: 1 !important; padding: 0 !important; }
+  body { background: white !important; }
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);

@@ -126,13 +126,6 @@ export default function AgreementPage() {
           )}
         </div>
 
-        {/* Signing Loading State — skeleton placeholder */}
-        {signing.signingLoading === "enrollment_agreement" && (
-          <div className="relative rounded-lg border overflow-hidden" style={{ height: "70vh" }}>
-            <Skeleton className="absolute inset-0 rounded-none" />
-          </div>
-        )}
-
         {/* Completed: Show PDF */}
         {isCompleted && pdfUrl && (
           <div className="relative rounded-lg border overflow-hidden" style={{ height: "70vh" }}>
@@ -152,30 +145,43 @@ export default function AgreementPage() {
           </div>
         )}
 
-        {/* Signing Embed */}
-        {signing.signingSession?.type === "enrollment_agreement" && (
-          <>
+        {/* Loading state */}
+        {signing.signingLoading === "enrollment_agreement" && (
+          <div className="flex items-center justify-center py-12">
+            <Loader2 className="size-6 animate-spin text-muted-foreground" />
+            <span className="ml-2 text-sm text-muted-foreground">Preparing document...</span>
+          </div>
+        )}
+      </div>
+
+      {/* PandaDoc Signing Modal */}
+      <Dialog
+        open={!!signing.signingSession && signing.signingSession.type === "enrollment_agreement"}
+        onOpenChange={() => {}}
+      >
+        <DialogContent className="max-w-4xl h-[90vh] flex flex-col p-0 gap-0 [&>button]:hidden">
+          <DialogHeader className="px-6 py-4 border-b shrink-0">
+            <DialogTitle>Sign Enrollment Agreement</DialogTitle>
+            <DialogDescription>
+              Review and sign the enrollment agreement below.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex-1 relative overflow-hidden">
             <style>{`
               #pandadoc-signing-wrapper {
-                position: relative;
+                position: absolute;
+                inset: 0;
               }
               #pandadoc-signing-wrapper iframe {
-                position: absolute;
-                top: 0;
-                left: 0;
                 width: 100% !important;
                 height: 100% !important;
                 border: none;
               }
             `}</style>
-            <div
-              id="pandadoc-signing-wrapper"
-              className="rounded-lg border overflow-hidden"
-              style={{ height: "70vh" }}
-            />
-          </>
-        )}
-      </div>
+            <div id="pandadoc-signing-wrapper" className="absolute inset-0" />
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Reset Confirmation Dialog */}
       <Dialog

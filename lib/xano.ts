@@ -86,6 +86,9 @@ export interface XanoApplication {
   liability_waiver_pdf_url: string | null;
   enrollment_agreement_pdf_url: string | null;
   sufs_award_id: number;
+  sufs_status: string;
+  sufs_scholarship_type: string;
+  opportunity_scholarship_award_amount: number;
   is_bus_transportation: boolean;
   bus_stop: string;
   current_previous_school: string;
@@ -137,9 +140,20 @@ export interface XanoFamilyPayment {
   created_at: number;
   registration_families_id: number;
   registration_school_years_id: number;
+  isFamilyAccepted: boolean;
+  signature: Record<string, unknown>;
+  name: string;
+  signature_data: Record<string, unknown> | null;
+  registration_fee_waiver_id: number | null;
+  monthly_tuition_payment: number;
   tuition_reviewed: boolean;
   tuition_reviewed_at: number | null;
-  tuition_reviewed_by: string; // typed name
+  tuition_reviewed_by: string;
+  enrollment_agreement_pandadoc_id: string;
+  enrollment_agreement_status: string;
+  enrollment_agreement_sent_at: string | null;
+  enrollment_agreement_pdf_url: string;
+  is_enrollment_agreement_signed: boolean;
 }
 
 export interface XanoScholarship {
@@ -241,6 +255,61 @@ export interface XanoBusStop {
   pick_up_time: number;
   drop_off_time: number;
   address: string;
+}
+
+export interface XanoEmergencyContact {
+  id: number;
+  created_at: number;
+  registration_families_id: number;
+  first_name: string;
+  last_name: string;
+  email: string;
+  phone: string;
+  relationship: string;
+  address_line_1: string;
+  address_line_2: string;
+  city: string;
+  state: string;
+  zipcode: string;
+}
+
+export interface XanoStudentRegistration {
+  id: number;
+  created_at: number;
+  registration_students_id: number;
+  shirt_size: string;
+  pant_size: string;
+  swim_level: string;
+  birth_certificate: Record<string, unknown>;
+  school_health_form: Record<string, unknown>;
+  transcripts: Record<string, unknown>;
+  iep: Record<string, unknown>;
+  ssn_card: Record<string, unknown>;
+  immunization_forms: Record<string, unknown>;
+  passport: Record<string, unknown>;
+  immunization_form: Record<string, unknown>;
+  student_state_id: Record<string, unknown>;
+  allergies: string;
+  iep_description: string;
+  dietary_restrictions: string;
+  prescription_medications: string;
+  health_conditions: string;
+  vision_impairments: string;
+  hearing_impairments: string;
+  is_student_on_medicaid: boolean;
+  medicaid_number: number;
+  medicaid_provider: string;
+  carry_epi_pen: boolean;
+  epipen_explainer: string;
+  permission_for_acetaminophen: string;
+  additional_health_information: string;
+  interested_in_counseling_services: string;
+  other_adults_approved_for_pickup: string;
+  prohibited_adults: string;
+  liability_waiver_pandadoc_id: string;
+  liability_waiver_status: string;
+  liability_wavier_sent_at: string | null;
+  liability_waiver_pdf_url: string;
 }
 
 const pendingEnsure = new Map<string, Promise<XanoParent>>();
@@ -525,7 +594,7 @@ export const xano = {
         }
         const results: XanoStudent[] = await res.json();
         const items = Array.isArray(results) ? results : [];
-        return items.filter((s) => !s.isArchived);
+        return items.filter((s) => s.registration_families_id === familyId && !s.isArchived);
       } catch {
         const all = await this.getAll();
         return all.filter((s) => s.registration_families_id === familyId && !s.isArchived);
@@ -1001,6 +1070,87 @@ export const xano = {
 
     async update(id: number, data: Partial<Omit<XanoFamilyPayment, "id" | "created_at">>): Promise<XanoFamilyPayment> {
       const res = await fetch(`${getBaseUrl()}/registration_families_payment/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+  },
+
+  emergencyContacts: {
+    async create(data: Omit<XanoEmergencyContact, "id" | "created_at">): Promise<XanoEmergencyContact> {
+      const res = await fetch(`${getBaseUrl()}/registration_emergency_contacts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async getByFamilyId(familyId: number): Promise<XanoEmergencyContact[]> {
+      try {
+        const res = await fetch(
+          `${getBaseUrl()}/registration_emergency_contacts?registration_families_id=${familyId}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) return [];
+        const results = await res.json();
+        return Array.isArray(results) ? results.filter((c: XanoEmergencyContact) => c.registration_families_id === familyId) : [];
+      } catch {
+        return [];
+      }
+    },
+
+    async update(id: number, data: Partial<Omit<XanoEmergencyContact, "id" | "created_at">>): Promise<XanoEmergencyContact> {
+      const res = await fetch(`${getBaseUrl()}/registration_emergency_contacts/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async delete(id: number): Promise<void> {
+      const res = await fetch(`${getBaseUrl()}/registration_emergency_contacts/${id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+    },
+  },
+
+  studentRegistration: {
+    async create(data: Omit<XanoStudentRegistration, "id" | "created_at">): Promise<XanoStudentRegistration> {
+      const res = await fetch(`${getBaseUrl()}/registration_student_registration`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async getByStudentId(studentId: number): Promise<XanoStudentRegistration | null> {
+      try {
+        const res = await fetch(
+          `${getBaseUrl()}/registration_student_registration?registration_students_id=${studentId}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) return null;
+        const results = await res.json();
+        const items = Array.isArray(results) ? results : [];
+        const match = items.find((r: XanoStudentRegistration) => r.registration_students_id === studentId);
+        return match ?? null;
+      } catch {
+        return null;
+      }
+    },
+
+    async update(id: number, data: Partial<Omit<XanoStudentRegistration, "id" | "created_at">>): Promise<XanoStudentRegistration> {
+      const res = await fetch(`${getBaseUrl()}/registration_student_registration/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
