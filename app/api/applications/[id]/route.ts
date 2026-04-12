@@ -23,12 +23,21 @@ export async function GET(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const familyId = toNumber(user.publicMetadata.registration_families_id);
+  const familyId = Number(user.publicMetadata.registration_families_id);
 
   const { id } = await params;
-  const application = await xano.applications.getById(Number(id));
+  let application;
+  try {
+    application = await xano.applications.getById(Number(id));
+  } catch {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
 
-  if (!application || toNumber(application.registration_families_id) !== familyId) {
+  const appFamilyId = typeof application.registration_families_id === "object" && application.registration_families_id !== null
+    ? Number((application.registration_families_id as { id?: number }).id ?? application.registration_families_id)
+    : Number(application.registration_families_id);
+
+  if (!application || appFamilyId !== familyId) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
@@ -68,8 +77,18 @@ export async function PATCH(
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
-    // Verify ownership — compare as numbers
-    if (Number(existing.registration_families_id) !== familyId) {
+    // Verify ownership — handle both plain ID and expanded object
+    const existingFamilyId = typeof existing.registration_families_id === "object" && existing.registration_families_id !== null
+      ? Number((existing.registration_families_id as { id?: number }).id ?? existing.registration_families_id)
+      : Number(existing.registration_families_id);
+
+    if (existingFamilyId !== familyId) {
+      console.error("[PATCH /api/applications] ownership mismatch", {
+        appId: id,
+        existingFamilyId,
+        clerkFamilyId: familyId,
+        rawExisting: existing.registration_families_id,
+      });
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
