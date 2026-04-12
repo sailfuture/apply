@@ -94,14 +94,14 @@ export default function WelcomePage() {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center">
+      <div className="flex min-h-[calc(100vh-7.5rem)] items-center justify-center">
         <p className="text-muted-foreground">Loading...</p>
       </div>
     );
   }
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center px-4 py-12">
+    <div className="flex min-h-[calc(100vh-7.5rem)] flex-col items-center justify-center px-4 py-12">
       <div className="mx-auto w-full max-w-lg space-y-8">
         <div className="flex flex-col items-center text-center space-y-4">
           <div className="relative size-16 overflow-hidden rounded-full bg-muted">

@@ -55,6 +55,7 @@ export async function POST(req: NextRequest) {
     family_name,
     bus_transportation: false,
     isAccepted: false,
+    isSubmitted: false,
     registration_parents_id: [parent.id],
     registration_students_id: [],
     registration_fee_waiver_id: null,
@@ -87,7 +88,13 @@ export async function GET() {
     try {
       const family = await xano.families.getById(familyId);
       const parents = await resolveParents(family);
-      return NextResponse.json({ ...family, parents }, { status: 200 });
+      // Flatten expanded relation arrays to just IDs to reduce payload size
+      return NextResponse.json({
+        ...family,
+        registration_students_id: xano.families.getStudentIds(family),
+        registration_parents_id: xano.families.getParentIds(family),
+        parents,
+      }, { status: 200 });
     } catch {
       return NextResponse.json(null, { status: 200 });
     }
@@ -109,5 +116,34 @@ export async function GET() {
   });
 
   const parents = await resolveParents(family);
-  return NextResponse.json({ ...family, parents }, { status: 200 });
+  // Flatten expanded relation arrays to just IDs to reduce payload size
+  return NextResponse.json({
+    ...family,
+    registration_students_id: xano.families.getStudentIds(family),
+    registration_parents_id: xano.families.getParentIds(family),
+    parents,
+  }, { status: 200 });
+}
+
+export async function PATCH(req: NextRequest) {
+  const { userId } = await auth();
+  if (!userId) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const user = await currentUser();
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const familyId = user.publicMetadata.registration_families_id as
+    | number
+    | undefined;
+  if (!familyId) {
+    return NextResponse.json({ error: "No family found" }, { status: 404 });
+  }
+
+  const body = await req.json();
+  const updated = await xano.families.update(familyId, body);
+  return NextResponse.json(updated, { status: 200 });
 }

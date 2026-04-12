@@ -14,9 +14,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const familyId = user.publicMetadata.registration_families_id as
-    | number
-    | undefined;
+  const familyId = Number(user.publicMetadata.registration_families_id);
   if (!familyId) {
     return NextResponse.json({ error: "No family found" }, { status: 400 });
   }
@@ -32,7 +30,7 @@ export async function GET(req: NextRequest) {
   }
 
   const application = await xano.applications.getById(Number(applicationId));
-  if (!application || application.registration_families_id !== familyId) {
+  if (!application || Number(application.registration_families_id) !== familyId) {
     return NextResponse.json({ error: "Application not found" }, { status: 404 });
   }
 

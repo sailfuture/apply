@@ -21,11 +21,28 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(scholarship);
   }
 
-  const all = await xano.scholarship.getAll();
-  const filtered = all.filter(
-    (s) => s.registration_families_id === Number(familyId)
-  );
-  return NextResponse.json(filtered);
+  try {
+    const res = await fetch(
+      `${process.env.XANO_API_BASE_URL}/registration_opportunity_scholarship?registration_families_id=${familyId}`,
+      { cache: "no-store" }
+    );
+    if (!res.ok) {
+      // Fallback to full scan
+      const all = await xano.scholarship.getAll();
+      const filtered = all.filter(
+        (s) => s.registration_families_id === Number(familyId)
+      );
+      return NextResponse.json(filtered);
+    }
+    const results = await res.json();
+    return NextResponse.json(Array.isArray(results) ? results : []);
+  } catch {
+    const all = await xano.scholarship.getAll();
+    const filtered = all.filter(
+      (s) => s.registration_families_id === Number(familyId)
+    );
+    return NextResponse.json(filtered);
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -73,8 +90,8 @@ export async function POST(req: NextRequest) {
     debts_student_loans: 0,
     debts_personal_loans: 0,
     government_benefits: false,
-    snap_benefits: null,
-    other_benefits: null,
+    snap_benefits: [],
+    other_benefits: [],
     family_contribution_per_month: 0,
     scholarship_advocacy_letter: "",
     signature: null,

@@ -1,7 +1,6 @@
 "use client"
 
 import * as React from "react"
-import { useState, useEffect, useCallback } from "react"
 
 import { NavMain } from "@/components/nav-main"
 import { NavSecondary } from "@/components/nav-secondary"
@@ -30,6 +29,7 @@ import Image from "next/image"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
+import { useFamily, useSchoolYears, useApplications, useScholarship } from "@/hooks/use-api"
 
 const staticNavSecondary = [
   {
@@ -46,89 +46,48 @@ const staticNavSecondary = [
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const router = useRouter()
-  const [targetYearId, setTargetYearId] = useState<number | null>(null)
-  const [loaded, setLoaded] = useState(false)
 
-  const [familyComplete, setFamilyComplete] = useState(false)
-  const [studentsComplete, setStudentsComplete] = useState(false)
-  const [scholarshipComplete, setScholarshipComplete] = useState(false)
-  const [liabilityComplete, setLiabilityComplete] = useState(false)
-  const [enrollmentComplete, setEnrollmentComplete] = useState(false)
+  const { data: familyData } = useFamily()
+  const { data: yearsData } = useSchoolYears()
+  const { data: appsData } = useApplications()
 
-  const fetchSidebarData = useCallback(async () => {
-    try {
-      const [yearsRes, familyRes, studentsRes, appsRes] = await Promise.all([
-        fetch("/api/school-years"),
-        fetch("/api/families"),
-        fetch("/api/students"),
-        fetch("/api/applications"),
-      ])
+  const targetYear = React.useMemo(() => {
+    if (!yearsData) return null
+    const years = yearsData as { id: number; isNextYear: boolean; isActive: boolean }[]
+    return years.find((y) => y.isNextYear) ?? years.find((y) => y.isActive) ?? null
+  }, [yearsData])
 
-      let yId: number | null = null
-      if (yearsRes.ok) {
-        const years: { id: number; isNextYear: boolean; isActive: boolean }[] =
-          await yearsRes.json()
-        const upcoming = years.find((y) => y.isNextYear)
-        const active = years.find((y) => y.isActive)
-        const target = upcoming ?? active
-        if (target) {
-          yId = target.id
-          setTargetYearId(target.id)
-        }
-      }
+  const targetYearId = targetYear?.id ?? null
+  const familyId = familyData?.id ?? null
 
-      let fId: number | null = null
-      if (familyRes.ok) {
-        const fam = await familyRes.json()
-        fId = fam?.id ?? null
-        const parents = fam?.parents ?? []
-        setFamilyComplete(
-          parents.length > 0 &&
-          parents.some((p: { phone: string; address_line_1: string; email: string }) =>
-            p.phone && p.address_line_1 && p.email
-          )
-        )
-      }
+  const { data: scholarshipData } = useScholarship(familyId, targetYearId)
 
-      if (studentsRes.ok && appsRes.ok && yId) {
-        const allApps = await appsRes.json()
-        const yearApps = allApps.filter(
-          (a: { registration_school_years_id: number }) =>
-            a.registration_school_years_id === yId
-        )
-        setStudentsComplete(yearApps.length > 0)
+  const loaded = !!(yearsData && familyData)
 
-        if (yearApps.length > 0) {
-          const app = yearApps[0] as {
-            liability_waiver_status: string | null
-            enrollment_agreement_status: string | null
-          }
-          setLiabilityComplete(app.liability_waiver_status === "completed")
-          setEnrollmentComplete(app.enrollment_agreement_status === "completed")
-        }
-      }
+  const familyComplete = React.useMemo(() => {
+    const parents = familyData?.parents ?? []
+    return parents.length > 0 && parents.some((p: { phone: string; address_line_1: string; email: string }) =>
+      p.phone && p.address_line_1 && p.email
+    )
+  }, [familyData])
 
-      if (fId && yId) {
-        try {
-          const scholarshipRes = await fetch(`/api/scholarship?familyId=${fId}&yearId=${yId}`)
-          if (scholarshipRes.ok) {
-            const data = await scholarshipRes.json()
-            setScholarshipComplete(!!(data && data.id))
-          }
-        } catch {
-          // ignore
-        }
-      }
-    } catch {
-      // graceful fallback
-    } finally {
-      setLoaded(true)
-    }
-  }, [])
+  const yearApps = React.useMemo(() => {
+    if (!appsData || !targetYearId) return []
+    return (appsData as { registration_school_years_id: number }[]).filter(
+      (a) => a.registration_school_years_id === targetYearId
+    )
+  }, [appsData, targetYearId])
 
-  useEffect(() => {
-    fetchSidebarData()
-  }, [fetchSidebarData])
+  const studentsComplete = yearApps.length > 0
+  const scholarshipComplete = !!(scholarshipData && scholarshipData.id)
+
+  const firstApp = yearApps[0] as {
+    liability_waiver_status?: string | null
+    enrollment_agreement_status?: string | null
+  } | undefined
+
+  const liabilityComplete = firstApp?.liability_waiver_status === "completed"
+  const enrollmentComplete = firstApp?.enrollment_agreement_status === "completed"
 
   const navMain = React.useMemo(() => {
     if (!loaded || !targetYearId) return []

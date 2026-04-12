@@ -1,23 +1,19 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
+import { useSWRConfig } from "swr";
+import Image from "next/image";
+import { useUser } from "@clerk/nextjs";
+import { useApplicationFlow } from "@/contexts/application-flow-context";
 import {
   Card,
   CardHeader,
   CardTitle,
   CardContent,
 } from "@/components/ui/card";
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
-} from "@/components/ui/breadcrumb";
 import { Separator } from "@/components/ui/separator";
-import { SidebarTrigger } from "@/components/ui/sidebar";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -48,7 +44,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Trash2, FileUp, X, Loader2, CheckCircle2, Users, Home, Car } from "lucide-react";
+import { Trash2, FileUp, X, Loader2, CheckCircle2, Users, Home, Car, ArrowRight, ExternalLink } from "lucide-react";
 import {
   Empty,
   EmptyHeader,
@@ -102,7 +98,8 @@ interface Scholarship {
   government_benefits: boolean;
   family_contribution_per_month: number;
   scholarship_advocacy_letter: string;
-  snap_benefits: Record<string, unknown> | null;
+  snap_benefits: Record<string, unknown>[];
+  other_benefits: Record<string, unknown>[];
   signature: Record<string, unknown> | null;
   termination_letter: Record<string, unknown> | null;
   last_edited: number | null;
@@ -220,6 +217,7 @@ function CurrencyInput({
   onBlur,
   disabled,
   placeholder,
+  className: extraClassName,
 }: {
   id?: string;
   value: number;
@@ -227,6 +225,7 @@ function CurrencyInput({
   onBlur?: () => void;
   disabled?: boolean;
   placeholder?: string;
+  className?: string;
 }) {
   const [display, setDisplay] = useState(
     value ? formatCurrencyDisplay(value) : ""
@@ -248,7 +247,7 @@ function CurrencyInput({
       </span>
       <Input
         id={id}
-        className="pl-7"
+        className={`pl-7 ${extraClassName ?? ""}`}
         value={display}
         placeholder={placeholder ?? "0"}
         disabled={disabled}
@@ -279,7 +278,20 @@ function isDeadlinePassed(deadline: string | null): boolean {
 export default function ScholarshipPage() {
   const params = useParams();
   const router = useRouter();
+  const { mutate } = useSWRConfig();
+  const { user } = useUser();
+  const firstName = user?.firstName ?? "";
   const yearId = Number(params.yearId);
+
+  const {
+    setPageTitle,
+    registerSaveHandler,
+    unregisterSaveHandler,
+    updateSaveOptions,
+    registerOnBack,
+    unregisterOnBack,
+    setHideBottomBar,
+  } = useApplicationFlow();
 
   const [schoolYear, setSchoolYear] = useState<SchoolYear | null>(null);
   const [scholarship, setScholarship] = useState<Scholarship | null>(null);
@@ -325,7 +337,8 @@ export default function ScholarshipPage() {
   const [signatureMeta, setSignatureMeta] = useState<Record<string, unknown> | null>(null);
   const [signatureLocalUrl, setSignatureLocalUrl] = useState<string | null>(null);
   const [signatureUploading, setSignatureUploading] = useState(false);
-  const [snapBenefitsFile, setSnapBenefitsFile] = useState<Record<string, unknown> | null>(null);
+  const [snapBenefitsFiles, setSnapBenefitsFiles] = useState<Record<string, unknown>[]>([]);
+  const [otherBenefitsFiles, setOtherBenefitsFiles] = useState<Record<string, unknown>[]>([]);
   const [terminationLetter, setTerminationLetter] = useState<Record<string, unknown> | null>(null);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
   const [, setTick] = useState(0);
@@ -335,11 +348,44 @@ export default function ScholarshipPage() {
   const savingRef = useRef(false);
   const handleSaveRef = useRef<(() => Promise<void>) | undefined>(undefined);
 
+  const [showForm, setShowForm] = useState(false);
+
   const [pendingDelete, setPendingDelete] = useState<{
     type: "member" | "benefit" | "home" | "vehicle";
     id: number;
     label: string;
   } | null>(null);
+
+  const [addingMember, setAddingMember] = useState(false);
+  const [addingHome, setAddingHome] = useState(false);
+  const [addingVehicle, setAddingVehicle] = useState(false);
+  const [addingBenefit, setAddingBenefit] = useState(false);
+
+  const [openSections, setOpenSections] = useState<Set<string>>(new Set(["income", "members", "assets", "contribution"]));
+
+  function toggleSection(key: string) {
+    setOpenSections(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  const incomeComplete = householdAdults > 0 && householdChildren > 0 &&
+    (!govBenefits || benefits.every(b => b.type && b.amount_monthly > 0));
+
+  const membersComplete = noContributing || (
+    members.length > 0 &&
+    members.every(m => m.first_name && m.last_name && m.address_1 && m.city && m.state && m.zipcode && m.estimated_annual_income > 0)
+  );
+
+  const assetsComplete = (
+    (homes.length === 0 || homes.every(h => h.type && h.address_1 && h.city && h.state && h.zipcode && h.total_value > 0 && h.outstanding_debt >= 0)) &&
+    (vehicles.length === 0 || vehicles.every(v => v.type && v.car_make && v.car_model && v.car_year && v.total_value > 0 && v.remaining_debt >= 0))
+  );
+
+  const contributionComplete = familyContribution > 0 && advocacyLetter.trim().length > 0;
 
   const sigCanvasRef = useRef<SignatureCanvas>(null);
   const sigRestoredRef = useRef(false);
@@ -357,7 +403,19 @@ export default function ScholarshipPage() {
     });
   }
 
-  const isDirty = savedSnapshotRef.current !== "" && buildSnapshot() !== savedSnapshotRef.current;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const currentSnapshotMemo = useMemo(() => buildSnapshot(), [
+    householdAdults, householdChildren, noContributing,
+    businessIncome, capitalGains, childSupport, alimony, trustsIncome,
+    otherIncome, describeOtherIncome, assetsChecking, assetsSavings,
+    assetsRetirement, assetsStocks, assetsTrusts, assetsBusiness,
+    debtsCreditCards, debtsStudentLoans, debtsPersonalLoans,
+    govBenefits, familyContribution, advocacyLetter,
+    signatureMeta, terminationLetter,
+    members, homes, vehicles, benefits,
+  ]);
+
+  const isDirty = savedSnapshotRef.current !== "" && currentSnapshotMemo !== savedSnapshotRef.current;
 
   function captureSnapshot() {
     savedSnapshotRef.current = buildSnapshot();
@@ -495,8 +553,11 @@ export default function ScholarshipPage() {
         }
       }
     }
-    if (s.snap_benefits) {
-      setSnapBenefitsFile(s.snap_benefits as Record<string, unknown>);
+    if (Array.isArray(s.snap_benefits) && s.snap_benefits.length > 0) {
+      setSnapBenefitsFiles(s.snap_benefits as Record<string, unknown>[]);
+    }
+    if (Array.isArray(s.other_benefits) && s.other_benefits.length > 0) {
+      setOtherBenefitsFiles(s.other_benefits as Record<string, unknown>[]);
     }
     if (s.termination_letter) {
       setTerminationLetter(s.termination_letter as Record<string, unknown>);
@@ -550,11 +611,24 @@ export default function ScholarshipPage() {
   }, [signatureLocalUrl]);
 
   useEffect(() => {
-    if (scholarshipChoice !== "full") return;
+    if (!showForm) return;
+    sigRestoredRef.current = false;
     const timer = setTimeout(() => restoreSignatureToCanvas(), 300);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scholarshipChoice]);
+  }, [showForm]);
+
+  // When inside the scholarship form, back button returns to selection page
+  useEffect(() => {
+    if (showForm) {
+      registerOnBack(() => setShowForm(false));
+    } else {
+      unregisterOnBack();
+    }
+    return () => unregisterOnBack();
+  }, [showForm, registerOnBack, unregisterOnBack]);
+
+  // Keep all sections open — no auto-collapse on completion
 
   async function ensureScholarship(): Promise<number | null> {
     if (scholarship) return scholarship.id;
@@ -607,7 +681,8 @@ export default function ScholarshipPage() {
           government_benefits: govBenefits,
           family_contribution_per_month: familyContribution,
           scholarship_advocacy_letter: advocacyLetter,
-          snap_benefits: snapBenefitsFile,
+          snap_benefits: snapBenefitsFiles,
+          other_benefits: otherBenefitsFiles,
           signature: signatureMeta,
           termination_letter: terminationLetter,
           last_edited: Date.now(),
@@ -699,6 +774,7 @@ export default function ScholarshipPage() {
       captureSnapshot();
     } catch (err) {
       console.error("Save failed:", err);
+      throw err;
     } finally {
       setSaving(false);
       savingRef.current = false;
@@ -707,11 +783,28 @@ export default function ScholarshipPage() {
 
   handleSaveRef.current = handleSave;
 
-  const currentSnapshot = buildSnapshot();
+  useEffect(() => {
+    setPageTitle("Financial Aid");
+    registerSaveHandler(() => handleSaveRef.current?.(), {
+      label: "Save",
+      disabled: !isDirty,
+    });
+    return () => unregisterSaveHandler();
+  }, [setPageTitle, registerSaveHandler, unregisterSaveHandler]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    updateSaveOptions({ saving, disabled: !isDirty || saving });
+  }, [saving, isDirty, updateSaveOptions]);
+
+  // Hide bottom bar on the choice selection page, show it on the form
+  useEffect(() => {
+    setHideBottomBar(!showForm);
+    return () => setHideBottomBar(false);
+  }, [showForm, setHideBottomBar]);
 
   useEffect(() => {
     if (savedSnapshotRef.current === "" || savingRef.current) return;
-    if (currentSnapshot === savedSnapshotRef.current) return;
+    if (currentSnapshotMemo === savedSnapshotRef.current) return;
 
     if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
     autoSaveTimerRef.current = setTimeout(() => {
@@ -722,7 +815,7 @@ export default function ScholarshipPage() {
       if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentSnapshot]);
+  }, [currentSnapshotMemo]);
 
   function patchMemberLocal(id: number, data: Partial<ContributingMember>) {
     setMembers((prev) =>
@@ -746,69 +839,89 @@ export default function ScholarshipPage() {
 
 
   async function addMember() {
-    const sid = await ensureScholarship();
-    if (!sid) return;
-    const res = await fetch(`/api/scholarship/${sid}/contributing-members`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
-    });
-    if (res.ok) setMembers([...members, await res.json()]);
+    setAddingMember(true);
+    try {
+      const sid = await ensureScholarship();
+      if (!sid) return;
+      const res = await fetch(`/api/scholarship/${sid}/contributing-members`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      if (res.ok) setMembers([...members, await res.json()]);
+    } finally {
+      setAddingMember(false);
+    }
   }
 
-  async function deleteMember(id: number) {
-    await fetch(`/api/scholarship-items/contributing-members/${id}`, {
+  function deleteMember(id: number) {
+    setMembers((prev) => prev.filter((m) => m.id !== id));
+    fetch(`/api/scholarship-items/contributing-members/${id}`, {
       method: "DELETE",
-    });
-    setMembers(members.filter((m) => m.id !== id));
+    }).catch((err) => console.error("Failed to delete member:", err));
   }
 
   async function addHome() {
-    const sid = await ensureScholarship();
-    if (!sid) return;
-    const res = await fetch(`/api/scholarship/${sid}/homes`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
-    });
-    if (res.ok) setHomes([...homes, await res.json()]);
+    setAddingHome(true);
+    try {
+      const sid = await ensureScholarship();
+      if (!sid) return;
+      const res = await fetch(`/api/scholarship/${sid}/homes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      if (res.ok) setHomes([...homes, await res.json()]);
+    } finally {
+      setAddingHome(false);
+    }
   }
 
-  async function deleteHome(id: number) {
-    await fetch(`/api/scholarship-items/homes/${id}`, { method: "DELETE" });
-    setHomes(homes.filter((h) => h.id !== id));
+  function deleteHome(id: number) {
+    setHomes((prev) => prev.filter((h) => h.id !== id));
+    fetch(`/api/scholarship-items/homes/${id}`, { method: "DELETE" }).catch((err) => console.error("Failed to delete home:", err));
   }
 
   async function addVehicle() {
-    const sid = await ensureScholarship();
-    if (!sid) return;
-    const res = await fetch(`/api/scholarship/${sid}/vehicles`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
-    });
-    if (res.ok) setVehicles([...vehicles, await res.json()]);
+    setAddingVehicle(true);
+    try {
+      const sid = await ensureScholarship();
+      if (!sid) return;
+      const res = await fetch(`/api/scholarship/${sid}/vehicles`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      if (res.ok) setVehicles([...vehicles, await res.json()]);
+    } finally {
+      setAddingVehicle(false);
+    }
   }
 
-  async function deleteVehicle(id: number) {
-    await fetch(`/api/scholarship-items/vehicles/${id}`, { method: "DELETE" });
-    setVehicles(vehicles.filter((v) => v.id !== id));
+  function deleteVehicle(id: number) {
+    setVehicles((prev) => prev.filter((v) => v.id !== id));
+    fetch(`/api/scholarship-items/vehicles/${id}`, { method: "DELETE" }).catch((err) => console.error("Failed to delete vehicle:", err));
   }
 
   async function addBenefit() {
-    const sid = await ensureScholarship();
-    if (!sid) return;
-    const res = await fetch(`/api/scholarship/${sid}/benefits`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
-    });
-    if (res.ok) setBenefits([...benefits, await res.json()]);
+    setAddingBenefit(true);
+    try {
+      const sid = await ensureScholarship();
+      if (!sid) return;
+      const res = await fetch(`/api/scholarship/${sid}/benefits`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      if (res.ok) setBenefits([...benefits, await res.json()]);
+    } finally {
+      setAddingBenefit(false);
+    }
   }
 
-  async function deleteBenefit(id: number) {
-    await fetch(`/api/scholarship-items/benefits/${id}`, { method: "DELETE" });
-    setBenefits(benefits.filter((b) => b.id !== id));
+  function deleteBenefit(id: number) {
+    setBenefits((prev) => prev.filter((b) => b.id !== id));
+    fetch(`/api/scholarship-items/benefits/${id}`, { method: "DELETE" }).catch((err) => console.error("Failed to delete benefit:", err));
   }
 
   const deadlinePassed = isDeadlinePassed(
@@ -858,16 +971,33 @@ export default function ScholarshipPage() {
 
   if (loading) {
     return (
-      <>
-        <StepHeader yearId={String(yearId)} yearName="" />
-        <div className="flex min-h-[60vh] items-center justify-center">
-          <p className="text-muted-foreground">Loading...</p>
+      <div className="flex flex-1 flex-col items-center justify-center px-4">
+        <div className="w-full max-w-2xl py-8">
+          <div className="text-center mb-8">
+            <Skeleton className="h-7 w-80 mx-auto mb-3" />
+            <Skeleton className="h-4 w-96 max-w-full mx-auto" />
+            <Skeleton className="h-4 w-72 mx-auto mt-2" />
+          </div>
+          <div className="rounded-xl bg-background p-1.5 shadow-sm border">
+            <div className="overflow-hidden rounded-lg border">
+              <div className="divide-y">
+                {Array.from({ length: 3 }).map((_, i) => (
+                  <div key={i} className="flex items-center px-4 py-4 gap-4">
+                    <Skeleton className="size-8 shrink-0 rounded-full" />
+                    <Skeleton className="h-4 w-48 flex-1" />
+                    <Skeleton className="size-7 shrink-0 rounded-md" />
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
         </div>
-      </>
+      </div>
     );
   }
 
   const isChoiceLocked = scholarshipChoice === "none" || scholarshipChoice === "snap" || scholarshipChoice === "full";
+  const isScholarshipFormComplete = incomeComplete && membersComplete && assetsComplete && contributionComplete && !!signatureMeta;
 
   async function saveScholarshipChoice(choice: "none" | "snap" | "full") {
     const sid = await ensureScholarship();
@@ -882,10 +1012,14 @@ export default function ScholarshipPage() {
         last_edited: Date.now(),
       }),
     });
+    // Revalidate SWR caches so side nav + overview table update immediately
+    mutate(`/api/scholarship/${sid}`);
+    if (familyId) mutate(`/api/scholarship?familyId=${familyId}&yearId=${yearId}`);
   }
 
   async function resetScholarshipChoice() {
     setScholarshipChoice(null);
+    setShowForm(false);
     if (scholarship?.id) {
       await fetch(`/api/scholarship/${scholarship.id}`, {
         method: "PATCH",
@@ -897,189 +1031,201 @@ export default function ScholarshipPage() {
           last_edited: Date.now(),
         }),
       });
+      // Revalidate SWR caches
+      mutate(`/api/scholarship/${scholarship.id}`);
+      if (familyId) mutate(`/api/scholarship?familyId=${familyId}&yearId=${yearId}`);
     }
   }
 
-  if (scholarshipChoice !== "full") {
+  if (!showForm) {
     return (
-      <>
-        <StepHeader
-          yearId={String(yearId)}
-          yearName={schoolYear?.year_name ?? ""}
-        />
-        <div className="flex flex-1 flex-col gap-6 p-4 pt-0">
-          <div>
+      <div className="flex flex-col px-4 py-8 mx-auto w-full max-w-4xl">
+          <div className="w-full">
+          <div className="text-center xl:text-left mb-8">
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground mb-1">
+              SailFuture Opportunity Scholarship
+            </p>
             <h1 className="text-2xl font-semibold">
-              Welcome to the SailFuture Opportunity Scholarship Application
+              {firstName ? `${firstName}, See` : "See"} If Your Family Qualifies for Up to $14,000 in Tuition Assistance
             </h1>
-            <p className="text-muted-foreground text-sm mt-3 max-w-3xl">
+            <p className="text-muted-foreground text-sm mt-3 max-w-lg xl:mx-0 mx-auto">
               The SailFuture Academy Scholarship is designed to support students who exhibit financial need, academic promise, and a strong commitment to their education. This scholarship is awarded on a sliding scale, with the amount determined by the applicant&apos;s household income and assets.
             </p>
-            <p className="text-muted-foreground text-sm mt-3 max-w-3xl">
-              The SailFuture Scholarship Fund is made possible through generous contributions from supporters, including national grants, individual donors, corporations, and organizations dedicated to expanding educational opportunities for students in need.
-            </p>
-          </div>
-
-          <div className="grid gap-4 sm:grid-cols-1 max-w-2xl">
-            <Card
-              className={`gap-0 py-0 transition-colors ${
-                scholarshipChoice === "none"
-                  ? "border-primary ring-2 ring-primary/20"
-                  : isChoiceLocked
-                    ? "opacity-50 pointer-events-none"
-                    : "cursor-pointer hover:border-primary"
-              }`}
-              onClick={() => {
-                if (isChoiceLocked) return;
-                setNotParticipatingConfirm(true);
-              }}
-            >
-              <CardContent className="py-4 flex items-center gap-4">
-                <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-muted">
-                  <svg className="size-5 text-muted-foreground" viewBox="0 0 20 20" fill="currentColor">
-                    <path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z" />
-                  </svg>
-                </div>
-                <div className="flex-1">
-                  <p className="text-sm font-medium">Choose not to participate</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    I do not wish to apply for the SailFuture Opportunity Scholarship.
-                  </p>
-                </div>
-                {scholarshipChoice === "none" && (
-                  <svg className="size-5 shrink-0 text-primary" viewBox="0 0 20 20" fill="currentColor">
-                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clipRule="evenodd" />
-                  </svg>
-                )}
-              </CardContent>
-            </Card>
-
-            <Card
-              className={`gap-0 py-0 transition-colors ${
-                scholarshipChoice === "snap"
-                  ? "border-primary ring-2 ring-primary/20"
-                  : isChoiceLocked
-                    ? "opacity-50 pointer-events-none"
-                    : "cursor-pointer hover:border-primary"
-              }`}
-              onClick={() => {
-                if (isChoiceLocked) return;
-                setSnapModalOpen(true);
-              }}
-            >
-              <CardContent className="py-4 flex items-center gap-4">
-                <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30">
-                  <svg className="size-5 text-green-600 dark:text-green-400" viewBox="0 0 20 20" fill="currentColor">
-                    <path fillRule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clipRule="evenodd" />
-                  </svg>
-                </div>
-                <div className="flex-1">
-                  <p className="text-sm font-medium">I receive SNAP benefits</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    If you receive SNAP benefits, you pre-qualify for the SailFuture Academy Scholarship.
-                  </p>
-                </div>
-                {scholarshipChoice === "snap" && (
-                  <svg className="size-5 shrink-0 text-primary" viewBox="0 0 20 20" fill="currentColor">
-                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clipRule="evenodd" />
-                  </svg>
-                )}
-              </CardContent>
-            </Card>
-
-            <Card
-              className={`gap-0 py-0 transition-colors ${
-                isChoiceLocked
-                  ? "opacity-50 pointer-events-none"
-                  : "cursor-pointer hover:border-primary"
-              }`}
-              onClick={async () => {
-                if (isChoiceLocked) return;
-                setScholarshipChoice("full");
-                await saveScholarshipChoice("full");
-              }}
-            >
-              <CardContent className="py-4 flex items-center gap-4">
-                <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-blue-100 dark:bg-blue-900/30">
-                  <svg className="size-5 text-blue-600 dark:text-blue-400" viewBox="0 0 20 20" fill="currentColor">
-                    <path d="M5.433 13.917l1.262-3.155A4 4 0 017.58 9.42l6.92-6.918a2.121 2.121 0 013 3l-6.92 6.918c-.383.383-.84.685-1.343.886l-3.154 1.262a.5.5 0 01-.65-.65z" />
-                    <path d="M3.5 5.75c0-.69.56-1.25 1.25-1.25H10A.75.75 0 0010 3H4.75A2.75 2.75 0 002 5.75v9.5A2.75 2.75 0 004.75 18h9.5A2.75 2.75 0 0017 15.25V10a.75.75 0 00-1.5 0v5.25c0 .69-.56 1.25-1.25 1.25h-9.5c-.69 0-1.25-.56-1.25-1.25v-9.5z" />
-                  </svg>
-                </div>
-                <div className="flex-1">
-                  <p className="text-sm font-medium">
-                    {scholarship ? "Continue the SailFuture Opportunity Scholarship" : "Complete the SailFuture Opportunity Scholarship"}
-                  </p>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    {scholarship
-                      ? "Resume where you left off on your scholarship application."
-                      : "Fill out the full scholarship application with household and financial information."}
-                  </p>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-
-          {isChoiceLocked && (
-            <div className="max-w-2xl">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setResetChoiceConfirm(true)}
-              >
-                Change Selection
-              </Button>
-            </div>
-          )}
-
-          {scholarshipChoice === "none" && (
-            <div className="max-w-2xl rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-800 dark:bg-amber-950/30">
-              <p className="text-sm text-amber-800 dark:text-amber-300">
-                You have chosen not to participate in the scholarship program.
+            {isChoiceLocked && (
+              <div className="mt-4">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setResetChoiceConfirm(true)}
+                >
+                  Change Selection
+                </Button>
+              </div>
+            )}
+            <div className="mt-6">
+              <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground mb-2">
+                Nationally Recognized and Scholarships Funded By:
               </p>
+              <div className="flex items-center justify-center xl:justify-start gap-4">
+                <Image src="/logos/yass-prize.png" alt="The Yass Prize" width={36} height={36} className="size-9 rounded-full" />
+                <Image src="/logos/google.png" alt="Google" width={36} height={36} className="size-9" />
+                <Image src="/logos/linkedin.png" alt="LinkedIn" width={36} height={36} className="size-9 rounded-full" />
+                <Image src="/logos/stand-together.png" alt="Stand Together" width={36} height={36} className="size-9 rounded-full" />
+                <Image src="/logos/att.png" alt="AT&T" width={36} height={36} className="size-9 rounded-full" />
+              </div>
             </div>
-          )}
+          </div>
 
-          {scholarshipChoice === "snap" && (
-            <Card className="max-w-2xl gap-0 py-0">
-              <CardContent className="py-5 space-y-4">
-                <div>
-                  <p className="text-sm font-medium">SNAP Benefits Award Letter</p>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Upload your valid SNAP benefits award letter below.
-                  </p>
-                </div>
-                <IncomeFileUpload
-                  label="Drop SNAP award letter here or click to upload"
-                  existingFile={snapBenefitsFile as XanoFileMetadata | null}
-                  onUploaded={async (meta) => {
-                    setSnapBenefitsFile(meta);
-                    const sid = scholarship?.id ?? await ensureScholarship();
-                    if (sid) {
-                      await fetch(`/api/scholarship/${sid}`, {
-                        method: "PATCH",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ snap_benefits: meta, last_edited: Date.now() }),
-                      });
-                    }
-                  }}
-                  onRemoved={async () => {
-                    setSnapBenefitsFile(null);
-                    const sid = scholarship?.id ?? await ensureScholarship();
-                    if (sid) {
-                      await fetch(`/api/scholarship/${sid}`, {
-                        method: "PATCH",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ snap_benefits: {}, last_edited: Date.now() }),
-                      });
-                    }
-                  }}
-                />
-              </CardContent>
-            </Card>
-          )}
+          <div className="rounded-xl bg-background p-1.5 shadow-sm border">
+            <div className="overflow-hidden rounded-lg border">
+              <table className="w-full text-sm">
+                <tbody className="divide-y">
+                  {/* Choose not to participate */}
+                  <tr
+                    className={`transition-colors ${
+                      scholarshipChoice === "none"
+                        ? "bg-gray-50 dark:bg-muted/30"
+                        : scholarshipChoice === "full" || scholarshipChoice === "snap"
+                          ? "opacity-50 pointer-events-none"
+                          : "cursor-pointer hover:bg-muted/30"
+                    }`}
+                    onClick={() => {
+                      if (isChoiceLocked) return;
+                      setNotParticipatingConfirm(true);
+                    }}
+                  >
+                    <td className="px-4 py-4 w-12">
+                      <div className={`flex size-8 shrink-0 items-center justify-center rounded-full ${
+                        scholarshipChoice === "none"
+                          ? "bg-green-500 text-white"
+                          : "bg-muted text-muted-foreground"
+                      }`}>
+                        {scholarshipChoice === "none" ? (
+                          <svg className="size-4" viewBox="0 0 20 20" fill="currentColor">
+                            <path fillRule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clipRule="evenodd" />
+                          </svg>
+                        ) : (
+                          <span className="text-xs font-semibold">1</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-2 py-4">
+                      <p className="font-medium">Choose not to participate</p>
+                    </td>
+                    <td className="px-4 py-4 w-10 text-muted-foreground">
+                      <div className="flex size-7 items-center justify-center rounded-md border border-border">
+                        <ArrowRight className="size-3.5" />
+                      </div>
+                    </td>
+                  </tr>
 
-          <div className="h-20" />
+                  {/* SNAP benefits */}
+                  <tr
+                    className={`transition-colors ${
+                      scholarshipChoice === "snap"
+                        ? "bg-gray-50 dark:bg-muted/30 cursor-pointer hover:bg-gray-100 dark:hover:bg-muted/50"
+                        : scholarshipChoice === "full" || scholarshipChoice === "none"
+                          ? "opacity-50 pointer-events-none"
+                          : "cursor-pointer hover:bg-muted/30"
+                    }`}
+                    onClick={() => {
+                      if (scholarshipChoice === "snap") {
+                        setSnapModalOpen(true);
+                        return;
+                      }
+                      if (isChoiceLocked) return;
+                      setSnapModalOpen(true);
+                    }}
+                  >
+                    <td className="px-4 py-4 w-12">
+                      <div className={`flex size-8 shrink-0 items-center justify-center rounded-full ${
+                        scholarshipChoice === "snap" && snapBenefitsFiles.length > 0
+                          ? "bg-green-500 text-white"
+                          : scholarshipChoice === "snap"
+                            ? "bg-amber-500 text-white"
+                            : "bg-muted text-muted-foreground"
+                      }`}>
+                        {scholarshipChoice === "snap" && snapBenefitsFiles.length > 0 ? (
+                          <svg className="size-4" viewBox="0 0 20 20" fill="currentColor">
+                            <path fillRule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clipRule="evenodd" />
+                          </svg>
+                        ) : scholarshipChoice === "snap" ? (
+                          <svg className="size-4" viewBox="0 0 20 20" fill="currentColor">
+                            <path d="M5.433 13.917l1.262-3.155A4 4 0 017.58 9.42l6.92-6.918a2.121 2.121 0 013 3l-6.92 6.918c-.383.383-.84.685-1.343.886l-3.154 1.262a.5.5 0 01-.65-.65z" />
+                            <path d="M3.5 5.75c0-.69.56-1.25 1.25-1.25H10A.75.75 0 0010 3H4.75A2.75 2.75 0 002 5.75v9.5A2.75 2.75 0 004.75 18h9.5A2.75 2.75 0 0017 15.25V10a.75.75 0 00-1.5 0v5.25c0 .69-.56 1.25-1.25 1.25h-9.5c-.69 0-1.25-.56-1.25-1.25v-9.5z" />
+                          </svg>
+                        ) : (
+                          <span className="text-xs font-semibold">2</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-2 py-4">
+                      <p className="font-medium">I receive SNAP benefits</p>
+                    </td>
+                    <td className="px-4 py-4 w-10 text-muted-foreground">
+                      <div className="flex size-7 items-center justify-center rounded-md border border-border">
+                        <ArrowRight className="size-3.5" />
+                      </div>
+                    </td>
+                  </tr>
+
+                  {/* Continue scholarship */}
+                  <tr
+                    className={`transition-colors ${
+                      scholarshipChoice === "full"
+                        ? "bg-gray-50 dark:bg-muted/30 cursor-pointer hover:bg-gray-100 dark:hover:bg-muted/50"
+                        : scholarshipChoice === "none" || scholarshipChoice === "snap"
+                          ? "opacity-50 pointer-events-none"
+                          : "cursor-pointer hover:bg-muted/30"
+                    }`}
+                    onClick={async () => {
+                      if (scholarshipChoice === "none" || scholarshipChoice === "snap") return;
+                      if (scholarshipChoice !== "full") {
+                        setScholarshipChoice("full");
+                        await saveScholarshipChoice("full");
+                      }
+                      setShowForm(true);
+                    }}
+                  >
+                    <td className="px-4 py-4 w-12">
+                      <div className={`flex size-8 shrink-0 items-center justify-center rounded-full ${
+                        scholarshipChoice === "full" && isScholarshipFormComplete
+                          ? "bg-green-500 text-white"
+                          : scholarshipChoice === "full"
+                            ? "bg-amber-500 text-white"
+                            : "bg-muted text-muted-foreground"
+                      }`}>
+                        {scholarshipChoice === "full" && isScholarshipFormComplete ? (
+                          <svg className="size-4" viewBox="0 0 20 20" fill="currentColor">
+                            <path fillRule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clipRule="evenodd" />
+                          </svg>
+                        ) : scholarshipChoice === "full" ? (
+                          <svg className="size-4" viewBox="0 0 20 20" fill="currentColor">
+                            <path d="M5.433 13.917l1.262-3.155A4 4 0 017.58 9.42l6.92-6.918a2.121 2.121 0 013 3l-6.92 6.918c-.383.383-.84.685-1.343.886l-3.154 1.262a.5.5 0 01-.65-.65z" />
+                            <path d="M3.5 5.75c0-.69.56-1.25 1.25-1.25H10A.75.75 0 0010 3H4.75A2.75 2.75 0 002 5.75v9.5A2.75 2.75 0 004.75 18h9.5A2.75 2.75 0 0017 15.25V10a.75.75 0 00-1.5 0v5.25c0 .69-.56 1.25-1.25 1.25h-9.5c-.69 0-1.25-.56-1.25-1.25v-9.5z" />
+                          </svg>
+                        ) : (
+                          <span className="text-xs font-semibold">3</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-2 py-4">
+                      <p className="font-medium">
+                        {scholarship ? "Continue the SailFuture Opportunity Scholarship" : "Complete the SailFuture Opportunity Scholarship"}
+                      </p>
+                    </td>
+                    <td className="px-4 py-4 w-10 text-muted-foreground">
+                      <div className="flex size-7 items-center justify-center rounded-md border border-border">
+                        <ArrowRight className="size-3.5" />
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+
         </div>
 
         {/* Not Participating Warning Modal */}
@@ -1108,14 +1254,70 @@ export default function ScholarshipPage() {
 
         {/* SNAP Benefits Modal */}
         <AlertDialog open={snapModalOpen} onOpenChange={setSnapModalOpen}>
-          <AlertDialogContent>
+          <AlertDialogContent className="max-w-2xl max-h-[90vh] flex flex-col overflow-hidden">
             <AlertDialogHeader>
               <AlertDialogTitle>SNAP Benefits Pre-Qualification</AlertDialogTitle>
               <AlertDialogDescription>
-                If you receive SNAP benefits, you pre-qualify for the SailFuture Academy Scholarship. If applicable, please upload your SNAP benefits award letter below.
+                If you receive SNAP benefits, you pre-qualify for the SailFuture Academy Scholarship. Upload your Florida SNAP benefits award letter below.
               </AlertDialogDescription>
             </AlertDialogHeader>
-            <AlertDialogFooter>
+
+            <div className="flex-1 overflow-y-auto space-y-4 pr-1">
+              <div>
+                <IncomeFileUpload
+                  label="Drop SNAP award letter here or click to upload"
+                  multiple
+                  existingFiles={snapBenefitsFiles as XanoFileMetadata[]}
+                  onFilesChanged={async (files) => {
+                    setSnapBenefitsFiles(files);
+                    const sid = scholarship?.id ?? await ensureScholarship();
+                    if (sid) {
+                      await fetch(`/api/scholarship/${sid}`, {
+                        method: "PATCH",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ snap_benefits: files, last_edited: Date.now() }),
+                      });
+                      mutate(`/api/scholarship/${sid}`);
+                      if (familyId) mutate(`/api/scholarship?familyId=${familyId}&yearId=${yearId}`);
+                    }
+                  }}
+                />
+              </div>
+
+              {/* What is a SNAP Award Letter */}
+              <div className="rounded-lg border bg-muted/30 p-4 space-y-3">
+                <h4 className="text-sm font-semibold">What is a SNAP Award Letter?</h4>
+                <p className="text-sm text-muted-foreground">
+                  The SNAP (Supplemental Nutrition Assistance Program) award letter is a &quot;Notice of Case Action&quot; issued by the Florida Department of Children and Families (DCF). It confirms your household&apos;s eligibility for Food Assistance benefits and lists each eligible household member along with your benefit amount.
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  You can access your award letter by logging into your{" "}
+                  <a
+                    href="https://www.myflorida.com/accessflorida/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary underline underline-offset-2 hover:text-primary/80"
+                  >
+                    MyACCESS Florida account
+                  </a>
+                  , or by contacting your local DCF office. If you received a physical copy in the mail, you can scan or photograph it for upload.
+                </p>
+                <div className="rounded-md border overflow-hidden bg-white">
+                  <Image
+                    src="/1.webp"
+                    alt="Example Florida SNAP Benefits Award Letter - Notice of Case Action"
+                    width={600}
+                    height={776}
+                    className="w-full h-auto"
+                  />
+                  <p className="text-xs text-muted-foreground text-center py-2 bg-muted/20">
+                    Example: Florida DCF &quot;Notice of Case Action&quot; letter
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <AlertDialogFooter className="shrink-0">
               <AlertDialogCancel>Cancel</AlertDialogCancel>
               <AlertDialogAction
                 onClick={async () => {
@@ -1152,25 +1354,19 @@ export default function ScholarshipPage() {
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
-      </>
+      </div>
     );
   }
 
   return (
     <>
-      <StepHeader
-        yearId={String(yearId)}
-        yearName={schoolYear?.year_name ?? ""}
-      />
-      <div className="flex flex-1 flex-col gap-6 p-4 pt-0">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold">Scholarships</h1>
-            <p className="text-muted-foreground text-sm mt-1">
-              Complete the opportunity scholarship application for{" "}
-              {schoolYear?.year_name ?? "this year"}.
-            </p>
-          </div>
+      <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
+        <div className="text-center xl:text-left">
+          <h1 className="text-2xl font-semibold">Scholarships</h1>
+          <p className="text-muted-foreground text-sm mt-1">
+            Complete the opportunity scholarship application for{" "}
+            {schoolYear?.year_name ?? "this year"}.
+          </p>
         </div>
 
         {deadlinePassed && (
@@ -1182,13 +1378,31 @@ export default function ScholarshipPage() {
         )}
 
         {/* Annual Household Income Documentation */}
-        <Card className="overflow-hidden gap-0 py-0">
-          <CardHeader className="border-b py-3 !pb-3">
-            <CardTitle className="text-lg">Annual Household Income Documentation</CardTitle>
-            <p className="text-sm text-muted-foreground mt-1">
-              To process your application, we need to collect some information about the family of the applicant(s).
-            </p>
+        <Card className="overflow-hidden gap-0 py-0 ring-0 border">
+          <CardHeader className="border-b py-3 !pb-3 cursor-pointer select-none" onClick={() => toggleSection("income")}>
+            <div className="flex items-center justify-between gap-4">
+              <div className="min-w-0">
+                <CardTitle className="text-lg">Annual Household Income Documentation</CardTitle>
+                <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
+                  To process your application, we need to collect some information about the family of the applicant(s).
+                </p>
+              </div>
+              <div className="flex size-8 shrink-0 items-center justify-center rounded-md border border-input text-muted-foreground hover:bg-muted/50 transition-colors">
+                  <svg className={`size-4 transition-transform duration-200 ${openSections.has("income") ? "rotate-180" : ""}`} viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
+                  </svg>
+                </div>
+            </div>
           </CardHeader>
+          <AnimatePresence initial={false}>
+          {openSections.has("income") && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.25, ease: "easeInOut" }}
+              className="overflow-hidden"
+            >
           <CardContent className="space-y-6 py-5 bg-gray-50 dark:bg-muted/50">
             <section>
               <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
@@ -1197,7 +1411,7 @@ export default function ScholarshipPage() {
               <div className="grid gap-4 sm:grid-cols-3">
                 <Field>
                   <FieldLabel className="text-xs">
-                    Adults in Household
+                    Adults in Household <span className="text-red-400">*</span>
                   </FieldLabel>
                   <Input
                     type="number"
@@ -1207,11 +1421,12 @@ export default function ScholarshipPage() {
                       setHouseholdAdults(Number(e.target.value) || 0)
                     }
                     disabled={isReadonly}
+                    className={!householdAdults ? "border-red-400" : ""}
                   />
                 </Field>
                 <Field>
                   <FieldLabel className="text-xs">
-                    Children in Household
+                    Children in Household <span className="text-red-400">*</span>
                   </FieldLabel>
                   <Input
                     type="number"
@@ -1221,6 +1436,7 @@ export default function ScholarshipPage() {
                       setHouseholdChildren(Number(e.target.value) || 0)
                     }
                     disabled={isReadonly}
+                    className={!householdChildren ? "border-red-400" : ""}
                   />
                 </Field>
               </div>
@@ -1374,17 +1590,16 @@ export default function ScholarshipPage() {
                       </Button>
                     )}
                   </div>
-                  {benefits.length === 0 ? (
+                  {benefits.length === 0 && !addingBenefit ? (
                     <p className="text-muted-foreground text-sm">
                       No benefits listed.
                     </p>
                   ) : (
-                    <motion.div layout className="space-y-3">
+                    <div className="space-y-3">
                       <AnimatePresence initial={false}>
                       {benefits.map((benefit) => (
                         <motion.div
                           key={benefit.id}
-                          layout
                           initial={{ opacity: 0, y: -8 }}
                           animate={{ opacity: 1, y: 0 }}
                           exit={{ opacity: 0, y: -8, height: 0, marginBottom: 0 }}
@@ -1392,7 +1607,7 @@ export default function ScholarshipPage() {
                           className="flex items-end gap-3"
                         >
                           <Field className="flex-1">
-                            <FieldLabel className="text-xs">Type</FieldLabel>
+                            <FieldLabel className="text-xs">Type <span className="text-red-400">*</span></FieldLabel>
                             <Select
                               value={benefit.type}
                               onValueChange={(val) => {
@@ -1400,7 +1615,7 @@ export default function ScholarshipPage() {
                               }}
                               disabled={isReadonly}
                             >
-                              <SelectTrigger className="w-full">
+                              <SelectTrigger className={`w-full ${!benefit.type ? "border-red-400" : ""}`}>
                                 <SelectValue placeholder="Select type" />
                               </SelectTrigger>
                               <SelectContent>
@@ -1417,14 +1632,15 @@ export default function ScholarshipPage() {
                               </SelectContent>
                             </Select>
                           </Field>
-                          <Field className="w-40">
+                          <Field className="flex-1">
                             <FieldLabel className="text-xs">
-                              Monthly Amount
+                              Monthly Amount <span className="text-red-400">*</span>
                             </FieldLabel>
                             <CurrencyInput
                               value={benefit.amount_monthly}
                               onChange={(val) => patchBenefitLocal(benefit.id, { amount_monthly: val })}
                               disabled={isReadonly}
+                              className={!benefit.amount_monthly ? "border-red-400" : ""}
                             />
                           </Field>
                           {!isReadonly && (
@@ -1440,14 +1656,59 @@ export default function ScholarshipPage() {
                         </motion.div>
                       ))}
                       </AnimatePresence>
-                    </motion.div>
+                      {addingBenefit && (
+                        <div className="flex items-end gap-3 animate-pulse">
+                          <div className="flex-1 space-y-1.5">
+                            <Skeleton className="h-3 w-10" />
+                            <Skeleton className="h-9 w-full rounded-md" />
+                          </div>
+                          <div className="flex-1 space-y-1.5">
+                            <Skeleton className="h-3 w-20" />
+                            <Skeleton className="h-9 w-full rounded-md" />
+                          </div>
+                          <Skeleton className="size-8 rounded-md" />
+                        </div>
+                      )}
+                    </div>
                   )}
+                </div>
+
+                {/* Other Benefits Documentation */}
+                <div className="mt-6">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+                    Supporting Documentation
+                  </p>
+                  <p className="text-sm text-muted-foreground mb-3">
+                    Upload any supporting documents for your government benefits (award letters, approval notices, etc.)
+                  </p>
+                  <IncomeFileUpload
+                    label="Drop benefit documents here or click to upload"
+                    multiple
+                    disabled={isReadonly}
+                    existingFiles={otherBenefitsFiles as XanoFileMetadata[]}
+                    onFilesChanged={async (files) => {
+                      setOtherBenefitsFiles(files);
+                      const sid = scholarship?.id ?? await ensureScholarship();
+                      if (sid) {
+                        await fetch(`/api/scholarship/${sid}`, {
+                          method: "PATCH",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ other_benefits: files, last_edited: Date.now() }),
+                        });
+                        mutate(`/api/scholarship/${sid}`);
+                        if (familyId) mutate(`/api/scholarship?familyId=${familyId}&yearId=${yearId}`);
+                      }
+                    }}
+                  />
                 </div>
                 </motion.div>
               )}
               </AnimatePresence>
             </section>
           </CardContent>
+            </motion.div>
+          )}
+          </AnimatePresence>
         </Card>
 
         {/* Contributing Members */}
@@ -1461,15 +1722,33 @@ export default function ScholarshipPage() {
             transition={{ duration: 0.25, ease: "easeInOut" }}
             className="overflow-hidden"
           >
-          <Card className="overflow-hidden gap-0 py-0">
-            <CardHeader className="border-b py-3 !pb-3">
-              <CardTitle className="text-lg">Contributing Members</CardTitle>
-              <p className="text-sm text-muted-foreground mt-1">
-                Identify each person in your household who provides or is responsible for any portion of the family&apos;s income.
-              </p>
+          <Card className="overflow-hidden gap-0 py-0 ring-0 border">
+            <CardHeader className="border-b py-3 !pb-3 cursor-pointer select-none" onClick={() => toggleSection("members")}>
+              <div className="flex items-center justify-between gap-4">
+                <div className="min-w-0">
+                  <CardTitle className="text-lg">Contributing Members</CardTitle>
+                  <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
+                    Identify each person in your household who provides or is responsible for any portion of the family&apos;s income.
+                  </p>
+                </div>
+                <div className="flex size-8 shrink-0 items-center justify-center rounded-md border border-input text-muted-foreground hover:bg-muted/50 transition-colors">
+                  <svg className={`size-4 transition-transform duration-200 ${openSections.has("members") ? "rotate-180" : ""}`} viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
+                  </svg>
+                </div>
+              </div>
             </CardHeader>
+            <AnimatePresence initial={false}>
+            {openSections.has("members") && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: "auto", opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                transition={{ duration: 0.25, ease: "easeInOut" }}
+                className="overflow-hidden"
+              >
             <CardContent className="space-y-6 py-5 bg-gray-50 dark:bg-muted/50">
-              {members.length === 0 ? (
+              {members.length === 0 && !addingMember ? (
                 <Empty className="border rounded-lg py-10">
                   <EmptyHeader>
                     <EmptyMedia variant="icon">
@@ -1480,37 +1759,38 @@ export default function ScholarshipPage() {
                   </EmptyHeader>
                   {!isReadonly && (
                     <EmptyContent>
-                      <Button size="sm" onClick={addMember}>Add Member</Button>
+                      <Button size="sm" onClick={addMember} disabled={addingMember}>Add Member</Button>
                     </EmptyContent>
                   )}
                 </Empty>
               ) : (
-                <motion.div layout className="space-y-4">
+                <div className="space-y-4">
                   <AnimatePresence initial={false}>
                   {members.map((member, idx) => (
                     <motion.div
                       key={member.id}
-                      layout
                       initial={{ opacity: 0, y: -10 }}
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: -10, height: 0, marginBottom: 0 }}
                       transition={{ duration: 0.2 }}
-                      className="rounded-xl bg-card p-4 shadow-xs ring-1 ring-foreground/10"
+                      className="rounded-xl bg-card p-4 shadow-xs border"
                     >
-                      <div className="-mx-4 mb-3 flex items-center justify-between border-b border-foreground/10 px-4 pb-3">
+                      <div className="-mx-4 mb-3 flex items-center justify-between border-b px-4 pb-3">
                         <p className="text-sm font-semibold">
                           Contributing Member {idx + 1}
                         </p>
                         {!isReadonly && (
                           <div className="flex items-center gap-2">
-                            <Button
-                              variant={idx === members.length - 1 ? "default" : "outline"}
-                              size="sm"
-                              onClick={addMember}
-                              disabled={idx !== members.length - 1}
-                            >
-                              Add Another Member
-                            </Button>
+                            {idx === members.length - 1 && (
+                              <Button
+                                variant="default"
+                                size="sm"
+                                onClick={addMember}
+                                disabled={addingMember}
+                              >
+                                {addingMember ? <><Loader2 className="size-4 animate-spin mr-1.5" />Adding...</> : "Add Another Member"}
+                              </Button>
+                            )}
                             <Button
                               variant="outline"
                               size="icon"
@@ -1524,31 +1804,34 @@ export default function ScholarshipPage() {
                       </div>
                       <div className="grid gap-4 sm:grid-cols-2">
                         <Field>
-                          <FieldLabel className="text-xs">First Name</FieldLabel>
+                          <FieldLabel className="text-xs">First Name <span className="text-red-400">*</span></FieldLabel>
                           <LocalInput
                             value={member.first_name ?? ""}
                             onBlurSave={(val) => patchMemberLocal(member.id, { first_name: val })}
                             disabled={isReadonly}
+                            className={!(member.first_name ?? "").trim() ? "border-red-400" : ""}
                           />
                         </Field>
                         <Field>
-                          <FieldLabel className="text-xs">Last Name</FieldLabel>
+                          <FieldLabel className="text-xs">Last Name <span className="text-red-400">*</span></FieldLabel>
                           <LocalInput
                             value={member.last_name ?? ""}
                             onBlurSave={(val) => patchMemberLocal(member.id, { last_name: val })}
                             disabled={isReadonly}
+                            className={!(member.last_name ?? "").trim() ? "border-red-400" : ""}
                           />
                         </Field>
                       </div>
 
                       <div className="mt-4 grid gap-4 grid-cols-1 sm:grid-cols-[2fr_1fr]">
                         <Field>
-                          <FieldLabel className="text-xs">Street Address</FieldLabel>
+                          <FieldLabel className="text-xs">Street Address <span className="text-red-400">*</span></FieldLabel>
                           <LocalInput
                             value={member.address_1 || ""}
                             onBlurSave={(val) => patchMemberLocal(member.id, { address_1: val })}
                             disabled={isReadonly}
                             placeholder="123 Main Street"
+                            className={!(member.address_1 || "").trim() ? "border-red-400" : ""}
                           />
                         </Field>
                         <Field>
@@ -1563,21 +1846,22 @@ export default function ScholarshipPage() {
                       </div>
                       <div className="mt-4 grid gap-4 grid-cols-1 sm:grid-cols-[2fr_1fr_1fr]">
                         <Field>
-                          <FieldLabel className="text-xs">City</FieldLabel>
+                          <FieldLabel className="text-xs">City <span className="text-red-400">*</span></FieldLabel>
                           <LocalInput
                             value={member.city || ""}
                             onBlurSave={(val) => patchMemberLocal(member.id, { city: val })}
                             disabled={isReadonly}
                             placeholder="St. Petersburg"
+                            className={!(member.city || "").trim() ? "border-red-400" : ""}
                           />
                         </Field>
                         <Field>
-                          <FieldLabel className="text-xs">State</FieldLabel>
+                          <FieldLabel className="text-xs">State <span className="text-red-400">*</span></FieldLabel>
                           <Combobox
                             value={member.state || ""}
                             onValueChange={(v) => patchMemberLocal(member.id, { state: v as string })}
                           >
-                            <ComboboxInput placeholder="Search state..." className="w-full" disabled={isReadonly} />
+                            <ComboboxInput placeholder="Search state..." className={`w-full ${!(member.state || "").trim() ? "border-red-400" : ""}`} disabled={isReadonly} />
                             <ComboboxContent>
                               <ComboboxList>
                                 {US_STATES.map((s) => (
@@ -1591,12 +1875,13 @@ export default function ScholarshipPage() {
                           </Combobox>
                         </Field>
                         <Field>
-                          <FieldLabel className="text-xs">Zip Code</FieldLabel>
+                          <FieldLabel className="text-xs">Zip Code <span className="text-red-400">*</span></FieldLabel>
                           <LocalInput
                             value={member.zipcode || ""}
                             onBlurSave={(val) => patchMemberLocal(member.id, { zipcode: val })}
                             disabled={isReadonly}
                             placeholder="33701"
+                            className={!(member.zipcode || "").trim() ? "border-red-400" : ""}
                           />
                         </Field>
                       </div>
@@ -1605,11 +1890,12 @@ export default function ScholarshipPage() {
 
                       <div className="space-y-4">
                         <Field className="max-w-xs">
-                          <FieldLabel className="text-xs">Estimated Annual Income</FieldLabel>
+                          <FieldLabel className="text-xs">Estimated Annual Income <span className="text-red-400">*</span></FieldLabel>
                           <CurrencyInput
                             value={member.estimated_annual_income || 0}
                             onChange={(val) => patchMemberLocal(member.id, { estimated_annual_income: val })}
                             disabled={isReadonly}
+                            className={!(member.estimated_annual_income || 0) ? "border-red-400" : ""}
                           />
                         </Field>
 
@@ -1707,22 +1993,54 @@ export default function ScholarshipPage() {
                     </motion.div>
                   ))}
                   </AnimatePresence>
-                </motion.div>
+                  {addingMember && (
+                    <div className="rounded-xl bg-card p-4 shadow-xs border animate-pulse">
+                      <div className="-mx-4 mb-3 flex items-center justify-between border-b px-4 pb-3">
+                        <Skeleton className="h-4 w-40" />
+                      </div>
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        <div className="space-y-1.5"><Skeleton className="h-3 w-16" /><Skeleton className="h-9 w-full rounded-md" /></div>
+                        <div className="space-y-1.5"><Skeleton className="h-3 w-16" /><Skeleton className="h-9 w-full rounded-md" /></div>
+                      </div>
+                    </div>
+                  )}
+                </div>
               )}
             </CardContent>
+              </motion.div>
+            )}
+            </AnimatePresence>
           </Card>
           </motion.div>
         )}
         </AnimatePresence>
 
         {/* Family Household Assets */}
-        <Card className="overflow-hidden gap-0 py-0">
-          <CardHeader className="border-b py-3 !pb-3">
-            <CardTitle className="text-lg">Family Household Assets</CardTitle>
-            <p className="text-sm text-muted-foreground mt-1">
-              In this section, briefly outline all financial resources available to your household. These may include cash in checking or savings accounts, investments (stocks, bonds, mutual funds), retirement accounts, real estate holdings, and any other items of substantial value. Indicate approximate market values and note whether the assets are liquid (easily converted to cash). This clarity helps the scholarship committee accurately gauge your overall financial picture.
-            </p>
+        <Card className="overflow-hidden gap-0 py-0 ring-0 border">
+          <CardHeader className="border-b py-3 !pb-3 cursor-pointer select-none" onClick={() => toggleSection("assets")}>
+            <div className="flex items-center justify-between gap-4">
+              <div className="min-w-0">
+                <CardTitle className="text-lg">Family Household Assets</CardTitle>
+                <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
+                  Briefly outline all financial resources available to your household, including checking/savings accounts, investments, retirement accounts, and real estate holdings.
+                </p>
+              </div>
+              <div className="flex size-8 shrink-0 items-center justify-center rounded-md border border-input text-muted-foreground hover:bg-muted/50 transition-colors">
+                  <svg className={`size-4 transition-transform duration-200 ${openSections.has("assets") ? "rotate-180" : ""}`} viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
+                  </svg>
+                </div>
+            </div>
           </CardHeader>
+          <AnimatePresence initial={false}>
+          {openSections.has("assets") && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.25, ease: "easeInOut" }}
+              className="overflow-hidden"
+            >
           <CardContent className="space-y-6 py-5 bg-gray-50 dark:bg-muted/50">
             {/* Assets */}
             <section>
@@ -1835,7 +2153,7 @@ export default function ScholarshipPage() {
                   Home / Real Estate
                 </h3>
               </div>
-              {homes.length === 0 ? (
+              {homes.length === 0 && !addingHome ? (
                 <Empty className="border rounded-lg py-10">
                   <EmptyHeader>
                     <EmptyMedia variant="icon">
@@ -1846,37 +2164,38 @@ export default function ScholarshipPage() {
                   </EmptyHeader>
                   {!isReadonly && (
                     <EmptyContent>
-                      <Button size="sm" onClick={addHome}>Add Property</Button>
+                      <Button size="sm" onClick={addHome} disabled={addingHome}>Add Property</Button>
                     </EmptyContent>
                   )}
                 </Empty>
               ) : (
-                <motion.div layout className="space-y-4">
+                <div className="space-y-4">
                   <AnimatePresence initial={false}>
                   {homes.map((home, idx) => (
                     <motion.div
                       key={home.id}
-                      layout
                       initial={{ opacity: 0, y: -10 }}
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: -10, height: 0, marginBottom: 0 }}
                       transition={{ duration: 0.2 }}
-                      className="rounded-xl bg-card p-4 shadow-xs ring-1 ring-foreground/10"
+                      className="rounded-xl bg-card p-4 shadow-xs border"
                     >
-                      <div className="-mx-4 mb-3 flex items-center justify-between border-b border-foreground/10 px-4 pb-3">
+                      <div className="-mx-4 mb-3 flex items-center justify-between border-b px-4 pb-3">
                         <p className="text-sm font-semibold">
                           Property {idx + 1}
                         </p>
                         {!isReadonly && (
                           <div className="flex items-center gap-2">
-                            <Button
-                              variant={idx === homes.length - 1 ? "default" : "outline"}
-                              size="sm"
-                              onClick={addHome}
-                              disabled={idx !== homes.length - 1}
-                            >
-                              Add Another Property
-                            </Button>
+                            {idx === homes.length - 1 && (
+                              <Button
+                                variant="default"
+                                size="sm"
+                                onClick={addHome}
+                                disabled={addingHome}
+                              >
+                                {addingHome ? <><Loader2 className="size-4 animate-spin mr-1.5" />Adding...</> : "Add Another Property"}
+                              </Button>
+                            )}
                             <Button
                               variant="outline"
                               size="icon"
@@ -1890,7 +2209,7 @@ export default function ScholarshipPage() {
                       </div>
                       <div className="grid gap-4 sm:grid-cols-2">
                         <Field>
-                          <FieldLabel className="text-xs">Type</FieldLabel>
+                          <FieldLabel className="text-xs">Type <span className="text-red-400">*</span></FieldLabel>
                           <Select
                             value={home.type ?? ""}
                             onValueChange={(val) => {
@@ -1898,7 +2217,7 @@ export default function ScholarshipPage() {
                             }}
                             disabled={isReadonly}
                           >
-                            <SelectTrigger className="w-full">
+                            <SelectTrigger className={`w-full ${!(home.type ?? "").trim() ? "border-red-400" : ""}`}>
                               <SelectValue placeholder="Select type" />
                             </SelectTrigger>
                             <SelectContent>
@@ -1919,12 +2238,13 @@ export default function ScholarshipPage() {
                       </div>
                       <div className="mt-4 grid gap-4 grid-cols-1 sm:grid-cols-[2fr_1fr]">
                         <Field>
-                          <FieldLabel className="text-xs">Street Address</FieldLabel>
+                          <FieldLabel className="text-xs">Street Address <span className="text-red-400">*</span></FieldLabel>
                           <LocalInput
                             value={home.address_1 || ""}
                             onBlurSave={(val) => patchHomeLocal(home.id, { address_1: val })}
                             disabled={isReadonly}
                             placeholder="123 Main Street"
+                            className={!(home.address_1 || "").trim() ? "border-red-400" : ""}
                           />
                         </Field>
                         <Field>
@@ -1939,21 +2259,22 @@ export default function ScholarshipPage() {
                       </div>
                       <div className="mt-4 grid gap-4 grid-cols-1 sm:grid-cols-[2fr_1fr_1fr]">
                         <Field>
-                          <FieldLabel className="text-xs">City</FieldLabel>
+                          <FieldLabel className="text-xs">City <span className="text-red-400">*</span></FieldLabel>
                           <LocalInput
                             value={home.city || ""}
                             onBlurSave={(val) => patchHomeLocal(home.id, { city: val })}
                             disabled={isReadonly}
                             placeholder="St. Petersburg"
+                            className={!(home.city || "").trim() ? "border-red-400" : ""}
                           />
                         </Field>
                         <Field>
-                          <FieldLabel className="text-xs">State</FieldLabel>
+                          <FieldLabel className="text-xs">State <span className="text-red-400">*</span></FieldLabel>
                           <Combobox
                             value={home.state || ""}
                             onValueChange={(v) => patchHomeLocal(home.id, { state: v as string })}
                           >
-                            <ComboboxInput placeholder="Select state" disabled={isReadonly} />
+                            <ComboboxInput placeholder="Select state" className={!(home.state || "").trim() ? "border-red-400" : ""} disabled={isReadonly} />
                             <ComboboxContent>
                               <ComboboxList>
                                 {US_STATES.map((s) => (
@@ -1965,23 +2286,25 @@ export default function ScholarshipPage() {
                           </Combobox>
                         </Field>
                         <Field>
-                          <FieldLabel className="text-xs">ZIP Code</FieldLabel>
+                          <FieldLabel className="text-xs">ZIP Code <span className="text-red-400">*</span></FieldLabel>
                           <LocalInput
                             value={home.zipcode || ""}
                             onBlurSave={(val) => patchHomeLocal(home.id, { zipcode: val })}
                             disabled={isReadonly}
+                            className={!(home.zipcode || "").trim() ? "border-red-400" : ""}
                           />
                         </Field>
                       </div>
                       <div className="mt-4 grid gap-4 sm:grid-cols-2">
                         <Field>
                           <FieldLabel className="text-xs">
-                            Total Value
+                            Total Value <span className="text-red-400">*</span>
                           </FieldLabel>
                           <CurrencyInput
                             value={home.total_value ?? 0}
                             onChange={(val) => patchHomeLocal(home.id, { total_value: val })}
                             disabled={isReadonly}
+                            className={!(home.total_value ?? 0) ? "border-red-400" : ""}
                           />
                         </Field>
                         <Field>
@@ -1998,7 +2321,17 @@ export default function ScholarshipPage() {
                     </motion.div>
                   ))}
                   </AnimatePresence>
-                </motion.div>
+                  {addingHome && (
+                    <div className="rounded-xl bg-card p-4 shadow-xs border animate-pulse">
+                      <div className="-mx-4 mb-3 flex items-center justify-between border-b px-4 pb-3">
+                        <Skeleton className="h-4 w-24" />
+                      </div>
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        <div className="space-y-1.5"><Skeleton className="h-3 w-12" /><Skeleton className="h-9 w-full rounded-md" /></div>
+                      </div>
+                    </div>
+                  )}
+                </div>
               )}
             </section>
 
@@ -2011,7 +2344,7 @@ export default function ScholarshipPage() {
                   Vehicles
                 </h3>
               </div>
-              {vehicles.length === 0 ? (
+              {vehicles.length === 0 && !addingVehicle ? (
                 <Empty className="border rounded-lg py-10">
                   <EmptyHeader>
                     <EmptyMedia variant="icon">
@@ -2022,37 +2355,38 @@ export default function ScholarshipPage() {
                   </EmptyHeader>
                   {!isReadonly && (
                     <EmptyContent>
-                      <Button size="sm" onClick={addVehicle}>Add Vehicle</Button>
+                      <Button size="sm" onClick={addVehicle} disabled={addingVehicle}>Add Vehicle</Button>
                     </EmptyContent>
                   )}
                 </Empty>
               ) : (
-                <motion.div layout className="space-y-4">
+                <div className="space-y-4">
                   <AnimatePresence initial={false}>
                   {vehicles.map((vehicle, idx) => (
                     <motion.div
                       key={vehicle.id}
-                      layout
                       initial={{ opacity: 0, y: -10 }}
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: -10, height: 0, marginBottom: 0 }}
                       transition={{ duration: 0.2 }}
-                      className="rounded-xl bg-card p-4 shadow-xs ring-1 ring-foreground/10"
+                      className="rounded-xl bg-card p-4 shadow-xs border"
                     >
-                      <div className="-mx-4 mb-3 flex items-center justify-between border-b border-foreground/10 px-4 pb-3">
+                      <div className="-mx-4 mb-3 flex items-center justify-between border-b px-4 pb-3">
                         <p className="text-sm font-semibold">
                           Vehicle {idx + 1}
                         </p>
                         {!isReadonly && (
                           <div className="flex items-center gap-2">
-                            <Button
-                              variant={idx === vehicles.length - 1 ? "default" : "outline"}
-                              size="sm"
-                              onClick={addVehicle}
-                              disabled={idx !== vehicles.length - 1}
-                            >
-                              Add Another Vehicle
-                            </Button>
+                            {idx === vehicles.length - 1 && (
+                              <Button
+                                variant="default"
+                                size="sm"
+                                onClick={addVehicle}
+                                disabled={addingVehicle}
+                              >
+                                {addingVehicle ? <><Loader2 className="size-4 animate-spin mr-1.5" />Adding...</> : "Add Another Vehicle"}
+                              </Button>
+                            )}
                             <Button
                               variant="outline"
                               size="icon"
@@ -2066,7 +2400,7 @@ export default function ScholarshipPage() {
                       </div>
                       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                         <Field>
-                          <FieldLabel className="text-xs">Type</FieldLabel>
+                          <FieldLabel className="text-xs">Type <span className="text-red-400">*</span></FieldLabel>
                           <Select
                             value={vehicle.type ?? ""}
                             onValueChange={(val) => {
@@ -2074,7 +2408,7 @@ export default function ScholarshipPage() {
                             }}
                             disabled={isReadonly}
                           >
-                            <SelectTrigger className="w-full">
+                            <SelectTrigger className={`w-full ${!(vehicle.type ?? "").trim() ? "border-red-400" : ""}`}>
                               <SelectValue placeholder="Select type" />
                             </SelectTrigger>
                             <SelectContent>
@@ -2090,40 +2424,44 @@ export default function ScholarshipPage() {
                           </Select>
                         </Field>
                         <Field>
-                          <FieldLabel className="text-xs">Year</FieldLabel>
+                          <FieldLabel className="text-xs">Year <span className="text-red-400">*</span></FieldLabel>
                           <LocalInput
                             value={vehicle.car_year ?? ""}
                             onBlurSave={(val) => patchVehicleLocal(vehicle.id, { car_year: val })}
                             disabled={isReadonly}
                             placeholder="e.g. 2020"
+                            className={!(vehicle.car_year ?? "").trim() ? "border-red-400" : ""}
                           />
                         </Field>
                         <Field>
-                          <FieldLabel className="text-xs">Make</FieldLabel>
+                          <FieldLabel className="text-xs">Make <span className="text-red-400">*</span></FieldLabel>
                           <LocalInput
                             value={vehicle.car_make ?? ""}
                             onBlurSave={(val) => patchVehicleLocal(vehicle.id, { car_make: val })}
                             disabled={isReadonly}
                             placeholder="e.g. Toyota"
+                            className={!(vehicle.car_make ?? "").trim() ? "border-red-400" : ""}
                           />
                         </Field>
                         <Field>
-                          <FieldLabel className="text-xs">Model</FieldLabel>
+                          <FieldLabel className="text-xs">Model <span className="text-red-400">*</span></FieldLabel>
                           <LocalInput
                             value={vehicle.car_model ?? ""}
                             onBlurSave={(val) => patchVehicleLocal(vehicle.id, { car_model: val })}
                             disabled={isReadonly}
                             placeholder="e.g. Camry"
+                            className={!(vehicle.car_model ?? "").trim() ? "border-red-400" : ""}
                           />
                         </Field>
                         <Field>
                           <FieldLabel className="text-xs">
-                            Total Value
+                            Total Value <span className="text-red-400">*</span>
                           </FieldLabel>
                           <CurrencyInput
                             value={vehicle.total_value ?? 0}
                             onChange={(val) => patchVehicleLocal(vehicle.id, { total_value: val })}
                             disabled={isReadonly}
+                            className={!(vehicle.total_value ?? 0) ? "border-red-400" : ""}
                           />
                         </Field>
                         <Field>
@@ -2140,19 +2478,52 @@ export default function ScholarshipPage() {
                     </motion.div>
                   ))}
                   </AnimatePresence>
-                </motion.div>
+                  {addingVehicle && (
+                    <div className="rounded-xl bg-card p-4 shadow-xs border animate-pulse">
+                      <div className="-mx-4 mb-3 flex items-center justify-between border-b px-4 pb-3">
+                        <Skeleton className="h-4 w-20" />
+                      </div>
+                      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                        <div className="space-y-1.5"><Skeleton className="h-3 w-12" /><Skeleton className="h-9 w-full rounded-md" /></div>
+                        <div className="space-y-1.5"><Skeleton className="h-3 w-10" /><Skeleton className="h-9 w-full rounded-md" /></div>
+                        <div className="space-y-1.5"><Skeleton className="h-3 w-12" /><Skeleton className="h-9 w-full rounded-md" /></div>
+                      </div>
+                    </div>
+                  )}
+                </div>
               )}
             </section>
           </CardContent>
+            </motion.div>
+          )}
+          </AnimatePresence>
         </Card>
 
         {/* Family Contribution & Advocacy */}
-        <Card className="overflow-hidden gap-0 py-0">
-          <CardHeader className="border-b py-3 !pb-3">
-            <CardTitle className="text-lg">
-              Contribution &amp; Advocacy
-            </CardTitle>
+        <Card className="overflow-hidden gap-0 py-0 ring-0 border">
+          <CardHeader className="border-b py-3 !pb-3 cursor-pointer select-none" onClick={() => toggleSection("contribution")}>
+            <div className="flex items-center justify-between gap-4">
+              <div className="min-w-0">
+                <CardTitle className="text-lg">
+                  Contribution &amp; Advocacy
+                </CardTitle>
+              </div>
+              <div className="flex size-8 shrink-0 items-center justify-center rounded-md border border-input text-muted-foreground hover:bg-muted/50 transition-colors">
+                  <svg className={`size-4 transition-transform duration-200 ${openSections.has("contribution") ? "rotate-180" : ""}`} viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
+                  </svg>
+                </div>
+            </div>
           </CardHeader>
+          <AnimatePresence initial={false}>
+          {openSections.has("contribution") && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.25, ease: "easeInOut" }}
+              className="overflow-hidden"
+            >
           <CardContent className="space-y-6 py-5 bg-gray-50 dark:bg-muted/50">
             <section>
               <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
@@ -2160,12 +2531,13 @@ export default function ScholarshipPage() {
               </h3>
               <Field className="max-w-xs">
                 <FieldLabel className="text-xs">
-                  Monthly Contribution
+                  Monthly Contribution <span className="text-red-400">*</span>
                 </FieldLabel>
                 <CurrencyInput
                   value={familyContribution}
                   onChange={setFamilyContribution}
                   disabled={isReadonly}
+                  className={!familyContribution ? "border-red-400" : ""}
                 />
               </Field>
             </section>
@@ -2174,13 +2546,13 @@ export default function ScholarshipPage() {
 
             <section>
               <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
-                Scholarship Advocacy Letter
+                Scholarship Advocacy Letter <span className="text-red-400">*</span>
               </h3>
               <p className="text-sm text-muted-foreground mb-3">
                 Provide a brief overview of your household income, usual expenses, and any special obligations (medical bills, job loss, or caregiving). Clearly state a realistic annual contribution toward tuition and your request for additional tuition funding for your child.
               </p>
               <textarea
-                className="flex min-h-[120px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                className={`flex min-h-[120px] w-full rounded-md border bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${!advocacyLetter.trim() ? "border-red-400" : "border-input"}`}
                 value={advocacyLetter}
                 onChange={(e) => setAdvocacyLetter(e.target.value)}
                 disabled={isReadonly}
@@ -2240,30 +2612,11 @@ export default function ScholarshipPage() {
               </div>
             </section>
           </CardContent>
+            </motion.div>
+          )}
+          </AnimatePresence>
         </Card>
 
-        <div className="h-20" />
-      </div>
-
-      <div className="fixed bottom-0 left-0 right-0 z-50 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 md:left-[var(--sidebar-width)]">
-        <div className="flex h-16 items-center justify-between px-4 sm:px-6">
-          <Button
-            variant="outline"
-            onClick={() => router.push(`/apply/year/${yearId}`)}
-          >
-            &larr; Back to Checklist
-          </Button>
-          {!isReadonly && (
-            <div className="flex items-center gap-3">
-              <span className="text-xs text-muted-foreground">
-                {saving ? "Saving..." : lastSaved ? `Last saved ${formatRelativeTime(lastSaved)}` : ""}
-              </span>
-              <Button onClick={handleSave} disabled={saving || !isDirty}>
-                Save Scholarship Application
-              </Button>
-            </div>
-          )}
-        </div>
       </div>
 
       <AlertDialog open={!!pendingDelete} onOpenChange={(open) => { if (!open) setPendingDelete(null); }}>
@@ -2298,6 +2651,51 @@ interface XanoFileMetadata {
 }
 
 function IncomeFileUpload({
+  label,
+  disabled,
+  existingFile,
+  onUploaded,
+  onRemoved,
+  multiple,
+  existingFiles,
+  onFilesChanged,
+}: {
+  label: string;
+  disabled?: boolean;
+  /** Single-file mode */
+  existingFile?: XanoFileMetadata | null;
+  onUploaded?: (metadata: XanoFileMetadata) => void;
+  onRemoved?: () => void;
+  /** Multi-file mode */
+  multiple?: boolean;
+  existingFiles?: XanoFileMetadata[];
+  onFilesChanged?: (files: XanoFileMetadata[]) => void;
+}) {
+  // Multi-file mode
+  if (multiple) {
+    return (
+      <MultiFileUpload
+        label={label}
+        disabled={disabled}
+        existingFiles={existingFiles ?? []}
+        onFilesChanged={onFilesChanged ?? (() => {})}
+      />
+    );
+  }
+
+  // Single-file mode (original behavior)
+  return (
+    <SingleFileUpload
+      label={label}
+      disabled={disabled}
+      existingFile={existingFile}
+      onUploaded={onUploaded}
+      onRemoved={onRemoved}
+    />
+  );
+}
+
+function SingleFileUpload({
   label,
   disabled,
   existingFile,
@@ -2365,6 +2763,19 @@ function IncomeFileUpload({
             <p className="text-sm font-medium truncate">{uploaded.name || "Uploaded file"}</p>
             <p className="text-xs text-muted-foreground">Uploaded successfully</p>
           </div>
+          {uploaded.path && (
+            <a
+              href={
+                uploaded.url ??
+                `${process.env.NEXT_PUBLIC_XANO_BASE ?? "https://xsc3-mvx7-r86m.n7e.xano.io"}${uploaded.path}`
+              }
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center justify-center size-7 shrink-0 rounded-md hover:bg-muted transition-colors"
+            >
+              <ExternalLink className="size-4 text-muted-foreground" />
+            </a>
+          )}
           {!disabled && (
             <Button
               variant="ghost"
@@ -2439,41 +2850,134 @@ function IncomeFileUpload({
   );
 }
 
-function StepHeader({
-  yearId,
-  yearName,
+function MultiFileUpload({
+  label,
+  disabled,
+  existingFiles,
+  onFilesChanged,
 }: {
-  yearId: string;
-  yearName: string;
+  label: string;
+  disabled?: boolean;
+  existingFiles: XanoFileMetadata[];
+  onFilesChanged: (files: XanoFileMetadata[]) => void;
 }) {
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [removeIndex, setRemoveIndex] = useState<number | null>(null);
+
+  async function handleNewFiles(newFiles: File[]) {
+    setPendingFiles(newFiles);
+    setError(null);
+    if (newFiles.length === 0) return;
+
+    const file = newFiles[0];
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch("/api/upload", { method: "POST", body: formData });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error ?? `Upload failed (${res.status})`);
+      }
+      const metadata: XanoFileMetadata = await res.json();
+      onFilesChanged([...existingFiles, metadata]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Upload failed");
+    } finally {
+      setPendingFiles([]);
+      setUploading(false);
+    }
+  }
+
+  function doRemove(index: number) {
+    const updated = existingFiles.filter((_, i) => i !== index);
+    onFilesChanged(updated);
+    setRemoveIndex(null);
+  }
+
   return (
-    <header className="flex h-16 shrink-0 items-center gap-2">
-      <div className="flex items-center gap-2 px-4">
-        <SidebarTrigger className="-ml-1" />
-        <Separator
-          orientation="vertical"
-          className="mr-2 data-vertical:h-4 data-vertical:self-auto"
-        />
-        <Breadcrumb>
-          <BreadcrumbList>
-            <BreadcrumbItem className="hidden md:block">
-              <BreadcrumbLink href={`/apply/year/${yearId}`}>
-                {yearName || "Overview"}
-              </BreadcrumbLink>
-            </BreadcrumbItem>
-            <BreadcrumbSeparator className="hidden md:block" />
-            <BreadcrumbItem className="hidden md:block">
-              <BreadcrumbLink href={`/apply/year/${yearId}/scholarship`}>
-                Financial Aid
-              </BreadcrumbLink>
-            </BreadcrumbItem>
-            <BreadcrumbSeparator className="hidden md:block" />
-            <BreadcrumbItem>
-              <BreadcrumbPage>Opportunity Scholarship</BreadcrumbPage>
-            </BreadcrumbItem>
-          </BreadcrumbList>
-        </Breadcrumb>
+    <>
+      <div className="space-y-2">
+        {existingFiles.map((file, index) => (
+          <div key={index} className="flex items-center gap-3 rounded-md border border-input bg-background px-4 py-3">
+            <CheckCircle2 className="size-5 text-green-600 shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium truncate">{file.name || "Uploaded file"}</p>
+              <p className="text-xs text-muted-foreground">Uploaded successfully</p>
+            </div>
+            {file.path && (
+              <a
+                href={
+                  file.url ??
+                  `${process.env.NEXT_PUBLIC_XANO_BASE ?? "https://xsc3-mvx7-r86m.n7e.xano.io"}${file.path}`
+                }
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center justify-center size-7 shrink-0 rounded-md hover:bg-muted transition-colors"
+              >
+                <ExternalLink className="size-4 text-muted-foreground" />
+              </a>
+            )}
+            {!disabled && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-7 shrink-0"
+                onClick={() => setRemoveIndex(index)}
+              >
+                <X className="size-4" />
+              </Button>
+            )}
+          </div>
+        ))}
+
+        {/* Upload dropzone for adding more files */}
+        <FileUpload
+          maxFiles={1}
+          maxSize={10 * 1024 * 1024}
+          accept=".pdf,.jpg,.jpeg,.png"
+          className="w-full"
+          value={pendingFiles}
+          onValueChange={handleNewFiles}
+          disabled={disabled || uploading}
+        >
+          <FileUploadDropzone className="flex-row gap-3 px-4 py-3 cursor-pointer">
+            {uploading ? (
+              <Loader2 className="size-5 text-muted-foreground animate-spin" />
+            ) : (
+              <FileUp className="size-5 text-muted-foreground" />
+            )}
+            <div className="flex-1 text-left">
+              <p className="text-sm font-medium">
+                {uploading ? "Uploading..." : label}
+              </p>
+              <p className="text-xs text-muted-foreground">PDF, JPG, or PNG (max 10MB)</p>
+            </div>
+          </FileUploadDropzone>
+        </FileUpload>
+
+        {error && (
+          <p className="text-xs text-red-600 mt-1">{error}</p>
+        )}
       </div>
-    </header>
+
+      <AlertDialog open={removeIndex !== null} onOpenChange={(open) => { if (!open) setRemoveIndex(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove uploaded file?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will remove the uploaded file. You can upload a new one afterwards.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => removeIndex !== null && doRemove(removeIndex)}>Remove</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }
+
