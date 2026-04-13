@@ -250,6 +250,33 @@ export interface XanoBusStop {
   address: string;
 }
 
+export interface XanoAdmin {
+  id: number;
+  created_at: number;
+  clerk_user_id: string;
+  email: string;
+  first_name: string;
+  last_name: string;
+  role: string;
+}
+
+export interface XanoInquiry {
+  id: number;
+  created_at: number;
+  primary_first_name: string;
+  primary_last_name: string;
+  primary_email: string;
+  primary_phone: number;
+  student_first_name: string;
+  student_last_name: string;
+  current_grade: string;
+  starting_grade: string;
+  previous_school: string;
+  about_student: string;
+  hear_about_us: string;
+  messaging_opt_in: boolean;
+}
+
 export interface XanoEmergencyContact {
   id: number;
   created_at: number;
@@ -1150,6 +1177,44 @@ export const xano = {
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
       return res.json();
+    },
+  },
+
+  admins: {
+    async getByClerkId(clerkUserId: string): Promise<XanoAdmin | null> {
+      try {
+        const res = await fetch(`${getBaseUrl()}/registration_admin`, { cache: "no-store" });
+        if (!res.ok) return null;
+        const all: XanoAdmin[] = await res.json();
+        return all.find((a) => a.clerk_user_id === clerkUserId) ?? null;
+      } catch {
+        return null;
+      }
+    },
+
+    async getAll(): Promise<XanoAdmin[]> {
+      const res = await fetch(`${getBaseUrl()}/registration_admin`, { cache: "no-store" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+  },
+
+  inquiries: {
+    async getAll(): Promise<XanoInquiry[]> {
+      const res = await fetch(`${getBaseUrl()}/registration_inquiry`, { cache: "no-store" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+
+    async getById(id: number): Promise<XanoInquiry> {
+      const res = await fetch(`${getBaseUrl()}/registration_inquiry/${id}`, { cache: "no-store" });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async delete(id: number): Promise<void> {
+      const res = await fetch(`${getBaseUrl()}/registration_inquiry/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
     },
   },
 };

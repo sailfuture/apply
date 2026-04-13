@@ -2,7 +2,14 @@
   "permissions": {
     "allow": [
       "Bash(find /c/Users/hunte/GitHub/apply -type d \\\\\\(-name api -o -name app -o -name pages \\\\\\) ! -path */node_modules/* ! -path */.next/*)",
-      "Bash(find /c/Users/hunte/GitHub/apply -maxdepth 2 -name prisma.ts -o -name schema.prisma -o -name *schema* -type f)"
+      "Bash(find /c/Users/hunte/GitHub/apply -maxdepth 2 -name prisma.ts -o -name schema.prisma -o -name *schema* -type f)",
+      "Bash(npx shadcn@latest add table --yes)",
+      "Bash(ls \"C:/Users/hunte/GitHub/apply/app/\\(admin\\)/\")",
+      "Bash(ls -la \"C:/Users/hunte/GitHub/apply/app/\\(admin\\)/admin/\")",
+      "Bash(find \"C:/Users/hunte/GitHub/apply/app/\\(admin\\)/\" -name \"*.tsx\" -o -name \"*.ts\")",
+      "Bash(find \"C:/Users/hunte/GitHub/apply/app/\\(admin\\)/\" -name \"*.tsx\")",
+      "Bash(npx tsc:*)",
+      "Bash(find \"C:\\\\Users\\\\hunte\\\\GitHub\\\\apply\\\\app\\\\\\(admin\\)\" -name \"*.tsx\")"
     ]
   }
 }
