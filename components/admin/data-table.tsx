@@ -50,10 +50,12 @@ export function DataTable<T extends Record<string, unknown>>({
     [columns]
   );
 
+  const safeData = Array.isArray(data) ? data : [];
+
   const filtered = useMemo(() => {
-    if (!search.trim()) return data;
+    if (!search.trim()) return safeData;
     const q = search.toLowerCase();
-    return data.filter((row) =>
+    return safeData.filter((row) =>
       searchableKeys.some((col) => {
         const val = col.accessor
           ? col.accessor(row)
@@ -61,7 +63,7 @@ export function DataTable<T extends Record<string, unknown>>({
         return val != null && String(val).toLowerCase().includes(q);
       })
     );
-  }, [data, search, searchableKeys]);
+  }, [safeData, search, searchableKeys]);
 
   const sorted = useMemo(() => {
     if (!sortKey) return filtered;
