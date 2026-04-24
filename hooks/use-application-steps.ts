@@ -305,13 +305,16 @@ export function useApplicationSteps(yearId: number) {
     firstApp?.enrollment_agreement_status === "completed";
   const enrollmentSent = !!firstApp?.enrollment_agreement_pandadoc_id;
 
-  // Explicit "section completed" bools from the progress bridge row take
-  // priority — clicking "Complete X Section" flips these and the sidenav
-  // should reflect it immediately, independent of the derived field checks.
-  const familyDone = !!progressData?.family_completed || familyComplete;
-  const studentsDone = !!progressData?.students_completed || studentsComplete;
-  const financialAidDone = !!progressData?.financial_aid_completed || financialAidComplete;
-  const nweaDone = !!progressData?.testing_completed || nweaComplete;
+  // A section is ONLY considered "done" when the explicit bool on the
+  // `registration_family_application_progress` row is true. The derived
+  // `*Complete` checks (based on field presence) are kept around purely to
+  // decide whether the in-progress state has been entered (see `*Started`
+  // below), so an unchecked-but-filled-out section doesn't prematurely flip
+  // the sidenav to green.
+  const familyDone = !!progressData?.family_completed;
+  const studentsDone = !!progressData?.students_completed;
+  const financialAidDone = !!progressData?.financial_aid_completed;
+  const nweaDone = !!progressData?.testing_completed;
 
   const steps: StepDef[] = useMemo(
     () => [
