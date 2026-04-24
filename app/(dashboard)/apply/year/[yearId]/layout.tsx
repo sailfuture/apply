@@ -27,6 +27,8 @@ import {
 } from "@/contexts/application-flow-context";
 import { ApplicationSideNav } from "@/components/application-side-nav";
 import { useApplicationSteps } from "@/hooks/use-application-steps";
+import { PreSubmitReviewModal } from "@/components/pre-submit-review-modal";
+import { useSubmitReadiness } from "@/hooks/use-submit-readiness";
 
 function LayoutInner({ children }: { children: React.ReactNode }) {
   const params = useParams();
@@ -42,6 +44,10 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
 
   const [helpOpen, setHelpOpen] = useState(false);
   const [unlockWarningOpen, setUnlockWarningOpen] = useState(false);
+  // Pre-submit review modal — the same modal available from the year overview
+  // is exposed here so parents can review & submit from any step page.
+  const [preSubmitOpen, setPreSubmitOpen] = useState(false);
+  const submitReadiness = useSubmitReadiness(Number(yearId));
 
   // Get registration step counts for the Complete Section button
   const { registrationSteps, steps } = useApplicationSteps(Number(yearId));
@@ -167,84 +173,101 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
       </Dialog>
 
       {/* Side Nav (left) + Content — centered together */}
-      <div
-        className={`flex-1 flex justify-center px-4 lg:px-6 ${
-          showBottomBar ? "pb-[72px]" : ""
-        }`}
-      >
+      <div className="flex-1 flex justify-center px-4 lg:px-6">
         <div className={`flex w-full gap-6 ${showSideNav ? "max-w-[980px]" : "max-w-2xl"}`}>
           {/* Side Navigation — left of content */}
-          {showSideNav && <ApplicationSideNav yearId={Number(yearId)} />}
+          {showSideNav && (
+            <ApplicationSideNav
+              yearId={Number(yearId)}
+              onSubmitClick={() => setPreSubmitOpen(true)}
+            />
+          )}
 
-          {/* Main scrollable content */}
-          <main className={`flex-1 min-w-0 ${saveOptions.completed ? "opacity-50" : ""}`}>
-            {children}
+          {/* Main scrollable content. The global auto-save pill is placed
+              inline in each page's header via <GlobalSaveStatusPill />. */}
+          <main className="flex-1 min-w-0">
+            <div className={saveOptions.completed ? "opacity-50" : ""}>
+              {children}
+            </div>
+
+            {/* Inline bottom nav — appears at end of content.
+                Wrapped in max-w-4xl to match page card width, and padded equally
+                above and below the border-t (pt-6 above via page's p-6 bottom, pt-6 below). */}
+            {showBottomBar && (
+              <>
+              <div className="mx-auto w-full max-w-4xl flex items-center gap-2 border-t pt-6 px-6">
+                {/* Back — hidden when the side nav is visible (it provides step navigation) */}
+                {!showSideNav && (
+                  <button
+                    onClick={() => handleBack()}
+                    className="flex items-center justify-center gap-1.5 rounded-md border border-input px-3 py-2.5 text-sm font-medium transition-colors bg-white text-muted-foreground hover:text-foreground hover:bg-gray-50"
+                  >
+                    <svg className="size-4" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M12.79 5.23a.75.75 0 01-.02 1.06L8.832 10l3.938 3.71a.75.75 0 11-1.04 1.08l-4.5-4.25a.75.75 0 010-1.08l4.5-4.25a.75.75 0 011.06.02z" clipRule="evenodd" />
+                    </svg>
+                    Back
+                  </button>
+                )}
+
+                {/* Primary action — takes up most space */}
+                {saveOptions.completed ? (
+                  <button
+                    className="flex-1 flex items-center justify-center gap-2 rounded-md bg-muted px-4 py-2.5 text-sm font-medium text-muted-foreground hover:bg-muted/80 transition-colors cursor-pointer"
+                    onClick={() => saveOptions.onUnlock && setUnlockWarningOpen(true)}
+                  >
+                    {saveOptions.completedLabel ?? "Section Completed"}
+                  </button>
+                ) : saveOptions.label ? (
+                  <Button
+                    variant={saveOptions.disabled ? "outline" : "default"}
+                    className={`flex-1 py-2.5 ${saveOptions.disabled ? "bg-muted text-muted-foreground cursor-not-allowed hover:bg-muted" : ""}`}
+                    onClick={saveHandler && !saveOptions.disabled ? handleSave : undefined}
+                    disabled={saveHandler ? (saveOptions.disabled || saveOptions.saving) : false}
+                  >
+                    {saveOptions.saving ? "Saving..." : saveOptions.label}
+                  </Button>
+                ) : (
+                  <div className="flex-1 h-10 rounded-md bg-muted animate-pulse" />
+                )}
+
+                {/* Next — hidden when the side nav is visible (it provides step navigation) */}
+                {!showSideNav && (
+                  <button
+                    onClick={isLastStep ? undefined : (nextStep ? () => router.push(nextStep.href) : undefined)}
+                    disabled={isLastStep}
+                    className={`flex items-center justify-center gap-1.5 rounded-md px-3 py-2.5 text-sm font-medium transition-colors ${
+                      isLastStep
+                        ? "border border-input bg-muted text-muted-foreground/40 cursor-not-allowed"
+                        : saveOptions.completed
+                          ? "bg-primary text-primary-foreground hover:bg-primary/90"
+                          : "border border-input bg-white text-muted-foreground hover:text-foreground hover:bg-gray-50"
+                    }`}
+                  >
+                    Next
+                    <svg className="size-4" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clipRule="evenodd" />
+                    </svg>
+                  </button>
+                )}
+              </div>
+              {/* Submit link — only when the sidenav isn't visible (the sidenav
+                  already has its own Submit button on desktop). */}
+              {!showSideNav && (
+                <div className="mx-auto w-full max-w-4xl flex items-center justify-end px-6 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setPreSubmitOpen(true)}
+                    className="text-xs font-medium text-primary underline underline-offset-2 hover:no-underline"
+                  >
+                    Review &amp; Submit Application →
+                  </button>
+                </div>
+              )}
+              </>
+            )}
           </main>
         </div>
       </div>
-
-      {/* Fixed Bottom Nav — flush above footer */}
-      {showBottomBar && (
-        <div className="fixed bottom-[37px] left-0 right-0 z-50 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
-          <div className="mx-auto w-full max-w-4xl flex items-center gap-2 px-4 py-3">
-            {/* Back */}
-            <button
-              onClick={() => handleBack()}
-              className="flex items-center justify-center gap-1.5 rounded-md border border-input px-3 py-2.5 text-sm font-medium transition-colors bg-white text-muted-foreground hover:text-foreground hover:bg-gray-50"
-            >
-              <svg className="size-4" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M12.79 5.23a.75.75 0 01-.02 1.06L8.832 10l3.938 3.71a.75.75 0 11-1.04 1.08l-4.5-4.25a.75.75 0 010-1.08l4.5-4.25a.75.75 0 011.06.02z" clipRule="evenodd" />
-              </svg>
-              Back
-            </button>
-
-            {/* Primary action — takes up most space */}
-            {saveOptions.completed ? (
-              <button
-                className="flex-1 flex items-center justify-center gap-2 rounded-md bg-muted px-4 py-2.5 text-sm font-medium text-muted-foreground hover:bg-muted/80 transition-colors cursor-pointer"
-                onClick={() => saveOptions.onUnlock && setUnlockWarningOpen(true)}
-              >
-                <svg className="size-4" viewBox="0 0 20 20" fill="currentColor">
-                  <path fillRule="evenodd" d="M10 1a4.5 4.5 0 00-4.5 4.5V9H5a2 2 0 00-2 2v6a2 2 0 002 2h10a2 2 0 002-2v-6a2 2 0 00-2-2h-.5V5.5A4.5 4.5 0 0010 1zm3 8V5.5a3 3 0 10-6 0V9h6z" clipRule="evenodd" />
-                </svg>
-                {saveOptions.completedLabel ?? "Section Completed"}
-              </button>
-            ) : saveOptions.label ? (
-              <Button
-                variant={saveOptions.disabled ? "outline" : "default"}
-                className={`flex-1 py-2.5 ${saveOptions.disabled ? "bg-muted text-muted-foreground cursor-not-allowed hover:bg-muted" : ""}`}
-                onClick={saveHandler && !saveOptions.disabled ? handleSave : undefined}
-                disabled={saveHandler ? (saveOptions.disabled || saveOptions.saving) : false}
-              >
-                <svg className="size-4 mr-1.5" viewBox="0 0 20 20" fill="currentColor">
-                  <path fillRule="evenodd" d="M14.5 1A4.5 4.5 0 0010 5.5V9H3a2 2 0 00-2 2v6a2 2 0 002 2h10a2 2 0 002-2v-6a2 2 0 00-2-2h-.5V5.5a3 3 0 116 0v2.75a.75.75 0 01-1.5 0V5.5A4.5 4.5 0 0014.5 1z" clipRule="evenodd" />
-                </svg>
-                {saveOptions.saving ? "Saving..." : saveOptions.label}
-              </Button>
-            ) : (
-              <div className="flex-1 h-10 rounded-md bg-muted animate-pulse" />
-            )}
-
-            {/* Next */}
-            <button
-              onClick={isLastStep ? undefined : (nextStep ? () => router.push(nextStep.href) : undefined)}
-              disabled={isLastStep}
-              className={`flex items-center justify-center gap-1.5 rounded-md px-3 py-2.5 text-sm font-medium transition-colors ${
-                isLastStep
-                  ? "border border-input bg-muted text-muted-foreground/40 cursor-not-allowed"
-                  : saveOptions.completed
-                    ? "bg-primary text-primary-foreground hover:bg-primary/90"
-                    : "border border-input bg-white text-muted-foreground hover:text-foreground hover:bg-gray-50"
-              }`}
-            >
-              Next
-              <svg className="size-4" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clipRule="evenodd" />
-              </svg>
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* Unlock Warning Modal */}
       <AlertDialog open={unlockWarningOpen} onOpenChange={setUnlockWarningOpen}>
@@ -268,6 +291,19 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Pre-submit review modal — same modal as the year overview, reachable
+          from every section page via the "Review & Submit Application" link. */}
+      <PreSubmitReviewModal
+        open={preSubmitOpen}
+        onOpenChange={setPreSubmitOpen}
+        sections={submitReadiness.sections}
+        basePath={basePath}
+        onConfirm={() => {
+          setPreSubmitOpen(false);
+          router.push(`${basePath}/submit`);
+        }}
+      />
     </div>
   );
 }

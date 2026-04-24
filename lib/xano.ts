@@ -1178,6 +1178,13 @@ export const xano = {
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
       return res.json();
     },
+
+    async delete(id: number): Promise<void> {
+      const res = await fetch(`${getBaseUrl()}/registration_student_registration/${id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+    },
   },
 
   admins: {

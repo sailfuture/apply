@@ -5,8 +5,10 @@ import {
   useContext,
   useState,
   useCallback,
+  useRef,
   type ReactNode,
 } from "react";
+import type { SaveStatus } from "@/hooks/use-save-status";
 
 export interface SaveHandlerOptions {
   label?: string;
@@ -50,6 +52,12 @@ interface ApplicationFlowContextValue {
   // Hide just the bottom bar (back/save) while keeping side nav visible
   hideBottomBar: boolean;
   setHideBottomBar: (hide: boolean) => void;
+
+  // Global auto-save status — used by the layout to show a "Saving… / Saved"
+  // badge regardless of which page is firing the save.
+  saveStatus: SaveStatus;
+  /** Run a promise and publish Saving → Saved / Error to the global badge. */
+  trackAutosave: <T>(promise: Promise<T>) => Promise<T>;
 }
 
 const ApplicationFlowContext = createContext<ApplicationFlowContextValue | null>(
@@ -66,6 +74,28 @@ export function ApplicationFlowProvider({ children }: { children: ReactNode }) {
   const [onBack, setOnBack] = useState<(() => void) | null>(null);
   const [hideChrome, setHideChrome] = useState(false);
   const [hideBottomBar, setHideBottomBar] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>({ state: "idle" });
+  const autosaveCallIdRef = useRef(0);
+
+  // Any page's auto-save can publish its status here. Out-of-order completions
+  // are ignored so a slower earlier save doesn't clobber a fresher result.
+  const trackAutosave = useCallback(async <T,>(promise: Promise<T>): Promise<T> => {
+    const id = ++autosaveCallIdRef.current;
+    setSaveStatus({ state: "saving" });
+    try {
+      const result = await promise;
+      if (id === autosaveCallIdRef.current) {
+        setSaveStatus({ state: "saved", at: Date.now() });
+      }
+      return result;
+    } catch (err) {
+      if (id === autosaveCallIdRef.current) {
+        const message = err instanceof Error ? err.message : "Save failed";
+        setSaveStatus({ state: "error", message });
+      }
+      throw err;
+    }
+  }, []);
 
   const registerSaveHandler = useCallback(
     (handler: () => Promise<void> | void, options?: SaveHandlerOptions) => {
@@ -123,6 +153,8 @@ export function ApplicationFlowProvider({ children }: { children: ReactNode }) {
         setHideChrome,
         hideBottomBar,
         setHideBottomBar,
+        saveStatus,
+        trackAutosave,
       }}
     >
       {children}

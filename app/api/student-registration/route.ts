@@ -51,6 +51,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Student not found in family" }, { status: 403 });
   }
 
+  // Xano types medicaid_number as a number; coerce empty strings to 0
+  // otherwise Xano rejects the whole payload and the client swallows the 4xx.
+  const medicaidNumber = Number(body.medicaid_number);
+
   const registration = await xano.studentRegistration.create({
     registration_students_id: body.registration_students_id,
     shirt_size: body.shirt_size ?? "",
@@ -73,7 +77,7 @@ export async function POST(req: NextRequest) {
     vision_impairments: body.vision_impairments ?? "",
     hearing_impairments: body.hearing_impairments ?? "",
     is_student_on_medicaid: body.is_student_on_medicaid ?? false,
-    medicaid_number: body.medicaid_number ?? 0,
+    medicaid_number: Number.isFinite(medicaidNumber) ? medicaidNumber : 0,
     medicaid_provider: body.medicaid_provider ?? "",
     carry_epi_pen: body.carry_epi_pen ?? false,
     epipen_explainer: body.epipen_explainer ?? "",

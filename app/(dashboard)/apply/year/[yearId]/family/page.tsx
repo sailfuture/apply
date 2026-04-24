@@ -36,18 +36,14 @@ import {
   Field,
   FieldLabel,
 } from "@/components/ui/field";
-import {
-  Combobox,
-  ComboboxInput,
-  ComboboxContent,
-  ComboboxList,
-  ComboboxItem,
-  ComboboxEmpty,
-} from "@/components/ui/combobox";
+import { StateSelect } from "@/components/state-select";
 import { Trash2, Plus } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import { toast } from "sonner";
 import { useSWRConfig } from "swr";
+import { MissingItemsPanel } from "@/components/missing-items-panel";
+import { familyRequirements } from "@/lib/application-schemas";
+import { GlobalSaveStatusPill } from "@/components/save-status-pill";
 import { US_STATES } from "@/lib/us-states";
 
 interface Parent {
@@ -85,6 +81,7 @@ export default function FamilyStepPage() {
     registerSaveHandler,
     unregisterSaveHandler,
     updateSaveOptions,
+    trackAutosave,
   } = useApplicationFlow();
   const { mutate } = useSWRConfig();
 
@@ -153,16 +150,12 @@ export default function FamilyStepPage() {
     fetchData();
   }, [fetchData]);
 
-  // Auto-collapse complete parents on initial load, open incomplete ones
+  // Default all parents to open on initial load — don't auto-collapse completed
+  // ones. Users can manually collapse via the chevron.
   useEffect(() => {
     if (loading || initialCollapseRef.current || parents.length === 0) return;
     initialCollapseRef.current = true;
-    const openIds = new Set<number>();
-    parents.forEach((p) => {
-      if (!isParentComplete(p)) openIds.add(p.id);
-    });
-    // If all are complete, leave all collapsed
-    setOpenParents(openIds);
+    setOpenParents(new Set(parents.map((p) => p.id)));
   }, [loading, parents]);
 
   function updateParentLocal(parentId: number, field: string, value: string) {
@@ -174,12 +167,22 @@ export default function FamilyStepPage() {
   const [saving, setSaving] = useState(false);
 
   async function saveParentField(parentId: number, field: string, value: string) {
+    // Per-field onBlur auto-save — drives the global SaveStatusPill badge
+    // shown in the apply-flow layout so users see "Saving… → Saved Xs ago".
     try {
-      await fetch(`/api/parents/${parentId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ [field]: value }),
-      });
+      await trackAutosave(
+        fetch(`/api/parents/${parentId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ [field]: value }),
+        }).then(async (res) => {
+          if (!res.ok) {
+            const body = await res.text().catch(() => "");
+            throw new Error(`Save failed (${res.status}) ${body}`);
+          }
+          return res;
+        })
+      );
     } catch (err) {
       console.error("Failed to save parent field:", err);
     }
@@ -188,21 +191,28 @@ export default function FamilyStepPage() {
   async function handleSaveAll() {
     setSaving(true);
     try {
-      await Promise.all(
-        parents.map((p) =>
-          fetch(`/api/parents/${p.id}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              email: p.email,
-              phone: p.phone,
-              relationship: p.relationship,
-              address_line_1: p.address_line_1,
-              address_line_2: p.address_line_2,
-              city: p.city,
-              state: p.state,
-              zipcode: p.zipcode,
-            }),
+      await trackAutosave(
+        Promise.all(
+          parents.map(async (p) => {
+            const res = await fetch(`/api/parents/${p.id}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                email: p.email,
+                phone: p.phone,
+                relationship: p.relationship,
+                address_line_1: p.address_line_1,
+                address_line_2: p.address_line_2,
+                city: p.city,
+                state: p.state,
+                zipcode: p.zipcode,
+              }),
+            });
+            if (!res.ok) {
+              const body = await res.text().catch(() => "");
+              throw new Error(`Failed to save ${p.first_name} (${res.status}) ${body}`);
+            }
+            return res;
           })
         )
       );
@@ -326,18 +336,27 @@ export default function FamilyStepPage() {
     );
   }
 
+  // Live missing-items list driven by the Zod schema — updates as the user types.
+  const familyMissing = familyRequirements(parents);
+
   return (
     <>
       <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
-        <div className="text-center xl:text-left">
-          <h1 className="text-2xl font-semibold">
-            {familyName || "Family Information"}
+        <div>
+          <div className="flex items-center justify-between gap-3 pb-3 border-b">
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+              Family
+            </p>
+            <GlobalSaveStatusPill />
+          </div>
+          <h1 className="text-2xl font-semibold mt-4">
+            Add at least one primary parent or guardian for your family.
           </h1>
-          <p className="text-muted-foreground text-sm mt-1">
-            Manage contact information and addresses for all parents and
-            guardians.
-          </p>
         </div>
+
+        {/* Missing-items panel — lists every required field still blank across
+            every parent. Click an item to jump to and highlight that field. */}
+        <MissingItemsPanel missing={familyMissing} />
 
         {parents.length === 0 ? (
           <div className="flex min-h-[20vh] items-center justify-center rounded-lg border">
@@ -348,7 +367,11 @@ export default function FamilyStepPage() {
         ) : (
           <div className="space-y-6">
             {parents.map((parent, idx) => (
-              <Card key={parent.id} className="overflow-hidden gap-0 py-0 ring-0 border">
+              <Card
+                key={parent.id}
+                id={`parent-${idx}`}
+                className="overflow-hidden gap-0 py-0 ring-0 border scroll-mt-20"
+              >
                 <CardHeader
                   className="border-b py-3 !pb-3 cursor-pointer select-none"
                   onClick={() => toggleParent(parent.id)}
@@ -523,28 +546,14 @@ export default function FamilyStepPage() {
                         <Field>
                           <FieldLabel className="text-xs">
                             State                          </FieldLabel>
-                          <Combobox
+                          <StateSelect
                             value={parent.state || ""}
-                            onValueChange={(v) => {
-                              updateParentLocal(parent.id, "state", v as string);
-                              saveParentField(parent.id, "state", v as string);
+                            invalid={!parent.state}
+                            onChange={(v) => {
+                              updateParentLocal(parent.id, "state", v);
+                              saveParentField(parent.id, "state", v);
                             }}
-                          >
-                            <ComboboxInput
-                              placeholder="Search state..."
-                              className="w-full" aria-invalid={!parent.state || undefined}
-                            />
-                            <ComboboxContent>
-                              <ComboboxList>
-                                {US_STATES.map((s) => (
-                                  <ComboboxItem key={s.value} value={s.value}>
-                                    {s.label}
-                                  </ComboboxItem>
-                                ))}
-                              </ComboboxList>
-                              <ComboboxEmpty>No state found</ComboboxEmpty>
-                            </ComboboxContent>
-                          </Combobox>
+                          />
                         </Field>
                         <Field>
                           <FieldLabel className="text-xs">
@@ -597,7 +606,10 @@ export default function FamilyStepPage() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={() => pendingDeleteParent && handleDeleteParent(pendingDeleteParent.id)}>
+            <AlertDialogAction
+              className="bg-red-600 text-white hover:bg-red-700"
+              onClick={() => pendingDeleteParent && handleDeleteParent(pendingDeleteParent.id)}
+            >
               Remove
             </AlertDialogAction>
           </AlertDialogFooter>

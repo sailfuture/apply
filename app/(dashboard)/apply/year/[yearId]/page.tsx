@@ -4,6 +4,8 @@ import { useParams, useRouter } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
 import { useApplicationSteps, type StepStatus } from "@/hooks/use-application-steps";
 import { useStudents } from "@/hooks/use-api";
+import { useSubmitReadiness } from "@/hooks/use-submit-readiness";
+import { PreSubmitReviewModal } from "@/components/pre-submit-review-modal";
 import { ArrowRight, Clock, CheckCircle2, Lock } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import Image from "next/image";
@@ -269,6 +271,11 @@ export default function YearOverviewPage() {
   const { data: students } = useStudents();
   const yearName = schoolYear?.year_name ?? "next year";
 
+  // Pre-submit review — opens as a modal when the user clicks "Submit Application".
+  // Shows per-section completion + jump links to fix anything missing.
+  const readiness = useSubmitReadiness(yearId);
+  const [preSubmitOpen, setPreSubmitOpen] = useState(false);
+
   // When family is accepted, sync isAccepted=true on all family students
   const acceptanceSynced = useRef(false);
   useEffect(() => {
@@ -451,16 +458,11 @@ export default function YearOverviewPage() {
                   );
                 })}
 
-                {/* Submit Application row */}
+                {/* Submit Application row — always clickable; the modal tells
+                    the user what's left if anything. */}
                 <tr
-                  className={`bg-primary text-primary-foreground transition-opacity ${
-                    allComplete
-                      ? "cursor-pointer hover:opacity-90"
-                      : "opacity-10 cursor-not-allowed"
-                  }`}
-                  onClick={() => {
-                    if (allComplete) router.push(`/apply/year/${yearId}/submit`);
-                  }}
+                  className="bg-primary text-primary-foreground cursor-pointer transition-opacity hover:opacity-90"
+                  onClick={() => setPreSubmitOpen(true)}
                 >
                   <td className="px-4 py-4 w-12">
                     <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary-foreground/20 text-primary-foreground text-xs font-semibold">
@@ -500,6 +502,19 @@ export default function YearOverviewPage() {
           .
         </p>
       </div>
+
+      {/* Pre-submit review modal — opens when the Submit Application row is clicked.
+          Shows per-section completion + missing items with jump links. */}
+      <PreSubmitReviewModal
+        open={preSubmitOpen}
+        onOpenChange={setPreSubmitOpen}
+        sections={readiness.sections}
+        basePath={`/apply/year/${yearId}`}
+        onConfirm={() => {
+          setPreSubmitOpen(false);
+          router.push(`/apply/year/${yearId}/submit`);
+        }}
+      />
     </div>
   );
 }

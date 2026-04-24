@@ -18,14 +18,7 @@ import {
   FieldLabel,
   FieldDescription,
 } from "@/components/ui/field";
-import {
-  Combobox,
-  ComboboxInput,
-  ComboboxContent,
-  ComboboxList,
-  ComboboxItem,
-  ComboboxEmpty,
-} from "@/components/ui/combobox";
+import { StateSelect } from "@/components/state-select";
 import { US_STATES } from "@/lib/us-states";
 
 export default function WelcomePage() {
@@ -183,28 +176,7 @@ export default function WelcomePage() {
                 <div className="col-span-3">
                   <Field>
                     <FieldLabel>State</FieldLabel>
-                    <Combobox
-                      value={state}
-                      onValueChange={(val) => setState(val as string)}
-                    >
-                      <ComboboxInput
-                        placeholder="Search state..."
-                        className="w-full"
-                      />
-                      <ComboboxContent>
-                        <ComboboxList>
-                          {US_STATES.map((s) => (
-                            <ComboboxItem
-                              key={s.value}
-                              value={s.value}
-                            >
-                              {s.label}
-                            </ComboboxItem>
-                          ))}
-                        </ComboboxList>
-                        <ComboboxEmpty>No state found</ComboboxEmpty>
-                      </ComboboxContent>
-                    </Combobox>
+                    <StateSelect value={state} onChange={setState} />
                   </Field>
                 </div>
               </div>

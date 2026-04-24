@@ -4,20 +4,31 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* Reserve space for the vertical scrollbar on every page so opening a modal
+   (Radix Dialog / AlertDialog) doesn't shift content horizontally when the
+   scrollbar briefly collapses. */
 html {
   scrollbar-gutter: stable;
 }
 
-/* Prevent layout shift when Radix UI locks scroll */
-body[data-scroll-locked] {
+/* Radix locks body scroll by setting `data-scroll-locked` and adding inline
+   padding-right equal to the scrollbar width. Combined with `scrollbar-gutter`
+   above, that padding becomes a double offset and shifts the page right.
+   Neutralize the inline padding/margin but leave Radix's overflow:hidden
+   intact so its focus trap and click-outside behavior still work. */
+body[data-scroll-locked],
+body[data-scroll-locked="1"],
+body[style*="padding-right"] {
   margin-right: 0 !important;
   padding-right: 0 !important;
 }
 
-/* Ensure form inputs and file uploads have white backgrounds */
-input,
-textarea,
-select,
+/* Ensure form inputs and file uploads have white backgrounds.
+   Scoped away from Clerk-rendered UI (.cl-rootBox) so its OTP / phone inputs
+   keep their own theme — otherwise white-on-white text appears in code fields. */
+input:not(.cl-rootBox *),
+textarea:not(.cl-rootBox *),
+select:not(.cl-rootBox *),
 [data-slot="file-upload-dropzone"] {
   background-color: white !important;
 }

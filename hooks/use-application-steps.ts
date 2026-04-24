@@ -135,7 +135,8 @@ export function useApplicationSteps(yearId: number) {
 
   const familyStarted = (familyData?.parents ?? []).length > 0;
 
-  // Students are complete only when every enrolled app has all required fields
+  // Student Details completion — school-history fields only.
+  // NWEA, SUFS, and Transportation live on other steps and don't gate this one.
   const studentsComplete = useMemo(() => {
     if (yearApps.length === 0) return false;
     return yearApps.every((app) => {
@@ -145,13 +146,39 @@ export function useApplicationSteps(yearId: number) {
       if (!a.current_grade) return false;
       if (!a.describe_student_strengths) return false;
       if (!a.describe_student_opportunities_for_growth) return false;
-      if (a.is_bus_transportation && (!a.registration_parents_id || !a.bus_stop)) return false;
-      if (!a.nwea_testing_complete && !a.test_scores) return false;
       return true;
     });
   }, [yearApps]);
 
   const studentsStarted = yearApps.length > 0;
+
+  // NWEA completion — admin-entered. Complete when every yearApp has
+  // nwea_testing_complete flipped on (or has test scores as a legacy signal).
+  // Started when at least one is scheduled or has scores. Doesn't block Submit.
+  const nweaComplete = useMemo(() => {
+    if (yearApps.length === 0) return false;
+    return yearApps.every((app) => {
+      const a = app as Record<string, unknown>;
+      return a.nwea_testing_complete === true || !!a.test_scores;
+    });
+  }, [yearApps]);
+
+  const nweaStarted = useMemo(() => {
+    return yearApps.some((app) => {
+      const a = app as Record<string, unknown>;
+      return a.nwea_testing_scheduled === true || a.nwea_testing_complete === true || !!a.test_scores;
+    });
+  }, [yearApps]);
+
+  // SUFS completion — every yearApp must have a sufs_award_id entered (parent's
+  // 6-digit Step Up For Students Award ID). Admin-only sufs_type is separate.
+  const sufsComplete = useMemo(() => {
+    if (yearApps.length === 0) return false;
+    return yearApps.every((app) => {
+      const a = app as { sufs_award_id?: number };
+      return typeof a.sufs_award_id === "number" && a.sufs_award_id > 0;
+    });
+  }, [yearApps]);
 
   // Fetch full scholarship data (including sub-entities) for proper completion checks
   const scholarshipId = scholarshipData?.id ?? null;
@@ -237,7 +264,13 @@ export function useApplicationSteps(yearId: number) {
     return incomeComplete && membersComplete && assetsComplete && contributionComplete;
   }, [fullScholarship]);
 
+  // Financial Aid (the sidenav step) combines SUFS selection + Opportunity Scholarship.
+  const financialAidComplete = scholarshipComplete && sufsComplete;
   const scholarshipStarted = !!(scholarshipData && scholarshipData.id);
+  const financialAidStarted = scholarshipStarted || yearApps.some((app) => {
+    const a = app as { sufs_award_id?: number };
+    return typeof a.sufs_award_id === "number" && a.sufs_award_id > 0;
+  });
 
   const firstApp = yearApps[0] as
     | {
@@ -274,7 +307,7 @@ export function useApplicationSteps(yearId: number) {
       },
       {
         number: 2,
-        title: "Student Enrollment Information",
+        title: "Student Details",
         description: "",
         status: getStatus(studentsComplete, studentsStarted),
         detail: studentsComplete ? "Complete" : studentsStarted ? "In progress" : "Not started",
@@ -282,22 +315,31 @@ export function useApplicationSteps(yearId: number) {
       },
       {
         number: 3,
-        title: "Financial Aid Application",
+        title: "Financial Aid",
         description: "",
-        status: getStatus(scholarshipComplete, scholarshipStarted),
-        detail: scholarshipComplete
+        status: getStatus(financialAidComplete, financialAidStarted),
+        detail: financialAidComplete
           ? "Complete"
-          : scholarshipStarted
+          : financialAidStarted
             ? "In progress"
             : "Not started",
         href: `${base}/scholarship`,
       },
       {
         number: 4,
+        title: "Initial Testing",
+        description: "",
+        status: getStatus(nweaComplete, nweaStarted),
+        detail: nweaComplete ? "Complete" : nweaStarted ? "In progress" : "Not started",
+        href: `${base}/nwea`,
+      },
+      {
+        number: 5,
         title: "Submit Application",
         description: "",
-        status: (familyComplete && studentsComplete && scholarshipComplete) ? "in_progress" as StepStatus : "not_started" as StepStatus,
-        detail: (familyComplete && studentsComplete && scholarshipComplete) ? "Ready to submit" : "Locked",
+        // NWEA does NOT gate Submit — testing typically happens after application is submitted.
+        status: (familyComplete && studentsComplete && financialAidComplete) ? "in_progress" as StepStatus : "not_started" as StepStatus,
+        detail: (familyComplete && studentsComplete && financialAidComplete) ? "Ready to submit" : "Locked",
         href: `#`,
       },
     ],
@@ -308,13 +350,15 @@ export function useApplicationSteps(yearId: number) {
       familyStarted,
       studentsComplete,
       studentsStarted,
-      scholarshipComplete,
-      scholarshipStarted,
+      financialAidComplete,
+      financialAidStarted,
+      nweaComplete,
+      nweaStarted,
     ]
   );
 
   const completedCount = steps.filter((s) => s.status === "complete" && s.title !== "Submit Application").length;
-  const allComplete = steps.filter((s) => s.title !== "Submit Application").every((s) => s.status === "complete");
+  const allComplete = steps.filter((s) => s.title !== "Submit Application" && s.title !== "Initial Testing").every((s) => s.status === "complete");
 
   // Post-acceptance registration steps
   const tuitionReviewed = paymentRecord?.tuition_reviewed === true || paymentRecord?.isFamilyAccepted === true;

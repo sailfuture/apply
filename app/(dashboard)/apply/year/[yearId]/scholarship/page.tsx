@@ -25,14 +25,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Combobox,
-  ComboboxInput,
-  ComboboxContent,
-  ComboboxList,
-  ComboboxItem,
-  ComboboxEmpty,
-} from "@/components/ui/combobox";
+import { StateSelect } from "@/components/state-select";
+import { OptionSelect } from "@/components/option-select";
 import { US_STATES } from "@/lib/us-states";
 import {
   AlertDialog,
@@ -44,7 +38,11 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Trash2, FileUp, X, Loader2, CheckCircle2, Users, Home, Car, ArrowRight, ExternalLink, Plus } from "lucide-react";
+import { Trash2, FileUp, X, Loader2, CheckCircle2, Users, Home, Car, ArrowRight, ExternalLink, Plus, HelpCircle } from "lucide-react";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { GlobalSaveStatusPill } from "@/components/save-status-pill";
 import { toast } from "sonner";
 import {
   Empty,
@@ -71,6 +69,41 @@ interface SchoolYear {
   id: number;
   year_name: string;
   opportunity_scholarship_deadline: string | null;
+  fes_eo_8: number;
+  fes_eo_9: number;
+  ftc_8: number;
+  ftc_9: number;
+  fes_ua_8_ese_1_3: number;
+  fes_ua_9_ese_1_3: number;
+  fes_ua_ese_4: number;
+  fes_ua_ese_5: number;
+}
+
+interface SufsStudent {
+  id: number;
+  first_name: string;
+  last_name: string;
+  photo: string | { url: string } | null;
+}
+
+interface SufsApplication {
+  id: number;
+  registration_students_id: number;
+  registration_school_years_id: number;
+  sufs_award_id?: number;
+}
+
+const STEP_UP_URL = "https://www.stepupforstudents.org/scholarships/logins/";
+
+function sufsInitials(first: string, last: string): string {
+  return `${first.charAt(0)}${last.charAt(0)}`.toUpperCase();
+}
+
+function getSufsPhotoUrl(photo: SufsStudent["photo"]): string | undefined {
+  if (!photo) return undefined;
+  if (typeof photo === "string") return photo.startsWith("http") ? photo : undefined;
+  if (typeof photo === "object" && photo.url) return photo.url;
+  return undefined;
 }
 
 interface Scholarship {
@@ -292,12 +325,23 @@ export default function ScholarshipPage() {
     registerOnBack,
     unregisterOnBack,
     setHideBottomBar,
+    trackAutosave,
   } = useApplicationFlow();
 
   const [schoolYear, setSchoolYear] = useState<SchoolYear | null>(null);
   const [scholarship, setScholarship] = useState<Scholarship | null>(null);
   const [familyId, setFamilyId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
+
+  // SUFS (Step Up For Students) — per-student Award ID, stored on each yearly application
+  const [sufsStudents, setSufsStudents] = useState<SufsStudent[]>([]);
+  const [sufsApplications, setSufsApplications] = useState<SufsApplication[]>([]);
+  const [sufsSavingAppId, setSufsSavingAppId] = useState<number | null>(null);
+  const [stepUpDialogOpen, setStepUpDialogOpen] = useState(false);
+  // Pending target when the user is switching between scholarship choices.
+  // Drives the "Switch selection?" warning modal. Must live at the top of the
+  // component — below the `if (loading) return …` early return it breaks Rules of Hooks.
+  const [pendingSwitchTo, setPendingSwitchTo] = useState<"none" | "snap" | "full" | null>(null);
   const [saving, setSaving] = useState(false);
   const [scholarshipChoice, setScholarshipChoice] = useState<"none" | "snap" | "full" | null>(null);
   const [notParticipatingConfirm, setNotParticipatingConfirm] = useState(false);
@@ -389,21 +433,13 @@ export default function ScholarshipPage() {
 
   const contributionComplete = familyContribution > 0 && advocacyLetter.trim().length > 0;
 
-  // Auto-open only incomplete sections on initial load
+  // Default every section to OPEN on initial load. Users can manually collapse
+  // via the chevron, but completion never auto-collapses anything.
   useEffect(() => {
     if (scholarshipInitCollapseRef.current || !showForm || loading) return;
     scholarshipInitCollapseRef.current = true;
-    const open = new Set<string>();
-    if (!incomeComplete) open.add("income");
-    if (!membersComplete) open.add("members");
-    if (!assetsComplete) open.add("assets");
-    if (!contributionComplete) open.add("contribution");
-    // If all complete, leave collapsed; if none open, open first incomplete
-    if (open.size === 0) {
-      // all complete — leave collapsed
-    }
-    setOpenSections(open);
-  }, [showForm, loading, incomeComplete, membersComplete, assetsComplete, contributionComplete]);
+    setOpenSections(new Set(["income", "members", "assets", "contribution"]));
+  }, [showForm, loading]);
 
   const sigCanvasRef = useRef<SignatureCanvas>(null);
   const sigRestoredRef = useRef(false);
@@ -447,10 +483,20 @@ export default function ScholarshipPage() {
       if (!familyData?.id) return;
       setFamilyId(familyData.id);
 
-      const [yearRes, scholarshipRes] = await Promise.all([
+      const [yearRes, scholarshipRes, studentsRes, appsRes] = await Promise.all([
         fetch("/api/school-years"),
         fetch(`/api/scholarship?familyId=${familyData.id}&yearId=${yearId}`),
+        fetch("/api/students"),
+        fetch("/api/applications"),
       ]);
+
+      if (studentsRes.ok) {
+        setSufsStudents(await studentsRes.json());
+      }
+      if (appsRes.ok) {
+        const allApps: SufsApplication[] = await appsRes.json();
+        setSufsApplications(allApps.filter((a) => a.registration_school_years_id === yearId));
+      }
 
       if (yearRes.ok) {
         const years: SchoolYear[] = await yearRes.json();
@@ -529,6 +575,39 @@ export default function ScholarshipPage() {
       setLoading(false);
     }
   }, [yearId]);
+
+  // Local edit handler — updates state immediately so users see their typing.
+  // SUFS Award IDs are 9-digit numeric codes issued by Step Up For Students.
+  function handleSufsAwardIdChange(appId: number, raw: string) {
+    const digitsOnly = raw.replace(/\D/g, "").slice(0, 9);
+    const num = digitsOnly === "" ? 0 : Number(digitsOnly);
+    setSufsApplications((prev) =>
+      prev.map((a) => (a.id === appId ? { ...a, sufs_award_id: num } : a))
+    );
+  }
+
+  // Persists on blur — cheap PATCH when the user leaves the field.
+  async function handleSufsAwardIdBlur(appId: number) {
+    const app = sufsApplications.find((a) => a.id === appId);
+    if (!app) return;
+    setSufsSavingAppId(appId);
+    try {
+      await trackAutosave(
+        fetch(`/api/applications/${appId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sufs_award_id: app.sufs_award_id ?? 0 }),
+        }).then(async (res) => {
+          if (!res.ok) throw new Error(`Save failed (${res.status})`);
+          return res;
+        })
+      );
+    } catch (err) {
+      console.error("Failed to save SUFS Award ID:", err);
+    } finally {
+      setSufsSavingAppId(null);
+    }
+  }
 
   function populateForm(s: Scholarship) {
     setHouseholdAdults(s.household_adults ?? 0);
@@ -774,13 +853,20 @@ export default function ScholarshipPage() {
         })
       );
 
-      const [scholarshipRes] = await Promise.all([
-        scholarshipPatch,
-        ...memberPatches,
-        ...homePatches,
-        ...vehiclePatches,
-        ...benefitPatches,
-      ]);
+      const [scholarshipRes] = await trackAutosave(
+        Promise.all([
+          scholarshipPatch,
+          ...memberPatches,
+          ...homePatches,
+          ...vehiclePatches,
+          ...benefitPatches,
+        ]).then((results) => {
+          // Surface any failed PATCH so the badge goes red and errors aren't silent.
+          const failed = results.find((r) => !r.ok);
+          if (failed) throw new Error(`Save failed (${failed.status})`);
+          return results;
+        })
+      );
 
       if (scholarshipRes.ok) {
         const saved: Scholarship = await scholarshipRes.json();
@@ -829,7 +915,7 @@ export default function ScholarshipPage() {
 
   useEffect(() => {
     registerSaveHandler(() => handleCompleteScholarshipRef.current(), {
-      label: "Complete Financial Aid Section",
+      label: "Complete SailFuture Opportunity Scholarship",
     });
   }, [registerSaveHandler]);
 
@@ -837,7 +923,7 @@ export default function ScholarshipPage() {
     if (scholarshipLocked) {
       updateSaveOptions({
         completed: true,
-        completedLabel: "Financial Aid Section Completed",
+        completedLabel: "SailFuture Opportunity Scholarship Completed",
         onUnlock: () => setScholarshipLocked(false),
       });
     } else {
@@ -846,7 +932,7 @@ export default function ScholarshipPage() {
       updateSaveOptions({
         saving,
         disabled: !hasValidChoice || saving,
-        label: "Complete Financial Aid Section",
+        label: "Complete SailFuture Opportunity Scholarship",
       });
     }
   }, [saving, scholarshipChoice, scholarshipLocked, updateSaveOptions]);
@@ -1048,19 +1134,188 @@ export default function ScholarshipPage() {
   const isChoiceLocked = scholarshipChoice === "none" || scholarshipChoice === "snap" || scholarshipChoice === "full";
   const isScholarshipFormComplete = incomeComplete && membersComplete && assetsComplete && contributionComplete && !!signatureMeta;
 
+  // Per-student SUFS block. Rendered on both the chooser screen (!showForm)
+  // and the full Opportunity Scholarship form (showForm) so it's always visible.
+  const sufsBlock = (() => {
+    const enrolled = sufsApplications
+      .map((app) => ({
+        app,
+        student: sufsStudents.find((s) => s.id === app.registration_students_id),
+      }))
+      .filter((x): x is { app: SufsApplication; student: SufsStudent } => !!x.student);
+
+    if (enrolled.length === 0) {
+      return (
+        <Card className="overflow-hidden gap-0 py-0">
+          <CardHeader className="py-3 !pb-3">
+            <CardTitle className="text-lg">Step Up For Students</CardTitle>
+          </CardHeader>
+          <CardContent className="py-5 bg-white dark:bg-background">
+            <p className="text-sm text-muted-foreground">
+              No students enrolled for this year. Add students first in the Student Enrollment step.
+            </p>
+          </CardContent>
+        </Card>
+      );
+    }
+
+    return (
+      <div className="space-y-4">
+        {/* Shared SUFS info + Apply button — appears once above the student cards */}
+        <div>
+          <div className="flex items-center gap-3 mb-2">
+            <Image
+              src="/logos/step-up.png"
+              alt="Step Up for Students"
+              width={36}
+              height={36}
+              className="size-9 rounded-full border-4 border-gray-200"
+            />
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+              Step Up for Students Scholarship
+            </p>
+          </div>
+          <h2 className="text-2xl font-semibold">
+            Step 1: Apply for Florida Tax Voucher SUFS Scholarship (Up to $8,000)
+          </h2>
+          <p className="text-sm text-muted-foreground mt-3 mb-4 max-w-2xl">
+            Available to all Florida students eligible for K-12 public school, regardless of household income.{" "}
+            <span className="font-semibold text-foreground">$8,000</span> average scholarship for private school tuition and related fees. If your student has been awarded a Step Up scholarship, enter their Award ID below.{" "}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setStepUpDialogOpen(true);
+              }}
+              className="inline-flex items-center gap-1 text-primary underline underline-offset-2 hover:text-primary/80 transition-colors"
+            >
+              Visit Step Up for Students
+              <ExternalLink className="size-3" />
+            </button>
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setStepUpDialogOpen(true);
+            }}
+          >
+            <ExternalLink className="size-4 mr-1.5 shrink-0" />
+            <span className="truncate">Apply for the Step Up for Students Scholarship</span>
+          </Button>
+        </div>
+
+        {/* Per-student cards — just the Award ID input, full width */}
+        {enrolled.map(({ app, student }) => {
+          const photoUrl = getSufsPhotoUrl(student.photo);
+          return (
+            <Card key={student.id} className="overflow-hidden gap-0 py-0">
+              {/* Students-page card format — avatar + name + status icon only.
+                  No trash icon, no chevron, not collapsible. */}
+              <CardHeader className="py-3 !pb-3 border-b">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <Avatar className="size-10">
+                      {photoUrl ? <AvatarImage src={photoUrl} alt={`${student.first_name} ${student.last_name}`} /> : null}
+                      <AvatarFallback className="bg-muted text-muted-foreground text-sm font-medium">
+                        {sufsInitials(student.first_name, student.last_name)}
+                      </AvatarFallback>
+                    </Avatar>
+                    <CardTitle className="text-lg">
+                      {student.first_name} {student.last_name}
+                    </CardTitle>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {app.sufs_award_id && app.sufs_award_id > 0 ? (
+                      <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-green-500 text-white">
+                        <svg className="size-4" viewBox="0 0 20 20" fill="currentColor">
+                          <path fillRule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clipRule="evenodd" />
+                        </svg>
+                      </div>
+                    ) : (
+                      <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-amber-500 text-white">
+                        <svg className="size-4" viewBox="0 0 20 20" fill="currentColor">
+                          <path d="M5.433 13.917l1.262-3.155A4 4 0 017.58 9.42l6.92-6.918a2.121 2.121 0 013 3l-6.92 6.918c-.383.383-.84.685-1.343.886l-3.154 1.262a.5.5 0 01-.65-.65z" />
+                          <path d="M3.5 5.75c0-.69.56-1.25 1.25-1.25H10A.75.75 0 0010 3H4.75A2.75 2.75 0 002 5.75v9.5A2.75 2.75 0 004.75 18h9.5A2.75 2.75 0 0017 15.25V10a.75.75 0 00-1.5 0v5.25c0 .69-.56 1.25-1.25 1.25h-9.5c-.69 0-1.25-.56-1.25-1.25v-9.5z" />
+                        </svg>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </CardHeader>
+
+              <CardContent className="space-y-3 py-5 bg-white dark:bg-background">
+                <Field>
+                  <FieldLabel className="text-xs">
+                    <span className="inline-flex items-center gap-1.5">
+                      SUFS Award ID <span className="text-red-400">*</span>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button type="button" className="inline-flex text-muted-foreground/50 hover:text-muted-foreground transition-colors">
+                            <HelpCircle className="size-3.5" />
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-xs">
+                          <p className="text-xs mb-2">Your SUFS Award ID is a 9-digit numerical code assigned by Step Up For Students. Find it in your Step Up for Students parent portal under your student&apos;s scholarship details.</p>
+                          <div className="rounded border overflow-hidden">
+                            <Image
+                              src="/1.webp"
+                              alt="Example showing where to find your SUFS Award ID"
+                              width={300}
+                              height={200}
+                              className="w-full h-auto"
+                            />
+                          </div>
+                        </TooltipContent>
+                      </Tooltip>
+                    </span>
+                  </FieldLabel>
+                  <Input
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    maxLength={9}
+                    placeholder="000000000"
+                    className={`w-full [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${!app.sufs_award_id ? "border-red-400" : ""}`}
+                    value={app.sufs_award_id || ""}
+                    disabled={sufsSavingAppId === app.id}
+                    onChange={(e) => handleSufsAwardIdChange(app.id, e.target.value)}
+                    onBlur={() => handleSufsAwardIdBlur(app.id)}
+                  />
+                  <p className="text-xs text-muted-foreground mt-1.5">
+                    Enter the 9-digit Award ID from your Step Up For Students parent
+                    portal (under your student&apos;s scholarship details).
+                  </p>
+                </Field>
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
+    );
+  })();
+
   async function saveScholarshipChoice(choice: "none" | "snap" | "full") {
     const sid = await ensureScholarship();
     if (!sid) return;
-    await fetch(`/api/scholarship/${sid}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        isNotParticipating: choice === "none",
-        isSNAPBenefits: choice === "snap",
-        isOpportunityScholarship: choice === "full",
-        last_edited: Date.now(),
-      }),
-    });
+    await trackAutosave(
+      fetch(`/api/scholarship/${sid}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          isNotParticipating: choice === "none",
+          isSNAPBenefits: choice === "snap",
+          isOpportunityScholarship: choice === "full",
+          last_edited: Date.now(),
+        }),
+      }).then(async (res) => {
+        if (!res.ok) throw new Error(`Save failed (${res.status})`);
+        return res;
+      })
+    );
     // Revalidate SWR caches so side nav + overview table update immediately
     mutate(`/api/scholarship/${sid}`);
     if (familyId) mutate(`/api/scholarship?familyId=${familyId}&yearId=${yearId}`);
@@ -1086,31 +1341,93 @@ export default function ScholarshipPage() {
     }
   }
 
+  // Click on a chooser row. If no choice yet, proceeds to the row's flow;
+  // if a *different* choice is active, opens a switch-confirmation modal.
+  function handleChooserRowClick(target: "none" | "snap" | "full") {
+    if (scholarshipChoice && scholarshipChoice !== target) {
+      setPendingSwitchTo(target);
+      return;
+    }
+    // No switch needed — run the row's flow directly.
+    if (target === "none") {
+      setNotParticipatingConfirm(true);
+    } else if (target === "snap") {
+      setSnapModalOpen(true);
+    } else if (target === "full") {
+      // Re-clicking "full" when already on it: just re-enter the form.
+      if (scholarshipChoice !== "full") {
+        setScholarshipChoice("full");
+        void saveScholarshipChoice("full");
+      }
+      setShowForm(true);
+    }
+  }
+
+  // Confirm the switch — clear current state, then run the target's flow.
+  async function confirmSwitchSelection() {
+    const target = pendingSwitchTo;
+    setPendingSwitchTo(null);
+    if (!target) return;
+    await resetScholarshipChoice();
+    // After reset, run the target's flow.
+    if (target === "none") {
+      setNotParticipatingConfirm(true);
+    } else if (target === "snap") {
+      setSnapModalOpen(true);
+    } else if (target === "full") {
+      setScholarshipChoice("full");
+      await saveScholarshipChoice("full");
+      setShowForm(true);
+    }
+  }
+
   if (!showForm) {
     return (
-      <div className="flex flex-col px-4 py-8 mx-auto w-full max-w-4xl">
+      <div className="flex flex-col px-4 py-8 mx-auto w-full max-w-4xl gap-6">
+          {/* Page header — introduces the two funding paths (Step 1 + Step 2) */}
+          <div className="pb-4 border-b">
+            <div className="flex items-center justify-between gap-3 pb-3 border-b">
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+                Financial Aid
+              </p>
+              <GlobalSaveStatusPill />
+            </div>
+            <h1 className="text-2xl font-semibold mt-4">
+              Complete both scholarship steps to maximize your tuition assistance.
+            </h1>
+            <p className="text-muted-foreground text-sm mt-2 max-w-2xl">
+              Most families qualify for state-funded scholarships and may be
+              eligible for additional support from SailFuture. Complete both
+              steps below to maximize your tuition assistance.
+            </p>
+          </div>
+
+          {/* SUFS — rendered at the top even before the Opportunity Scholarship chooser */}
+          {sufsBlock}
+
+          {/* Horizontal divider between SUFS and Opportunity Scholarship */}
+          <Separator />
+
           <div className="w-full">
           <div className="text-center xl:text-left mb-8">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground mb-1">
-              SailFuture Opportunity Scholarship
-            </p>
+            <div className="flex items-center gap-3 mb-2">
+              <Image
+                src="/logo.svg"
+                alt="SailFuture Academy"
+                width={36}
+                height={36}
+                className="size-9 rounded-full border-4 border-gray-200"
+              />
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+                SailFuture Opportunity Scholarship
+              </p>
+            </div>
             <h1 className="text-2xl font-semibold">
-              {firstName ? `${firstName}, See` : "See"} If Your Family Qualifies for Up to $14,000 in Tuition Assistance
+              Step 2: Apply for Additional SailFuture Support (Up to $20,000)
             </h1>
-            <p className="text-muted-foreground text-sm mt-3 max-w-lg xl:mx-0 mx-auto">
+            <p className="text-muted-foreground text-sm mt-3 w-full">
               The SailFuture Academy Scholarship is designed to support students who exhibit financial need, academic promise, and a strong commitment to their education. This scholarship is awarded on a sliding scale, with the amount determined by the applicant&apos;s household income and assets.
             </p>
-            {isChoiceLocked && (
-              <div className="mt-4">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setResetChoiceConfirm(true)}
-                >
-                  Change Selection
-                </Button>
-              </div>
-            )}
             <div className="mt-6">
               <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground mb-2">
                 Nationally Recognized and Scholarships Funded By:
@@ -1131,17 +1448,12 @@ export default function ScholarshipPage() {
                 <tbody className="divide-y">
                   {/* Choose not to participate */}
                   <tr
-                    className={`transition-colors ${
+                    className={`transition-colors cursor-pointer ${
                       scholarshipChoice === "none"
-                        ? "bg-gray-50 dark:bg-muted/30"
-                        : scholarshipChoice === "full" || scholarshipChoice === "snap"
-                          ? "opacity-50 pointer-events-none"
-                          : "cursor-pointer hover:bg-muted/30"
+                        ? "bg-gray-50 dark:bg-muted/30 hover:bg-gray-100 dark:hover:bg-muted/50"
+                        : "hover:bg-muted/30"
                     }`}
-                    onClick={() => {
-                      if (isChoiceLocked) return;
-                      setNotParticipatingConfirm(true);
-                    }}
+                    onClick={() => handleChooserRowClick("none")}
                   >
                     <td className="px-4 py-4 w-12">
                       <div className={`flex size-8 shrink-0 items-center justify-center rounded-full ${
@@ -1170,21 +1482,12 @@ export default function ScholarshipPage() {
 
                   {/* SNAP benefits */}
                   <tr
-                    className={`transition-colors ${
+                    className={`transition-colors cursor-pointer ${
                       scholarshipChoice === "snap"
-                        ? "bg-gray-50 dark:bg-muted/30 cursor-pointer hover:bg-gray-100 dark:hover:bg-muted/50"
-                        : scholarshipChoice === "full" || scholarshipChoice === "none"
-                          ? "opacity-50 pointer-events-none"
-                          : "cursor-pointer hover:bg-muted/30"
+                        ? "bg-gray-50 dark:bg-muted/30 hover:bg-gray-100 dark:hover:bg-muted/50"
+                        : "hover:bg-muted/30"
                     }`}
-                    onClick={() => {
-                      if (scholarshipChoice === "snap") {
-                        setSnapModalOpen(true);
-                        return;
-                      }
-                      if (isChoiceLocked) return;
-                      setSnapModalOpen(true);
-                    }}
+                    onClick={() => handleChooserRowClick("snap")}
                   >
                     <td className="px-4 py-4 w-12">
                       <div className={`flex size-8 shrink-0 items-center justify-center rounded-full ${
@@ -1220,21 +1523,12 @@ export default function ScholarshipPage() {
 
                   {/* Continue scholarship */}
                   <tr
-                    className={`transition-colors ${
+                    className={`transition-colors cursor-pointer ${
                       scholarshipChoice === "full"
-                        ? "bg-gray-50 dark:bg-muted/30 cursor-pointer hover:bg-gray-100 dark:hover:bg-muted/50"
-                        : scholarshipChoice === "none" || scholarshipChoice === "snap"
-                          ? "opacity-50 pointer-events-none"
-                          : "cursor-pointer hover:bg-muted/30"
+                        ? "bg-gray-50 dark:bg-muted/30 hover:bg-gray-100 dark:hover:bg-muted/50"
+                        : "hover:bg-muted/30"
                     }`}
-                    onClick={async () => {
-                      if (scholarshipChoice === "none" || scholarshipChoice === "snap") return;
-                      if (scholarshipChoice !== "full") {
-                        setScholarshipChoice("full");
-                        await saveScholarshipChoice("full");
-                      }
-                      setShowForm(true);
-                    }}
+                    onClick={() => handleChooserRowClick("full")}
                   >
                     <td className="px-4 py-4 w-12">
                       <div className={`flex size-8 shrink-0 items-center justify-center rounded-full ${
@@ -1276,6 +1570,30 @@ export default function ScholarshipPage() {
 
 
         </div>
+
+        {/* Switch Selection Warning Modal — fires when clicking a row that
+            differs from the current choice. */}
+        <AlertDialog
+          open={!!pendingSwitchTo}
+          onOpenChange={(open) => { if (!open) setPendingSwitchTo(null); }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Switch your selection?</AlertDialogTitle>
+              <AlertDialogDescription>
+                You&apos;ve already picked a different path. Switching will clear your
+                current selection and any data entered on that path. You can change back
+                later by clicking another row.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Keep Current Selection</AlertDialogCancel>
+              <AlertDialogAction onClick={confirmSwitchSelection}>
+                Yes, Switch
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
 
         {/* Not Participating Warning Modal */}
         <AlertDialog open={notParticipatingConfirm} onOpenChange={setNotParticipatingConfirm}>
@@ -1403,6 +1721,25 @@ export default function ScholarshipPage() {
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
+
+        {/* Step Up For Students Dialog — also available on the chooser screen */}
+        <Dialog open={stepUpDialogOpen} onOpenChange={setStepUpDialogOpen}>
+          <DialogContent className="sm:max-w-[95vw] w-[95vw] h-[90vh] p-0 flex flex-col overflow-hidden">
+            <DialogHeader className="px-6 pt-6 pb-2 shrink-0">
+              <DialogTitle>Step Up for Students</DialogTitle>
+              <DialogDescription>
+                Log in or create an account to manage your Step Up for Students scholarship.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex-1 m-6 mt-0 overflow-hidden rounded-lg border">
+              <iframe
+                src={STEP_UP_URL}
+                className="h-full w-full border-0"
+                title="Step Up for Students"
+              />
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
     );
   }
@@ -1410,13 +1747,38 @@ export default function ScholarshipPage() {
   return (
     <>
       <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
-        <div className="text-center xl:text-left">
-          <h1 className="text-2xl font-semibold">Scholarships</h1>
-          <p className="text-muted-foreground text-sm mt-1">
-            Complete the opportunity scholarship application for{" "}
+        <div>
+          <div className="flex items-center justify-between gap-3 pb-3 border-b">
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+              Financial Aid
+            </p>
+            <GlobalSaveStatusPill />
+          </div>
+          <h1 className="text-2xl font-semibold mt-4">
+            SailFuture Academy Opportunity Scholarship Application
+          </h1>
+          <p className="text-muted-foreground text-sm mt-2 max-w-2xl">
+            Complete your household income, assets, and family contribution for{" "}
             {schoolYear?.year_name ?? "this year"}.
           </p>
+          {/* Back button — returns to the Financial Aid chooser so users can
+              switch to "not participating" or SNAP without losing their path.
+              Styled to match the Back button in the inline bottom nav. */}
+          <button
+            type="button"
+            onClick={() => setShowForm(false)}
+            className="mt-4 inline-flex items-center justify-center gap-1.5 rounded-md border border-input px-3 py-2.5 text-sm font-medium transition-colors bg-white text-muted-foreground hover:text-foreground hover:bg-gray-50"
+          >
+            <svg className="size-4" viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M12.79 5.23a.75.75 0 01-.02 1.06L8.832 10l3.938 3.71a.75.75 0 11-1.04 1.08l-4.5-4.25a.75.75 0 010-1.08l4.5-4.25a.75.75 0 011.06.02z" clipRule="evenodd" />
+            </svg>
+            Back to Financial Aid options
+          </button>
         </div>
+
+        {/* SUFS deliberately omitted on the OS form view — it lives only on the
+            Financial Aid chooser. Users can return via the "Back to Financial
+            Aid options" link above to edit SUFS Award IDs. */}
 
         {deadlinePassed && (
           <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 dark:border-red-900/50 dark:bg-red-900/20">
@@ -1428,12 +1790,13 @@ export default function ScholarshipPage() {
 
         {/* Annual Household Income Documentation */}
         <Card className="overflow-hidden gap-0 py-0 ring-0 border">
-          <CardHeader className="border-b py-3 !pb-3 cursor-pointer select-none" onClick={() => toggleSection("income")}>
+          <CardHeader className="border-b py-3 !pb-3">
             <div className="flex items-center justify-between gap-4">
               <div className="min-w-0">
-                <CardTitle className="text-lg">Annual Household Income Documentation</CardTitle>
+                <CardTitle className="text-lg">Household Information</CardTitle>
                 <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
-                  To process your application, we need to collect some information about the family of the applicant(s).
+                  Enter who lives in your home and any income your household
+                  receives to continue.
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -1442,32 +1805,21 @@ export default function ScholarshipPage() {
                 ) : (
                   <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-amber-500 text-white"><svg className="size-4" viewBox="0 0 20 20" fill="currentColor"><path d="M5.433 13.917l1.262-3.155A4 4 0 017.58 9.42l6.92-6.918a2.121 2.121 0 013 3l-6.92 6.918c-.383.383-.84.685-1.343.886l-3.154 1.262a.5.5 0 01-.65-.65z" /><path d="M3.5 5.75c0-.69.56-1.25 1.25-1.25H10A.75.75 0 0010 3H4.75A2.75 2.75 0 002 5.75v9.5A2.75 2.75 0 004.75 18h9.5A2.75 2.75 0 0017 15.25V10a.75.75 0 00-1.5 0v5.25c0 .69-.56 1.25-1.25 1.25h-9.5c-.69 0-1.25-.56-1.25-1.25v-9.5z" /></svg></div>
                 )}
-                <div className="flex size-8 shrink-0 items-center justify-center rounded-md border border-input text-muted-foreground hover:bg-muted/50 transition-colors">
-                  <svg className={`size-4 transition-transform duration-200 ${openSections.has("income") ? "rotate-180" : ""}`} viewBox="0 0 20 20" fill="currentColor">
-                    <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
-                  </svg>
-                </div>
               </div>
             </div>
           </CardHeader>
-          <AnimatePresence initial={false}>
-          {openSections.has("income") && (
-            <motion.div
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: "auto", opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              transition={{ duration: 0.25, ease: "easeInOut" }}
-              className="overflow-hidden"
-            >
           <CardContent className="space-y-6 py-5 bg-white dark:bg-background">
             <section>
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
-                Household Size
+              <h3 className="text-lg font-medium">
+                Who Lives in Your Home
               </h3>
+              <p className="text-sm text-muted-foreground mt-1 mb-6 max-w-2xl">
+                Add all adults and children living in your home.
+              </p>
               <div className="grid gap-4 sm:grid-cols-3">
                 <Field>
                   <FieldLabel className="text-xs">
-                    Adults in Household <span className="text-red-400">*</span>
+                    Number of Adults <span className="text-red-400">*</span>
                   </FieldLabel>
                   <Input
                     type="number"
@@ -1482,7 +1834,7 @@ export default function ScholarshipPage() {
                 </Field>
                 <Field>
                   <FieldLabel className="text-xs">
-                    Children in Household <span className="text-red-400">*</span>
+                    Number of Children <span className="text-red-400">*</span>
                   </FieldLabel>
                   <Input
                     type="number"
@@ -1496,53 +1848,19 @@ export default function ScholarshipPage() {
                   />
                 </Field>
               </div>
-              <label htmlFor="no_contributing" className="mt-4 inline-flex w-auto cursor-pointer items-center gap-3">
-                <input
-                  type="checkbox"
-                  id="no_contributing"
-                  checked={noContributing}
-                  onChange={(e) => setNoContributing(e.target.checked)}
-                  disabled={isReadonly}
-                  className="size-5 cursor-pointer rounded accent-primary"
-                />
-                <span className="text-sm select-none">No contributing members in the household</span>
-              </label>
-              <AnimatePresence initial={false}>
-              {noContributing && (
-                <motion.div
-                  key="no-contributing-section"
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: "auto" }}
-                  exit={{ opacity: 0, height: 0 }}
-                  transition={{ duration: 0.22, ease: "easeInOut" }}
-                  className="overflow-hidden"
-                >
-                  <div className="mt-4">
-                    <p className="text-sm text-muted-foreground mb-3">
-                      You have selected that you have no persons who are currently employed or have a contributing income to the household. If this is accurate, please upload proof of unemployment or termination.
-                    </p>
-                    <p className="text-xs font-medium mb-2">Termination / Unemployment Letter</p>
-                    <IncomeFileUpload
-                      label="Drop termination letter here or click to upload"
-                      disabled={isReadonly}
-                      existingFile={terminationLetter as XanoFileMetadata | null}
-                      onUploaded={(meta) => setTerminationLetter(meta)}
-                      onRemoved={() => setTerminationLetter({})}
-                    />
-                  </div>
-                </motion.div>
-              )}
-              </AnimatePresence>
             </section>
 
             {/* Monthly Income */}
             <section>
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
-                Monthly Income
+              <h3 className="text-lg font-medium">
+                Other Money Your Household Receives Each Month
               </h3>
+              <p className="text-sm text-muted-foreground mt-1 mb-6 max-w-2xl">
+                Not from a job (for example: child support or side income).
+              </p>
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 <Field>
-                  <FieldLabel className="text-xs">Business Income</FieldLabel>
+                  <FieldLabel className="text-xs">Money from a Business or Side Job</FieldLabel>
                   <CurrencyInput
                     value={businessIncome}
                     onChange={setBusinessIncome}
@@ -1550,7 +1868,7 @@ export default function ScholarshipPage() {
                   />
                 </Field>
                 <Field>
-                  <FieldLabel className="text-xs">Capital Gains</FieldLabel>
+                  <FieldLabel className="text-xs">Money from Investments (if any)</FieldLabel>
                   <CurrencyInput
                     value={capitalGains}
                     onChange={setCapitalGains}
@@ -1566,7 +1884,7 @@ export default function ScholarshipPage() {
                   />
                 </Field>
                 <Field>
-                  <FieldLabel className="text-xs">Alimony</FieldLabel>
+                  <FieldLabel className="text-xs">Alimony / Spousal Support</FieldLabel>
                   <CurrencyInput
                     value={alimony}
                     onChange={setAlimony}
@@ -1574,7 +1892,7 @@ export default function ScholarshipPage() {
                   />
                 </Field>
                 <Field>
-                  <FieldLabel className="text-xs">Trusts</FieldLabel>
+                  <FieldLabel className="text-xs">Money from Trusts or Inheritance</FieldLabel>
                   <CurrencyInput
                     value={trustsIncome}
                     onChange={setTrustsIncome}
@@ -1612,19 +1930,34 @@ export default function ScholarshipPage() {
             {/* Government Benefits */}
             <section>
               <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
-                Government Benefits
+                Government Assistance
               </h3>
-              <label htmlFor="gov_benefits" className="inline-flex w-auto cursor-pointer items-center gap-3">
+              <div className="inline-flex w-auto items-center gap-3">
+                {/* Only the checkbox is clickable — the label text is inert so
+                    clicking the phrase doesn't toggle the state by accident. */}
                 <input
                   type="checkbox"
                   id="gov_benefits"
                   checked={govBenefits}
-                  onChange={(e) => setGovBenefits(e.target.checked)}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    setGovBenefits(checked);
+                    // Unchecking removes any previously-added benefits so they
+                    // aren't retained as hidden data.
+                    if (!checked && benefits.length > 0) {
+                      const toDelete = [...benefits];
+                      setBenefits([]);
+                      toDelete.forEach((b) => {
+                        fetch(`/api/scholarship-items/benefits/${b.id}`, { method: "DELETE" })
+                          .catch((err) => console.error("Failed to delete benefit:", err));
+                      });
+                    }
+                  }}
                   disabled={isReadonly}
                   className="size-5 cursor-pointer rounded accent-primary"
                 />
-                <span className="text-sm select-none">My household receives government benefits</span>
-              </label>
+                <span className="text-sm select-none">My household receives government assistance (SNAP, SSI, etc.)</span>
+              </div>
               <AnimatePresence initial={false}>
               {govBenefits && (
                 <motion.div
@@ -1762,27 +2095,14 @@ export default function ScholarshipPage() {
               </AnimatePresence>
             </section>
           </CardContent>
-            </motion.div>
-          )}
-          </AnimatePresence>
         </Card>
 
         {/* Contributing Members */}
-        <AnimatePresence initial={false}>
-        {!noContributing && (
-          <motion.div
-            key="contributing-members-card"
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: "auto" }}
-            exit={{ opacity: 0, height: 0 }}
-            transition={{ duration: 0.25, ease: "easeInOut" }}
-            className="overflow-hidden"
-          >
-          <Card className="overflow-hidden gap-0 py-0 ring-0 border">
-            <CardHeader className="border-b py-3 !pb-3 cursor-pointer select-none" onClick={() => toggleSection("members")}>
+        <Card className="overflow-hidden gap-0 py-0 ring-0 border">
+            <CardHeader className="border-b py-3 !pb-3">
               <div className="flex items-center justify-between gap-4">
                 <div className="min-w-0">
-                  <CardTitle className="text-lg">Contributing Members</CardTitle>
+                  <CardTitle className="text-lg">Household Members with Income</CardTitle>
                   <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
                     Identify each person in your household who provides or is responsible for any portion of the family&apos;s income.
                   </p>
@@ -1793,24 +2113,63 @@ export default function ScholarshipPage() {
                   ) : (
                     <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-amber-500 text-white"><svg className="size-4" viewBox="0 0 20 20" fill="currentColor"><path d="M5.433 13.917l1.262-3.155A4 4 0 017.58 9.42l6.92-6.918a2.121 2.121 0 013 3l-6.92 6.918c-.383.383-.84.685-1.343.886l-3.154 1.262a.5.5 0 01-.65-.65z" /><path d="M3.5 5.75c0-.69.56-1.25 1.25-1.25H10A.75.75 0 0010 3H4.75A2.75 2.75 0 002 5.75v9.5A2.75 2.75 0 004.75 18h9.5A2.75 2.75 0 0017 15.25V10a.75.75 0 00-1.5 0v5.25c0 .69-.56 1.25-1.25 1.25h-9.5c-.69 0-1.25-.56-1.25-1.25v-9.5z" /></svg></div>
                   )}
-                  <div className="flex size-8 shrink-0 items-center justify-center rounded-md border border-input text-muted-foreground hover:bg-muted/50 transition-colors">
-                    <svg className={`size-4 transition-transform duration-200 ${openSections.has("members") ? "rotate-180" : ""}`} viewBox="0 0 20 20" fill="currentColor">
-                      <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
-                    </svg>
-                  </div>
                 </div>
               </div>
             </CardHeader>
-            <AnimatePresence initial={false}>
-            {openSections.has("members") && (
-              <motion.div
-                initial={{ height: 0, opacity: 0 }}
-                animate={{ height: "auto", opacity: 1 }}
-                exit={{ height: 0, opacity: 0 }}
-                transition={{ duration: 0.25, ease: "easeInOut" }}
-                className="overflow-hidden"
-              >
             <CardContent className="space-y-6 py-5 bg-white dark:bg-background">
+              {/* "No contributing members" option — moved here from the Income
+                  card. Checking it hides the members list and surfaces a
+                  termination-letter upload instead. */}
+              <div className="inline-flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  id="no_contributing"
+                  checked={noContributing}
+                  onChange={(e) => setNoContributing(e.target.checked)}
+                  disabled={isReadonly}
+                  className="size-5 cursor-pointer rounded accent-primary"
+                />
+                <span className="text-sm select-none">
+                  No contributing members in the household
+                </span>
+              </div>
+
+              <AnimatePresence initial={false} mode="wait">
+              {noContributing ? (
+                <motion.div
+                  key="no-contributing-branch"
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: "auto" }}
+                  exit={{ opacity: 0, height: 0 }}
+                  transition={{ duration: 0.22, ease: "easeInOut" }}
+                  className="overflow-hidden"
+                >
+                  <p className="text-sm text-muted-foreground mb-3">
+                    You have selected that you have no persons who are currently
+                    employed or have a contributing income to the household. If
+                    this is accurate, please upload proof of unemployment or
+                    termination.
+                  </p>
+                  <p className="text-xs font-medium mb-2">
+                    Termination / Unemployment Letter
+                  </p>
+                  <IncomeFileUpload
+                    label="Drop termination letter here or click to upload"
+                    disabled={isReadonly}
+                    existingFile={terminationLetter as XanoFileMetadata | null}
+                    onUploaded={(meta) => setTerminationLetter(meta)}
+                    onRemoved={() => setTerminationLetter({})}
+                  />
+                </motion.div>
+              ) : (
+                <motion.div
+                  key="members-branch"
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: "auto" }}
+                  exit={{ opacity: 0, height: 0 }}
+                  transition={{ duration: 0.22, ease: "easeInOut" }}
+                  className="overflow-hidden"
+                >
               {members.length === 0 && !addingMember ? (
                 <Empty className="border rounded-lg py-10">
                   <EmptyHeader>
@@ -1840,7 +2199,7 @@ export default function ScholarshipPage() {
                     >
                       <div className="-mx-4 mb-3 flex items-center justify-between border-b px-4 pb-3">
                         <p className="text-sm font-semibold">
-                          Contributing Member {idx + 1}
+                          Income Earner {idx + 1}
                         </p>
                         {!isReadonly && (
                           <div className="flex items-center gap-2">
@@ -1848,7 +2207,7 @@ export default function ScholarshipPage() {
                               variant="outline"
                               size="icon"
                               className="size-8 text-muted-foreground hover:text-red-600"
-                              onClick={() => setPendingDelete({ type: "member", id: member.id, label: `Contributing Member ${idx + 1}` })}
+                              onClick={() => setPendingDelete({ type: "member", id: member.id, label: `Income Earner ${idx + 1}` })}
                             >
                               <Trash2 className="size-4" />
                             </Button>
@@ -1910,22 +2269,12 @@ export default function ScholarshipPage() {
                         </Field>
                         <Field>
                           <FieldLabel className="text-xs">State <span className="text-red-400">*</span></FieldLabel>
-                          <Combobox
+                          <StateSelect
                             value={member.state || ""}
-                            onValueChange={(v) => patchMemberLocal(member.id, { state: v as string })}
-                          >
-                            <ComboboxInput placeholder="Search state..." className="w-full" aria-invalid={!(member.state || "").trim() || undefined} disabled={isReadonly} />
-                            <ComboboxContent>
-                              <ComboboxList>
-                                {US_STATES.map((s) => (
-                                  <ComboboxItem key={s.value} value={s.value}>
-                                    {s.label}
-                                  </ComboboxItem>
-                                ))}
-                              </ComboboxList>
-                              <ComboboxEmpty>No state found</ComboboxEmpty>
-                            </ComboboxContent>
-                          </Combobox>
+                            invalid={!(member.state || "").trim()}
+                            disabled={isReadonly}
+                            onChange={(v) => patchMemberLocal(member.id, { state: v })}
+                          />
                         </Field>
                         <Field>
                           <FieldLabel className="text-xs">Zip Code <span className="text-red-400">*</span></FieldLabel>
@@ -2059,10 +2408,10 @@ export default function ScholarshipPage() {
                   )}
                 </div>
               )}
+                </motion.div>
+              )}
+              </AnimatePresence>
             </CardContent>
-              </motion.div>
-            )}
-            </AnimatePresence>
             {!isReadonly && (
               <div className="border-t px-4 py-3">
                 <Button
@@ -2074,17 +2423,14 @@ export default function ScholarshipPage() {
                 </Button>
               </div>
             )}
-          </Card>
-          </motion.div>
-        )}
-        </AnimatePresence>
+        </Card>
 
         {/* Family Household Assets */}
         <Card className="overflow-hidden gap-0 py-0 ring-0 border">
-          <CardHeader className="border-b py-3 !pb-3 cursor-pointer select-none" onClick={() => toggleSection("assets")}>
+          <CardHeader className="border-b py-3 !pb-3">
             <div className="flex items-center justify-between gap-4">
               <div className="min-w-0">
-                <CardTitle className="text-lg">Family Household Assets</CardTitle>
+                <CardTitle className="text-lg">Savings, Property &amp; Other Assets</CardTitle>
                 <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
                   Briefly outline all financial resources available to your household, including checking/savings accounts, investments, retirement accounts, and real estate holdings.
                 </p>
@@ -2095,33 +2441,23 @@ export default function ScholarshipPage() {
                 ) : (
                   <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-amber-500 text-white"><svg className="size-4" viewBox="0 0 20 20" fill="currentColor"><path d="M5.433 13.917l1.262-3.155A4 4 0 017.58 9.42l6.92-6.918a2.121 2.121 0 013 3l-6.92 6.918c-.383.383-.84.685-1.343.886l-3.154 1.262a.5.5 0 01-.65-.65z" /><path d="M3.5 5.75c0-.69.56-1.25 1.25-1.25H10A.75.75 0 0010 3H4.75A2.75 2.75 0 002 5.75v9.5A2.75 2.75 0 004.75 18h9.5A2.75 2.75 0 0017 15.25V10a.75.75 0 00-1.5 0v5.25c0 .69-.56 1.25-1.25 1.25h-9.5c-.69 0-1.25-.56-1.25-1.25v-9.5z" /></svg></div>
                 )}
-                <div className="flex size-8 shrink-0 items-center justify-center rounded-md border border-input text-muted-foreground hover:bg-muted/50 transition-colors">
-                  <svg className={`size-4 transition-transform duration-200 ${openSections.has("assets") ? "rotate-180" : ""}`} viewBox="0 0 20 20" fill="currentColor">
-                    <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
-                  </svg>
-                </div>
               </div>
             </div>
           </CardHeader>
-          <AnimatePresence initial={false}>
-          {openSections.has("assets") && (
-            <motion.div
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: "auto", opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              transition={{ duration: 0.25, ease: "easeInOut" }}
-              className="overflow-hidden"
-            >
           <CardContent className="space-y-6 py-5 bg-white dark:bg-background">
             {/* Assets */}
             <section>
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
-                Financial Assets
+              <h3 className="text-lg font-medium">
+                Your Savings and Money
               </h3>
+              <p className="text-sm text-muted-foreground mt-1 mb-6 max-w-2xl">
+                Add any savings or money your family has in accounts or
+                investments.
+              </p>
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 <Field>
                   <FieldLabel className="text-xs">
-                    Checking Accounts
+                    Money in Checking Accounts
                   </FieldLabel>
                   <CurrencyInput
                     value={assetsChecking}
@@ -2131,7 +2467,7 @@ export default function ScholarshipPage() {
                 </Field>
                 <Field>
                   <FieldLabel className="text-xs">
-                    Savings Accounts
+                    Money in Savings Accounts
                   </FieldLabel>
                   <CurrencyInput
                     value={assetsSavings}
@@ -2141,7 +2477,7 @@ export default function ScholarshipPage() {
                 </Field>
                 <Field>
                   <FieldLabel className="text-xs">
-                    Retirement / Savings
+                    Retirement Accounts (401k, IRA)
                   </FieldLabel>
                   <CurrencyInput
                     value={assetsRetirement}
@@ -2151,7 +2487,7 @@ export default function ScholarshipPage() {
                 </Field>
                 <Field>
                   <FieldLabel className="text-xs">
-                    Stocks / Bonds / Securities
+                    Investments (Stocks or Bonds)
                   </FieldLabel>
                   <CurrencyInput
                     value={assetsStocks}
@@ -2161,7 +2497,7 @@ export default function ScholarshipPage() {
                 </Field>
                 <Field>
                   <FieldLabel className="text-xs">
-                    Trusts / Inheritance
+                    Trust Funds or Inheritance
                   </FieldLabel>
                   <CurrencyInput
                     value={assetsTrusts}
@@ -2170,7 +2506,9 @@ export default function ScholarshipPage() {
                   />
                 </Field>
                 <Field>
-                  <FieldLabel className="text-xs">Business</FieldLabel>
+                  <FieldLabel className="text-xs">
+                    Money in a Business You Own
+                  </FieldLabel>
                   <CurrencyInput
                     value={assetsBusiness}
                     onChange={setAssetsBusiness}
@@ -2184,12 +2522,15 @@ export default function ScholarshipPage() {
 
             {/* Debts */}
             <section>
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
-                Debts
+              <h3 className="text-lg font-medium">
+                Loans and Bills You&rsquo;re Paying
               </h3>
+              <p className="text-sm text-muted-foreground mt-1 mb-6 max-w-2xl">
+                Add any credit cards, loans, or bills you are currently paying.
+              </p>
               <div className="grid gap-4 sm:grid-cols-3">
                 <Field>
-                  <FieldLabel className="text-xs">Credit Cards</FieldLabel>
+                  <FieldLabel className="text-xs">Credit Cards (total owed)</FieldLabel>
                   <CurrencyInput
                     value={debtsCreditCards}
                     onChange={setDebtsCreditCards}
@@ -2197,7 +2538,7 @@ export default function ScholarshipPage() {
                   />
                 </Field>
                 <Field>
-                  <FieldLabel className="text-xs">Student Loans</FieldLabel>
+                  <FieldLabel className="text-xs">Student Loans (total owed)</FieldLabel>
                   <CurrencyInput
                     value={debtsStudentLoans}
                     onChange={setDebtsStudentLoans}
@@ -2205,7 +2546,7 @@ export default function ScholarshipPage() {
                   />
                 </Field>
                 <Field>
-                  <FieldLabel className="text-xs">Personal Loans</FieldLabel>
+                  <FieldLabel className="text-xs">Other Loans (total owed)</FieldLabel>
                   <CurrencyInput
                     value={debtsPersonalLoans}
                     onChange={setDebtsPersonalLoans}
@@ -2219,11 +2560,12 @@ export default function ScholarshipPage() {
 
             {/* Homes / Real Estate */}
             <section>
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Home / Real Estate
-                </h3>
-              </div>
+              <h3 className="text-lg font-medium">
+                Your Home and Property
+              </h3>
+              <p className="text-sm text-muted-foreground mt-1 mb-6 max-w-2xl">
+                Add any homes, land, or property your family owns.
+              </p>
               {homes.length === 0 && !addingHome ? (
                 <Empty className="border rounded-lg py-10">
                   <EmptyHeader>
@@ -2271,30 +2613,20 @@ export default function ScholarshipPage() {
                       <div className="grid gap-4 sm:grid-cols-2">
                         <Field>
                           <FieldLabel className="text-xs">Type <span className="text-red-400">*</span></FieldLabel>
-                          <Select
+                          <OptionSelect
                             value={home.type ?? ""}
-                            onValueChange={(val) => {
-                              patchHomeLocal(home.id, { type: val });
-                            }}
+                            invalid={!(home.type ?? "").trim()}
                             disabled={isReadonly}
-                          >
-                            <SelectTrigger className={`w-full ${!(home.type ?? "").trim() ? "border-red-400" : ""}`}>
-                              <SelectValue placeholder="Select type" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="Primary Residence">
-                                Primary Residence
-                              </SelectItem>
-                              <SelectItem value="Rental Property">
-                                Rental Property
-                              </SelectItem>
-                              <SelectItem value="Vacation Home">
-                                Vacation Home
-                              </SelectItem>
-                              <SelectItem value="Land">Land</SelectItem>
-                              <SelectItem value="Other">Other</SelectItem>
-                            </SelectContent>
-                          </Select>
+                            placeholder="Select type"
+                            onChange={(val) => patchHomeLocal(home.id, { type: val })}
+                            options={[
+                              { value: "Primary Residence", label: "Primary Residence" },
+                              { value: "Rental Property", label: "Rental Property" },
+                              { value: "Vacation Home", label: "Vacation Home" },
+                              { value: "Land", label: "Land" },
+                              { value: "Other", label: "Other" },
+                            ]}
+                          />
                         </Field>
                       </div>
                       <div className="mt-4 grid gap-4 grid-cols-1 sm:grid-cols-[2fr_1fr]">
@@ -2331,20 +2663,12 @@ export default function ScholarshipPage() {
                         </Field>
                         <Field>
                           <FieldLabel className="text-xs">State <span className="text-red-400">*</span></FieldLabel>
-                          <Combobox
+                          <StateSelect
                             value={home.state || ""}
-                            onValueChange={(v) => patchHomeLocal(home.id, { state: v as string })}
-                          >
-                            <ComboboxInput placeholder="Select state" aria-invalid={!(home.state || "").trim() || undefined} disabled={isReadonly} />
-                            <ComboboxContent>
-                              <ComboboxList>
-                                {US_STATES.map((s) => (
-                                  <ComboboxItem key={s.value} value={s.value}>{s.label}</ComboboxItem>
-                                ))}
-                                <ComboboxEmpty>No state found</ComboboxEmpty>
-                              </ComboboxList>
-                            </ComboboxContent>
-                          </Combobox>
+                            invalid={!(home.state || "").trim()}
+                            disabled={isReadonly}
+                            onChange={(v) => patchHomeLocal(home.id, { state: v })}
+                          />
                         </Field>
                         <Field>
                           <FieldLabel className="text-xs">ZIP Code <span className="text-red-400">*</span></FieldLabel>
@@ -2370,7 +2694,10 @@ export default function ScholarshipPage() {
                         </Field>
                         <Field>
                           <FieldLabel className="text-xs">
-                            Outstanding Debt
+                            Amount You Still Owe{" "}
+                            <span className="text-muted-foreground font-normal">
+                              (Enter $0 if none)
+                            </span>
                           </FieldLabel>
                           <CurrencyInput
                             value={home.outstanding_debt ?? 0}
@@ -2409,11 +2736,13 @@ export default function ScholarshipPage() {
 
             {/* Vehicles */}
             <section>
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Vehicles
-                </h3>
-              </div>
+              <h3 className="text-lg font-medium">
+                Cars and Vehicles You Own
+              </h3>
+              <p className="text-sm text-muted-foreground mt-1 mb-6 max-w-2xl">
+                Add any cars, trucks, or other vehicles your family owns or
+                makes payments on.
+              </p>
               {vehicles.length === 0 && !addingVehicle ? (
                 <Empty className="border rounded-lg py-10">
                   <EmptyHeader>
@@ -2526,7 +2855,10 @@ export default function ScholarshipPage() {
                         </Field>
                         <Field>
                           <FieldLabel className="text-xs">
-                            Remaining Debt
+                            Amount You Still Owe{" "}
+                            <span className="text-muted-foreground font-normal">
+                              (Enter $0 if none)
+                            </span>
                           </FieldLabel>
                           <CurrencyInput
                             value={vehicle.remaining_debt ?? 0}
@@ -2563,19 +2895,18 @@ export default function ScholarshipPage() {
               )}
             </section>
           </CardContent>
-            </motion.div>
-          )}
-          </AnimatePresence>
         </Card>
 
         {/* Family Contribution & Advocacy */}
         <Card className="overflow-hidden gap-0 py-0 ring-0 border">
-          <CardHeader className="border-b py-3 !pb-3 cursor-pointer select-none" onClick={() => toggleSection("contribution")}>
+          <CardHeader className="border-b py-3 !pb-3">
             <div className="flex items-center justify-between gap-4">
               <div className="min-w-0">
-                <CardTitle className="text-lg">
-                  Contribution &amp; Advocacy
-                </CardTitle>
+                <CardTitle className="text-lg">Your Tuition Contribution</CardTitle>
+                <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
+                  Tell us how much your family can reasonably contribute toward
+                  tuition each month.
+                </p>
               </div>
               <div className="flex items-center gap-2">
                 {contributionComplete ? (
@@ -2583,32 +2914,19 @@ export default function ScholarshipPage() {
                 ) : (
                   <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-amber-500 text-white"><svg className="size-4" viewBox="0 0 20 20" fill="currentColor"><path d="M5.433 13.917l1.262-3.155A4 4 0 017.58 9.42l6.92-6.918a2.121 2.121 0 013 3l-6.92 6.918c-.383.383-.84.685-1.343.886l-3.154 1.262a.5.5 0 01-.65-.65z" /><path d="M3.5 5.75c0-.69.56-1.25 1.25-1.25H10A.75.75 0 0010 3H4.75A2.75 2.75 0 002 5.75v9.5A2.75 2.75 0 004.75 18h9.5A2.75 2.75 0 0017 15.25V10a.75.75 0 00-1.5 0v5.25c0 .69-.56 1.25-1.25 1.25h-9.5c-.69 0-1.25-.56-1.25-1.25v-9.5z" /></svg></div>
                 )}
-                <div className="flex size-8 shrink-0 items-center justify-center rounded-md border border-input text-muted-foreground hover:bg-muted/50 transition-colors">
-                  <svg className={`size-4 transition-transform duration-200 ${openSections.has("contribution") ? "rotate-180" : ""}`} viewBox="0 0 20 20" fill="currentColor">
-                    <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
-                  </svg>
-                </div>
               </div>
             </div>
           </CardHeader>
-          <AnimatePresence initial={false}>
-          {openSections.has("contribution") && (
-            <motion.div
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: "auto", opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              transition={{ duration: 0.25, ease: "easeInOut" }}
-              className="overflow-hidden"
-            >
           <CardContent className="space-y-6 py-5 bg-white dark:bg-background">
             <section>
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
-                Family Contribution
+              <h3 className="text-lg font-medium">
+                How much can your family contribute towards tuition each month?
               </h3>
+              <p className="text-sm text-muted-foreground mt-1 mb-6 max-w-2xl">
+                Enter the amount your family can reasonably pay toward tuition
+                each month.
+              </p>
               <Field className="max-w-xs">
-                <FieldLabel className="text-xs">
-                  Monthly Contribution <span className="text-red-400">*</span>
-                </FieldLabel>
                 <CurrencyInput
                   value={familyContribution}
                   onChange={setFamilyContribution}
@@ -2621,18 +2939,24 @@ export default function ScholarshipPage() {
             <Separator />
 
             <section>
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
-                Scholarship Advocacy Letter <span className="text-red-400">*</span>
+              <h3 className="text-lg font-medium">
+                Tell Us About Your Family&rsquo;s Financial Situation
               </h3>
-              <p className="text-sm text-muted-foreground mb-3">
-                Provide a brief overview of your household income, usual expenses, and any special obligations (medical bills, job loss, or caregiving). Clearly state a realistic annual contribution toward tuition and your request for additional tuition funding for your child.
+              <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
+                Share your household income, typical expenses, and anything else
+                we should know (such as medical costs, job changes, or
+                caregiving responsibilities).
+              </p>
+              <p className="text-sm text-muted-foreground mt-2 mb-6 max-w-2xl">
+                Let us know how much support you&rsquo;re requesting and why
+                it&rsquo;s important for your child.
               </p>
               <textarea
                 className={`flex min-h-[120px] w-full rounded-md border bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${!advocacyLetter.trim() ? "border-red-400" : "border-input"}`}
                 value={advocacyLetter}
                 onChange={(e) => setAdvocacyLetter(e.target.value)}
                 disabled={isReadonly}
-                placeholder="Tell us about your family's financial situation and why scholarship assistance is important..."
+                placeholder="Tell us about your situation and how we can support your family..."
               />
             </section>
 
@@ -2688,9 +3012,6 @@ export default function ScholarshipPage() {
               </div>
             </section>
           </CardContent>
-            </motion.div>
-          )}
-          </AnimatePresence>
         </Card>
 
       </div>
@@ -2705,12 +3026,32 @@ export default function ScholarshipPage() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmDelete} className="bg-red-600 hover:bg-red-700">
+            <AlertDialogAction onClick={confirmDelete} className="bg-red-600 text-white hover:bg-red-700">
               Delete
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Step Up For Students Dialog — rendered on the OS form view so the
+          SUFS block's Apply / Visit buttons can open the iframe from here too. */}
+      <Dialog open={stepUpDialogOpen} onOpenChange={setStepUpDialogOpen}>
+        <DialogContent className="sm:max-w-[95vw] w-[95vw] h-[90vh] p-0 flex flex-col overflow-hidden">
+          <DialogHeader className="px-6 pt-6 pb-2 shrink-0">
+            <DialogTitle>Step Up for Students</DialogTitle>
+            <DialogDescription>
+              Log in or create an account to manage your Step Up for Students scholarship.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex-1 m-6 mt-0 overflow-hidden rounded-lg border">
+            <iframe
+              src={STEP_UP_URL}
+              className="h-full w-full border-0"
+              title="Step Up for Students"
+            />
+          </div>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }
@@ -2873,7 +3214,12 @@ function SingleFileUpload({
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction onClick={doRemove}>Remove</AlertDialogAction>
+              <AlertDialogAction
+                className="bg-red-600 text-white hover:bg-red-700"
+                onClick={doRemove}
+              >
+                Remove
+              </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
@@ -3049,7 +3395,12 @@ function MultiFileUpload({
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={() => removeIndex !== null && doRemove(removeIndex)}>Remove</AlertDialogAction>
+            <AlertDialogAction
+              className="bg-red-600 text-white hover:bg-red-700"
+              onClick={() => removeIndex !== null && doRemove(removeIndex)}
+            >
+              Remove
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

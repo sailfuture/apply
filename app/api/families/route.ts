@@ -4,7 +4,13 @@ import { xano, ensureParentRecord } from "@/lib/xano";
 
 async function resolveParents(family: ReturnType<typeof xano.families.getById> extends Promise<infer T> ? T : never) {
   const embedded = xano.families.getEmbeddedParents(family);
-  if (embedded.length > 0) return embedded;
+  // Xano relation expansion sometimes returns a partial object (id + name) without
+  // address fields. Trust the embedded version only when it includes address_line_1;
+  // otherwise fall back to a per-id fetch so inputs can pre-fill correctly.
+  const embeddedIsComplete =
+    embedded.length > 0 &&
+    embedded.every((p) => typeof p.address_line_1 === "string");
+  if (embeddedIsComplete) return embedded;
 
   const ids = xano.families.getParentIds(family);
   return await Promise.all(ids.map((id) => xano.parents.getById(id)));

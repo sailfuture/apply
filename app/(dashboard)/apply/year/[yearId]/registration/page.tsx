@@ -24,14 +24,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Combobox,
-  ComboboxInput,
-  ComboboxContent,
-  ComboboxList,
-  ComboboxItem,
-  ComboboxEmpty,
-} from "@/components/ui/combobox";
+import { StateSelect } from "@/components/state-select";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -56,6 +49,7 @@ import {
   Clock,
   ExternalLink,
 } from "lucide-react";
+import { GlobalSaveStatusPill } from "@/components/save-status-pill";
 import { AnimatePresence, motion } from "framer-motion";
 import { toast } from "sonner";
 import { US_STATES } from "@/lib/us-states";
@@ -384,7 +378,12 @@ function DocumentUpload({
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction onClick={doRemove}>Remove</AlertDialogAction>
+              <AlertDialogAction
+                className="bg-red-600 text-white hover:bg-red-700"
+                onClick={doRemove}
+              >
+                Remove
+              </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
@@ -448,6 +447,7 @@ export default function RegistrationPage() {
     registerSaveHandler,
     unregisterSaveHandler,
     updateSaveOptions,
+    trackAutosave,
   } = useApplicationFlow();
 
   // SWR hooks
@@ -462,6 +462,7 @@ export default function RegistrationPage() {
   const [saving, setSaving] = useState(false);
   const [openSections, setOpenSections] = useState<Set<string>>(new Set());
   const [pendingDeleteContact, setPendingDeleteContact] = useState<{ id: number; name: string } | null>(null);
+  const [pendingRemoveStudent, setPendingRemoveStudent] = useState<{ id: number; name: string } | null>(null);
   const [showValidation, setShowValidation] = useState(false);
   const [addStudentOpen, setAddStudentOpen] = useState(false);
   const [selectedStudentIds, setSelectedStudentIds] = useState<Set<number>>(new Set());
@@ -697,6 +698,24 @@ export default function RegistrationPage() {
 
       if (ecRes.ok) {
         const contacts: EmergencyContact[] = await ecRes.json();
+        // Every family must have at least one emergency contact — seed an empty
+        // card so the requirement is visible rather than hidden behind "Add".
+        if (contacts.length === 0) {
+          contacts.push({
+            id: -Date.now(),
+            first_name: "",
+            last_name: "",
+            email: "",
+            phone: "",
+            relationship: "",
+            address_line_1: "",
+            address_line_2: "",
+            city: "",
+            state: "",
+            zipcode: "",
+            _isNew: true,
+          });
+        }
         setEmergencyContacts(contacts);
       }
     } catch (err) {
@@ -724,17 +743,23 @@ export default function RegistrationPage() {
         })
       );
 
+      // Compute existingIds up front — mutating inside a setState updater is
+      // unreliable because the updater may run asynchronously (or multiple times
+      // in concurrent/strict mode), so by the time the `if` check below runs the
+      // Set could still be empty. This is why students with saved registrations
+      // weren't being auto-selected on reload.
       const existingIds = new Set<number>();
+      enrolledStudents.forEach((s, i) => {
+        if (results[i] && results[i]!.id) {
+          existingIds.add(s.id);
+        }
+      });
+
       setRegistrations((prev) => {
         const next = { ...prev };
         enrolledStudents.forEach((s, i) => {
-          const existing = next[s.id];
-          if (!existing) {
+          if (!next[s.id]) {
             next[s.id] = results[i] ?? emptyRegistration(s.id);
-          }
-          // Auto-select students that have existing registration records
-          if (results[i] && results[i]!.id) {
-            existingIds.add(s.id);
           }
         });
         return next;
@@ -762,30 +787,21 @@ export default function RegistrationPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [studentsData, applicationsData]);
 
-  // Auto-open only incomplete sections on initial load; keep completed ones collapsed
+  // Default every section to open on initial load — don't auto-collapse completed
+  // ones. Users can still manually collapse via the chevron.
   useEffect(() => {
     if (loading || initialCollapseRef.current) return;
     if (!studentsData || !applicationsData) return;
     initialCollapseRef.current = true;
 
     const openIds = new Set<string>();
-    parents.forEach((p) => {
-      if (!isParentComplete(p)) openIds.add(`parent-${p.id}`);
-    });
-    emergencyContacts.forEach((ec) => {
-      if (!isEmergencyContactComplete(ec)) openIds.add(`ec-${ec.id}`);
-    });
-    enrolledStudents.filter((s) => selectedStudentIds.has(s.id)).forEach((s) => {
-      const reg = registrations[s.id];
-      if (!reg || !isRegistrationComplete(reg)) openIds.add(`student-${s.id}`);
-    });
-    // If everything is complete, open nothing; otherwise open incomplete ones
-    // If no cards are open, open the first one so the page isn't empty
-    if (openIds.size === 0 && (parents.length > 0 || enrolledStudents.length > 0)) {
-      // All complete — leave collapsed
-    }
+    parents.forEach((p) => openIds.add(`parent-${p.id}`));
+    emergencyContacts.forEach((ec) => openIds.add(`ec-${ec.id}`));
+    enrolledStudents
+      .filter((s) => selectedStudentIds.has(s.id))
+      .forEach((s) => openIds.add(`student-${s.id}`));
     setOpenSections(openIds);
-  }, [loading, parents, emergencyContacts, enrolledStudents, registrations, studentsData, applicationsData]);
+  }, [loading, parents, emergencyContacts, enrolledStudents, registrations, studentsData, applicationsData, selectedStudentIds]);
 
   // ---------------------------------------------------------------------------
   // Section toggle
@@ -838,6 +854,37 @@ export default function RegistrationPage() {
     };
     setEmergencyContacts((prev) => [...prev, newContact]);
     setOpenSections((prev) => new Set(prev).add(`ec-${tempId}`));
+  }
+
+  async function handleRemoveStudent(studentId: number) {
+    const reg = registrations[studentId];
+    setPendingRemoveStudent(null);
+
+    // Deselect locally
+    setSelectedStudentIds((prev) => {
+      const next = new Set(prev);
+      next.delete(studentId);
+      return next;
+    });
+    setRegistrations((prev) => {
+      const next = { ...prev };
+      delete next[studentId];
+      return next;
+    });
+    setOpenSections((prev) => {
+      const next = new Set(prev);
+      next.delete(`student-${studentId}`);
+      return next;
+    });
+
+    // Delete persisted registration, if any
+    if (reg?.id) {
+      try {
+        await fetch(`/api/student-registration/${reg.id}`, { method: "DELETE" });
+      } catch (err) {
+        console.error("Failed to delete student registration:", err);
+      }
+    }
   }
 
   function handleDeleteContact(contactId: number) {
@@ -968,13 +1015,26 @@ export default function RegistrationPage() {
                   next[reg.registration_students_id] = created;
                   return next;
                 });
+              } else {
+                const errBody = await res.text().catch(() => "");
+                console.error(
+                  `Failed to create student registration for student ${reg.registration_students_id}: ${res.status} ${errBody}`
+                );
               }
             })
           );
         }
       }
 
-      await Promise.all(promises);
+      await trackAutosave(
+        Promise.all(promises).then((results) => {
+          // Surface any non-ok response so the global badge goes red.
+          const responses = results.filter((r): r is Response => r instanceof Response);
+          const failed = responses.find((r) => !r.ok);
+          if (failed) throw new Error(`Save failed (${failed.status})`);
+          return results;
+        })
+      );
 
       // Refresh emergency contacts to get real IDs for newly created ones
       const ecRes = await fetch("/api/emergency-contacts");
@@ -982,8 +1042,6 @@ export default function RegistrationPage() {
         const contacts: EmergencyContact[] = await ecRes.json();
         setEmergencyContacts(contacts);
       }
-
-      // Auto-saved silently — no toast for background saves
     } catch (err) {
       console.error("Failed to save registration:", err);
       toast.error("Failed to save registration. Please try again.");
@@ -1090,7 +1148,7 @@ export default function RegistrationPage() {
       });
     } else {
       updateSaveOptions({
-        label: `Complete Registration ${completedCards}/${totalCards}`,
+        label: `Complete Registration`,
         disabled: false,
         saving,
         completed: false,
@@ -1131,14 +1189,20 @@ export default function RegistrationPage() {
     <>
       <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
         {/* Page header */}
-        <div className="text-center xl:text-left">
-          <div className="flex items-center gap-3 justify-center xl:justify-start">
+        <div>
+          <div className="flex items-center justify-between gap-3 pb-3 border-b">
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+              Registration
+            </p>
+            <GlobalSaveStatusPill />
+          </div>
+          <div className="flex items-center gap-3 mt-4">
             <h1 className="text-2xl font-semibold">Complete Registration</h1>
             <span className="text-sm text-muted-foreground font-medium bg-muted px-2.5 py-0.5 rounded-full">
               {completedCards}/{totalCards}
             </span>
           </div>
-          <p className="text-muted-foreground text-sm mt-1">
+          <p className="text-muted-foreground text-sm mt-2 max-w-2xl">
             Verify family contacts, upload required documents, and provide health information for each student.
           </p>
         </div>
@@ -1148,7 +1212,7 @@ export default function RegistrationPage() {
         {/* ================================================================= */}
 
         <div>
-          <h2 className="text-lg font-semibold mb-4">Family &amp; Emergency Contacts</h2>
+          <h2 className="text-lg font-semibold mb-4">Current Primary and Secondary Contacts</h2>
 
           <div className="space-y-4">
             {/* Parent / Guardian Cards */}
@@ -1273,26 +1337,11 @@ export default function RegistrationPage() {
                                 </Field>
                                 <Field>
                                   <FieldLabel className="text-xs">State</FieldLabel>
-                                  <Combobox
+                                  <StateSelect
                                     value={parent.state || ""}
-                                    onValueChange={(v) => updateParentLocal(parent.id, "state", v as string)}
-                                  >
-                                    <ComboboxInput
-                                      placeholder="Search state..."
-                                      className="w-full"
-                                      aria-invalid={!parent.state || undefined}
-                                    />
-                                    <ComboboxContent>
-                                      <ComboboxList>
-                                        {US_STATES.map((s) => (
-                                          <ComboboxItem key={s.value} value={s.value}>
-                                            {s.label}
-                                          </ComboboxItem>
-                                        ))}
-                                      </ComboboxList>
-                                      <ComboboxEmpty>No state found</ComboboxEmpty>
-                                    </ComboboxContent>
-                                  </Combobox>
+                                    invalid={!parent.state}
+                                    onChange={(v) => updateParentLocal(parent.id, "state", v)}
+                                  />
                                 </Field>
                                 <Field>
                                   <FieldLabel className="text-xs">Zip Code</FieldLabel>
@@ -1313,6 +1362,15 @@ export default function RegistrationPage() {
                 </Card>
               );
             })}
+
+            {/* Divider between parents and emergency contacts */}
+            {parents.length > 0 && (
+              <div className="pt-2">
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  Emergency Contacts
+                </h3>
+              </div>
+            )}
 
             {/* Emergency Contact Cards */}
             {emergencyContacts.map((ec) => {
@@ -1348,8 +1406,18 @@ export default function RegistrationPage() {
                           variant="outline"
                           size="icon"
                           className="size-8 text-muted-foreground hover:text-red-600"
+                          disabled={emergencyContacts.length <= 1}
+                          title={
+                            emergencyContacts.length <= 1
+                              ? "At least one emergency contact is required"
+                              : undefined
+                          }
                           onClick={(e) => {
                             e.stopPropagation();
+                            if (emergencyContacts.length <= 1) {
+                              toast.error("At least one emergency contact is required.");
+                              return;
+                            }
                             setPendingDeleteContact({
                               id: ec.id,
                               name: `${ec.first_name} ${ec.last_name}`.trim() || "this contact",
@@ -1475,26 +1543,11 @@ export default function RegistrationPage() {
                                 </Field>
                                 <Field>
                                   <FieldLabel className="text-xs">State <span className="text-red-400">*</span></FieldLabel>
-                                  <Combobox
+                                  <StateSelect
                                     value={ec.state || ""}
-                                    onValueChange={(v) => updateContactLocal(ec.id, "state", v as string)}
-                                  >
-                                    <ComboboxInput
-                                      placeholder="Search state..."
-                                      className="w-full"
-                                      aria-invalid={(showValidation && !ec.state) || undefined}
-                                    />
-                                    <ComboboxContent>
-                                      <ComboboxList>
-                                        {US_STATES.map((s) => (
-                                          <ComboboxItem key={s.value} value={s.value}>
-                                            {s.label}
-                                          </ComboboxItem>
-                                        ))}
-                                      </ComboboxList>
-                                      <ComboboxEmpty>No state found</ComboboxEmpty>
-                                    </ComboboxContent>
-                                  </Combobox>
+                                    invalid={showValidation && !ec.state}
+                                    onChange={(v) => updateContactLocal(ec.id, "state", v)}
+                                  />
                                 </Field>
                                 <Field>
                                   <FieldLabel className="text-xs">Zip Code <span className="text-red-400">*</span></FieldLabel>
@@ -1581,6 +1634,20 @@ export default function RegistrationPage() {
                         </div>
                         <div className="flex items-center gap-2">
                           <StatusIcon complete={isRegistrationComplete(reg)} />
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            className="size-8 text-muted-foreground hover:text-red-600"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setPendingRemoveStudent({
+                                id: student.id,
+                                name: `${student.first_name} ${student.last_name}`.trim() || "this student",
+                              });
+                            }}
+                          >
+                            <Trash2 className="size-4" />
+                          </Button>
                           <div
                             className="flex size-8 items-center justify-center rounded-md border border-input text-muted-foreground hover:bg-muted/50 transition-colors"
                             onClick={(e) => { e.stopPropagation(); toggleSection(sectionKey); }}
@@ -2032,6 +2099,29 @@ export default function RegistrationPage() {
         )}
       </div>
 
+      {/* Remove Student from Registration Confirmation */}
+      <AlertDialog open={!!pendingRemoveStudent} onOpenChange={(open) => { if (!open) setPendingRemoveStudent(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove student from registration?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will remove {pendingRemoveStudent?.name} from this year&apos;s registration and discard their
+              registration details (documents, health info, waiver). The student record and application remain.
+              You can re-add them later.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 text-white hover:bg-red-700"
+              onClick={() => pendingRemoveStudent && handleRemoveStudent(pendingRemoveStudent.id)}
+            >
+              Remove
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       {/* Delete Emergency Contact Confirmation */}
       <AlertDialog open={!!pendingDeleteContact} onOpenChange={(open) => { if (!open) setPendingDeleteContact(null); }}>
         <AlertDialogContent>
@@ -2043,7 +2133,10 @@ export default function RegistrationPage() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={() => pendingDeleteContact && handleDeleteContact(pendingDeleteContact.id)}>
+            <AlertDialogAction
+              className="bg-red-600 text-white hover:bg-red-700"
+              onClick={() => pendingDeleteContact && handleDeleteContact(pendingDeleteContact.id)}
+            >
               Remove
             </AlertDialogAction>
           </AlertDialogFooter>

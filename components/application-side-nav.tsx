@@ -8,8 +8,9 @@ import { Mail, Phone, HelpCircle, ArrowLeft } from "lucide-react";
 /* Short labels for the side nav — keeps everything single-line */
 const SHORT_LABELS: Record<string, string> = {
   "Your Family Information": "Family",
-  "Student Enrollment Information": "Students",
-  "Financial Aid Application": "Financial Aid",
+  "Student Details": "Students",
+  "Financial Aid": "Financial Aid",
+  "Initial Testing": "Testing",
   "Review Tuition & Scholarship Award": "Tuition",
   "Sign Enrollment Agreement": "Enrollment",
   "Begin Registration Process": "Registration",
@@ -25,8 +26,7 @@ const APPLICATION_SEGMENT_MAP: Record<string, number> = {
   family: 1,
   students: 2,
   scholarship: 3,
-  nwea: 3,
-  sufs: 3,
+  nwea: 4,
   submit: -1,
 };
 
@@ -67,7 +67,7 @@ function StepCircle({ number, status }: { number: number; status: StepStatus }) 
   );
 }
 
-export function ApplicationSideNav({ yearId }: { yearId: number }) {
+export function ApplicationSideNav({ yearId, onSubmitClick }: { yearId: number; onSubmitClick?: () => void }) {
   const pathname = usePathname();
   const router = useRouter();
   const { hideChrome } = useApplicationFlow();
@@ -122,14 +122,22 @@ export function ApplicationSideNav({ yearId }: { yearId: number }) {
                     const label = SHORT_LABELS[step.title] ?? step.title;
 
                     if (isSubmit) {
+                      // Application submit → opens the pre-submit review modal
+                      // via the layout's callback. Registration submit still
+                      // routes to step.href (overview page handles the modal).
+                      const isApplicationSubmit = step.title === "Submit Application";
                       return (
-                        <div
+                        <button
                           key={step.number}
-                          className={`flex w-full items-center gap-3 px-3 py-3 text-left text-sm transition-colors ${
-                            step.status === "not_started"
-                              ? "bg-blue-600/40 cursor-not-allowed"
-                              : "bg-blue-600 hover:bg-blue-700 cursor-pointer"
-                          }`}
+                          type="button"
+                          onClick={() => {
+                            if (isApplicationSubmit && onSubmitClick) {
+                              onSubmitClick();
+                            } else if (step.href && step.href !== "#") {
+                              router.push(step.href);
+                            }
+                          }}
+                          className="flex w-full items-center gap-3 px-3 py-3 text-left text-sm transition-colors bg-blue-600 hover:bg-blue-700 cursor-pointer"
                         >
                           <div className="flex size-6 shrink-0 items-center justify-center rounded-full bg-white/20">
                             <svg className="size-3 text-white" viewBox="0 0 20 20" fill="currentColor">
@@ -142,7 +150,7 @@ export function ApplicationSideNav({ yearId }: { yearId: number }) {
                               ({activeSteps.filter((s) => s.status === "complete" && s.title !== "Submit Registration" && s.title !== "Submit Application").length}/{activeSteps.filter((s) => s.title !== "Submit Registration" && s.title !== "Submit Application").length})
                             </span>
                           </span>
-                        </div>
+                        </button>
                       );
                     }
 

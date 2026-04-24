@@ -78,7 +78,7 @@ export default function TuitionPage() {
   const router = useRouter();
   const yearId = Number(params.yearId);
   const { user } = useUser();
-  const { setPageTitle, registerSaveHandler, unregisterSaveHandler, updateSaveOptions } = useApplicationFlow();
+  const { setPageTitle, registerSaveHandler, unregisterSaveHandler, updateSaveOptions, trackAutosave } = useApplicationFlow();
   const { data: students } = useStudents();
   const { data: applications } = useApplications();
   const { data: yearsData } = useSchoolYears();
@@ -302,20 +302,24 @@ export default function TuitionPage() {
     }
     setSubmitting(true);
     try {
-      const res = await fetch("/api/family-payment", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          registration_school_years_id: yearId,
-          tuition_reviewed_by: user?.fullName ?? "Parent/Guardian",
-          signature: signatureMeta,
-          signature_data: signatureMeta,
-          isFamilyAccepted: true,
-          name: user?.fullName ?? "Parent/Guardian",
-          monthly_tuition_payment: grandTotal / 12,
-        }),
-      });
-      if (!res.ok) throw new Error("Failed to submit");
+      await trackAutosave(
+        fetch("/api/family-payment", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            registration_school_years_id: yearId,
+            tuition_reviewed_by: user?.fullName ?? "Parent/Guardian",
+            signature: signatureMeta,
+            signature_data: signatureMeta,
+            isFamilyAccepted: true,
+            name: user?.fullName ?? "Parent/Guardian",
+            monthly_tuition_payment: grandTotal / 12,
+          }),
+        }).then(async (r) => {
+          if (!r.ok) throw new Error(`Submit failed (${r.status})`);
+          return r;
+        })
+      );
       await mutatePayment();
       toast.success("Tuition review submitted successfully.");
     } catch {
