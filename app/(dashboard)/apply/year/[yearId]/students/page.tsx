@@ -51,8 +51,9 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Switch } from "@/components/ui/switch";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Trash2, FileUp, X, Loader2, CheckCircle2, Plus, ExternalLink, HelpCircle } from "lucide-react";
+import { Trash2, FileUp, X, Loader2, CheckCircle2, Plus, ExternalLink, HelpCircle, Pencil } from "lucide-react";
 import { GlobalSaveStatusPill } from "@/components/save-status-pill";
+import { useFamilyProgress } from "@/hooks/use-family-progress";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useSWRConfig } from "swr";
 import {
@@ -169,7 +170,6 @@ export default function StudentsStepPage() {
   const [yearName, setYearName] = useState("");
   const [loading, setLoading] = useState(true);
   const [addingStudentId, setAddingStudentId] = useState<number | null>(null);
-  const [collapsedCards, setCollapsedCards] = useState<Set<number>>(new Set());
   const [savedApplications, setSavedApplications] = useState<Application[]>([]);
   const [pendingNavPath, setPendingNavPath] = useState<string | null>(null);
 
@@ -177,6 +177,9 @@ export default function StudentsStepPage() {
   const [addError, setAddError] = useState("");
 
   const [createSheetOpen, setCreateSheetOpen] = useState(false);
+  // When set, the Create Student Sheet is in edit mode and PATCHes this id
+  // instead of POSTing a new record.
+  const [editingStudentId, setEditingStudentId] = useState<number | null>(null);
   const [newFirst, setNewFirst] = useState("");
   const [newLast, setNewLast] = useState("");
   const [newDob, setNewDob] = useState("");
@@ -184,6 +187,30 @@ export default function StudentsStepPage() {
   const [newEthnicity, setNewEthnicity] = useState("");
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState("");
+
+  function resetStudentForm() {
+    setNewFirst("");
+    setNewLast("");
+    setNewDob("");
+    setNewGender("");
+    setNewEthnicity("");
+    setCreateError("");
+    setEditingStudentId(null);
+  }
+
+  function openEditStudentSheet(student: Student) {
+    setEditingStudentId(student.id);
+    setNewFirst(student.first_name ?? "");
+    setNewLast(student.last_name ?? "");
+    // Xano stores dates as "YYYY-MM-DD" strings already; guard against the
+    // occasional legacy full-ISO value by taking the first 10 chars.
+    setNewDob(student.date_of_birth ? String(student.date_of_birth).slice(0, 10) : "");
+    setNewGender(student.gender ?? "");
+    setNewEthnicity(student.ethnicity ?? "");
+    setCreateError("");
+    setAddDialogOpen(false);
+    setCreateSheetOpen(true);
+  }
 
   const [uploadingPhotoId, setUploadingPhotoId] = useState<number | null>(null);
   const [savingAppId, setSavingAppId] = useState<number | null>(null);
@@ -273,12 +300,6 @@ export default function StudentsStepPage() {
         const newApp = await res.json();
         setApplications((prev) => [...prev, newApp]);
         setSavedApplications((prev) => [...prev, newApp]);
-        // Ensure the new student's card starts expanded
-        setCollapsedCards((prev) => {
-          const next = new Set(prev);
-          next.delete(studentId);
-          return next;
-        });
       } else {
         const body = await res.json().catch(() => null);
         setAddError(body?.error ?? `Failed to add student (${res.status})`);
@@ -307,11 +328,13 @@ export default function StudentsStepPage() {
   function isAppComplete(app: Application): boolean {
     // Student Details completion — only the school-history fields on this page.
     // SUFS lives on the Financial Aid step. Transportation + NWEA moved out.
-    if (!app.current_previous_school) return false;
-    if (!app.last_grade_completed) return false;
-    if (!app.current_grade) return false;
-    if (!app.describe_student_strengths) return false;
-    if (!app.describe_student_opportunities_for_growth) return false;
+    // Trim before checking so whitespace-only values don't pass as complete.
+    const nonEmpty = (v: string | null | undefined) => !!v && v.trim().length > 0;
+    if (!nonEmpty(app.current_previous_school)) return false;
+    if (!nonEmpty(app.last_grade_completed)) return false;
+    if (!nonEmpty(app.current_grade)) return false;
+    if (!nonEmpty(app.describe_student_strengths)) return false;
+    if (!nonEmpty(app.describe_student_opportunities_for_growth)) return false;
     return true;
   }
 
@@ -333,15 +356,6 @@ export default function StudentsStepPage() {
         </svg>
       </div>
     );
-  }
-
-  function toggleCard(studentId: number) {
-    setCollapsedCards((prev) => {
-      const next = new Set(prev);
-      if (next.has(studentId)) next.delete(studentId);
-      else next.add(studentId);
-      return next;
-    });
   }
 
   const trackedFields: (keyof Application)[] = [
@@ -425,33 +439,34 @@ export default function StudentsStepPage() {
   const handleSaveAllAppsRef = useRef(handleSaveAllApps);
   handleSaveAllAppsRef.current = handleSaveAllApps;
 
-  const [studentsLocked, setStudentsLocked] = useState(false);
+  // Progress bridge row — source of truth for section completion.
+  const { progress, setSection: setProgressSection } = useFamilyProgress(yearId);
+  const studentsLocked = !!progress?.students_completed;
 
   const handleCompleteStudentsRef = useRef<() => Promise<void>>(() => Promise.resolve());
   handleCompleteStudentsRef.current = async () => {
-    if (applications.length === 0) {
+    // Only validate apps whose student record still exists. If a student was
+    // deleted but their application record lingers (orphan), the app would
+    // fail the field check forever even though the UI hides it. Use the same
+    // `enrolled` filter the render uses so validation and UI agree.
+    const visible = applications
+      .map((app) => ({ app, student: students.find((s) => s.id === app.registration_students_id) }))
+      .filter((x): x is { app: Application; student: Student } => !!x.student);
+
+    if (visible.length === 0) {
       toast.error("Please add at least one student before completing this section.");
       throw new Error("Validation failed");
     }
-    // Validate using the same function as the status icon
-    const incomplete = applications.filter((app) => !isAppComplete(app));
+
+    const incomplete = visible.filter(({ app }) => !isAppComplete(app));
     if (incomplete.length > 0) {
-      const student = students.find((s) => s.id === incomplete[0].registration_students_id);
-      const name = student ? `${student.first_name} ${student.last_name}` : "Student";
-      toast.error(`${name}: Please fill out all required fields.`);
-      // Open the incomplete card
-      if (student) {
-        setCollapsedCards((prev) => {
-          const next = new Set(prev);
-          next.delete(student.id);
-          return next;
-        });
-      }
+      const { student } = incomplete[0];
+      toast.error(`${student.first_name} ${student.last_name}: Please fill out all required fields.`);
       throw new Error("Validation failed");
     }
     // Save
     await handleSaveAllAppsRef.current();
-    setStudentsLocked(true);
+    await setProgressSection("students_completed", true);
     toast.success("Students section completed.");
   };
 
@@ -469,12 +484,12 @@ export default function StudentsStepPage() {
       updateSaveOptions({
         completed: true,
         completedLabel: "Students Section Completed",
-        onUnlock: () => setStudentsLocked(false),
+        onUnlock: () => void setProgressSection("students_completed", false),
       });
     } else {
       updateSaveOptions({ label: "Complete Students Section" });
     }
-  }, [studentsLocked, updateSaveOptions]);
+  }, [studentsLocked, updateSaveOptions, setProgressSection]);
 
   // Auto-save on changes (debounced)
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -507,8 +522,10 @@ export default function StudentsStepPage() {
     setCreating(true);
     setCreateError("");
     try {
-      const res = await fetch("/api/students", {
-        method: "POST",
+      const isEdit = editingStudentId !== null;
+      const url = isEdit ? `/api/students/${editingStudentId}` : "/api/students";
+      const res = await fetch(url, {
+        method: isEdit ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           first_name: newFirst,
@@ -520,15 +537,12 @@ export default function StudentsStepPage() {
       });
       if (res.ok) {
         setCreateSheetOpen(false);
-        setNewFirst("");
-        setNewLast("");
-        setNewDob("");
-        setNewGender("");
-        setNewEthnicity("");
+        resetStudentForm();
         await fetchData();
+        toast.success(isEdit ? "Student updated" : "Student added");
       } else {
         const body = await res.json().catch(() => null);
-        setCreateError(body?.error ?? "Failed to add student");
+        setCreateError(body?.error ?? (editingStudentId ? "Failed to update student" : "Failed to add student"));
       }
     } catch {
       setCreateError("Network error — please try again");
@@ -553,21 +567,24 @@ export default function StudentsStepPage() {
   if (loading) {
     return (
       <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
-        <div className="flex items-center justify-between">
-          <Skeleton className="h-6 w-48" />
-          <Skeleton className="h-9 w-32 rounded-md" />
+        <div>
+          <div className="flex items-center justify-between gap-3 pb-3 border-b">
+            <Skeleton className="h-3 w-20" />
+          </div>
+          <Skeleton className="h-8 w-3/4 mt-4" />
+          <Skeleton className="h-4 w-2/3 mt-3" />
         </div>
         {Array.from({ length: 2 }).map((_, i) => (
           <div key={i} className="rounded-lg border p-6">
-            <div className="flex items-center justify-between mb-4">
-              <Skeleton className="h-5 w-36" />
-              <Skeleton className="h-5 w-5 rounded" />
+            <div className="flex items-center gap-3 mb-5">
+              <Skeleton className="size-10 rounded-full" />
+              <Skeleton className="h-5 w-44" />
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {Array.from({ length: 8 }).map((_, j) => (
+            <div className="space-y-4">
+              {Array.from({ length: 5 }).map((_, j) => (
                 <div key={j}>
-                  <Skeleton className="h-4 w-24 mb-2" />
-                  <Skeleton className="h-10 w-full rounded-md" />
+                  <Skeleton className="h-3 w-24 mb-2" />
+                  <Skeleton className="h-9 w-full rounded-md" />
                 </div>
               ))}
             </div>
@@ -607,18 +624,14 @@ export default function StudentsStepPage() {
           <div className="space-y-6">
             {enrolled.map(({ app, student }, idx) => (
               <Card key={student.id} className="overflow-hidden gap-0 py-0">
-                <CardHeader
-                  className={`py-3 !pb-3 cursor-pointer ${collapsedCards.has(student.id) ? "" : "border-b"}`}
-                  onClick={() => toggleCard(student.id)}
-                >
+                <CardHeader className="py-3 !pb-3 border-b">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
                       <button
                         type="button"
                         className="relative group rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         disabled={uploadingPhotoId === student.id}
-                        onClick={(e) => {
-                          e.stopPropagation();
+                        onClick={() => {
                           photoTargetStudentId.current = student.id;
                           photoInputRef.current?.click();
                         }}
@@ -652,22 +665,15 @@ export default function StudentsStepPage() {
                         variant="outline"
                         size="icon"
                         className="size-8 text-muted-foreground hover:text-red-600"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setPendingDeleteStudent({ appId: app.id, name: `${student.first_name} ${student.last_name}` });
-                        }}
+                        onClick={() =>
+                          setPendingDeleteStudent({ appId: app.id, name: `${student.first_name} ${student.last_name}` })
+                        }
                       >
                         <Trash2 className="size-4" />
                       </Button>
-                      <span className={`inline-flex items-center justify-center size-7 rounded-md border border-input text-muted-foreground transition-all hover:bg-muted ${collapsedCards.has(student.id) ? "" : "rotate-180"}`}>
-                        <svg className="size-4" viewBox="0 0 20 20" fill="currentColor">
-                          <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
-                        </svg>
-                      </span>
                     </div>
                   </div>
                 </CardHeader>
-                {!collapsedCards.has(student.id) && (
                 <CardContent className="space-y-6 py-5 bg-white dark:bg-background">
                   {/* Student Information */}
                   <section>
@@ -709,7 +715,7 @@ export default function StudentsStepPage() {
                           Current / Previous School
                         </FieldLabel>
                         <Input
-                          className={!app.current_previous_school ? "border-red-400" : ""}
+                          className={!app.current_previous_school ? "border-2 border-red-400" : ""}
                           placeholder="School name"
                           value={app.current_previous_school || ""}
                           onChange={(e) =>
@@ -728,7 +734,7 @@ export default function StudentsStepPage() {
                           Last Grade Completed
                         </FieldLabel>
                         <Input
-                          className={!app.last_grade_completed ? "border-red-400" : ""}
+                          className={!app.last_grade_completed ? "border-2 border-red-400" : ""}
                           placeholder="e.g. 7th"
                           value={app.last_grade_completed || ""}
                           onChange={(e) =>
@@ -747,7 +753,7 @@ export default function StudentsStepPage() {
                           Current Grade
                         </FieldLabel>
                         <Input
-                          className={!app.current_grade ? "border-red-400" : ""}
+                          className={!app.current_grade ? "border-2 border-red-400" : ""}
                           placeholder="e.g. 8th"
                           value={app.current_grade || ""}
                           onChange={(e) =>
@@ -768,7 +774,7 @@ export default function StudentsStepPage() {
                           Describe Student Strengths
                         </FieldLabel>
                         <textarea
-                          className={`flex min-h-[80px] w-full rounded-md border bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${!app.describe_student_strengths ? "border-red-400" : "border-input"}`}
+                          className={`flex min-h-[80px] w-full rounded-md border bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${!app.describe_student_strengths ? "border-2 border-red-400" : "border-input"}`}
                           placeholder="Student's strengths..."
                           value={app.describe_student_strengths || ""}
                           onChange={(e) =>
@@ -787,7 +793,7 @@ export default function StudentsStepPage() {
                           Describe Student Opportunities for Growth
                         </FieldLabel>
                         <textarea
-                          className={`flex min-h-[80px] w-full rounded-md border bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${!app.describe_student_opportunities_for_growth ? "border-red-400" : "border-input"}`}
+                          className={`flex min-h-[80px] w-full rounded-md border bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${!app.describe_student_opportunities_for_growth ? "border-2 border-red-400" : "border-input"}`}
                           placeholder="Areas for growth..."
                           value={app.describe_student_opportunities_for_growth || ""}
                           onChange={(e) =>
@@ -804,7 +810,6 @@ export default function StudentsStepPage() {
                     </div>
                   </section>
                 </CardContent>
-                )}
               </Card>
             ))}
             <Button
@@ -855,13 +860,24 @@ export default function StudentsStepPage() {
                       {student.gender ? ` · ${student.gender}` : ""}
                     </p>
                   </div>
-                  <Button
-                    size="sm"
-                    disabled={addingStudentId === student.id}
-                    onClick={() => handleAddToYear(student.id)}
-                  >
-                    {addingStudentId === student.id ? "Adding..." : "Add"}
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      disabled={addingStudentId === student.id}
+                      onClick={() => handleAddToYear(student.id)}
+                    >
+                      {addingStudentId === student.id ? "Adding..." : "Add"}
+                    </Button>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="size-8 text-muted-foreground hover:text-foreground"
+                      onClick={() => openEditStudentSheet(student)}
+                      aria-label={`Edit ${student.first_name} ${student.last_name}`}
+                    >
+                      <Pencil className="size-4" />
+                    </Button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -892,12 +908,22 @@ export default function StudentsStepPage() {
       </Dialog>
 
       {/* Create New Student Sheet */}
-      <Sheet open={createSheetOpen} onOpenChange={setCreateSheetOpen}>
+      <Sheet
+        open={createSheetOpen}
+        onOpenChange={(open) => {
+          setCreateSheetOpen(open);
+          if (!open) resetStudentForm();
+        }}
+      >
         <SheetContent>
           <SheetHeader>
-            <SheetTitle>Create New Student</SheetTitle>
+            <SheetTitle>
+              {editingStudentId ? "Edit Student" : "Create New Student"}
+            </SheetTitle>
             <SheetDescription>
-              Add a new student to your family.
+              {editingStudentId
+                ? "Update this student's information."
+                : "Add a new student to your family."}
             </SheetDescription>
           </SheetHeader>
           <form
@@ -980,7 +1006,13 @@ export default function StudentsStepPage() {
               </p>
             )}
             <Button type="submit" disabled={creating} className="mt-2">
-              {creating ? "Adding..." : "Add Student"}
+              {creating
+                ? editingStudentId
+                  ? "Saving..."
+                  : "Adding..."
+                : editingStudentId
+                  ? "Save Changes"
+                  : "Add Student"}
             </Button>
           </form>
         </SheetContent>

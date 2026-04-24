@@ -88,6 +88,20 @@ export function useApplicationSteps(yearId: number) {
     { revalidateOnFocus: false, dedupingInterval: 10000 }
   );
 
+  // Progress bridge row — explicit "section completed" bools take priority
+  // over the derived field checks below. When a user clicks "Complete X",
+  // this flips and the sidenav turns green immediately.
+  const { data: progressData } = useSWR<{
+    family_completed?: boolean;
+    students_completed?: boolean;
+    financial_aid_completed?: boolean;
+    testing_completed?: boolean;
+  } | null>(
+    yearId ? `/api/family-progress?yearId=${yearId}` : null,
+    fetcher,
+    { revalidateOnFocus: false, dedupingInterval: 10000 }
+  );
+
   const loading = !familyData || !yearsData || !appsData;
 
   const schoolYear = useMemo(() => {
@@ -291,14 +305,22 @@ export function useApplicationSteps(yearId: number) {
     firstApp?.enrollment_agreement_status === "completed";
   const enrollmentSent = !!firstApp?.enrollment_agreement_pandadoc_id;
 
+  // Explicit "section completed" bools from the progress bridge row take
+  // priority — clicking "Complete X Section" flips these and the sidenav
+  // should reflect it immediately, independent of the derived field checks.
+  const familyDone = !!progressData?.family_completed || familyComplete;
+  const studentsDone = !!progressData?.students_completed || studentsComplete;
+  const financialAidDone = !!progressData?.financial_aid_completed || financialAidComplete;
+  const nweaDone = !!progressData?.testing_completed || nweaComplete;
+
   const steps: StepDef[] = useMemo(
     () => [
       {
         number: 1,
         title: "Your Family Information",
         description: "",
-        status: getStatus(familyComplete, familyStarted),
-        detail: familyComplete
+        status: getStatus(familyDone, familyStarted),
+        detail: familyDone
           ? "Complete"
           : familyStarted
             ? "In progress"
@@ -309,16 +331,16 @@ export function useApplicationSteps(yearId: number) {
         number: 2,
         title: "Student Details",
         description: "",
-        status: getStatus(studentsComplete, studentsStarted),
-        detail: studentsComplete ? "Complete" : studentsStarted ? "In progress" : "Not started",
+        status: getStatus(studentsDone, studentsStarted),
+        detail: studentsDone ? "Complete" : studentsStarted ? "In progress" : "Not started",
         href: `${base}/students`,
       },
       {
         number: 3,
         title: "Financial Aid",
         description: "",
-        status: getStatus(financialAidComplete, financialAidStarted),
-        detail: financialAidComplete
+        status: getStatus(financialAidDone, financialAidStarted),
+        detail: financialAidDone
           ? "Complete"
           : financialAidStarted
             ? "In progress"
@@ -329,8 +351,8 @@ export function useApplicationSteps(yearId: number) {
         number: 4,
         title: "Initial Testing",
         description: "",
-        status: getStatus(nweaComplete, nweaStarted),
-        detail: nweaComplete ? "Complete" : nweaStarted ? "In progress" : "Not started",
+        status: getStatus(nweaDone, nweaStarted),
+        detail: nweaDone ? "Complete" : nweaStarted ? "In progress" : "Not started",
         href: `${base}/nwea`,
       },
       {
@@ -338,21 +360,21 @@ export function useApplicationSteps(yearId: number) {
         title: "Submit Application",
         description: "",
         // NWEA does NOT gate Submit — testing typically happens after application is submitted.
-        status: (familyComplete && studentsComplete && financialAidComplete) ? "in_progress" as StepStatus : "not_started" as StepStatus,
-        detail: (familyComplete && studentsComplete && financialAidComplete) ? "Ready to submit" : "Locked",
+        status: (familyDone && studentsDone && financialAidDone) ? "in_progress" as StepStatus : "not_started" as StepStatus,
+        detail: (familyDone && studentsDone && financialAidDone) ? "Ready to submit" : "Locked",
         href: `#`,
       },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       base,
-      familyComplete,
+      familyDone,
       familyStarted,
-      studentsComplete,
+      studentsDone,
       studentsStarted,
-      financialAidComplete,
+      financialAidDone,
       financialAidStarted,
-      nweaComplete,
+      nweaDone,
       nweaStarted,
     ]
   );

@@ -165,7 +165,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           <div className="px-3 mt-2">
             <Button
               className="w-full"
-              onClick={() => router.push(`/apply/year/${targetYearId}/submit`)}
+              onClick={() => router.push(`/apply/year/${targetYearId}`)}
             >
               Submit Application
             </Button>

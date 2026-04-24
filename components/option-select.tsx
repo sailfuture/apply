@@ -71,7 +71,7 @@ export function OptionSelect({
             "w-full justify-between bg-white font-normal",
             !selected && "text-muted-foreground",
             // Match the other inputs: plain red border, no halo ring.
-            invalid && "border-red-400",
+            invalid && "border-2 border-red-400",
             className
           )}
         >

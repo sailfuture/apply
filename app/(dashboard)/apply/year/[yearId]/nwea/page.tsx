@@ -21,7 +21,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Calendar } from "lucide-react";
+import { useRef } from "react";
+import { toast } from "sonner";
 import { GlobalSaveStatusPill } from "@/components/save-status-pill";
+import { useFamilyProgress } from "@/hooks/use-family-progress";
 
 interface Student {
   id: number;
@@ -56,7 +59,9 @@ export default function InitialTestingStepPage() {
   const params = useParams();
   const yearId = Number(params.yearId);
 
-  const { setPageTitle, updateSaveOptions, trackAutosave } = useApplicationFlow();
+  const { setPageTitle, updateSaveOptions, trackAutosave, registerSaveHandler, unregisterSaveHandler } = useApplicationFlow();
+  const { progress, setSection: setProgressSection } = useFamilyProgress(yearId);
+  const testingLocked = !!progress?.testing_completed;
 
   const [students, setStudents] = useState<Student[]>([]);
   const [applications, setApplications] = useState<Application[]>([]);
@@ -88,14 +93,48 @@ export default function InitialTestingStepPage() {
     fetchData();
   }, [fetchData]);
 
-  useEffect(() => {
-    setPageTitle("Initial Testing");
-    updateSaveOptions({ label: "Complete Initial Testing" });
-  }, [setPageTitle, updateSaveOptions]);
+  const handleCompleteTestingRef = useRef<() => Promise<void>>(() => Promise.resolve());
+  handleCompleteTestingRef.current = async () => {
+    // Only validate apps whose student record still exists — orphan app rows
+    // (student deleted) hang around in state but aren't shown. Use the same
+    // filter the render uses so validation + UI always agree.
+    const visible = applications.filter((a) =>
+      students.some((s) => s.id === a.registration_students_id)
+    );
+    if (visible.length === 0) {
+      toast.error("No students enrolled for this year.");
+      throw new Error("Validation failed");
+    }
+    const allScheduled = visible.every(
+      (a) => a.nwea_testing_complete === true || a.nwea_testing_scheduled === true
+    );
+    if (!allScheduled) {
+      toast.error("Please schedule NWEA testing for every student.");
+      throw new Error("Validation failed");
+    }
+    await setProgressSection("testing_completed", true);
+    toast.success("Initial Testing section completed.");
+  };
 
   useEffect(() => {
-    updateSaveOptions({ saving: savingAppId !== null });
-  }, [savingAppId, updateSaveOptions]);
+    setPageTitle("Initial Testing");
+    registerSaveHandler(() => handleCompleteTestingRef.current(), {
+      label: "Complete Initial Testing",
+    });
+    return () => unregisterSaveHandler();
+  }, [setPageTitle, registerSaveHandler, unregisterSaveHandler]);
+
+  useEffect(() => {
+    if (testingLocked) {
+      updateSaveOptions({
+        completed: true,
+        completedLabel: "Initial Testing Completed",
+        onUnlock: () => void setProgressSection("testing_completed", false),
+      });
+    } else {
+      updateSaveOptions({ label: "Complete Initial Testing", saving: savingAppId !== null });
+    }
+  }, [testingLocked, savingAppId, updateSaveOptions, setProgressSection]);
 
   async function toggleScheduled(appId: number, current: boolean) {
     const newVal = !current;
@@ -148,14 +187,23 @@ export default function InitialTestingStepPage() {
   if (loading) {
     return (
       <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
-        <Skeleton className="h-6 w-40" />
+        <div>
+          <div className="flex items-center justify-between gap-3 pb-3 border-b">
+            <Skeleton className="h-3 w-20" />
+          </div>
+          <Skeleton className="h-8 w-3/4 mt-4" />
+          <Skeleton className="h-4 w-2/3 mt-3" />
+          <Skeleton className="h-4 w-1/2 mt-2" />
+        </div>
         {Array.from({ length: 2 }).map((_, i) => (
           <div key={i} className="rounded-lg border p-6">
-            <Skeleton className="h-5 w-36 mb-4" />
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {Array.from({ length: 2 }).map((_, j) => (
-                <Skeleton key={j} className="h-24 w-full rounded-md" />
-              ))}
+            <div className="flex items-center gap-3 mb-5">
+              <Skeleton className="size-10 rounded-full" />
+              <Skeleton className="h-5 w-44" />
+            </div>
+            <div className="space-y-3">
+              <Skeleton className="h-10 w-full rounded-md" />
+              <Skeleton className="h-14 w-full rounded-md" />
             </div>
           </div>
         ))}
@@ -258,7 +306,7 @@ export default function InitialTestingStepPage() {
 
                     <label
                       className={`flex items-start gap-3 cursor-pointer rounded-md border px-4 py-3 transition-colors ${
-                        scheduled ? "border-input" : "border-red-400"
+                        scheduled ? "border-input" : "border-2 border-red-400"
                       }`}
                     >
                       <input

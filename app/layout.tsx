@@ -39,6 +39,8 @@ export default function RootLayout({
             <TooltipProvider>{children}</TooltipProvider>
           </main>
           <GlobalFooter />
+          {/* Position is responsive — top-center on mobile (so it doesn't
+              collide with the fixed bottom nav), bottom-right on xl+. */}
           <Toaster />
         </body>
       </html>

@@ -108,6 +108,14 @@ export async function POST(req: NextRequest) {
     isOffered: false,
     isAccepted: false,
     opportunity_scholarship_award_amount: 0,
+    liability_waiver_pandadoc_id: "",
+    liability_waiver_status: "",
+    liability_waiver_sent_at: null,
+    liability_waiver_pdf_url: "",
+    enrollment_agreement_pandadoc_id: "",
+    enrollment_agreement_status: "",
+    enrollment_agreement_sent_at: null,
+    enrollment_agreement_pdf_url: "",
   });
 
   try {

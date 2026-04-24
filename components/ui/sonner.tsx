@@ -1,15 +1,34 @@
 "use client"
 
+import { useEffect, useState } from "react"
 import { useTheme } from "next-themes"
 import { Toaster as Sonner, type ToasterProps } from "sonner"
 import { CircleCheckIcon, InfoIcon, TriangleAlertIcon, OctagonXIcon, Loader2Icon } from "lucide-react"
 
+/** Use bottom-right on xl+ screens (where there's a sidenav and empty space),
+ *  top-center on smaller screens so toasts don't land on top of the fixed
+ *  bottom nav. */
+function useResponsivePosition(): ToasterProps["position"] {
+  const [position, setPosition] = useState<ToasterProps["position"]>("top-center")
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const mql = window.matchMedia("(min-width: 1280px)")
+    const sync = () => setPosition(mql.matches ? "bottom-right" : "top-center")
+    sync()
+    mql.addEventListener("change", sync)
+    return () => mql.removeEventListener("change", sync)
+  }, [])
+  return position
+}
+
 const Toaster = ({ ...props }: ToasterProps) => {
   const { theme = "system" } = useTheme()
+  const responsivePosition = useResponsivePosition()
 
   return (
     <Sonner
       theme={theme as ToasterProps["theme"]}
+      position={props.position ?? responsivePosition}
       className="toaster group"
       icons={{
         success: (

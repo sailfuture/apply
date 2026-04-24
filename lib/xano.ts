@@ -94,6 +94,15 @@ export interface XanoApplication {
   isOffered: boolean;
   isAccepted: boolean;
   opportunity_scholarship_award_amount: number;
+  // PandaDoc signing — waiver + enrollment agreement state.
+  liability_waiver_pandadoc_id: string;
+  liability_waiver_status: string;
+  liability_waiver_sent_at: string | null;
+  liability_waiver_pdf_url: string;
+  enrollment_agreement_pandadoc_id: string;
+  enrollment_agreement_status: string;
+  enrollment_agreement_sent_at: string | null;
+  enrollment_agreement_pdf_url: string;
 }
 
 export interface XanoApplicationStatus {
@@ -275,6 +284,34 @@ export interface XanoInquiry {
   about_student: string;
   hear_about_us: string;
   messaging_opt_in: boolean;
+}
+
+/** Lookup table — distinguishes new applicants from returning enrollments. */
+export interface XanoRegistrationType {
+  id: number;
+  created_at: number;
+  type: string; // "New Application" | "New Enrollment" | "Re-Enrollment"
+}
+
+/** Bridge row: one per family per school year. Tracks explicit section-complete
+ *  booleans so the UI doesn't have to re-derive completion from field presence. */
+export interface XanoFamilyApplicationProgress {
+  id: number;
+  created_at: number;
+  registration_families_id: number;
+  registration_school_years_id: number;
+  family_completed: boolean;
+  students_completed: boolean;
+  financial_aid_completed: boolean;
+  testing_completed: boolean;
+  last_edited: number | null;
+  submitted_at: number | null;
+  /** Hard submission flag — true once the parent has clicked Submit and the
+   *  application has been locked. `submitted_at` is the timestamp of that
+   *  click; `isSubmitted` is the durable bool the dashboard reads to show
+   *  the "Application Submitted" banner and gate further edits. */
+  isSubmitted: boolean;
+  registration_type_id: number;
 }
 
 export interface XanoEmergencyContact {
@@ -1202,6 +1239,77 @@ export const xano = {
     async getAll(): Promise<XanoAdmin[]> {
       const res = await fetch(`${getBaseUrl()}/registration_admin`, { cache: "no-store" });
       if (!res.ok) return [];
+      return res.json();
+    },
+  },
+
+  registrationTypes: {
+    async getAll(): Promise<XanoRegistrationType[]> {
+      const res = await fetch(`${getBaseUrl()}/registration_type`, { cache: "no-store" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+
+    async findByName(name: string): Promise<XanoRegistrationType | null> {
+      const all = await this.getAll();
+      return all.find((t) => t.type.toLowerCase() === name.toLowerCase()) ?? null;
+    },
+  },
+
+  familyApplicationProgress: {
+    /** Fetch the single row for this family + year, or null. */
+    async getByFamilyAndYear(
+      familyId: number,
+      yearId: number
+    ): Promise<XanoFamilyApplicationProgress | null> {
+      try {
+        const res = await fetch(
+          `${getBaseUrl()}/registration_family_application_progress?registration_families_id=${familyId}&registration_school_years_id=${yearId}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) return null;
+        const results = await res.json();
+        const items = Array.isArray(results) ? results : [];
+        return (
+          items.find(
+            (r: XanoFamilyApplicationProgress) =>
+              r.registration_families_id === familyId &&
+              r.registration_school_years_id === yearId
+          ) ?? null
+        );
+      } catch {
+        return null;
+      }
+    },
+
+    async create(
+      data: Omit<XanoFamilyApplicationProgress, "id" | "created_at">
+    ): Promise<XanoFamilyApplicationProgress> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_family_application_progress`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async update(
+      id: number,
+      data: Partial<Omit<XanoFamilyApplicationProgress, "id" | "created_at">>
+    ): Promise<XanoFamilyApplicationProgress> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_family_application_progress/${id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
       return res.json();
     },
   },

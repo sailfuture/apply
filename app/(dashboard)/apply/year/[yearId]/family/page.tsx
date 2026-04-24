@@ -44,6 +44,7 @@ import { useSWRConfig } from "swr";
 import { MissingItemsPanel } from "@/components/missing-items-panel";
 import { familyRequirements } from "@/lib/application-schemas";
 import { GlobalSaveStatusPill } from "@/components/save-status-pill";
+import { useFamilyProgress } from "@/hooks/use-family-progress";
 import { US_STATES } from "@/lib/us-states";
 
 interface Parent {
@@ -228,7 +229,9 @@ export default function FamilyStepPage() {
   const handleSaveAllRef = useRef(handleSaveAll);
   handleSaveAllRef.current = handleSaveAll;
 
-  const [familyLocked, setFamilyLocked] = useState(false);
+  // Progress bridge row — source of truth for whether this section is "complete".
+  const { progress, setSection: setProgressSection } = useFamilyProgress(Number(yearId));
+  const familyLocked = !!progress?.family_completed;
 
   const handleCompleteRef = useRef<() => Promise<void>>(() => Promise.resolve());
   handleCompleteRef.current = async () => {
@@ -238,7 +241,7 @@ export default function FamilyStepPage() {
       throw new Error("Validation failed");
     }
     await handleSaveAllRef.current();
-    setFamilyLocked(true);
+    await setProgressSection("family_completed", true);
     toast.success("Family section completed.");
   };
 
@@ -253,13 +256,13 @@ export default function FamilyStepPage() {
       updateSaveOptions({
         completed: true,
         completedLabel: "Family Section Completed",
-        onUnlock: () => setFamilyLocked(false),
+        onUnlock: () => void setProgressSection("family_completed", false),
         saving: false,
       });
     } else {
       updateSaveOptions({ saving, label: "Complete Family Section" });
     }
-  }, [saving, familyLocked, updateSaveOptions]);
+  }, [saving, familyLocked, updateSaveOptions, setProgressSection]);
 
   const [pendingDeleteParent, setPendingDeleteParent] = useState<{ id: number; name: string } | null>(null);
 
@@ -308,30 +311,29 @@ export default function FamilyStepPage() {
   if (loading) {
     return (
       <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
-        {/* Parent card skeleton */}
-        <div className="rounded-lg border p-6">
-          <Skeleton className="h-5 w-40 mb-4" />
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <div key={i}>
-                <Skeleton className="h-4 w-24 mb-2" />
-                <Skeleton className="h-10 w-full rounded-md" />
-              </div>
-            ))}
+        <div>
+          <div className="flex items-center justify-between gap-3 pb-3 border-b">
+            <Skeleton className="h-3 w-20" />
           </div>
+          <Skeleton className="h-8 w-3/4 mt-4" />
+          <Skeleton className="h-4 w-2/3 mt-3" />
         </div>
-        {/* Second parent card skeleton */}
-        <div className="rounded-lg border p-6">
-          <Skeleton className="h-5 w-40 mb-4" />
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <div key={i}>
-                <Skeleton className="h-4 w-24 mb-2" />
-                <Skeleton className="h-10 w-full rounded-md" />
-              </div>
-            ))}
+        {Array.from({ length: 2 }).map((_, i) => (
+          <div key={i} className="rounded-lg border p-6">
+            <div className="flex items-center gap-3 mb-5">
+              <Skeleton className="size-10 rounded-full" />
+              <Skeleton className="h-5 w-44" />
+            </div>
+            <div className="space-y-4">
+              {Array.from({ length: 4 }).map((_, j) => (
+                <div key={j}>
+                  <Skeleton className="h-3 w-24 mb-2" />
+                  <Skeleton className="h-9 w-full rounded-md" />
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
+        ))}
       </div>
     );
   }
@@ -457,7 +459,7 @@ export default function FamilyStepPage() {
                         <FieldLabel className="text-xs">
                           Phone                        </FieldLabel>
                         <Input
-                          className={!parent.phone ? "border-red-400" : ""}
+                          className={!parent.phone ? "border-2 border-red-400" : ""}
                           placeholder="(555) 555-5555"
                           value={parent.phone || ""}
                           onChange={(e) =>
@@ -472,7 +474,7 @@ export default function FamilyStepPage() {
                         <FieldLabel className="text-xs">
                           Relationship                        </FieldLabel>
                         <Input
-                          className={!parent.relationship ? "border-red-400" : ""}
+                          className={!parent.relationship ? "border-2 border-red-400" : ""}
                           placeholder="e.g. Mother"
                           value={parent.relationship || ""}
                           onChange={(e) =>
@@ -500,7 +502,7 @@ export default function FamilyStepPage() {
                             Street Address{" "}
                                                      </FieldLabel>
                           <Input
-                            className={!parent.address_line_1 ? "border-red-400" : ""}
+                            className={!parent.address_line_1 ? "border-2 border-red-400" : ""}
                             placeholder="123 Main Street"
                             value={parent.address_line_1 || ""}
                             onChange={(e) =>
@@ -532,7 +534,7 @@ export default function FamilyStepPage() {
                           <FieldLabel className="text-xs">
                             City                          </FieldLabel>
                           <Input
-                            className={!parent.city ? "border-red-400" : ""}
+                            className={!parent.city ? "border-2 border-red-400" : ""}
                             placeholder="St. Petersburg"
                             value={parent.city || ""}
                             onChange={(e) =>
@@ -560,7 +562,7 @@ export default function FamilyStepPage() {
                             Zip Code{" "}
                                                      </FieldLabel>
                           <Input
-                            className={!parent.zipcode ? "border-red-400" : ""}
+                            className={!parent.zipcode ? "border-2 border-red-400" : ""}
                             placeholder="33701"
                             value={parent.zipcode || ""}
                             onChange={(e) =>

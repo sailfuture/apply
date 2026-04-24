@@ -64,7 +64,7 @@ export function StateSelect({
             "w-full justify-between bg-white font-normal",
             !selected && "text-muted-foreground",
             // Match the other inputs on this form: plain red border, no halo ring.
-            invalid && "border-red-400"
+            invalid && "border-2 border-red-400"
           )}
         >
           {selected ? selected.label : placeholder}

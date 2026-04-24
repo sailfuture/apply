@@ -27,8 +27,8 @@ import {
 } from "@/contexts/application-flow-context";
 import { ApplicationSideNav } from "@/components/application-side-nav";
 import { useApplicationSteps } from "@/hooks/use-application-steps";
-import { PreSubmitReviewModal } from "@/components/pre-submit-review-modal";
-import { useSubmitReadiness } from "@/hooks/use-submit-readiness";
+import { PreSubmitReviewModal, type SectionStatus } from "@/components/pre-submit-review-modal";
+import { useFamilyProgress } from "@/hooks/use-family-progress";
 
 function LayoutInner({ children }: { children: React.ReactNode }) {
   const params = useParams();
@@ -47,7 +47,20 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
   // Pre-submit review modal — the same modal available from the year overview
   // is exposed here so parents can review & submit from any step page.
   const [preSubmitOpen, setPreSubmitOpen] = useState(false);
-  const submitReadiness = useSubmitReadiness(Number(yearId));
+  // Section completion is tracked in `registration_family_application_progress`
+  // (one row per family per year). The review modal renders one row per section
+  // with a Fix button if the section isn't yet marked complete.
+  const { progress, submit: submitFamilyApplication } = useFamilyProgress(Number(yearId));
+  const [submitting, setSubmitting] = useState(false);
+  const submitSections: SectionStatus[] = useMemo(
+    () => [
+      { section: "family", complete: !!progress?.family_completed },
+      { section: "students", complete: !!progress?.students_completed },
+      { section: "financial_aid", complete: !!progress?.financial_aid_completed },
+      { section: "testing", complete: !!progress?.testing_completed },
+    ],
+    [progress]
+  );
 
   // Get registration step counts for the Complete Section button
   const { registrationSteps, steps } = useApplicationSteps(Number(yearId));
@@ -184,85 +197,80 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
           )}
 
           {/* Main scrollable content. The global auto-save pill is placed
-              inline in each page's header via <GlobalSaveStatusPill />. */}
+              inline in each page's header via <GlobalSaveStatusPill />.
+              Extra bottom padding on mobile leaves room for the fixed nav. */}
           <main className="flex-1 min-w-0">
             <div className={saveOptions.completed ? "opacity-50" : ""}>
               {children}
             </div>
 
-            {/* Inline bottom nav — appears at end of content.
-                Wrapped in max-w-4xl to match page card width, and padded equally
-                above and below the border-t (pt-6 above via page's p-6 bottom, pt-6 below). */}
+            {/*
+              Bottom nav behaviour:
+              - xl+ (sidenav visible): renders inline below content with just the
+                Complete/Save primary button. Back/Next come from the sidenav.
+              - < xl (no sidenav): renders fixed at the bottom of the viewport
+                with Back | Complete | Next, plus a Review & Submit link above.
+            */}
             {showBottomBar && (
               <>
-              <div className="mx-auto w-full max-w-4xl flex items-center gap-2 border-t pt-6 px-6">
-                {/* Back — hidden when the side nav is visible (it provides step navigation) */}
-                {!showSideNav && (
-                  <button
-                    onClick={() => handleBack()}
-                    className="flex items-center justify-center gap-1.5 rounded-md border border-input px-3 py-2.5 text-sm font-medium transition-colors bg-white text-muted-foreground hover:text-foreground hover:bg-gray-50"
-                  >
-                    <svg className="size-4" viewBox="0 0 20 20" fill="currentColor">
-                      <path fillRule="evenodd" d="M12.79 5.23a.75.75 0 01-.02 1.06L8.832 10l3.938 3.71a.75.75 0 11-1.04 1.08l-4.5-4.25a.75.75 0 010-1.08l4.5-4.25a.75.75 0 011.06.02z" clipRule="evenodd" />
-                    </svg>
-                    Back
-                  </button>
-                )}
-
-                {/* Primary action — takes up most space */}
-                {saveOptions.completed ? (
-                  <button
-                    className="flex-1 flex items-center justify-center gap-2 rounded-md bg-muted px-4 py-2.5 text-sm font-medium text-muted-foreground hover:bg-muted/80 transition-colors cursor-pointer"
-                    onClick={() => saveOptions.onUnlock && setUnlockWarningOpen(true)}
-                  >
-                    {saveOptions.completedLabel ?? "Section Completed"}
-                  </button>
-                ) : saveOptions.label ? (
-                  <Button
-                    variant={saveOptions.disabled ? "outline" : "default"}
-                    className={`flex-1 py-2.5 ${saveOptions.disabled ? "bg-muted text-muted-foreground cursor-not-allowed hover:bg-muted" : ""}`}
-                    onClick={saveHandler && !saveOptions.disabled ? handleSave : undefined}
-                    disabled={saveHandler ? (saveOptions.disabled || saveOptions.saving) : false}
-                  >
-                    {saveOptions.saving ? "Saving..." : saveOptions.label}
-                  </Button>
-                ) : (
-                  <div className="flex-1 h-10 rounded-md bg-muted animate-pulse" />
-                )}
-
-                {/* Next — hidden when the side nav is visible (it provides step navigation) */}
-                {!showSideNav && (
-                  <button
-                    onClick={isLastStep ? undefined : (nextStep ? () => router.push(nextStep.href) : undefined)}
-                    disabled={isLastStep}
-                    className={`flex items-center justify-center gap-1.5 rounded-md px-3 py-2.5 text-sm font-medium transition-colors ${
-                      isLastStep
-                        ? "border border-input bg-muted text-muted-foreground/40 cursor-not-allowed"
-                        : saveOptions.completed
-                          ? "bg-primary text-primary-foreground hover:bg-primary/90"
-                          : "border border-input bg-white text-muted-foreground hover:text-foreground hover:bg-gray-50"
-                    }`}
-                  >
-                    Next
-                    <svg className="size-4" viewBox="0 0 20 20" fill="currentColor">
-                      <path fillRule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clipRule="evenodd" />
-                    </svg>
-                  </button>
-                )}
-              </div>
-              {/* Submit link — only when the sidenav isn't visible (the sidenav
-                  already has its own Submit button on desktop). */}
-              {!showSideNav && (
-                <div className="mx-auto w-full max-w-4xl flex items-center justify-end px-6 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => setPreSubmitOpen(true)}
-                    className="text-xs font-medium text-primary underline underline-offset-2 hover:no-underline"
-                  >
-                    Review &amp; Submit Application →
-                  </button>
+                {/* Desktop (xl+) — inline primary button below content */}
+                <div className="hidden xl:flex mx-auto w-full max-w-4xl items-center gap-2 border-t pt-6 px-6">
+                  {saveOptions.completed ? (
+                    <button
+                      className="flex-1 flex items-center justify-center gap-2 rounded-md bg-muted px-4 py-2.5 text-sm font-medium text-muted-foreground hover:bg-muted/80 transition-colors cursor-pointer"
+                      onClick={() => saveOptions.onUnlock && setUnlockWarningOpen(true)}
+                    >
+                      {saveOptions.completedLabel ?? "Section Completed"}
+                    </button>
+                  ) : saveOptions.label ? (
+                    <Button
+                      variant={saveOptions.disabled ? "outline" : "default"}
+                      className={`flex-1 py-2.5 ${saveOptions.disabled ? "bg-muted text-muted-foreground cursor-not-allowed hover:bg-muted" : ""}`}
+                      onClick={saveHandler && !saveOptions.disabled ? handleSave : undefined}
+                      disabled={saveHandler ? (saveOptions.disabled || saveOptions.saving) : false}
+                    >
+                      {saveOptions.saving ? "Saving..." : saveOptions.label}
+                    </Button>
+                  ) : (
+                    <div className="flex-1 h-10 rounded-md bg-muted animate-pulse" />
+                  )}
                 </div>
-              )}
+
+                {/* Mobile (< xl) — fixed bottom bar. Two buttons only:
+                    "Return to Dashboard" (goes to the year overview) and the
+                    current section's Complete button. */}
+                <div className="xl:hidden fixed bottom-0 left-0 right-0 z-50 border-t bg-background">
+                  <div className="mx-auto w-full max-w-4xl flex items-stretch gap-2 px-3 py-3">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="flex-1 min-w-0 py-2.5 bg-white"
+                      onClick={() => router.push(basePath)}
+                    >
+                      <span className="truncate">Return to Dashboard</span>
+                    </Button>
+
+                    {saveOptions.completed ? (
+                      <button
+                        className="flex-1 min-w-0 flex items-center justify-center gap-2 rounded-md bg-muted px-4 py-2.5 text-sm font-medium text-muted-foreground hover:bg-muted/80 transition-colors cursor-pointer"
+                        onClick={() => saveOptions.onUnlock && setUnlockWarningOpen(true)}
+                      >
+                        <span className="truncate">{saveOptions.completedLabel ?? "Section Completed"}</span>
+                      </button>
+                    ) : saveOptions.label ? (
+                      <Button
+                        variant={saveOptions.disabled ? "outline" : "default"}
+                        className={`flex-1 min-w-0 py-2.5 ${saveOptions.disabled ? "bg-muted text-muted-foreground cursor-not-allowed hover:bg-muted" : ""}`}
+                        onClick={saveHandler && !saveOptions.disabled ? handleSave : undefined}
+                        disabled={saveHandler ? (saveOptions.disabled || saveOptions.saving) : false}
+                      >
+                        <span className="truncate">{saveOptions.saving ? "Saving..." : saveOptions.label}</span>
+                      </Button>
+                    ) : (
+                      <div className="flex-1 min-w-0 h-10 rounded-md bg-muted animate-pulse" />
+                    )}
+                  </div>
+                </div>
               </>
             )}
           </main>
@@ -297,11 +305,24 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
       <PreSubmitReviewModal
         open={preSubmitOpen}
         onOpenChange={setPreSubmitOpen}
-        sections={submitReadiness.sections}
+        sections={submitSections}
         basePath={basePath}
-        onConfirm={() => {
-          setPreSubmitOpen(false);
-          router.push(`${basePath}/submit`);
+        submitting={submitting}
+        onConfirm={async () => {
+          if (submitting) return;
+          setSubmitting(true);
+          try {
+            await submitFamilyApplication();
+            setPreSubmitOpen(false);
+            // After a successful submit, drop the user back on the year
+            // dashboard where the "Application Submitted" banner takes over.
+            router.push(basePath);
+          } catch {
+            // Keep the modal open so they can retry — error toast is handled
+            // by trackAutosave inside useFamilyProgress.submit().
+          } finally {
+            setSubmitting(false);
+          }
         }}
       />
     </div>

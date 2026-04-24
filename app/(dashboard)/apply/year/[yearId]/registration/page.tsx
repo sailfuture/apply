@@ -40,8 +40,6 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Trash2,
   Plus,
-  ChevronDown,
-  ChevronUp,
   FileUp,
   X,
   Loader2,
@@ -460,13 +458,11 @@ export default function RegistrationPage() {
   const [registrations, setRegistrations] = useState<Record<number, StudentRegistration>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [openSections, setOpenSections] = useState<Set<string>>(new Set());
   const [pendingDeleteContact, setPendingDeleteContact] = useState<{ id: number; name: string } | null>(null);
   const [pendingRemoveStudent, setPendingRemoveStudent] = useState<{ id: number; name: string } | null>(null);
   const [showValidation, setShowValidation] = useState(false);
   const [addStudentOpen, setAddStudentOpen] = useState(false);
   const [selectedStudentIds, setSelectedStudentIds] = useState<Set<number>>(new Set());
-  const initialCollapseRef = useRef(false);
 
   // PandaDoc signing state for per-student liability waivers
   const [signingStudentId, setSigningStudentId] = useState<number | null>(null);
@@ -787,35 +783,6 @@ export default function RegistrationPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [studentsData, applicationsData]);
 
-  // Default every section to open on initial load — don't auto-collapse completed
-  // ones. Users can still manually collapse via the chevron.
-  useEffect(() => {
-    if (loading || initialCollapseRef.current) return;
-    if (!studentsData || !applicationsData) return;
-    initialCollapseRef.current = true;
-
-    const openIds = new Set<string>();
-    parents.forEach((p) => openIds.add(`parent-${p.id}`));
-    emergencyContacts.forEach((ec) => openIds.add(`ec-${ec.id}`));
-    enrolledStudents
-      .filter((s) => selectedStudentIds.has(s.id))
-      .forEach((s) => openIds.add(`student-${s.id}`));
-    setOpenSections(openIds);
-  }, [loading, parents, emergencyContacts, enrolledStudents, registrations, studentsData, applicationsData, selectedStudentIds]);
-
-  // ---------------------------------------------------------------------------
-  // Section toggle
-  // ---------------------------------------------------------------------------
-
-  function toggleSection(key: string) {
-    setOpenSections((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  }
-
   // ---------------------------------------------------------------------------
   // Parent helpers
   // ---------------------------------------------------------------------------
@@ -853,7 +820,6 @@ export default function RegistrationPage() {
       _isNew: true,
     };
     setEmergencyContacts((prev) => [...prev, newContact]);
-    setOpenSections((prev) => new Set(prev).add(`ec-${tempId}`));
   }
 
   async function handleRemoveStudent(studentId: number) {
@@ -869,11 +835,6 @@ export default function RegistrationPage() {
     setRegistrations((prev) => {
       const next = { ...prev };
       delete next[studentId];
-      return next;
-    });
-    setOpenSections((prev) => {
-      const next = new Set(prev);
-      next.delete(`student-${studentId}`);
       return next;
     });
 
@@ -1161,17 +1122,23 @@ export default function RegistrationPage() {
     return (
       <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
         <div>
-          <Skeleton className="h-7 w-56 mb-2" />
-          <Skeleton className="h-4 w-80" />
+          <div className="flex items-center justify-between gap-3 pb-3 border-b">
+            <Skeleton className="h-3 w-20" />
+          </div>
+          <Skeleton className="h-8 w-3/4 mt-4" />
+          <Skeleton className="h-4 w-2/3 mt-3" />
         </div>
         {Array.from({ length: 3 }).map((_, i) => (
           <div key={i} className="rounded-lg border p-6">
-            <Skeleton className="h-5 w-40 mb-4" />
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {Array.from({ length: 6 }).map((_, j) => (
+            <div className="flex items-center gap-3 mb-5">
+              <Skeleton className="size-10 rounded-full" />
+              <Skeleton className="h-5 w-44" />
+            </div>
+            <div className="space-y-4">
+              {Array.from({ length: 4 }).map((_, j) => (
                 <div key={j}>
-                  <Skeleton className="h-4 w-24 mb-2" />
-                  <Skeleton className="h-10 w-full rounded-md" />
+                  <Skeleton className="h-3 w-24 mb-2" />
+                  <Skeleton className="h-9 w-full rounded-md" />
                 </div>
               ))}
             </div>
@@ -1217,14 +1184,9 @@ export default function RegistrationPage() {
           <div className="space-y-4">
             {/* Parent / Guardian Cards */}
             {parents.map((parent) => {
-              const sectionKey = `parent-${parent.id}`;
-              const isOpen = openSections.has(sectionKey);
               return (
                 <Card key={parent.id} className="overflow-hidden gap-0 py-0 ring-0 border">
-                  <CardHeader
-                    className="border-b py-3 !pb-3 cursor-pointer select-none"
-                    onClick={() => toggleSection(sectionKey)}
-                  >
+                  <CardHeader className="border-b py-3 !pb-3">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
                         <Avatar className="size-10">
@@ -1241,27 +1203,10 @@ export default function RegistrationPage() {
                       </div>
                       <div className="flex items-center gap-2">
                         <StatusIcon complete={isParentComplete(parent)} />
-                        <div
-                          className="flex size-8 items-center justify-center rounded-md border border-input text-muted-foreground hover:bg-muted/50 transition-colors"
-                          onClick={(e) => { e.stopPropagation(); toggleSection(sectionKey); }}
-                        >
-                          <svg className={`size-4 transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`} viewBox="0 0 20 20" fill="currentColor">
-                            <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
-                          </svg>
-                        </div>
                       </div>
                     </div>
                   </CardHeader>
-                  <AnimatePresence initial={false}>
-                    {isOpen && (
-                      <motion.div
-                        initial={{ height: 0, opacity: 0 }}
-                        animate={{ height: "auto", opacity: 1 }}
-                        exit={{ height: 0, opacity: 0 }}
-                        transition={{ duration: 0.25, ease: "easeInOut" }}
-                        className="overflow-hidden"
-                      >
-                        <CardContent className="space-y-6 py-5 bg-white dark:bg-background">
+                  <CardContent className="space-y-6 py-5 bg-white dark:bg-background">
                           {/* Contact Information */}
                           <section>
                             <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
@@ -1280,7 +1225,7 @@ export default function RegistrationPage() {
                               <Field>
                                 <FieldLabel className="text-xs">Phone</FieldLabel>
                                 <Input
-                                  className={!parent.phone ? "border-red-400" : ""}
+                                  className={!parent.phone ? "border-2 border-red-400" : ""}
                                   placeholder="(555) 555-5555"
                                   value={parent.phone || ""}
                                   onChange={(e) => updateParentLocal(parent.id, "phone", e.target.value)}
@@ -1289,7 +1234,7 @@ export default function RegistrationPage() {
                               <Field>
                                 <FieldLabel className="text-xs">Relationship</FieldLabel>
                                 <Input
-                                  className={!parent.relationship ? "border-red-400" : ""}
+                                  className={!parent.relationship ? "border-2 border-red-400" : ""}
                                   placeholder="e.g. Mother"
                                   value={parent.relationship || ""}
                                   onChange={(e) => updateParentLocal(parent.id, "relationship", e.target.value)}
@@ -1310,7 +1255,7 @@ export default function RegistrationPage() {
                                 <Field>
                                   <FieldLabel className="text-xs">Street Address</FieldLabel>
                                   <Input
-                                    className={!parent.address_line_1 ? "border-red-400" : ""}
+                                    className={!parent.address_line_1 ? "border-2 border-red-400" : ""}
                                     placeholder="123 Main Street"
                                     value={parent.address_line_1 || ""}
                                     onChange={(e) => updateParentLocal(parent.id, "address_line_1", e.target.value)}
@@ -1329,7 +1274,7 @@ export default function RegistrationPage() {
                                 <Field>
                                   <FieldLabel className="text-xs">City</FieldLabel>
                                   <Input
-                                    className={!parent.city ? "border-red-400" : ""}
+                                    className={!parent.city ? "border-2 border-red-400" : ""}
                                     placeholder="St. Petersburg"
                                     value={parent.city || ""}
                                     onChange={(e) => updateParentLocal(parent.id, "city", e.target.value)}
@@ -1346,7 +1291,7 @@ export default function RegistrationPage() {
                                 <Field>
                                   <FieldLabel className="text-xs">Zip Code</FieldLabel>
                                   <Input
-                                    className={!parent.zipcode ? "border-red-400" : ""}
+                                    className={!parent.zipcode ? "border-2 border-red-400" : ""}
                                     placeholder="33701"
                                     value={parent.zipcode || ""}
                                     onChange={(e) => updateParentLocal(parent.id, "zipcode", e.target.value)}
@@ -1356,9 +1301,6 @@ export default function RegistrationPage() {
                             </div>
                           </section>
                         </CardContent>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
                 </Card>
               );
             })}
@@ -1374,14 +1316,9 @@ export default function RegistrationPage() {
 
             {/* Emergency Contact Cards */}
             {emergencyContacts.map((ec) => {
-              const sectionKey = `ec-${ec.id}`;
-              const isOpen = openSections.has(sectionKey);
               return (
                 <Card key={ec.id} className="overflow-hidden gap-0 py-0 ring-0 border">
-                  <CardHeader
-                    className="border-b py-3 !pb-3 cursor-pointer select-none"
-                    onClick={() => toggleSection(sectionKey)}
-                  >
+                  <CardHeader className="border-b py-3 !pb-3">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
                         <Avatar className="size-10">
@@ -1426,27 +1363,10 @@ export default function RegistrationPage() {
                         >
                           <Trash2 className="size-4" />
                         </Button>
-                        <div
-                          className="flex size-8 items-center justify-center rounded-md border border-input text-muted-foreground hover:bg-muted/50 transition-colors"
-                          onClick={(e) => { e.stopPropagation(); toggleSection(sectionKey); }}
-                        >
-                          <svg className={`size-4 transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`} viewBox="0 0 20 20" fill="currentColor">
-                            <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
-                          </svg>
-                        </div>
                       </div>
                     </div>
                   </CardHeader>
-                  <AnimatePresence initial={false}>
-                    {isOpen && (
-                      <motion.div
-                        initial={{ height: 0, opacity: 0 }}
-                        animate={{ height: "auto", opacity: 1 }}
-                        exit={{ height: 0, opacity: 0 }}
-                        transition={{ duration: 0.25, ease: "easeInOut" }}
-                        className="overflow-hidden"
-                      >
-                        <CardContent className="space-y-6 py-5 bg-white dark:bg-background">
+                  <CardContent className="space-y-6 py-5 bg-white dark:bg-background">
                           {/* Contact Information */}
                           <section>
                             <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
@@ -1456,7 +1376,7 @@ export default function RegistrationPage() {
                               <Field>
                                 <FieldLabel className="text-xs">First Name</FieldLabel>
                                 <Input
-                                  className={!ec.first_name ? "border-red-400" : ""}
+                                  className={!ec.first_name ? "border-2 border-red-400" : ""}
                                   placeholder="First name"
                                   value={ec.first_name || ""}
                                   onChange={(e) => updateContactLocal(ec.id, "first_name", e.target.value)}
@@ -1465,7 +1385,7 @@ export default function RegistrationPage() {
                               <Field>
                                 <FieldLabel className="text-xs">Last Name</FieldLabel>
                                 <Input
-                                  className={!ec.last_name ? "border-red-400" : ""}
+                                  className={!ec.last_name ? "border-2 border-red-400" : ""}
                                   placeholder="Last name"
                                   value={ec.last_name || ""}
                                   onChange={(e) => updateContactLocal(ec.id, "last_name", e.target.value)}
@@ -1474,7 +1394,7 @@ export default function RegistrationPage() {
                               <Field>
                                 <FieldLabel className="text-xs">Relationship</FieldLabel>
                                 <Input
-                                  className={!ec.relationship ? "border-red-400" : ""}
+                                  className={!ec.relationship ? "border-2 border-red-400" : ""}
                                   placeholder="e.g. Grandmother"
                                   value={ec.relationship || ""}
                                   onChange={(e) => updateContactLocal(ec.id, "relationship", e.target.value)}
@@ -1486,7 +1406,7 @@ export default function RegistrationPage() {
                                 <FieldLabel className="text-xs">Email <span className="text-red-400">*</span></FieldLabel>
                                 <Input
                                   type="email"
-                                  className={showValidation && !ec.email ? "border-red-400" : ""}
+                                  className={showValidation && !ec.email ? "border-2 border-red-400" : ""}
                                   placeholder="email@example.com"
                                   value={ec.email || ""}
                                   onChange={(e) => updateContactLocal(ec.id, "email", e.target.value)}
@@ -1495,7 +1415,7 @@ export default function RegistrationPage() {
                               <Field>
                                 <FieldLabel className="text-xs">Phone</FieldLabel>
                                 <Input
-                                  className={!ec.phone ? "border-red-400" : ""}
+                                  className={!ec.phone ? "border-2 border-red-400" : ""}
                                   placeholder="(555) 555-5555"
                                   value={ec.phone || ""}
                                   onChange={(e) => updateContactLocal(ec.id, "phone", e.target.value)}
@@ -1516,7 +1436,7 @@ export default function RegistrationPage() {
                                 <Field>
                                   <FieldLabel className="text-xs">Street Address <span className="text-red-400">*</span></FieldLabel>
                                   <Input
-                                    className={showValidation && !ec.address_line_1 ? "border-red-400" : ""}
+                                    className={showValidation && !ec.address_line_1 ? "border-2 border-red-400" : ""}
                                     placeholder="123 Main Street"
                                     value={ec.address_line_1 || ""}
                                     onChange={(e) => updateContactLocal(ec.id, "address_line_1", e.target.value)}
@@ -1535,7 +1455,7 @@ export default function RegistrationPage() {
                                 <Field>
                                   <FieldLabel className="text-xs">City <span className="text-red-400">*</span></FieldLabel>
                                   <Input
-                                    className={showValidation && !ec.city ? "border-red-400" : ""}
+                                    className={showValidation && !ec.city ? "border-2 border-red-400" : ""}
                                     placeholder="St. Petersburg"
                                     value={ec.city || ""}
                                     onChange={(e) => updateContactLocal(ec.id, "city", e.target.value)}
@@ -1552,7 +1472,7 @@ export default function RegistrationPage() {
                                 <Field>
                                   <FieldLabel className="text-xs">Zip Code <span className="text-red-400">*</span></FieldLabel>
                                   <Input
-                                    className={showValidation && !ec.zipcode ? "border-red-400" : ""}
+                                    className={showValidation && !ec.zipcode ? "border-2 border-red-400" : ""}
                                     placeholder="33701"
                                     value={ec.zipcode || ""}
                                     onChange={(e) => updateContactLocal(ec.id, "zipcode", e.target.value)}
@@ -1562,9 +1482,6 @@ export default function RegistrationPage() {
                             </div>
                           </section>
                         </CardContent>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
                 </Card>
               );
             })}
@@ -1611,16 +1528,11 @@ export default function RegistrationPage() {
 
             <div className="space-y-4">
               {enrolledStudents.filter((s) => selectedStudentIds.has(s.id)).map((student) => {
-                const sectionKey = `student-${student.id}`;
-                const isOpen = openSections.has(sectionKey);
                 const reg = registrations[student.id] ?? emptyRegistration(student.id);
 
                 return (
                   <Card key={student.id} className="overflow-hidden gap-0 py-0 ring-0 border">
-                    <CardHeader
-                      className="border-b py-3 !pb-3 cursor-pointer select-none"
-                      onClick={() => toggleSection(sectionKey)}
-                    >
+                    <CardHeader className="border-b py-3 !pb-3">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
                           <Avatar className="size-10">
@@ -1648,27 +1560,10 @@ export default function RegistrationPage() {
                           >
                             <Trash2 className="size-4" />
                           </Button>
-                          <div
-                            className="flex size-8 items-center justify-center rounded-md border border-input text-muted-foreground hover:bg-muted/50 transition-colors"
-                            onClick={(e) => { e.stopPropagation(); toggleSection(sectionKey); }}
-                          >
-                            <svg className={`size-4 transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`} viewBox="0 0 20 20" fill="currentColor">
-                              <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
-                            </svg>
-                          </div>
                         </div>
                       </div>
                     </CardHeader>
-                    <AnimatePresence initial={false}>
-                      {isOpen && (
-                        <motion.div
-                          initial={{ height: 0, opacity: 0 }}
-                          animate={{ height: "auto", opacity: 1 }}
-                          exit={{ height: 0, opacity: 0 }}
-                          transition={{ duration: 0.25, ease: "easeInOut" }}
-                          className="overflow-hidden"
-                        >
-                          <CardContent className="space-y-6 py-5 bg-white dark:bg-background">
+                    <CardContent className="space-y-6 py-5 bg-white dark:bg-background">
                             {/* Uniform & Activities */}
                             <section>
                               <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
@@ -1681,7 +1576,7 @@ export default function RegistrationPage() {
                                     value={reg.shirt_size || ""}
                                     onValueChange={(v) => updateRegistration(student.id, "shirt_size", v)}
                                   >
-                                    <SelectTrigger className={showValidation && !reg.shirt_size ? "border-red-400" : ""}>
+                                    <SelectTrigger className={showValidation && !reg.shirt_size ? "border-2 border-red-400" : ""}>
                                       <SelectValue placeholder="Select size" />
                                     </SelectTrigger>
                                     <SelectContent>
@@ -1697,7 +1592,7 @@ export default function RegistrationPage() {
                                     value={reg.pant_size || ""}
                                     onValueChange={(v) => updateRegistration(student.id, "pant_size", v)}
                                   >
-                                    <SelectTrigger className={showValidation && !reg.pant_size ? "border-red-400" : ""}>
+                                    <SelectTrigger className={showValidation && !reg.pant_size ? "border-2 border-red-400" : ""}>
                                       <SelectValue placeholder="Select size" />
                                     </SelectTrigger>
                                     <SelectContent>
@@ -1713,7 +1608,7 @@ export default function RegistrationPage() {
                                     value={reg.swim_level || ""}
                                     onValueChange={(v) => updateRegistration(student.id, "swim_level", v)}
                                   >
-                                    <SelectTrigger className={showValidation && !reg.swim_level ? "border-red-400" : ""}>
+                                    <SelectTrigger className={showValidation && !reg.swim_level ? "border-2 border-red-400" : ""}>
                                       <SelectValue placeholder="Select level" />
                                     </SelectTrigger>
                                     <SelectContent>
@@ -1796,7 +1691,7 @@ export default function RegistrationPage() {
                                       placeholder="List any allergies..."
                                       value={reg.allergies || ""}
                                       onChange={(e) => updateRegistration(student.id, "allergies", e.target.value)}
-                                      className={showValidation && !reg.allergies ? "border-red-400" : ""}
+                                      className={showValidation && !reg.allergies ? "border-2 border-red-400" : ""}
                                       rows={2}
                                     />
                                   </Field>
@@ -1808,7 +1703,7 @@ export default function RegistrationPage() {
                                       placeholder="List any dietary restrictions..."
                                       value={reg.dietary_restrictions || ""}
                                       onChange={(e) => updateRegistration(student.id, "dietary_restrictions", e.target.value)}
-                                      className={showValidation && !reg.dietary_restrictions ? "border-red-400" : ""}
+                                      className={showValidation && !reg.dietary_restrictions ? "border-2 border-red-400" : ""}
                                       rows={2}
                                     />
                                   </Field>
@@ -1818,7 +1713,7 @@ export default function RegistrationPage() {
                                       placeholder="List any prescription medications..."
                                       value={reg.prescription_medications || ""}
                                       onChange={(e) => updateRegistration(student.id, "prescription_medications", e.target.value)}
-                                      className={showValidation && !reg.prescription_medications ? "border-red-400" : ""}
+                                      className={showValidation && !reg.prescription_medications ? "border-2 border-red-400" : ""}
                                       rows={2}
                                     />
                                   </Field>
@@ -1830,7 +1725,7 @@ export default function RegistrationPage() {
                                       placeholder="Describe any health conditions..."
                                       value={reg.health_conditions || ""}
                                       onChange={(e) => updateRegistration(student.id, "health_conditions", e.target.value)}
-                                      className={showValidation && !reg.health_conditions ? "border-red-400" : ""}
+                                      className={showValidation && !reg.health_conditions ? "border-2 border-red-400" : ""}
                                       rows={2}
                                     />
                                   </Field>
@@ -1851,7 +1746,7 @@ export default function RegistrationPage() {
                                       placeholder="Describe any vision impairments..."
                                       value={reg.vision_impairments || ""}
                                       onChange={(e) => updateRegistration(student.id, "vision_impairments", e.target.value)}
-                                      className={showValidation && !reg.vision_impairments ? "border-red-400" : ""}
+                                      className={showValidation && !reg.vision_impairments ? "border-2 border-red-400" : ""}
                                     />
                                   </Field>
                                   <Field>
@@ -1860,7 +1755,7 @@ export default function RegistrationPage() {
                                       placeholder="Describe any hearing impairments..."
                                       value={reg.hearing_impairments || ""}
                                       onChange={(e) => updateRegistration(student.id, "hearing_impairments", e.target.value)}
-                                      className={showValidation && !reg.hearing_impairments ? "border-red-400" : ""}
+                                      className={showValidation && !reg.hearing_impairments ? "border-2 border-red-400" : ""}
                                     />
                                   </Field>
                                 </div>
@@ -1872,7 +1767,7 @@ export default function RegistrationPage() {
                                       value={reg.permission_for_acetaminophen || ""}
                                       onValueChange={(v) => updateRegistration(student.id, "permission_for_acetaminophen", v)}
                                     >
-                                      <SelectTrigger className={showValidation && !reg.permission_for_acetaminophen ? "border-red-400" : ""}>
+                                      <SelectTrigger className={showValidation && !reg.permission_for_acetaminophen ? "border-2 border-red-400" : ""}>
                                         <SelectValue placeholder="Select" />
                                       </SelectTrigger>
                                       <SelectContent>
@@ -1888,7 +1783,7 @@ export default function RegistrationPage() {
                                       value={reg.interested_in_counseling_services || ""}
                                       onValueChange={(v) => updateRegistration(student.id, "interested_in_counseling_services", v)}
                                     >
-                                      <SelectTrigger className={showValidation && !reg.interested_in_counseling_services ? "border-red-400" : ""}>
+                                      <SelectTrigger className={showValidation && !reg.interested_in_counseling_services ? "border-2 border-red-400" : ""}>
                                         <SelectValue placeholder="Select" />
                                       </SelectTrigger>
                                       <SelectContent>
@@ -1934,7 +1829,7 @@ export default function RegistrationPage() {
                                           placeholder="Describe the allergy, when to administer, and any other relevant details..."
                                           value={reg.epipen_explainer || ""}
                                           onChange={(e) => updateRegistration(student.id, "epipen_explainer", e.target.value)}
-                                          className={showValidation && reg.carry_epi_pen && !reg.epipen_explainer ? "border-red-400" : ""}
+                                          className={showValidation && reg.carry_epi_pen && !reg.epipen_explainer ? "border-2 border-red-400" : ""}
                                           rows={3}
                                         />
                                       </Field>
@@ -2006,7 +1901,7 @@ export default function RegistrationPage() {
                                     placeholder="List names and relationships of approved adults..."
                                     value={reg.other_adults_approved_for_pickup || ""}
                                     onChange={(e) => updateRegistration(student.id, "other_adults_approved_for_pickup", e.target.value)}
-                                    className={showValidation && !reg.other_adults_approved_for_pickup ? "border-red-400" : ""}
+                                    className={showValidation && !reg.other_adults_approved_for_pickup ? "border-2 border-red-400" : ""}
                                     rows={3}
                                   />
                                 </Field>
@@ -2016,7 +1911,7 @@ export default function RegistrationPage() {
                                     placeholder="List any adults prohibited from picking up the student..."
                                     value={reg.prohibited_adults || ""}
                                     onChange={(e) => updateRegistration(student.id, "prohibited_adults", e.target.value)}
-                                    className={showValidation && !reg.prohibited_adults ? "border-red-400" : ""}
+                                    className={showValidation && !reg.prohibited_adults ? "border-2 border-red-400" : ""}
                                     rows={3}
                                   />
                                 </Field>
@@ -2088,9 +1983,6 @@ export default function RegistrationPage() {
                               </div>
                             </section>
                           </CardContent>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
                   </Card>
                 );
               })}
@@ -2184,12 +2076,6 @@ export default function RegistrationPage() {
                         if (!next[student.id]) {
                           next[student.id] = emptyRegistration(student.id);
                         }
-                        return next;
-                      });
-                      // Auto-open the new card
-                      setOpenSections((prev) => {
-                        const next = new Set(prev);
-                        next.add(`student-${student.id}`);
                         return next;
                       });
                       setAddStudentOpen(false);

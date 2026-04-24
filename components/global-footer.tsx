@@ -21,14 +21,14 @@ export function GlobalFooter() {
 
   return (
     <footer className="fixed bottom-0 left-0 right-0 z-40 border-t bg-white">
-      <div className="mx-auto flex items-center justify-center gap-4 px-4 py-2.5 text-xs text-muted-foreground sm:justify-between sm:w-full lg:px-6">
-        {/* Left: Copyright + Address + Tagline — hidden on mobile */}
-        <div className="hidden sm:flex flex-wrap items-center gap-1.5">
-          <span>&copy; {currentYear} SailFuture Academy</span>
-          <span aria-hidden="true">&bull;</span>
-          <span>2154 27th Ave N, Saint Petersburg FL 33713</span>
-          <span aria-hidden="true">&bull;</span>
-          <span>Where the Classroom Meets the Real World.</span>
+      <div className="mx-auto flex items-center justify-between gap-4 px-4 py-2.5 text-xs text-muted-foreground whitespace-nowrap lg:px-6">
+        {/* Copyright — always visible. Address + tagline desktop only. */}
+        <div className="flex items-center gap-1.5 min-w-0">
+          <span className="truncate">&copy; {currentYear} SailFuture Academy</span>
+          <span aria-hidden="true" className="hidden sm:inline">&bull;</span>
+          <span className="hidden sm:inline truncate">2154 27th Ave N, Saint Petersburg FL 33713</span>
+          <span aria-hidden="true" className="hidden lg:inline">&bull;</span>
+          <span className="hidden lg:inline truncate">Where the Classroom Meets the Real World.</span>
         </div>
 
         {/* Links + Socials — always visible */}

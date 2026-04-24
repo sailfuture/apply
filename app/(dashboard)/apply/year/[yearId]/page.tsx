@@ -4,12 +4,12 @@ import { useParams, useRouter } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
 import { useApplicationSteps, type StepStatus } from "@/hooks/use-application-steps";
 import { useStudents } from "@/hooks/use-api";
-import { useSubmitReadiness } from "@/hooks/use-submit-readiness";
-import { PreSubmitReviewModal } from "@/components/pre-submit-review-modal";
+import { useFamilyProgress } from "@/hooks/use-family-progress";
+import { PreSubmitReviewModal, type SectionStatus } from "@/components/pre-submit-review-modal";
 import { ArrowRight, Clock, CheckCircle2, Lock } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import Image from "next/image";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -272,9 +272,22 @@ export default function YearOverviewPage() {
   const yearName = schoolYear?.year_name ?? "next year";
 
   // Pre-submit review — opens as a modal when the user clicks "Submit Application".
-  // Shows per-section completion + jump links to fix anything missing.
-  const readiness = useSubmitReadiness(yearId);
+  // Reads the 4 section completion booleans from
+  // `registration_family_application_progress` and surfaces a Fix link for
+  // any section that isn't yet marked complete.
+  const { progress, submit: submitFamilyApplication } = useFamilyProgress(yearId);
+  const isSubmitted = !!progress?.isSubmitted;
+  const submitSections: SectionStatus[] = useMemo(
+    () => [
+      { section: "family", complete: !!progress?.family_completed },
+      { section: "students", complete: !!progress?.students_completed },
+      { section: "financial_aid", complete: !!progress?.financial_aid_completed },
+      { section: "testing", complete: !!progress?.testing_completed },
+    ],
+    [progress]
+  );
   const [preSubmitOpen, setPreSubmitOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   // When family is accepted, sync isAccepted=true on all family students
   const acceptanceSynced = useRef(false);
@@ -324,25 +337,27 @@ export default function YearOverviewPage() {
 
   if (loading) {
     return (
-      <div className="flex min-h-[calc(100vh-7.5rem)] items-center justify-center px-4">
+      <div className="flex min-h-[calc(100vh-7.5rem)] items-center justify-center px-4 bg-gray-50 dark:bg-background">
         <div className="w-full max-w-2xl py-8">
           <div className="text-center mb-8">
             <Skeleton className="size-16 rounded-full mx-auto mb-4" />
-            <Skeleton className="h-7 w-80 mx-auto" />
-            <Skeleton className="h-4 w-full max-w-lg mx-auto mt-3" />
-            <Skeleton className="h-4 w-96 mx-auto mt-1" />
-            <Skeleton className="h-4 w-full max-w-lg mx-auto mt-3" />
+            <Skeleton className="h-7 w-3/4 mx-auto" />
+            <Skeleton className="h-7 w-2/3 mx-auto mt-2" />
+            <Skeleton className="h-4 w-full max-w-lg mx-auto mt-4" />
+            <Skeleton className="h-4 w-5/6 max-w-lg mx-auto mt-2" />
           </div>
-          <div className="overflow-hidden rounded-lg border">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <div key={i} className="flex items-center px-4 py-4 border-b last:border-b-0">
-                <Skeleton className="size-8 rounded-full shrink-0" />
-                <div className="flex-1 px-4">
-                  <Skeleton className="h-4 w-32" />
-                </div>
-                <Skeleton className="size-7 rounded-md" />
+          <div className="rounded-xl bg-background p-1.5 shadow-sm border">
+            <div className="overflow-hidden rounded-lg border">
+              <div className="divide-y">
+                {Array.from({ length: 5 }).map((_, i) => (
+                  <div key={i} className="flex items-center px-4 py-4 gap-3">
+                    <Skeleton className="size-8 rounded-full shrink-0" />
+                    <Skeleton className="h-4 w-48 flex-1" />
+                    <Skeleton className="size-7 rounded-md shrink-0" />
+                  </div>
+                ))}
               </div>
-            ))}
+            </div>
           </div>
         </div>
       </div>
@@ -397,6 +412,79 @@ export default function YearOverviewPage() {
   /* ────────── Stage 3: Accepted ────────── */
   if (stage === "accepted") {
     return <AcceptedView firstName={firstName} yearId={yearId} registrationSteps={registrationSteps} allSectionsComplete={allRegistrationSectionsComplete} />;
+  }
+
+  /* ────────── Post-submit: Application is in review ──────────
+     Once the parent hits Submit, `isSubmitted` flips to true on the
+     `registration_family_application_progress` row. We replace the step
+     table with a confirmation banner so the form can't be re-submitted or
+     casually edited from here. */
+  if (isSubmitted) {
+    return (
+      <div className="flex min-h-[calc(100vh-7.5rem)] items-center justify-center px-4 bg-gray-50 dark:bg-background">
+        <div className="w-full max-w-2xl py-8">
+          <div className="text-center mb-8">
+            <div className="flex justify-center mb-4">
+              <div className="rounded-full border-[6px] border-white dark:border-background shadow-sm">
+                <Image
+                  src="/logo.svg"
+                  alt="SailFuture Academy"
+                  width={64}
+                  height={64}
+                  className="size-16 rounded-full"
+                />
+              </div>
+            </div>
+            <h1 className="text-2xl font-semibold">
+              Your application has been submitted.
+            </h1>
+            <p className="text-muted-foreground text-sm mt-3 max-w-lg mx-auto">
+              Thank you{firstName ? `, ${firstName}` : ""}. We&rsquo;ve received
+              your application for {yearName}. Please stand by while our
+              admissions team reviews it — check back here for updates and next
+              steps on your acceptance.
+            </p>
+          </div>
+
+          <div className="rounded-xl bg-background p-6 shadow-sm border text-center">
+            <div className="flex justify-center mb-3">
+              <div className="flex size-12 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30">
+                <CheckCircle2 className="size-6 text-green-600 dark:text-green-500" />
+              </div>
+            </div>
+            <p className="text-sm font-medium">Application received</p>
+            {progress?.submitted_at ? (
+              <p className="text-xs text-muted-foreground mt-1">
+                Submitted on{" "}
+                {new Date(progress.submitted_at).toLocaleDateString("en-US", {
+                  month: "long",
+                  day: "numeric",
+                  year: "numeric",
+                })}
+              </p>
+            ) : null}
+          </div>
+
+          <p className="text-xs text-muted-foreground text-center mt-6">
+            Questions? Contact us at{" "}
+            <a
+              href="mailto:tward@sailfuture.org"
+              className="text-primary underline underline-offset-2"
+            >
+              tward@sailfuture.org
+            </a>{" "}
+            or call{" "}
+            <a
+              href="tel:+17279001436"
+              className="text-primary underline underline-offset-2"
+            >
+              (727) 900-1436
+            </a>
+            .
+          </p>
+        </div>
+      </div>
+    );
   }
 
   /* ────────── Stage 1: Start the Application ────────── */
@@ -508,11 +596,22 @@ export default function YearOverviewPage() {
       <PreSubmitReviewModal
         open={preSubmitOpen}
         onOpenChange={setPreSubmitOpen}
-        sections={readiness.sections}
+        sections={submitSections}
         basePath={`/apply/year/${yearId}`}
-        onConfirm={() => {
-          setPreSubmitOpen(false);
-          router.push(`/apply/year/${yearId}/submit`);
+        submitting={submitting}
+        onConfirm={async () => {
+          if (submitting) return;
+          setSubmitting(true);
+          try {
+            await submitFamilyApplication();
+            setPreSubmitOpen(false);
+            // Stay on the dashboard; the "Application Submitted" banner
+            // renders because `progress.isSubmitted` is now true.
+          } catch {
+            // Leave modal open so the user can retry.
+          } finally {
+            setSubmitting(false);
+          }
         }}
       />
     </div>

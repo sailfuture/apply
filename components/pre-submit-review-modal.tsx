@@ -1,6 +1,5 @@
 "use client";
 
-import { Fragment } from "react";
 import { useRouter } from "next/navigation";
 import { CheckCircle2, AlertCircle } from "lucide-react";
 import {
@@ -19,12 +18,24 @@ import {
   TableCell,
   TableRow,
 } from "@/components/ui/table";
-import type { SectionCheckResult } from "@/lib/application-schemas";
+
+/** Section completion status derived from the
+ *  `registration_family_application_progress` row. */
+export type ProgressSectionKey =
+  | "family"
+  | "students"
+  | "financial_aid"
+  | "testing";
+
+export interface SectionStatus {
+  section: ProgressSectionKey;
+  complete: boolean;
+}
 
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  sections: SectionCheckResult[];
+  sections: SectionStatus[];
   /** Base href for "Fix" jump links, e.g. `/apply/year/123`. */
   basePath: string;
   /** Called when the user confirms submission. */
@@ -32,22 +43,29 @@ interface Props {
   submitting?: boolean;
 }
 
-const SECTION_LABELS: Record<string, string> = {
+const SECTION_LABELS: Record<ProgressSectionKey, string> = {
   family: "Family Information",
   students: "Student Details",
   financial_aid: "Financial Aid",
+  testing: "Initial Testing",
 };
 
-const SECTION_HREFS: Record<string, string> = {
+const SECTION_HREFS: Record<ProgressSectionKey, string> = {
   family: "/family",
   students: "/students",
   financial_aid: "/scholarship",
+  testing: "/nwea",
 };
 
 /**
- * Review modal shown when a parent clicks Submit. Rendered as a grouped table:
- * one header row per section (with the Fix button inline), then one row per
- * missing requirement beneath it. Complete sections collapse to a single row.
+ * Review modal shown when a parent clicks Submit. Reads the section-level
+ * completion booleans from `registration_family_application_progress`. Each
+ * row shows a section label + status; incomplete sections get a Fix link that
+ * jumps to the corresponding step page.
+ *
+ * This modal intentionally does NOT enumerate individual missing fields —
+ * specifics are the section page's job. Here we only surface the high-level
+ * question: "Is the section marked complete yet?"
  */
 export function PreSubmitReviewModal({
   open,
@@ -58,111 +76,79 @@ export function PreSubmitReviewModal({
   submitting,
 }: Props) {
   const router = useRouter();
-  const allReady = sections.every((s) => s.complete);
+  const allReady = sections.length > 0 && sections.every((s) => s.complete);
 
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent className="max-w-2xl max-h-[85vh] overflow-hidden flex flex-col">
         <AlertDialogHeader>
           <AlertDialogTitle>
-            {allReady ? "Ready to submit?" : "A few items need your attention"}
+            {allReady ? "Ready to submit?" : "A few sections still need attention"}
           </AlertDialogTitle>
           <AlertDialogDescription>
             {allReady
               ? "Once you submit, you won't be able to edit your application without contacting the school."
-              : "Review the items still needed below. Use Fix to jump to the section."}
+              : "Each section below must be marked complete before you can submit. Use Fix to jump to the section."}
           </AlertDialogDescription>
         </AlertDialogHeader>
 
         <div className="flex-1 overflow-y-auto rounded-md border">
-          <Table className="text-xs table-fixed w-full">
+          <Table className="text-sm table-fixed w-full">
             <TableBody>
               {sections.map((s) => {
                 const label = SECTION_LABELS[s.section] ?? s.section;
                 const href = basePath + (SECTION_HREFS[s.section] ?? "");
-                const completedCount = Math.max(0, s.total - s.missing.length);
 
                 return (
-                  <Fragment key={s.section}>
-                    {/* Section header row — spans the whole table with the
-                        section title, count, status, and (if incomplete) Fix. */}
-                    <TableRow className="bg-muted/50 hover:bg-muted/50">
-                      <TableCell className="py-2 px-3" colSpan={2}>
-                        <div className="flex items-center justify-between gap-2 min-w-0">
-                          <div className="flex items-baseline gap-2 min-w-0">
-                            <span className="text-xs font-semibold truncate">
-                              {label}
+                  <TableRow key={s.section}>
+                    <TableCell className="py-3 px-3">
+                      <span className="font-medium">{label}</span>
+                    </TableCell>
+                    <TableCell className="py-3 px-3 text-right">
+                      <div className="flex items-center justify-end gap-3">
+                        {s.complete ? (
+                          <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                            <CheckCircle2 className="size-4 text-green-600 dark:text-green-500" />
+                            Complete
+                          </span>
+                        ) : (
+                          <>
+                            <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                              <AlertCircle className="size-4 text-red-600 dark:text-red-500" />
+                              Not yet complete
                             </span>
-                            <span className="text-[11px] text-muted-foreground tabular-nums shrink-0">
-                              {completedCount}/{s.total}
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-2 shrink-0">
-                            {s.complete ? (
-                              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground">
-                                <CheckCircle2 className="size-3.5 text-green-600 dark:text-green-500" />
-                                Complete
-                              </span>
-                            ) : (
-                              <>
-                                <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground">
-                                  <AlertCircle className="size-3.5 text-red-600 dark:text-red-500" />
-                                  {s.missing.length} left
-                                </span>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    onOpenChange(false);
-                                    router.push(href);
-                                  }}
-                                  className="text-xs font-medium text-primary underline underline-offset-2 hover:no-underline"
-                                >
-                                  Fix →
-                                </button>
-                              </>
-                            )}
-                          </div>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-
-                    {/* Section body rows — one per missing item, or a single
-                        "All required fields filled" line when complete. */}
-                    {s.complete ? (
-                      <TableRow>
-                        <TableCell
-                          className="py-1.5 px-3 text-[11px] text-muted-foreground"
-                          colSpan={2}
-                        >
-                          All required fields filled
-                        </TableCell>
-                      </TableRow>
-                    ) : (
-                      s.missing.map((req) => (
-                        <TableRow key={req.key}>
-                          <TableCell
-                            className="py-1.5 px-3 text-[11px] text-muted-foreground truncate"
-                            colSpan={2}
-                            title={req.label}
-                          >
-                            {req.label}
-                          </TableCell>
-                        </TableRow>
-                      ))
-                    )}
-                  </Fragment>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onOpenChange(false);
+                                router.push(href);
+                              }}
+                              className="text-xs font-medium text-primary underline underline-offset-2 hover:no-underline"
+                            >
+                              Fix →
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </TableCell>
+                  </TableRow>
                 );
               })}
             </TableBody>
           </Table>
         </div>
 
-        <AlertDialogFooter>
-          <AlertDialogCancel disabled={submitting}>
+        {/* Split the footer actions 50/50 on all breakpoints. Default
+            AlertDialogFooter stacks on mobile and right-aligns on sm+; we
+            override with a simple 2-col grid so Cancel/Submit always share
+            the full width evenly. */}
+        <AlertDialogFooter className="grid grid-cols-2 gap-2 sm:flex-row sm:justify-stretch">
+          <AlertDialogCancel disabled={submitting} className="w-full">
             {allReady ? "Cancel" : "Close"}
           </AlertDialogCancel>
           <AlertDialogAction
             disabled={!allReady || submitting}
+            className="w-full"
             onClick={(e) => {
               if (!allReady) {
                 e.preventDefault();

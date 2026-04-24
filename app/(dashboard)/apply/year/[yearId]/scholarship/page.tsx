@@ -43,6 +43,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { GlobalSaveStatusPill } from "@/components/save-status-pill";
+import { useFamilyProgress } from "@/hooks/use-family-progress";
 import { toast } from "sonner";
 import {
   Empty,
@@ -892,7 +893,9 @@ export default function ScholarshipPage() {
     return () => unregisterSaveHandler();
   }, [setPageTitle, unregisterSaveHandler]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const [scholarshipLocked, setScholarshipLocked] = useState(false);
+  // Progress bridge row — source of truth for financial-aid section completion.
+  const { progress, setSection: setProgressSection } = useFamilyProgress(yearId);
+  const scholarshipLocked = !!progress?.financial_aid_completed;
 
   const handleCompleteScholarshipRef = useRef<() => Promise<void>>(() => Promise.resolve());
   handleCompleteScholarshipRef.current = async () => {
@@ -909,13 +912,13 @@ export default function ScholarshipPage() {
       throw new Error("Validation failed");
     }
     await handleSaveRef.current?.();
-    setScholarshipLocked(true);
+    await setProgressSection("financial_aid_completed", true);
     toast.success("Financial aid section completed.");
   };
 
   useEffect(() => {
     registerSaveHandler(() => handleCompleteScholarshipRef.current(), {
-      label: "Complete SailFuture Opportunity Scholarship",
+      label: "Complete Financial Aid Section",
     });
   }, [registerSaveHandler]);
 
@@ -923,8 +926,8 @@ export default function ScholarshipPage() {
     if (scholarshipLocked) {
       updateSaveOptions({
         completed: true,
-        completedLabel: "SailFuture Opportunity Scholarship Completed",
-        onUnlock: () => setScholarshipLocked(false),
+        completedLabel: "Financial Aid Section Completed",
+        onUnlock: () => void setProgressSection("financial_aid_completed", false),
       });
     } else {
       // Enable button if a valid choice has been made (even if not dirty)
@@ -932,10 +935,10 @@ export default function ScholarshipPage() {
       updateSaveOptions({
         saving,
         disabled: !hasValidChoice || saving,
-        label: "Complete SailFuture Opportunity Scholarship",
+        label: "Complete Financial Aid Section",
       });
     }
-  }, [saving, scholarshipChoice, scholarshipLocked, updateSaveOptions]);
+  }, [saving, scholarshipChoice, scholarshipLocked, updateSaveOptions, setProgressSection]);
 
   useEffect(() => {
     if (savedSnapshotRef.current === "" || savingRef.current) return;
@@ -1106,27 +1109,27 @@ export default function ScholarshipPage() {
 
   if (loading) {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center px-4">
-        <div className="w-full max-w-2xl py-8">
-          <div className="text-center mb-8">
-            <Skeleton className="h-7 w-80 mx-auto mb-3" />
-            <Skeleton className="h-4 w-96 max-w-full mx-auto" />
-            <Skeleton className="h-4 w-72 mx-auto mt-2" />
+      <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
+        <div>
+          <div className="flex items-center justify-between gap-3 pb-3 border-b">
+            <Skeleton className="h-3 w-20" />
           </div>
-          <div className="rounded-xl bg-background p-1.5 shadow-sm border">
-            <div className="overflow-hidden rounded-lg border">
-              <div className="divide-y">
-                {Array.from({ length: 3 }).map((_, i) => (
-                  <div key={i} className="flex items-center px-4 py-4 gap-4">
-                    <Skeleton className="size-8 shrink-0 rounded-full" />
-                    <Skeleton className="h-4 w-48 flex-1" />
-                    <Skeleton className="size-7 shrink-0 rounded-md" />
-                  </div>
-                ))}
-              </div>
+          <Skeleton className="h-8 w-3/4 mt-4" />
+          <Skeleton className="h-4 w-2/3 mt-3" />
+        </div>
+        {Array.from({ length: 3 }).map((_, i) => (
+          <div key={i} className="rounded-lg border p-6">
+            <Skeleton className="h-5 w-48 mb-5" />
+            <div className="space-y-4">
+              {Array.from({ length: 4 }).map((_, j) => (
+                <div key={j}>
+                  <Skeleton className="h-3 w-24 mb-2" />
+                  <Skeleton className="h-9 w-full rounded-md" />
+                </div>
+              ))}
             </div>
           </div>
-        </div>
+        ))}
       </div>
     );
   }
@@ -1180,23 +1183,10 @@ export default function ScholarshipPage() {
           </h2>
           <p className="text-sm text-muted-foreground mt-3 mb-4 max-w-2xl">
             Available to all Florida students eligible for K-12 public school, regardless of household income.{" "}
-            <span className="font-semibold text-foreground">$8,000</span> average scholarship for private school tuition and related fees. If your student has been awarded a Step Up scholarship, enter their Award ID below.{" "}
-            <button
-              type="button"
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                setStepUpDialogOpen(true);
-              }}
-              className="inline-flex items-center gap-1 text-primary underline underline-offset-2 hover:text-primary/80 transition-colors"
-            >
-              Visit Step Up for Students
-              <ExternalLink className="size-3" />
-            </button>
+            <span className="font-semibold text-foreground">$8,000</span> average scholarship for private school tuition and related fees. If your student has been awarded a Step Up scholarship, enter their Award ID below.
           </p>
           <Button
             type="button"
-            variant="outline"
             className="w-full"
             onClick={(e) => {
               e.preventDefault();
@@ -1279,7 +1269,7 @@ export default function ScholarshipPage() {
                     pattern="[0-9]*"
                     maxLength={9}
                     placeholder="000000000"
-                    className={`w-full [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${!app.sufs_award_id ? "border-red-400" : ""}`}
+                    className={`w-full [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${!app.sufs_award_id ? "border-2 border-red-400" : ""}`}
                     value={app.sufs_award_id || ""}
                     disabled={sufsSavingAppId === app.id}
                     onChange={(e) => handleSufsAwardIdChange(app.id, e.target.value)}
@@ -1383,7 +1373,7 @@ export default function ScholarshipPage() {
 
   if (!showForm) {
     return (
-      <div className="flex flex-col px-4 py-8 mx-auto w-full max-w-4xl gap-6">
+      <div className="flex flex-col px-4 pt-8 pb-4 mx-auto w-full max-w-4xl gap-6">
           {/* Page header — introduces the two funding paths (Step 1 + Step 2) */}
           <div className="pb-4 border-b">
             <div className="flex items-center justify-between gap-3 pb-3 border-b">
@@ -1409,7 +1399,7 @@ export default function ScholarshipPage() {
           <Separator />
 
           <div className="w-full">
-          <div className="text-center xl:text-left mb-8">
+          <div className="text-left mb-8">
             <div className="flex items-center gap-3 mb-2">
               <Image
                 src="/logo.svg"
@@ -1432,7 +1422,7 @@ export default function ScholarshipPage() {
               <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground mb-2">
                 Nationally Recognized and Scholarships Funded By:
               </p>
-              <div className="flex items-center justify-center xl:justify-start gap-4">
+              <div className="flex items-center justify-start gap-4">
                 <Image src="/logos/yass-prize.png" alt="The Yass Prize" width={36} height={36} className="size-9 rounded-full" />
                 <Image src="/logos/google.png" alt="Google" width={36} height={36} className="size-9" />
                 <Image src="/logos/linkedin.png" alt="LinkedIn" width={36} height={36} className="size-9 rounded-full" />
@@ -1829,7 +1819,7 @@ export default function ScholarshipPage() {
                       setHouseholdAdults(Number(e.target.value) || 0)
                     }
                     disabled={isReadonly}
-                    className={!householdAdults ? "border-red-400" : ""}
+                    className={!householdAdults ? "border-2 border-red-400" : ""}
                   />
                 </Field>
                 <Field>
@@ -1844,7 +1834,7 @@ export default function ScholarshipPage() {
                       setHouseholdChildren(Number(e.target.value) || 0)
                     }
                     disabled={isReadonly}
-                    className={!householdChildren ? "border-red-400" : ""}
+                    className={!householdChildren ? "border-2 border-red-400" : ""}
                   />
                 </Field>
               </div>
@@ -2004,7 +1994,7 @@ export default function ScholarshipPage() {
                               }}
                               disabled={isReadonly}
                             >
-                              <SelectTrigger className={`w-full ${!benefit.type ? "border-red-400" : ""}`}>
+                              <SelectTrigger className={`w-full ${!benefit.type ? "border-2 border-red-400" : ""}`}>
                                 <SelectValue placeholder="Select type" />
                               </SelectTrigger>
                               <SelectContent>
@@ -2029,7 +2019,7 @@ export default function ScholarshipPage() {
                               value={benefit.amount_monthly}
                               onChange={(val) => patchBenefitLocal(benefit.id, { amount_monthly: val })}
                               disabled={isReadonly}
-                              className={!benefit.amount_monthly ? "border-red-400" : ""}
+                              className={!benefit.amount_monthly ? "border-2 border-red-400" : ""}
                             />
                           </Field>
                           {!isReadonly && (
@@ -2221,7 +2211,7 @@ export default function ScholarshipPage() {
                             value={member.first_name ?? ""}
                             onBlurSave={(val) => patchMemberLocal(member.id, { first_name: val })}
                             disabled={isReadonly}
-                            className={!(member.first_name ?? "").trim() ? "border-red-400" : ""}
+                            className={!(member.first_name ?? "").trim() ? "border-2 border-red-400" : ""}
                           />
                         </Field>
                         <Field>
@@ -2230,7 +2220,7 @@ export default function ScholarshipPage() {
                             value={member.last_name ?? ""}
                             onBlurSave={(val) => patchMemberLocal(member.id, { last_name: val })}
                             disabled={isReadonly}
-                            className={!(member.last_name ?? "").trim() ? "border-red-400" : ""}
+                            className={!(member.last_name ?? "").trim() ? "border-2 border-red-400" : ""}
                           />
                         </Field>
                       </div>
@@ -2243,7 +2233,7 @@ export default function ScholarshipPage() {
                             onBlurSave={(val) => patchMemberLocal(member.id, { address_1: val })}
                             disabled={isReadonly}
                             placeholder="123 Main Street"
-                            className={!(member.address_1 || "").trim() ? "border-red-400" : ""}
+                            className={!(member.address_1 || "").trim() ? "border-2 border-red-400" : ""}
                           />
                         </Field>
                         <Field>
@@ -2264,7 +2254,7 @@ export default function ScholarshipPage() {
                             onBlurSave={(val) => patchMemberLocal(member.id, { city: val })}
                             disabled={isReadonly}
                             placeholder="St. Petersburg"
-                            className={!(member.city || "").trim() ? "border-red-400" : ""}
+                            className={!(member.city || "").trim() ? "border-2 border-red-400" : ""}
                           />
                         </Field>
                         <Field>
@@ -2283,7 +2273,7 @@ export default function ScholarshipPage() {
                             onBlurSave={(val) => patchMemberLocal(member.id, { zipcode: val })}
                             disabled={isReadonly}
                             placeholder="33701"
-                            className={!(member.zipcode || "").trim() ? "border-red-400" : ""}
+                            className={!(member.zipcode || "").trim() ? "border-2 border-red-400" : ""}
                           />
                         </Field>
                       </div>
@@ -2297,7 +2287,7 @@ export default function ScholarshipPage() {
                             value={member.estimated_annual_income || 0}
                             onChange={(val) => patchMemberLocal(member.id, { estimated_annual_income: val })}
                             disabled={isReadonly}
-                            className={!(member.estimated_annual_income || 0) ? "border-red-400" : ""}
+                            className={!(member.estimated_annual_income || 0) ? "border-2 border-red-400" : ""}
                           />
                         </Field>
 
@@ -2637,7 +2627,7 @@ export default function ScholarshipPage() {
                             onBlurSave={(val) => patchHomeLocal(home.id, { address_1: val })}
                             disabled={isReadonly}
                             placeholder="123 Main Street"
-                            className={!(home.address_1 || "").trim() ? "border-red-400" : ""}
+                            className={!(home.address_1 || "").trim() ? "border-2 border-red-400" : ""}
                           />
                         </Field>
                         <Field>
@@ -2658,7 +2648,7 @@ export default function ScholarshipPage() {
                             onBlurSave={(val) => patchHomeLocal(home.id, { city: val })}
                             disabled={isReadonly}
                             placeholder="St. Petersburg"
-                            className={!(home.city || "").trim() ? "border-red-400" : ""}
+                            className={!(home.city || "").trim() ? "border-2 border-red-400" : ""}
                           />
                         </Field>
                         <Field>
@@ -2676,7 +2666,7 @@ export default function ScholarshipPage() {
                             value={home.zipcode || ""}
                             onBlurSave={(val) => patchHomeLocal(home.id, { zipcode: val })}
                             disabled={isReadonly}
-                            className={!(home.zipcode || "").trim() ? "border-red-400" : ""}
+                            className={!(home.zipcode || "").trim() ? "border-2 border-red-400" : ""}
                           />
                         </Field>
                       </div>
@@ -2689,7 +2679,7 @@ export default function ScholarshipPage() {
                             value={home.total_value ?? 0}
                             onChange={(val) => patchHomeLocal(home.id, { total_value: val })}
                             disabled={isReadonly}
-                            className={!(home.total_value ?? 0) ? "border-red-400" : ""}
+                            className={!(home.total_value ?? 0) ? "border-2 border-red-400" : ""}
                           />
                         </Field>
                         <Field>
@@ -2797,7 +2787,7 @@ export default function ScholarshipPage() {
                             }}
                             disabled={isReadonly}
                           >
-                            <SelectTrigger className={`w-full ${!(vehicle.type ?? "").trim() ? "border-red-400" : ""}`}>
+                            <SelectTrigger className={`w-full ${!(vehicle.type ?? "").trim() ? "border-2 border-red-400" : ""}`}>
                               <SelectValue placeholder="Select type" />
                             </SelectTrigger>
                             <SelectContent>
@@ -2819,7 +2809,7 @@ export default function ScholarshipPage() {
                             onBlurSave={(val) => patchVehicleLocal(vehicle.id, { car_year: val })}
                             disabled={isReadonly}
                             placeholder="e.g. 2020"
-                            className={!(vehicle.car_year ?? "").trim() ? "border-red-400" : ""}
+                            className={!(vehicle.car_year ?? "").trim() ? "border-2 border-red-400" : ""}
                           />
                         </Field>
                         <Field>
@@ -2829,7 +2819,7 @@ export default function ScholarshipPage() {
                             onBlurSave={(val) => patchVehicleLocal(vehicle.id, { car_make: val })}
                             disabled={isReadonly}
                             placeholder="e.g. Toyota"
-                            className={!(vehicle.car_make ?? "").trim() ? "border-red-400" : ""}
+                            className={!(vehicle.car_make ?? "").trim() ? "border-2 border-red-400" : ""}
                           />
                         </Field>
                         <Field>
@@ -2839,7 +2829,7 @@ export default function ScholarshipPage() {
                             onBlurSave={(val) => patchVehicleLocal(vehicle.id, { car_model: val })}
                             disabled={isReadonly}
                             placeholder="e.g. Camry"
-                            className={!(vehicle.car_model ?? "").trim() ? "border-red-400" : ""}
+                            className={!(vehicle.car_model ?? "").trim() ? "border-2 border-red-400" : ""}
                           />
                         </Field>
                         <Field>
@@ -2850,7 +2840,7 @@ export default function ScholarshipPage() {
                             value={vehicle.total_value ?? 0}
                             onChange={(val) => patchVehicleLocal(vehicle.id, { total_value: val })}
                             disabled={isReadonly}
-                            className={!(vehicle.total_value ?? 0) ? "border-red-400" : ""}
+                            className={!(vehicle.total_value ?? 0) ? "border-2 border-red-400" : ""}
                           />
                         </Field>
                         <Field>
@@ -2931,7 +2921,7 @@ export default function ScholarshipPage() {
                   value={familyContribution}
                   onChange={setFamilyContribution}
                   disabled={isReadonly}
-                  className={!familyContribution ? "border-red-400" : ""}
+                  className={!familyContribution ? "border-2 border-red-400" : ""}
                 />
               </Field>
             </section>
@@ -2952,7 +2942,7 @@ export default function ScholarshipPage() {
                 it&rsquo;s important for your child.
               </p>
               <textarea
-                className={`flex min-h-[120px] w-full rounded-md border bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${!advocacyLetter.trim() ? "border-red-400" : "border-input"}`}
+                className={`flex min-h-[120px] w-full rounded-md border bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${!advocacyLetter.trim() ? "border-2 border-red-400" : "border-input"}`}
                 value={advocacyLetter}
                 onChange={(e) => setAdvocacyLetter(e.target.value)}
                 disabled={isReadonly}
