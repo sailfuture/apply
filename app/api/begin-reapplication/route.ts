@@ -217,6 +217,34 @@ export async function POST(req: NextRequest) {
   // 5. Resolve (or create) the re-application progress row.
   const progress = await xano.reapplyFamilyProgress.resolve(familyId, yearId);
 
+  // 6. Append every new app id to the family-progress row's
+  //    `registration_application_id` array so the per-family app set
+  //    stays addressable straight off that row. Best-effort — a
+  //    failure here logs but doesn't fail the bootstrap.
+  if (created.length > 0) {
+    try {
+      const famProgress = await xano.familyApplicationProgress.resolve(
+        familyId,
+        yearId
+      );
+      const existingIds = Array.isArray(famProgress.registration_application_id)
+        ? famProgress.registration_application_id
+        : [];
+      const merged = Array.from(new Set([...existingIds, ...created]));
+      if (merged.length !== existingIds.length) {
+        await xano.familyApplicationProgress.update(famProgress.id, {
+          registration_application_id: merged,
+          last_edited: Date.now(),
+        });
+      }
+    } catch (err) {
+      console.error(
+        "Failed to append re-application ids to family progress:",
+        err
+      );
+    }
+  }
+
   return NextResponse.json(
     {
       progressId: progress.id,

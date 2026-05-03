@@ -130,5 +130,32 @@ export async function POST(req: NextRequest) {
     console.error("Failed to update student school year list:", err);
   }
 
+  // Append this app's id to the family-progress row's
+  // `registration_application_id` array so admins (and any future
+  // server-side aggregator) can read the per-family app set straight
+  // off the progress row without a separate query. Resolve creates
+  // the row if it doesn't exist yet — first-app-on-a-family case.
+  // Best-effort: a failure here logs but doesn't fail the create.
+  try {
+    const progress = await xano.familyApplicationProgress.resolve(
+      familyId,
+      registration_school_years_id
+    );
+    const ids = Array.isArray(progress.registration_application_id)
+      ? progress.registration_application_id
+      : [];
+    if (!ids.includes(application.id)) {
+      await xano.familyApplicationProgress.update(progress.id, {
+        registration_application_id: [...ids, application.id],
+        last_edited: Date.now(),
+      });
+    }
+  } catch (err) {
+    console.error(
+      "Failed to append application id to family progress row:",
+      err
+    );
+  }
+
   return NextResponse.json(application, { status: 201 });
 }

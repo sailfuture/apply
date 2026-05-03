@@ -468,6 +468,12 @@ export interface XanoFamilyApplicationProgress {
    *  the "Application Submitted" banner and gate further edits. */
   isSubmitted: boolean;
   registration_type_id: number;
+  /** IDs of every `registration_application` row attached to this
+   *  family + year. Maintained by the application-create flow so admins
+   *  can pull the per-family application set straight off the progress
+   *  row without a separate `apps?registration_families_id=…` round
+   *  trip. May be missing on legacy rows; treat as empty when absent. */
+  registration_application_id?: number[];
 }
 
 /**
@@ -1698,6 +1704,32 @@ export const xano = {
   },
 
   familyApplicationProgress: {
+    /** Fetch-or-create the row for this family + year. Mirrors the
+     *  pattern used by `studentRegistrationProgress.resolve` and
+     *  `reapplyFamilyProgress.resolve` so server-side callers can
+     *  always PATCH against an existing row. */
+    async resolve(
+      familyId: number,
+      yearId: number,
+      registration_type_id: number = 1
+    ): Promise<XanoFamilyApplicationProgress> {
+      const existing = await this.getByFamilyAndYear(familyId, yearId);
+      if (existing) return existing;
+      return this.create({
+        registration_families_id: familyId,
+        registration_school_years_id: yearId,
+        family_completed: false,
+        students_completed: false,
+        financial_aid_completed: false,
+        testing_completed: false,
+        last_edited: Date.now(),
+        submitted_at: null,
+        isSubmitted: false,
+        registration_type_id,
+        registration_application_id: [],
+      });
+    },
+
     /** All progress rows for a school year — backs the admin Applications
      *  list. Calls the dedicated Xano query
      *  `registration_family_application_progress_by_year` with
