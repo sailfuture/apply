@@ -32,10 +32,30 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const [progressRows, families] = await Promise.all([
+    // Isolate failures so a Xano hiccup on the families join doesn't
+    // 500 the whole table. Same pattern as `/api/admin/applications`.
+    const [progressResult, familiesResult] = await Promise.allSettled([
       xano.studentRegistrationProgress.getByYear(yearId),
       xano.families.getAllDetails(),
     ]);
+
+    if (progressResult.status === "rejected") {
+      console.error(
+        "[/api/admin/registrations] failed to load registration progress:",
+        progressResult.reason
+      );
+    }
+    if (familiesResult.status === "rejected") {
+      console.error(
+        "[/api/admin/registrations] failed to load families join:",
+        familiesResult.reason
+      );
+    }
+
+    const progressRows =
+      progressResult.status === "fulfilled" ? progressResult.value : [];
+    const families =
+      familiesResult.status === "fulfilled" ? familiesResult.value : [];
 
     const familyById = new Map(families.map((f) => [f.id, f]));
 

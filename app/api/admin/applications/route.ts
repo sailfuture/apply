@@ -34,10 +34,34 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const [progressRows, families] = await Promise.all([
+    // Fetch both side-by-side, but isolate failures: if the families
+    // join fails (Xano hiccup, schema drift, etc.) we can still render
+    // the table with the progress rows and fall back to "Family #X"
+    // labels — much better than 500ing the whole admin page. Each
+    // failure logs the underlying error so the server console tells us
+    // exactly what went wrong.
+    const [progressResult, familiesResult] = await Promise.allSettled([
       xano.familyApplicationProgress.getByYear(yearId),
       xano.families.getAllDetails(),
     ]);
+
+    if (progressResult.status === "rejected") {
+      console.error(
+        "[/api/admin/applications] failed to load family progress:",
+        progressResult.reason
+      );
+    }
+    if (familiesResult.status === "rejected") {
+      console.error(
+        "[/api/admin/applications] failed to load families join:",
+        familiesResult.reason
+      );
+    }
+
+    const progressRows =
+      progressResult.status === "fulfilled" ? progressResult.value : [];
+    const families =
+      familiesResult.status === "fulfilled" ? familiesResult.value : [];
 
     const familyById = new Map(families.map((f) => [f.id, f]));
 

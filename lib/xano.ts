@@ -1672,7 +1672,11 @@ export const xano = {
     /** All progress rows for a school year — backs the admin Applications
      *  list. Calls the dedicated Xano query
      *  `registration_family_application_progress_by_year` with
-     *  `registration_school_years_id` as input. */
+     *  `registration_school_years_id` as input. Errors are logged with
+     *  the response body (when available) so server logs reveal whether
+     *  the issue is a 4xx from input-shape mismatch, a 5xx from Xano
+     *  itself, or a transport error — silently returning [] used to
+     *  hide all of those.  */
     async getByYear(yearId: number): Promise<XanoFamilyApplicationProgress[]> {
       try {
         const url = new URL(
@@ -1680,10 +1684,20 @@ export const xano = {
         );
         url.searchParams.set("registration_school_years_id", String(yearId));
         const res = await fetch(url.toString(), { cache: "no-store" });
-        if (!res.ok) return [];
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          console.error(
+            `[xano.familyApplicationProgress.getByYear] ${res.status} for yearId=${yearId}: ${body}`
+          );
+          return [];
+        }
         const items = await res.json();
         return Array.isArray(items) ? items : [];
-      } catch {
+      } catch (err) {
+        console.error(
+          `[xano.familyApplicationProgress.getByYear] threw for yearId=${yearId}:`,
+          err
+        );
         return [];
       }
     },
@@ -1861,7 +1875,9 @@ export const xano = {
     /** All registration-progress rows for a school year — backs the
      *  admin Registrations list. Calls the dedicated Xano query
      *  `registration_student_registration_progress_by_year` with
-     *  `registration_school_years_id` as input. */
+     *  `registration_school_years_id` as input. Errors are logged so
+     *  server logs reveal whether the issue is input-shape, Xano-side,
+     *  or transport. */
     async getByYear(yearId: number): Promise<XanoStudentRegistrationProgress[]> {
       try {
         const url = new URL(
@@ -1869,10 +1885,20 @@ export const xano = {
         );
         url.searchParams.set("registration_school_years_id", String(yearId));
         const res = await fetch(url.toString(), { cache: "no-store" });
-        if (!res.ok) return [];
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          console.error(
+            `[xano.studentRegistrationProgress.getByYear] ${res.status} for yearId=${yearId}: ${body}`
+          );
+          return [];
+        }
         const items = await res.json();
         return Array.isArray(items) ? items : [];
-      } catch {
+      } catch (err) {
+        console.error(
+          `[xano.studentRegistrationProgress.getByYear] threw for yearId=${yearId}:`,
+          err
+        );
         return [];
       }
     },
