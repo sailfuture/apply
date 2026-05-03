@@ -31,9 +31,8 @@ const NAV_ITEMS: NavItem[] = [
   { title: "Dashboard", href: "/admin", matchExact: true },
   { title: "Inquiries", href: "/admin/inquiries" },
   { title: "Applications", href: "/admin/applications" },
+  { title: "Re-Applications", href: "/admin/reapply" },
   { title: "Registrations", href: "/admin/registrations" },
-  { title: "Students", href: "/admin/students" },
-  { title: "Families", href: "/admin/families" },
   { title: "School Years", href: "/admin/school-years" },
 ];
 

@@ -15,7 +15,7 @@ import {
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { cn } from "@/lib/utils";
 
-interface AppProgressRow {
+interface ReapplyRow {
   id: number;
   family_id: number;
   year_id: number;
@@ -23,14 +23,13 @@ interface AppProgressRow {
   primary_name: string;
   primary_email: string;
   student_count: number;
-  family_completed: boolean;
-  students_completed: boolean;
-  financial_aid_completed: boolean;
-  testing_completed: boolean;
+  isFamilyDetails: boolean;
+  isStudentDetails: boolean;
+  isScholarship: boolean;
+  isTransportation: boolean;
   sections_complete: number;
   sections_total: number;
   isSubmitted: boolean;
-  submitted_at: number | null;
   last_edited: number | null;
   [key: string]: unknown;
 }
@@ -44,54 +43,50 @@ const FILTER_LABEL: Record<ProgressFilter, string> = {
   not_started: "Not started",
 };
 
-function deriveFilter(row: AppProgressRow): ProgressFilter {
+function deriveFilter(row: ReapplyRow): ProgressFilter {
   if (row.isSubmitted) return "submitted";
   if (row.sections_complete > 0) return "in_progress";
   return "not_started";
 }
 
-/**
- * Per-section route segment — keys must match the slug used by the
- * `/admin/families/[id]/<section>` page below the table. Adding a new
- * section means adding a row here AND creating that page.
- */
 const SECTIONS = [
-  { key: "family", label: "Family", slug: "family" },
-  { key: "students", label: "Students", slug: "students" },
-  { key: "financial_aid", label: "Financial Aid", slug: "financial-aid" },
-  { key: "testing", label: "Testing", slug: "testing" },
+  { key: "isFamilyDetails", label: "Family", slug: "family" },
+  { key: "isStudentDetails", label: "Students", slug: "students" },
+  { key: "isScholarship", label: "Financial Aid", slug: "financial-aid" },
+  { key: "isTransportation", label: "Transportation", slug: "transportation" },
 ] as const;
 
 type SectionKey = (typeof SECTIONS)[number]["key"];
 
-function isComplete(row: AppProgressRow, key: SectionKey): boolean {
+function isComplete(row: ReapplyRow, key: SectionKey): boolean {
   switch (key) {
-    case "family":
-      return row.family_completed;
-    case "students":
-      return row.students_completed;
-    case "financial_aid":
-      return row.financial_aid_completed;
-    case "testing":
-      return row.testing_completed;
+    case "isFamilyDetails":
+      return row.isFamilyDetails;
+    case "isStudentDetails":
+      return row.isStudentDetails;
+    case "isScholarship":
+      return row.isScholarship;
+    case "isTransportation":
+      return row.isTransportation;
   }
 }
 
 /**
- * Admin Applications list — one row per family per year, backed by the
- * per-year progress endpoint. Each section gets its own column so admins
- * can see at a glance which sections each family has completed; clicking
- * a section opens the per-section detail page where the data can be
- * reviewed and edited.
+ * Admin Re-Application list — returning families that have started or
+ * completed a re-application for the active school year. Mirrors the
+ * shape of the Applications page (per-section columns, click into a
+ * section to review/edit) so the two surfaces feel like the same
+ * product. Backed by the dedicated
+ * `reapply_family_progress_by_year` Xano query.
  */
-export default function ApplicationsPage() {
+export default function AdminReapplyPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const yearId = searchParams.get("yearId");
   const [filter, setFilter] = useState<ProgressFilter>("all");
 
-  const { data, isLoading, error } = useSWR<AppProgressRow[]>(
-    yearId ? `/api/admin/applications?yearId=${yearId}` : null,
+  const { data, isLoading, error } = useSWR<ReapplyRow[]>(
+    yearId ? `/api/admin/reapply?yearId=${yearId}` : null,
     adminFetcher
   );
 
@@ -108,19 +103,17 @@ export default function ApplicationsPage() {
       in_progress: 0,
       not_started: 0,
     };
-    for (const r of all) {
-      result[deriveFilter(r)] += 1;
-    }
+    for (const r of all) result[deriveFilter(r)] += 1;
     return result;
   }, [all]);
 
-  function openSection(row: AppProgressRow, slug: string) {
+  function openSection(row: ReapplyRow, slug: string) {
     router.push(
-      `/admin/families/${row.family_id}/${slug}?yearId=${row.year_id}`
+      `/admin/families/${row.family_id}/reapply-${slug}?yearId=${row.year_id}`
     );
   }
 
-  const columns: ColumnDef<AppProgressRow>[] = [
+  const columns: ColumnDef<ReapplyRow>[] = [
     {
       key: "family_name",
       header: "Family",
@@ -146,11 +139,8 @@ export default function ApplicationsPage() {
       render: (row) =>
         row.student_count === 1 ? "1 student" : `${row.student_count} students`,
     },
-    // One column per application section. Each cell is its own
-    // click target (stops row-click propagation) so the admin can
-    // jump straight into the section they want to edit.
     ...SECTIONS.map(
-      (s): ColumnDef<AppProgressRow> => ({
+      (s): ColumnDef<ReapplyRow> => ({
         key: s.key,
         header: s.label,
         sortable: true,
@@ -176,9 +166,7 @@ export default function ApplicationsPage() {
               ) : (
                 <Circle className="size-4 text-muted-foreground/40" />
               )}
-              <span className="underline-offset-2 group-hover:underline">
-                {complete ? "Complete" : "Not yet"}
-              </span>
+              {complete ? "Complete" : "Not yet"}
             </button>
           );
         },
@@ -206,20 +194,16 @@ export default function ApplicationsPage() {
       },
     },
     {
-      key: "submitted_at",
-      header: "Submitted",
+      key: "last_edited",
+      header: "Last edit",
       sortable: true,
       render: (row) =>
-        row.submitted_at
-          ? new Date(row.submitted_at).toLocaleDateString()
-          : "—",
+        row.last_edited ? new Date(row.last_edited).toLocaleDateString() : "—",
     },
     {
       key: "id",
       header: "",
-      render: () => (
-        <ChevronRight className="size-4 text-muted-foreground" />
-      ),
+      render: () => <ChevronRight className="size-4 text-muted-foreground" />,
     },
   ];
 
@@ -227,10 +211,10 @@ export default function ApplicationsPage() {
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold">Applications</h1>
+          <h1 className="text-2xl font-bold">Re-Applications</h1>
           <p className="text-sm text-muted-foreground">
-            One row per family per academic year. Click any section to
-            open it for review or editing.
+            Returning families that have started or completed a
+            re-application for the selected school year.
           </p>
         </div>
         <Select
@@ -254,25 +238,22 @@ export default function ApplicationsPage() {
 
       {error ? (
         <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-          Failed to load applications:{" "}
+          Failed to load re-applications:{" "}
           {error instanceof Error ? error.message : "unknown error"}
         </div>
       ) : null}
 
       {!yearId ? (
         <div className="rounded-lg border bg-white px-6 py-12 text-center text-sm text-muted-foreground">
-          Pick a school year above to view its applications.
+          Pick a school year above to view its re-applications.
         </div>
       ) : (
         <>
-          <DataTable<AppProgressRow>
+          <DataTable<ReapplyRow>
             columns={columns}
             data={filtered}
             isLoading={isLoading}
             searchPlaceholder="Search by family name…"
-            // Row click goes to the family overview; section-cell clicks
-            // override this via stopPropagation above and route to the
-            // per-section page instead.
             onRowClick={(row) => {
               router.push(
                 `/admin/families/${row.family_id}?yearId=${row.year_id}`

@@ -5,16 +5,24 @@ import { xano } from "@/lib/xano";
 /**
  * Admin Applications list — one row per family per year, backed by the
  * Xano `registration_family_application_progress_by_year` query. Each
- * row carries the four section-completion booleans (`family_completed`,
- * `students_completed`, `financial_aid_completed`, `testing_completed`)
- * plus the hard-submit flag, so the admin table can show a progress
- * indicator at a glance.
+ * row carries the four section-completion booleans plus the hard-submit
+ * flag, so the admin table can show per-section progress at a glance.
  *
- * To make the row labels human-readable we merge in family + primary
- * parent details from the existing enriched families endpoint
- * (`registration_families_all_details`). Two parallel reads here, joined
- * client-side. Once Xano exposes those fields directly on the progress
- * endpoint we can drop the join.
+ * Joins:
+ *   - `xano.families.getAll()` → resolves `family_name` for every family
+ *     (including families that don't yet appear in the enriched
+ *     `_all_details` endpoint because they have no students yet).
+ *   - `xano.parents.getAll()` → primary parent name + email for the
+ *     row subtitle. We pick the lowest-id parent on the family as the
+ *     "primary" since Xano doesn't model that explicitly.
+ *   - `xano.applications.getAll()` filtered to (family, year) → student
+ *     count for the year. Each app row in `registration_application` is
+ *     one student in that year's application, so the row count is the
+ *     student count.
+ *
+ * Joins are isolated so a single Xano hiccup doesn't 500 the whole
+ * route — failures fall back to placeholder labels and zero counts
+ * with the underlying error logged.
  */
 export async function GET(req: NextRequest) {
   try {
@@ -34,16 +42,13 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    // Fetch both side-by-side, but isolate failures: if the families
-    // join fails (Xano hiccup, schema drift, etc.) we can still render
-    // the table with the progress rows and fall back to "Family #X"
-    // labels — much better than 500ing the whole admin page. Each
-    // failure logs the underlying error so the server console tells us
-    // exactly what went wrong.
-    const [progressResult, familiesResult] = await Promise.allSettled([
-      xano.familyApplicationProgress.getByYear(yearId),
-      xano.families.getAllDetails(),
-    ]);
+    const [progressResult, familiesResult, parentsResult, appsResult] =
+      await Promise.allSettled([
+        xano.familyApplicationProgress.getByYear(yearId),
+        xano.families.getAll(),
+        xano.parents.getAll(),
+        xano.applications.getAll(),
+      ]);
 
     if (progressResult.status === "rejected") {
       console.error(
@@ -53,8 +58,20 @@ export async function GET(req: NextRequest) {
     }
     if (familiesResult.status === "rejected") {
       console.error(
-        "[/api/admin/applications] failed to load families join:",
+        "[/api/admin/applications] failed to load families list:",
         familiesResult.reason
+      );
+    }
+    if (parentsResult.status === "rejected") {
+      console.error(
+        "[/api/admin/applications] failed to load parents list:",
+        parentsResult.reason
+      );
+    }
+    if (appsResult.status === "rejected") {
+      console.error(
+        "[/api/admin/applications] failed to load applications list:",
+        appsResult.reason
       );
     }
 
@@ -62,12 +79,40 @@ export async function GET(req: NextRequest) {
       progressResult.status === "fulfilled" ? progressResult.value : [];
     const families =
       familiesResult.status === "fulfilled" ? familiesResult.value : [];
+    const parents =
+      parentsResult.status === "fulfilled" ? parentsResult.value : [];
+    const apps = appsResult.status === "fulfilled" ? appsResult.value : [];
 
     const familyById = new Map(families.map((f) => [f.id, f]));
 
+    // Group parents by family_id by reading each parent's family ID from
+    // the family's `registration_parents_id` array. Parents themselves
+    // don't directly carry `registration_families_id`, so we walk
+    // families and look up parents by their id.
+    const parentsByFamily = new Map<number, typeof parents>();
+    for (const family of families) {
+      const ids = xano.families.getParentIds(family);
+      const matched = parents.filter((p) => ids.includes(p.id));
+      // Sort by id ascending so the "primary" is deterministic — usually
+      // the first-created parent is the one who signed up the family.
+      matched.sort((a, b) => a.id - b.id);
+      parentsByFamily.set(family.id, matched);
+    }
+
+    // App count per family for the requested year — equals the student
+    // count for that year's application (one app row = one student).
+    const appsByFamily = new Map<number, number>();
+    for (const a of apps) {
+      if (Number(a.registration_school_years_id) !== yearId) continue;
+      const fid = Number(a.registration_families_id);
+      appsByFamily.set(fid, (appsByFamily.get(fid) ?? 0) + 1);
+    }
+
     const rows: AppProgressRow[] = progressRows.map((p) => {
       const family = familyById.get(p.registration_families_id) ?? null;
-      const primary = family?.registration_parents_id?.[0] ?? null;
+      const familyParents =
+        parentsByFamily.get(p.registration_families_id) ?? [];
+      const primary = familyParents[0] ?? null;
       const sectionsComplete = [
         p.family_completed,
         p.students_completed,
@@ -79,18 +124,13 @@ export async function GET(req: NextRequest) {
         family_id: p.registration_families_id,
         year_id: p.registration_school_years_id,
         family_name:
-          family?.family_name || `Family #${p.registration_families_id}`,
+          family?.family_name?.trim() ||
+          `Family #${p.registration_families_id}`,
         primary_name: primary
           ? `${primary.first_name ?? ""} ${primary.last_name ?? ""}`.trim()
           : "",
         primary_email: primary?.email ?? "",
-        student_count: family
-          ? new Set(
-              family.registration_students_id
-                .map((a) => Number(a.registration_students_id))
-                .filter((id) => Number.isFinite(id) && id > 0)
-            ).size
-          : 0,
+        student_count: appsByFamily.get(p.registration_families_id) ?? 0,
         family_completed: !!p.family_completed,
         students_completed: !!p.students_completed,
         financial_aid_completed: !!p.financial_aid_completed,
@@ -103,8 +143,6 @@ export async function GET(req: NextRequest) {
       };
     });
 
-    // Submitted apps first (admin reviews those), then in-progress by
-    // last_edited recency, then unstarted at the bottom.
     rows.sort((a, b) => {
       if (a.isSubmitted !== b.isSubmitted) return a.isSubmitted ? -1 : 1;
       const aEdit = a.last_edited ?? a.submitted_at ?? 0;

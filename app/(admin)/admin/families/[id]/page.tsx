@@ -184,12 +184,10 @@ export default function FamilyDetailPage() {
                 <div key={student.id} className="flex items-center justify-between rounded-md border p-3">
                   <div>
                     <p className="text-sm font-medium">
-                      <Link
-                        href={`/admin/students/${student.id}${yearId ? `?yearId=${yearId}` : ""}`}
-                        className="hover:underline underline-offset-2"
-                      >
-                        {student.first_name} {student.last_name}
-                      </Link>
+                      {/* Per-student admin page was removed — student name
+                          renders as plain text now. Section-level details
+                          live on the per-section pages instead. */}
+                      {student.first_name} {student.last_name}
                     </p>
                     <div className="text-xs text-muted-foreground mt-0.5">
                       {student.date_of_birth && <span>DOB: {new Date(student.date_of_birth).toLocaleDateString()} &middot; </span>}

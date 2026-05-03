@@ -470,6 +470,35 @@ export interface XanoFamilyApplicationProgress {
   registration_type_id: number;
 }
 
+/**
+ * Shape returned by `/reapply_family_progress_by_year` — same fields as
+ * `XanoReapplyFamilyProgress` plus the inline-expanded family record
+ * under `_registration_families`. Used by the admin Reapply list so
+ * we don't need a separate families join.
+ */
+export interface ReapplyProgressRow {
+  id: number;
+  created_at: number;
+  registration_school_years_id: number;
+  registration_families_id: number;
+  last_edited: number | null;
+  isScholarship: boolean;
+  isTransportation: boolean;
+  isFamilyDetails: boolean;
+  isStudentDetails: boolean;
+  isSubmitted: boolean;
+  _registration_families: {
+    id: number;
+    created_at: number;
+    family_name: string;
+    registration_students_id: number[];
+    registration_parents_id: number[];
+    registration_emergency_contacts_id: number[];
+    isAccepted: boolean;
+    isSubmitted: boolean;
+  } | null;
+}
+
 /** Bridge row: one per family per school year, covering the RE-APPLICATION
  *  flow for returning families. Tracks the four section bools the parent
  *  needs to refresh when applying for a new academic year — most notably
@@ -1760,6 +1789,39 @@ export const xano = {
   },
 
   reapplyFamilyProgress: {
+    /** All reapply progress rows for a school year — backs the admin
+     *  Reapply list. Calls the dedicated Xano query
+     *  `reapply_family_progress_by_year` which expands each row's
+     *  family record inline (under `_registration_families`). Errors
+     *  are logged so server logs reveal whether the issue is
+     *  input-shape, Xano-side, or transport. */
+    async getByYear(
+      yearId: number
+    ): Promise<ReapplyProgressRow[]> {
+      try {
+        const url = new URL(
+          `${getBaseUrl()}/reapply_family_progress_by_year`
+        );
+        url.searchParams.set("registration_school_years_id", String(yearId));
+        const res = await fetch(url.toString(), { cache: "no-store" });
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          console.error(
+            `[xano.reapplyFamilyProgress.getByYear] ${res.status} for yearId=${yearId}: ${body}`
+          );
+          return [];
+        }
+        const items = await res.json();
+        return Array.isArray(items) ? items : [];
+      } catch (err) {
+        console.error(
+          `[xano.reapplyFamilyProgress.getByYear] threw for yearId=${yearId}:`,
+          err
+        );
+        return [];
+      }
+    },
+
     /** Fetch-or-create the row for this family + year. Mirrors the same
      *  pattern as the other progress helpers so server-side callers can
      *  always PATCH against an existing row. */
