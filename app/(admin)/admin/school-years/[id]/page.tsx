@@ -136,16 +136,19 @@ export default function SchoolYearDetailPage() {
         onDeleted={() => router.push("/admin/school-years")}
       />
 
-      {/* Tuition payment matrix — dollar amount the family pays per
-          year given (household size × income bracket). Lives on the
-          shared award_brackets table with isNetAssets=false. */}
+      {/* Tuition payment matrix — percentage of the year's base
+          tuition the family pays, given (household size × income
+          bracket). Lives on the shared award_brackets table with
+          isNetAssets=false. The MatrixCell renders the resulting
+          dollar amount under each cell using the year's `tuition`. */}
       <BracketMatrixCard
         yearId={year.id}
         title="Family Tuition Payment Matrix"
-        description="The dollar amount each family pays for the year, given their household size (rows) and annual income bracket (columns). Cell edits save automatically on blur."
+        description={`The percentage of base tuition each family pays, given their household size (rows) and annual income bracket (columns). Base tuition for this year: ${formatCurrency(year.tuition)}. The dollar amount under each cell is calculated automatically. Cell edits save on blur.`}
         endpoint="/api/admin/school-year-brackets"
         valueField="tuition_payment"
-        valueKind="currency"
+        valueKind="percentage"
+        baseAmount={year.tuition}
         flag={{ isNetAssets: false }}
       />
 
@@ -569,6 +572,12 @@ interface BracketMatrixCardProps {
   valueField: string;
   /** Visual treatment of cell values + the input affordance. */
   valueKind: "currency" | "percentage";
+  /** When `valueKind` is "percentage", multiplying each cell's value
+   *  by `baseAmount / 100` yields the dollar figure rendered under
+   *  the input. Pass the year's `tuition` for the household-tuition
+   *  matrix; omit for matrices where the percentage is meaningful on
+   *  its own. */
+  baseAmount?: number;
   /** Optional discriminator merged into every POST + every GET filter
    *  string. Used so two card instances on the same page don't see
    *  each other's rows when they live on the same Xano table. */
@@ -586,6 +595,7 @@ function BracketMatrixCard({
   endpoint,
   valueField,
   valueKind,
+  baseAmount,
   flag,
   bracketAxisLabel = "income bracket",
 }: BracketMatrixCardProps) {
@@ -993,6 +1003,7 @@ function BracketMatrixCard({
                           <MatrixCell
                             value={cellValue}
                             valueKind={valueKind}
+                            baseAmount={baseAmount}
                             onSave={(amount) => {
                               if (cell) {
                                 patchCell(cell.id, {
@@ -1143,16 +1154,21 @@ function BracketHeader({
  * input is treated as 0 so admins can clear a cell quickly.
  *
  * `valueKind` swaps the affordance between currency ("$" prefix) and
- * percentage ("%" suffix). The actual save still goes through the
- * parent's `onSave` callback, which knows the underlying field name.
+ * percentage ("%" suffix). When `valueKind` is "percentage" and a
+ * `baseAmount` is provided, we render the calculated dollar amount
+ * (`baseAmount * value / 100`) in muted text under the input so the
+ * admin can sanity-check what the family will actually pay without
+ * doing the math in their head.
  */
 function MatrixCell({
   value: initial,
   valueKind,
+  baseAmount,
   onSave,
 }: {
   value: number;
   valueKind: "currency" | "percentage";
+  baseAmount?: number;
   onSave: (amount: number) => void;
 }) {
   const [value, setValue] = useState(String(initial));
@@ -1171,35 +1187,55 @@ function MatrixCell({
     onSave(n);
   }
 
+  // Live preview of the typed value (not just the saved one) so the
+  // dollar figure updates as the admin edits before blur.
+  const draftNumeric =
+    value === "" ? 0 : Number.isFinite(Number(value)) ? Number(value) : initial;
+  const showDerived =
+    valueKind === "percentage" &&
+    typeof baseAmount === "number" &&
+    Number.isFinite(baseAmount) &&
+    baseAmount > 0;
+  const derivedDollars = showDerived
+    ? (baseAmount as number) * (draftNumeric / 100)
+    : 0;
+
   return (
-    <div className="relative">
-      {valueKind === "currency" ? (
-        <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground pointer-events-none">
-          $
-        </span>
-      ) : (
-        <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground pointer-events-none">
-          %
-        </span>
-      )}
-      <Input
-        type="number"
-        inputMode="decimal"
-        min={0}
-        max={valueKind === "percentage" ? 100 : undefined}
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        onBlur={commit}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            (e.target as HTMLInputElement).blur();
-          }
-        }}
-        className={cn(
-          "h-9 text-sm tabular-nums bg-white",
-          valueKind === "currency" ? "pl-5" : "pr-5"
+    <div className="space-y-0.5">
+      <div className="relative">
+        {valueKind === "currency" ? (
+          <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground pointer-events-none">
+            $
+          </span>
+        ) : (
+          <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground pointer-events-none">
+            %
+          </span>
         )}
-      />
+        <Input
+          type="number"
+          inputMode="decimal"
+          min={0}
+          max={valueKind === "percentage" ? 100 : undefined}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              (e.target as HTMLInputElement).blur();
+            }
+          }}
+          className={cn(
+            "h-9 text-sm tabular-nums bg-white",
+            valueKind === "currency" ? "pl-5" : "pr-5"
+          )}
+        />
+      </div>
+      {showDerived ? (
+        <p className="text-[11px] tabular-nums text-muted-foreground text-right pr-1">
+          = {formatCurrency(derivedDollars)}
+        </p>
+      ) : null}
     </div>
   );
 }

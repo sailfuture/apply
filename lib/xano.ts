@@ -370,20 +370,21 @@ export interface XanoRegistrationDetails extends XanoStudentRegistration {
 /**
  * One cell in a per-year sliding-scale matrix. The matrix axes are
  * household size (rows) and annual-income brackets (columns); each row
- * in this table is a single cell. The cell value (`tuition_payment`)
- * is the dollar amount the family is expected to pay given that
- * household size + income bracket.
+ * in this table is a single cell.
  *
  * The same Xano table backs two distinct matrices, discriminated by
  * `isNetAssets`:
- *   - `false` → standard tuition payment matrix
- *   - `true`  → transportation cost matrix (separate sliding scale)
+ *   - `false` → tuition matrix. `tuition_payment` is a **percentage
+ *               (0–100)** of the school year's base tuition that the
+ *               family pays. The actual dollar amount is derived at
+ *               render time as `school_year.tuition * tuition_payment / 100`.
+ *   - `true`  → transportation cost matrix. `tuition_payment` is a
+ *               **flat dollar amount** the family pays for transport.
  *
- * The boolean flag was originally introduced for a different
- * "high net assets" use case — that surface ended up living in its own
- * dedicated table (`registration_school_year_net_assets_bracket`),
- * but the discriminator is still useful here for splitting tuition
- * from transportation.
+ * The field name is `tuition_payment` for historical reasons (it used
+ * to store dollars for both flavors). For the tuition matrix it now
+ * holds a percentage; the field rename is deferred until we're sure
+ * we're done iterating on the shape.
  *
  * Cells are independently PATCH-able so the admin matrix editor can
  * persist a single cell change without re-sending the rest of the
@@ -399,9 +400,9 @@ export interface XanoSchoolYearAwardBracket {
   household_size: number;
   income_min: number;
   income_max: number | null;
+  /** Tuition matrix: percentage (0–100). Transportation matrix: dollars. */
   tuition_payment: number;
-  /** Discriminator: false = tuition matrix, true = transportation matrix.
-   *  See doc comment above for the historical context on the name. */
+  /** Discriminator: false = tuition matrix, true = transportation matrix. */
   isNetAssets: boolean;
 }
 
