@@ -6,6 +6,12 @@ import useSWR from "swr";
 import { CheckCircle2, Circle, ChevronRight } from "lucide-react";
 import { DataTable, type ColumnDef } from "@/components/admin/data-table";
 import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -13,23 +19,30 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { adminFetcher } from "@/lib/admin-fetcher";
+import { cn } from "@/lib/utils";
 
-interface RegProgressRow {
+interface RegStudentRow {
   id: number;
+  application_id: number;
+  student_id: number;
   family_id: number;
   year_id: number;
+  student_first_name: string;
+  student_last_name: string;
+  student_full_name: string;
+  student_dob: string;
+  student_grade: string;
   family_name: string;
   primary_name: string;
   primary_email: string;
-  student_count: number;
   isTuition: boolean;
   isEnrollment: boolean;
   isRegistration: boolean;
   isVolunteerHours: boolean;
   sections_complete: number;
   sections_total: number;
-  isSubmitted: boolean;
-  submitted_date: number | null;
+  registration_submitted: boolean;
+  registration_submitted_date: number | null;
   last_edited: number | null;
   enrollment_agreement_status: string;
   is_enrollment_agreement_signed: boolean;
@@ -39,25 +52,25 @@ interface RegProgressRow {
 type ProgressFilter = "all" | "submitted" | "in_progress" | "not_started";
 
 const FILTER_LABEL: Record<ProgressFilter, string> = {
-  all: "All families",
+  all: "All students",
   submitted: "Submitted",
   in_progress: "In progress",
   not_started: "Not started",
 };
 
-function deriveFilter(row: RegProgressRow): ProgressFilter {
-  if (row.isSubmitted) return "submitted";
+function deriveFilter(row: RegStudentRow): ProgressFilter {
+  if (row.registration_submitted) return "submitted";
   if (row.sections_complete > 0) return "in_progress";
   return "not_started";
 }
 
 /**
- * Admin Registrations list — one row per family per year, backed by
- * `registration_student_registration_progress_by_year`. Mirrors the
- * Applications page in shape so the two surfaces feel like one product;
- * just swaps the four-section completion booleans (tuition / enrollment
- * agreement / registration packet / volunteer-hours acknowledgment) and
- * the click-through still routes to the family detail page.
+ * Admin Registrations list — one row per student who's been confirmed
+ * to be starting in the selected year (i.e. their `registration_application`
+ * row has `isAccepted=true`). The four post-acceptance sections (Tuition,
+ * Enrollment Agreement, Registration Packet, Volunteer Hours) are still
+ * tracked at the family level today, so multiple student rows from the
+ * same family will share the same section dots — that's expected.
  */
 export default function RegistrationsPage() {
   const router = useRouter();
@@ -65,59 +78,82 @@ export default function RegistrationsPage() {
   const yearId = searchParams.get("yearId");
   const [filter, setFilter] = useState<ProgressFilter>("all");
 
-  const { data, isLoading, error } = useSWR<RegProgressRow[]>(
+  const { data, isLoading, error } = useSWR<RegStudentRow[]>(
     yearId ? `/api/admin/registrations?yearId=${yearId}` : null,
     adminFetcher
   );
 
   const all = useMemo(() => (Array.isArray(data) ? data : []), [data]);
-  const filtered = useMemo(() => {
-    if (filter === "all") return all;
-    return all.filter((r) => deriveFilter(r) === filter);
-  }, [all, filter]);
 
-  const counts = useMemo(() => {
-    const result: Record<ProgressFilter, number> = {
-      all: all.length,
-      submitted: 0,
-      in_progress: 0,
-      not_started: 0,
-    };
+  const groups = useMemo(() => {
+    const submitted: RegStudentRow[] = [];
+    const inProgress: RegStudentRow[] = [];
+    const notStarted: RegStudentRow[] = [];
     for (const r of all) {
-      result[deriveFilter(r)] += 1;
+      const f = deriveFilter(r);
+      if (f === "submitted") submitted.push(r);
+      else if (f === "in_progress") inProgress.push(r);
+      else notStarted.push(r);
     }
-    return result;
+    return { submitted, inProgress, notStarted };
   }, [all]);
 
-  const columns: ColumnDef<RegProgressRow>[] = [
+  const visibleGroups = useMemo(() => {
+    if (filter === "all") return groups;
+    return {
+      submitted: filter === "submitted" ? groups.submitted : [],
+      inProgress: filter === "in_progress" ? groups.inProgress : [],
+      notStarted: filter === "not_started" ? groups.notStarted : [],
+    };
+  }, [filter, groups]);
+
+  const counts = useMemo(() => {
+    return {
+      all: all.length,
+      submitted: groups.submitted.length,
+      in_progress: groups.inProgress.length,
+      not_started: groups.notStarted.length,
+    } satisfies Record<ProgressFilter, number>;
+  }, [all, groups]);
+
+  const columns: ColumnDef<RegStudentRow>[] = [
     {
-      key: "family_name",
-      header: "Family",
+      key: "student_full_name",
+      header: "Student",
       sortable: true,
       searchable: true,
       render: (row) => (
         <div className="min-w-0">
-          <p className="truncate font-medium">{row.family_name}</p>
-          {row.primary_name || row.primary_email ? (
-            <p className="truncate text-xs text-muted-foreground">
-              {row.primary_name}
-              {row.primary_name && row.primary_email ? " · " : ""}
-              {row.primary_email}
-            </p>
-          ) : null}
+          <p className="truncate font-medium">{row.student_full_name}</p>
+          <p className="truncate text-xs text-muted-foreground">
+            {row.student_grade ? (
+              <>Grade {row.student_grade} · </>
+            ) : null}
+            {row.family_name}
+          </p>
         </div>
       ),
     },
     {
-      key: "student_count",
-      header: "Students",
+      key: "primary_email",
+      header: "Primary Contact",
       sortable: true,
+      searchable: true,
       render: (row) =>
-        row.student_count === 1 ? "1 student" : `${row.student_count} students`,
+        row.primary_name || row.primary_email ? (
+          <div className="min-w-0">
+            <p className="truncate text-sm">{row.primary_name}</p>
+            <p className="truncate text-xs text-muted-foreground">
+              {row.primary_email}
+            </p>
+          </div>
+        ) : (
+          <span className="text-xs text-muted-foreground">—</span>
+        ),
     },
     {
       key: "sections_complete",
-      header: "Progress",
+      header: "Packet Progress",
       sortable: true,
       render: (row) => (
         <div className="flex items-center gap-2">
@@ -158,7 +194,7 @@ export default function RegistrationsPage() {
       },
     },
     {
-      key: "isSubmitted",
+      key: "registration_submitted",
       header: "Status",
       sortable: true,
       render: (row) => {
@@ -179,12 +215,12 @@ export default function RegistrationsPage() {
       },
     },
     {
-      key: "submitted_date",
+      key: "registration_submitted_date",
       header: "Submitted",
       sortable: true,
       render: (row) =>
-        row.submitted_date
-          ? new Date(row.submitted_date).toLocaleDateString()
+        row.registration_submitted_date
+          ? new Date(row.registration_submitted_date).toLocaleDateString()
           : "—",
     },
     {
@@ -200,10 +236,10 @@ export default function RegistrationsPage() {
         <div>
           <h1 className="text-2xl font-bold">Registrations</h1>
           <p className="text-sm text-muted-foreground">
-            One row per accepted family per academic year. Click into a
-            family to see all post-acceptance sections (tuition,
-            enrollment agreement, registration packet, volunteer hours)
-            and edit values.
+            One row per student who&rsquo;s been accepted for the
+            selected academic year. Click into a row to land on the
+            family detail page where post-acceptance packets and
+            decision details live.
           </p>
         </div>
         <Select
@@ -237,37 +273,113 @@ export default function RegistrationsPage() {
           Pick a school year above to view its registrations.
         </div>
       ) : (
-        <>
-          <DataTable<RegProgressRow>
+        <div className="space-y-8">
+          <RegistrationsGroup
+            title="Submitted"
+            description="Family has submitted the post-acceptance packet."
+            rows={visibleGroups.submitted}
+            isLoading={
+              isLoading && filter !== "in_progress" && filter !== "not_started"
+            }
+            error={error}
             columns={columns}
-            data={filtered}
-            isLoading={isLoading}
-            searchPlaceholder="Search by family name…"
-            onRowClick={(row) => {
+            tone="blue"
+            onRowClick={(row) =>
               router.push(
                 `/admin/families/${row.family_id}?yearId=${row.year_id}`
-              );
-            }}
+              )
+            }
           />
-
-          {!isLoading && !error && filtered.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              No families match the current filter for this school year.
-            </p>
-          ) : null}
-        </>
+          <RegistrationsGroup
+            title="In Progress"
+            description="Started the packet but not yet submitted."
+            rows={visibleGroups.inProgress}
+            isLoading={
+              isLoading && filter !== "submitted" && filter !== "not_started"
+            }
+            error={error}
+            columns={columns}
+            tone="amber"
+            onRowClick={(row) =>
+              router.push(
+                `/admin/families/${row.family_id}?yearId=${row.year_id}`
+              )
+            }
+          />
+          <RegistrationsGroup
+            title="Not Started"
+            description="Accepted but the family hasn't begun the packet."
+            rows={visibleGroups.notStarted}
+            isLoading={
+              isLoading && filter !== "submitted" && filter !== "in_progress"
+            }
+            error={error}
+            columns={columns}
+            tone="slate"
+            onRowClick={(row) =>
+              router.push(
+                `/admin/families/${row.family_id}?yearId=${row.year_id}`
+              )
+            }
+          />
+        </div>
       )}
     </div>
   );
 }
 
-/**
- * Four colored dots: one per registration section (Tuition, Enrollment
- * Agreement, Registration Packet, Volunteer Hours). Filled green when
- * complete, hollow gray when not. Same component shape as the
- * Applications page so the two tables read consistently.
- */
-function SectionDots({ row }: { row: RegProgressRow }) {
+function RegistrationsGroup({
+  title,
+  description,
+  rows,
+  isLoading,
+  error,
+  columns,
+  tone,
+  onRowClick,
+}: {
+  title: string;
+  description: string;
+  rows: RegStudentRow[];
+  isLoading: boolean;
+  error: unknown;
+  columns: ColumnDef<RegStudentRow>[];
+  tone: "blue" | "amber" | "slate";
+  onRowClick: (row: RegStudentRow) => void;
+}) {
+  if (!isLoading && !error && rows.length === 0) return null;
+  const dotClass =
+    tone === "blue"
+      ? "bg-blue-500"
+      : tone === "amber"
+        ? "bg-amber-500"
+        : "bg-slate-400";
+  return (
+    <Card className="overflow-hidden bg-white py-0 gap-0">
+      <CardHeader className="py-4 border-b bg-white">
+        <div className="flex items-center gap-3">
+          <span className={cn("inline-block size-2 rounded-full", dotClass)} />
+          <CardTitle className="text-lg">{title}</CardTitle>
+          <span className="text-sm tabular-nums text-muted-foreground">
+            ({rows.length})
+          </span>
+          <p className="text-xs text-muted-foreground ml-2">{description}</p>
+        </div>
+      </CardHeader>
+      <CardContent className="p-4 bg-white">
+        <DataTable<RegStudentRow>
+          columns={columns}
+          data={rows}
+          isLoading={isLoading}
+          searchPlaceholder={`Search ${title.toLowerCase()}…`}
+          onRowClick={onRowClick}
+        />
+      </CardContent>
+    </Card>
+  );
+}
+
+function SectionDots({ row }: { row: RegStudentRow }) {
   const sections = [
     { key: "tuition", complete: row.isTuition, label: "Tuition" },
     {

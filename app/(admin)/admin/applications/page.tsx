@@ -27,14 +27,16 @@ interface AppProgressRow {
   id: number;
   family_id: number;
   year_id: number;
+  flow_type: "apply" | "reapply";
   family_name: string;
   primary_name: string;
   primary_email: string;
   student_count: number;
-  family_completed: boolean;
-  students_completed: boolean;
-  financial_aid_completed: boolean;
-  testing_completed: boolean;
+  family_done: boolean;
+  students_done: boolean;
+  financial_aid_done: boolean;
+  fourth_done: boolean;
+  fourth_label: "Testing" | "Transportation";
   sections_complete: number;
   sections_total: number;
   isSubmitted: boolean;
@@ -59,38 +61,35 @@ function deriveFilter(row: AppProgressRow): ProgressFilter {
 }
 
 /**
- * Per-section route segment — keys must match the slug used by the
- * `/admin/families/[id]/<section>` page below the table. Adding a new
- * section means adding a row here AND creating that page.
+ * Per-section route slug. Same first three sections regardless of flow,
+ * different fourth (Testing vs Transportation), and the reapply flow
+ * uses `reapply-*` slugs to land on the right section editor.
  */
-const SECTIONS = [
-  { key: "family", label: "Family", slug: "family" },
-  { key: "students", label: "Students", slug: "students" },
-  { key: "financial_aid", label: "Financial Aid", slug: "financial-aid" },
-  { key: "testing", label: "Testing", slug: "testing" },
-] as const;
-
-type SectionKey = (typeof SECTIONS)[number]["key"];
-
-function isComplete(row: AppProgressRow, key: SectionKey): boolean {
-  switch (key) {
-    case "family":
-      return row.family_completed;
-    case "students":
-      return row.students_completed;
-    case "financial_aid":
-      return row.financial_aid_completed;
-    case "testing":
-      return row.testing_completed;
+function sectionSlugs(row: AppProgressRow) {
+  if (row.flow_type === "reapply") {
+    return {
+      family: "reapply-family",
+      students: "reapply-students",
+      financial_aid: "reapply-financial-aid",
+      fourth: "reapply-transportation",
+    };
   }
+  return {
+    family: "family",
+    students: "students",
+    financial_aid: "financial-aid",
+    fourth: "testing",
+  };
 }
 
 /**
- * Admin Applications list — one row per family per year, backed by the
- * per-year progress endpoint. Each section gets its own column so admins
- * can see at a glance which sections each family has completed; clicking
- * a section opens the per-section detail page where the data can be
- * reviewed and edited.
+ * Admin Applications list — unified view of new applications AND
+ * re-applications for the active school year. Each row carries a
+ * `flow_type` discriminator that pivots the fourth-section column
+ * (Testing vs Transportation) and the section editor slugs.
+ *
+ * Tables are bucketed by status (Submitted / In Progress / Not Started)
+ * so admins can triage submitted apps first and chase the rest later.
  */
 export default function ApplicationsPage() {
   const router = useRouter();
@@ -105,8 +104,6 @@ export default function ApplicationsPage() {
 
   const all = useMemo(() => (Array.isArray(data) ? data : []), [data]);
 
-  // Pre-bucketed by status — cheaper than filtering on every render
-  // and lets us render each table group from a single source of truth.
   const groups = useMemo(() => {
     const submitted: AppProgressRow[] = [];
     const inProgress: AppProgressRow[] = [];
@@ -120,8 +117,6 @@ export default function ApplicationsPage() {
     return { submitted, inProgress, notStarted };
   }, [all]);
 
-  // Apply the optional filter on top of the buckets — when a filter is
-  // selected, only that bucket gets shown.
   const visibleGroups = useMemo(() => {
     if (filter === "all") return groups;
     return {
@@ -166,50 +161,80 @@ export default function ApplicationsPage() {
       ),
     },
     {
+      key: "flow_type",
+      header: "Type",
+      sortable: true,
+      render: (row) => (
+        <span
+          className={cn(
+            "inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider",
+            row.flow_type === "reapply"
+              ? "bg-purple-50 text-purple-700 border-purple-200"
+              : "bg-sky-50 text-sky-700 border-sky-200"
+          )}
+        >
+          {row.flow_type === "reapply" ? "Re-Apply" : "New"}
+        </span>
+      ),
+    },
+    {
       key: "student_count",
       header: "Students",
       sortable: true,
       render: (row) =>
         row.student_count === 1 ? "1 student" : `${row.student_count} students`,
     },
-    // One column per application section. Each cell is its own
-    // click target (stops row-click propagation) so the admin can
-    // jump straight into the section they want to edit.
-    ...SECTIONS.map(
-      (s): ColumnDef<AppProgressRow> => ({
-        key: s.key,
-        header: s.label,
-        sortable: true,
-        render: (row) => {
-          const complete = isComplete(row, s.key);
-          return (
-            <button
-              type="button"
-              className={cn(
-                "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium transition-colors",
-                complete
-                  ? "text-emerald-700 hover:bg-emerald-50"
-                  : "text-muted-foreground hover:bg-muted"
-              )}
-              onClick={(e) => {
-                e.stopPropagation();
-                openSection(row, s.slug);
-              }}
-              title={`Open ${s.label} section for ${row.family_name}`}
-            >
-              {complete ? (
-                <CheckCircle2 className="size-4 text-green-600" />
-              ) : (
-                <Circle className="size-4 text-muted-foreground/40" />
-              )}
-              <span className="underline-offset-2 group-hover:underline">
-                {complete ? "Complete" : "Not yet"}
-              </span>
-            </button>
-          );
-        },
-      })
-    ),
+    {
+      key: "family_done",
+      header: "Family",
+      sortable: true,
+      render: (row) => (
+        <SectionPill
+          complete={row.family_done}
+          onClick={() => openSection(row, sectionSlugs(row).family)}
+          label={`Family for ${row.family_name}`}
+        />
+      ),
+    },
+    {
+      key: "students_done",
+      header: "Students",
+      sortable: true,
+      render: (row) => (
+        <SectionPill
+          complete={row.students_done}
+          onClick={() => openSection(row, sectionSlugs(row).students)}
+          label={`Students for ${row.family_name}`}
+        />
+      ),
+    },
+    {
+      key: "financial_aid_done",
+      header: "Financial Aid",
+      sortable: true,
+      render: (row) => (
+        <SectionPill
+          complete={row.financial_aid_done}
+          onClick={() =>
+            openSection(row, sectionSlugs(row).financial_aid)
+          }
+          label={`Financial Aid for ${row.family_name}`}
+        />
+      ),
+    },
+    {
+      key: "fourth_done",
+      header: "Testing / Transport",
+      sortable: true,
+      render: (row) => (
+        <SectionPill
+          complete={row.fourth_done}
+          onClick={() => openSection(row, sectionSlugs(row).fourth)}
+          label={`${row.fourth_label} for ${row.family_name}`}
+          fallbackText={row.fourth_label}
+        />
+      ),
+    },
     {
       key: "isSubmitted",
       header: "Status",
@@ -255,8 +280,9 @@ export default function ApplicationsPage() {
         <div>
           <h1 className="text-2xl font-bold">Applications</h1>
           <p className="text-sm text-muted-foreground">
-            One row per family per academic year. Click any section to
-            open it for review or editing.
+            One row per family per academic year — both new applications
+            and re-applications. Click any section to open it for review
+            or editing.
           </p>
         </div>
         <Select
@@ -290,13 +316,6 @@ export default function ApplicationsPage() {
           Pick a school year above to view its applications.
         </div>
       ) : (
-        // Three discrete table groups — Submitted / In Progress / Not
-        // Started — instead of one big filterable table. Admins
-        // overwhelmingly want to triage submitted apps first, then
-        // chase in-progress families, then ignore not-started rows
-        // unless they're scanning. Each group has its own header with
-        // a count and only renders when it has rows (or is the
-        // exclusive selection from the status filter).
         <div className="space-y-8">
           <ApplicationsGroup
             title="Submitted"
@@ -338,13 +357,44 @@ export default function ApplicationsPage() {
   );
 }
 
-/**
- * One status-bucket section. Renders a header (title + count + tone
- * dot) above its own DataTable; suppresses entirely when there are no
- * rows AND we're not loading, so the page doesn't render three
- * "no rows" placeholders. Each table row is clickable and routes to
- * the family overview just like the unified table did.
- */
+function SectionPill({
+  complete,
+  onClick,
+  label,
+  fallbackText,
+}: {
+  complete: boolean;
+  onClick: () => void;
+  label: string;
+  fallbackText?: string;
+}) {
+  return (
+    <button
+      type="button"
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium transition-colors",
+        complete
+          ? "text-emerald-700 hover:bg-emerald-50"
+          : "text-muted-foreground hover:bg-muted"
+      )}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      title={`Open ${label}`}
+    >
+      {complete ? (
+        <CheckCircle2 className="size-4 text-green-600" />
+      ) : (
+        <Circle className="size-4 text-muted-foreground/40" />
+      )}
+      <span className="underline-offset-2 group-hover:underline">
+        {complete ? "Complete" : fallbackText ?? "Not yet"}
+      </span>
+    </button>
+  );
+}
+
 function ApplicationsGroup({
   title,
   description,
@@ -364,9 +414,6 @@ function ApplicationsGroup({
   router: AdminRouter;
   tone: "blue" | "amber" | "slate";
 }) {
-  // Skip rendering the section entirely when it's empty and not in
-  // flight — clutters the page otherwise. (Error + loading still
-  // render so the user sees feedback for the active group.)
   if (!isLoading && !error && rows.length === 0) return null;
   const dotClass =
     tone === "blue"
@@ -374,11 +421,6 @@ function ApplicationsGroup({
       : tone === "amber"
         ? "bg-amber-500"
         : "bg-slate-400";
-  // Card wraps each status group so the page reads as three discrete
-  // surfaces — admins parse "submitted vs in-progress vs not-started"
-  // at a glance without scanning headers. White bg keeps the table
-  // crisp against the muted page; the table's own header band already
-  // mirrors the rest of the admin themeing.
   return (
     <Card className="overflow-hidden bg-white py-0 gap-0">
       <CardHeader className="py-4 border-b bg-white">

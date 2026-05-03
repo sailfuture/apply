@@ -30,8 +30,9 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { title: "Dashboard", href: "/admin", matchExact: true },
   { title: "Inquiries", href: "/admin/inquiries" },
+  // Applications now folds in re-applications (with a `flow_type` pill
+  // on each row), so the standalone Re-Applications nav item is gone.
   { title: "Applications", href: "/admin/applications" },
-  { title: "Re-Applications", href: "/admin/reapply" },
   { title: "Registrations", href: "/admin/registrations" },
   { title: "School Years", href: "/admin/school-years" },
 ];
