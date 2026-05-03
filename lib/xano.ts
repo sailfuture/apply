@@ -368,9 +368,12 @@ export interface XanoRegistrationDetails extends XanoStudentRegistration {
 }
 
 /**
- * One cell in the per-year scholarship award matrix. The matrix axes are
- * household size (rows) and income brackets (columns); each row in this
- * table is a single cell with its dollar amount. A 7×6 matrix = 42 rows.
+ * One cell in the per-year tuition-payment matrix. The matrix axes are
+ * household size (rows) and annual-income brackets (columns); each row
+ * in this table is a single cell. The cell value (`tuition_payment`)
+ * is the amount the family is expected to pay for the year given that
+ * household size + income bracket — i.e. their share after scholarship
+ * + financial aid considerations are applied.
  *
  * Cells are independently PATCH-able so the admin matrix editor can
  * persist a single cell change without re-sending the rest of the
@@ -386,7 +389,7 @@ export interface XanoSchoolYearAwardBracket {
   household_size: number;
   income_min: number;
   income_max: number | null;
-  award_amount: number;
+  tuition_payment: number;
 }
 
 /**

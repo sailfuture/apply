@@ -3,11 +3,13 @@ import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
 
 /**
- * Admin scholarship award matrix endpoints. The matrix lives at
+ * Admin tuition-payment matrix endpoints. The matrix lives at
  * `registration_school_year_award_brackets` in Xano — one row per cell
- * at (household_size × income_bracket). The school-year detail page
- * pulls the whole matrix on mount via GET, edits cells via PATCH on
- * `[id]`, and inserts new rows/columns via POST.
+ * at (household_size × income_bracket). Each cell's `tuition_payment`
+ * is the amount the family is expected to pay for the year given that
+ * combination. The school-year detail page pulls the whole matrix on
+ * mount via GET, edits cells via PATCH on `[id]`, and inserts new
+ * rows/columns via POST.
  *
  * Why one row per cell instead of a JSON blob: makes single-cell PATCH
  * cheap, lets us add brackets/sizes without rewriting everything, and
@@ -44,7 +46,12 @@ export async function POST(req: NextRequest) {
       incomeMaxRaw === null || incomeMaxRaw === undefined || incomeMaxRaw === ""
         ? null
         : Number(incomeMaxRaw);
-    const awardAmount = Number(body?.award_amount);
+    // Accept either `tuition_payment` (current canonical name) or the
+    // legacy `award_amount` so any in-flight client doesn't 400 during
+    // the rename window. `tuition_payment` wins if both are present.
+    const tuitionPayment = Number(
+      body?.tuition_payment ?? body?.award_amount
+    );
 
     if (!Number.isFinite(yearId) || yearId <= 0) {
       return NextResponse.json(
@@ -76,7 +83,7 @@ export async function POST(req: NextRequest) {
       household_size: householdSize,
       income_min: incomeMin,
       income_max: incomeMax,
-      award_amount: Number.isFinite(awardAmount) ? awardAmount : 0,
+      tuition_payment: Number.isFinite(tuitionPayment) ? tuitionPayment : 0,
     });
     return NextResponse.json(created, { status: 201 });
   } catch (err) {

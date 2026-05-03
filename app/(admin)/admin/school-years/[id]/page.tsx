@@ -138,7 +138,7 @@ export default function SchoolYearDetailPage() {
         onDeleted={() => router.push("/admin/school-years")}
       />
 
-      <ScholarshipMatrixCard yearId={year.id} />
+      <TuitionMatrixCard yearId={year.id} />
     </div>
   );
 }
@@ -508,7 +508,7 @@ function formatBracketLabel(b: BracketShape): string {
   return `${formatCurrency(b.income_min)} – ${formatCurrency(b.income_max)}`;
 }
 
-function ScholarshipMatrixCard({ yearId }: { yearId: number }) {
+function TuitionMatrixCard({ yearId }: { yearId: number }) {
   const {
     data: cells,
     isLoading,
@@ -574,7 +574,7 @@ function ScholarshipMatrixCard({ yearId }: { yearId: number }) {
             household_size: next,
             income_min: 0,
             income_max: 25000,
-            award_amount: 0,
+            tuition_payment: 0,
           }),
         });
         await mutate();
@@ -596,7 +596,7 @@ function ScholarshipMatrixCard({ yearId }: { yearId: number }) {
               household_size: next,
               income_min: b.income_min,
               income_max: b.income_max,
-              award_amount: 0,
+              tuition_payment: 0,
             }),
           })
         )
@@ -636,7 +636,7 @@ function ScholarshipMatrixCard({ yearId }: { yearId: number }) {
               household_size: s,
               income_min: min,
               income_max: max,
-              award_amount: 0,
+              tuition_payment: 0,
             }),
           })
         )
@@ -741,11 +741,12 @@ function ScholarshipMatrixCard({ yearId }: { yearId: number }) {
         <div className="flex items-center justify-between gap-3">
           <div>
             <CardTitle className="text-base">
-              Scholarship Award Matrix
+              Family Tuition Payment Matrix
             </CardTitle>
             <p className="text-xs text-muted-foreground mt-1">
-              Per-cell awards by household size (rows) × annual income
-              bracket (columns). Cell edits save automatically on blur.
+              The dollar amount each family pays for the year, given
+              their household size (rows) and annual income bracket
+              (columns). Cell edits save automatically on blur.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -845,7 +846,9 @@ function ScholarshipMatrixCard({ yearId }: { yearId: number }) {
                             cell={cell}
                             onSave={(amount) => {
                               if (cell) {
-                                patchCell(cell.id, { award_amount: amount });
+                                patchCell(cell.id, {
+                                  tuition_payment: amount,
+                                });
                               } else {
                                 // Cell doesn't exist (gap in matrix) —
                                 // create it on first edit.
@@ -859,7 +862,7 @@ function ScholarshipMatrixCard({ yearId }: { yearId: number }) {
                                     household_size: size,
                                     income_min: b.income_min,
                                     income_max: b.income_max,
-                                    award_amount: amount,
+                                    tuition_payment: amount,
                                   }),
                                 }).then(() => mutate());
                               }
@@ -985,6 +988,9 @@ function BracketHeader({
  * One editable matrix cell. Local input state until blur, then
  * compares to the saved value and PATCHes only if it changed. Empty
  * input is treated as 0 so admins can clear a cell quickly.
+ *
+ * The persisted field is `tuition_payment` — the dollar amount the
+ * family pays for the year given that household size + income bracket.
  */
 function MatrixCell({
   cell,
@@ -993,12 +999,12 @@ function MatrixCell({
   cell: XanoSchoolYearAwardBracket | undefined;
   onSave: (amount: number) => void;
 }) {
-  const initial = cell?.award_amount ?? 0;
+  const initial = cell?.tuition_payment ?? 0;
   const [value, setValue] = useState(String(initial));
 
   useEffect(() => {
-    setValue(String(cell?.award_amount ?? 0));
-  }, [cell?.award_amount]);
+    setValue(String(cell?.tuition_payment ?? 0));
+  }, [cell?.tuition_payment]);
 
   function commit() {
     const n = value === "" ? 0 : Number(value);
