@@ -3,18 +3,13 @@ import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
 
 /**
- * Admin tuition-payment matrix endpoints. The matrix lives at
- * `registration_school_year_award_brackets` in Xano — one row per cell
- * at (household_size × income_bracket). Each cell's `tuition_payment`
- * is the amount the family is expected to pay for the year given that
- * combination. The school-year detail page pulls the whole matrix on
- * mount via GET, edits cells via PATCH on `[id]`, and inserts new
- * rows/columns via POST.
+ * Admin endpoints for the per-year "high net assets" matrix. Backs
+ * `registration_school_year_net_assets_bracket` in Xano. Same shape as
+ * the regular tuition matrix (household_size × income_bracket), but
+ * each cell stores a **percentage** of total tuition (0–100) rather
+ * than a dollar amount.
  *
- * Why one row per cell instead of a JSON blob: makes single-cell PATCH
- * cheap, lets us add brackets/sizes without rewriting everything, and
- * gives us a clean place to record the per-cell `created_at` so an
- * admin can see when a tier last shifted.
+ * One row per cell so single-cell PATCH stays cheap.
  */
 export async function GET(req: NextRequest) {
   try {
@@ -27,16 +22,7 @@ export async function GET(req: NextRequest) {
         { status: 400 }
       );
     }
-    // Optional `?isNetAssets=true|false` filter splits the table into
-    // its two semantic matrices: tuition (false) and transportation
-    // (true). When omitted, we return everything so a single fetch
-    // can rebuild whichever matrix the page needs.
-    const flagParam = req.nextUrl.searchParams.get("isNetAssets");
-    const rows = await xano.schoolYearAwardBrackets.getByYear(yearId);
-    if (flagParam === "true" || flagParam === "false") {
-      const wanted = flagParam === "true";
-      return NextResponse.json(rows.filter((r) => r.isNetAssets === wanted));
-    }
+    const rows = await xano.schoolYearNetAssetsBrackets.getByYear(yearId);
     return NextResponse.json(rows);
   } catch (err) {
     return handleAdminError(err);
@@ -55,12 +41,7 @@ export async function POST(req: NextRequest) {
       incomeMaxRaw === null || incomeMaxRaw === undefined || incomeMaxRaw === ""
         ? null
         : Number(incomeMaxRaw);
-    // Accept either `tuition_payment` (current canonical name) or the
-    // legacy `award_amount` so any in-flight client doesn't 400 during
-    // the rename window. `tuition_payment` wins if both are present.
-    const tuitionPayment = Number(
-      body?.tuition_payment ?? body?.award_amount
-    );
+    const tuitionPercentage = Number(body?.tuition_percentage);
 
     if (!Number.isFinite(yearId) || yearId <= 0) {
       return NextResponse.json(
@@ -87,19 +68,14 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // The `isNetAssets` discriminator picks which matrix the new cell
-    // belongs to. Defaults to `false` (regular tuition) when omitted
-    // so existing clients that don't know about the flag stay
-    // backwards-compatible.
-    const isNetAssets = body?.isNetAssets === true;
-
-    const created = await xano.schoolYearAwardBrackets.create({
+    const created = await xano.schoolYearNetAssetsBrackets.create({
       registration_school_years_id: yearId,
       household_size: householdSize,
       income_min: incomeMin,
       income_max: incomeMax,
-      tuition_payment: Number.isFinite(tuitionPayment) ? tuitionPayment : 0,
-      isNetAssets,
+      tuition_percentage: Number.isFinite(tuitionPercentage)
+        ? tuitionPercentage
+        : 0,
     });
     return NextResponse.json(created, { status: 201 });
   } catch (err) {

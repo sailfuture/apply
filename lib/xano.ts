@@ -368,12 +368,22 @@ export interface XanoRegistrationDetails extends XanoStudentRegistration {
 }
 
 /**
- * One cell in the per-year tuition-payment matrix. The matrix axes are
+ * One cell in a per-year sliding-scale matrix. The matrix axes are
  * household size (rows) and annual-income brackets (columns); each row
  * in this table is a single cell. The cell value (`tuition_payment`)
- * is the amount the family is expected to pay for the year given that
- * household size + income bracket — i.e. their share after scholarship
- * + financial aid considerations are applied.
+ * is the dollar amount the family is expected to pay given that
+ * household size + income bracket.
+ *
+ * The same Xano table backs two distinct matrices, discriminated by
+ * `isNetAssets`:
+ *   - `false` → standard tuition payment matrix
+ *   - `true`  → transportation cost matrix (separate sliding scale)
+ *
+ * The boolean flag was originally introduced for a different
+ * "high net assets" use case — that surface ended up living in its own
+ * dedicated table (`registration_school_year_net_assets_bracket`),
+ * but the discriminator is still useful here for splitting tuition
+ * from transportation.
  *
  * Cells are independently PATCH-able so the admin matrix editor can
  * persist a single cell change without re-sending the rest of the
@@ -390,6 +400,33 @@ export interface XanoSchoolYearAwardBracket {
   income_min: number;
   income_max: number | null;
   tuition_payment: number;
+  /** Discriminator: false = tuition matrix, true = transportation matrix.
+   *  See doc comment above for the historical context on the name. */
+  isNetAssets: boolean;
+}
+
+/**
+ * One cell in the per-year "high net assets" matrix — applies to
+ * families whose net assets exceed $100k. The matrix has the same
+ * shape as the regular tuition matrix (household size × bracket), but
+ * the cell value is a **percentage of total tuition** the family
+ * pays, not a flat dollar amount.
+ *
+ * Example: a family with net assets in the $100k–$150k bracket might
+ * pay 40% of tuition. The percentage is stored as a number 0–100.
+ *
+ * Stored in the `registration_school_year_net_assets_bracket` Xano
+ * table.
+ */
+export interface XanoSchoolYearNetAssetsBracket {
+  id: number;
+  created_at: number;
+  registration_school_years_id: number;
+  household_size: number;
+  income_min: number;
+  income_max: number | null;
+  /** Percentage of total tuition the family pays, 0–100. */
+  tuition_percentage: number;
 }
 
 /**
@@ -1278,6 +1315,77 @@ export const xano = {
     async delete(id: number): Promise<void> {
       const res = await fetch(
         `${getBaseUrl()}/registration_school_year_award_brackets/${id}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok)
+        throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+    },
+  },
+
+  /**
+   * Per-year "high net assets" matrix. Same shape as the award
+   * brackets above, but cell values are percentages of total tuition
+   * (0–100), not dollar amounts. Backed by the
+   * `registration_school_year_net_assets_bracket` Xano table.
+   */
+  schoolYearNetAssetsBrackets: {
+    async getByYear(
+      yearId: number
+    ): Promise<XanoSchoolYearNetAssetsBracket[]> {
+      const url = new URL(
+        `${getBaseUrl()}/registration_school_year_net_assets_bracket`
+      );
+      url.searchParams.set(
+        "registration_school_years_id",
+        String(yearId)
+      );
+      const res = await fetch(url.toString(), { cache: "no-store" });
+      if (!res.ok) {
+        if (res.status === 404) return [];
+        throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      }
+      const items = await res.json();
+      return Array.isArray(items) ? items : [];
+    },
+
+    async create(
+      data: Omit<XanoSchoolYearNetAssetsBracket, "id" | "created_at">
+    ): Promise<XanoSchoolYearNetAssetsBracket> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_school_year_net_assets_bracket`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        }
+      );
+      if (!res.ok)
+        throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async update(
+      id: number,
+      data: Partial<
+        Omit<XanoSchoolYearNetAssetsBracket, "id" | "created_at">
+      >
+    ): Promise<XanoSchoolYearNetAssetsBracket> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_school_year_net_assets_bracket/${id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        }
+      );
+      if (!res.ok)
+        throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async delete(id: number): Promise<void> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_school_year_net_assets_bracket/${id}`,
         { method: "DELETE" }
       );
       if (!res.ok)

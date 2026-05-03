@@ -3,10 +3,9 @@ import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
 
 /**
- * Single-cell PATCH / DELETE for the per-year tuition-payment matrix.
- * Used by the school-year detail page when an admin commits a cell
- * edit (PATCH) or removes a household-size row / income-bracket column
- * (DELETE — caller batches these per axis).
+ * Single-cell PATCH / DELETE for the per-year "high net assets"
+ * percentage matrix. Cell values are 0–100 percentages of total
+ * tuition.
  */
 export async function PATCH(
   req: NextRequest,
@@ -39,17 +38,9 @@ export async function PATCH(
         if (Number.isFinite(n)) patch.income_max = n;
       }
     }
-    // Accept the canonical `tuition_payment` field; also fall back to
-    // the legacy `award_amount` so a stale tab doesn't 400 mid-rename.
-    if ("tuition_payment" in body) {
-      const n = Number(body.tuition_payment);
-      patch.tuition_payment = Number.isFinite(n) ? n : 0;
-    } else if ("award_amount" in body) {
-      const n = Number(body.award_amount);
-      patch.tuition_payment = Number.isFinite(n) ? n : 0;
-    }
-    if ("isNetAssets" in body) {
-      patch.isNetAssets = body.isNetAssets === true;
+    if ("tuition_percentage" in body) {
+      const n = Number(body.tuition_percentage);
+      patch.tuition_percentage = Number.isFinite(n) ? n : 0;
     }
     if (Object.keys(patch).length === 0) {
       return NextResponse.json(
@@ -57,7 +48,7 @@ export async function PATCH(
         { status: 400 }
       );
     }
-    const updated = await xano.schoolYearAwardBrackets.update(id, patch);
+    const updated = await xano.schoolYearNetAssetsBrackets.update(id, patch);
     return NextResponse.json(updated);
   } catch (err) {
     return handleAdminError(err);
@@ -75,7 +66,7 @@ export async function DELETE(
     if (!Number.isFinite(id)) {
       return NextResponse.json({ error: "Invalid id" }, { status: 400 });
     }
-    await xano.schoolYearAwardBrackets.delete(id);
+    await xano.schoolYearNetAssetsBrackets.delete(id);
     return NextResponse.json({ ok: true });
   } catch (err) {
     return handleAdminError(err);

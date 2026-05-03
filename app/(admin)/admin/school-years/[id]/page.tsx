@@ -35,10 +35,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { adminFetcher } from "@/lib/admin-fetcher";
-import type {
-  XanoSchoolYear,
-  XanoSchoolYearAwardBracket,
-} from "@/lib/xano";
+import { cn } from "@/lib/utils";
+import type { XanoSchoolYear } from "@/lib/xano";
 
 type YearStatus = "active" | "next" | "past" | "future" | "none";
 
@@ -138,7 +136,44 @@ export default function SchoolYearDetailPage() {
         onDeleted={() => router.push("/admin/school-years")}
       />
 
-      <TuitionMatrixCard yearId={year.id} />
+      {/* Tuition payment matrix — dollar amount the family pays per
+          year given (household size × income bracket). Lives on the
+          shared award_brackets table with isNetAssets=false. */}
+      <BracketMatrixCard
+        yearId={year.id}
+        title="Family Tuition Payment Matrix"
+        description="The dollar amount each family pays for the year, given their household size (rows) and annual income bracket (columns). Cell edits save automatically on blur."
+        endpoint="/api/admin/school-year-brackets"
+        valueField="tuition_payment"
+        valueKind="currency"
+        flag={{ isNetAssets: false }}
+      />
+
+      {/* Transportation cost matrix — same shape as tuition, also
+          dollars, but stored on the same Xano table with the
+          isNetAssets discriminator flipped to true. */}
+      <BracketMatrixCard
+        yearId={year.id}
+        title="Transportation Cost Matrix"
+        description="The dollar amount each family pays for transportation given household size and income bracket. Same sliding-scale structure as tuition; lives on the same table with isNetAssets=true."
+        endpoint="/api/admin/school-year-brackets"
+        valueField="tuition_payment"
+        valueKind="currency"
+        flag={{ isNetAssets: true }}
+      />
+
+      {/* High-net-assets matrix — applies to families with net assets
+          above $100k. Different table; cell values are percentages of
+          total tuition (0–100), not dollar amounts. */}
+      <BracketMatrixCard
+        yearId={year.id}
+        title="Net Assets > $100k Tuition Percentage"
+        description="For families whose net assets exceed $100k. Each cell is the percentage of total tuition the family pays given their household size and net-asset bracket (e.g. 40 = 40% of tuition)."
+        endpoint="/api/admin/school-year-net-assets-brackets"
+        valueField="tuition_percentage"
+        valueKind="percentage"
+        bracketAxisLabel="Net asset bracket"
+      />
     </div>
   );
 }
@@ -488,13 +523,26 @@ function YearMetadataCard({
   );
 }
 
-/* ─────────────────────── Scholarship matrix card ─────────────────────── */
+/* ─────────────────────── Bracket matrix card (generic) ─────────────────────── */
 
 interface BracketShape {
   /** "min-max" or "min-null" key — uniquely identifies a column */
   key: string;
   income_min: number;
   income_max: number | null;
+}
+
+/** Minimal shape every matrix row must satisfy. The two concrete row
+ *  types (`XanoSchoolYearAwardBracket` and `XanoSchoolYearNetAssetsBracket`)
+ *  both have these columns; the only difference is the value field
+ *  (`tuition_payment` vs `tuition_percentage`), which we look up
+ *  dynamically via `valueField`. */
+interface BracketRowBase {
+  id: number;
+  household_size: number;
+  income_min: number;
+  income_max: number | null;
+  [extra: string]: unknown;
 }
 
 function bracketKey(min: number, max: number | null): string {
@@ -508,16 +556,70 @@ function formatBracketLabel(b: BracketShape): string {
   return `${formatCurrency(b.income_min)} – ${formatCurrency(b.income_max)}`;
 }
 
-function TuitionMatrixCard({ yearId }: { yearId: number }) {
+interface BracketMatrixCardProps {
+  yearId: number;
+  title: string;
+  description: string;
+  /** Base path for the admin endpoints — POST goes here, PATCH/DELETE
+   *  go to `${endpoint}/${id}`. */
+  endpoint: string;
+  /** Name of the cell-value field on the row. The matrix is otherwise
+   *  identical between tuition (currency) and net-assets (percentage)
+   *  surfaces, so we just swap the field reference. */
+  valueField: string;
+  /** Visual treatment of cell values + the input affordance. */
+  valueKind: "currency" | "percentage";
+  /** Optional discriminator merged into every POST + every GET filter
+   *  string. Used so two card instances on the same page don't see
+   *  each other's rows when they live on the same Xano table. */
+  flag?: Record<string, boolean>;
+  /** Override the bracket-axis label in copy + empty state — net
+   *  assets matrix calls them "net asset brackets" rather than
+   *  "income brackets". */
+  bracketAxisLabel?: string;
+}
+
+function BracketMatrixCard({
+  yearId,
+  title,
+  description,
+  endpoint,
+  valueField,
+  valueKind,
+  flag,
+  bracketAxisLabel = "income bracket",
+}: BracketMatrixCardProps) {
+  // Build the SWR key from the endpoint + flag so two cards using the
+  // same endpoint (Tuition vs Transportation, both on award_brackets)
+  // hit different cache entries and re-fetch independently.
+  const flagQuery = flag
+    ? Object.entries(flag)
+        .map(([k, v]) => `&${encodeURIComponent(k)}=${v}`)
+        .join("")
+    : "";
+  const swrKey = `${endpoint}?yearId=${yearId}${flagQuery}`;
+
   const {
     data: cells,
     isLoading,
     error,
     mutate,
-  } = useSWR<XanoSchoolYearAwardBracket[]>(
-    `/api/admin/school-year-brackets?yearId=${yearId}`,
-    adminFetcher
-  );
+  } = useSWR<BracketRowBase[]>(swrKey, adminFetcher);
+
+  // `pendingMutation` covers the gap between a structural change
+  // (cell create / bracket-bound update / row|column delete) and the
+  // SWR revalidation that follows. Without it, the table briefly
+  // shows the old labels with the new bounds (or vice versa) which
+  // reads as a flicker. We collapse to a skeleton during that window.
+  const [pendingMutation, setPendingMutation] = useState(false);
+  async function withPending<T>(fn: () => Promise<T>): Promise<T> {
+    setPendingMutation(true);
+    try {
+      return await fn();
+    } finally {
+      setPendingMutation(false);
+    }
+  }
 
   const safeCells = useMemo(
     () => (Array.isArray(cells) ? cells : []),
@@ -550,7 +652,7 @@ function TuitionMatrixCard({ yearId }: { yearId: number }) {
 
   // Lookup: (size, bracketKey) → cell row
   const cellLookup = useMemo(() => {
-    const map = new Map<string, XanoSchoolYearAwardBracket>();
+    const map = new Map<string, BracketRowBase>();
     for (const c of safeCells) {
       const key = `${c.household_size}::${bracketKey(c.income_min, c.income_max)}`;
       map.set(key, c);
@@ -558,65 +660,79 @@ function TuitionMatrixCard({ yearId }: { yearId: number }) {
     return map;
   }, [safeCells]);
 
+  // Default empty value for a freshly-created cell. Currency = 0 dollars,
+  // percentage = 0%.
+  function buildPostBody(
+    extra: Record<string, unknown>
+  ): Record<string, unknown> {
+    return {
+      registration_school_years_id: yearId,
+      ...flag,
+      ...extra,
+    };
+  }
+
   /* ────── Adders ────── */
 
   async function addHouseholdSize() {
     const next = sizes.length === 0 ? 1 : Math.max(...sizes) + 1;
-    if (brackets.length === 0) {
-      // No columns yet — bootstrap with a default $0–$25k bracket so
-      // the new row has somewhere to land. Admin can rename it after.
-      try {
-        await fetch("/api/admin/school-year-brackets", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            registration_school_years_id: yearId,
-            household_size: next,
-            income_min: 0,
-            income_max: 25000,
-            tuition_payment: 0,
-          }),
-        });
-        await mutate();
-        toast.success("Added first cell. Add brackets to grow the matrix.");
-        return;
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Couldn't add row.");
-        return;
-      }
-    }
-    try {
-      await Promise.all(
-        brackets.map((b) =>
-          fetch("/api/admin/school-year-brackets", {
+    await withPending(async () => {
+      if (brackets.length === 0) {
+        try {
+          await fetch(endpoint, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              registration_school_years_id: yearId,
-              household_size: next,
-              income_min: b.income_min,
-              income_max: b.income_max,
-              tuition_payment: 0,
-            }),
-          })
-        )
-      );
-      await mutate();
-      toast.success(`Added household size ${next}.`);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Couldn't add row.");
-    }
+            body: JSON.stringify(
+              buildPostBody({
+                household_size: next,
+                income_min: 0,
+                income_max: 25000,
+                [valueField]: 0,
+              })
+            ),
+          });
+          await mutate();
+          toast.success(
+            "Added first cell. Add brackets to grow the matrix."
+          );
+        } catch (err) {
+          toast.error(
+            err instanceof Error ? err.message : "Couldn't add row."
+          );
+        }
+        return;
+      }
+      try {
+        await Promise.all(
+          brackets.map((b) =>
+            fetch(endpoint, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(
+                buildPostBody({
+                  household_size: next,
+                  income_min: b.income_min,
+                  income_max: b.income_max,
+                  [valueField]: 0,
+                })
+              ),
+            })
+          )
+        );
+        await mutate();
+        toast.success(`Added household size ${next}.`);
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Couldn't add row.");
+      }
+    });
   }
 
   async function addIncomeBracket() {
-    // Default new bracket bounds: pick up where the highest bracket
-    // ends. If no brackets exist yet, start at $0–$25k.
     let min = 0;
     let max: number | null = 25000;
     if (brackets.length > 0) {
       const last = brackets[brackets.length - 1];
       if (last.income_max === null) {
-        // Top is already unbounded — split it.
         min = last.income_min + 1;
         max = null;
       } else {
@@ -625,44 +741,49 @@ function TuitionMatrixCard({ yearId }: { yearId: number }) {
       }
     }
     const sizesToSeed = sizes.length === 0 ? [1] : sizes;
-    try {
-      await Promise.all(
-        sizesToSeed.map((s) =>
-          fetch("/api/admin/school-year-brackets", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              registration_school_years_id: yearId,
-              household_size: s,
-              income_min: min,
-              income_max: max,
-              tuition_payment: 0,
-            }),
-          })
-        )
-      );
-      await mutate();
-      toast.success(`Added bracket ${formatCurrency(min)}+.`);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Couldn't add column.");
-    }
+    await withPending(async () => {
+      try {
+        await Promise.all(
+          sizesToSeed.map((s) =>
+            fetch(endpoint, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(
+                buildPostBody({
+                  household_size: s,
+                  income_min: min,
+                  income_max: max,
+                  [valueField]: 0,
+                })
+              ),
+            })
+          )
+        );
+        await mutate();
+        toast.success(`Added bracket ${formatCurrency(min)}+.`);
+      } catch (err) {
+        toast.error(
+          err instanceof Error ? err.message : "Couldn't add column."
+        );
+      }
+    });
   }
 
   async function deleteHouseholdSize(size: number) {
     const targets = safeCells.filter((c) => c.household_size === size);
-    try {
-      await Promise.all(
-        targets.map((c) =>
-          fetch(`/api/admin/school-year-brackets/${c.id}`, {
-            method: "DELETE",
-          })
-        )
-      );
-      await mutate();
-      toast.success(`Removed household size ${size}.`);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Couldn't delete.");
-    }
+    await withPending(async () => {
+      try {
+        await Promise.all(
+          targets.map((c) =>
+            fetch(`${endpoint}/${c.id}`, { method: "DELETE" })
+          )
+        );
+        await mutate();
+        toast.success(`Removed household size ${size}.`);
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Couldn't delete.");
+      }
+    });
   }
 
   async function deleteBracket(b: BracketShape) {
@@ -670,27 +791,24 @@ function TuitionMatrixCard({ yearId }: { yearId: number }) {
       (c) =>
         c.income_min === b.income_min && (c.income_max ?? null) === b.income_max
     );
-    try {
-      await Promise.all(
-        targets.map((c) =>
-          fetch(`/api/admin/school-year-brackets/${c.id}`, {
-            method: "DELETE",
-          })
-        )
-      );
-      await mutate();
-      toast.success(`Removed bracket ${formatBracketLabel(b)}.`);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Couldn't delete.");
-    }
+    await withPending(async () => {
+      try {
+        await Promise.all(
+          targets.map((c) =>
+            fetch(`${endpoint}/${c.id}`, { method: "DELETE" })
+          )
+        );
+        await mutate();
+        toast.success(`Removed bracket ${formatBracketLabel(b)}.`);
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Couldn't delete.");
+      }
+    });
   }
 
-  async function patchCell(
-    id: number,
-    fields: Partial<XanoSchoolYearAwardBracket>
-  ) {
+  async function patchCell(id: number, fields: Record<string, unknown>) {
     try {
-      const res = await fetch(`/api/admin/school-year-brackets/${id}`, {
+      const res = await fetch(`${endpoint}/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(fields),
@@ -715,38 +833,49 @@ function TuitionMatrixCard({ yearId }: { yearId: number }) {
         c.income_min === oldB.income_min &&
         (c.income_max ?? null) === oldB.income_max
     );
-    try {
-      await Promise.all(
-        targets.map((c) =>
-          fetch(`/api/admin/school-year-brackets/${c.id}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              income_min: nextMin,
-              income_max: nextMax,
-            }),
-          })
-        )
-      );
-      await mutate();
-      toast.success("Bracket updated.");
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Update failed.");
-    }
+    await withPending(async () => {
+      try {
+        await Promise.all(
+          targets.map((c) =>
+            fetch(`${endpoint}/${c.id}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                income_min: nextMin,
+                income_max: nextMax,
+              }),
+            })
+          )
+        );
+        await mutate();
+        toast.success("Bracket updated.");
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Update failed.");
+      }
+    });
   }
+
+  // Sticky-left column needs an explicit width AND a fully opaque
+  // background so it doesn't bleed into the next column when the
+  // table scrolls horizontally. Dropping `bg-muted/40` (40% alpha)
+  // for `bg-muted` (opaque) was the actual fix for the overlap.
+  const HOUSEHOLD_COL_W = "w-[160px] min-w-[160px] max-w-[160px]";
+
+  // Show the skeleton during the initial load *and* while a structural
+  // mutation (cell create / bracket edit / row|column delete) is
+  // re-fetching. This avoids the brief frame where stale cell labels
+  // sit next to fresh bracket bounds while SWR catches up.
+  const showSkeleton =
+    (isLoading && safeCells.length === 0) || pendingMutation;
 
   return (
     <Card className="overflow-hidden gap-0 py-0 bg-white">
       <CardHeader className="py-3 !pb-3 border-b">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <CardTitle className="text-base">
-              Family Tuition Payment Matrix
-            </CardTitle>
+            <CardTitle className="text-base">{title}</CardTitle>
             <p className="text-xs text-muted-foreground mt-1">
-              The dollar amount each family pays for the year, given
-              their household size (rows) and annual income bracket
-              (columns). Cell edits save automatically on blur.
+              {description}
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -754,6 +883,7 @@ function TuitionMatrixCard({ yearId }: { yearId: number }) {
               variant="outline"
               size="sm"
               onClick={addHouseholdSize}
+              disabled={pendingMutation}
               className="bg-white"
             >
               <Plus className="size-4 mr-1" />
@@ -763,6 +893,7 @@ function TuitionMatrixCard({ yearId }: { yearId: number }) {
               variant="outline"
               size="sm"
               onClick={addIncomeBracket}
+              disabled={pendingMutation}
               className="bg-white"
             >
               <Plus className="size-4 mr-1" />
@@ -776,13 +907,16 @@ function TuitionMatrixCard({ yearId }: { yearId: number }) {
           <div className="p-4 text-sm text-red-700 bg-red-50 border-b border-red-200">
             Failed to load matrix:{" "}
             {error instanceof Error ? error.message : "unknown error"}.
-            Confirm the <code>registration_school_year_award_brackets</code>{" "}
-            Xano table exists and has the documented endpoints.
+            Confirm the corresponding Xano table exists and exposes the
+            documented endpoints.
           </div>
         ) : null}
-        {isLoading && safeCells.length === 0 ? (
-          <div className="p-4">
-            <Skeleton className="h-48 w-full" />
+        {showSkeleton ? (
+          <div className="p-4 space-y-3">
+            <Skeleton className="h-9 w-full" />
+            <Skeleton className="h-9 w-full" />
+            <Skeleton className="h-9 w-full" />
+            <Skeleton className="h-9 w-full" />
           </div>
         ) : sizes.length === 0 || brackets.length === 0 ? (
           <div className="p-8 text-center">
@@ -790,23 +924,28 @@ function TuitionMatrixCard({ yearId }: { yearId: number }) {
               No matrix configured yet for this year.
             </p>
             <p className="text-xs text-muted-foreground/80 mb-4">
-              Click <strong>Add bracket</strong> to set up your first
-              income column, then <strong>Add row</strong> to add household
-              sizes.
+              Click <strong>Add bracket</strong> to set up your first{" "}
+              {bracketAxisLabel} column, then <strong>Add row</strong>{" "}
+              to add household sizes.
             </p>
           </div>
         ) : (
           <div className="overflow-x-auto">
             <Table>
-              <TableHeader className="bg-muted/40">
-                <TableRow>
-                  <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground sticky left-0 bg-muted/40 z-10">
+              <TableHeader className="bg-muted">
+                <TableRow className="hover:bg-muted">
+                  <TableHead
+                    className={cn(
+                      "text-xs font-semibold uppercase tracking-wider text-muted-foreground sticky left-0 bg-muted z-20 border-r",
+                      HOUSEHOLD_COL_W
+                    )}
+                  >
                     Household
                   </TableHead>
                   {brackets.map((b) => (
                     <TableHead
                       key={b.key}
-                      className="text-xs font-semibold text-muted-foreground min-w-[180px]"
+                      className="text-xs font-semibold text-muted-foreground min-w-[200px]"
                     >
                       <BracketHeader
                         bracket={b}
@@ -822,8 +961,13 @@ function TuitionMatrixCard({ yearId }: { yearId: number }) {
               <TableBody>
                 {sizes.map((size) => (
                   <TableRow key={size}>
-                    <TableCell className="font-medium sticky left-0 bg-white z-10 border-r">
-                      <div className="flex items-center justify-between gap-2 min-w-[100px]">
+                    <TableCell
+                      className={cn(
+                        "font-medium sticky left-0 bg-white z-10 border-r",
+                        HOUSEHOLD_COL_W
+                      )}
+                    >
+                      <div className="flex items-center justify-between gap-2">
                         <span>
                           {size} {size === 1 ? "person" : "people"}
                         </span>
@@ -840,31 +984,40 @@ function TuitionMatrixCard({ yearId }: { yearId: number }) {
                     </TableCell>
                     {brackets.map((b) => {
                       const cell = cellLookup.get(`${size}::${b.key}`);
+                      const cellValue =
+                        cell && typeof cell[valueField] === "number"
+                          ? (cell[valueField] as number)
+                          : 0;
                       return (
                         <TableCell key={b.key} className="p-1">
                           <MatrixCell
-                            cell={cell}
+                            value={cellValue}
+                            valueKind={valueKind}
                             onSave={(amount) => {
                               if (cell) {
                                 patchCell(cell.id, {
-                                  tuition_payment: amount,
+                                  [valueField]: amount,
                                 });
                               } else {
                                 // Cell doesn't exist (gap in matrix) —
                                 // create it on first edit.
-                                fetch("/api/admin/school-year-brackets", {
-                                  method: "POST",
-                                  headers: {
-                                    "Content-Type": "application/json",
-                                  },
-                                  body: JSON.stringify({
-                                    registration_school_years_id: yearId,
-                                    household_size: size,
-                                    income_min: b.income_min,
-                                    income_max: b.income_max,
-                                    tuition_payment: amount,
-                                  }),
-                                }).then(() => mutate());
+                                withPending(async () => {
+                                  await fetch(endpoint, {
+                                    method: "POST",
+                                    headers: {
+                                      "Content-Type": "application/json",
+                                    },
+                                    body: JSON.stringify(
+                                      buildPostBody({
+                                        household_size: size,
+                                        income_min: b.income_min,
+                                        income_max: b.income_max,
+                                        [valueField]: amount,
+                                      })
+                                    ),
+                                  });
+                                  await mutate();
+                                });
                               }
                             }}
                           />
@@ -989,22 +1142,24 @@ function BracketHeader({
  * compares to the saved value and PATCHes only if it changed. Empty
  * input is treated as 0 so admins can clear a cell quickly.
  *
- * The persisted field is `tuition_payment` — the dollar amount the
- * family pays for the year given that household size + income bracket.
+ * `valueKind` swaps the affordance between currency ("$" prefix) and
+ * percentage ("%" suffix). The actual save still goes through the
+ * parent's `onSave` callback, which knows the underlying field name.
  */
 function MatrixCell({
-  cell,
+  value: initial,
+  valueKind,
   onSave,
 }: {
-  cell: XanoSchoolYearAwardBracket | undefined;
+  value: number;
+  valueKind: "currency" | "percentage";
   onSave: (amount: number) => void;
 }) {
-  const initial = cell?.tuition_payment ?? 0;
   const [value, setValue] = useState(String(initial));
 
   useEffect(() => {
-    setValue(String(cell?.tuition_payment ?? 0));
-  }, [cell?.tuition_payment]);
+    setValue(String(initial));
+  }, [initial]);
 
   function commit() {
     const n = value === "" ? 0 : Number(value);
@@ -1018,12 +1173,20 @@ function MatrixCell({
 
   return (
     <div className="relative">
-      <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground pointer-events-none">
-        $
-      </span>
+      {valueKind === "currency" ? (
+        <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground pointer-events-none">
+          $
+        </span>
+      ) : (
+        <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground pointer-events-none">
+          %
+        </span>
+      )}
       <Input
         type="number"
         inputMode="decimal"
+        min={0}
+        max={valueKind === "percentage" ? 100 : undefined}
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onBlur={commit}
@@ -1032,7 +1195,10 @@ function MatrixCell({
             (e.target as HTMLInputElement).blur();
           }
         }}
-        className="h-9 pl-5 text-sm tabular-nums bg-white"
+        className={cn(
+          "h-9 text-sm tabular-nums bg-white",
+          valueKind === "currency" ? "pl-5" : "pr-5"
+        )}
       />
     </div>
   );
