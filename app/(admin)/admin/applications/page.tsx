@@ -8,6 +8,12 @@ import useSWR from "swr";
 import { CheckCircle2, Circle, ChevronRight } from "lucide-react";
 import { DataTable, type ColumnDef } from "@/components/admin/data-table";
 import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -368,27 +374,36 @@ function ApplicationsGroup({
       : tone === "amber"
         ? "bg-amber-500"
         : "bg-slate-400";
+  // Card wraps each status group so the page reads as three discrete
+  // surfaces — admins parse "submitted vs in-progress vs not-started"
+  // at a glance without scanning headers. White bg keeps the table
+  // crisp against the muted page; the table's own header band already
+  // mirrors the rest of the admin themeing.
   return (
-    <section>
-      <header className="flex items-baseline gap-3 mb-3">
-        <span className={cn("inline-block size-2 rounded-full", dotClass)} />
-        <h2 className="text-lg font-semibold">{title}</h2>
-        <span className="text-sm tabular-nums text-muted-foreground">
-          ({rows.length})
-        </span>
-        <p className="text-xs text-muted-foreground ml-2">{description}</p>
-      </header>
-      <DataTable<AppProgressRow>
-        columns={columns}
-        data={rows}
-        isLoading={isLoading}
-        searchPlaceholder={`Search ${title.toLowerCase()}…`}
-        onRowClick={(row) => {
-          router.push(
-            `/admin/families/${row.family_id}?yearId=${row.year_id}`
-          );
-        }}
-      />
-    </section>
+    <Card className="overflow-hidden bg-white py-0 gap-0">
+      <CardHeader className="py-4 border-b bg-white">
+        <div className="flex items-center gap-3">
+          <span className={cn("inline-block size-2 rounded-full", dotClass)} />
+          <CardTitle className="text-lg">{title}</CardTitle>
+          <span className="text-sm tabular-nums text-muted-foreground">
+            ({rows.length})
+          </span>
+          <p className="text-xs text-muted-foreground ml-2">{description}</p>
+        </div>
+      </CardHeader>
+      <CardContent className="p-4 bg-white">
+        <DataTable<AppProgressRow>
+          columns={columns}
+          data={rows}
+          isLoading={isLoading}
+          searchPlaceholder={`Search ${title.toLowerCase()}…`}
+          onRowClick={(row) => {
+            router.push(
+              `/admin/families/${row.family_id}?yearId=${row.year_id}`
+            );
+          }}
+        />
+      </CardContent>
+    </Card>
   );
 }

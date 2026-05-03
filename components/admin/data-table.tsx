@@ -114,12 +114,19 @@ export function DataTable<T extends Record<string, unknown>>({
         />
       )}
 
-      <div className="rounded-md border">
+      {/* `bg-white` so the table sits flush on cards / colored page
+          backgrounds without inheriting tint. The header row gets a
+          muted band to mirror the look across the rest of the admin
+          surface. */}
+      <div className="rounded-md border bg-white overflow-hidden">
         <Table>
-          <TableHeader>
-            <TableRow>
+          <TableHeader className="bg-muted/40">
+            <TableRow className="hover:bg-muted/40">
               {columns.map((col) => (
-                <TableHead key={col.key}>
+                <TableHead
+                  key={col.key}
+                  className="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
+                >
                   {col.sortable ? (
                     <button
                       type="button"

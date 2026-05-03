@@ -279,11 +279,6 @@ function ParentCard({
             {draft.first_name || draft.last_name
               ? `${draft.first_name} ${draft.last_name}`.trim()
               : `Parent #${parent.id}`}
-            {draft.relationship ? (
-              <span className="ml-2 text-xs font-normal text-muted-foreground">
-                ({draft.relationship})
-              </span>
-            ) : null}
           </CardTitle>
           {editing ? (
             <div className="flex items-center gap-2">

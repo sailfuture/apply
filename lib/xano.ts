@@ -369,8 +369,8 @@ export interface XanoRegistrationDetails extends XanoStudentRegistration {
 
 /**
  * Aggregated admin view of one family's application+scholarship state for
- * a specific school year. Backed by the `admin_student_applications`
- * Xano endpoint, which takes `registration_families_id` and
+ * a specific school year. Backed by the `admin_family_application` Xano
+ * endpoint, which takes `registration_families_id` and
  * `registration_school_years_id` as inputs.
  *
  * Shape mirrors what Xano returns — notably `scholarship` is an array
@@ -996,7 +996,7 @@ export const xano = {
      *   - `family` — the family record (parents/students/contacts as IDs)
      *   - `school_year` — the matching school-year metadata
      *
-     * Backed by the Xano `admin_student_applications` query with two
+     * Backed by the Xano `admin_family_application` query with two
      * inputs: `registration_families_id` and `registration_school_years_id`.
      */
     async getAdminFamilyDetail(
@@ -1004,7 +1004,7 @@ export const xano = {
       yearId: number
     ): Promise<XanoAdminFamilyDetail | null> {
       try {
-        const url = new URL(`${getBaseUrl()}/admin_student_applications`);
+        const url = new URL(`${getBaseUrl()}/admin_family_application`);
         url.searchParams.set(
           "registration_families_id",
           String(familyId)
