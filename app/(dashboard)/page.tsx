@@ -3,6 +3,34 @@ import { redirect } from "next/navigation";
 import { xano, ensureParentRecord } from "@/lib/xano";
 import { getAdminForEmail } from "@/lib/admin-auth";
 
+/**
+ * Root landing page. Single decision-and-redirect — collapses what
+ * used to be a multi-hop chain (`/` → `/apply/year/X` → `/registration/year/X`
+ * → `/dashboard`) into one server-side hop straight to the final
+ * destination. The previous chain caused visible white-frame flashes
+ * between hops because each hop was a full browser navigation; the
+ * destination pages then re-redirected client-side once their data
+ * resolved.
+ *
+ * Resolution order (first match wins):
+ *   1. Not signed in            → /sign-in
+ *   2. Email matches admin list → /admin
+ *   3. No parent record / no family → /welcome
+ *   4. No upcoming or active year → / (renders nothing — degenerate state)
+ *   5. Family has at least one student `registrationConfirmed` for the
+ *      target year AND the registration progress row is `isSubmitted`
+ *                              → /dashboard?yearId=X (enrolled)
+ *   6. Family is accepted (any app for the year, or family-level
+ *      `isAccepted`)            → /registration/year/X
+ *   7. Otherwise (still applying / under review)
+ *                              → /apply/year/X
+ *
+ * The destination pages still keep their client-side stage detection
+ * as a safety net — if a parent manually types `/apply/year/X` while
+ * they're actually accepted, the page will correct them. But for the
+ * sign-in landing path, no further redirect should fire because we
+ * sent them straight to the right URL.
+ */
 export default async function Page() {
   const { userId } = await auth();
   if (!userId) redirect("/sign-in");
@@ -10,27 +38,24 @@ export default async function Page() {
   const user = await currentUser();
   if (!user) redirect("/sign-in");
 
-  // Admin short-circuit: if the signed-in Clerk user's email matches an
-  // active admin in `/teachers_by_admin`, send them straight to the admin
-  // tool. We MUST do this before `ensureParentRecord`, otherwise an admin's
-  // first sign-in would create a junk `registration_parents` row for them
-  // and pull them into the parent onboarding flow at `/welcome`.
+  // Step 1 — admin short-circuit. MUST run before `ensureParentRecord`
+  // so we never create a junk `registration_parents` row for a staff
+  // member signing in for the first time.
   for (const e of user.emailAddresses ?? []) {
     if (!e.emailAddress) continue;
     const matched = await getAdminForEmail(e.emailAddress);
     if (matched) redirect("/admin");
   }
 
+  // Step 2 — make sure the family record is resolved + cached on Clerk
+  // metadata. New users hit `/welcome` to create their family.
   let familyId = user.publicMetadata.registration_families_id as
     | number
     | undefined;
-
   if (!familyId) {
     const parent = await ensureParentRecord(userId, user);
     const family = await xano.families.findByParentId(parent.id);
-
     if (!family) redirect("/welcome");
-
     const clerk = await clerkClient();
     await clerk.users.updateUserMetadata(userId, {
       publicMetadata: { registration_families_id: family.id },
@@ -38,6 +63,9 @@ export default async function Page() {
     familyId = family.id;
   }
 
+  // Step 3 — pick the target school year. Upcoming year wins (it's the
+  // one parents are most likely to be acting on); active year is the
+  // fallback for the late-summer transition window.
   let targetYearId: number | null = null;
   try {
     const years = await xano.schoolYears.getAll();
@@ -46,12 +74,60 @@ export default async function Page() {
     const target = upcoming ?? active;
     if (target) targetYearId = target.id;
   } catch {
-    // fallback
+    /* leave null; degenerate-state fallback below */
   }
+  // No target year configured — render the no-year landing (the
+  // degenerate state). Avoid recursing back into this page by
+  // redirecting to /welcome where the parent at least sees something
+  // meaningful. (This shouldn't happen in practice — Xano should
+  // always have an upcoming or active year.)
+  if (!targetYearId) redirect("/welcome");
 
-  if (targetYearId) {
-    redirect(`/apply/year/${targetYearId}`);
+  // Step 4 — fan out the lifecycle queries in parallel. We need all
+  // four to compute the final destination without bouncing through
+  // intermediate URLs.
+  const packetsUrl = `${process.env.XANO_API_BASE_URL}/registration_student_registration?registration_school_years_id=${targetYearId}&registration_families_id=${familyId}`;
+  const [family, yearApps, regProgress, yearPackets] = await Promise.all([
+    xano.families.getById(familyId).catch(() => null),
+    xano.applications
+      .getByFamilyId(familyId)
+      .then((apps) =>
+        apps.filter(
+          (a) => Number(a.registration_school_years_id) === targetYearId
+        )
+      )
+      .catch(() => []),
+    xano.studentRegistrationProgress
+      .getByFamilyAndYear(familyId, targetYearId)
+      .catch(() => null),
+    fetch(packetsUrl, { cache: "no-store" })
+      .then(async (res) => {
+        if (!res.ok) return [] as { registrationConfirmed?: boolean }[];
+        const items = await res.json();
+        return (Array.isArray(items) ? items : []).filter(
+          (p: { registration_families_id?: number }) =>
+            Number(p.registration_families_id) === familyId
+        ) as { registrationConfirmed?: boolean }[];
+      })
+      .catch(() => [] as { registrationConfirmed?: boolean }[]),
+  ]);
+
+  // Step 5 — derive lifecycle state and pick the final URL.
+  const familyAccepted = family?.isAccepted === true;
+  const anyAppAccepted = yearApps.some((a) => a.isAccepted === true);
+  const isAccepted = familyAccepted || anyAppAccepted;
+
+  const isRegistrationSubmitted = regProgress?.isSubmitted === true;
+  const allPacketsConfirmed =
+    yearPackets.length > 0 &&
+    yearPackets.every((p) => p.registrationConfirmed === true);
+  const isEnrolled = isRegistrationSubmitted && allPacketsConfirmed;
+
+  if (isAccepted && isEnrolled) {
+    redirect(`/dashboard?yearId=${targetYearId}`);
   }
-
-  redirect("/apply");
+  if (isAccepted) {
+    redirect(`/registration/year/${targetYearId}`);
+  }
+  redirect(`/apply/year/${targetYearId}`);
 }
