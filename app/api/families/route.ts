@@ -112,11 +112,12 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // `isAccepted` / `isSubmitted` are no longer columns on the family
+  // row — they live on the per-year `family_application_progress`
+  // bridge instead, since acceptance is per-academic-year.
   const family = await xano.families.create({
     family_name,
     bus_transportation: false,
-    isAccepted: false,
-    isSubmitted: false,
     registration_parents_id: [parent.id],
     registration_students_id: [],
     registration_fee_waiver_id: null,

@@ -31,6 +31,7 @@ async function resolveProgress(familyId: number, yearId: number) {
     last_edited: Date.now(),
     submitted_at: null,
     isSubmitted: false,
+    isAccepted: false,
     registration_type_id,
   });
 }

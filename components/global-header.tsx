@@ -14,7 +14,6 @@ export function GlobalHeader() {
   const { data: familyData } = useFamily();
   const { data: yearsData } = useSchoolYears();
   const familyName = familyData?.family_name ?? null;
-  const isAccepted = familyData?.isAccepted === true;
 
   // The dashboard is the post-enrollment surface — no application or
   // registration chrome should appear there. Strip the "Student Application
@@ -22,10 +21,18 @@ export function GlobalHeader() {
   const isDashboard = pathname.startsWith("/dashboard");
   const isReapply = pathname.startsWith("/reapply");
 
-  // Detect if user is on a registration page
-  const yearMatch = pathname.match(/\/apply\/year\/(\d+)/);
+  // Detect URL-driven registration vs application chrome. With the
+  // family-level `isAccepted` flag gone (it moved to the per-year
+  // `family_application_progress` row), we just trust the URL: the
+  // root `/` page already redirects accepted families to
+  // `/registration/year/X`, so being on a registration URL is
+  // equivalent to being accepted as far as the header chrome cares.
+  const yearMatch = pathname.match(/\/(?:apply|registration)\/year\/(\d+)/);
   const yearId = yearMatch ? Number(yearMatch[1]) : null;
-  const segment = yearMatch ? pathname.replace(`/apply/year/${yearMatch[1]}`, "").replace(/^\//, "").split("/")[0] : "";
+  const segment = yearMatch
+    ? pathname.replace(yearMatch[0], "").replace(/^\//, "").split("/")[0]
+    : "";
+  const isAccepted = pathname.startsWith("/registration/");
   const isRegistrationFlow = isAccepted || REGISTRATION_SEGMENTS.has(segment);
 
   // Get school year name

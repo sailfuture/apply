@@ -54,8 +54,10 @@ export async function GET(req: NextRequest) {
         parent_count: family.registration_parents_id.length,
         student_count: studentIds.size,
         application_count: yearApps.length,
-        isSubmitted: family.isSubmitted,
-        isAccepted: family.isAccepted,
+        // `isSubmitted` / `isAccepted` no longer live on the family
+        // row — they're per-year on `family_application_progress`.
+        // `top_status` derived from per-app decision booleans below
+        // already reflects the right thing for this row's year.
         top_status: topStatus,
         primary_email: family.registration_parents_id[0]?.email ?? "",
         primary_name: family.registration_parents_id[0]

@@ -49,8 +49,10 @@ interface FamilyResponse {
   registration_parents_id: Parent[];
   registration_students_id: Student[];
   registration_emergency_contacts_id: number[];
-  isAccepted: boolean;
-  isSubmitted: boolean;
+  // `isSubmitted` and `isAccepted` used to live on this row but moved
+  // to the per-year `family_application_progress` row. Header badges
+  // now read from there (via `detail.scholarship` / etc.); the flags
+  // are intentionally absent from this interface.
 }
 
 const xanoBase =
@@ -126,8 +128,12 @@ export default function FamilyDetailPage() {
                 {yearMeta.year_name}
               </span>
             ) : null}
-            {family.isSubmitted && <StatusBadge status="submitted" />}
-            {family.isAccepted && <StatusBadge status="accepted" />}
+            {/* Per-year submitted / accepted badges removed — those
+                flags now live on `family_application_progress` and the
+                Applications + Re-Applications tables already show them
+                per row. The family detail page is family-wide and
+                doesn't have a single "is this family accepted" answer
+                anymore (it's per academic year). */}
           </div>
         </div>
       </div>

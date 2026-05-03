@@ -27,8 +27,6 @@ export interface XanoFamily {
   created_at: number;
   family_name: string;
   bus_transportation: boolean;
-  isAccepted: boolean;
-  isSubmitted: boolean;
   registration_students_id: (number | Record<string, unknown> | unknown[])[];
   registration_parents_id: (number | Record<string, unknown> | unknown[])[];
   registration_fee_waiver_id: number | null;
@@ -313,8 +311,8 @@ export interface XanoFamilyAllDetails {
   registration_students_id: XanoApplication[];
   registration_parents_id: XanoParent[];
   registration_emergency_contacts_id: number[];
-  isAccepted: boolean;
-  isSubmitted: boolean;
+  // `isAccepted` / `isSubmitted` were dropped from `registration_families`
+  // — they live on `family_application_progress` per academic year now.
 }
 
 /**
@@ -346,8 +344,6 @@ function cleanFamilyAllDetails(raw: unknown): XanoFamilyAllDetails {
           (v): v is number => typeof v === "number"
         ) as number[])
       : [],
-    isAccepted: r.isAccepted === true,
-    isSubmitted: r.isSubmitted === true,
   };
 }
 
@@ -391,8 +387,6 @@ export interface XanoAdminFamilyDetail {
     registration_students_id: number[];
     registration_parents_id: number[];
     registration_emergency_contacts_id: number[];
-    isAccepted: boolean;
-    isSubmitted: boolean;
   };
   school_year: XanoSchoolYear;
 }
@@ -450,7 +444,10 @@ export interface XanoRegistrationType {
 }
 
 /** Bridge row: one per family per school year. Tracks explicit section-complete
- *  booleans so the UI doesn't have to re-derive completion from field presence. */
+ *  booleans so the UI doesn't have to re-derive completion from field presence.
+ *  Also the canonical home for the per-year `isSubmitted` and `isAccepted`
+ *  booleans — they used to live on `registration_families` but moved here
+ *  because acceptance is per-year-per-family, not per-family-forever. */
 export interface XanoFamilyApplicationProgress {
   id: number;
   created_at: number;
@@ -467,6 +464,10 @@ export interface XanoFamilyApplicationProgress {
    *  click; `isSubmitted` is the durable bool the dashboard reads to show
    *  the "Application Submitted" banner and gate further edits. */
   isSubmitted: boolean;
+  /** Admin decision flag — true once the family has been accepted for the
+   *  year. Drives the parent-side "Welcome to the Academy" view and the
+   *  global header's chrome (apply vs. registration). */
+  isAccepted: boolean;
   registration_type_id: number;
   /** IDs of every `registration_application` row attached to this
    *  family + year. Maintained by the application-create flow so admins
@@ -500,8 +501,6 @@ export interface ReapplyProgressRow {
     registration_students_id: number[];
     registration_parents_id: number[];
     registration_emergency_contacts_id: number[];
-    isAccepted: boolean;
-    isSubmitted: boolean;
   } | null;
 }
 
@@ -1725,6 +1724,7 @@ export const xano = {
         last_edited: Date.now(),
         submitted_at: null,
         isSubmitted: false,
+        isAccepted: false,
         registration_type_id,
         registration_application_id: [],
       });

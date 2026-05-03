@@ -106,6 +106,11 @@ export function useApplicationSteps(yearId: number) {
     students_completed?: boolean;
     financial_aid_completed?: boolean;
     testing_completed?: boolean;
+    /** Per-year submission + acceptance flags. Moved here from
+     *  `registration_families` so they can be tracked per academic
+     *  year rather than once-and-forever per family. */
+    isSubmitted?: boolean;
+    isAccepted?: boolean;
   } | null>(
     yearId ? `/api/family-progress?yearId=${yearId}` : null,
     fetcher,
@@ -518,17 +523,24 @@ export function useApplicationSteps(yearId: number) {
 
   const registrationCompletedCount = registrationSteps.filter((s) => s.status === "complete").length;
 
-  // Application stage flags (from first app for this year OR family-level flag)
+  // Application stage flags. `isSubmitted` and `isAccepted` now live on
+  // the per-year `family_application_progress` row (they used to be
+  // family-level booleans, but acceptance is per-year-per-family). We
+  // keep the per-app fallbacks so the stage advances if admin moved an
+  // individual student forward before flipping the family-level flag.
+  const familySubmitted = progressData?.isSubmitted === true;
+  const familyAccepted = progressData?.isAccepted === true;
   const isSubmitted =
-    familyData?.isSubmitted === true ||
+    familySubmitted ||
     yearApps.some((a) => (a as { isSubmitted?: boolean }).isSubmitted);
   const isOffered = yearApps.some((a) => (a as { isOffered?: boolean }).isOffered);
-  const isAccepted = yearApps.some((a) => (a as { isAccepted?: boolean }).isAccepted);
-  const familyAccepted = familyData?.isAccepted ?? false;
+  const isAccepted =
+    familyAccepted ||
+    yearApps.some((a) => (a as { isAccepted?: boolean }).isAccepted);
 
   // Derive stage: "apply" | "review" | "accepted"
   const stage: "apply" | "review" | "accepted" =
-    isAccepted || familyAccepted
+    isAccepted
       ? "accepted"
       : isSubmitted
         ? "review"

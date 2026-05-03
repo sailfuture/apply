@@ -87,8 +87,12 @@ export default async function Page() {
   // four to compute the final destination without bouncing through
   // intermediate URLs.
   const packetsUrl = `${process.env.XANO_API_BASE_URL}/registration_student_registration?registration_school_years_id=${targetYearId}&registration_families_id=${familyId}`;
-  const [family, yearApps, regProgress, yearPackets] = await Promise.all([
-    xano.families.getById(familyId).catch(() => null),
+  // `family` itself no longer carries `isAccepted` / `isSubmitted` —
+  // those moved to the per-year `family_application_progress` row,
+  // which we already fetch below as `appProgress`. We still pull the
+  // family record for non-acceptance reasons (could be needed later);
+  // for now, the dropped flags just live elsewhere.
+  const [yearApps, appProgress, regProgress, yearPackets] = await Promise.all([
     xano.applications
       .getByFamilyId(familyId)
       .then((apps) =>
@@ -97,6 +101,9 @@ export default async function Page() {
         )
       )
       .catch(() => []),
+    xano.familyApplicationProgress
+      .getByFamilyAndYear(familyId, targetYearId)
+      .catch(() => null),
     xano.studentRegistrationProgress
       .getByFamilyAndYear(familyId, targetYearId)
       .catch(() => null),
@@ -112,10 +119,13 @@ export default async function Page() {
       .catch(() => [] as { registrationConfirmed?: boolean }[]),
   ]);
 
-  // Step 5 — derive lifecycle state and pick the final URL.
-  const familyAccepted = family?.isAccepted === true;
-  const anyAppAccepted = yearApps.some((a) => a.isAccepted === true);
-  const isAccepted = familyAccepted || anyAppAccepted;
+  // Step 5 — derive lifecycle state and pick the final URL. `isAccepted`
+  // now lives on the per-year application-progress row; we fall back to
+  // any per-app flag in case the family-level flag hasn't been flipped
+  // yet but admin already moved a student forward.
+  const isAccepted =
+    appProgress?.isAccepted === true ||
+    yearApps.some((a) => a.isAccepted === true);
 
   const isRegistrationSubmitted = regProgress?.isSubmitted === true;
   const allPacketsConfirmed =
