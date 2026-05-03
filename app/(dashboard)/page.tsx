@@ -1,6 +1,7 @@
 import { auth, clerkClient, currentUser } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
 import { xano, ensureParentRecord } from "@/lib/xano";
+import { getAdminForEmail } from "@/lib/admin-auth";
 
 export default async function Page() {
   const { userId } = await auth();
@@ -8,6 +9,17 @@ export default async function Page() {
 
   const user = await currentUser();
   if (!user) redirect("/sign-in");
+
+  // Admin short-circuit: if the signed-in Clerk user's email matches an
+  // active admin in `/teachers_by_admin`, send them straight to the admin
+  // tool. We MUST do this before `ensureParentRecord`, otherwise an admin's
+  // first sign-in would create a junk `registration_parents` row for them
+  // and pull them into the parent onboarding flow at `/welcome`.
+  for (const e of user.emailAddresses ?? []) {
+    if (!e.emailAddress) continue;
+    const matched = await getAdminForEmail(e.emailAddress);
+    if (matched) redirect("/admin");
+  }
 
   let familyId = user.publicMetadata.registration_families_id as
     | number

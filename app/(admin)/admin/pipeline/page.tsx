@@ -32,11 +32,15 @@ const stageConfig: {
   label: string;
   status: ApplicationStatus;
 }[] = [
-  { key: "inquiry", label: "Inquiry", status: "inquiry" },
+  // The "inquiry" stage doesn't have a true application status (inquiries
+  // live in their own table) — we reuse "draft" for the badge color since
+  // it's the closest "early funnel" visual. "Registered" maps to the
+  // enrolled-state badge.
+  { key: "inquiry", label: "Inquiry", status: "draft" },
   { key: "applied", label: "Applied", status: "submitted" },
   { key: "offered", label: "Offered", status: "offered" },
   { key: "accepted", label: "Accepted", status: "accepted" },
-  { key: "registered", label: "Registered", status: "registered" },
+  { key: "registered", label: "Registered", status: "enrolled" },
 ];
 
 function PipelineCard({ item }: { item: PipelineItem }) {

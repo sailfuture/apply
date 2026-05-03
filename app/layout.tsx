@@ -1,10 +1,8 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
-import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
-import { GlobalHeader } from "@/components/global-header";
-import { GlobalFooter } from "@/components/global-footer";
+import { AppChrome } from "@/components/app-chrome";
 import "./globals.css";
 import { cn } from "@/lib/utils";
 
@@ -34,11 +32,7 @@ export default function RootLayout({
         <body
           className={`${geistSans.variable} ${geistMono.variable} antialiased bg-gray-50`}
         >
-          <GlobalHeader />
-          <main className="pt-14 pb-16 min-h-screen">
-            <TooltipProvider>{children}</TooltipProvider>
-          </main>
-          <GlobalFooter />
+          <AppChrome>{children}</AppChrome>
           {/* Position is responsive — top-center on mobile (so it doesn't
               collide with the fixed bottom nav), bottom-right on xl+. */}
           <Toaster />

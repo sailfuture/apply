@@ -19,7 +19,7 @@ const SHORT_LABELS: Record<string, string> = {
 };
 
 /* Registration page segments */
-const REGISTRATION_SEGMENTS = new Set(["tuition", "enrollment-signing", "registration"]);
+const REGISTRATION_SEGMENTS = new Set(["tuition", "enrollment-signing", "registration", "volunteer-hours"]);
 
 /* Segment → step number maps */
 const APPLICATION_SEGMENT_MAP: Record<string, number> = {
@@ -34,6 +34,7 @@ const REGISTRATION_SEGMENT_MAP: Record<string, number> = {
   tuition: 1,
   "enrollment-signing": 2,
   registration: 3,
+  "volunteer-hours": 4,
 };
 
 function StepCircle({ number, status }: { number: number; status: StepStatus }) {
@@ -92,8 +93,32 @@ export function ApplicationSideNav({ yearId, onSubmitClick }: { yearId: number; 
   const activeStepNumber = segmentMap[currentSegment] ?? -1;
 
   return (
+    // The `<aside>` is a width-reserving placeholder in the flex layout
+    // — it keeps the main content from sliding left into the side nav's
+    // 220px column. The actual nav content below is `position: fixed`
+    // rather than `sticky`, which is what shadcn's own `<Sidebar>` does.
+    //
+    // Why fixed over sticky: when Radix opens a modal it engages
+    // `react-remove-scroll`, which locks the document scroll by
+    // applying inline `overflow: hidden !important` to whichever
+    // element scrolls (in our case `<html>`, because globals.css
+    // forces `overflow-y: scroll` on it). With its scroll context
+    // gone, every `position: sticky` descendant reverts to relative
+    // positioning and snaps to the top of its containing block — the
+    // user-visible "left nav jumps up." Inline !important wins over
+    // our stylesheet, so this can't be patched with CSS alone.
+    //
+    // Fixed positioning sidesteps the whole scroll-lock interaction.
+    // The `left` calc anchors the fixed element to the same column the
+    // aside reserves: `(viewport - max-w-[980px]) / 2 + lg:px-6 (24px)`,
+    // which simplifies to `50vw - 466px`. The `max(1.5rem, …)` guard
+    // catches narrower viewports — though xl: (≥1280px) is always wide
+    // enough to land on the calc branch.
     <aside className="hidden xl:block w-[220px] shrink-0">
-      <div className="sticky top-20">
+      <div
+        className="fixed top-20 w-[220px]"
+        style={{ left: "max(1.5rem, calc(50vw - 466px))" }}
+      >
         {/* Steps */}
         <div className="rounded-xl bg-background p-1.5 shadow-sm border">
           <div className="overflow-hidden rounded-lg border">
@@ -122,16 +147,25 @@ export function ApplicationSideNav({ yearId, onSubmitClick }: { yearId: number; 
                     const label = SHORT_LABELS[step.title] ?? step.title;
 
                     if (isSubmit) {
-                      // Application submit → opens the pre-submit review modal
-                      // via the layout's callback. Registration submit still
-                      // routes to step.href (overview page handles the modal).
-                      const isApplicationSubmit = step.title === "Submit Application";
+                      // Both Submit Application (application phase) and
+                      // Submit Registration (registration phase) open the
+                      // pre-submit review modal via the layout callback —
+                      // the layout decides which set of sections to show
+                      // based on which phase the user is in.
                       return (
                         <button
                           key={step.number}
                           type="button"
-                          onClick={() => {
-                            if (isApplicationSubmit && onSubmitClick) {
+                          onClick={(e) => {
+                            // Blur the trigger before opening the modal.
+                            // Without this, Radix Dialog's focus-restoration
+                            // on close calls `scrollIntoView` on this button —
+                            // which is inside a sticky container, so the
+                            // viewport scrolls and the side nav appears to
+                            // jump. Blurring drops the trigger from focus
+                            // history so Radix has nothing to restore back to.
+                            e.currentTarget.blur();
+                            if (onSubmitClick) {
                               onSubmitClick();
                             } else if (step.href && step.href !== "#") {
                               router.push(step.href);

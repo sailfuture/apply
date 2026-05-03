@@ -95,7 +95,9 @@ export async function POST(req: NextRequest) {
     family_contribution_per_month: 0,
     scholarship_advocacy_letter: "",
     signature: null,
-    termination_letter: null,
+    // Empty array on first create — populated when the family chooses
+    // "no contributing members" and uploads proof.
+    unemployment_letter: [],
     last_edited: null,
     isNotParticipating: false,
     isSNAPBenefits: false,

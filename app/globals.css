@@ -4,15 +4,39 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/* Reserve space for the vertical scrollbar on every page so opening a modal
-   (Radix Dialog / AlertDialog) doesn't shift content horizontally when the
-   scrollbar briefly collapses. */
+/* Belt-and-suspenders fix for the Radix "layout jumps when the dropdown
+   closes" issue.
+   - `scrollbar-gutter: stable` reserves space for the scrollbar in browsers
+     that support it.
+   - `overflow-y: scroll` forces the vertical scrollbar to always render, so
+     when Radix (Select / Dialog / DropdownMenu / Sheet) briefly removes or
+     re-adds the scrollbar during its scroll-lock dance, nothing visibly
+     shifts. Kept as !important because Tailwind utilities occasionally
+     override it on specific pages.
+   - `overflow-x: hidden` clips any momentary horizontal overflow caused by
+     a component expanding past the viewport width during the same dance.
+
+   For context: this combination was recommended by the shadcn community
+   after testing several alternatives (`modal={false}`, per-component body
+   locking flags, etc.) as the most reliable fix. See the discussion thread
+   for the reasoning — the short version is that Radix Select doesn't
+   expose a `modal` prop the way DropdownMenu does, so we handle it
+   globally at the CSS layer. */
 html {
   scrollbar-gutter: stable;
+  overflow-x: hidden;
+  overflow-y: scroll !important;
+}
+
+body {
+  /* Pin body to at least the viewport width so children that briefly expand
+     (e.g. from Radix adding inline padding-right) can't push layout
+     sideways. !important because Tailwind's preflight resets clash here. */
+  min-width: 100% !important;
 }
 
 /* Radix locks body scroll by setting `data-scroll-locked` and adding inline
-   padding-right equal to the scrollbar width. Combined with `scrollbar-gutter`
+   padding-right equal to the scrollbar width. Combined with the html rules
    above, that padding becomes a double offset and shifts the page right.
    Neutralize the inline padding/margin but leave Radix's overflow:hidden
    intact so its focus trap and click-outside behavior still work. */

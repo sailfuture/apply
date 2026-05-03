@@ -1,0 +1,125 @@
+import { auth, currentUser } from "@clerk/nextjs/server";
+import { NextRequest, NextResponse } from "next/server";
+import { xano } from "@/lib/xano";
+import type { XanoStudentRegistrationProgress } from "@/lib/xano";
+
+/**
+ * Read-or-create the registration progress row for the current Clerk user's
+ * family + a school year. Creating on read guarantees every family always has
+ * a row to PATCH against, so the client can send single-field updates without
+ * caring whether the row exists yet.
+ *
+ * Family-level by design — a single row covers the whole household's
+ * post-acceptance registration (tuition, enrollment signing, and the
+ * registration packet step). Per-student state like waiver/agreement PandaDoc
+ * status lives on `registration_application` rows.
+ */
+async function resolveProgress(familyId: number, yearId: number) {
+  // Default the registration_type_id to whatever the family application
+  // progress row already carries, so a family admin-classified as
+  // "New Enrollment" on the application side keeps the same label here.
+  const appProgress = await xano.familyApplicationProgress.getByFamilyAndYear(
+    familyId,
+    yearId
+  );
+  const registration_type_id = appProgress?.registration_type_id ?? 1;
+  return xano.studentRegistrationProgress.resolve(
+    familyId,
+    yearId,
+    registration_type_id
+  );
+}
+
+export async function GET(req: NextRequest) {
+  const { userId } = await auth();
+  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const user = await currentUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const familyId = user.publicMetadata.registration_families_id as number | undefined;
+  if (!familyId) return NextResponse.json(null, { status: 200 });
+
+  const yearIdParam = req.nextUrl.searchParams.get("yearId");
+  if (!yearIdParam) {
+    return NextResponse.json({ error: "yearId is required" }, { status: 400 });
+  }
+  const yearId = Number(yearIdParam);
+  if (!Number.isFinite(yearId)) {
+    return NextResponse.json({ error: "yearId must be a number" }, { status: 400 });
+  }
+
+  const row = await resolveProgress(familyId, yearId);
+  return NextResponse.json(row, { status: 200 });
+}
+
+export async function PATCH(req: NextRequest) {
+  const { userId } = await auth();
+  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const user = await currentUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const familyId = user.publicMetadata.registration_families_id as number | undefined;
+  if (!familyId) return NextResponse.json({ error: "No family" }, { status: 400 });
+
+  const yearIdParam = req.nextUrl.searchParams.get("yearId");
+  if (!yearIdParam) {
+    return NextResponse.json({ error: "yearId is required" }, { status: 400 });
+  }
+  const yearId = Number(yearIdParam);
+  if (!Number.isFinite(yearId)) {
+    return NextResponse.json({ error: "yearId must be a number" }, { status: 400 });
+  }
+
+  const body = await req.json();
+
+  // Only whitelisted fields can be written from the client. family / year / id
+  // must not be mutable.
+  const allowed: Array<keyof XanoStudentRegistrationProgress> = [
+    "isTuition",
+    "isEnrollment",
+    "isRegistration",
+    "isVolunteerHours",
+    "tuition_scholarship_signature",
+    "signature_data_volunteer",
+    "volunteer_signature_data",
+    "name_volunteer",
+    "monthly_tuition_payment",
+    "monthly_transportation_payment",
+    "enrollment_agreement_pandadoc_id",
+    "enrollment_agreement_status",
+    "enrollment_agreement_sent",
+    "enrollment_agreement_pdf_url",
+    "is_enrollment_agreement_signed",
+    "signature_data",
+    "name",
+    "submitted_date",
+    "isSubmitted",
+    "registration_type_id",
+  ];
+  const patch: Record<string, unknown> = { last_edited: Date.now() };
+  for (const key of allowed) {
+    if (key in body) patch[key] = body[key];
+  }
+
+  const row = await resolveProgress(familyId, yearId);
+
+  // Derive `submitted_date`: once all four section bools are true, stamp
+  // the current time if not already stamped. One-way latch — we don't clear
+  // it if a bool later flips back. This keeps the post-enrollment dashboard
+  // sticky across unlock/re-lock cycles.
+  const next = { ...row, ...patch };
+  if (
+    next.isTuition === true &&
+    next.isEnrollment === true &&
+    next.isRegistration === true &&
+    next.isVolunteerHours === true &&
+    (!row.submitted_date || row.submitted_date === null)
+  ) {
+    patch.submitted_date = Date.now();
+  }
+
+  const updated = await xano.studentRegistrationProgress.update(row.id, patch);
+  return NextResponse.json(updated, { status: 200 });
+}

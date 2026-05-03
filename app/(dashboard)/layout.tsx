@@ -12,7 +12,16 @@ export default function DashboardLayout({
 }) {
   const pathname = usePathname();
   const { isLoaded } = useAuth();
-  const isApplicationFlow = pathname === "/" || /^\/apply\/year\/\d+/.test(pathname);
+  // The entire `/dashboard/**` tree, the application + registration flows,
+  // and the root home all render on a clean shell — no app sidebar, no
+  // application-step nav. The dashboard pages have their own self-contained
+  // layout (header + cards) and shouldn't inherit the application chrome.
+  const isApplicationFlow =
+    pathname === "/" ||
+    pathname.startsWith("/dashboard") ||
+    /^\/apply\/year\/\d+/.test(pathname) ||
+    /^\/registration\/year\/\d+/.test(pathname) ||
+    /^\/reapply\/year\/\d+/.test(pathname);
 
   if (!isLoaded) {
     return (

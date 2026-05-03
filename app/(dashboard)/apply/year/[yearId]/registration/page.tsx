@@ -3,7 +3,10 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams } from "next/navigation";
 import { useApplicationFlow } from "@/contexts/application-flow-context";
-import { useApplications, useStudents, mutateApplications } from "@/hooks/use-api";
+import { useApplications, useStudents, mutateApplications, mutateStudents } from "@/hooks/use-api";
+import { useSWRConfig } from "swr";
+import { useFamilyProgress } from "@/hooks/use-family-progress";
+import { useStudentRegistrationProgress } from "@/hooks/use-student-registration-progress";
 import {
   Dialog,
   DialogContent,
@@ -25,6 +28,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { StateSelect } from "@/components/state-select";
+import { OptionSelect } from "@/components/option-select";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -36,6 +40,13 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Trash2,
@@ -46,7 +57,13 @@ import {
   CheckCircle2,
   Clock,
   ExternalLink,
+  Info,
 } from "lucide-react";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { GlobalSaveStatusPill } from "@/components/save-status-pill";
 import { AnimatePresence, motion } from "framer-motion";
 import { toast } from "sonner";
@@ -98,7 +115,28 @@ interface Student {
   id: number;
   first_name: string;
   last_name: string;
+  // Document arrays live on `registration_students` (evergreen, per student).
+  // Parents can upload multiple files per category.
+  birth_certificate?: FileMetadata[];
+  school_health_form?: FileMetadata[];
+  transcripts?: FileMetadata[];
+  immunization_forms?: FileMetadata[];
+  passport?: FileMetadata[];
+  student_state_id?: FileMetadata[];
+  iep?: FileMetadata[];
+  ssn_card?: FileMetadata[];
 }
+
+// Keys on the Student object that are document-array fields.
+type StudentDocField =
+  | "birth_certificate"
+  | "school_health_form"
+  | "transcripts"
+  | "immunization_forms"
+  | "passport"
+  | "student_state_id"
+  | "iep"
+  | "ssn_card";
 
 interface Application {
   id: number;
@@ -119,6 +157,11 @@ interface FileMetadata {
 interface StudentRegistration {
   id?: number;
   registration_students_id: number;
+  /** Year this packet belongs to — packets are per (student, year). */
+  registration_school_years_id: number;
+  /** New Enrollment vs Re-Enrollment — admin-set elsewhere, defaulted from
+   *  the family application progress row on create. */
+  registration_type_id: number;
   shirt_size: string;
   pant_size: string;
   swim_level: string;
@@ -149,7 +192,7 @@ interface StudentRegistration {
   prohibited_adults: string;
   liability_waiver_pandadoc_id: string;
   liability_waiver_status: string;
-  liability_wavier_sent_at: string | null;
+  liability_waiver_sent_at: string | null;
   liability_waiver_pdf_url: string;
 }
 
@@ -162,19 +205,196 @@ const SWIM_LEVELS = ["None", "Beginner", "Intermediate", "Advanced"];
 const YES_NO = ["Yes", "No"];
 const YES_NO_MAYBE = ["Yes", "No", "Maybe"];
 
-const REQUIRED_DOCUMENTS: { key: keyof StudentRegistration; label: string }[] = [
+// Florida Medicaid managed-care plan options. Same list the admissions
+// team uses — admin can extend this array when new plans are accepted.
+const MEDICAID_PROVIDERS = [
+  "Humana Healthy Horizons in Florida",
+  "Sunshine Health",
+  "Simply Healthcare Plan",
+  "UnitedHealthcare Community Plan of Florida",
+  "Aetna Better Health of Florida",
+];
+
+// Helper — map string arrays into the { value, label } shape OptionSelect expects.
+const toOptions = (items: string[]) => items.map((i) => ({ value: i, label: i }));
+
+const REQUIRED_DOCUMENTS: { key: StudentDocField; label: string }[] = [
   { key: "birth_certificate", label: "Birth Certificate" },
   { key: "school_health_form", label: "School Health Form" },
   { key: "transcripts", label: "Transcripts" },
   { key: "immunization_forms", label: "Immunization Forms" },
 ];
 
-const OPTIONAL_DOCUMENTS: { key: keyof StudentRegistration; label: string }[] = [
+/** Per-document parent-facing guidance: a short how-to (rendered in a
+ *  popover) and an external link to the relevant ordering page. Keyed by
+ *  the same StudentDocField used on the student record. */
+const DOC_GUIDES: Partial<
+  Record<StudentDocField, { sourceUrl: string; sourceLabel: string; help: React.ReactNode }>
+> = {
+  school_health_form: {
+    sourceUrl:
+      "https://www.floridahealth.gov/wp-content/uploads/2025/07/school-health-entry-exam-form-dh3040-chp-07-2013.pdf",
+    sourceLabel: "Download DH3040 form",
+    help: (
+      <>
+        <p className="text-sm font-medium mb-1">School Entry Health Exam (DH3040)</p>
+        <p className="text-xs text-muted-foreground">
+          Download the Florida DH3040 form and have it completed by your child&rsquo;s
+          doctor at their physical, then upload the signed copy here.
+        </p>
+      </>
+    ),
+  },
+  immunization_forms: {
+    sourceUrl:
+      "https://flshotsusers.com/patients-and-parents/request-your-immunization-records",
+    sourceLabel: "Request via Florida SHOTS",
+    help: (
+      <>
+        <p className="text-sm font-medium mb-1">How to get immunization records</p>
+        <ul className="text-xs text-muted-foreground space-y-1 list-disc pl-4">
+          <li>
+            <span className="font-medium text-foreground">Ask your provider.</span>{" "}
+            Most use Florida SHOTS and can print your child&rsquo;s history on request.
+          </li>
+          <li>
+            <span className="font-medium text-foreground">County health department.</span>{" "}
+            If your provider isn&rsquo;t on Florida SHOTS, request from your local county
+            health department.
+          </li>
+          <li>
+            <span className="font-medium text-foreground">Florida SHOTS online.</span>{" "}
+            Adults (18+) can submit form DH3203 directly. Minor records must go through
+            a provider or the county health department.
+          </li>
+        </ul>
+      </>
+    ),
+  },
+  transcripts: {
+    sourceUrl:
+      "https://www.pcsb.org/departments/student-support/records-management/transcript-verification-records",
+    sourceLabel: "Pinellas County Records Management",
+    help: (
+      <>
+        <p className="text-sm font-medium mb-1">Where to request transcripts</p>
+        <ul className="text-xs text-muted-foreground space-y-1 list-disc pl-4">
+          <li>
+            <span className="font-medium text-foreground">Current / recent students.</span>{" "}
+            Within 5 years of a Pinellas high school or 7 years of elementary/middle —
+            contact the last school attended directly.
+          </li>
+          <li>
+            <span className="font-medium text-foreground">Older records.</span>{" "}
+            Use the ScribOrder online system linked above.
+          </li>
+        </ul>
+        <p className="text-xs text-muted-foreground mt-2">
+          Questions? Pinellas County Records Management —{" "}
+          <a
+            href="mailto:centralrecords@pcsb.org"
+            className="underline underline-offset-2"
+          >
+            centralrecords@pcsb.org
+          </a>
+          , (727) 793-2701.
+        </p>
+      </>
+    ),
+  },
+  birth_certificate: {
+    sourceUrl: "https://www.floridahealth.gov/certificates-records/birth-certificates/",
+    sourceLabel: "Florida Department of Health — Birth Certificates",
+    help: (
+      <>
+        <p className="text-sm font-medium mb-1">Ordering a Florida birth certificate</p>
+        <p className="text-xs text-muted-foreground mb-2">
+          Eligible requestors: the registrant (18+), a parent named on the record, or
+          a legal guardian. Photo ID required.
+        </p>
+        <ul className="text-xs text-muted-foreground space-y-1 list-disc pl-4">
+          <li>
+            <span className="font-medium text-foreground">Online (recommended).</span>{" "}
+            VitalChek is Florida&rsquo;s only authorized online vendor — $19 Bureau fee +
+            $7 processing, mailed to you.
+          </li>
+          <li>
+            <span className="font-medium text-foreground">By mail.</span>{" "}
+            Florida Bureau of Vital Statistics, PO Box 210, Jacksonville FL 32231 — $9
+            per certificate, 3-5 business days.
+          </li>
+          <li>
+            <span className="font-medium text-foreground">In person.</span>{" "}
+            1217 N Pearl St, Jacksonville (Mon-Fri 8am-4:30pm). $10 rush for same-day.
+          </li>
+          <li>
+            <span className="font-medium text-foreground">County health department.</span>{" "}
+            For records from 1917 to present, mail-in or walk-in (fees vary).
+          </li>
+        </ul>
+      </>
+    ),
+  },
+};
+
+function DocumentGuide({
+  guide,
+}: {
+  guide: { sourceUrl: string; sourceLabel: string; help: React.ReactNode };
+}) {
+  return (
+    <span className="inline-flex items-center gap-1 ml-1">
+      <Popover>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            aria-label="About this document"
+            className="inline-flex items-center justify-center size-4 rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+          >
+            <Info className="size-3.5" />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent align="start" className="w-80 text-left">
+          {guide.help}
+          <div className="mt-3 pt-3 border-t">
+            <a
+              href={guide.sourceUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-primary underline underline-offset-2 hover:no-underline"
+            >
+              {guide.sourceLabel}
+              <ExternalLink className="size-3" />
+            </a>
+          </div>
+        </PopoverContent>
+      </Popover>
+      <a
+        href={guide.sourceUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label={guide.sourceLabel}
+        className="inline-flex items-center justify-center size-4 rounded text-muted-foreground hover:text-primary hover:bg-muted transition-colors"
+      >
+        <ExternalLink className="size-3.5" />
+      </a>
+    </span>
+  );
+}
+
+const OPTIONAL_DOCUMENTS: { key: StudentDocField; label: string }[] = [
   { key: "iep", label: "IEP" },
   { key: "ssn_card", label: "SSN Card" },
   { key: "passport", label: "Passport" },
   { key: "student_state_id", label: "Student State ID" },
 ];
+
+/** True when the student has at least one valid file uploaded under `field`. */
+function hasAnyStudentDoc(student: Student | undefined, field: StudentDocField): boolean {
+  const arr = student?.[field];
+  if (!Array.isArray(arr) || arr.length === 0) return false;
+  return arr.some((m) => hasFile(m));
+}
 
 function getInitials(first: string, last: string): string {
   return `${first.charAt(0)}${last.charAt(0)}`.toUpperCase();
@@ -184,14 +404,14 @@ function hasFile(meta: FileMetadata | null | undefined): boolean {
   return !!meta && Object.keys(meta).length > 0 && !!meta.path;
 }
 
-function isRegistrationComplete(reg: StudentRegistration): boolean {
+function isRegistrationComplete(reg: StudentRegistration, student: Student | undefined): boolean {
   // Uniform
   if (!reg.shirt_size || !reg.pant_size || !reg.swim_level) return false;
-  // Required documents
-  if (!hasFile(reg.birth_certificate as FileMetadata)) return false;
-  if (!hasFile(reg.school_health_form as FileMetadata)) return false;
-  if (!hasFile(reg.transcripts as FileMetadata)) return false;
-  if (!hasFile(reg.immunization_forms as FileMetadata)) return false;
+  // Required documents — now live on the student record (evergreen, array).
+  if (!hasAnyStudentDoc(student, "birth_certificate")) return false;
+  if (!hasAnyStudentDoc(student, "school_health_form")) return false;
+  if (!hasAnyStudentDoc(student, "transcripts")) return false;
+  if (!hasAnyStudentDoc(student, "immunization_forms")) return false;
   // Health & medical
   if (!reg.allergies) return false;
   if (!reg.dietary_restrictions) return false;
@@ -239,9 +459,15 @@ function StatusIcon({ complete }: { complete: boolean }) {
   );
 }
 
-function emptyRegistration(studentId: number): StudentRegistration {
+function emptyRegistration(
+  studentId: number,
+  yearId: number,
+  typeId: number
+): StudentRegistration {
   return {
     registration_students_id: studentId,
+    registration_school_years_id: yearId,
+    registration_type_id: typeId,
     shirt_size: "",
     pant_size: "",
     swim_level: "",
@@ -272,135 +498,128 @@ function emptyRegistration(studentId: number): StudentRegistration {
     prohibited_adults: "",
     liability_waiver_pandadoc_id: "",
     liability_waiver_status: "",
-    liability_wavier_sent_at: null,
+    liability_waiver_sent_at: null,
     liability_waiver_pdf_url: "",
   };
 }
 
 // ---------------------------------------------------------------------------
-// DocumentUpload – inline component for single-file document fields
+// DocumentUpload – multi-file uploader for the per-student document arrays
+// on `registration_students`. Parents can add multiple files per category
+// (e.g. two pages of a passport, a set of immunization forms, etc.).
 // ---------------------------------------------------------------------------
 
 function DocumentUpload({
   label,
-  file,
+  files,
   onUploaded,
   onRemoved,
+  invalid = false,
 }: {
   label: string;
-  file: FileMetadata | null | undefined;
+  /** Current array of uploaded file metadata (Xano file shape). */
+  files: FileMetadata[];
+  /** Called after a successful upload with the new metadata. The parent is
+   *  responsible for appending to its array state and persisting. */
   onUploaded: (meta: FileMetadata) => void;
-  onRemoved: () => void;
+  /** Remove the file at `index` from the array. */
+  onRemoved: (index: number) => void;
+  /** When true AND the array is empty, highlight the dropzone red. */
+  invalid?: boolean;
 }) {
-  const [files, setFiles] = useState<File[]>([]);
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [confirmRemove, setConfirmRemove] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState<number | null>(null);
+
+  const hasAny = files.some((f) => hasFile(f));
 
   async function handleFilesChange(newFiles: File[]) {
-    setFiles(newFiles);
+    setPendingFiles(newFiles);
     setError(null);
+    if (newFiles.length === 0) return;
 
-    if (newFiles.length === 0) {
-      if (hasFile(file)) {
-        setConfirmRemove(true);
-      }
-      return;
-    }
-
-    const f = newFiles[0];
+    // Upload each selected file in series so errors surface one at a time
+    // and partial successes are persisted.
     setUploading(true);
     try {
-      const formData = new FormData();
-      formData.append("file", f);
-      const res = await fetch("/api/upload", { method: "POST", body: formData });
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        throw new Error(body?.error ?? `Upload failed (${res.status})`);
+      for (const f of newFiles) {
+        const formData = new FormData();
+        formData.append("file", f);
+        const res = await fetch("/api/upload", { method: "POST", body: formData });
+        if (!res.ok) {
+          const body = await res.json().catch(() => null);
+          throw new Error(body?.error ?? `Upload failed (${res.status})`);
+        }
+        const metadata: FileMetadata = await res.json();
+        onUploaded(metadata);
       }
-      const metadata: FileMetadata = await res.json();
-      onUploaded(metadata);
-      setFiles([]);
+      setPendingFiles([]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed");
-      setFiles([]);
+      setPendingFiles([]);
     } finally {
       setUploading(false);
     }
   }
 
-  function doRemove() {
-    setConfirmRemove(false);
-    setFiles([]);
-    onRemoved();
-  }
-
-  if (hasFile(file) && files.length === 0) {
-    return (
-      <>
-        <div className="flex items-center gap-3 rounded-md border border-input bg-background px-4 py-3">
-          <CheckCircle2 className="size-5 text-green-600 shrink-0" />
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium truncate">{file?.name || "Uploaded file"}</p>
-            <p className="text-xs text-muted-foreground">Uploaded successfully</p>
-          </div>
-          {file?.path && (
-            <a
-              href={
-                file.url ??
-                `${process.env.NEXT_PUBLIC_XANO_BASE ?? "https://xsc3-mvx7-r86m.n7e.xano.io"}${file.path}`
-              }
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center justify-center size-7 shrink-0 rounded-md hover:bg-muted transition-colors"
-            >
-              <ExternalLink className="size-4 text-muted-foreground" />
-            </a>
-          )}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-7 shrink-0"
-            onClick={() => setConfirmRemove(true)}
-          >
-            <X className="size-4" />
-          </Button>
-        </div>
-        <AlertDialog open={confirmRemove} onOpenChange={setConfirmRemove}>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Remove uploaded file?</AlertDialogTitle>
-              <AlertDialogDescription>
-                This will remove the uploaded file. You can upload a new one afterwards.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction
-                className="bg-red-600 text-white hover:bg-red-700"
-                onClick={doRemove}
-              >
-                Remove
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-      </>
-    );
-  }
-
   return (
-    <div>
+    <div className="flex flex-col gap-2">
+      {/* Previously-uploaded files — each is independently removable. */}
+      {files.map((file, idx) => {
+        if (!hasFile(file)) return null;
+        return (
+          <div
+            key={(file.path as string) ?? idx}
+            className="flex items-center gap-3 rounded-md border border-input bg-background px-4 py-3"
+          >
+            <CheckCircle2 className="size-5 text-green-600 shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium truncate">
+                {(file.name as string) || `Uploaded file ${idx + 1}`}
+              </p>
+              <p className="text-xs text-muted-foreground">Uploaded successfully</p>
+            </div>
+            {file.path && (
+              <a
+                href={
+                  (file.url as string) ??
+                  `${process.env.NEXT_PUBLIC_XANO_BASE ?? "https://xsc3-mvx7-r86m.n7e.xano.io"}${file.path}`
+                }
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center justify-center size-7 shrink-0 rounded-md hover:bg-muted transition-colors"
+              >
+                <ExternalLink className="size-4 text-muted-foreground" />
+              </a>
+            )}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-7 shrink-0"
+              onClick={() => setConfirmRemove(idx)}
+            >
+              <X className="size-4" />
+            </Button>
+          </div>
+        );
+      })}
+
+      {/* Dropzone — always rendered so parents can add additional files. */}
       <FileUpload
-        maxFiles={1}
+        maxFiles={5}
         maxSize={10 * 1024 * 1024}
         accept=".pdf,.jpg,.jpeg,.png"
         className="w-full"
-        value={files}
+        value={pendingFiles}
         onValueChange={handleFilesChange}
         disabled={uploading}
       >
-        <FileUploadDropzone className="flex-row gap-3 px-4 py-3 cursor-pointer">
+        <FileUploadDropzone
+          className={`flex-row gap-3 px-4 py-3 cursor-pointer ${
+            invalid && !hasAny ? "border-2 border-red-400" : ""
+          }`}
+        >
           {uploading ? (
             <Loader2 className="size-5 text-muted-foreground animate-spin" />
           ) : (
@@ -408,13 +627,17 @@ function DocumentUpload({
           )}
           <div className="flex-1 text-left">
             <p className="text-sm font-medium">
-              {uploading ? "Uploading..." : label}
+              {uploading
+                ? "Uploading..."
+                : hasAny
+                  ? `Add another ${label.toLowerCase()}`
+                  : label}
             </p>
-            <p className="text-xs text-muted-foreground">PDF, JPG, or PNG (max 10MB)</p>
+            <p className="text-xs text-muted-foreground">PDF, JPG, or PNG (max 10MB each, up to 5)</p>
           </div>
         </FileUploadDropzone>
         <FileUploadList>
-          {files.map((f, i) => (
+          {pendingFiles.map((f, i) => (
             <FileUploadItem key={i} value={f}>
               <FileUploadItemPreview />
               <FileUploadItemMetadata />
@@ -428,6 +651,34 @@ function DocumentUpload({
         </FileUploadList>
       </FileUpload>
       {error && <p className="text-xs text-red-600 mt-1">{error}</p>}
+
+      <AlertDialog
+        open={confirmRemove !== null}
+        onOpenChange={(open) => {
+          if (!open) setConfirmRemove(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove uploaded file?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will remove the uploaded file. You can upload another afterwards.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 text-white hover:bg-red-700"
+              onClick={() => {
+                if (confirmRemove !== null) onRemoved(confirmRemove);
+                setConfirmRemove(null);
+              }}
+            >
+              Remove
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -449,8 +700,22 @@ export default function RegistrationPage() {
   } = useApplicationFlow();
 
   // SWR hooks
+  const { mutate: swrMutate } = useSWRConfig();
   const { data: studentsData } = useStudents();
   const { data: applicationsData } = useApplications();
+  // Pull the current registration_type_id off the family application progress
+  // row. Every new student_registration row is stamped with this so the
+  // packet is scoped to (student, year, type).
+  const { progress } = useFamilyProgress(yearId);
+  // Default to 1 ("New Application") if the progress row hasn't resolved
+  // yet — matches the server-side default in /api/family-progress.
+  const registrationTypeId = progress?.registration_type_id ?? 1;
+
+  // Registration-progress bridge row — `isRegistration` latches when the
+  // parent clicks "Complete Registration". Drives the sidenav state and
+  // the post-enrollment dashboard trigger.
+  const { progress: regProgress, setSection: setRegSection } =
+    useStudentRegistrationProgress(yearId);
 
   // Local state
   const [parents, setParents] = useState<Parent[]>([]);
@@ -463,6 +728,52 @@ export default function RegistrationPage() {
   const [showValidation, setShowValidation] = useState(false);
   const [addStudentOpen, setAddStudentOpen] = useState(false);
   const [selectedStudentIds, setSelectedStudentIds] = useState<Set<number>>(new Set());
+
+  // Invite-a-parent state — same Clerk invitation flow as /family. Sends an
+  // email the secondary contact uses to create their own Clerk account and
+  // link to this family.
+  const [inviteSheetOpen, setInviteSheetOpen] = useState(false);
+  const [inviteFirstName, setInviteFirstName] = useState("");
+  const [inviteLastName, setInviteLastName] = useState("");
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteRelationship, setInviteRelationship] = useState("");
+  const [inviting, setInviting] = useState(false);
+  const [inviteError, setInviteError] = useState("");
+
+  async function handleInvite(e: React.FormEvent) {
+    e.preventDefault();
+    setInviting(true);
+    setInviteError("");
+    try {
+      const res = await fetch("/api/invites", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: inviteEmail,
+          first_name: inviteFirstName,
+          last_name: inviteLastName,
+          relationship: inviteRelationship,
+        }),
+      });
+      if (res.ok) {
+        setInviteSheetOpen(false);
+        setInviteFirstName("");
+        setInviteLastName("");
+        setInviteEmail("");
+        setInviteRelationship("");
+        // Pull the new pending parent into the Parents section immediately.
+        await fetchData();
+        toast.success("Invitation sent. They'll receive an email to join.");
+      } else {
+        const body = await res.json().catch(() => null);
+        setInviteError(body?.error ?? "Failed to send invitation");
+      }
+    } catch {
+      setInviteError("Network error — please try again");
+    } finally {
+      setInviting(false);
+    }
+  }
 
   // PandaDoc signing state for per-student liability waivers
   const [signingStudentId, setSigningStudentId] = useState<number | null>(null);
@@ -543,7 +854,7 @@ export default function RegistrationPage() {
           body: JSON.stringify({
             liability_waiver_pandadoc_id: documentId,
             liability_waiver_status: "sent",
-            liability_wavier_sent_at: new Date().toISOString(),
+            liability_waiver_sent_at: new Date().toISOString(),
           }),
         });
         // Update local state
@@ -755,7 +1066,20 @@ export default function RegistrationPage() {
         const next = { ...prev };
         enrolledStudents.forEach((s, i) => {
           if (!next[s.id]) {
-            next[s.id] = results[i] ?? emptyRegistration(s.id);
+            const loaded = results[i];
+            if (loaded) {
+              // Backfill year/type on rows that predate the schema change so
+              // the next save writes them back up. No-op once migrated data.
+              next[s.id] = {
+                ...loaded,
+                registration_school_years_id:
+                  loaded.registration_school_years_id || yearId,
+                registration_type_id:
+                  loaded.registration_type_id || registrationTypeId,
+              };
+            } else {
+              next[s.id] = emptyRegistration(s.id, yearId, registrationTypeId);
+            }
           }
         });
         return next;
@@ -871,10 +1195,81 @@ export default function RegistrationPage() {
   function updateRegistration(studentId: number, field: string, value: unknown) {
     setRegistrations((prev) => {
       const next = { ...prev };
-      const reg = next[studentId] ?? emptyRegistration(studentId);
+      const reg = next[studentId] ?? emptyRegistration(studentId, yearId, registrationTypeId);
       next[studentId] = { ...reg, [field]: value };
       return next;
     });
+  }
+
+  // -------------------------------------------------------------------------
+  // Student document uploads — docs live on the evergreen `registration_students`
+  // row as arrays, so each add/remove hits the student PATCH endpoint
+  // directly and the students SWR cache is revalidated.
+  // -------------------------------------------------------------------------
+
+  async function patchStudentDocs(
+    studentId: number,
+    field: StudentDocField,
+    nextArray: FileMetadata[]
+  ) {
+    // Optimistic update — patch the students SWR cache immediately so the
+    // newly-uploaded file shows up in the uploaded-files list the same tick
+    // the upload finishes. Without this, the DocumentUpload component
+    // flickers: pendingFiles clears → brief empty gap → server revalidation
+    // finally catches up and the green "uploaded" row appears.
+    swrMutate(
+      "/api/students",
+      (current: Student[] | undefined) => {
+        if (!Array.isArray(current)) return current;
+        return current.map((s) =>
+          s.id === studentId ? { ...s, [field]: nextArray } : s
+        );
+      },
+      { revalidate: false }
+    );
+
+    try {
+      const res = await fetch(`/api/students/${studentId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ [field]: nextArray }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error ?? `Save failed (${res.status})`);
+      }
+      // Confirm with the server's copy (replaces the optimistic value).
+      await mutateStudents();
+    } catch (err) {
+      console.error(`Failed to save ${field} for student ${studentId}:`, err);
+      toast.error("Failed to save document. Please try again.");
+      // Revert — pull the true value back from Xano.
+      await mutateStudents();
+    }
+  }
+
+  function handleStudentDocUpload(
+    studentId: number,
+    field: StudentDocField,
+    meta: FileMetadata
+  ) {
+    const student = enrolledStudents.find((s) => s.id === studentId);
+    const current = (student?.[field] as FileMetadata[] | undefined) ?? [];
+    patchStudentDocs(studentId, field, [...current, meta]);
+  }
+
+  function handleStudentDocRemove(
+    studentId: number,
+    field: StudentDocField,
+    index: number
+  ) {
+    const student = enrolledStudents.find((s) => s.id === studentId);
+    const current = (student?.[field] as FileMetadata[] | undefined) ?? [];
+    patchStudentDocs(
+      studentId,
+      field,
+      current.filter((_, i) => i !== index)
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -1015,25 +1410,71 @@ export default function RegistrationPage() {
   const handleSaveAllRef = useRef(handleSaveAll);
   handleSaveAllRef.current = handleSaveAll;
 
-  // Check if all registrations are complete
-  const allRegistrationsComplete = selectedStudentIds.size > 0 &&
+  // Check if every section of the page is complete — parents, selected
+  // students, and at least one emergency contact. Previously this missed
+  // parent completion, which let the Complete button pass validation with
+  // required parent fields still empty (the downstream PATCH would then
+  // silently reject at Xano).
+  const allParentsComplete =
+    parents.length > 0 && parents.every((p) => isParentComplete(p));
+  const allStudentsComplete =
+    selectedStudentIds.size > 0 &&
     [...selectedStudentIds].every((id) => {
       const reg = registrations[id];
-      return reg && isRegistrationComplete(reg);
-    }) &&
+      const student = enrolledStudents.find((s) => s.id === id);
+      return reg && isRegistrationComplete(reg, student);
+    });
+  const allEmergencyContactsComplete =
     emergencyContacts.length > 0 &&
     emergencyContacts.every((c) => isEmergencyContactComplete(c));
+  const allRegistrationsComplete =
+    allParentsComplete && allStudentsComplete && allEmergencyContactsComplete;
 
   const handleCompleteRef = useRef<() => Promise<void>>(() => Promise.resolve());
   handleCompleteRef.current = async () => {
     if (!allRegistrationsComplete) {
       setShowValidation(true);
-      toast.error("Please fill out all required fields before completing this section.");
+      // Surface the specific section that's blocking so the parent knows
+      // where to look. Without this, users who have complete students but
+      // incomplete parents see "fill out all required fields" and can't
+      // tell which cards need attention.
+      const blocker = !allParentsComplete
+        ? "parent / guardian"
+        : !allStudentsComplete
+          ? "student"
+          : "emergency contact";
+      toast.error(
+        `Please complete every required field in each ${blocker} card before continuing.`
+      );
       throw new Error("Validation failed");
     }
-    // Save first
-    await handleSaveAllRef.current();
-    setRegistrationLocked(true);
+    // Fire the bool flip and the full-save in parallel. `setRegSection`
+    // does an optimistic SWR mutate internally, so `regProgress.isRegistration`
+    // flips to true on the same tick — the button transitions to the
+    // "Section Completed" state immediately, instead of waiting for the
+    // multi-request save to complete. If the save fails we roll the latch
+    // back so we don't leave the section falsely marked complete.
+    const [saveResult, latchResult] = await Promise.allSettled([
+      handleSaveAllRef.current(),
+      setRegSection("isRegistration", true),
+    ]);
+
+    if (saveResult.status === "rejected") {
+      // Revert the optimistic latch so the UI matches the server.
+      try {
+        await setRegSection("isRegistration", false);
+      } catch {
+        /* best-effort revert */
+      }
+      throw saveResult.reason;
+    }
+
+    if (latchResult.status === "rejected") {
+      console.error("Failed to latch isRegistration:", latchResult.reason);
+      toast.error("Saved, but couldn't mark the section complete. Please try again.");
+      throw latchResult.reason;
+    }
+
     toast.success("Registration section completed.");
   };
 
@@ -1092,12 +1533,14 @@ export default function RegistrationPage() {
   const selectedStudents = enrolledStudents.filter((s) => selectedStudentIds.has(s.id));
   const studentCards = selectedStudents.map((s) => {
     const reg = registrations[s.id];
-    return reg ? isRegistrationComplete(reg) : false;
+    return reg ? isRegistrationComplete(reg, s) : false;
   });
   const allCards = [...parentCards, ...ecCards, ...studentCards];
   const completedCards = allCards.filter(Boolean).length;
   const totalCards = allCards.length;
-  const [registrationLocked, setRegistrationLocked] = useState(false);
+  // Lock state is the bridge row's bool — single source of truth, so the
+  // sidenav + this button always agree and the state survives reloads.
+  const registrationLocked = regProgress?.isRegistration === true;
 
   useEffect(() => {
     if (loading || !studentsData || !applicationsData) return;
@@ -1105,18 +1548,24 @@ export default function RegistrationPage() {
       updateSaveOptions({
         completed: true,
         completedLabel: "Registration Section Completed",
-        onUnlock: () => setRegistrationLocked(false),
+        onUnlock: () => {
+          setRegSection("isRegistration", false).catch(() => {
+            toast.error("Failed to unlock — please try again.");
+          });
+        },
       });
     } else {
+      // The top-bar autosave pill already shows "Saving…" on every field
+      // change, so the Complete Registration button stays static here —
+      // we don't flash "Saving…" on it during the per-keystroke autosave.
       updateSaveOptions({
         label: `Complete Registration`,
         disabled: false,
-        saving,
         completed: false,
         isUnlocked: false,
       });
     }
-  }, [loading, studentsData, applicationsData, saving, completedCards, totalCards, registrationLocked, updateSaveOptions]);
+  }, [loading, studentsData, applicationsData, completedCards, totalCards, registrationLocked, updateSaveOptions]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (loading || !studentsData || !applicationsData) {
     return (
@@ -1304,6 +1753,22 @@ export default function RegistrationPage() {
                 </Card>
               );
             })}
+
+            {/* Invite a secondary parent/guardian. Sends a Clerk invitation
+                so the other parent can create an account, link to this
+                family, and fill in their own details. */}
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full bg-white"
+              onClick={() => {
+                setInviteError("");
+                setInviteSheetOpen(true);
+              }}
+            >
+              <Plus className="size-4 mr-1.5" />
+              Add Parent / Guardian
+            </Button>
 
             {/* Divider between parents and emergency contacts */}
             {parents.length > 0 && (
@@ -1528,7 +1993,7 @@ export default function RegistrationPage() {
 
             <div className="space-y-4">
               {enrolledStudents.filter((s) => selectedStudentIds.has(s.id)).map((student) => {
-                const reg = registrations[student.id] ?? emptyRegistration(student.id);
+                const reg = registrations[student.id] ?? emptyRegistration(student.id, yearId, registrationTypeId);
 
                 return (
                   <Card key={student.id} className="overflow-hidden gap-0 py-0 ring-0 border">
@@ -1545,7 +2010,7 @@ export default function RegistrationPage() {
                           </CardTitle>
                         </div>
                         <div className="flex items-center gap-2">
-                          <StatusIcon complete={isRegistrationComplete(reg)} />
+                          <StatusIcon complete={isRegistrationComplete(reg, student)} />
                           <Button
                             variant="outline"
                             size="icon"
@@ -1572,51 +2037,33 @@ export default function RegistrationPage() {
                               <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
                                 <Field>
                                   <FieldLabel className="text-xs">Shirt Size <span className="text-red-400">*</span></FieldLabel>
-                                  <Select
+                                  <OptionSelect
+                                    options={toOptions(SIZES)}
                                     value={reg.shirt_size || ""}
-                                    onValueChange={(v) => updateRegistration(student.id, "shirt_size", v)}
-                                  >
-                                    <SelectTrigger className={showValidation && !reg.shirt_size ? "border-2 border-red-400" : ""}>
-                                      <SelectValue placeholder="Select size" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                      {SIZES.map((s) => (
-                                        <SelectItem key={s} value={s}>{s}</SelectItem>
-                                      ))}
-                                    </SelectContent>
-                                  </Select>
+                                    onChange={(v) => updateRegistration(student.id, "shirt_size", v)}
+                                    placeholder="Select size"
+                                    invalid={showValidation && !reg.shirt_size}
+                                  />
                                 </Field>
                                 <Field>
                                   <FieldLabel className="text-xs">Pant Size <span className="text-red-400">*</span></FieldLabel>
-                                  <Select
+                                  <OptionSelect
+                                    options={toOptions(SIZES)}
                                     value={reg.pant_size || ""}
-                                    onValueChange={(v) => updateRegistration(student.id, "pant_size", v)}
-                                  >
-                                    <SelectTrigger className={showValidation && !reg.pant_size ? "border-2 border-red-400" : ""}>
-                                      <SelectValue placeholder="Select size" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                      {SIZES.map((s) => (
-                                        <SelectItem key={s} value={s}>{s}</SelectItem>
-                                      ))}
-                                    </SelectContent>
-                                  </Select>
+                                    onChange={(v) => updateRegistration(student.id, "pant_size", v)}
+                                    placeholder="Select size"
+                                    invalid={showValidation && !reg.pant_size}
+                                  />
                                 </Field>
                                 <Field>
                                   <FieldLabel className="text-xs">Swim Level <span className="text-red-400">*</span></FieldLabel>
-                                  <Select
+                                  <OptionSelect
+                                    options={toOptions(SWIM_LEVELS)}
                                     value={reg.swim_level || ""}
-                                    onValueChange={(v) => updateRegistration(student.id, "swim_level", v)}
-                                  >
-                                    <SelectTrigger className={showValidation && !reg.swim_level ? "border-2 border-red-400" : ""}>
-                                      <SelectValue placeholder="Select level" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                      {SWIM_LEVELS.map((l) => (
-                                        <SelectItem key={l} value={l}>{l}</SelectItem>
-                                      ))}
-                                    </SelectContent>
-                                  </Select>
+                                    onChange={(v) => updateRegistration(student.id, "swim_level", v)}
+                                    placeholder="Select level"
+                                    invalid={showValidation && !reg.swim_level}
+                                  />
                                 </Field>
                               </div>
                             </section>
@@ -1629,17 +2076,28 @@ export default function RegistrationPage() {
                                 Required Documents <span className="text-red-400">*</span>
                               </h3>
                               <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
-                                {REQUIRED_DOCUMENTS.map(({ key, label }) => (
-                                  <Field key={key}>
-                                    <FieldLabel className="text-xs">{label} <span className="text-red-400">*</span></FieldLabel>
-                                    <DocumentUpload
-                                      label={`Upload ${label}`}
-                                      file={reg[key] as FileMetadata}
-                                      onUploaded={(meta) => updateRegistration(student.id, key, meta)}
-                                      onRemoved={() => updateRegistration(student.id, key, {})}
-                                    />
-                                  </Field>
-                                ))}
+                                {REQUIRED_DOCUMENTS.map(({ key, label }) => {
+                                  const currentFiles =
+                                    (student[key] as FileMetadata[] | undefined) ?? [];
+                                  const guide = DOC_GUIDES[key];
+                                  return (
+                                    <Field key={key}>
+                                      <FieldLabel className="text-xs flex items-center">
+                                        <span>
+                                          {label} <span className="text-red-400">*</span>
+                                        </span>
+                                        {guide && <DocumentGuide guide={guide} />}
+                                      </FieldLabel>
+                                      <DocumentUpload
+                                        label={`Upload ${label}`}
+                                        files={currentFiles}
+                                        onUploaded={(meta) => handleStudentDocUpload(student.id, key, meta)}
+                                        onRemoved={(idx) => handleStudentDocRemove(student.id, key, idx)}
+                                        invalid={showValidation && !hasAnyStudentDoc(student, key)}
+                                      />
+                                    </Field>
+                                  );
+                                })}
                               </div>
                             </section>
 
@@ -1651,29 +2109,39 @@ export default function RegistrationPage() {
                                 Optional Documents
                               </h3>
                               <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
-                                {OPTIONAL_DOCUMENTS.map(({ key, label }) => (
-                                  <Field key={key}>
-                                    <FieldLabel className="text-xs">{label}</FieldLabel>
-                                    <DocumentUpload
-                                      label={`Upload ${label}`}
-                                      file={reg[key] as FileMetadata}
-                                      onUploaded={(meta) => updateRegistration(student.id, key, meta)}
-                                      onRemoved={() => updateRegistration(student.id, key, {})}
+                                {OPTIONAL_DOCUMENTS.map(({ key, label }) => {
+                                  const currentFiles =
+                                    (student[key] as FileMetadata[] | undefined) ?? [];
+                                  return (
+                                    <Field key={key}>
+                                      <FieldLabel className="text-xs">{label}</FieldLabel>
+                                      <DocumentUpload
+                                        label={`Upload ${label}`}
+                                        files={currentFiles}
+                                        onUploaded={(meta) => handleStudentDocUpload(student.id, key, meta)}
+                                        onRemoved={(idx) => handleStudentDocRemove(student.id, key, idx)}
+                                      />
+                                    </Field>
+                                  );
+                                })}
+                              </div>
+                              {/* IEP description only shows up after a parent
+                                  has actually uploaded an IEP document — no
+                                  reason to prompt for a description when
+                                  the form isn't on file. */}
+                              {hasAnyStudentDoc(student, "iep") && (
+                                <div className="mt-4">
+                                  <Field>
+                                    <FieldLabel className="text-xs">IEP Description</FieldLabel>
+                                    <Textarea
+                                      placeholder="Describe IEP if applicable..."
+                                      value={reg.iep_description || ""}
+                                      onChange={(e) => updateRegistration(student.id, "iep_description", e.target.value)}
+                                      rows={2}
                                     />
                                   </Field>
-                                ))}
-                              </div>
-                              <div className="mt-4">
-                                <Field>
-                                  <FieldLabel className="text-xs">IEP Description</FieldLabel>
-                                  <Textarea
-                                    placeholder="Describe IEP if applicable..."
-                                    value={reg.iep_description || ""}
-                                    onChange={(e) => updateRegistration(student.id, "iep_description", e.target.value)}
-                                    rows={2}
-                                  />
-                                </Field>
-                              </div>
+                                </div>
+                              )}
                             </section>
 
                             <Separator />
@@ -1763,35 +2231,23 @@ export default function RegistrationPage() {
                                 <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
                                   <Field>
                                     <FieldLabel className="text-xs">Permission for Acetaminophen <span className="text-red-400">*</span></FieldLabel>
-                                    <Select
+                                    <OptionSelect
+                                      options={toOptions(YES_NO)}
                                       value={reg.permission_for_acetaminophen || ""}
-                                      onValueChange={(v) => updateRegistration(student.id, "permission_for_acetaminophen", v)}
-                                    >
-                                      <SelectTrigger className={showValidation && !reg.permission_for_acetaminophen ? "border-2 border-red-400" : ""}>
-                                        <SelectValue placeholder="Select" />
-                                      </SelectTrigger>
-                                      <SelectContent>
-                                        {YES_NO.map((o) => (
-                                          <SelectItem key={o} value={o}>{o}</SelectItem>
-                                        ))}
-                                      </SelectContent>
-                                    </Select>
+                                      onChange={(v) => updateRegistration(student.id, "permission_for_acetaminophen", v)}
+                                      placeholder="Select"
+                                      invalid={showValidation && !reg.permission_for_acetaminophen}
+                                    />
                                   </Field>
                                   <Field>
                                     <FieldLabel className="text-xs">Interested in Counseling Services <span className="text-red-400">*</span></FieldLabel>
-                                    <Select
+                                    <OptionSelect
+                                      options={toOptions(YES_NO_MAYBE)}
                                       value={reg.interested_in_counseling_services || ""}
-                                      onValueChange={(v) => updateRegistration(student.id, "interested_in_counseling_services", v)}
-                                    >
-                                      <SelectTrigger className={showValidation && !reg.interested_in_counseling_services ? "border-2 border-red-400" : ""}>
-                                        <SelectValue placeholder="Select" />
-                                      </SelectTrigger>
-                                      <SelectContent>
-                                        {YES_NO_MAYBE.map((o) => (
-                                          <SelectItem key={o} value={o}>{o}</SelectItem>
-                                        ))}
-                                      </SelectContent>
-                                    </Select>
+                                      onChange={(v) => updateRegistration(student.id, "interested_in_counseling_services", v)}
+                                      placeholder="Select"
+                                      invalid={showValidation && !reg.interested_in_counseling_services}
+                                    />
                                   </Field>
                                 </div>
                               </div>
@@ -1875,10 +2331,11 @@ export default function RegistrationPage() {
                                       </Field>
                                       <Field>
                                         <FieldLabel className="text-xs">Medicaid Provider</FieldLabel>
-                                        <Input
-                                          placeholder="Medicaid provider"
+                                        <OptionSelect
+                                          options={toOptions(MEDICAID_PROVIDERS)}
                                           value={reg.medicaid_provider || ""}
-                                          onChange={(e) => updateRegistration(student.id, "medicaid_provider", e.target.value)}
+                                          onChange={(v) => updateRegistration(student.id, "medicaid_provider", v)}
+                                          placeholder="Select plan"
                                         />
                                       </Field>
                                     </div>
@@ -1925,20 +2382,49 @@ export default function RegistrationPage() {
                               <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
                                 Liability Waiver <span className="text-red-400">*</span>
                               </h3>
-                              <div className="rounded-md border border-input bg-white p-4">
+                              <div
+                                className={`rounded-md border bg-white p-4 ${
+                                  showValidation && reg.liability_waiver_status !== "completed"
+                                    ? "border-2 border-red-400"
+                                    : "border-input"
+                                }`}
+                              >
                                 {(() => {
                                   const waiverStatus = reg.liability_waiver_status;
                                   const waiverSent = !!reg.liability_waiver_pandadoc_id;
                                   const isLoading = signingLoading === student.id;
 
                                   if (waiverStatus === "completed") {
+                                    // Build the download URL from the proxy
+                                    // route — authorizes the fetch against
+                                    // the family and streams the signed PDF.
+                                    const docId = reg.liability_waiver_pandadoc_id;
+                                    const app = yearApps.find(
+                                      (a) => a.registration_students_id === student.id
+                                    );
+                                    const downloadUrl =
+                                      docId && app
+                                        ? `/api/pandadoc/download?documentId=${docId}&applicationId=${app.id}`
+                                        : null;
                                     return (
-                                      <div className="flex items-center gap-3">
-                                        <CheckCircle2 className="size-5 text-green-600 shrink-0" />
-                                        <div>
-                                          <p className="text-sm font-medium">Liability waiver signed</p>
-                                          <p className="text-xs text-muted-foreground">This document has been signed and completed.</p>
+                                      <div className="flex items-center justify-between gap-3">
+                                        <div className="flex items-center gap-3">
+                                          <CheckCircle2 className="size-5 text-green-600 shrink-0" />
+                                          <div>
+                                            <p className="text-sm font-medium">Liability waiver signed</p>
+                                            <p className="text-xs text-muted-foreground">This document has been signed and completed.</p>
+                                          </div>
                                         </div>
+                                        {downloadUrl && (
+                                          <Button
+                                            variant="outline"
+                                            size="sm"
+                                            className="shrink-0 bg-white"
+                                            onClick={() => window.open(downloadUrl, "_blank")}
+                                          >
+                                            Download PDF
+                                          </Button>
+                                        )}
                                       </div>
                                     );
                                   }
@@ -2014,6 +2500,63 @@ export default function RegistrationPage() {
         </AlertDialogContent>
       </AlertDialog>
 
+      {/* Add Parent / Guardian Sheet — mirrors the invite flow on /family so
+          parents can add a secondary contact without leaving this page. */}
+      <Sheet open={inviteSheetOpen} onOpenChange={setInviteSheetOpen}>
+        <SheetContent>
+          <SheetHeader>
+            <SheetTitle>Add Parent / Guardian</SheetTitle>
+            <SheetDescription>
+              They&apos;ll receive an email to create their own account and
+              join your family.
+            </SheetDescription>
+          </SheetHeader>
+          <form onSubmit={handleInvite} className="flex flex-col gap-4 p-4">
+            <div className="grid grid-cols-2 gap-4">
+              <Field>
+                <FieldLabel>First Name</FieldLabel>
+                <Input
+                  value={inviteFirstName}
+                  onChange={(e) => setInviteFirstName(e.target.value)}
+                />
+              </Field>
+              <Field>
+                <FieldLabel>Last Name</FieldLabel>
+                <Input
+                  value={inviteLastName}
+                  onChange={(e) => setInviteLastName(e.target.value)}
+                />
+              </Field>
+            </div>
+            <Field>
+              <FieldLabel>Email</FieldLabel>
+              <Input
+                type="email"
+                value={inviteEmail}
+                onChange={(e) => setInviteEmail(e.target.value)}
+                required
+              />
+            </Field>
+            <Field>
+              <FieldLabel>Relationship</FieldLabel>
+              <Input
+                placeholder="e.g. Mother, Father, Guardian"
+                value={inviteRelationship}
+                onChange={(e) => setInviteRelationship(e.target.value)}
+              />
+            </Field>
+            {inviteError && (
+              <p className="text-sm text-red-600 dark:text-red-400">
+                {inviteError}
+              </p>
+            )}
+            <Button type="submit" disabled={inviting} className="mt-2">
+              {inviting ? "Sending..." : "Send Invitation"}
+            </Button>
+          </form>
+        </SheetContent>
+      </Sheet>
+
       {/* Delete Emergency Contact Confirmation */}
       <AlertDialog open={!!pendingDeleteContact} onOpenChange={(open) => { if (!open) setPendingDeleteContact(null); }}>
         <AlertDialogContent>
@@ -2074,7 +2617,7 @@ export default function RegistrationPage() {
                       setRegistrations((prev) => {
                         const next = { ...prev };
                         if (!next[student.id]) {
-                          next[student.id] = emptyRegistration(student.id);
+                          next[student.id] = emptyRegistration(student.id, yearId, registrationTypeId);
                         }
                         return next;
                       });

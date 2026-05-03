@@ -44,10 +44,32 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const application = await xano.applications.getById(applicationId);
-  if (!application || Number(application.registration_families_id) !== familyId) {
-    return NextResponse.json({ error: "Application not found" }, { status: 404 });
+  // Ownership check: look up the application inside the family's own app
+  // list rather than fetching it directly. This avoids flaky 404s caused by
+  // Xano returning `registration_families_id` as an expanded relation
+  // object (vs. a scalar id) — which breaks a raw `Number(...)` compare.
+  const familyApps = await xano.applications.getByFamilyId(familyId);
+  const application = familyApps.find(
+    (a) => Number(a.id) === Number(applicationId)
+  );
+  if (!application) {
+    return NextResponse.json(
+      { error: "Application not found for this family" },
+      { status: 404 }
+    );
   }
+
+  // Waiver lives on the per-student application row; enrollment agreement
+  // lives on the family-level registration progress row. Resolve whichever
+  // record applies for this `type` so the field lookups that follow target
+  // the right table.
+  const progressRow =
+    type === "enrollment_agreement"
+      ? await xano.studentRegistrationProgress.resolve(
+          familyId,
+          application.registration_school_years_id
+        )
+      : null;
 
   const pandadocIdField = type === "liability_waiver"
     ? "liability_waiver_pandadoc_id"
@@ -56,8 +78,9 @@ export async function POST(req: NextRequest) {
     ? "liability_waiver_status"
     : "enrollment_agreement_status";
 
-  const existingDocId = application[pandadocIdField] as string | null;
-  const existingStatus = application[statusField] as string | null;
+  const sourceRecord = (progressRow ?? application) as unknown as Record<string, unknown>;
+  const existingDocId = sourceRecord[pandadocIdField] as string | null;
+  const existingStatus = sourceRecord[statusField] as string | null;
 
   if (existingStatus === "completed") {
     return NextResponse.json(
@@ -66,12 +89,17 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // The signing identity is whichever parent is logged into Clerk right now.
+  // Either parent on the family can sign — the document is tokenized to
+  // their name and the signing session is addressed to their email.
+  const family = await xano.families.getById(familyId);
+  const recipientEmail = user.emailAddresses[0]?.emailAddress ?? "";
+  const recipientFirstName = user.firstName ?? "";
+  const recipientLastName = user.lastName ?? "";
+
   if (existingDocId) {
     try {
-      const sessionId = await createSigningSession(
-        existingDocId,
-        user.emailAddresses[0]?.emailAddress ?? ""
-      );
+      const sessionId = await createSigningSession(existingDocId, recipientEmail);
       return NextResponse.json({
         documentId: existingDocId,
         sessionId,
@@ -83,16 +111,11 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const family = await xano.families.getById(familyId);
     const student = await xano.students.getById(
       application.registration_students_id
     );
 
     const templateId = getTemplateId(type);
-    const recipientEmail =
-      user.emailAddresses[0]?.emailAddress ?? "";
-    const recipientFirstName = user.firstName ?? "";
-    const recipientLastName = user.lastName ?? "";
 
     const docName =
       type === "liability_waiver"
@@ -124,15 +147,23 @@ export async function POST(req: NextRequest) {
 
     const sessionId = await createSigningSession(doc.id, recipientEmail);
 
-    const sentAtField = type === "liability_waiver"
-      ? "liability_waiver_sent_at"
-      : "enrollment_agreement_sent_at";
-
-    await xano.applications.update(applicationId, {
-      [pandadocIdField]: doc.id,
-      [statusField]: "sent",
-      [sentAtField]: new Date().toISOString(),
-    });
+    // Target table depends on doc type:
+    // - waiver → per-student `registration_application` row (same as before)
+    // - enrollment agreement → family-level `..._progress` row (absorbed
+    //   from the retired families_payment table)
+    if (type === "enrollment_agreement" && progressRow) {
+      await xano.studentRegistrationProgress.update(progressRow.id, {
+        enrollment_agreement_pandadoc_id: doc.id,
+        enrollment_agreement_status: "sent",
+        enrollment_agreement_sent: new Date().toISOString(),
+      });
+    } else {
+      await xano.applications.update(applicationId, {
+        liability_waiver_pandadoc_id: doc.id,
+        liability_waiver_status: "sent",
+        liability_waiver_sent_at: new Date().toISOString(),
+      });
+    }
 
     return NextResponse.json({ documentId: doc.id, sessionId });
   } catch (err) {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { useParams } from "next/navigation";
+import { useParams, usePathname } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
 import { useApplicationFlow } from "@/contexts/application-flow-context";
 import { Button } from "@/components/ui/button";
@@ -41,10 +41,9 @@ import { Trash2, Plus } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import { toast } from "sonner";
 import { useSWRConfig } from "swr";
-import { MissingItemsPanel } from "@/components/missing-items-panel";
-import { familyRequirements } from "@/lib/application-schemas";
 import { GlobalSaveStatusPill } from "@/components/save-status-pill";
 import { useFamilyProgress } from "@/hooks/use-family-progress";
+import { useReapplyFamilyProgress } from "@/hooks/use-reapply-family-progress";
 import { US_STATES } from "@/lib/us-states";
 
 interface Parent {
@@ -229,9 +228,34 @@ export default function FamilyStepPage() {
   const handleSaveAllRef = useRef(handleSaveAll);
   handleSaveAllRef.current = handleSaveAll;
 
-  // Progress bridge row — source of truth for whether this section is "complete".
-  const { progress, setSection: setProgressSection } = useFamilyProgress(Number(yearId));
-  const familyLocked = !!progress?.family_completed;
+  // Flow-aware progress: this same page renders under both /apply (where
+  // we track the apply progress row's `family_completed` bool) and /reapply
+  // (where we track the reapply progress row's `isFamilyDetails` bool).
+  // Both hooks always mount so the rules of hooks stay happy, but we pass
+  // `null` to the inactive one so only the active flow's progress endpoint
+  // is hit per page mount (otherwise every render fires both fetches).
+  const pathnameForFlow = usePathname();
+  const isReapplyFlow = pathnameForFlow.startsWith("/reapply");
+  const yearIdNum = Number(yearId);
+  const applyProgress = useFamilyProgress(isReapplyFlow ? null : yearIdNum);
+  const reapplyProgress = useReapplyFamilyProgress(isReapplyFlow ? yearIdNum : null);
+  const familyLocked = isReapplyFlow
+    ? !!reapplyProgress.progress?.isFamilyDetails
+    : !!applyProgress.progress?.family_completed;
+  // Stabilize the lock setter via a ref. The progress hooks return fresh
+  // object literals each render, so naming them in a useCallback dep list
+  // gives every render a new function identity — which feeds into the
+  // `updateSaveOptions` useEffect below and creates an infinite loop.
+  // Pulling the latest hook returns through a ref keeps the callback
+  // identity stable while still calling whichever flow is active.
+  const flowRef = useRef({ isReapplyFlow, applyProgress, reapplyProgress });
+  flowRef.current = { isReapplyFlow, applyProgress, reapplyProgress };
+  const setProgressSectionLocked = useCallback((value: boolean) => {
+    const f = flowRef.current;
+    return f.isReapplyFlow
+      ? f.reapplyProgress.setSection("isFamilyDetails", value)
+      : f.applyProgress.setSection("family_completed", value);
+  }, []);
 
   const handleCompleteRef = useRef<() => Promise<void>>(() => Promise.resolve());
   handleCompleteRef.current = async () => {
@@ -241,7 +265,7 @@ export default function FamilyStepPage() {
       throw new Error("Validation failed");
     }
     await handleSaveAllRef.current();
-    await setProgressSection("family_completed", true);
+    await setProgressSectionLocked(true);
     toast.success("Family section completed.");
   };
 
@@ -256,13 +280,45 @@ export default function FamilyStepPage() {
       updateSaveOptions({
         completed: true,
         completedLabel: "Family Section Completed",
-        onUnlock: () => void setProgressSection("family_completed", false),
+        onUnlock: () => void setProgressSectionLocked(false),
         saving: false,
       });
     } else {
-      updateSaveOptions({ saving, label: "Complete Family Section" });
+      // Explicitly clear `completed` + `onUnlock` — `updateSaveOptions`
+      // shallow-merges into the previous state, so without these the
+      // stale `completed: true` from the locked branch survives unlock
+      // and the layout keeps dimming + click-blocking the page.
+      updateSaveOptions({
+        completed: false,
+        onUnlock: undefined,
+        saving,
+        label: "Complete Family Section",
+      });
     }
-  }, [saving, familyLocked, updateSaveOptions, setProgressSection]);
+  }, [saving, familyLocked, updateSaveOptions, setProgressSectionLocked]);
+
+  // Auto-revoke completion when validation regresses (e.g. a new parent
+  // was invited and added with missing phone/relationship/etc., so the
+  // section is no longer genuinely complete). Mirrors the same pattern
+  // on the Students page.
+  const autoRevokedFamilyRef = useRef(false);
+  useEffect(() => {
+    if (!familyLocked) {
+      autoRevokedFamilyRef.current = false;
+      return;
+    }
+    if (loading || parents.length === 0) return;
+    const allComplete = parents.every((p) => isParentComplete(p));
+    if (allComplete) return;
+    if (autoRevokedFamilyRef.current) return;
+    autoRevokedFamilyRef.current = true;
+    void setProgressSectionLocked(false);
+    toast.message(
+      "A parent was added or updated — please review and re-complete this section."
+    );
+    // isParentComplete is a stable function declaration; safe to omit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [parents, familyLocked, loading, setProgressSectionLocked]);
 
   const [pendingDeleteParent, setPendingDeleteParent] = useState<{ id: number; name: string } | null>(null);
 
@@ -338,9 +394,6 @@ export default function FamilyStepPage() {
     );
   }
 
-  // Live missing-items list driven by the Zod schema — updates as the user types.
-  const familyMissing = familyRequirements(parents);
-
   return (
     <>
       <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
@@ -355,10 +408,6 @@ export default function FamilyStepPage() {
             Add at least one primary parent or guardian for your family.
           </h1>
         </div>
-
-        {/* Missing-items panel — lists every required field still blank across
-            every parent. Click an item to jump to and highlight that field. */}
-        <MissingItemsPanel missing={familyMissing} />
 
         {parents.length === 0 ? (
           <div className="flex min-h-[20vh] items-center justify-center rounded-lg border">
@@ -435,6 +484,46 @@ export default function FamilyStepPage() {
                     className="overflow-hidden"
                   >
                 <CardContent className="space-y-6 py-5 bg-white dark:bg-background">
+                  {/* Name — editable for every parent (primary + secondary).
+                      Auto-saves on blur via the same per-field pattern the
+                      rest of this card uses. The card header above re-reads
+                      from the same parent object so it updates as they type. */}
+                  <section>
+                    <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
+                      Name
+                    </h3>
+                    <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
+                      <Field>
+                        <FieldLabel className="text-xs">First Name</FieldLabel>
+                        <Input
+                          className={!parent.first_name ? "border-2 border-red-400" : ""}
+                          placeholder="Jane"
+                          value={parent.first_name || ""}
+                          onChange={(e) =>
+                            updateParentLocal(parent.id, "first_name", e.target.value)
+                          }
+                          onBlur={(e) =>
+                            saveParentField(parent.id, "first_name", e.target.value)
+                          }
+                        />
+                      </Field>
+                      <Field>
+                        <FieldLabel className="text-xs">Last Name</FieldLabel>
+                        <Input
+                          className={!parent.last_name ? "border-2 border-red-400" : ""}
+                          placeholder="Walsh"
+                          value={parent.last_name || ""}
+                          onChange={(e) =>
+                            updateParentLocal(parent.id, "last_name", e.target.value)
+                          }
+                          onBlur={(e) =>
+                            saveParentField(parent.id, "last_name", e.target.value)
+                          }
+                        />
+                      </Field>
+                    </div>
+                  </section>
+
                   {/* Contact Information */}
                   <section>
                     <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">

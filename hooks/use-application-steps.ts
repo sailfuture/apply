@@ -31,6 +31,17 @@ interface FullScholarshipResponse {
     state: string;
     zipcode: string;
     estimated_annual_income: number;
+    /** Income verification flags + multi-file arrays (one slot can hold
+     *  every page of a W-2 or pay-stub packet). Optional / nullable so
+     *  legacy single-object rows still type-check during the schema
+     *  transition — `hasFile` normalizes both shapes. */
+    isW2?: boolean;
+    isPayStubs?: boolean;
+    w2?: Record<string, unknown>[] | Record<string, unknown> | null;
+    paystub_1?: Record<string, unknown>[] | Record<string, unknown> | null;
+    paystub_2?: Record<string, unknown>[] | Record<string, unknown> | null;
+    paystub_3?: Record<string, unknown>[] | Record<string, unknown> | null;
+    paystub_4?: Record<string, unknown>[] | Record<string, unknown> | null;
   }[];
   homes: {
     type: string;
@@ -52,6 +63,10 @@ interface FullScholarshipResponse {
   benefits: {
     type: string;
     amount_monthly: number;
+    /** Per-benefit documentation array — required upload of award letter
+     *  / approval notice for each listed benefit. Replaces the old
+     *  family-wide `other_benefits` blob. */
+    benefit_documentation?: Record<string, unknown>[];
   }[];
 }
 
@@ -81,16 +96,11 @@ export function useApplicationSteps(yearId: number) {
   const familyId = familyData?.id ?? null;
   const { data: scholarshipData, isLoading: scholarshipLoading } = useScholarship(familyId, yearId);
 
-  // Fetch payment record for tuition review status
-  const { data: paymentRecord } = useSWR(
-    familyId && yearId ? `/api/family-payment?yearId=${yearId}` : null,
-    fetcher,
-    { revalidateOnFocus: false, dedupingInterval: 10000 }
-  );
-
-  // Progress bridge row — explicit "section completed" bools take priority
+  // Progress bridge rows — explicit "section completed" bools take priority
   // over the derived field checks below. When a user clicks "Complete X",
-  // this flips and the sidenav turns green immediately.
+  // the corresponding bool flips and the sidenav turns green immediately.
+  // Two bridge rows because the application and post-acceptance registration
+  // stages are tracked in separate tables.
   const { data: progressData } = useSWR<{
     family_completed?: boolean;
     students_completed?: boolean;
@@ -98,6 +108,20 @@ export function useApplicationSteps(yearId: number) {
     testing_completed?: boolean;
   } | null>(
     yearId ? `/api/family-progress?yearId=${yearId}` : null,
+    fetcher,
+    { revalidateOnFocus: false, dedupingInterval: 10000 }
+  );
+  const { data: regProgressData } = useSWR<{
+    isTuition?: boolean;
+    isEnrollment?: boolean;
+    isRegistration?: boolean;
+    isVolunteerHours?: boolean;
+    submitted_date?: number | null;
+    /** Whether the enrollment-agreement PandaDoc has been dispatched yet.
+     *  Used as a "started" signal so the sidenav can show in-progress. */
+    enrollment_agreement_pandadoc_id?: string | null;
+  } | null>(
+    yearId ? `/api/student-registration-progress?yearId=${yearId}` : null,
     fetcher,
     { revalidateOnFocus: false, dedupingInterval: 10000 }
   );
@@ -224,13 +248,54 @@ export function useApplicationSteps(yearId: number) {
     const vehicles = fullScholarship.vehicles ?? [];
     const benefits = fullScholarship.benefits ?? [];
 
-    // Household Size: both inputs required
+    // Helpers: a Xano file slot has a usable file when at least one
+    // metadata object inside it carries a canonical `path`. Both helpers
+    // accept either the legacy single-object shape or the new array shape
+    // — w2/paystub_*/benefit_documentation moved from object → array
+    // mid-cycle, so we have to handle both during the transition.
+    const hasFileObject = (f: unknown): boolean =>
+      !!f &&
+      typeof f === "object" &&
+      !Array.isArray(f) &&
+      typeof (f as { path?: unknown }).path === "string" &&
+      (f as { path: string }).path.length > 0;
+    const hasFile = (v: unknown): boolean => {
+      if (Array.isArray(v)) return v.some(hasFileObject);
+      return hasFileObject(v);
+    };
+
+    // Household size + per-benefit documentation. Each listed benefit
+    // must carry its own `benefit_documentation` upload — the old
+    // family-wide `other_benefits` blob is gone.
     const incomeComplete =
       s.household_adults > 0 &&
       s.household_children > 0 &&
-      (!s.government_benefits || benefits.every((b) => b.type && b.amount_monthly > 0));
+      (!s.government_benefits ||
+        (benefits.length > 0 &&
+          benefits.every(
+            (b) =>
+              b.type &&
+              b.amount_monthly > 0 &&
+              hasFile(b.benefit_documentation)
+          )));
 
-    // Contributing Members: all fields required (address_2 optional)
+    // Per-member income verification: one of W-2 or pay stubs selected,
+    // with the matching file slot(s) actually uploaded. Without this we
+    // can't gate sections that depend on a verifiable income.
+    const memberIncomeVerified = (m: (typeof members)[number]): boolean => {
+      if (m.isW2) return hasFile(m.w2);
+      if (m.isPayStubs) {
+        return (
+          hasFile(m.paystub_1) &&
+          hasFile(m.paystub_2) &&
+          hasFile(m.paystub_3) &&
+          hasFile(m.paystub_4)
+        );
+      }
+      return false;
+    };
+
+    // Contributing Members: identity + address + income amount + verified.
     const membersComplete =
       s.no_contributing_member ||
       (members.length > 0 &&
@@ -242,7 +307,8 @@ export function useApplicationSteps(yearId: number) {
             m.city &&
             m.state &&
             m.zipcode &&
-            m.estimated_annual_income > 0
+            m.estimated_annual_income > 0 &&
+            memberIncomeVerified(m)
         ));
 
     // Home/Real Estate: all fields required per property (address_2 optional)
@@ -385,19 +451,23 @@ export function useApplicationSteps(yearId: number) {
   const completedCount = steps.filter((s) => s.status === "complete" && s.title !== "Submit Application").length;
   const allComplete = steps.filter((s) => s.title !== "Submit Application" && s.title !== "Initial Testing").every((s) => s.status === "complete");
 
-  // Post-acceptance registration steps
-  const tuitionReviewed = paymentRecord?.tuition_reviewed === true || paymentRecord?.isFamilyAccepted === true;
+  // Post-acceptance registration steps — driven exclusively by the section
+  // bools on the `registration_student_registration_progress` bridge row.
+  // No legacy fallbacks; the bool is the only signal that counts.
+  const tuitionReviewed = regProgressData?.isTuition === true;
+  const postEnrollmentSigned = regProgressData?.isEnrollment === true;
+  const registrationComplete = regProgressData?.isRegistration === true;
+  const volunteerAcknowledged = regProgressData?.isVolunteerHours === true;
 
-  // Enrollment signing: check family payment record
-  const postEnrollmentSigned = paymentRecord?.is_enrollment_agreement_signed === true || paymentRecord?.enrollment_agreement_status === "completed";
-  const postEnrollmentStarted = !!paymentRecord?.enrollment_agreement_pandadoc_id;
-
-  // Registration: in progress once the user has visited / started filling out the form
-  // For now, mark as started if tuition is reviewed (prerequisite met)
+  // "Started" signals are independent of the completion bools so an
+  // in-progress section shows as yellow instead of gray.
+  const postEnrollmentStarted = !!regProgressData?.enrollment_agreement_pandadoc_id;
+  // Each subsequent step unlocks once the prior section's bool is true.
   const registrationStarted = tuitionReviewed;
-  const registrationComplete = false; // TODO: wire to real completion check
+  const volunteerStarted = registrationComplete;
 
-  const allRegistrationSectionsComplete = tuitionReviewed && postEnrollmentSigned && registrationComplete;
+  const allRegistrationSectionsComplete =
+    tuitionReviewed && postEnrollmentSigned && registrationComplete && volunteerAcknowledged;
 
   const registrationSteps: StepDef[] = useMemo(
     () => [
@@ -427,6 +497,14 @@ export function useApplicationSteps(yearId: number) {
       },
       {
         number: 4,
+        title: "Volunteer Hours Acknowledgment",
+        description: "Acknowledge the mandatory volunteer-hours commitment for the year.",
+        status: getStatus(volunteerAcknowledged, volunteerStarted),
+        detail: volunteerAcknowledged ? "Acknowledged" : volunteerStarted ? "In progress" : "Locked",
+        href: `${base}/volunteer-hours`,
+      },
+      {
+        number: 5,
         title: "Submit Registration",
         description: "Review and submit your completed registration.",
         status: allRegistrationSectionsComplete ? "in_progress" as StepStatus : "not_started" as StepStatus,
@@ -435,7 +513,7 @@ export function useApplicationSteps(yearId: number) {
       },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [base, tuitionReviewed, postEnrollmentSigned, registrationComplete, allRegistrationSectionsComplete]
+    [base, tuitionReviewed, postEnrollmentSigned, registrationComplete, volunteerAcknowledged, volunteerStarted, allRegistrationSectionsComplete]
   );
 
   const registrationCompletedCount = registrationSteps.filter((s) => s.status === "complete").length;

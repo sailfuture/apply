@@ -1,19 +1,26 @@
 "use client";
 
 import Image from "next/image";
-import { useRouter, usePathname } from "next/navigation";
+import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { UserButton } from "@clerk/nextjs";
 import { useFamily, useSchoolYears } from "@/hooks/use-api";
 
-const REGISTRATION_SEGMENTS = new Set(["tuition", "enrollment-signing", "registration"]);
+const REGISTRATION_SEGMENTS = new Set(["tuition", "enrollment-signing", "registration", "volunteer-hours"]);
 
 export function GlobalHeader() {
   const router = useRouter();
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const { data: familyData } = useFamily();
   const { data: yearsData } = useSchoolYears();
   const familyName = familyData?.family_name ?? null;
   const isAccepted = familyData?.isAccepted === true;
+
+  // The dashboard is the post-enrollment surface — no application or
+  // registration chrome should appear there. Strip the "Student Application
+  // / Student Registration" suffix and just show the school name.
+  const isDashboard = pathname.startsWith("/dashboard");
+  const isReapply = pathname.startsWith("/reapply");
 
   // Detect if user is on a registration page
   const yearMatch = pathname.match(/\/apply\/year\/(\d+)/);
@@ -27,9 +34,43 @@ export function GlobalHeader() {
     : null;
   const yearName = schoolYear?.year_name ?? null;
 
-  const title = isRegistrationFlow
-    ? "SailFuture Academy Student Registration"
-    : "SailFuture Academy Student Application";
+  const title = isDashboard
+    ? "SailFuture Academy Parent Dashboard"
+    : isReapply
+      ? "SailFuture Academy Re-Application"
+      : isRegistrationFlow
+        ? "SailFuture Academy Student Registration"
+        : "SailFuture Academy Student Application";
+
+  // Logo click routes by lifecycle stage. Each branch returns a
+  // destination that's already correct for the user — no chained
+  // redirects. The `if` ladder short-circuits before falling through to
+  // the apply/registration default so users never bounce through pages
+  // they shouldn't see.
+  const homeHref = (() => {
+    // On the parent dashboard, logo just stays on the dashboard for
+    // whichever year is currently in view. Preserves `?yearId` so the
+    // year picker doesn't reset when the user clicks home.
+    if (isDashboard) {
+      const yearParam = searchParams.get("yearId");
+      return yearParam ? `/dashboard?yearId=${yearParam}` : "/dashboard";
+    }
+    // Re-application is for already-enrolled families — sending them
+    // back to the dashboard is the right "home" gesture, even though
+    // they're applying for next year.
+    if (isReapply) return "/dashboard";
+
+    const years =
+      (yearsData as
+        | { id: number; isNextYear?: boolean; isActive?: boolean }[]
+        | undefined) ?? [];
+    const target =
+      years.find((y) => y.isNextYear) ?? years.find((y) => y.isActive) ?? null;
+    if (!target) return "/";
+    return isAccepted
+      ? `/registration/year/${target.id}`
+      : `/apply/year/${target.id}`;
+  })();
 
   return (
     <header className="fixed top-0 left-0 right-0 z-50 border-b bg-white">
@@ -37,8 +78,8 @@ export function GlobalHeader() {
         {/* Left: Logo (clickable) + Title + Family name */}
         <div className="flex items-center gap-3">
           <button
-            onClick={() => router.push("/")}
-            className="flex size-9 items-center justify-center overflow-hidden rounded-full border-2 border-primary/20 shadow-sm transition-opacity hover:opacity-80"
+            onClick={() => router.push(homeHref)}
+            className="flex size-9 items-center justify-center overflow-hidden rounded-full border-2 border-gray-200 dark:border-gray-700 shadow-sm transition-opacity hover:opacity-80"
           >
             <Image
               src="/logo.svg"

@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, usePathname, useRouter } from "next/navigation";
 import Image from "next/image";
 import { useApplicationFlow } from "@/contexts/application-flow-context";
 import { Button } from "@/components/ui/button";
@@ -54,6 +54,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Trash2, FileUp, X, Loader2, CheckCircle2, Plus, ExternalLink, HelpCircle, Pencil } from "lucide-react";
 import { GlobalSaveStatusPill } from "@/components/save-status-pill";
 import { useFamilyProgress } from "@/hooks/use-family-progress";
+import { useReapplyFamilyProgress } from "@/hooks/use-reapply-family-progress";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useSWRConfig } from "swr";
 import {
@@ -172,6 +173,18 @@ export default function StudentsStepPage() {
   const [addingStudentId, setAddingStudentId] = useState<number | null>(null);
   const [savedApplications, setSavedApplications] = useState<Application[]>([]);
   const [pendingNavPath, setPendingNavPath] = useState<string | null>(null);
+  // Skeleton placeholder for a brand-new student that's mid-auto-add.
+  // Set the moment the create sheet succeeds; cleared as soon as the
+  // student appears in the `enrolled` list (i.e. the application POST
+  // finished and the optimistic push landed). Renders a card with the
+  // student's name + skeleton inputs in the spot where the real card
+  // will materialize, so the page doesn't feel blank during the round
+  // trip to the applications endpoint.
+  const [pendingNewStudent, setPendingNewStudent] = useState<{
+    id: number;
+    first_name: string;
+    last_name: string;
+  } | null>(null);
 
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [addError, setAddError] = useState("");
@@ -439,16 +452,33 @@ export default function StudentsStepPage() {
   const handleSaveAllAppsRef = useRef(handleSaveAllApps);
   handleSaveAllAppsRef.current = handleSaveAllApps;
 
-  // Progress bridge row — source of truth for section completion.
-  const { progress, setSection: setProgressSection } = useFamilyProgress(yearId);
-  const studentsLocked = !!progress?.students_completed;
+  // Flow-aware progress: same component renders under both /apply (where
+  // we track the apply progress row's `students_completed` bool) and
+  // /reapply (where we track the reapply progress row's `isStudentDetails`
+  // bool). Both hooks always mount (rules of hooks), but we pass `null` to
+  // the inactive one so only the active flow's progress endpoint is hit —
+  // otherwise every render fires both fetches.
+  const pathnameForFlow = usePathname();
+  const isReapplyFlow = pathnameForFlow.startsWith("/reapply");
+  const applyProgress = useFamilyProgress(isReapplyFlow ? null : yearId);
+  const reapplyProgress = useReapplyFamilyProgress(isReapplyFlow ? yearId : null);
+  const studentsLocked = isReapplyFlow
+    ? !!reapplyProgress.progress?.isStudentDetails
+    : !!applyProgress.progress?.students_completed;
+  // Stabilize the setter via a ref — the progress hooks return fresh
+  // object literals each render, so listing them in useCallback deps
+  // would cause the consumer useEffect to re-fire indefinitely.
+  const flowRef = useRef({ isReapplyFlow, applyProgress, reapplyProgress });
+  flowRef.current = { isReapplyFlow, applyProgress, reapplyProgress };
+  const setStudentsLocked = useCallback((value: boolean) => {
+    const f = flowRef.current;
+    return f.isReapplyFlow
+      ? f.reapplyProgress.setSection("isStudentDetails", value)
+      : f.applyProgress.setSection("students_completed", value);
+  }, []);
 
   const handleCompleteStudentsRef = useRef<() => Promise<void>>(() => Promise.resolve());
   handleCompleteStudentsRef.current = async () => {
-    // Only validate apps whose student record still exists. If a student was
-    // deleted but their application record lingers (orphan), the app would
-    // fail the field check forever even though the UI hides it. Use the same
-    // `enrolled` filter the render uses so validation and UI agree.
     const visible = applications
       .map((app) => ({ app, student: students.find((s) => s.id === app.registration_students_id) }))
       .filter((x): x is { app: Application; student: Student } => !!x.student);
@@ -464,9 +494,8 @@ export default function StudentsStepPage() {
       toast.error(`${student.first_name} ${student.last_name}: Please fill out all required fields.`);
       throw new Error("Validation failed");
     }
-    // Save
     await handleSaveAllAppsRef.current();
-    await setProgressSection("students_completed", true);
+    await setStudentsLocked(true);
     toast.success("Students section completed.");
   };
 
@@ -484,12 +513,46 @@ export default function StudentsStepPage() {
       updateSaveOptions({
         completed: true,
         completedLabel: "Students Section Completed",
-        onUnlock: () => void setProgressSection("students_completed", false),
+        onUnlock: () => void setStudentsLocked(false),
       });
     } else {
-      updateSaveOptions({ label: "Complete Students Section" });
+      // Explicitly clear `completed` + `onUnlock` so the layout's
+      // dim + click-block wrapper releases on unlock. Otherwise the
+      // shallow merge in `updateSaveOptions` carries the stale
+      // `completed: true` forward and the page stays locked-looking.
+      updateSaveOptions({
+        completed: false,
+        onUnlock: undefined,
+        label: "Complete Students Section",
+      });
     }
-  }, [studentsLocked, updateSaveOptions, setProgressSection]);
+  }, [studentsLocked, updateSaveOptions, setStudentsLocked]);
+
+  // Auto-revoke completion when the section's validation regresses
+  // (e.g. the parent added a new student via the modal — the new app
+  // row has empty grade/school/etc., so the section is no longer
+  // genuinely complete even though the bool still says it is). We
+  // also alert the parent so they understand why the green check
+  // disappeared and what they need to fix.
+  const autoRevokedStudentsRef = useRef(false);
+  useEffect(() => {
+    if (!studentsLocked) {
+      autoRevokedStudentsRef.current = false;
+      return;
+    }
+    if (loading || applications.length === 0) return;
+    const allComplete = applications.every((a) => isAppComplete(a));
+    if (allComplete) return;
+    if (autoRevokedStudentsRef.current) return;
+    autoRevokedStudentsRef.current = true;
+    void setStudentsLocked(false).then(() => {
+      toast.message(
+        "A student was added or updated — please review and re-complete this section."
+      );
+    });
+    // isAppComplete is a stable function declaration; safe to omit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [applications, studentsLocked, loading, setStudentsLocked]);
 
   // Auto-save on changes (debounced)
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -536,10 +599,37 @@ export default function StudentsStepPage() {
         }),
       });
       if (res.ok) {
+        const created = await res.json().catch(() => null);
         setCreateSheetOpen(false);
         resetStudentForm();
-        await fetchData();
-        toast.success(isEdit ? "Student updated" : "Student added");
+        // For brand-new students, immediately add them to this year's
+        // application so the parent doesn't have to click through the
+        // modal again to do it. Edits don't trigger this — the student
+        // already had whatever application status they had.
+        if (!isEdit && created && typeof created.id === "number") {
+          // Stage a skeleton placeholder for the new student so the
+          // page shows "something is happening" between sheet close
+          // and the application POST landing. The placeholder is
+          // cleared by the effect below as soon as the real card
+          // shows up in the enrolled list.
+          setPendingNewStudent({
+            id: created.id,
+            first_name:
+              typeof created.first_name === "string" ? created.first_name : "",
+            last_name:
+              typeof created.last_name === "string" ? created.last_name : "",
+          });
+          await handleAddToYear(created.id);
+          // Refresh the rest of the page state (students list +
+          // applications) after the auto-add. handleAddToYear pushes
+          // optimistically into the applications list already, but
+          // fetchData makes sure the new student row also appears.
+          await fetchData();
+          toast.success("Student added to this year's application.");
+        } else {
+          await fetchData();
+          toast.success(isEdit ? "Student updated" : "Student added");
+        }
       } else {
         const body = await res.json().catch(() => null);
         setCreateError(body?.error ?? (editingStudentId ? "Failed to update student" : "Failed to add student"));
@@ -563,6 +653,25 @@ export default function StudentsStepPage() {
   const notEnrolled = students.filter(
     (s) => !applications.some((a) => a.registration_students_id === s.id)
   );
+
+  // Clear the skeleton placeholder once the real student card has
+  // landed in the enrolled list (i.e. the application POST + fetchData
+  // round trip finished). Without this the skeleton would persist
+  // indefinitely after the real card appeared.
+  useEffect(() => {
+    if (!pendingNewStudent) return;
+    const present = enrolled.some(
+      (e) => e.student.id === pendingNewStudent.id
+    );
+    if (present) setPendingNewStudent(null);
+  }, [pendingNewStudent, enrolled]);
+
+  // Don't render two cards for the same student — if the real card is
+  // already in the enrolled list, suppress the skeleton even though
+  // the effect above hasn't yet flushed `pendingNewStudent` to null.
+  const showPendingSkeleton =
+    !!pendingNewStudent &&
+    !enrolled.some((e) => e.student.id === pendingNewStudent.id);
 
   if (loading) {
     return (
@@ -812,6 +921,41 @@ export default function StudentsStepPage() {
                 </CardContent>
               </Card>
             ))}
+            {/* Pending skeleton card — appears in the same slot the new
+                student is about to occupy, so the page reads as "we're
+                adding them now" instead of jumping straight to the new
+                card. Matches the real card's outer shape (avatar + name
+                header, four input rows below) so when it swaps out for
+                the real card the layout doesn't shift. */}
+            {showPendingSkeleton && pendingNewStudent ? (
+              <Card className="overflow-hidden gap-0 py-0">
+                <CardHeader className="py-3 !pb-3 border-b">
+                  <div className="flex items-center gap-3">
+                    <Avatar className="size-10">
+                      <AvatarFallback className="bg-muted text-muted-foreground text-sm font-medium">
+                        {(pendingNewStudent.first_name.charAt(0) ?? "").toUpperCase()}
+                        {(pendingNewStudent.last_name.charAt(0) ?? "").toUpperCase()}
+                      </AvatarFallback>
+                    </Avatar>
+                    <CardTitle className="text-lg flex items-center gap-2">
+                      {pendingNewStudent.first_name} {pendingNewStudent.last_name}
+                      <span className="text-xs font-normal text-muted-foreground inline-flex items-center gap-1.5">
+                        <Loader2 className="size-3 animate-spin" />
+                        Adding to application…
+                      </span>
+                    </CardTitle>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-4 py-5 bg-white dark:bg-background">
+                  {Array.from({ length: 4 }).map((_, i) => (
+                    <div key={i}>
+                      <Skeleton className="h-3 w-24 mb-2" />
+                      <Skeleton className="h-9 w-full rounded-md" />
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            ) : null}
             <Button
               variant="outline"
               className="w-full"
@@ -842,49 +986,70 @@ export default function StudentsStepPage() {
             </div>
           )}
 
-          {notEnrolled.length > 0 ? (
+          {students.length > 0 ? (
             <div className="divide-y rounded-lg border">
-              {notEnrolled.map((student) => (
-                <div
-                  key={student.id}
-                  className="flex items-center justify-between px-4 py-3"
-                >
-                  <div>
-                    <p className="text-sm font-medium">
-                      {student.first_name} {student.last_name}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {student.date_of_birth
-                        ? `${formatDob(student.date_of_birth)} · Age ${formatAge(student.date_of_birth)}`
-                        : "No date of birth"}
-                      {student.gender ? ` · ${student.gender}` : ""}
-                    </p>
+              {students.map((student) => {
+                // Show every family student in the modal — already-added
+                // ones get a disabled "Added to application" pill so the
+                // parent can see at a glance who's in vs out, instead of
+                // hiding them and showing a "nothing left to add" message.
+                const isAdded = applications.some(
+                  (a) => a.registration_students_id === student.id
+                );
+                return (
+                  <div
+                    key={student.id}
+                    className="flex items-center justify-between px-4 py-3"
+                  >
+                    <div>
+                      <p className="text-sm font-medium">
+                        {student.first_name} {student.last_name}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {student.date_of_birth
+                          ? `${formatDob(student.date_of_birth)} · Age ${formatAge(student.date_of_birth)}`
+                          : "No date of birth"}
+                        {student.gender ? ` · ${student.gender}` : ""}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {isAdded ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled
+                          className="bg-muted text-muted-foreground"
+                        >
+                          Added to application
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          disabled={addingStudentId === student.id}
+                          onClick={() => handleAddToYear(student.id)}
+                        >
+                          {addingStudentId === student.id ? "Adding..." : "Add"}
+                        </Button>
+                      )}
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="size-8 text-muted-foreground hover:text-foreground"
+                        onClick={() => openEditStudentSheet(student)}
+                        aria-label={`Edit ${student.first_name} ${student.last_name}`}
+                      >
+                        <Pencil className="size-4" />
+                      </Button>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      size="sm"
-                      disabled={addingStudentId === student.id}
-                      onClick={() => handleAddToYear(student.id)}
-                    >
-                      {addingStudentId === student.id ? "Adding..." : "Add"}
-                    </Button>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="size-8 text-muted-foreground hover:text-foreground"
-                      onClick={() => openEditStudentSheet(student)}
-                      aria-label={`Edit ${student.first_name} ${student.last_name}`}
-                    >
-                      <Pencil className="size-4" />
-                    </Button>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           ) : (
             <div className="rounded-lg border px-4 py-6 text-center">
               <p className="text-sm text-muted-foreground">
-                All students in your family are already enrolled.
+                No students on your family yet — use &ldquo;Create New
+                Student&rdquo; below to add one.
               </p>
             </div>
           )}

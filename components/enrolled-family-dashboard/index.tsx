@@ -1,0 +1,798 @@
+"use client";
+
+import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import useSWR, { useSWRConfig } from "swr";
+import { toast } from "sonner";
+import { useUser } from "@clerk/nextjs";
+import { useFamily, useStudents, useApplications, useSchoolYears, mutateFamily } from "@/hooks/use-api";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Pencil,
+  HandHeart,
+  CreditCard,
+  ChevronRight,
+  Plus,
+  Trash2,
+} from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { EditContactSheet } from "./edit-contact-sheet";
+import { AddParentSheet } from "./add-parent-sheet";
+import { AddEmergencyContactSheet } from "./add-emergency-contact-sheet";
+import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
+
+type Parent = {
+  id: number;
+  first_name: string;
+  last_name: string;
+  email: string;
+  phone: string;
+  relationship: string;
+  address_line_1: string;
+  address_line_2: string;
+  city: string;
+  state: string;
+  zipcode: string;
+};
+
+type EmergencyContact = Parent & {
+  // EC shape is parent-shape + these; safe to reuse the Parent type since the
+  // sheet writes a superset of fields.
+};
+
+type Student = {
+  id: number;
+  first_name: string;
+  last_name: string;
+  date_of_birth: string;
+  gender: string;
+  isAccepted: boolean;
+  /** Either a Xano file metadata object (with `url` / `path`) or a string URL. */
+  photo?: string | { url?: string; path?: string } | null;
+};
+
+type Application = {
+  id: number;
+  registration_students_id: number;
+  registration_school_years_id: number;
+  current_grade: string;
+};
+
+const fetcher = async (url: string) => {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Fetch failed (${res.status})`);
+  return res.json();
+};
+
+interface Props {
+  yearId: number;
+  yearName: string;
+  submittedDate: number | null;
+  /** Pre-resolved list of enrolled years for the picker. Passed in from
+   *  the page so we don't refetch /api/student-registration?yearId=X for
+   *  every candidate year a second time — the page already did that work
+   *  to figure out which year to render. Sorted most-recent-first. */
+  availableYears?: { id: number; year_name: string }[];
+}
+
+export function EnrolledFamilyDashboard({
+  yearId,
+  yearName,
+  submittedDate,
+  availableYears: availableYearsProp,
+}: Props) {
+  const router = useRouter();
+  const { user } = useUser();
+  const firstName = user?.firstName ?? "";
+
+  const { data: familyData } = useFamily();
+  const { data: studentsData } = useStudents();
+  const { data: applicationsData } = useApplications();
+  const { data: yearsData } = useSchoolYears();
+  const { data: emergencyContacts } = useSWR<EmergencyContact[]>(
+    "/api/emergency-contacts",
+    fetcher,
+    { revalidateOnFocus: false, dedupingInterval: 10000 }
+  );
+
+  // Re-application affordance: if the school has a `nextYear` row, surface
+  // a card on the dashboard pointing at that year's reapply flow. Returning
+  // families use it to bootstrap (or resume) the new academic year. We
+  // intentionally show this even when the dashboard's current `yearId`
+  // matches `nextYear.id` — the parent might switch year pickers and we
+  // don't want the card flickering out of existence based on that.
+  const nextYear = useMemo(() => {
+    if (!yearsData) return null;
+    const ys = yearsData as { id: number; year_name: string; isNextYear?: boolean }[];
+    return ys.find((y) => y.isNextYear === true) ?? null;
+  }, [yearsData]);
+
+  const { data: nextYearReapply } = useSWR<{ id: number; isSubmitted?: boolean } | null>(
+    nextYear ? `/api/reapply-family-progress?yearId=${nextYear.id}` : null,
+    fetcher,
+    { revalidateOnFocus: false, dedupingInterval: 10000 }
+  );
+
+  const [reapplying, setReapplying] = useState(false);
+  async function beginReapplication() {
+    if (!nextYear || reapplying) return;
+    setReapplying(true);
+    try {
+      const res = await fetch("/api/begin-reapplication", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ yearId: nextYear.id }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error ?? `Failed (${res.status})`);
+      }
+      const { redirectTo } = await res.json();
+      router.push(redirectTo ?? `/reapply/year/${nextYear.id}`);
+    } catch (err) {
+      console.error("Failed to begin re-application:", err);
+      toast.error(
+        err instanceof Error
+          ? err.message
+          : "Couldn't start re-application. Please try again."
+      );
+    } finally {
+      setReapplying(false);
+    }
+  }
+
+  const parents: Parent[] = (familyData?.parents ?? []) as Parent[];
+  const primary = parents[0] ?? null;
+  const secondary = parents[1] ?? null;
+
+  // Students + grade for this year
+  const enrolledStudents = useMemo(() => {
+    if (!studentsData || !applicationsData) return [];
+    const apps = (applicationsData as Application[]).filter(
+      (a) => a.registration_school_years_id === yearId
+    );
+    return apps
+      .map((app) => {
+        const student = (studentsData as Student[]).find(
+          (s) => s.id === app.registration_students_id
+        );
+        if (!student) return null;
+        return { student, app };
+      })
+      .filter((x): x is { student: Student; app: Application } => x !== null);
+  }, [studentsData, applicationsData, yearId]);
+
+  // Year picker — only show years where the family is fully enrolled.
+  // The parent page already resolved this list (it had to, in order to
+  // pick which year to render) and passes it in as `availableYearsProp`.
+  // We fall back to deriving from `yearsData` when it's not provided so
+  // the component stays usable in isolation, but the dashboard page
+  // always passes the prop to avoid a duplicate per-year packet fetch.
+  const availableYears = useMemo(() => {
+    if (availableYearsProp) return availableYearsProp;
+    // Fallback: no enrollment-status info available, just show every
+    // year the family has applications for. Year picker still works for
+    // navigation; the parent page guards the actual route access.
+    if (!yearsData || !applicationsData) return [];
+    const candidateYearIds = new Set(
+      (applicationsData as Application[]).map(
+        (a) => a.registration_school_years_id
+      )
+    );
+    return (yearsData as { id: number; year_name: string }[])
+      .filter((y) => candidateYearIds.has(y.id))
+      .sort((a, b) => b.id - a.id);
+  }, [availableYearsProp, yearsData, applicationsData]);
+
+  const { mutate: swrMutate } = useSWRConfig();
+  const [editing, setEditing] = useState<
+    | { kind: "parent"; record: Parent }
+    | { kind: "emergency"; record: EmergencyContact }
+    | null
+  >(null);
+  const [addParentOpen, setAddParentOpen] = useState(false);
+  const [addEmergencyOpen, setAddEmergencyOpen] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<
+    | { kind: "parent"; id: number; name: string }
+    | { kind: "emergency"; id: number; name: string }
+    | null
+  >(null);
+  const [deleting, setDeleting] = useState(false);
+
+  async function confirmDelete() {
+    if (!pendingDelete) return;
+    setDeleting(true);
+    try {
+      const url =
+        pendingDelete.kind === "parent"
+          ? `/api/parents/${pendingDelete.id}`
+          : `/api/emergency-contacts/${pendingDelete.id}`;
+      const res = await fetch(url, { method: "DELETE" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error ?? `Delete failed (${res.status})`);
+      }
+      // Refresh whichever cache the contact lived in.
+      if (pendingDelete.kind === "parent") {
+        await mutateFamily();
+      } else {
+        await swrMutate("/api/emergency-contacts");
+      }
+      toast.success(`${pendingDelete.name} removed.`);
+      setPendingDelete(null);
+    } catch (err) {
+      console.error("Failed to delete contact:", err);
+      toast.error(
+        err instanceof Error ? err.message : "Failed to remove contact."
+      );
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  const loading =
+    !familyData ||
+    !studentsData ||
+    !applicationsData ||
+    !yearsData ||
+    emergencyContacts === undefined;
+
+  if (loading) {
+    return (
+      <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
+        <div className="flex items-center justify-between border-b pb-4">
+          <div className="space-y-2">
+            <Skeleton className="h-3 w-24" />
+            <Skeleton className="h-7 w-64" />
+          </div>
+          <Skeleton className="h-9 w-40" />
+        </div>
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div key={i} className="rounded-lg border p-6 space-y-3">
+            <Skeleton className="h-4 w-32" />
+            <Skeleton className="h-16 w-full" />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
+      {/* Header — label, heading, year picker */}
+      <div className="flex items-start justify-between gap-4 border-b pb-4">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            Enrolled
+          </p>
+          <h1 className="text-2xl font-semibold mt-1">
+            {firstName ? `Welcome back, ${firstName}.` : "Welcome back."}
+          </h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Your family is enrolled for the {yearName} school year
+            {submittedDate
+              ? `, confirmed on ${new Date(submittedDate).toLocaleDateString(
+                  "en-US",
+                  { month: "long", day: "numeric", year: "numeric" }
+                )}.`
+              : "."}
+          </p>
+        </div>
+        {availableYears.length > 1 ? (
+          <Select
+            value={String(yearId)}
+            onValueChange={(val) => router.push(`/dashboard?yearId=${val}`)}
+          >
+            <SelectTrigger className="w-40 bg-white">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {availableYears.map((y) => (
+                <SelectItem key={y.id} value={String(y.id)}>
+                  {y.year_name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : null}
+      </div>
+
+      {/* Re-application card — always rendered when there's a `nextYear`
+          school year, so returning families see a clear path to next
+          year's enrollment regardless of where they are in the process.
+          Three states:
+            - Not bootstrapped yet (no app rows for nextYear): "Begin"
+            - Bootstrapped, in progress (`isSubmitted: false`): "Resume"
+            - Submitted (`isSubmitted: true`): awaiting-review status
+          The bootstrap state is derived from applicationsData rather than
+          the progress row because the progress GET endpoint resolve-creates
+          a row on first read; presence of an application row is a stronger
+          signal that the family actually clicked Begin. */}
+      {nextYear ? (() => {
+        const hasNextYearApp = (applicationsData as Application[] | undefined)?.some(
+          (a) => a.registration_school_years_id === nextYear.id
+        );
+        const submitted = nextYearReapply?.isSubmitted === true;
+
+        if (submitted) {
+          return (
+            <div className="rounded-xl border bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-900 p-5 flex items-start justify-between gap-4">
+              <div>
+                <p className="text-sm font-semibold text-emerald-900 dark:text-emerald-100">
+                  {nextYear.year_name} re-application submitted
+                </p>
+                <p className="text-xs text-emerald-800/80 dark:text-emerald-200/80 mt-1 max-w-xl">
+                  We&rsquo;ve received your re-application — admissions will
+                  be in touch as we confirm your spot for the next academic
+                  year.
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                className="bg-white shrink-0"
+                onClick={() => router.push(`/reapply/year/${nextYear.id}`)}
+              >
+                Review re-application
+              </Button>
+            </div>
+          );
+        }
+
+        if (hasNextYearApp) {
+          return (
+            <div className="rounded-xl border bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-900 p-5 flex items-start justify-between gap-4">
+              <div>
+                <p className="text-sm font-semibold text-amber-900 dark:text-amber-100">
+                  {nextYear.year_name} re-application in progress
+                </p>
+                <p className="text-xs text-amber-800/80 dark:text-amber-200/80 mt-1 max-w-xl">
+                  Pick up where you left off — finish your remaining sections
+                  to lock in your spot for the next academic year.
+                </p>
+              </div>
+              <Button
+                className="shrink-0"
+                onClick={() => router.push(`/reapply/year/${nextYear.id}`)}
+              >
+                Resume re-application
+              </Button>
+            </div>
+          );
+        }
+
+        return (
+          <div className="rounded-xl border bg-blue-50 dark:bg-blue-950/30 border-blue-200 dark:border-blue-900 p-5 flex items-start justify-between gap-4">
+            <div>
+              <p className="text-sm font-semibold text-blue-900 dark:text-blue-100">
+                Re-apply for {nextYear.year_name}
+              </p>
+              <p className="text-xs text-blue-800/80 dark:text-blue-200/80 mt-1 max-w-xl">
+                Registration for the next academic year is now open for
+                returning families. You&rsquo;ll be asked to confirm your
+                family + student information, re-submit the Opportunity
+                Scholarship application, and confirm transportation
+                preferences.
+              </p>
+            </div>
+            <Button
+              onClick={beginReapplication}
+              disabled={reapplying}
+              className="shrink-0"
+            >
+              {reapplying ? "Starting…" : "Begin Re-application"}
+            </Button>
+          </div>
+        );
+      })() : null}
+
+      {/* Tuition & Fees + Volunteer Hours — buttons that route to the
+          dedicated detail pages where the schedules + history live. */}
+      <div className="grid gap-3 sm:grid-cols-2">
+        <button
+          type="button"
+          onClick={() => router.push(`/dashboard/tuition?yearId=${yearId}`)}
+          className="flex items-center justify-between gap-3 rounded-xl border bg-white px-5 py-4 text-left shadow-sm hover:bg-muted/30 transition-colors cursor-pointer"
+        >
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-muted/50">
+              <CreditCard className="size-5 text-muted-foreground" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-medium">Tuition &amp; Fees</p>
+              <p className="text-xs text-muted-foreground truncate">
+                Payment schedule, balance, history
+              </p>
+            </div>
+          </div>
+          <ChevronRight className="size-4 text-muted-foreground shrink-0" />
+        </button>
+        <button
+          type="button"
+          onClick={() =>
+            router.push(`/dashboard/volunteer-hours?yearId=${yearId}`)
+          }
+          className="flex items-center justify-between gap-3 rounded-xl border bg-white px-5 py-4 text-left shadow-sm hover:bg-muted/30 transition-colors cursor-pointer"
+        >
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-muted/50">
+              <HandHeart className="size-5 text-muted-foreground" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-medium">Volunteer Hours</p>
+              <p className="text-xs text-muted-foreground truncate">
+                40 per year &middot; 8 per term
+              </p>
+            </div>
+          </div>
+          <ChevronRight className="size-4 text-muted-foreground shrink-0" />
+        </button>
+      </div>
+
+      {/* Students enrolled this year — same table styling as the year
+          overview's step table. Each row is clickable; takes the parent
+          to the student's detail page. */}
+      <div>
+        <h2 className="text-sm font-semibold mb-3">Currently Enrolled Students</h2>
+        <div className="rounded-xl bg-background p-1.5 shadow-sm border">
+          <div className="overflow-hidden rounded-lg border">
+            {enrolledStudents.length === 0 ? (
+              <p className="px-4 py-6 text-sm text-muted-foreground text-center">
+                No students enrolled for this year.
+              </p>
+            ) : (
+              <Table className="text-sm">
+                <TableBody>
+                  {enrolledStudents.map(({ student, app }) => {
+                    // Photo can be either a string URL (older rows) or a
+                    // Xano file metadata object — accept both shapes.
+                    const photoUrl =
+                      typeof student.photo === "string"
+                        ? student.photo
+                        : student.photo &&
+                          typeof student.photo === "object"
+                          ? (student.photo.url as string | undefined) ??
+                            (student.photo.path
+                              ? `${process.env.NEXT_PUBLIC_XANO_BASE ?? "https://xsc3-mvx7-r86m.n7e.xano.io"}${student.photo.path}`
+                              : undefined)
+                          : undefined;
+                    return (
+                      <TableRow
+                        key={student.id}
+                        className="cursor-pointer transition-colors hover:bg-muted/30"
+                        onClick={() =>
+                          router.push(
+                            `/dashboard/student/${student.id}?yearId=${yearId}`
+                          )
+                        }
+                      >
+                        <TableCell className="px-4 py-3">
+                          <div className="flex items-center gap-3">
+                            <Avatar className="size-10 shrink-0">
+                              {photoUrl ? (
+                                <AvatarImage
+                                  src={photoUrl}
+                                  alt={`${student.first_name} ${student.last_name}`}
+                                />
+                              ) : null}
+                              <AvatarFallback className="bg-muted text-muted-foreground text-sm font-medium">
+                                {student.first_name.charAt(0)}
+                                {student.last_name.charAt(0)}
+                              </AvatarFallback>
+                            </Avatar>
+                            <div className="min-w-0">
+                              <p className="font-medium truncate">
+                                {student.first_name} {student.last_name}
+                              </p>
+                              <p className="text-xs text-muted-foreground mt-0.5 truncate">
+                                {app.current_grade
+                                  ? `${app.current_grade} grade`
+                                  : "Grade not set"}
+                              </p>
+                            </div>
+                          </div>
+                        </TableCell>
+                        <TableCell className="px-4 py-3 text-right w-10">
+                          <ChevronRight className="size-4 text-muted-foreground inline-block" />
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Contacts — grouped table with section headers for primary,
+          secondary, and emergency contacts. Each row has a pencil edit
+          button that opens the shared edit sheet. */}
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-semibold">Contacts</h2>
+          <div className="flex items-center gap-2">
+            {/* Add Parent — only renders when there's no secondary on file
+                yet, since the family already has a primary by definition. */}
+            {!secondary && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="bg-white"
+                onClick={() => setAddParentOpen(true)}
+              >
+                <Plus className="size-4 mr-1.5" />
+                Add Parent
+              </Button>
+            )}
+            <Button
+              size="sm"
+              variant="outline"
+              className="bg-white"
+              onClick={() => setAddEmergencyOpen(true)}
+            >
+              <Plus className="size-4 mr-1.5" />
+              Add Emergency Contact
+            </Button>
+          </div>
+        </div>
+        <div className="rounded-xl bg-background p-1.5 shadow-sm border">
+          <div className="overflow-hidden rounded-lg border">
+            {!primary && !secondary && (emergencyContacts ?? []).length === 0 ? (
+              <p className="px-4 py-6 text-sm text-muted-foreground text-center">
+                No contacts on file.{" "}
+                <a
+                  href="mailto:tward@sailfuture.org?subject=Missing%20contacts"
+                  className="text-primary underline underline-offset-2"
+                >
+                  Contact the office
+                </a>
+                .
+              </p>
+            ) : (
+              <Table className="text-sm">
+                <TableBody>
+                  {/* Parents / Guardians group — primary first, then
+                      secondary (if present). Family is capped at two
+                      parents total; primary is never deletable. */}
+                  <ContactGroupHeader label="Parents / Guardians" />
+                  {primary ? (
+                    <ContactTableRow
+                      contact={primary}
+                      role="Primary"
+                      onEdit={() =>
+                        setEditing({ kind: "parent", record: primary })
+                      }
+                    />
+                  ) : (
+                    <ContactEmptyRow note="No primary parent on file." />
+                  )}
+                  {secondary ? (
+                    <ContactTableRow
+                      contact={secondary}
+                      role="Secondary"
+                      onEdit={() =>
+                        setEditing({ kind: "parent", record: secondary })
+                      }
+                      onDelete={() =>
+                        setPendingDelete({
+                          kind: "parent",
+                          id: secondary.id,
+                          name: `${secondary.first_name} ${secondary.last_name}`,
+                        })
+                      }
+                    />
+                  ) : null}
+
+                  {/* Emergency contacts group — all deletable. */}
+                  <ContactGroupHeader label="Emergency Contacts" />
+                  {(emergencyContacts ?? []).length === 0 ? (
+                    <ContactEmptyRow note="No emergency contacts on file." />
+                  ) : (
+                    (emergencyContacts ?? []).map((ec) => (
+                      <ContactTableRow
+                        key={ec.id}
+                        contact={ec}
+                        onEdit={() =>
+                          setEditing({ kind: "emergency", record: ec })
+                        }
+                        onDelete={() =>
+                          setPendingDelete({
+                            kind: "emergency",
+                            id: ec.id,
+                            name: `${ec.first_name} ${ec.last_name}`,
+                          })
+                        }
+                      />
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Contact footer */}
+      <p className="text-xs text-muted-foreground text-center pt-4 border-t">
+        Need to change anything else? Reach us at{" "}
+        <a
+          href="mailto:tward@sailfuture.org"
+          className="text-primary underline underline-offset-2"
+        >
+          tward@sailfuture.org
+        </a>{" "}
+        or{" "}
+        <a
+          href="tel:+17279001436"
+          className="text-primary underline underline-offset-2"
+        >
+          (727) 900-1436
+        </a>
+        .
+      </p>
+
+      {/* Edit sheet — shared by both parent and emergency-contact edits. */}
+      <EditContactSheet
+        open={!!editing}
+        onOpenChange={(open) => {
+          if (!open) setEditing(null);
+        }}
+        kind={editing?.kind ?? "parent"}
+        contact={editing?.record ?? null}
+        onSaved={() => setEditing(null)}
+      />
+
+      {/* Add Parent — Clerk invitation flow, mirrors the registration page. */}
+      <AddParentSheet
+        open={addParentOpen}
+        onOpenChange={setAddParentOpen}
+      />
+
+      {/* Add Emergency Contact — direct create. */}
+      <AddEmergencyContactSheet
+        open={addEmergencyOpen}
+        onOpenChange={setAddEmergencyOpen}
+      />
+
+      {/* Delete confirmation — applies to secondary parents and emergency
+          contacts. Primary parents intentionally don't have a delete path. */}
+      <AlertDialog
+        open={!!pendingDelete}
+        onOpenChange={(open) => {
+          if (!open && !deleting) setPendingDelete(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove this contact?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingDelete
+                ? `${pendingDelete.name} will be removed from your family. You can re-add them later.`
+                : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 text-white hover:bg-red-700"
+              disabled={deleting}
+              onClick={(e) => {
+                e.preventDefault();
+                void confirmDelete();
+              }}
+            >
+              {deleting ? "Removing…" : "Remove"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}
+
+/** Section header row inside the contacts table — small-caps label on a
+ *  muted background so each contact group reads as its own bucket. */
+function ContactGroupHeader({ label }: { label: string }) {
+  return (
+    <TableRow className="bg-muted/40 hover:bg-muted/40">
+      <TableCell colSpan={2} className="px-4 py-2">
+        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          {label}
+        </p>
+      </TableCell>
+    </TableRow>
+  );
+}
+
+/** Empty-state row used when a group has no contacts on file. */
+function ContactEmptyRow({ note }: { note: string }) {
+  return (
+    <TableRow>
+      <TableCell colSpan={2} className="px-4 py-3 text-xs text-muted-foreground">
+        {note}
+      </TableCell>
+    </TableRow>
+  );
+}
+
+/** Single contact row — name + relationship + phone/email + edit + delete.
+ *  Delete is opt-in via `onDelete`; primary parent rows omit it because
+ *  the family always needs at least one primary on file. */
+function ContactTableRow({
+  contact,
+  onEdit,
+  onDelete,
+  role,
+}: {
+  contact: Parent | EmergencyContact;
+  onEdit: () => void;
+  onDelete?: () => void;
+  /** Optional pill rendered next to the name — used to label primary vs.
+   *  secondary parents under the combined Parents / Guardians group. */
+  role?: string;
+}) {
+  return (
+    <TableRow>
+      <TableCell className="px-4 py-3">
+        <p className="font-medium flex items-center gap-2 flex-wrap">
+          <span>
+            {contact.first_name} {contact.last_name}
+          </span>
+          {role ? (
+            <span className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground bg-muted/60 rounded px-1.5 py-0.5">
+              {role}
+            </span>
+          ) : null}
+          {contact.relationship ? (
+            <span className="font-normal text-muted-foreground">
+              {contact.relationship}
+            </span>
+          ) : null}
+        </p>
+        <p className="text-xs text-muted-foreground mt-0.5">
+          {[contact.phone, contact.email].filter(Boolean).join(" · ") || "—"}
+        </p>
+      </TableCell>
+      <TableCell className="px-4 py-3 text-right whitespace-nowrap">
+        <Button
+          size="icon"
+          variant="ghost"
+          className="size-8 text-muted-foreground hover:text-foreground"
+          onClick={onEdit}
+          aria-label={`Edit ${contact.first_name} ${contact.last_name}`}
+        >
+          <Pencil className="size-4" />
+        </Button>
+        {onDelete && (
+          <Button
+            size="icon"
+            variant="ghost"
+            className="size-8 text-muted-foreground hover:text-red-600 ml-1"
+            onClick={onDelete}
+            aria-label={`Remove ${contact.first_name} ${contact.last_name}`}
+          >
+            <Trash2 className="size-4" />
+          </Button>
+        )}
+      </TableCell>
+    </TableRow>
+  );
+}

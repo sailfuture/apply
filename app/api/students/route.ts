@@ -80,6 +80,18 @@ export async function POST(req: NextRequest) {
     registration_school_years_id: [],
     isArchived: false,
     isAccepted: false,
+    // Packet ID list — appended to by /api/student-registration when a new
+    // registration_student_registration row is created for this student.
+    registration_student_registration_id: [],
+    // Document arrays — start empty; parents populate them on /registration.
+    birth_certificate: [],
+    school_health_form: [],
+    transcripts: [],
+    immunization_forms: [],
+    passport: [],
+    student_state_id: [],
+    iep: [],
+    ssn_card: [],
   });
 
   const family = await xano.families.getById(familyId);

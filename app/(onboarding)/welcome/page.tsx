@@ -19,38 +19,64 @@ import {
   FieldDescription,
 } from "@/components/ui/field";
 import { StateSelect } from "@/components/state-select";
-import { US_STATES } from "@/lib/us-states";
 
+/**
+ * First-time onboarding for a new family. We capture the primary parent /
+ * guardian's name + home address; the family record's `family_name` is
+ * derived from the last name on submit (e.g. "Walsh Family"). The parent
+ * row already exists from the Clerk webhook (`user.created` → seeds
+ * first/last from Clerk), but we let the parent override those names here
+ * since Clerk's first/last can be wrong if they signed up with just an
+ * email — and either way this is the first time they've explicitly
+ * named themselves on the application side.
+ */
 export default function WelcomePage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
-  const [familyName, setFamilyName] = useState("");
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
   const [addressLine1, setAddressLine1] = useState("");
   const [addressLine2, setAddressLine2] = useState("");
   const [city, setCity] = useState("");
   const [state, setState] = useState("");
   const [zip, setZip] = useState("");
 
+  // If a family already exists, bounce back to the home redirect (which
+  // routes through admin / apply / dashboard depending on lifecycle).
+  // Also pre-fill name fields from the existing parent record so the user
+  // sees what we already have on file before they confirm.
   useEffect(() => {
-    async function checkFamily() {
+    async function bootstrap() {
       try {
-        const res = await fetch("/api/families");
-        if (res.ok) {
-          const data = await res.json();
+        const familyRes = await fetch("/api/families");
+        if (familyRes.ok) {
+          const data = await familyRes.json();
           if (data?.id) {
             router.replace("/");
             return;
           }
+        }
+        // Pre-fill from the parent record (created on Clerk signup via the
+        // webhook). Quietly swallow errors — the form still works without it.
+        try {
+          const me = await fetch("/api/parents/me");
+          if (me.ok) {
+            const parent = await me.json();
+            if (parent?.first_name) setFirstName(parent.first_name);
+            if (parent?.last_name) setLastName(parent.last_name);
+          }
+        } catch {
+          /* no-op */
         }
       } catch {
         // continue to show welcome
       }
       setLoading(false);
     }
-    checkFamily();
+    bootstrap();
   }, [router]);
 
   async function handleSubmit(e: React.FormEvent) {
@@ -63,7 +89,11 @@ export default function WelcomePage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          family_name: familyName,
+          // Primary parent's name is the canonical input now. The route
+          // derives `family_name` ("{lastName} Family") from these and
+          // updates the parent row so the names align across surfaces.
+          first_name: firstName.trim(),
+          last_name: lastName.trim(),
           address_line_1: addressLine1,
           address_line_2: addressLine2,
           city,
@@ -120,21 +150,39 @@ export default function WelcomePage() {
           <CardHeader>
             <CardTitle>Create Your Family</CardTitle>
             <CardDescription>
-              Enter your family name and home address to get started.
+              Enter the primary parent or guardian&rsquo;s name and your
+              home address to get started.
             </CardDescription>
           </CardHeader>
           <form onSubmit={handleSubmit}>
             <CardContent className="space-y-4">
-              <Field>
-                <FieldLabel htmlFor="family_name">Family Name</FieldLabel>
-                <Input
-                  id="family_name"
-                  placeholder='e.g. "The Walsh Family"'
-                  value={familyName}
-                  onChange={(e) => setFamilyName(e.target.value)}
-                  required
-                />
-              </Field>
+              <div className="grid grid-cols-2 gap-4">
+                <Field>
+                  <FieldLabel htmlFor="first_name">First Name</FieldLabel>
+                  <Input
+                    id="first_name"
+                    placeholder="Jane"
+                    value={firstName}
+                    onChange={(e) => setFirstName(e.target.value)}
+                    required
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="last_name">Last Name</FieldLabel>
+                  <Input
+                    id="last_name"
+                    placeholder="Walsh"
+                    value={lastName}
+                    onChange={(e) => setLastName(e.target.value)}
+                    required
+                  />
+                </Field>
+              </div>
+              <FieldDescription>
+                Your family record will be created as &ldquo;
+                {lastName ? `${lastName} Family` : "(your last name) Family"}
+                &rdquo;.
+              </FieldDescription>
 
               <Field>
                 <FieldLabel htmlFor="address_line_1">

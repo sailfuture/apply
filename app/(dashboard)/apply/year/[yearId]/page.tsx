@@ -1,11 +1,15 @@
 "use client";
 
-import { useParams, useRouter } from "next/navigation";
+import { useParams, usePathname, useRouter } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
 import { useApplicationSteps, type StepStatus } from "@/hooks/use-application-steps";
 import { useStudents } from "@/hooks/use-api";
+import useSWR from "swr";
 import { useFamilyProgress } from "@/hooks/use-family-progress";
+import { useStudentRegistrationProgress } from "@/hooks/use-student-registration-progress";
 import { PreSubmitReviewModal, type SectionStatus } from "@/components/pre-submit-review-modal";
+import { EnrolledFamilyDashboard } from "@/components/enrolled-family-dashboard";
+import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
 import { ArrowRight, Clock, CheckCircle2, Lock } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import Image from "next/image";
@@ -93,24 +97,186 @@ function AcceptanceStepCircle({
   );
 }
 
+/* ── Registration Pending View ── */
+/** Shown after the parent submits their registration but before every
+ *  student has been admin-confirmed (`registrationConfirmed` on the packet).
+ *  Mirrors the card + table styling used on the enrolled-family dashboard
+ *  and pre-submit review modal so the whole accepted-to-enrolled flow feels
+ *  like one surface. */
+function RegistrationPendingView({
+  parentName,
+  yearName,
+  submittedDate,
+  packets,
+  students,
+}: {
+  parentName: string;
+  yearName: string;
+  submittedDate: number | null;
+  packets: {
+    id: number;
+    registrationConfirmed?: boolean;
+    registration_students_id: number;
+  }[];
+  students: { id: number; first_name: string; last_name: string }[];
+}) {
+  const studentLookup = (id: number) => students.find((s) => s.id === id);
+  const confirmedCount = packets.filter((p) => p.registrationConfirmed).length;
+  const pendingCount = packets.length - confirmedCount;
+
+  return (
+    <div className="flex min-h-[calc(100vh-7.5rem)] items-center justify-center px-4 bg-gray-50 dark:bg-background">
+      <div className="w-full max-w-2xl py-8">
+        {/* Heading — same logo + centered headline + subhead pattern used by
+            the application-submitted banner and the accepted view. */}
+        <div className="text-center mb-8">
+          <div className="flex justify-center mb-4">
+            <div className="rounded-full border-[6px] border-white dark:border-background shadow-sm">
+              <Image
+                src="/logo.svg"
+                alt="SailFuture Academy"
+                width={64}
+                height={64}
+                className="size-16 rounded-full"
+              />
+            </div>
+          </div>
+          <h1 className="text-2xl font-semibold">
+            Your {yearName} registration is in review.
+          </h1>
+          <p className="text-muted-foreground text-sm mt-3 max-w-lg mx-auto">
+            {parentName ? `Thank you, ${parentName}. ` : "Thank you. "}
+            We&rsquo;ve received your registration. Our admissions team is
+            reviewing each student&rsquo;s packet — this page updates as each
+            student is confirmed, and once everyone is confirmed you&rsquo;ll
+            be taken to your family dashboard automatically.
+          </p>
+        </div>
+
+        {/* Summary table — same outer-border + divide rows styling used on
+            registration pages (bordered rounded container wrapping a Table
+            with row dividers). */}
+        <div className="rounded-xl bg-background p-1.5 shadow-sm border">
+          <div className="overflow-hidden rounded-lg border">
+            <div className="flex items-center justify-between border-b px-4 py-3 bg-muted/30">
+              <div>
+                <p className="text-sm font-medium">Registration received</p>
+                {submittedDate ? (
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Submitted on{" "}
+                    {new Date(submittedDate).toLocaleDateString("en-US", {
+                      month: "long",
+                      day: "numeric",
+                      year: "numeric",
+                    })}
+                  </p>
+                ) : null}
+              </div>
+              <span className="text-xs font-medium text-muted-foreground tabular-nums shrink-0">
+                {confirmedCount}/{packets.length} confirmed
+              </span>
+            </div>
+
+            {packets.length === 0 ? (
+              <p className="px-4 py-6 text-sm text-muted-foreground text-center">
+                No students found on this registration. If you believe this
+                is an error, please contact our admissions team.
+              </p>
+            ) : (
+              <Table className="text-sm">
+                <TableBody>
+                  {packets.map((p) => {
+                    const student = studentLookup(p.registration_students_id);
+                    const confirmed = !!p.registrationConfirmed;
+                    return (
+                      <TableRow key={p.id}>
+                        <TableCell className="py-3 px-4">
+                          <p className="font-medium">
+                            {student
+                              ? `${student.first_name} ${student.last_name}`
+                              : `Student #${p.registration_students_id}`}
+                          </p>
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            {confirmed
+                              ? "Confirmed by admissions"
+                              : "Awaiting admissions review"}
+                          </p>
+                        </TableCell>
+                        <TableCell className="py-3 px-4 text-right">
+                          {confirmed ? (
+                            <span className="inline-flex items-center gap-1.5 text-xs font-medium text-green-700 dark:text-green-500">
+                              <CheckCircle2 className="size-4" />
+                              Confirmed
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-700 dark:text-amber-500">
+                              <Clock className="size-4" />
+                              Pending
+                            </span>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            )}
+          </div>
+        </div>
+
+        {pendingCount > 0 ? (
+          <p className="text-xs text-muted-foreground text-center mt-4">
+            We&rsquo;ll email the primary parent on file as soon as the
+            remaining{" "}
+            {pendingCount === 1
+              ? "student is"
+              : `${pendingCount} students are`}{" "}
+            confirmed.
+          </p>
+        ) : null}
+
+        <p className="text-xs text-muted-foreground text-center mt-6">
+          Questions? Contact us at{" "}
+          <a
+            href="mailto:tward@sailfuture.org"
+            className="text-primary underline underline-offset-2"
+          >
+            tward@sailfuture.org
+          </a>{" "}
+          or call{" "}
+          <a
+            href="tel:+17279001436"
+            className="text-primary underline underline-offset-2"
+          >
+            (727) 900-1436
+          </a>
+          .
+        </p>
+      </div>
+    </div>
+  );
+}
+
 /* ── Accepted Stage View ── */
-function AcceptedView({ firstName, yearId, registrationSteps, allSectionsComplete }: { firstName: string; yearId: number; registrationSteps: { number: number; title: string; description: string; status: StepStatus; href: string }[]; allSectionsComplete: boolean }) {
+function AcceptedView({ firstName, yearId, registrationSteps }: { firstName: string; yearId: number; registrationSteps: { number: number; title: string; description: string; status: StepStatus; href: string }[]; allSectionsComplete: boolean }) {
   const router = useRouter();
   const [submitOpen, setSubmitOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  async function handleSubmitRegistration() {
-    setSubmitting(true);
-    try {
-      // TODO: Call API to mark registration as submitted
-      toast.success("Registration submitted successfully!");
-      setSubmitOpen(false);
-    } catch {
-      toast.error("Failed to submit registration. Please try again.");
-    } finally {
-      setSubmitting(false);
-    }
-  }
+  // Registration progress row drives the pre-submit modal sections. Same
+  // pattern as the application-phase submit — parent clicks Submit, sees
+  // which sections are done/not-done with Fix links, confirms when ready.
+  const { progress: regProgress, submit: submitRegistration } =
+    useStudentRegistrationProgress(yearId);
+  const submitSections: SectionStatus[] = useMemo(
+    () => [
+      { section: "tuition", complete: !!regProgress?.isTuition },
+      { section: "enrollment", complete: !!regProgress?.isEnrollment },
+      { section: "registration", complete: !!regProgress?.isRegistration },
+      { section: "volunteer", complete: !!regProgress?.isVolunteerHours },
+    ],
+    [regProgress]
+  );
 
   return (
     <div className="flex min-h-[calc(100vh-7.5rem)] items-center justify-center px-4 bg-gray-50 dark:bg-background">
@@ -118,7 +284,7 @@ function AcceptedView({ firstName, yearId, registrationSteps, allSectionsComplet
         {/* Heading */}
         <div className="text-center mb-8">
           <div className="flex justify-center mb-4">
-            <div className="flex size-20 items-center justify-center overflow-hidden rounded-full border-4 border-primary/20 shadow-md bg-white">
+            <div className="flex size-20 items-center justify-center overflow-hidden rounded-full border-4 border-gray-200 dark:border-gray-700 shadow-md bg-white">
               <Image
                 src="/logo.svg"
                 alt="SailFuture Academy"
@@ -144,7 +310,14 @@ function AcceptedView({ firstName, yearId, registrationSteps, allSectionsComplet
           <div className="overflow-hidden rounded-lg border">
             <table className="w-full text-sm">
               <tbody className="divide-y">
-                {registrationSteps.filter((s) => s.number <= 3).map((step) => {
+                {/* Steps 1–4 are the four registration sections (Tuition,
+                    Enrollment, Registration, Volunteer Hours). Step 5 is
+                    "Submit Registration" — rendered separately below as
+                    the blue CTA row, so we exclude it here. Volunteer
+                    Hours used to be excluded by mistake, which left it
+                    without the amber/pencil edit affordance the other
+                    sections render. */}
+                {registrationSteps.filter((s) => s.number <= 4).map((step) => {
                   const isComplete = step.status === "complete";
                   return (
                     <tr
@@ -177,16 +350,13 @@ function AcceptedView({ firstName, yearId, registrationSteps, allSectionsComplet
                   );
                 })}
 
-                {/* Submit Registration row */}
+                {/* Submit Registration row — always clickable. The modal
+                    itself surfaces which sections still need attention and
+                    gates the confirm button, matching the application-phase
+                    submit UX. */}
                 <tr
-                  className={`transition-colors ${
-                    allSectionsComplete
-                      ? "bg-blue-600 hover:bg-blue-700 cursor-pointer"
-                      : "bg-blue-600/40 cursor-not-allowed"
-                  }`}
-                  onClick={() => {
-                    if (allSectionsComplete) setSubmitOpen(true);
-                  }}
+                  className="transition-colors bg-blue-600 hover:bg-blue-700 cursor-pointer"
+                  onClick={() => setSubmitOpen(true)}
                 >
                   <td className="px-4 py-4 w-12">
                     <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-white/20">
@@ -197,14 +367,9 @@ function AcceptedView({ firstName, yearId, registrationSteps, allSectionsComplet
                     <p className="font-medium text-white">
                       Submit Registration
                       <span className="ml-1.5 text-white/70 text-xs font-normal">
-                        ({registrationSteps.filter((s) => s.number <= 3 && s.status === "complete").length}/{registrationSteps.filter((s) => s.number <= 3).length})
+                        ({submitSections.filter((s) => s.complete).length}/{submitSections.length})
                       </span>
                     </p>
-                    {!allSectionsComplete && (
-                      <p className="text-xs text-white/60 mt-0.5">
-                        Complete all sections above to submit
-                      </p>
-                    )}
                   </td>
                   <td className="px-4 py-4 w-10">
                     <div className="flex size-7 items-center justify-center rounded-md border border-white/30">
@@ -217,23 +382,33 @@ function AcceptedView({ firstName, yearId, registrationSteps, allSectionsComplet
           </div>
         </div>
 
-        {/* Submit confirmation dialog */}
-        <AlertDialog open={submitOpen} onOpenChange={setSubmitOpen}>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Submit Registration?</AlertDialogTitle>
-              <AlertDialogDescription>
-                Are you sure you&apos;re ready to submit your registration? By submitting, you confirm that all registration information is accurate and complete.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel disabled={submitting}>Cancel</AlertDialogCancel>
-              <AlertDialogAction onClick={handleSubmitRegistration} disabled={submitting}>
-                {submitting ? "Submitting..." : "Yes, Submit Registration"}
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+        {/* Pre-submit review modal — same component used for the
+            application-phase submit. `phase="registration"` switches the
+            title/button copy; `sections` comes from the registration
+            progress row's four bools. */}
+        <PreSubmitReviewModal
+          open={submitOpen}
+          onOpenChange={setSubmitOpen}
+          sections={submitSections}
+          basePath={`/apply/year/${yearId}`}
+          submitting={submitting}
+          phase="registration"
+          onConfirm={async () => {
+            if (submitting) return;
+            setSubmitting(true);
+            try {
+              await submitRegistration();
+              setSubmitOpen(false);
+              toast.success("Registration submitted successfully!");
+              // Stay on the year dashboard — the enrolled-family branch
+              // takes over once `isSubmitted` is true.
+            } catch {
+              toast.error("Failed to submit registration. Please try again.");
+            } finally {
+              setSubmitting(false);
+            }
+          }}
+        />
 
         {/* Contact info */}
         <p className="text-xs text-muted-foreground text-center mt-6">
@@ -261,6 +436,7 @@ function AcceptedView({ firstName, yearId, registrationSteps, allSectionsComplet
 export default function YearOverviewPage() {
   const params = useParams();
   const router = useRouter();
+  const pathname = usePathname();
   const yearId = Number(params.yearId);
 
   const { user } = useUser();
@@ -271,12 +447,80 @@ export default function YearOverviewPage() {
   const { data: students } = useStudents();
   const yearName = schoolYear?.year_name ?? "next year";
 
+  // URL policy by lifecycle phase:
+  //   - Application (apply / review)                  → /apply/year/[yearId]
+  //   - Registration (accepted, pending, etc.)        → /registration/year/[yearId]
+  //   - Enrolled (submitted + every student confirmed) → /dashboard
+  //
+  // The redirect effect itself lives further down the component so it can
+  // close over `regProgress`, `yearPackets`, and `isEnrolled` — see below
+  // after those are declared.
+
   // Pre-submit review — opens as a modal when the user clicks "Submit Application".
   // Reads the 4 section completion booleans from
   // `registration_family_application_progress` and surfaces a Fix link for
   // any section that isn't yet marked complete.
   const { progress, submit: submitFamilyApplication } = useFamilyProgress(yearId);
   const isSubmitted = !!progress?.isSubmitted;
+
+  // Post-registration: when the parent clicks Submit Registration we flip
+  // `isSubmitted: true` on the registration progress row. Submitted means
+  // "the family completed their side" — it does NOT mean the enrollment
+  // is final. Admin must then review each student and flip
+  // `registrationConfirmed: true` on that student's packet row. Once every
+  // student's packet is confirmed, the enrolled-family dashboard takes
+  // over the page.
+  const { progress: regProgress } = useStudentRegistrationProgress(yearId);
+  const isRegistrationSubmitted = !!regProgress?.isSubmitted;
+
+  const { data: yearPackets } = useSWR<
+    { id: number; registrationConfirmed?: boolean; registration_students_id: number }[]
+  >(
+    isRegistrationSubmitted
+      ? `/api/student-registration?yearId=${yearId}`
+      : null,
+    (url: string) => fetch(url).then((r) => r.json()),
+    { revalidateOnFocus: false, dedupingInterval: 10000 }
+  );
+
+  const allStudentsConfirmed =
+    !!yearPackets &&
+    yearPackets.length > 0 &&
+    yearPackets.every((p) => p.registrationConfirmed === true);
+
+  // "Enrolled" = submitted AND every student has been admin-confirmed. Until
+  // both are true, the registration-pending view is shown instead of the
+  // enrolled-family dashboard.
+  const isEnrolled = isRegistrationSubmitted && allStudentsConfirmed;
+
+  // URL routing effect — see comment near the top of the component for
+  // the lifecycle → URL mapping. Lives down here so it can read the
+  // already-declared `regProgress`, `yearPackets`, and `isEnrolled`.
+  useEffect(() => {
+    if (loading) return;
+    const onApply = pathname.startsWith(`/apply/year/${yearId}`);
+    const onRegistration = pathname.startsWith(`/registration/year/${yearId}`);
+
+    // Already-enrolled families belong on /dashboard. Wait for both the
+    // progress row and the per-year packets to load before deciding,
+    // otherwise we'd redirect on partial data.
+    if (
+      stage === "accepted" &&
+      regProgress !== null &&
+      yearPackets !== undefined &&
+      isEnrolled
+    ) {
+      router.replace("/dashboard");
+      return;
+    }
+
+    if (stage === "accepted" && onApply) {
+      router.replace(`/registration/year/${yearId}`);
+    } else if (stage !== "accepted" && onRegistration) {
+      router.replace(`/apply/year/${yearId}`);
+    }
+  }, [loading, stage, pathname, yearId, router, regProgress, yearPackets, isEnrolled]);
+
   const submitSections: SectionStatus[] = useMemo(
     () => [
       { section: "family", complete: !!progress?.family_completed },
@@ -305,35 +549,31 @@ export default function YearOverviewPage() {
     }
   }, [stage, students]);
 
-  // Confetti for accepted stage — hooks must be called before any early returns
+  // Confetti for the moment a family is freshly accepted — fires only when
+  // the family has truly just landed on the AcceptedView with zero
+  // registration progress yet. Gated on the registration progress row
+  // being loaded (regProgress !== null) so we don't fire during the
+  // initial load when `isRegistrationSubmitted` defaults to false.
   const confettiFired = useRef(false);
   useEffect(() => {
-    if (stage === "accepted" && !confettiFired.current && registrationCompletedCount === 0) {
+    if (
+      stage === "accepted" &&
+      !confettiFired.current &&
+      regProgress !== null &&
+      registrationCompletedCount === 0 &&
+      !isRegistrationSubmitted
+    ) {
       confettiFired.current = true;
 
-      confetti({
-        particleCount: 80,
-        spread: 70,
-        origin: { x: 0.1, y: 0.6 },
-        colors: ["#0D2446", "#1a3a6b", "#fbbf24", "#f59e0b", "#fcd34d"],
-      });
-      confetti({
-        particleCount: 80,
-        spread: 70,
-        origin: { x: 0.9, y: 0.6 },
-        colors: ["#0D2446", "#1a3a6b", "#fbbf24", "#f59e0b", "#fcd34d"],
-      });
-
+      // Navy blue + silver — SailFuture school colors.
+      const SCHOOL_COLORS = ["#0D2446", "#1a3a6b", "#1e40af", "#c0c0c0", "#e5e7eb", "#9ca3af"];
+      confetti({ particleCount: 80, spread: 70, origin: { x: 0.1, y: 0.6 }, colors: SCHOOL_COLORS });
+      confetti({ particleCount: 80, spread: 70, origin: { x: 0.9, y: 0.6 }, colors: SCHOOL_COLORS });
       setTimeout(() => {
-        confetti({
-          particleCount: 50,
-          spread: 100,
-          origin: { x: 0.5, y: 0.4 },
-          colors: ["#0D2446", "#1a3a6b", "#fbbf24", "#f59e0b", "#fcd34d"],
-        });
+        confetti({ particleCount: 50, spread: 100, origin: { x: 0.5, y: 0.4 }, colors: SCHOOL_COLORS });
       }, 300);
     }
-  }, [stage]);
+  }, [stage, regProgress, registrationCompletedCount, isRegistrationSubmitted]);
 
   if (loading) {
     return (
@@ -409,7 +649,61 @@ export default function YearOverviewPage() {
     );
   }
 
-  /* ────────── Stage 3: Accepted ────────── */
+  /* ────────── Accepted-stage substages ──────────
+     Wait for the registration progress row to load before deciding which
+     accepted-stage view to render. Without this gate the page briefly
+     paints the AcceptedView step table (and fires the celebration
+     confetti) before flipping to the pending / enrolled view once
+     `regProgress` resolves. Showing the loading skeleton instead keeps
+     the transition clean and prevents the "did I already submit?" flash. */
+  if (stage === "accepted" && regProgress === null) {
+    return (
+      <div className="flex min-h-[calc(100vh-7.5rem)] items-center justify-center px-4 bg-gray-50 dark:bg-background">
+        <div className="w-full max-w-2xl py-8">
+          <div className="text-center mb-8">
+            <Skeleton className="size-16 rounded-full mx-auto mb-4" />
+            <Skeleton className="h-7 w-3/4 mx-auto" />
+            <Skeleton className="h-4 w-2/3 mx-auto mt-3" />
+          </div>
+          <Skeleton className="h-48 w-full rounded-xl" />
+        </div>
+      </div>
+    );
+  }
+
+  /* Stage 5: Enrolled — registration submitted AND every student's packet
+     has been admin-confirmed. The enrolled-family dashboard takes over. */
+  if (stage === "accepted" && isEnrolled) {
+    return (
+      <EnrolledFamilyDashboard
+        yearId={yearId}
+        yearName={schoolYear?.year_name ?? "current"}
+        submittedDate={regProgress?.submitted_date ?? null}
+      />
+    );
+  }
+
+  /* Stage 4: Registration submitted — pending admin review. Parent has
+     submitted, but at least one student's packet hasn't been confirmed
+     yet. Show a "stand by" banner. */
+  if (stage === "accepted" && isRegistrationSubmitted) {
+    const parentName =
+      user?.fullName ||
+      [user?.firstName, user?.lastName].filter(Boolean).join(" ") ||
+      firstName ||
+      "";
+    return (
+      <RegistrationPendingView
+        parentName={parentName}
+        yearName={schoolYear?.year_name ?? "current"}
+        submittedDate={regProgress?.submitted_date ?? null}
+        packets={yearPackets ?? []}
+        students={(students ?? []) as { id: number; first_name: string; last_name: string }[]}
+      />
+    );
+  }
+
+  /* Stage 3: Accepted — registration steps in progress. */
   if (stage === "accepted") {
     return <AcceptedView firstName={firstName} yearId={yearId} registrationSteps={registrationSteps} allSectionsComplete={allRegistrationSectionsComplete} />;
   }

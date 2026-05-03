@@ -24,10 +24,16 @@ export async function POST(
   const { id } = await params;
   const body = await req.json();
 
+  // Default `benefit_documentation` to an empty array on create so the
+  // page can render the multi-file upload immediately without first
+  // having to PATCH a missing field into the column.
   const benefit = await xano.scholarshipBenefits.create({
     registration_opportunity_scholarship_id: Number(id),
     type: body.type ?? "",
     amount_monthly: body.amount_monthly ?? 0,
+    benefit_documentation: Array.isArray(body.benefit_documentation)
+      ? body.benefit_documentation
+      : [],
   });
 
   return NextResponse.json(benefit, { status: 201 });

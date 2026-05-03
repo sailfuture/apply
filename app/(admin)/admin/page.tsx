@@ -7,12 +7,19 @@ import { StatsCard } from "@/components/admin/stats-card";
 import { StatusBadge } from "@/components/admin/status-badge";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
+import { adminFetcher as fetcher } from "@/lib/admin-fetcher";
+import type { ApplicationStatus } from "@/lib/application-status";
 
 interface StatsResponse {
   inquiries: { total: number; recent: number };
-  applications: { total: number; draft: number; submitted: number; offered: number; accepted: number };
+  applications: {
+    total: number;
+    draft: number;
+    submitted: number;
+    offered: number;
+    accepted: number;
+    denied: number;
+  };
   registrations: { total: number; completed: number; inProgress: number };
   students: { total: number };
 }
@@ -27,14 +34,23 @@ interface Inquiry {
   student_last_name: string;
 }
 
+// Matches the per-family application progress row returned by
+// `/api/admin/applications` — one row per family per year, carrying
+// section completion + submitted state. Used by the dashboard's
+// "Recent Applications" card to surface families that recently
+// touched their application.
 interface Application {
   id: number;
-  created_at: number;
-  registration_students_id: number;
-  registration_families_id: number;
+  family_id: number;
+  family_name: string;
+  primary_name: string;
+  primary_email: string;
+  student_count: number;
   isSubmitted: boolean;
-  isOffered: boolean;
-  isAccepted: boolean;
+  sections_complete: number;
+  sections_total: number;
+  submitted_at: number | null;
+  last_edited: number | null;
 }
 
 export default function AdminDashboardPage() {
@@ -72,20 +88,28 @@ export default function AdminDashboardPage() {
     );
   }
 
-  const recentInquiries = (inquiries ?? [])
+  // Defensive `Array.isArray` guards — even with the throwing fetcher
+  // in place, a stale `data` shape (e.g. during a hot-reload mid-deploy)
+  // shouldn't crash the dashboard. Falling back to an empty list is a
+  // strictly better UX than the white-screen-of-death.
+  const recentInquiries = (Array.isArray(inquiries) ? inquiries : [])
+    .slice()
     .sort((a, b) => b.created_at - a.created_at)
     .slice(0, 5);
 
-  const recentApps = (applications ?? [])
-    .sort((a, b) => b.created_at - a.created_at)
+  // Sort by most-recently-edited so the dashboard surfaces families
+  // that just touched their application — the per-family endpoint
+  // doesn't have a `created_at`, so we fall through to `submitted_at`
+  // and `last_edited` instead.
+  const recentApps = (Array.isArray(applications) ? applications : [])
+    .slice()
+    .sort((a, b) => {
+      const aT = a.last_edited ?? a.submitted_at ?? 0;
+      const bT = b.last_edited ?? b.submitted_at ?? 0;
+      return bT - aT;
+    })
     .slice(0, 5);
 
-  function getAppStatus(app: Application) {
-    if (app.isAccepted) return "accepted" as const;
-    if (app.isOffered) return "offered" as const;
-    if (app.isSubmitted) return "submitted" as const;
-    return "draft" as const;
-  }
 
   return (
     <div className="space-y-6 p-6">
@@ -163,22 +187,32 @@ export default function AdminDashboardPage() {
               <p className="text-sm text-muted-foreground">No applications yet.</p>
             ) : (
               <div className="space-y-3">
-                {recentApps.map((app) => (
-                  <div
-                    key={app.id}
-                    className="flex items-center justify-between rounded-md border px-3 py-2"
-                  >
-                    <div>
-                      <p className="text-sm font-medium">
-                        Application #{app.id}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        Family #{app.registration_families_id}
-                      </p>
+                {recentApps.map((app) => {
+                  const status: ApplicationStatus = app.isSubmitted
+                    ? "submitted"
+                    : app.sections_complete > 0
+                      ? "draft"
+                      : "draft";
+                  return (
+                    <div
+                      key={app.id}
+                      className="flex items-center justify-between rounded-md border px-3 py-2"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium truncate">
+                          {app.family_name || `Family #${app.family_id}`}
+                        </p>
+                        <p className="text-xs text-muted-foreground truncate">
+                          {app.student_count}{" "}
+                          {app.student_count === 1 ? "student" : "students"}
+                          {" · "}
+                          {app.sections_complete}/{app.sections_total} sections
+                        </p>
+                      </div>
+                      <StatusBadge status={status} />
                     </div>
-                    <StatusBadge status={getAppStatus(app)} />
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </CardContent>

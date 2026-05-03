@@ -19,18 +19,30 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
-/** Section completion status derived from the
- *  `registration_family_application_progress` row. */
+/** Section keys for the two lifecycle stages the modal supports.
+ *
+ *  Application phase → `registration_family_application_progress` bools.
+ *  Registration phase → `registration_student_registration_progress` bools. */
 export type ProgressSectionKey =
+  // Application phase
   | "family"
   | "students"
   | "financial_aid"
-  | "testing";
+  | "testing"
+  // Registration phase
+  | "tuition"
+  | "enrollment"
+  | "registration"
+  | "volunteer";
 
 export interface SectionStatus {
   section: ProgressSectionKey;
   complete: boolean;
 }
+
+/** Which lifecycle phase this invocation is for. Drives the title / button
+ *  copy so "Submit Application" vs "Submit Registration" match the step. */
+export type SubmitPhase = "application" | "registration";
 
 interface Props {
   open: boolean;
@@ -41,6 +53,9 @@ interface Props {
   /** Called when the user confirms submission. */
   onConfirm: () => void | Promise<void>;
   submitting?: boolean;
+  /** Defaults to "application" for backwards compat. Pass "registration" on
+   *  the post-acceptance Submit button. */
+  phase?: SubmitPhase;
 }
 
 const SECTION_LABELS: Record<ProgressSectionKey, string> = {
@@ -48,6 +63,10 @@ const SECTION_LABELS: Record<ProgressSectionKey, string> = {
   students: "Student Details",
   financial_aid: "Financial Aid",
   testing: "Initial Testing",
+  tuition: "Tuition & Scholarship",
+  enrollment: "Enrollment Agreement",
+  registration: "Registration Packet",
+  volunteer: "Volunteer Hours",
 };
 
 const SECTION_HREFS: Record<ProgressSectionKey, string> = {
@@ -55,6 +74,10 @@ const SECTION_HREFS: Record<ProgressSectionKey, string> = {
   students: "/students",
   financial_aid: "/scholarship",
   testing: "/nwea",
+  tuition: "/tuition",
+  enrollment: "/enrollment-signing",
+  registration: "/registration",
+  volunteer: "/volunteer-hours",
 };
 
 /**
@@ -74,9 +97,13 @@ export function PreSubmitReviewModal({
   basePath,
   onConfirm,
   submitting,
+  phase = "application",
 }: Props) {
   const router = useRouter();
   const allReady = sections.length > 0 && sections.every((s) => s.complete);
+  const noun = phase === "registration" ? "registration" : "application";
+  const submitLabel =
+    phase === "registration" ? "Submit Registration" : "Submit Application";
 
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
@@ -87,7 +114,7 @@ export function PreSubmitReviewModal({
           </AlertDialogTitle>
           <AlertDialogDescription>
             {allReady
-              ? "Once you submit, you won't be able to edit your application without contacting the school."
+              ? `Once you submit, you won't be able to edit your ${noun} without contacting the school.`
               : "Each section below must be marked complete before you can submit. Use Fix to jump to the section."}
           </AlertDialogDescription>
         </AlertDialogHeader>
@@ -102,34 +129,38 @@ export function PreSubmitReviewModal({
                 return (
                   <TableRow key={s.section}>
                     <TableCell className="py-3 px-3">
-                      <span className="font-medium">{label}</span>
+                      {/* Section label + inline "Fix →" button so the
+                          jump link sits right next to the name it
+                          fixes, instead of all the way at the right
+                          edge of the row. */}
+                      <div className="flex items-center gap-3">
+                        <span className="font-medium">{label}</span>
+                        {!s.complete ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onOpenChange(false);
+                              router.push(href);
+                            }}
+                            className="text-xs font-medium text-primary underline underline-offset-2 hover:no-underline"
+                          >
+                            Fix →
+                          </button>
+                        ) : null}
+                      </div>
                     </TableCell>
                     <TableCell className="py-3 px-3 text-right">
-                      <div className="flex items-center justify-end gap-3">
-                        {s.complete ? (
-                          <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                            <CheckCircle2 className="size-4 text-green-600 dark:text-green-500" />
-                            Complete
-                          </span>
-                        ) : (
-                          <>
-                            <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                              <AlertCircle className="size-4 text-red-600 dark:text-red-500" />
-                              Not yet complete
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                onOpenChange(false);
-                                router.push(href);
-                              }}
-                              className="text-xs font-medium text-primary underline underline-offset-2 hover:no-underline"
-                            >
-                              Fix →
-                            </button>
-                          </>
-                        )}
-                      </div>
+                      {s.complete ? (
+                        <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                          <CheckCircle2 className="size-4 text-green-600 dark:text-green-500" />
+                          Complete
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                          <AlertCircle className="size-4 text-red-600 dark:text-red-500" />
+                          Not yet complete
+                        </span>
+                      )}
                     </TableCell>
                   </TableRow>
                 );
@@ -157,7 +188,7 @@ export function PreSubmitReviewModal({
               void onConfirm();
             }}
           >
-            {submitting ? "Submitting…" : "Submit Application"}
+            {submitting ? "Submitting…" : submitLabel}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

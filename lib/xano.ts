@@ -66,6 +66,22 @@ export interface XanoStudent {
   registration_school_years_id: number[];
   isArchived: boolean;
   isAccepted: boolean;
+  /** IDs of every `registration_student_registration` (packet) row this
+   *  student has. One per year — Xano side adds a new row on re-enrollment,
+   *  so this list grows over multi-year enrollment. */
+  registration_student_registration_id: number[];
+  // --- Document arrays (evergreen, live on the student) --------------------
+  // Parents can upload multiple files per category (e.g. two pages of a
+  // passport, a stack of medical forms). Each entry is Xano's file metadata
+  // shape — `{ path, url, mime, size, meta, ... }`.
+  birth_certificate: Record<string, unknown>[];
+  school_health_form: Record<string, unknown>[];
+  transcripts: Record<string, unknown>[];
+  immunization_forms: Record<string, unknown>[];
+  passport: Record<string, unknown>[];
+  student_state_id: Record<string, unknown>[];
+  iep: Record<string, unknown>[];
+  ssn_card: Record<string, unknown>[];
 }
 
 export interface XanoApplication {
@@ -93,6 +109,11 @@ export interface XanoApplication {
   isSubmitted: boolean;
   isOffered: boolean;
   isAccepted: boolean;
+  /** Set true when admin denies an application that was submitted. Mutually
+   *  exclusive with `isOffered` / `isAccepted` in practice — admin tools
+   *  flip exactly one of the decision booleans on a submitted application.
+   *  Optional because legacy rows predate the column. */
+  isDenied?: boolean;
   opportunity_scholarship_award_amount: number;
   // PandaDoc signing — waiver + enrollment agreement state.
   liability_waiver_pandadoc_id: string;
@@ -188,7 +209,11 @@ export interface XanoScholarship {
   family_contribution_per_month: number;
   scholarship_advocacy_letter: string;
   signature: Record<string, unknown> | null;
-  termination_letter: Record<string, unknown> | null;
+  /** Proof of unemployment / job termination — required when the family
+   *  marks "no contributing members" on the scholarship. Multi-file array
+   *  so a packet of letters can all live on one row. Replaces the older
+   *  single-file `termination_letter` column. */
+  unemployment_letter: Record<string, unknown>[];
   last_edited: number | null;
   isNotParticipating: boolean;
   isSNAPBenefits: boolean;
@@ -201,6 +226,9 @@ export interface XanoScholarshipBenefit {
   registration_opportunity_scholarship_id: number;
   type: string;
   amount_monthly: number;
+  /** Per-benefit documentation (award letter, approval notice, etc.).
+   *  Multi-file array — one benefit can need several pages of paperwork. */
+  benefit_documentation: Record<string, unknown>[];
 }
 
 export interface XanoScholarshipContributingMember {
@@ -217,11 +245,15 @@ export interface XanoScholarshipContributingMember {
   estimated_annual_income: number;
   isW2: boolean;
   isPayStubs: boolean;
-  w2: Record<string, unknown> | null;
-  paystub_1: Record<string, unknown> | null;
-  paystub_2: Record<string, unknown> | null;
-  paystub_3: Record<string, unknown> | null;
-  paystub_4: Record<string, unknown> | null;
+  /** Income verification slots are multi-file arrays — a W-2 packet or
+   *  a pay-stub can span multiple pages. The page-side `toFileArray`
+   *  helper normalizes legacy single-object values it might still see
+   *  during the schema transition. */
+  w2: Record<string, unknown>[];
+  paystub_1: Record<string, unknown>[];
+  paystub_2: Record<string, unknown>[];
+  paystub_3: Record<string, unknown>[];
+  paystub_4: Record<string, unknown>[];
 }
 
 export interface XanoScholarshipHome {
@@ -259,14 +291,138 @@ export interface XanoBusStop {
   address: string;
 }
 
-export interface XanoAdmin {
+/**
+ * Enriched family record returned by `/registration_families_all_details`.
+ * Mirrors `XanoFamily` but with the FK arrays already expanded:
+ *   - `registration_students_id` → array of full application rows
+ *     (one row per student per academic year for that family)
+ *   - `registration_parents_id` → array of full parent rows
+ *
+ * Xano's relationship expansion can insert empty `[]` items where an FK
+ * didn't resolve. Always run results through `cleanFamilyAllDetails` (or
+ * use `xano.families.getAllDetails()`, which does it for you) before
+ * touching the arrays — the cleaner narrows them to the object shape.
+ */
+export interface XanoFamilyAllDetails {
   id: number;
   created_at: number;
-  clerk_user_id: string;
-  email: string;
-  first_name: string;
-  last_name: string;
-  role: string;
+  family_name: string;
+  /** Despite the column name, each item here is a `registration_application`
+   *  row — the inner `registration_students_id` field is the FK to the
+   *  student. */
+  registration_students_id: XanoApplication[];
+  registration_parents_id: XanoParent[];
+  registration_emergency_contacts_id: number[];
+  isAccepted: boolean;
+  isSubmitted: boolean;
+}
+
+/**
+ * Strip Xano's empty-array artifacts from the expanded relationship arrays.
+ * Xano inserts `[]` in place of unresolved FKs; we narrow to actual row
+ * objects so downstream code can iterate without type guards.
+ */
+function cleanFamilyAllDetails(raw: unknown): XanoFamilyAllDetails {
+  const r = raw as Partial<XanoFamilyAllDetails> & {
+    registration_students_id?: unknown[];
+    registration_parents_id?: unknown[];
+  };
+  const isObj = (v: unknown): v is Record<string, unknown> =>
+    v !== null && typeof v === "object" && !Array.isArray(v);
+  return {
+    id: Number(r.id ?? 0),
+    created_at: Number(r.created_at ?? 0),
+    family_name: typeof r.family_name === "string" ? r.family_name : "",
+    registration_students_id: Array.isArray(r.registration_students_id)
+      ? (r.registration_students_id.filter(isObj) as XanoApplication[])
+      : [],
+    registration_parents_id: Array.isArray(r.registration_parents_id)
+      ? (r.registration_parents_id.filter(isObj) as XanoParent[])
+      : [],
+    registration_emergency_contacts_id: Array.isArray(
+      r.registration_emergency_contacts_id
+    )
+      ? (r.registration_emergency_contacts_id.filter(
+          (v): v is number => typeof v === "number"
+        ) as number[])
+      : [],
+    isAccepted: r.isAccepted === true,
+    isSubmitted: r.isSubmitted === true,
+  };
+}
+
+/**
+ * Enriched per-packet view returned by `/registration_student_registration_details`.
+ *
+ * Single fetch returns:
+ *   - the packet itself (every column from `registration_student_registration`)
+ *   - `_registration_type` — full RegistrationType row
+ *   - `_registration_school_years_1` — full SchoolYear row
+ *   - `_registration_students_1` — array containing the linked student row
+ *     (always one element; Xano returns it as an array because the
+ *     relationship engine treats it that way)
+ *
+ * Powers the admin per-student multi-year history page — one round trip
+ * per packet gets us packet + year + student + type info ready to render.
+ */
+export interface XanoRegistrationDetails extends XanoStudentRegistration {
+  _registration_type: XanoRegistrationType | null;
+  _registration_school_years_1: XanoSchoolYear | null;
+  _registration_students_1: XanoStudent[];
+}
+
+/**
+ * Aggregated admin view of one family's application+scholarship state for
+ * a specific school year. Backed by the `admin_student_applications`
+ * Xano endpoint, which takes `registration_families_id` and
+ * `registration_school_years_id` as inputs.
+ *
+ * Shape mirrors what Xano returns — notably `scholarship` is an array
+ * (typically 0 or 1 element) and `application` is one row per student
+ * for that family/year.
+ */
+export interface XanoAdminFamilyDetail {
+  scholarship: XanoScholarship[];
+  application: XanoApplication[];
+  family: {
+    id: number;
+    created_at: number;
+    family_name: string;
+    registration_students_id: number[];
+    registration_parents_id: number[];
+    registration_emergency_contacts_id: number[];
+    isAccepted: boolean;
+    isSubmitted: boolean;
+  };
+  school_year: XanoSchoolYear;
+}
+
+/**
+ * Admin-authored note attached to a family. Surfaces on the admin family
+ * detail page as a chronological comms log; pinned notes float to the top.
+ *
+ * `registration_students_id` and `registration_school_years_id` are
+ * optional foreign keys — set them when the note is specifically about
+ * one student or one academic year, leave null for a family-wide note.
+ *
+ * `author_email` / `author_name` are denormalized at write time so the
+ * note still renders correctly if a staff member is later archived from
+ * `/teachers_by_admin`.
+ */
+export interface XanoAdminNote {
+  id: number;
+  created_at: number;
+  registration_families_id: number;
+  registration_students_id: number | null;
+  registration_school_years_id: number | null;
+  author_email: string;
+  author_name: string;
+  body: string;
+  /** Free-form bucket — currently 'phone' | 'email' | 'in-person' | 'sms' | 'other'. */
+  category: string;
+  is_pinned: boolean;
+  /** Timestamp of the last edit; null if never edited. */
+  last_edited: number | null;
 }
 
 export interface XanoInquiry {
@@ -314,6 +470,100 @@ export interface XanoFamilyApplicationProgress {
   registration_type_id: number;
 }
 
+/** Bridge row: one per family per school year, covering the RE-APPLICATION
+ *  flow for returning families. Tracks the four section bools the parent
+ *  needs to refresh when applying for a new academic year — most notably
+ *  the per-year Opportunity Scholarship application. Family + student
+ *  records carry over; only these four sections need parent confirmation
+ *  for a re-applying family.
+ *
+ *  Distinct from `registration_family_application_progress` because the
+ *  section list differs (no Initial Testing, adds Transportation) and the
+ *  admin can independently track which families are re-applying vs.
+ *  applying for the first time. */
+export interface XanoReapplyFamilyProgress {
+  id: number;
+  created_at: number;
+  registration_families_id: number;
+  registration_school_years_id: number;
+  /** Parent acknowledged the existing family info for the new year. */
+  isFamilyDetails: boolean;
+  /** Parent acknowledged the existing student info for the new year. */
+  isStudentDetails: boolean;
+  /** Parent submitted the per-year Opportunity Scholarship application. */
+  isScholarship: boolean;
+  /** Parent confirmed bus / transportation preferences for the new year. */
+  isTransportation: boolean;
+  /** Hard submission latch — flips true when the parent clicks Submit on
+   *  the re-application review modal. */
+  isSubmitted: boolean;
+  last_edited: number | null;
+}
+
+/** Bridge row: one per family per school year, covering the POST-acceptance
+ *  registration flow. Mirrors the application-progress pattern but lives in a
+ *  separate table so the two lifecycle stages stay cleanly split. Three
+ *  section bools map 1:1 to the three registration step pages: tuition,
+ *  enrollment-signing, and registration. `submitted_date` is the latch
+ *  timestamp stamped when all three sections are complete. */
+export interface XanoStudentRegistrationProgress {
+  id: number;
+  created_at: number;
+  registration_families_id: number;
+  registration_school_years_id: number;
+  registration_type_id: number;
+  /** Parent reviewed and accepted the tuition schedule on /tuition */
+  isTuition: boolean;
+  /** Enrollment agreement signed + first payment completed (the
+   *  /enrollment-signing step) */
+  isEnrollment: boolean;
+  /** Student registration packet — medical, emergency contacts, etc. — done
+   *  on /registration */
+  isRegistration: boolean;
+  /** Parent acknowledged the mandatory volunteer-hours commitment (40/year,
+   *  8 per term over 5 academic terms) on /volunteer-hours. */
+  isVolunteerHours: boolean;
+  /** Uploaded signature image for the volunteer-hours acknowledgment — Xano
+   *  file metadata (path/url/mime/size). */
+  signature_data_volunteer: Record<string, unknown> | null;
+  /** Raw signature payload for the volunteer acknowledgment (timestamp,
+   *  draw metadata, etc.). Printed name lives on `name_volunteer` below. */
+  volunteer_signature_data: Record<string, unknown> | null;
+  /** Printed name typed by the parent on the volunteer-hours
+   *  acknowledgment page. Parallel to `name` on the tuition step. */
+  name_volunteer: string;
+  /** Family-level signature captured on /tuition when the parent acknowledges
+   *  the tuition + scholarship breakdown. Shape matches Xano's file metadata:
+   *  `{ path, url, mime, size, meta, ... }`. Null before the signature lands. */
+  tuition_scholarship_signature: Record<string, unknown> | null;
+
+  // --- Family billing + enrollment-agreement fields -----------------------
+  // All family-level (one per family per year). Absorbed from the retired
+  // `registration_families_payment` table so we have a single row to read
+  // and write for the registration lifecycle.
+  monthly_tuition_payment: number;
+  monthly_transportation_payment: number;
+  enrollment_agreement_pandadoc_id: string;
+  enrollment_agreement_status: string;
+  /** When the enrollment agreement was sent (ISO string or epoch ms). */
+  enrollment_agreement_sent: string | number | null;
+  enrollment_agreement_pdf_url: string;
+  is_enrollment_agreement_signed: boolean;
+  /** Legacy raw signature data carried forward from families_payment. */
+  signature_data: Record<string, unknown> | null;
+  /** Printed name on the tuition acknowledgement. */
+  name: string;
+
+  last_edited: number | null;
+  /** Timestamp stamped when all three section bools are true. */
+  submitted_date: number | null;
+  /** Hard submission flag — true once the parent has clicked Submit on the
+   *  final registration review. `submitted_date` is the timestamp; this is
+   *  the durable bool the enrolled-family dashboard reads to decide whether
+   *  to render the active registration flow or the post-enrollment view. */
+  isSubmitted: boolean;
+}
+
 export interface XanoEmergencyContact {
   id: number;
   created_at: number;
@@ -334,6 +584,12 @@ export interface XanoStudentRegistration {
   id: number;
   created_at: number;
   registration_students_id: number;
+  /** Year this packet belongs to. Packets are per (student, year); a fresh
+   *  row is created each year so historical data stays intact. */
+  registration_school_years_id: number;
+  /** New Enrollment vs Re-Enrollment — admin-set, drives which forms/templates
+   *  get used for this year's registration. */
+  registration_type_id: number;
   shirt_size: string;
   pant_size: string;
   swim_level: string;
@@ -365,8 +621,13 @@ export interface XanoStudentRegistration {
   prohibited_adults: string;
   liability_waiver_pandadoc_id: string;
   liability_waiver_status: string;
-  liability_wavier_sent_at: string | null;
+  liability_waiver_sent_at: string | null;
   liability_waiver_pdf_url: string;
+  /** Admin-set flag — flips true when the admissions team has reviewed
+   *  and confirmed this student's registration. The enrolled-family
+   *  dashboard only unlocks once every student on the family for a given
+   *  year has this set. */
+  registrationConfirmed: boolean;
 }
 
 const pendingEnsure = new Map<string, Promise<XanoParent>>();
@@ -552,6 +813,27 @@ export const xano = {
       return res.json();
     },
 
+    /**
+     * Enriched view of every family — Xano expands the
+     * `registration_students_id` and `registration_parents_id` arrays into
+     * full row objects (applications and parents respectively). Ideal for
+     * the admin tables which need a single fetch instead of N+1.
+     *
+     * The Xano relationship expansion sometimes inserts empty `[]` items
+     * inside those arrays for unresolved FKs — we strip them here so
+     * downstream code can iterate without type guards.
+     */
+    async getAllDetails(): Promise<XanoFamilyAllDetails[]> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_families_all_details`,
+        { cache: "no-store" }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      const raw = await res.json();
+      if (!Array.isArray(raw)) return [];
+      return raw.map(cleanFamilyAllDetails);
+    },
+
     async getById(id: number): Promise<XanoFamily> {
       const res = await fetch(`${getBaseUrl()}/registration_families/${id}`, {
         cache: "no-store",
@@ -668,6 +950,41 @@ export const xano = {
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
       return res.json() as Promise<XanoApplication>;
+    },
+
+    /**
+     * Admin-only — single fetch that returns every piece of data the
+     * admin family-detail page needs to render the per-student
+     * application breakdown:
+     *   - `application[]` — one row per student for the year
+     *   - `scholarship[]` — the family's Opportunity Scholarship row(s)
+     *     for the year (typically zero or one)
+     *   - `family` — the family record (parents/students/contacts as IDs)
+     *   - `school_year` — the matching school-year metadata
+     *
+     * Backed by the Xano `admin_student_applications` query with two
+     * inputs: `registration_families_id` and `registration_school_years_id`.
+     */
+    async getAdminFamilyDetail(
+      familyId: number,
+      yearId: number
+    ): Promise<XanoAdminFamilyDetail | null> {
+      try {
+        const url = new URL(`${getBaseUrl()}/admin_student_applications`);
+        url.searchParams.set(
+          "registration_families_id",
+          String(familyId)
+        );
+        url.searchParams.set(
+          "registration_school_years_id",
+          String(yearId)
+        );
+        const res = await fetch(url.toString(), { cache: "no-store" });
+        if (!res.ok) return null;
+        return (await res.json()) as XanoAdminFamilyDetail;
+      } catch {
+        return null;
+      }
     },
 
     async getAll(): Promise<XanoApplication[]> {
@@ -799,6 +1116,38 @@ export const xano = {
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
       return res.json();
+    },
+
+    async create(
+      data: Omit<XanoSchoolYear, "id" | "created_at">
+    ): Promise<XanoSchoolYear> {
+      const res = await fetch(`${getBaseUrl()}/registration_school_years`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async update(
+      id: number,
+      data: Partial<Omit<XanoSchoolYear, "id" | "created_at">>
+    ): Promise<XanoSchoolYear> {
+      const res = await fetch(`${getBaseUrl()}/registration_school_years/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async delete(id: number): Promise<void> {
+      const res = await fetch(`${getBaseUrl()}/registration_school_years/${id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
     },
   },
 
@@ -1222,24 +1571,87 @@ export const xano = {
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
     },
-  },
 
-  admins: {
-    async getByClerkId(clerkUserId: string): Promise<XanoAdmin | null> {
+    /**
+     * Enriched fetch — pulls packet + school year + registration type +
+     * student row in a single Xano call. Required input on the Xano side
+     * is `registration_student_registration_id`, which is just the
+     * packet's primary key.
+     */
+    async getDetailsById(packetId: number): Promise<XanoRegistrationDetails | null> {
       try {
-        const res = await fetch(`${getBaseUrl()}/registration_admin`, { cache: "no-store" });
+        const res = await fetch(
+          `${getBaseUrl()}/registration_student_registration_details`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              registration_student_registration_id: packetId,
+            }),
+            cache: "no-store",
+          }
+        );
         if (!res.ok) return null;
-        const all: XanoAdmin[] = await res.json();
-        return all.find((a) => a.clerk_user_id === clerkUserId) ?? null;
+        return (await res.json()) as XanoRegistrationDetails;
       } catch {
         return null;
       }
     },
+  },
 
-    async getAll(): Promise<XanoAdmin[]> {
-      const res = await fetch(`${getBaseUrl()}/registration_admin`, { cache: "no-store" });
-      if (!res.ok) return [];
+  adminNotes: {
+    /** All notes for a family, newest first. Pinned notes still appear in
+     *  the same list — sorting/grouping happens in the UI. */
+    async getByFamilyId(familyId: number): Promise<XanoAdminNote[]> {
+      try {
+        const res = await fetch(
+          `${getBaseUrl()}/registration_admin_notes?registration_families_id=${familyId}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) return [];
+        const items: XanoAdminNote[] = await res.json();
+        return Array.isArray(items)
+          ? items
+              .filter((n) => n.registration_families_id === familyId)
+              .sort((a, b) => b.created_at - a.created_at)
+          : [];
+      } catch {
+        return [];
+      }
+    },
+
+    async create(
+      data: Omit<XanoAdminNote, "id" | "created_at" | "last_edited"> & {
+        last_edited?: number | null;
+      }
+    ): Promise<XanoAdminNote> {
+      const res = await fetch(`${getBaseUrl()}/registration_admin_notes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ last_edited: null, ...data }),
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
       return res.json();
+    },
+
+    async update(
+      id: number,
+      data: Partial<Omit<XanoAdminNote, "id" | "created_at">>
+    ): Promise<XanoAdminNote> {
+      const res = await fetch(`${getBaseUrl()}/registration_admin_notes/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async delete(id: number): Promise<void> {
+      const res = await fetch(`${getBaseUrl()}/registration_admin_notes/${id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
     },
   },
 
@@ -1257,6 +1669,25 @@ export const xano = {
   },
 
   familyApplicationProgress: {
+    /** All progress rows for a school year — backs the admin Applications
+     *  list. Calls the dedicated Xano query
+     *  `registration_family_application_progress_by_year` with
+     *  `registration_school_years_id` as input. */
+    async getByYear(yearId: number): Promise<XanoFamilyApplicationProgress[]> {
+      try {
+        const url = new URL(
+          `${getBaseUrl()}/registration_family_application_progress_by_year`
+        );
+        url.searchParams.set("registration_school_years_id", String(yearId));
+        const res = await fetch(url.toString(), { cache: "no-store" });
+        if (!res.ok) return [];
+        const items = await res.json();
+        return Array.isArray(items) ? items : [];
+      } catch {
+        return [];
+      }
+    },
+
     /** Fetch the single row for this family + year, or null. */
     async getByFamilyAndYear(
       familyId: number,
@@ -1303,6 +1734,195 @@ export const xano = {
     ): Promise<XanoFamilyApplicationProgress> {
       const res = await fetch(
         `${getBaseUrl()}/registration_family_application_progress/${id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+  },
+
+  reapplyFamilyProgress: {
+    /** Fetch-or-create the row for this family + year. Mirrors the same
+     *  pattern as the other progress helpers so server-side callers can
+     *  always PATCH against an existing row. */
+    async resolve(
+      familyId: number,
+      yearId: number
+    ): Promise<XanoReapplyFamilyProgress> {
+      const existing = await this.getByFamilyAndYear(familyId, yearId);
+      if (existing) return existing;
+      return this.create({
+        registration_families_id: familyId,
+        registration_school_years_id: yearId,
+        isFamilyDetails: false,
+        isStudentDetails: false,
+        isScholarship: false,
+        isTransportation: false,
+        isSubmitted: false,
+        last_edited: Date.now(),
+      });
+    },
+
+    async getByFamilyAndYear(
+      familyId: number,
+      yearId: number
+    ): Promise<XanoReapplyFamilyProgress | null> {
+      try {
+        const res = await fetch(
+          `${getBaseUrl()}/reapply_family_progress?registration_families_id=${familyId}&registration_school_years_id=${yearId}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) return null;
+        const results = await res.json();
+        const items = Array.isArray(results) ? results : [];
+        return (
+          items.find(
+            (r: XanoReapplyFamilyProgress) =>
+              r.registration_families_id === familyId &&
+              r.registration_school_years_id === yearId
+          ) ?? null
+        );
+      } catch {
+        return null;
+      }
+    },
+
+    async create(
+      data: Omit<XanoReapplyFamilyProgress, "id" | "created_at">
+    ): Promise<XanoReapplyFamilyProgress> {
+      const res = await fetch(`${getBaseUrl()}/reapply_family_progress`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async update(
+      id: number,
+      data: Partial<Omit<XanoReapplyFamilyProgress, "id" | "created_at">>
+    ): Promise<XanoReapplyFamilyProgress> {
+      const res = await fetch(
+        `${getBaseUrl()}/reapply_family_progress/${id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+  },
+
+  studentRegistrationProgress: {
+    /** Fetch-or-create the single row for this family + year. Used by every
+     *  server-side caller (app-flow GET route, PandaDoc webhook handlers,
+     *  etc.) so there is always a row to PATCH against. */
+    async resolve(
+      familyId: number,
+      yearId: number,
+      registration_type_id: number = 1
+    ): Promise<XanoStudentRegistrationProgress> {
+      const existing = await this.getByFamilyAndYear(familyId, yearId);
+      if (existing) return existing;
+      return this.create({
+        registration_families_id: familyId,
+        registration_school_years_id: yearId,
+        registration_type_id,
+        isTuition: false,
+        isEnrollment: false,
+        isRegistration: false,
+        isVolunteerHours: false,
+        tuition_scholarship_signature: null,
+        signature_data_volunteer: null,
+        volunteer_signature_data: null,
+        name_volunteer: "",
+        monthly_tuition_payment: 0,
+        monthly_transportation_payment: 0,
+        enrollment_agreement_pandadoc_id: "",
+        enrollment_agreement_status: "",
+        enrollment_agreement_sent: null,
+        enrollment_agreement_pdf_url: "",
+        is_enrollment_agreement_signed: false,
+        signature_data: null,
+        name: "",
+        last_edited: Date.now(),
+        submitted_date: null,
+        isSubmitted: false,
+      });
+    },
+
+    /** All registration-progress rows for a school year — backs the
+     *  admin Registrations list. Calls the dedicated Xano query
+     *  `registration_student_registration_progress_by_year` with
+     *  `registration_school_years_id` as input. */
+    async getByYear(yearId: number): Promise<XanoStudentRegistrationProgress[]> {
+      try {
+        const url = new URL(
+          `${getBaseUrl()}/registration_student_registration_progress_by_year`
+        );
+        url.searchParams.set("registration_school_years_id", String(yearId));
+        const res = await fetch(url.toString(), { cache: "no-store" });
+        if (!res.ok) return [];
+        const items = await res.json();
+        return Array.isArray(items) ? items : [];
+      } catch {
+        return [];
+      }
+    },
+
+    /** Fetch the single row for this family + year, or null. */
+    async getByFamilyAndYear(
+      familyId: number,
+      yearId: number
+    ): Promise<XanoStudentRegistrationProgress | null> {
+      try {
+        const res = await fetch(
+          `${getBaseUrl()}/registration_student_registration_progress?registration_families_id=${familyId}&registration_school_years_id=${yearId}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) return null;
+        const results = await res.json();
+        const items = Array.isArray(results) ? results : [];
+        return (
+          items.find(
+            (r: XanoStudentRegistrationProgress) =>
+              r.registration_families_id === familyId &&
+              r.registration_school_years_id === yearId
+          ) ?? null
+        );
+      } catch {
+        return null;
+      }
+    },
+
+    async create(
+      data: Omit<XanoStudentRegistrationProgress, "id" | "created_at">
+    ): Promise<XanoStudentRegistrationProgress> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_student_registration_progress`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async update(
+      id: number,
+      data: Partial<Omit<XanoStudentRegistrationProgress, "id" | "created_at">>
+    ): Promise<XanoStudentRegistrationProgress> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_student_registration_progress/${id}`,
         {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },

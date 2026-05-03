@@ -36,11 +36,14 @@ export async function POST(
     estimated_annual_income: body.estimated_annual_income ?? 0,
     isW2: body.isW2 ?? false,
     isPayStubs: body.isPayStubs ?? false,
-    w2: null,
-    paystub_1: null,
-    paystub_2: null,
-    paystub_3: null,
-    paystub_4: null,
+    // Each verification slot is now a multi-file array. Default to []
+    // on create so the new member shows up with editable empty uploads
+    // instead of nullable single-object fields.
+    w2: [],
+    paystub_1: [],
+    paystub_2: [],
+    paystub_3: [],
+    paystub_4: [],
   });
 
   return NextResponse.json(member, { status: 201 });

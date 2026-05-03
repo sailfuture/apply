@@ -62,7 +62,12 @@ export async function POST(req: NextRequest) {
     family_contribution_per_month: source.family_contribution_per_month,
     scholarship_advocacy_letter: source.scholarship_advocacy_letter,
     signature: null,
-    termination_letter: source.termination_letter ?? null,
+    // Carry the unemployment / termination proof forward so a re-applying
+    // family doesn't have to re-upload the same letter — they can replace
+    // it on the new year if their employment situation has changed.
+    unemployment_letter: Array.isArray(source.unemployment_letter)
+      ? source.unemployment_letter
+      : [],
     last_edited: Date.now(),
     isNotParticipating: source.isNotParticipating ?? false,
     isSNAPBenefits: source.isSNAPBenefits ?? false,
@@ -129,6 +134,14 @@ export async function POST(req: NextRequest) {
         registration_opportunity_scholarship_id: newId,
         type: b.type,
         amount_monthly: b.amount_monthly,
+        // Carry the per-benefit documentation forward when a parent
+        // re-applies — same idea as the rest of the row clone here.
+        // Documentation is rarely year-specific (a Medicaid card is a
+        // Medicaid card), so re-using it lets families avoid re-uploading
+        // the same paperwork. They can still replace it on the new year.
+        benefit_documentation: Array.isArray(b.benefit_documentation)
+          ? b.benefit_documentation
+          : [],
       })
     ),
   ]);

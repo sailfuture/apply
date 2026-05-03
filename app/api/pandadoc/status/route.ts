@@ -56,26 +56,48 @@ export async function GET(req: NextRequest) {
       (normalizedStatus === "completed" || normalizedStatus === "viewed")
     ) {
       const appId = Number(applicationId);
-      const application = await xano.applications.getById(appId);
+      // Ownership check via family's own app list — same pattern as the
+      // other PandaDoc routes, avoids flaky 404s from relation-vs-scalar.
+      const familyApps = await xano.applications.getByFamilyId(familyId);
+      const application = familyApps.find((a) => Number(a.id) === appId);
 
-      if (application && application.registration_families_id === familyId) {
-        const statusField = type === "liability_waiver"
-          ? "liability_waiver_status"
-          : "enrollment_agreement_status";
-
-        if (application[statusField] !== normalizedStatus) {
-          const updateData: Record<string, unknown> = {
-            [statusField]: normalizedStatus,
-          };
-
-          if (normalizedStatus === "completed") {
-            const pdfUrlField = type === "liability_waiver"
-              ? "liability_waiver_pdf_url"
-              : "enrollment_agreement_pdf_url";
-            updateData[pdfUrlField] = getDocumentDownloadUrl(documentId);
+      if (application) {
+        if (type === "liability_waiver") {
+          // Per-student — write to the application row.
+          if (application.liability_waiver_status !== normalizedStatus) {
+            const updateData: Record<string, unknown> = {
+              liability_waiver_status: normalizedStatus,
+            };
+            if (normalizedStatus === "completed") {
+              updateData.liability_waiver_pdf_url = getDocumentDownloadUrl(documentId);
+            }
+            await xano.applications.update(appId, updateData);
           }
-
-          await xano.applications.update(appId, updateData);
+        } else {
+          // Enrollment agreement is family-level — write to the
+          // registration progress row. Also latches `isEnrollment` when
+          // the document is completed so the sidenav and enrolled
+          // dashboard reflect it without a second PATCH.
+          const progressRow = await xano.studentRegistrationProgress.resolve(
+            familyId,
+            application.registration_school_years_id
+          );
+          if (progressRow.enrollment_agreement_status !== normalizedStatus) {
+            const updateData: Partial<
+              import("@/lib/xano").XanoStudentRegistrationProgress
+            > = {
+              enrollment_agreement_status: normalizedStatus,
+            };
+            if (normalizedStatus === "completed") {
+              updateData.enrollment_agreement_pdf_url = getDocumentDownloadUrl(documentId);
+              updateData.is_enrollment_agreement_signed = true;
+              updateData.isEnrollment = true;
+            }
+            await xano.studentRegistrationProgress.update(
+              progressRow.id,
+              updateData
+            );
+          }
         }
       }
     }

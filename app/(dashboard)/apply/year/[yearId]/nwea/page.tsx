@@ -132,9 +132,46 @@ export default function InitialTestingStepPage() {
         onUnlock: () => void setProgressSection("testing_completed", false),
       });
     } else {
-      updateSaveOptions({ label: "Complete Initial Testing", saving: savingAppId !== null });
+      // Explicitly clear `completed` + `onUnlock` — `updateSaveOptions`
+      // shallow-merges, so without these the stale `completed: true`
+      // sticks around after unlock and the layout keeps the page dimmed.
+      updateSaveOptions({
+        completed: false,
+        onUnlock: undefined,
+        label: "Complete Initial Testing",
+        saving: savingAppId !== null,
+      });
     }
   }, [testingLocked, savingAppId, updateSaveOptions, setProgressSection]);
+
+  // Auto-revoke completion when a freshly added student's app row
+  // arrives without NWEA scheduled/complete. Without this, marking
+  // testing complete locks the bool, and a later add-student leaves the
+  // section claiming "complete" while the new student has neither flag
+  // set — the parent doesn't know they need to revisit this page.
+  const autoRevokedTestingRef = useRef(false);
+  useEffect(() => {
+    if (!testingLocked) {
+      autoRevokedTestingRef.current = false;
+      return;
+    }
+    if (loading || applications.length === 0) return;
+    const visible = applications.filter((a) =>
+      students.some((s) => s.id === a.registration_students_id)
+    );
+    if (visible.length === 0) return;
+    const allScheduled = visible.every(
+      (a) =>
+        a.nwea_testing_complete === true || a.nwea_testing_scheduled === true
+    );
+    if (allScheduled) return;
+    if (autoRevokedTestingRef.current) return;
+    autoRevokedTestingRef.current = true;
+    void setProgressSection("testing_completed", false);
+    toast.message(
+      "A new student needs NWEA scheduling — please review and re-complete this section."
+    );
+  }, [applications, students, testingLocked, loading, setProgressSection]);
 
   async function toggleScheduled(appId: number, current: boolean) {
     const newVal = !current;
@@ -251,78 +288,91 @@ export default function InitialTestingStepPage() {
               const photoUrl = getPhotoUrl(student.photo);
               const isComplete = hasUpload || scheduled;
               return (
-                <Card key={student.id} className="overflow-hidden gap-0 py-0">
-                  {/* Students-page card format — avatar + name + status icon only.
-                      No trash icon, no chevron, always expanded, no status sub-head. */}
-                  <CardHeader className="py-3 !pb-3 border-b">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <Avatar className="size-10">
-                          {photoUrl ? (
-                            <AvatarImage
-                              src={photoUrl}
-                              alt={`${student.first_name} ${student.last_name}`}
-                            />
-                          ) : null}
-                          <AvatarFallback className="bg-muted text-muted-foreground text-sm font-medium">
-                            {getInitials(student.first_name, student.last_name)}
-                          </AvatarFallback>
-                        </Avatar>
-                        <CardTitle className="text-lg">
-                          {student.first_name} {student.last_name}
-                        </CardTitle>
+                // Two stacked cards per student. Card 1 holds the schedule
+                // CTA + the student's status icon; Card 2 holds the
+                // confirmation checkbox in its own bordered container so
+                // it reads as a deliberate acknowledgment step rather than
+                // an inline form field.
+                <div key={student.id} className="space-y-3">
+                  <Card className="overflow-hidden gap-0 py-0">
+                    {/* Students-page card format — avatar + name + status icon only. */}
+                    <CardHeader className="py-3 !pb-3 border-b">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <Avatar className="size-10">
+                            {photoUrl ? (
+                              <AvatarImage
+                                src={photoUrl}
+                                alt={`${student.first_name} ${student.last_name}`}
+                              />
+                            ) : null}
+                            <AvatarFallback className="bg-muted text-muted-foreground text-sm font-medium">
+                              {getInitials(student.first_name, student.last_name)}
+                            </AvatarFallback>
+                          </Avatar>
+                          <CardTitle className="text-lg">
+                            {student.first_name} {student.last_name}
+                          </CardTitle>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {isComplete ? (
+                            <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-green-500 text-white">
+                              <svg className="size-4" viewBox="0 0 20 20" fill="currentColor">
+                                <path fillRule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clipRule="evenodd" />
+                              </svg>
+                            </div>
+                          ) : (
+                            <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-amber-500 text-white">
+                              <svg className="size-4" viewBox="0 0 20 20" fill="currentColor">
+                                <path d="M5.433 13.917l1.262-3.155A4 4 0 017.58 9.42l6.92-6.918a2.121 2.121 0 013 3l-6.92 6.918c-.383.383-.84.685-1.343.886l-3.154 1.262a.5.5 0 01-.65-.65z" />
+                                <path d="M3.5 5.75c0-.69.56-1.25 1.25-1.25H10A.75.75 0 0010 3H4.75A2.75 2.75 0 002 5.75v9.5A2.75 2.75 0 004.75 18h9.5A2.75 2.75 0 0017 15.25V10a.75.75 0 00-1.5 0v5.25c0 .69-.56 1.25-1.25 1.25h-9.5c-.69 0-1.25-.56-1.25-1.25v-9.5z" />
+                              </svg>
+                            </div>
+                          )}
+                        </div>
                       </div>
-                      <div className="flex items-center gap-2">
-                        {isComplete ? (
-                          <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-green-500 text-white">
-                            <svg className="size-4" viewBox="0 0 20 20" fill="currentColor">
-                              <path fillRule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clipRule="evenodd" />
-                            </svg>
-                          </div>
-                        ) : (
-                          <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-amber-500 text-white">
-                            <svg className="size-4" viewBox="0 0 20 20" fill="currentColor">
-                              <path d="M5.433 13.917l1.262-3.155A4 4 0 017.58 9.42l6.92-6.918a2.121 2.121 0 013 3l-6.92 6.918c-.383.383-.84.685-1.343.886l-3.154 1.262a.5.5 0 01-.65-.65z" />
-                              <path d="M3.5 5.75c0-.69.56-1.25 1.25-1.25H10A.75.75 0 0010 3H4.75A2.75 2.75 0 002 5.75v9.5A2.75 2.75 0 004.75 18h9.5A2.75 2.75 0 0017 15.25V10a.75.75 0 00-1.5 0v5.25c0 .69-.56 1.25-1.25 1.25h-9.5c-.69 0-1.25-.56-1.25-1.25v-9.5z" />
-                            </svg>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </CardHeader>
+                    </CardHeader>
 
-                  <CardContent className="space-y-4 py-5 bg-white dark:bg-background">
-                    {/* Schedule — white outline button. Parents must come in
-                        for initial testing; no self-upload option. */}
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="w-full bg-white"
-                      onClick={() => setScheduleDialogOpen(true)}
-                    >
-                      <Calendar className="size-4 mr-1.5 shrink-0" />
-                      Click to Schedule NWEA Testing
-                    </Button>
+                    <CardContent className="space-y-4 py-5 bg-white dark:bg-background">
+                      {/* Schedule — white outline button. Parents must come in
+                          for initial testing; no self-upload option. */}
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="w-full bg-white"
+                        onClick={() => setScheduleDialogOpen(true)}
+                      >
+                        <Calendar className="size-4 mr-1.5 shrink-0" />
+                        Click to Schedule NWEA Testing
+                      </Button>
+                    </CardContent>
+                  </Card>
 
-                    <label
-                      className={`flex items-start gap-3 cursor-pointer rounded-md border px-4 py-3 transition-colors ${
-                        scheduled ? "border-input" : "border-2 border-red-400"
-                      }`}
-                    >
-                      <input
-                        type="checkbox"
-                        className="size-5 mt-0.5 cursor-pointer rounded accent-primary"
-                        checked={scheduled}
-                        disabled={savingAppId === app.id}
-                        onChange={() => toggleScheduled(app.id, scheduled)}
-                      />
-                      <span className="text-sm font-medium">
-                        Yes, I&apos;ve scheduled NWEA testing for my child at
-                        the SailFuture Academy.
-                      </span>
-                    </label>
-                  </CardContent>
-                </Card>
+                  {/* Confirmation card — pulled out of the NWEA card above so
+                      acknowledging the schedule is a discrete "step" the
+                      parent intentionally checks off, not a passive footer. */}
+                  <Card className="overflow-hidden py-0">
+                    <CardContent className="py-4 bg-white dark:bg-background">
+                      <label
+                        className={`flex items-start gap-3 cursor-pointer rounded-md border px-4 py-3 transition-colors ${
+                          scheduled ? "border-input" : "border-2 border-red-400"
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          className="size-5 mt-0.5 cursor-pointer rounded accent-primary"
+                          checked={scheduled}
+                          disabled={savingAppId === app.id}
+                          onChange={() => toggleScheduled(app.id, scheduled)}
+                        />
+                        <span className="text-sm font-medium">
+                          Yes, I&apos;ve scheduled NWEA testing for my child
+                          at the SailFuture Academy.
+                        </span>
+                      </label>
+                    </CardContent>
+                  </Card>
+                </div>
               );
             })}
           </div>

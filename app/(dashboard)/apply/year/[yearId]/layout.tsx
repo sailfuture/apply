@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { CheckCircle2, Loader2 } from "lucide-react";
 import { useMemo, useCallback, useState } from "react";
 import {
   ApplicationFlowProvider,
@@ -29,6 +30,7 @@ import { ApplicationSideNav } from "@/components/application-side-nav";
 import { useApplicationSteps } from "@/hooks/use-application-steps";
 import { PreSubmitReviewModal, type SectionStatus } from "@/components/pre-submit-review-modal";
 import { useFamilyProgress } from "@/hooks/use-family-progress";
+import { useStudentRegistrationProgress } from "@/hooks/use-student-registration-progress";
 
 function LayoutInner({ children }: { children: React.ReactNode }) {
   const params = useParams();
@@ -36,7 +38,12 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const yearId = params.yearId as string;
 
-  const basePath = `/apply/year/${yearId}`;
+  // The same layout serves both `/apply/year/[yearId]` (application phase)
+  // and `/registration/year/[yearId]` (post-acceptance phase). The base
+  // path follows whichever URL the user is on, so links + the overview
+  // detection stay correct under either prefix.
+  const flowPrefix = pathname.startsWith("/registration/") ? "/registration" : "/apply";
+  const basePath = `${flowPrefix}/year/${yearId}`;
   const isOverview = pathname === basePath || pathname === `${basePath}/`;
 
   const { saveHandler, saveOptions, backGuard, onBack, hideChrome, hideBottomBar } =
@@ -51,8 +58,12 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
   // (one row per family per year). The review modal renders one row per section
   // with a Fix button if the section isn't yet marked complete.
   const { progress, submit: submitFamilyApplication } = useFamilyProgress(Number(yearId));
+  const {
+    progress: regProgress,
+    submit: submitRegistration,
+  } = useStudentRegistrationProgress(Number(yearId));
   const [submitting, setSubmitting] = useState(false);
-  const submitSections: SectionStatus[] = useMemo(
+  const applicationSections: SectionStatus[] = useMemo(
     () => [
       { section: "family", complete: !!progress?.family_completed },
       { section: "students", complete: !!progress?.students_completed },
@@ -61,12 +72,32 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
     ],
     [progress]
   );
+  const registrationSubmitSections: SectionStatus[] = useMemo(
+    () => [
+      { section: "tuition", complete: !!regProgress?.isTuition },
+      { section: "enrollment", complete: !!regProgress?.isEnrollment },
+      { section: "registration", complete: !!regProgress?.isRegistration },
+      { section: "volunteer", complete: !!regProgress?.isVolunteerHours },
+    ],
+    [regProgress]
+  );
 
   // Get registration step counts for the Complete Section button
   const { registrationSteps, steps } = useApplicationSteps(Number(yearId));
-  const REGISTRATION_SEGMENTS = new Set(["tuition", "enrollment-signing", "registration"]);
+  const REGISTRATION_SEGMENTS = new Set(["tuition", "enrollment-signing", "registration", "volunteer-hours"]);
   const currentSegment = pathname.replace(basePath, "").replace(/^\//, "").split("/")[0] || "";
   const isRegistrationPage = REGISTRATION_SEGMENTS.has(currentSegment);
+
+  // The modal sources its sections + submit action from whichever lifecycle
+  // phase the user is currently in. Registration pages → the four post-
+  // acceptance bools + registration submit. Everything else → the four
+  // application bools + application submit.
+  const submitSections = isRegistrationPage
+    ? registrationSubmitSections
+    : applicationSections;
+  const modalPhase: "application" | "registration" = isRegistrationPage
+    ? "registration"
+    : "application";
   const activeSteps = isRegistrationPage ? registrationSteps : steps;
   const stepsExcludingSubmit = activeSteps.filter((s) => s.title !== "Submit Registration");
   const completedStepCount = stepsExcludingSubmit.filter((s) => s.status === "complete").length;
@@ -96,14 +127,25 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
     }
   }, [backGuard, onBack, prevStep, router, basePath]);
 
+  // Local "pressing" state for the Complete Section button. The page-side
+  // saveHandler does some sync validation work before flipping its
+  // `saveOptions.saving` flag, so without this there's a perceptible
+  // gap between click and the spinner showing — the button looks dead
+  // for a few hundred ms. Flipping `pressing` synchronously on click
+  // gives the user instant visual feedback that the click registered.
+  const [pressing, setPressing] = useState(false);
   const handleSave = useCallback(async () => {
     if (!saveHandler) return;
+    setPressing(true);
     try {
       await saveHandler();
     } catch {
       // Save failed — stay on page, error toast handled by the page
+    } finally {
+      setPressing(false);
     }
   }, [saveHandler]);
+  const showSpinner = pressing || !!saveOptions.saving;
 
   // Show side nav on form pages (not overview, not hideChrome)
   const showSideNav = !isOverview && !hideChrome;
@@ -200,7 +242,23 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
               inline in each page's header via <GlobalSaveStatusPill />.
               Extra bottom padding on mobile leaves room for the fixed nav. */}
           <main className="flex-1 min-w-0">
-            <div className={saveOptions.completed ? "opacity-50" : ""}>
+            {/* When the section is marked complete, dim AND fully block
+                interaction with the page contents (`pointer-events-none`).
+                Previously only the opacity changed — inputs underneath
+                were still focusable / editable, which is why "unlock"
+                appeared to do nothing on pages whose individual inputs
+                weren't separately gated by a lock state. The block lifts
+                automatically as soon as `saveOptions.completed` flips
+                false (i.e. when onUnlock fires from the bottom-bar
+                button below). */}
+            <div
+              className={
+                saveOptions.completed
+                  ? "opacity-50 pointer-events-none select-none"
+                  : ""
+              }
+              aria-disabled={saveOptions.completed || undefined}
+            >
               {children}
             </div>
 
@@ -217,19 +275,32 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
                 <div className="hidden xl:flex mx-auto w-full max-w-4xl items-center gap-2 border-t pt-6 px-6">
                   {saveOptions.completed ? (
                     <button
-                      className="flex-1 flex items-center justify-center gap-2 rounded-md bg-muted px-4 py-2.5 text-sm font-medium text-muted-foreground hover:bg-muted/80 transition-colors cursor-pointer"
+                      className="flex-1 flex items-center justify-center gap-2 rounded-md bg-white border border-input px-4 py-2.5 text-sm font-medium text-foreground hover:bg-muted/30 transition-colors cursor-pointer"
                       onClick={() => saveOptions.onUnlock && setUnlockWarningOpen(true)}
                     >
-                      {saveOptions.completedLabel ?? "Section Completed"}
+                      <CheckCircle2 className="size-4 text-green-600 shrink-0" />
+                      <span>
+                        {saveOptions.completedLabel ?? "Section Completed"}
+                        <span className="ml-1.5 text-xs font-normal text-muted-foreground">
+                          (Click to Edit)
+                        </span>
+                      </span>
                     </button>
                   ) : saveOptions.label ? (
                     <Button
                       variant={saveOptions.disabled ? "outline" : "default"}
                       className={`flex-1 py-2.5 ${saveOptions.disabled ? "bg-muted text-muted-foreground cursor-not-allowed hover:bg-muted" : ""}`}
                       onClick={saveHandler && !saveOptions.disabled ? handleSave : undefined}
-                      disabled={saveHandler ? (saveOptions.disabled || saveOptions.saving) : false}
+                      disabled={saveHandler ? (saveOptions.disabled || showSpinner) : false}
                     >
-                      {saveOptions.saving ? "Saving..." : saveOptions.label}
+                      {showSpinner ? (
+                        <>
+                          <Loader2 className="size-4 mr-1.5 shrink-0 animate-spin" />
+                          {saveOptions.saving ? "Saving..." : "Working..."}
+                        </>
+                      ) : (
+                        saveOptions.label
+                      )}
                     </Button>
                   ) : (
                     <div className="flex-1 h-10 rounded-md bg-muted animate-pulse" />
@@ -252,19 +323,34 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
 
                     {saveOptions.completed ? (
                       <button
-                        className="flex-1 min-w-0 flex items-center justify-center gap-2 rounded-md bg-muted px-4 py-2.5 text-sm font-medium text-muted-foreground hover:bg-muted/80 transition-colors cursor-pointer"
+                        className="flex-1 min-w-0 flex items-center justify-center gap-2 rounded-md bg-white border border-input px-4 py-2.5 text-sm font-medium text-foreground hover:bg-muted/30 transition-colors cursor-pointer"
                         onClick={() => saveOptions.onUnlock && setUnlockWarningOpen(true)}
                       >
-                        <span className="truncate">{saveOptions.completedLabel ?? "Section Completed"}</span>
+                        <CheckCircle2 className="size-4 text-green-600 shrink-0" />
+                        <span className="truncate">
+                          {saveOptions.completedLabel ?? "Section Completed"}
+                          <span className="ml-1.5 text-xs font-normal text-muted-foreground">
+                            (Click to Edit)
+                          </span>
+                        </span>
                       </button>
                     ) : saveOptions.label ? (
                       <Button
                         variant={saveOptions.disabled ? "outline" : "default"}
                         className={`flex-1 min-w-0 py-2.5 ${saveOptions.disabled ? "bg-muted text-muted-foreground cursor-not-allowed hover:bg-muted" : ""}`}
                         onClick={saveHandler && !saveOptions.disabled ? handleSave : undefined}
-                        disabled={saveHandler ? (saveOptions.disabled || saveOptions.saving) : false}
+                        disabled={saveHandler ? (saveOptions.disabled || showSpinner) : false}
                       >
-                        <span className="truncate">{saveOptions.saving ? "Saving..." : saveOptions.label}</span>
+                        {showSpinner ? (
+                          <>
+                            <Loader2 className="size-4 mr-1.5 shrink-0 animate-spin" />
+                            <span className="truncate">
+                              {saveOptions.saving ? "Saving..." : "Working..."}
+                            </span>
+                          </>
+                        ) : (
+                          <span className="truncate">{saveOptions.label}</span>
+                        )}
                       </Button>
                     ) : (
                       <div className="flex-1 min-w-0 h-10 rounded-md bg-muted animate-pulse" />
@@ -308,18 +394,24 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
         sections={submitSections}
         basePath={basePath}
         submitting={submitting}
+        phase={modalPhase}
         onConfirm={async () => {
           if (submitting) return;
           setSubmitting(true);
           try {
-            await submitFamilyApplication();
+            // Phase drives which bool gets flipped and where the user
+            // lands afterwards. Application submit → application-submitted
+            // banner. Registration submit → enrolled-family dashboard.
+            if (modalPhase === "registration") {
+              await submitRegistration();
+            } else {
+              await submitFamilyApplication();
+            }
             setPreSubmitOpen(false);
-            // After a successful submit, drop the user back on the year
-            // dashboard where the "Application Submitted" banner takes over.
             router.push(basePath);
           } catch {
             // Keep the modal open so they can retry — error toast is handled
-            // by trackAutosave inside useFamilyProgress.submit().
+            // by trackAutosave inside the hook's submit().
           } finally {
             setSubmitting(false);
           }

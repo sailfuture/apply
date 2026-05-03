@@ -2,8 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AdminSidebar } from "@/components/admin-sidebar";
-import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+import { AdminTopNav } from "@/components/admin-top-nav";
 import { Skeleton } from "@/components/ui/skeleton";
 
 interface AdminUser {
@@ -13,6 +12,16 @@ interface AdminUser {
   role: string;
 }
 
+/**
+ * Admin shell. Top horizontal nav (mirrors the parent dashboard's
+ * `GlobalHeader` look) plus a centered content container below — same
+ * layout pattern the rest of the app uses, so admins don't context-shift
+ * to a sidebar paradigm just for this surface.
+ *
+ * Auth gate: hits `/api/admin/auth` on mount. Non-admins (or signed-out
+ * users that slipped past the middleware) bounce to `/`. While the check
+ * is in-flight we render skeletons so we don't flash protected content.
+ */
 export default function AdminLayout({
   children,
 }: {
@@ -49,9 +58,9 @@ export default function AdminLayout({
   }
 
   return (
-    <SidebarProvider>
-      <AdminSidebar admin={admin} />
-      <SidebarInset>{children}</SidebarInset>
-    </SidebarProvider>
+    <div className="min-h-screen bg-gray-50">
+      <AdminTopNav admin={admin} />
+      <main className="mx-auto w-full max-w-7xl">{children}</main>
+    </div>
   );
 }

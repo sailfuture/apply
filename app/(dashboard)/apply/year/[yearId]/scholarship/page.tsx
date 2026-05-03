@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, usePathname, useRouter } from "next/navigation";
 import { useSWRConfig } from "swr";
 import Image from "next/image";
 import { useUser } from "@clerk/nextjs";
@@ -44,6 +44,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { GlobalSaveStatusPill } from "@/components/save-status-pill";
 import { useFamilyProgress } from "@/hooks/use-family-progress";
+import { useReapplyFamilyProgress } from "@/hooks/use-reapply-family-progress";
 import { toast } from "sonner";
 import {
   Empty,
@@ -136,7 +137,10 @@ interface Scholarship {
   snap_benefits: Record<string, unknown>[];
   other_benefits: Record<string, unknown>[];
   signature: Record<string, unknown> | null;
-  termination_letter: Record<string, unknown> | null;
+  /** Multi-file array of unemployment / termination proof — required when
+   *  `no_contributing_member` is true. Replaces the older single-file
+   *  `termination_letter` column. */
+  unemployment_letter: Record<string, unknown>[];
   last_edited: number | null;
   isNotParticipating: boolean;
   isSNAPBenefits: boolean;
@@ -163,11 +167,15 @@ interface ContributingMember {
   estimated_annual_income: number;
   isW2: boolean;
   isPayStubs: boolean;
-  w2: Record<string, unknown> | null;
-  paystub_1: Record<string, unknown> | null;
-  paystub_2: Record<string, unknown> | null;
-  paystub_3: Record<string, unknown> | null;
-  paystub_4: Record<string, unknown> | null;
+  /** W-2 documents — multi-file array. A single member's W-2 packet can
+   *  span multiple pages, so the schema stores an array of file metadata
+   *  rather than one file slot. Legacy rows may contain a single object
+   *  in place of an array; the `toFileArray` helper normalizes both. */
+  w2: Record<string, unknown>[] | Record<string, unknown> | null;
+  paystub_1: Record<string, unknown>[] | Record<string, unknown> | null;
+  paystub_2: Record<string, unknown>[] | Record<string, unknown> | null;
+  paystub_3: Record<string, unknown>[] | Record<string, unknown> | null;
+  paystub_4: Record<string, unknown>[] | Record<string, unknown> | null;
 }
 
 interface Home {
@@ -196,6 +204,11 @@ interface Benefit {
   id: number;
   type: string;
   amount_monthly: number;
+  /** Per-benefit documentation (award letters, approval notices, etc.).
+   *  Multi-file array — one benefit may need several pages of paperwork
+   *  to verify. Replaces the family-wide `other_benefits` blob; each
+   *  benefit row is now self-contained. */
+  benefit_documentation: Record<string, unknown>[];
 }
 
 function formatCurrencyDisplay(value: number): string {
@@ -385,7 +398,7 @@ export default function ScholarshipPage() {
   const [signatureUploading, setSignatureUploading] = useState(false);
   const [snapBenefitsFiles, setSnapBenefitsFiles] = useState<Record<string, unknown>[]>([]);
   const [otherBenefitsFiles, setOtherBenefitsFiles] = useState<Record<string, unknown>[]>([]);
-  const [terminationLetter, setTerminationLetter] = useState<Record<string, unknown> | null>(null);
+  const [unemploymentLetter, setUnemploymentLetter] = useState<Record<string, unknown>[]>([]);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
   const [, setTick] = useState(0);
   const savedSnapshotRef = useRef<string>("");
@@ -419,13 +432,75 @@ export default function ScholarshipPage() {
     });
   }
 
-  const incomeComplete = householdAdults > 0 && householdChildren > 0 &&
-    (!govBenefits || benefits.every(b => b.type && b.amount_monthly > 0));
+  // Helpers for working with file metadata — both the single-object shape
+  // (legacy rows) and the array shape (W-2, paystub_*, benefit_documentation
+  // post-schema-change). A slot is "uploaded" if at least one entry has a
+  // canonical Xano `path`.
+  const hasFileObject = (f: unknown): boolean =>
+    !!f && typeof f === "object" && !Array.isArray(f) &&
+    typeof (f as { path?: unknown }).path === "string" &&
+    (f as { path: string }).path.length > 0;
+  /** Normalize either shape (legacy single object, new array, or null) into
+   *  an array of file metadata objects. Drops empty `{}` placeholders. */
+  const toFileArray = (v: unknown): Record<string, unknown>[] => {
+    if (Array.isArray(v)) return v.filter(hasFileObject) as Record<string, unknown>[];
+    if (hasFileObject(v)) return [v as Record<string, unknown>];
+    return [];
+  };
+  /** True when at least one usable file is present in the slot. Works
+   *  uniformly for legacy single-object slots and new array slots. */
+  const hasFile = (v: unknown): boolean => toFileArray(v).length > 0;
 
-  const membersComplete = noContributing || (
-    members.length > 0 &&
-    members.every(m => m.first_name && m.last_name && m.address_1 && m.city && m.state && m.zipcode && m.estimated_annual_income > 0)
-  );
+  const incomeComplete = householdAdults > 0 && householdChildren > 0 &&
+    (!govBenefits ||
+      // Each benefit row needs type + amount, AND at least one
+      // documentation file uploaded into its own `benefit_documentation`
+      // slot. The page-level "Supporting Documentation" upload was
+      // removed — every benefit is self-contained now.
+      (benefits.length > 0 &&
+        benefits.every(
+          (b) =>
+            b.type &&
+            b.amount_monthly > 0 &&
+            hasFile(b.benefit_documentation)
+        )));
+
+  // Per-member income verification: each contributing member must select
+  // either W-2 or pay stubs AND upload at least one file in each required
+  // slot. The slots are now arrays (multi-file), so a single page in a
+  // multi-page packet doesn't pretend to be the whole packet.
+  const memberIncomeVerified = (m: ContributingMember): boolean => {
+    if (m.isW2) return hasFile(m.w2);
+    if (m.isPayStubs) {
+      return (
+        hasFile(m.paystub_1) &&
+        hasFile(m.paystub_2) &&
+        hasFile(m.paystub_3) &&
+        hasFile(m.paystub_4)
+      );
+    }
+    return false;
+  };
+
+  // "No contributing members" branch is satisfied only when at least one
+  // unemployment / termination letter has been uploaded — the family
+  // checkbox alone isn't enough proof for admins to verify zero income.
+  const membersComplete = noContributing
+    ? hasFile(unemploymentLetter)
+    : (
+      members.length > 0 &&
+      members.every(
+        (m) =>
+          m.first_name &&
+          m.last_name &&
+          m.address_1 &&
+          m.city &&
+          m.state &&
+          m.zipcode &&
+          m.estimated_annual_income > 0 &&
+          memberIncomeVerified(m)
+      )
+    );
 
   const assetsComplete = (
     (homes.length === 0 || homes.every(h => h.type && h.address_1 && h.city && h.state && h.zipcode && h.total_value > 0 && h.outstanding_debt >= 0)) &&
@@ -453,7 +528,7 @@ export default function ScholarshipPage() {
       assetsRetirement, assetsStocks, assetsTrusts, assetsBusiness,
       debtsCreditCards, debtsStudentLoans, debtsPersonalLoans,
       govBenefits, familyContribution, advocacyLetter,
-      signatureMeta, terminationLetter,
+      signatureMeta, unemploymentLetter,
       members, homes, vehicles, benefits,
     });
   }
@@ -466,7 +541,7 @@ export default function ScholarshipPage() {
     assetsRetirement, assetsStocks, assetsTrusts, assetsBusiness,
     debtsCreditCards, debtsStudentLoans, debtsPersonalLoans,
     govBenefits, familyContribution, advocacyLetter,
-    signatureMeta, terminationLetter,
+    signatureMeta, unemploymentLetter,
     members, homes, vehicles, benefits,
   ]);
 
@@ -561,7 +636,9 @@ export default function ScholarshipPage() {
                 }
                 return Object.keys(sig).length > 0 ? sig : null;
               })(),
-              terminationLetter: s.termination_letter ?? null,
+              unemploymentLetter: Array.isArray(s.unemployment_letter)
+                ? s.unemployment_letter
+                : [],
               members: loadedMembers,
               homes: loadedHomes,
               vehicles: loadedVehicles,
@@ -657,8 +734,8 @@ export default function ScholarshipPage() {
     if (Array.isArray(s.other_benefits) && s.other_benefits.length > 0) {
       setOtherBenefitsFiles(s.other_benefits as Record<string, unknown>[]);
     }
-    if (s.termination_letter) {
-      setTerminationLetter(s.termination_letter as Record<string, unknown>);
+    if (Array.isArray(s.unemployment_letter)) {
+      setUnemploymentLetter(s.unemployment_letter as Record<string, unknown>[]);
     }
   }
 
@@ -782,7 +859,7 @@ export default function ScholarshipPage() {
           snap_benefits: snapBenefitsFiles,
           other_benefits: otherBenefitsFiles,
           signature: signatureMeta,
-          termination_letter: terminationLetter,
+          unemployment_letter: unemploymentLetter,
           last_edited: Date.now(),
         }),
       });
@@ -802,11 +879,14 @@ export default function ScholarshipPage() {
             estimated_annual_income: m.estimated_annual_income,
             isW2: m.isW2,
             isPayStubs: m.isPayStubs,
-            w2: m.w2,
-            paystub_1: m.paystub_1,
-            paystub_2: m.paystub_2,
-            paystub_3: m.paystub_3,
-            paystub_4: m.paystub_4,
+            // Each verification slot is now a multi-file array. Normalize
+            // before PATCH so legacy single-object rows get rewritten as
+            // arrays the first time they save through the new UI.
+            w2: toFileArray(m.w2),
+            paystub_1: toFileArray(m.paystub_1),
+            paystub_2: toFileArray(m.paystub_2),
+            paystub_3: toFileArray(m.paystub_3),
+            paystub_4: toFileArray(m.paystub_4),
           }),
         })
       );
@@ -850,6 +930,12 @@ export default function ScholarshipPage() {
           body: JSON.stringify({
             type: b.type,
             amount_monthly: b.amount_monthly,
+            // Persist the per-benefit documentation array. Older benefit
+            // rows may have arrived without this field; default to [] so
+            // we never PATCH `undefined` into the column.
+            benefit_documentation: Array.isArray(b.benefit_documentation)
+              ? b.benefit_documentation
+              : [],
           }),
         })
       );
@@ -893,9 +979,30 @@ export default function ScholarshipPage() {
     return () => unregisterSaveHandler();
   }, [setPageTitle, unregisterSaveHandler]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Progress bridge row — source of truth for financial-aid section completion.
-  const { progress, setSection: setProgressSection } = useFamilyProgress(yearId);
-  const scholarshipLocked = !!progress?.financial_aid_completed;
+  // Flow-aware progress: same component renders under both /apply and
+  // /reapply. On /apply we track the apply progress row's
+  // `financial_aid_completed` bool; on /reapply we track the reapply
+  // progress row's `isScholarship` bool. Both hooks always mount (rules of
+  // hooks), but we pass `null` to the inactive one so only the active
+  // flow's progress endpoint is hit per page mount.
+  const pathnameForFlow = usePathname();
+  const isReapplyFlow = pathnameForFlow.startsWith("/reapply");
+  const applyProgress = useFamilyProgress(isReapplyFlow ? null : yearId);
+  const reapplyProgress = useReapplyFamilyProgress(isReapplyFlow ? yearId : null);
+  const scholarshipLocked = isReapplyFlow
+    ? !!reapplyProgress.progress?.isScholarship
+    : !!applyProgress.progress?.financial_aid_completed;
+  // Stabilize the setter via a ref — the progress hooks return fresh
+  // object literals each render, so listing them in useCallback deps
+  // would cause the consumer useEffect to re-fire indefinitely.
+  const flowRef = useRef({ isReapplyFlow, applyProgress, reapplyProgress });
+  flowRef.current = { isReapplyFlow, applyProgress, reapplyProgress };
+  const setScholarshipLocked = useCallback((value: boolean) => {
+    const f = flowRef.current;
+    return f.isReapplyFlow
+      ? f.reapplyProgress.setSection("isScholarship", value)
+      : f.applyProgress.setSection("financial_aid_completed", value);
+  }, []);
 
   const handleCompleteScholarshipRef = useRef<() => Promise<void>>(() => Promise.resolve());
   handleCompleteScholarshipRef.current = async () => {
@@ -912,7 +1019,7 @@ export default function ScholarshipPage() {
       throw new Error("Validation failed");
     }
     await handleSaveRef.current?.();
-    await setProgressSection("financial_aid_completed", true);
+    await setScholarshipLocked(true);
     toast.success("Financial aid section completed.");
   };
 
@@ -927,18 +1034,59 @@ export default function ScholarshipPage() {
       updateSaveOptions({
         completed: true,
         completedLabel: "Financial Aid Section Completed",
-        onUnlock: () => void setProgressSection("financial_aid_completed", false),
+        onUnlock: () => void setScholarshipLocked(false),
       });
     } else {
-      // Enable button if a valid choice has been made (even if not dirty)
       const hasValidChoice = scholarshipChoice === "none" || scholarshipChoice === "snap" || scholarshipChoice === "full";
       updateSaveOptions({
+        // Explicitly clear completed + onUnlock — `updateSaveOptions`
+        // shallow-merges into the previous state, so without these the
+        // stale `completed: true` from the locked branch sticks around
+        // after unlock and the layout keeps dimming + click-blocking
+        // the page even though the section is now editable again.
+        completed: false,
+        onUnlock: undefined,
         saving,
         disabled: !hasValidChoice || saving,
         label: "Complete Financial Aid Section",
       });
     }
-  }, [saving, scholarshipChoice, scholarshipLocked, updateSaveOptions, setProgressSection]);
+  }, [saving, scholarshipChoice, scholarshipLocked, updateSaveOptions, setScholarshipLocked]);
+
+  // Auto-revoke completion when a freshly added student lacks a SUFS
+  // award ID. The Financial Aid section's gate requires every per-year
+  // app to carry a SUFS award id; a new student's app starts at 0, so
+  // the section's "complete" claim becomes stale the moment they're
+  // added on the Students page. Mirrors the same pattern on Family /
+  // Students / Testing.
+  const autoRevokedScholarshipRef = useRef(false);
+  useEffect(() => {
+    if (!scholarshipLocked) {
+      autoRevokedScholarshipRef.current = false;
+      return;
+    }
+    if (loading || sufsApplications.length === 0) return;
+    const visible = sufsApplications.filter((a) =>
+      sufsStudents.some((s) => s.id === a.registration_students_id)
+    );
+    if (visible.length === 0) return;
+    const allHaveAward = visible.every(
+      (a) => typeof a.sufs_award_id === "number" && a.sufs_award_id > 0
+    );
+    if (allHaveAward) return;
+    if (autoRevokedScholarshipRef.current) return;
+    autoRevokedScholarshipRef.current = true;
+    void setScholarshipLocked(false);
+    toast.message(
+      "A new student needs a Step Up Award ID — please review and re-complete this section."
+    );
+  }, [
+    sufsApplications,
+    sufsStudents,
+    scholarshipLocked,
+    loading,
+    setScholarshipLocked,
+  ]);
 
   useEffect(() => {
     if (savedSnapshotRef.current === "" || savingRef.current) return;
@@ -1065,7 +1213,13 @@ export default function ScholarshipPage() {
   const deadlinePassed = isDeadlinePassed(
     schoolYear?.opportunity_scholarship_deadline ?? null
   );
-  const isReadonly = deadlinePassed;
+  // Lock the form when EITHER the deadline has passed OR the section has
+  // been marked complete on the progress row. Without the lock-state half,
+  // marking the section complete only greyed it out visually (via the
+  // layout's opacity wrapper) — every input was still editable underneath,
+  // and unlocking didn't change anything because nothing was actually
+  // disabled to begin with.
+  const isReadonly = deadlinePassed || scholarshipLocked;
 
   function confirmDelete() {
     if (!pendingDelete) return;
@@ -1983,8 +2137,12 @@ export default function ScholarshipPage() {
                           animate={{ opacity: 1, y: 0 }}
                           exit={{ opacity: 0, y: -8, height: 0, marginBottom: 0 }}
                           transition={{ duration: 0.18 }}
-                          className="flex items-end gap-3"
+                          // Vertical layout per benefit so the per-row
+                          // documentation upload sits cleanly underneath the
+                          // type/amount inputs.
+                          className="rounded-lg border bg-card p-4 space-y-3"
                         >
+                          <div className="flex items-end gap-3">
                           <Field className="flex-1">
                             <FieldLabel className="text-xs">Type <span className="text-red-400">*</span></FieldLabel>
                             <Select
@@ -1998,7 +2156,12 @@ export default function ScholarshipPage() {
                                 <SelectValue placeholder="Select type" />
                               </SelectTrigger>
                               <SelectContent>
-                                <SelectItem value="SNAP">SNAP</SelectItem>
+                                {/* SNAP is intentionally NOT listed here —
+                                    SNAP recipients pre-qualify for the full
+                                    SailFuture Academy Scholarship via the
+                                    dedicated SNAP path on the financial-aid
+                                    chooser, so we don't want them duplicating
+                                    it as a generic government benefit. */}
                                 <SelectItem value="Medicaid">Medicaid</SelectItem>
                                 <SelectItem value="TANF">TANF</SelectItem>
                                 <SelectItem value="WIC">WIC</SelectItem>
@@ -2032,53 +2195,57 @@ export default function ScholarshipPage() {
                             <Trash2 className="size-4" />
                           </Button>
                         )}
+                          </div>
+
+                          {/* Per-benefit documentation. Each row is now
+                              self-contained — type + amount + the matching
+                              award letter / approval notice — so admins
+                              can verify each benefit individually instead
+                              of digging through one combined supporting-
+                              documents pile. */}
+                          <div>
+                            <p className="text-xs font-medium mb-2">
+                              Documentation for this benefit{" "}
+                              <span className="text-red-400">*</span>
+                            </p>
+                            <IncomeFileUpload
+                              label="Drop award letter / approval notice here or click to upload"
+                              multiple
+                              disabled={isReadonly}
+                              error={!hasFile(benefit.benefit_documentation)}
+                              existingFiles={
+                                toFileArray(
+                                  benefit.benefit_documentation
+                                ) as XanoFileMetadata[]
+                              }
+                              onFilesChanged={(files) =>
+                                patchBenefitLocal(benefit.id, {
+                                  benefit_documentation: files,
+                                })
+                              }
+                            />
+                          </div>
                         </motion.div>
                       ))}
                       </AnimatePresence>
                       {addingBenefit && (
-                        <div className="flex items-end gap-3 animate-pulse">
-                          <div className="flex-1 space-y-1.5">
-                            <Skeleton className="h-3 w-10" />
-                            <Skeleton className="h-9 w-full rounded-md" />
+                        <div className="rounded-lg border bg-card p-4 animate-pulse space-y-3">
+                          <div className="flex items-end gap-3">
+                            <div className="flex-1 space-y-1.5">
+                              <Skeleton className="h-3 w-10" />
+                              <Skeleton className="h-9 w-full rounded-md" />
+                            </div>
+                            <div className="flex-1 space-y-1.5">
+                              <Skeleton className="h-3 w-20" />
+                              <Skeleton className="h-9 w-full rounded-md" />
+                            </div>
+                            <Skeleton className="size-8 rounded-md" />
                           </div>
-                          <div className="flex-1 space-y-1.5">
-                            <Skeleton className="h-3 w-20" />
-                            <Skeleton className="h-9 w-full rounded-md" />
-                          </div>
-                          <Skeleton className="size-8 rounded-md" />
+                          <Skeleton className="h-16 w-full rounded-md" />
                         </div>
                       )}
                     </div>
                   )}
-                </div>
-
-                {/* Other Benefits Documentation */}
-                <div className="mt-6">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
-                    Supporting Documentation
-                  </p>
-                  <p className="text-sm text-muted-foreground mb-3">
-                    Upload any supporting documents for your government benefits (award letters, approval notices, etc.)
-                  </p>
-                  <IncomeFileUpload
-                    label="Drop benefit documents here or click to upload"
-                    multiple
-                    disabled={isReadonly}
-                    existingFiles={otherBenefitsFiles as XanoFileMetadata[]}
-                    onFilesChanged={async (files) => {
-                      setOtherBenefitsFiles(files);
-                      const sid = scholarship?.id ?? await ensureScholarship();
-                      if (sid) {
-                        await fetch(`/api/scholarship/${sid}`, {
-                          method: "PATCH",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ other_benefits: files, last_edited: Date.now() }),
-                        });
-                        mutate(`/api/scholarship/${sid}`);
-                        if (familyId) mutate(`/api/scholarship?familyId=${familyId}&yearId=${yearId}`);
-                      }
-                    }}
-                  />
                 </div>
                 </motion.div>
               )}
@@ -2138,17 +2305,19 @@ export default function ScholarshipPage() {
                     You have selected that you have no persons who are currently
                     employed or have a contributing income to the household. If
                     this is accurate, please upload proof of unemployment or
-                    termination.
+                    termination — at least one document is required.
                   </p>
                   <p className="text-xs font-medium mb-2">
-                    Termination / Unemployment Letter
+                    Termination / Unemployment Letter{" "}
+                    <span className="text-red-400">*</span>
                   </p>
                   <IncomeFileUpload
-                    label="Drop termination letter here or click to upload"
+                    label="Drop letters here or click to upload"
+                    multiple
                     disabled={isReadonly}
-                    existingFile={terminationLetter as XanoFileMetadata | null}
-                    onUploaded={(meta) => setTerminationLetter(meta)}
-                    onRemoved={() => setTerminationLetter({})}
+                    error={!hasFile(unemploymentLetter)}
+                    existingFiles={unemploymentLetter as XanoFileMetadata[]}
+                    onFilesChanged={(files) => setUnemploymentLetter(files)}
                   />
                 </motion.div>
               ) : (
@@ -2292,7 +2461,15 @@ export default function ScholarshipPage() {
                         </Field>
 
                         <div>
-                          <FieldLabel className="text-xs mb-2">Income Verification</FieldLabel>
+                          <FieldLabel className="text-xs mb-2">
+                            Income Verification{" "}
+                            <span className="text-red-400">*</span>
+                          </FieldLabel>
+                          {!memberIncomeVerified(member) && (
+                            <p className="text-xs text-red-500 mb-2">
+                              Required — upload a W-2 or all four most-recent pay stubs.
+                            </p>
+                          )}
                           <div className="flex items-center gap-5">
                             <label htmlFor={`w2-${member.id}`} className="inline-flex w-auto cursor-pointer items-center gap-2.5">
                               <input
@@ -2340,13 +2517,21 @@ export default function ScholarshipPage() {
                               className="overflow-hidden"
                             >
                               <div className="mt-3">
-                                <p className="text-xs font-medium mb-2">Upload W-2 Form</p>
+                                <p className="text-xs font-medium mb-2">
+                                  Upload W-2 Form{" "}
+                                  <span className="text-red-400">*</span>
+                                </p>
                                 <IncomeFileUpload
-                                  label="Drop W-2 here or click to upload"
+                                  label="Drop W-2 pages here or click to upload"
+                                  multiple
                                   disabled={isReadonly}
-                                  existingFile={member.w2 as XanoFileMetadata | null}
-                                  onUploaded={(meta) => patchMemberLocal(member.id, { w2: meta })}
-                                  onRemoved={() => patchMemberLocal(member.id, { w2: {} })}
+                                  error={!hasFile(member.w2)}
+                                  existingFiles={
+                                    toFileArray(member.w2) as XanoFileMetadata[]
+                                  }
+                                  onFilesChanged={(files) =>
+                                    patchMemberLocal(member.id, { w2: files })
+                                  }
                                 />
                               </div>
                             </motion.div>
@@ -2363,15 +2548,26 @@ export default function ScholarshipPage() {
                               <div className="mt-3 space-y-3">
                                 {([1, 2, 3, 4] as const).map((num) => {
                                   const field = `paystub_${num}` as keyof ContributingMember;
+                                  const stub = member[field];
                                   return (
                                     <div key={num}>
-                                      <p className="text-xs font-medium mb-2">Pay Stub {num}</p>
+                                      <p className="text-xs font-medium mb-2">
+                                        Pay Stub {num}{" "}
+                                        <span className="text-red-400">*</span>
+                                      </p>
                                       <IncomeFileUpload
-                                        label={`Drop pay stub ${num} here or click to upload`}
+                                        label={`Drop pay stub ${num} pages here or click to upload`}
+                                        multiple
                                         disabled={isReadonly}
-                                        existingFile={member[field] as XanoFileMetadata | null}
-                                        onUploaded={(meta) => patchMemberLocal(member.id, { [field]: meta as Record<string, unknown> })}
-                                        onRemoved={() => patchMemberLocal(member.id, { [field]: {} as Record<string, unknown> })}
+                                        error={!hasFile(stub)}
+                                        existingFiles={
+                                          toFileArray(stub) as XanoFileMetadata[]
+                                        }
+                                        onFilesChanged={(files) =>
+                                          patchMemberLocal(member.id, {
+                                            [field]: files,
+                                          })
+                                        }
                                       />
                                     </div>
                                   );
@@ -3066,6 +3262,7 @@ function IncomeFileUpload({
   multiple,
   existingFiles,
   onFilesChanged,
+  error,
 }: {
   label: string;
   disabled?: boolean;
@@ -3077,6 +3274,11 @@ function IncomeFileUpload({
   multiple?: boolean;
   existingFiles?: XanoFileMetadata[];
   onFilesChanged?: (files: XanoFileMetadata[]) => void;
+  /** When true, the upload's dropzone border renders red instead of the
+   *  default dashed gray — used to indicate the file is required and
+   *  missing. Replaces the older wrapper-ring approach which left a
+   *  visibly offset outline around the dashed border. */
+  error?: boolean;
 }) {
   // Multi-file mode
   if (multiple) {
@@ -3086,6 +3288,7 @@ function IncomeFileUpload({
         disabled={disabled}
         existingFiles={existingFiles ?? []}
         onFilesChanged={onFilesChanged ?? (() => {})}
+        error={error}
       />
     );
   }
@@ -3098,6 +3301,7 @@ function IncomeFileUpload({
       existingFile={existingFile}
       onUploaded={onUploaded}
       onRemoved={onRemoved}
+      error={error}
     />
   );
 }
@@ -3108,12 +3312,17 @@ function SingleFileUpload({
   existingFile,
   onUploaded,
   onRemoved,
+  error: errorProp,
 }: {
   label: string;
   disabled?: boolean;
   existingFile?: XanoFileMetadata | null;
   onUploaded?: (metadata: XanoFileMetadata) => void;
   onRemoved?: () => void;
+  /** Renders the dropzone border red to indicate the file is required
+   *  and missing. Distinct from the internal `error` state which holds
+   *  upload failure messages. */
+  error?: boolean;
 }) {
   const [files, setFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -3217,6 +3426,31 @@ function SingleFileUpload({
     );
   }
 
+  // While the upload is in flight we replace the dropzone entirely with
+  // an obvious uploading-state card. This is more responsive than relying
+  // on the dropzone's internal "Uploading..." swap because (a) it removes
+  // `FileUploadItemPreview`, which synchronously generates a thumbnail
+  // for the picked file and stalls the UI on multi-MB PDFs — that was
+  // the source of the "I don't see anything happen and there's a big
+  // delay" report — and (b) it shows the file name + size next to the
+  // spinner so the user can confirm the right file is in flight.
+  if (uploading) {
+    const pending = files[0];
+    return (
+      <div className="flex items-center gap-3 rounded-md border border-input bg-muted/40 px-4 py-3">
+        <Loader2 className="size-5 text-muted-foreground shrink-0 animate-spin" />
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium truncate">
+            Uploading{pending ? `: ${pending.name}` : "…"}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {pending ? `${formatFileSize(pending.size)} · ` : ""}Hang tight — this can take a few seconds.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div>
       <FileUpload
@@ -3226,40 +3460,31 @@ function SingleFileUpload({
         className="w-full"
         value={files}
         onValueChange={handleFilesChange}
-        disabled={disabled || uploading}
+        disabled={disabled}
       >
-        <FileUploadDropzone className="flex-row gap-3 px-4 py-3 cursor-pointer">
-          {uploading ? (
-            <Loader2 className="size-5 text-muted-foreground animate-spin" />
-          ) : (
-            <FileUp className="size-5 text-muted-foreground" />
-          )}
+        <FileUploadDropzone
+          className={`flex-row gap-3 px-4 py-3 cursor-pointer ${
+            errorProp ? "border-2 border-red-400 border-solid" : ""
+          }`}
+        >
+          <FileUp className="size-5 text-muted-foreground" />
           <div className="flex-1 text-left">
-            <p className="text-sm font-medium">
-              {uploading ? "Uploading..." : label}
-            </p>
+            <p className="text-sm font-medium">{label}</p>
             <p className="text-xs text-muted-foreground">PDF, JPG, or PNG (max 10MB)</p>
           </div>
         </FileUploadDropzone>
-        <FileUploadList>
-          {files.map((file, i) => (
-            <FileUploadItem key={i} value={file}>
-              <FileUploadItemPreview />
-              <FileUploadItemMetadata />
-              <FileUploadItemDelete asChild>
-                <Button variant="ghost" size="icon" className="size-7">
-                  <X className="size-4" />
-                </Button>
-              </FileUploadItemDelete>
-            </FileUploadItem>
-          ))}
-        </FileUploadList>
       </FileUpload>
-      {error && (
-        <p className="text-xs text-red-600 mt-1">{error}</p>
-      )}
+      {error && <p className="text-xs text-red-600 mt-1">{error}</p>}
     </div>
   );
+}
+
+/** Compact byte-count formatter used by the upload's in-flight card. */
+function formatFileSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function MultiFileUpload({
@@ -3267,39 +3492,54 @@ function MultiFileUpload({
   disabled,
   existingFiles,
   onFilesChanged,
+  error: errorProp,
 }: {
   label: string;
   disabled?: boolean;
   existingFiles: XanoFileMetadata[];
   onFilesChanged: (files: XanoFileMetadata[]) => void;
+  error?: boolean;
 }) {
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [uploadingIndex, setUploadingIndex] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [removeIndex, setRemoveIndex] = useState<number | null>(null);
 
+  // Process every selected file (not just `newFiles[0]` like the old impl).
+  // Uploads sequentially so the server isn't hit with a parallel burst,
+  // and so the existingFiles list grows in the order the user picked.
   async function handleNewFiles(newFiles: File[]) {
     setPendingFiles(newFiles);
     setError(null);
     if (newFiles.length === 0) return;
 
-    const file = newFiles[0];
     setUploading(true);
+    setUploadingIndex(0);
+    let merged = [...existingFiles];
     try {
-      const formData = new FormData();
-      formData.append("file", file);
-      const res = await fetch("/api/upload", { method: "POST", body: formData });
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        throw new Error(body?.error ?? `Upload failed (${res.status})`);
+      for (let i = 0; i < newFiles.length; i++) {
+        setUploadingIndex(i);
+        const file = newFiles[i];
+        const formData = new FormData();
+        formData.append("file", file);
+        const res = await fetch("/api/upload", { method: "POST", body: formData });
+        if (!res.ok) {
+          const body = await res.json().catch(() => null);
+          throw new Error(body?.error ?? `Upload failed (${res.status})`);
+        }
+        const metadata: XanoFileMetadata = await res.json();
+        merged = [...merged, metadata];
+        // Push each file as it completes so the user sees progress in
+        // the list, instead of all-or-nothing at the end.
+        onFilesChanged(merged);
       }
-      const metadata: XanoFileMetadata = await res.json();
-      onFilesChanged([...existingFiles, metadata]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed");
     } finally {
       setPendingFiles([]);
       setUploading(false);
+      setUploadingIndex(0);
     }
   }
 
@@ -3311,12 +3551,77 @@ function MultiFileUpload({
 
   return (
     <>
+      {/* Layout order: dropzone fixed at top, then the in-flight indicator
+          (when uploading), then the list of completed uploads underneath.
+          Keeps the click-target in a stable position so it doesn't move
+          around as files come and go. */}
       <div className="space-y-2">
+        {/* Upload dropzone — always at the top so the click target stays
+            put as files accumulate below. */}
+        <FileUpload
+          // Allow up to 10 files in a single drop / browse so the user can
+          // pick all their supporting docs at once. Previously this was
+          // capped at 1, which silently dropped extras and looked broken.
+          maxFiles={10}
+          maxSize={10 * 1024 * 1024}
+          accept=".pdf,.jpg,.jpeg,.png"
+          className="w-full"
+          multiple
+          value={pendingFiles}
+          onValueChange={handleNewFiles}
+          disabled={disabled || uploading}
+        >
+          <FileUploadDropzone
+            className={`flex-row gap-3 px-4 py-3 cursor-pointer ${
+              errorProp ? "border-2 border-red-400 border-solid" : ""
+            }`}
+          >
+            <FileUp className="size-5 text-muted-foreground" />
+            <div className="flex-1 text-left">
+              <p className="text-sm font-medium">{label}</p>
+              <p className="text-xs text-muted-foreground">
+                PDF, JPG, or PNG (max 10MB) · pick multiple at once
+              </p>
+            </div>
+          </FileUploadDropzone>
+        </FileUpload>
+
+        {/* In-flight indicator. Neutral white/gray styling — earlier blue
+            tinting was too loud for what is just a transient progress
+            state. Sits directly under the dropzone so it doesn't push
+            the dropzone around as files queue up. */}
+        {uploading && (
+          <div className="flex items-center gap-3 rounded-md border border-input bg-muted/40 px-4 py-3">
+            <Loader2 className="size-5 text-muted-foreground shrink-0 animate-spin" />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium truncate">
+                Uploading {uploadingIndex + 1} of {pendingFiles.length}
+                {pendingFiles[uploadingIndex]
+                  ? `: ${pendingFiles[uploadingIndex].name}`
+                  : "…"}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Each file appears in the list below as it completes.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {error && <p className="text-xs text-red-600 mt-1">{error}</p>}
+
+        {/* Completed uploads list — directly under the dropzone so the
+            most recent uploads are nearest the user's eye after dropping
+            files. */}
         {existingFiles.map((file, index) => (
-          <div key={index} className="flex items-center gap-3 rounded-md border border-input bg-background px-4 py-3">
+          <div
+            key={index}
+            className="flex items-center gap-3 rounded-md border border-input bg-background px-4 py-3"
+          >
             <CheckCircle2 className="size-5 text-green-600 shrink-0" />
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium truncate">{file.name || "Uploaded file"}</p>
+              <p className="text-sm font-medium truncate">
+                {file.name || "Uploaded file"}
+              </p>
               <p className="text-xs text-muted-foreground">Uploaded successfully</p>
             </div>
             {file.path && (
@@ -3344,35 +3649,6 @@ function MultiFileUpload({
             )}
           </div>
         ))}
-
-        {/* Upload dropzone for adding more files */}
-        <FileUpload
-          maxFiles={1}
-          maxSize={10 * 1024 * 1024}
-          accept=".pdf,.jpg,.jpeg,.png"
-          className="w-full"
-          value={pendingFiles}
-          onValueChange={handleNewFiles}
-          disabled={disabled || uploading}
-        >
-          <FileUploadDropzone className="flex-row gap-3 px-4 py-3 cursor-pointer">
-            {uploading ? (
-              <Loader2 className="size-5 text-muted-foreground animate-spin" />
-            ) : (
-              <FileUp className="size-5 text-muted-foreground" />
-            )}
-            <div className="flex-1 text-left">
-              <p className="text-sm font-medium">
-                {uploading ? "Uploading..." : label}
-              </p>
-              <p className="text-xs text-muted-foreground">PDF, JPG, or PNG (max 10MB)</p>
-            </div>
-          </FileUploadDropzone>
-        </FileUpload>
-
-        {error && (
-          <p className="text-xs text-red-600 mt-1">{error}</p>
-        )}
       </div>
 
       <AlertDialog open={removeIndex !== null} onOpenChange={(open) => { if (!open) setRemoveIndex(null); }}>

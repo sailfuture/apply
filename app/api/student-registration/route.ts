@@ -14,14 +14,36 @@ export async function GET(req: NextRequest) {
 
   const url = new URL(req.url);
   const studentId = url.searchParams.get("studentId");
+  const yearIdParam = url.searchParams.get("yearId");
 
   if (studentId) {
     const reg = await xano.studentRegistration.getByStudentId(Number(studentId));
     return NextResponse.json(reg, { status: 200 });
   }
 
-  // Return all registrations for students in this family
   const students = await xano.students.getByFamilyId(familyId);
+
+  if (yearIdParam) {
+    // Return every packet in this family for the requested year. Used by
+    // the pending-confirmation view to check whether every student has
+    // been admin-confirmed yet.
+    const yearId = Number(yearIdParam);
+    if (!Number.isFinite(yearId)) {
+      return NextResponse.json({ error: "yearId must be a number" }, { status: 400 });
+    }
+    const packets = await Promise.all(
+      students.map((s) => xano.studentRegistration.getByStudentId(s.id))
+    );
+    return NextResponse.json(
+      packets.filter(
+        (p): p is NonNullable<typeof p> =>
+          !!p && Number(p.registration_school_years_id) === yearId
+      ),
+      { status: 200 }
+    );
+  }
+
+  // Return all registrations for students in this family (legacy callers).
   const registrations = await Promise.all(
     students.map((s) => xano.studentRegistration.getByStudentId(s.id))
   );
@@ -51,12 +73,36 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Student not found in family" }, { status: 403 });
   }
 
+  // Year + type are required — the packet is scoped per (student, year), and
+  // `registration_type_id` drives which enrollment/waiver templates and form
+  // variants are used this cycle.
+  const schoolYearId = Number(body.registration_school_years_id);
+  const typeId = Number(body.registration_type_id);
+  if (!Number.isFinite(schoolYearId) || schoolYearId <= 0) {
+    return NextResponse.json(
+      { error: "registration_school_years_id is required" },
+      { status: 400 }
+    );
+  }
+  if (!Number.isFinite(typeId) || typeId <= 0) {
+    return NextResponse.json(
+      { error: "registration_type_id is required" },
+      { status: 400 }
+    );
+  }
+
   // Xano types medicaid_number as a number; coerce empty strings to 0
   // otherwise Xano rejects the whole payload and the client swallows the 4xx.
   const medicaidNumber = Number(body.medicaid_number);
 
+  // Pull the current student so we can append the newly-created packet
+  // ID onto its `registration_student_registration_id` array below.
+  const studentRow = students.find((s) => s.id === body.registration_students_id);
+
   const registration = await xano.studentRegistration.create({
     registration_students_id: body.registration_students_id,
+    registration_school_years_id: schoolYearId,
+    registration_type_id: typeId,
     shirt_size: body.shirt_size ?? "",
     pant_size: body.pant_size ?? "",
     swim_level: body.swim_level ?? "",
@@ -88,9 +134,42 @@ export async function POST(req: NextRequest) {
     prohibited_adults: body.prohibited_adults ?? "",
     liability_waiver_pandadoc_id: body.liability_waiver_pandadoc_id ?? "",
     liability_waiver_status: body.liability_waiver_status ?? "",
-    liability_wavier_sent_at: body.liability_wavier_sent_at ?? null,
+    liability_waiver_sent_at: body.liability_waiver_sent_at ?? null,
     liability_waiver_pdf_url: body.liability_waiver_pdf_url ?? "",
+    // Admin confirms each student once they've reviewed the packet. Starts
+    // false on every new packet.
+    registrationConfirmed: false,
   });
+
+  // Append the new packet ID to the student's
+  // `registration_student_registration_id` array so a student who
+  // re-enrolls in later years accumulates a list of packet IDs across
+  // all years. Failures here are logged but don't block the packet
+  // response — the row itself is saved.
+  if (studentRow) {
+    const existingPacketIds: number[] = Array.isArray(
+      (studentRow as unknown as { registration_student_registration_id?: number[] })
+        .registration_student_registration_id
+    )
+      ? ((studentRow as unknown as { registration_student_registration_id: number[] })
+          .registration_student_registration_id)
+      : [];
+    if (!existingPacketIds.includes(registration.id)) {
+      try {
+        await xano.students.update(body.registration_students_id, {
+          registration_student_registration_id: [
+            ...existingPacketIds,
+            registration.id,
+          ],
+        });
+      } catch (err) {
+        console.error(
+          `Failed to append packet ${registration.id} to student ${body.registration_students_id}:`,
+          err
+        );
+      }
+    }
+  }
 
   return NextResponse.json(registration, { status: 201 });
 }

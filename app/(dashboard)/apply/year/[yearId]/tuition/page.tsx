@@ -5,15 +5,15 @@ import { useParams, useRouter } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
 import { toast } from "sonner";
 import { useApplicationFlow } from "@/contexts/application-flow-context";
+import { useStudentRegistrationProgress } from "@/hooks/use-student-registration-progress";
 import { useStudents, useApplications, useSchoolYears } from "@/hooks/use-api";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Field, FieldLabel } from "@/components/ui/field";
 import { CheckCircle2, Loader2, HelpCircle } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import useSWR from "swr";
 import SignatureCanvas from "react-signature-canvas";
-
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 /** Maps sufs_type to the corresponding SchoolYear field */
 const SUFS_FIELDS: Record<string, string> = {
@@ -78,40 +78,58 @@ export default function TuitionPage() {
   const router = useRouter();
   const yearId = Number(params.yearId);
   const { user } = useUser();
-  const { setPageTitle, registerSaveHandler, unregisterSaveHandler, updateSaveOptions, trackAutosave } = useApplicationFlow();
+  const { setPageTitle, registerSaveHandler, unregisterSaveHandler, updateSaveOptions } = useApplicationFlow();
+  // Registration-progress bridge row — single source of truth. `isTuition`
+  // gates section completion; `tuition_scholarship_signature` stores the
+  // family-level signature JSON. Nothing else on this page writes completion
+  // state.
+  const {
+    progress: regProgress,
+    setSection: setRegSection,
+    patchProgress: patchRegProgress,
+  } = useStudentRegistrationProgress(yearId);
   const { data: students } = useStudents();
   const { data: applications } = useApplications();
   const { data: yearsData } = useSchoolYears();
 
-  // Fetch existing payment review record
-  const { data: paymentRecord, mutate: mutatePayment } = useSWR(
-    yearId ? `/api/family-payment?yearId=${yearId}` : null,
-    fetcher,
-    { revalidateOnFocus: false }
-  );
-
   const [submitting, setSubmitting] = useState(false);
   const [signatureMeta, setSignatureMeta] = useState<Record<string, unknown> | null>(null);
   const [signatureUploading, setSignatureUploading] = useState(false);
+  const [printedName, setPrintedName] = useState("");
   const sigCanvasRef = useRef<SignatureCanvas>(null);
 
-  const alreadyReviewed = paymentRecord?.tuition_reviewed === true || paymentRecord?.isFamilyAccepted === true;
+  // Hydrate the printed-name field once the progress row arrives. Keyed on
+  // the row so an async load overwrites the empty default exactly once.
+  const nameLoadedRef = useRef(false);
+  useEffect(() => {
+    if (nameLoadedRef.current) return;
+    if (!regProgress) return;
+    if (regProgress.name) setPrintedName(regProgress.name);
+    nameLoadedRef.current = true;
+  }, [regProgress]);
 
-  // Load existing signature from payment record and draw onto canvas
+  // Completion is read directly off the bool — no legacy fallbacks.
+  const alreadyReviewed = regProgress?.isTuition === true;
+
+  // Load the persisted signature from the progress row and draw it onto the
+  // canvas on first render. Keyed on the row itself so the load retries if
+  // the row arrives late.
   const signatureLoadedRef = useRef(false);
   useEffect(() => {
     if (signatureLoadedRef.current) return;
-    if (!paymentRecord?.signature || !paymentRecord.signature.path) return;
+    const persisted = regProgress?.tuition_scholarship_signature as
+      | { path?: string; url?: string }
+      | null
+      | undefined;
+    if (!persisted || !persisted.path) return;
 
-    setSignatureMeta(paymentRecord.signature);
+    setSignatureMeta(persisted as Record<string, unknown>);
     signatureLoadedRef.current = true;
 
-    // Draw saved signature image onto the canvas
     const url =
-      (paymentRecord.signature.url as string) ??
-      `${process.env.NEXT_PUBLIC_XANO_BASE ?? "https://xsc3-mvx7-r86m.n7e.xano.io"}${paymentRecord.signature.path}`;
+      persisted.url ??
+      `${process.env.NEXT_PUBLIC_XANO_BASE ?? "https://xsc3-mvx7-r86m.n7e.xano.io"}${persisted.path}`;
 
-    // Convert the remote image to a data URL and load onto canvas
     setTimeout(async () => {
       const canvas = sigCanvasRef.current;
       if (!canvas) return;
@@ -132,7 +150,7 @@ export default function TuitionPage() {
         console.error("Failed to load signature:", err);
       }
     }, 300);
-  }, [paymentRecord]);
+  }, [regProgress]);
 
   const handleSubmitRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
@@ -145,19 +163,13 @@ export default function TuitionPage() {
   // Unlocked state — allows editing even if already reviewed
   const [unlocked, setUnlocked] = useState(false);
 
-  // Unlock handler — sets isFamilyAccepted to false
+  // Unlock handler — flip `isTuition` back to false so the parent can edit
+  // the signature and re-submit. We leave the signature JSON in place; it
+  // just gets overwritten by the next save.
   async function handleUnlock() {
     setUnlocked(true);
     try {
-      await fetch("/api/family-payment", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          registration_school_years_id: yearId,
-          isFamilyAccepted: false,
-        }),
-      });
-      await mutatePayment();
+      await setRegSection("isTuition", false);
     } catch {
       console.error("Failed to unlock tuition section");
     }
@@ -168,9 +180,11 @@ export default function TuitionPage() {
     setUnlocked(false);
   }
 
-  // Update Complete Section button state (wait for paymentRecord to load)
+  // Update the Complete Section button state. Wait for the progress row to
+  // resolve so we don't briefly flicker "Complete" on top of an already-done
+  // state.
   useEffect(() => {
-    if (paymentRecord === undefined) return; // still loading
+    if (regProgress === null) return; // still loading
     if (alreadyReviewed && !unlocked) {
       updateSaveOptions({
         completed: true,
@@ -182,14 +196,16 @@ export default function TuitionPage() {
     } else {
       updateSaveOptions({
         label: "Complete Tuition Section",
-        disabled: !signatureMeta || signatureUploading,
+        // Require both a drawn signature AND a printed name before the
+        // section can be completed.
+        disabled: !signatureMeta || signatureUploading || printedName.trim() === "",
         saving: submitting,
         completed: false,
         onUnlock: alreadyReviewed ? handleLock : undefined,
         isUnlocked: unlocked,
       });
     }
-  }, [signatureMeta, signatureUploading, submitting, alreadyReviewed, unlocked, paymentRecord, updateSaveOptions]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [signatureMeta, signatureUploading, submitting, alreadyReviewed, unlocked, regProgress, printedName, updateSaveOptions]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loading = !students || !applications || !yearsData;
 
@@ -293,34 +309,27 @@ export default function TuitionPage() {
   }
 
   async function handleSubmitReview(): Promise<void> {
-    // Already reviewed — just navigate back
     if (alreadyReviewed) return;
 
     if (!signatureMeta) {
       toast.error("Please sign above to confirm your review.");
       throw new Error("Signature required");
     }
+    if (printedName.trim() === "") {
+      toast.error("Please type your full name to confirm your review.");
+      throw new Error("Printed name required");
+    }
     setSubmitting(true);
     try {
-      await trackAutosave(
-        fetch("/api/family-payment", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            registration_school_years_id: yearId,
-            tuition_reviewed_by: user?.fullName ?? "Parent/Guardian",
-            signature: signatureMeta,
-            signature_data: signatureMeta,
-            isFamilyAccepted: true,
-            name: user?.fullName ?? "Parent/Guardian",
-            monthly_tuition_payment: grandTotal / 12,
-          }),
-        }).then(async (r) => {
-          if (!r.ok) throw new Error(`Submit failed (${r.status})`);
-          return r;
-        })
-      );
-      await mutatePayment();
+      // One PATCH — signature + printed name + completion bool land on the
+      // same row in the same request. The server stamps `last_edited`
+      // automatically and latches `submitted_date` if this is the last
+      // section needed.
+      await patchRegProgress({
+        isTuition: true,
+        tuition_scholarship_signature: signatureMeta,
+        name: printedName.trim(),
+      });
       toast.success("Tuition review submitted successfully.");
     } catch {
       toast.error("Failed to submit tuition review. Please try again.");
@@ -542,8 +551,11 @@ export default function TuitionPage() {
                       Tuition review submitted
                     </p>
                     <p className="text-xs text-muted-foreground mt-0.5">
-                      {paymentRecord.tuition_reviewed_by && paymentRecord.tuition_reviewed_at
-                        ? `Reviewed by ${paymentRecord.tuition_reviewed_by} on ${new Date(paymentRecord.tuition_reviewed_at).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}`
+                      {regProgress?.last_edited
+                        ? `Reviewed on ${new Date(regProgress.last_edited).toLocaleDateString(
+                            "en-US",
+                            { month: "long", day: "numeric", year: "numeric" }
+                          )}`
                         : "Review completed"}
                     </p>
                   </div>
@@ -599,6 +611,17 @@ export default function TuitionPage() {
                     Clear Signature
                   </Button>
                 </div>
+                {/* Printed name — stored on the progress row's `name` column
+                    so the tuition acknowledgment has a typed record in
+                    addition to the drawn signature. */}
+                <Field className="mt-4">
+                  <FieldLabel>Type your full name</FieldLabel>
+                  <Input
+                    placeholder="Full name of the signing parent or guardian"
+                    value={printedName}
+                    onChange={(e) => setPrintedName(e.target.value)}
+                  />
+                </Field>
               </>
             )}
           </div>

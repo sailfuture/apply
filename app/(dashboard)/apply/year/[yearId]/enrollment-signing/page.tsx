@@ -1,42 +1,44 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useParams } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
 import { useApplicationFlow } from "@/contexts/application-flow-context";
-import { useApplications, useFamily, mutateApplications } from "@/hooks/use-api";
+import { useApplications, useFamily } from "@/hooks/use-api";
+import { useStudentRegistrationProgress } from "@/hooks/use-student-registration-progress";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Loader2, CheckCircle2 } from "lucide-react";
-import useSWR from "swr";
+import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
-
+/**
+ * Enrollment agreement signing page.
+ *
+ * The PandaDoc signing widget is embedded *inline* below the page header —
+ * no modal, no nested dialog. This gives the widget the full page-width
+ * canvas the signing UI expects (and avoids modal + iframe scroll-lock
+ * interactions that were causing layout shift).
+ *
+ * Any parent on the family who is signed into Clerk can sign — the
+ * `recipientEmail` on the PandaDoc session matches the current Clerk user's
+ * primary email, so PandaDoc accepts the session and lets them sign.
+ */
 export default function EnrollmentSigningPage() {
   const params = useParams();
   const yearId = Number(params.yearId);
-  const { user } = useUser();
+  useUser();
 
-  const { setPageTitle, updateSaveOptions } = useApplicationFlow();
+  const { setPageTitle, updateSaveOptions, setHideBottomBar } = useApplicationFlow();
+  // Registration progress bridge row is the single source of truth for the
+  // enrollment agreement — PandaDoc IDs, status, signed bool, and the
+  // section-complete latch all live here.
+  const {
+    progress: regProgress,
+    setSection: setRegSection,
+    patchProgress: patchRegProgress,
+  } = useStudentRegistrationProgress(yearId);
   const { data: familyData } = useFamily();
   const { data: appsData } = useApplications();
-
-  const familyId = familyData?.id ?? null;
-
-  // Fetch family payment record
-  const { data: paymentRecord, mutate: mutatePayment } = useSWR(
-    yearId ? `/api/family-payment?yearId=${yearId}` : null,
-    fetcher,
-    { revalidateOnFocus: false }
-  );
 
   const [pdfLoaded, setPdfLoaded] = useState(false);
   const [signingLoading, setSigningLoading] = useState(false);
@@ -56,50 +58,28 @@ export default function EnrollmentSigningPage() {
     );
   }, [appsData, yearId]);
 
-  const loading = !appsData || !familyData || paymentRecord === undefined;
+  const loading = !appsData || !familyData || regProgress === null;
 
-  const isCompleted = paymentRecord?.is_enrollment_agreement_signed === true || paymentRecord?.enrollment_agreement_status === "completed";
-  const isSent = !!paymentRecord?.enrollment_agreement_pandadoc_id;
-  const paymentId = paymentRecord?.id;
-
-  const [unlocked, setUnlocked] = useState(false);
-
-  async function handleUnlockEnrollment() {
-    setUnlocked(true);
-    try {
-      await fetch("/api/family-payment", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          registration_school_years_id: yearId,
-          is_enrollment_agreement_signed: false,
-          enrollment_agreement_status: "",
-          enrollment_agreement_pandadoc_id: "",
-        }),
-      });
-      await mutatePayment();
-      autoInitRef.current = false;
-    } catch {
-      console.error("Failed to unlock enrollment section");
-    }
-  }
+  // Bool is the single source of truth — no legacy payment-record fallbacks.
+  const isCompleted = regProgress?.isEnrollment === true;
+  const isSent = !!regProgress?.enrollment_agreement_pandadoc_id;
 
   useEffect(() => {
-    if (isCompleted && !unlocked) {
-      updateSaveOptions({
-        completed: true,
-        completedLabel: "Enrollment Agreement Signed",
-        onUnlock: handleUnlockEnrollment,
-      });
-    } else {
-      updateSaveOptions({
-        label: "Please Sign Enrollment Agreement",
-        completed: false,
-        disabled: true,
-        isUnlocked: unlocked,
-      });
+    // Once signed: hide the bottom bar entirely. The inline View / Re-Sign
+    // Document buttons rendered in the page body replace the old
+    // "Enrollment Agreement Signed" completion button.
+    // Unsigned: show the bottom bar with a disabled "Please Sign" hint.
+    if (isCompleted) {
+      setHideBottomBar(true);
+      return () => setHideBottomBar(false);
     }
-  }, [isCompleted, unlocked, updateSaveOptions]); // eslint-disable-line react-hooks/exhaustive-deps
+    setHideBottomBar(false);
+    updateSaveOptions({
+      label: "Please Sign Enrollment Agreement",
+      completed: false,
+      disabled: true,
+    });
+  }, [isCompleted, updateSaveOptions, setHideBottomBar]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-initiate signing when page loads
   useEffect(() => {
@@ -112,11 +92,12 @@ export default function EnrollmentSigningPage() {
   }, [loading, applications.length, isCompleted, isSent, signingLoading, signingSession]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const pdfUrl = useMemo(() => {
-    if (!isCompleted || !paymentRecord?.enrollment_agreement_pandadoc_id) return null;
+    const docId = regProgress?.enrollment_agreement_pandadoc_id;
+    if (!isCompleted || !docId) return null;
     const appId = applications[0]?.id;
     if (!appId) return null;
-    return `/api/pandadoc/download?documentId=${paymentRecord.enrollment_agreement_pandadoc_id}&applicationId=${appId}`;
-  }, [isCompleted, paymentRecord, applications]);
+    return `/api/pandadoc/download?documentId=${docId}&applicationId=${appId}`;
+  }, [isCompleted, regProgress, applications]);
 
   async function handleSign() {
     if (applications.length === 0) {
@@ -135,8 +116,6 @@ export default function EnrollmentSigningPage() {
 
       if (!res.ok) {
         if (res.status === 409) {
-          // Document already signed — refresh data
-          await mutatePayment();
           return;
         }
         const body = await res.json().catch(() => null);
@@ -146,18 +125,13 @@ export default function EnrollmentSigningPage() {
 
       const { documentId, sessionId } = await res.json();
 
-      // Save PandaDoc ID to family payment record (create if needed)
-      await fetch("/api/family-payment", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          registration_school_years_id: yearId,
-          enrollment_agreement_pandadoc_id: documentId,
-          enrollment_agreement_status: "sent",
-          enrollment_agreement_sent_at: new Date().toISOString(),
-        }),
+      // Mirror the server's write optimistically so the SWR cache reflects
+      // that a document is now "sent" without a round-trip.
+      await patchRegProgress({
+        enrollment_agreement_pandadoc_id: documentId,
+        enrollment_agreement_status: "sent",
+        enrollment_agreement_sent: new Date().toISOString(),
       });
-      await mutatePayment();
 
       setSigningSession({ sessionId, documentId });
       startPolling(documentId);
@@ -186,17 +160,11 @@ export default function EnrollmentSigningPage() {
         }
         const data = await res.json();
         if (data.status === "completed") {
-          // Update family payment record
-          await fetch("/api/family-payment", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              registration_school_years_id: yearId,
-              enrollment_agreement_status: "completed",
-              is_enrollment_agreement_signed: true,
-            }),
+          await patchRegProgress({
+            enrollment_agreement_status: "completed",
+            is_enrollment_agreement_signed: true,
+            isEnrollment: true,
           });
-          await mutatePayment();
           setSigningSession(null);
           toast.success("Enrollment agreement signed successfully.");
           pollingRef.current = null;
@@ -213,21 +181,26 @@ export default function EnrollmentSigningPage() {
     pollingRef.current = setTimeout(poll, delay);
   }
 
-  // PandaDoc embed initialization
+  // Inline PandaDoc embed — mounts the widget into the `<div
+  // id="pandadoc-enrollment-embed">` below as soon as a signing session is
+  // available. Cleanly destroys on unmount / session change.
   useEffect(() => {
     if (!signingSession) return;
     let cancelled = false;
 
     const init = async () => {
-      let wrapper: HTMLElement | null = null;
+      // Wait for the embed target to exist in the DOM (we only render it
+      // inside the signing branch of the template below).
+      let target: HTMLElement | null = null;
       for (let i = 0; i < 20; i++) {
-        wrapper = document.getElementById("pandadoc-enrollment-wrapper");
-        if (wrapper) break;
+        target = document.getElementById("pandadoc-enrollment-embed");
+        if (target) break;
         await new Promise((r) => setTimeout(r, 100));
       }
-      if (!wrapper || cancelled) return;
+      if (!target || cancelled) return;
 
-      wrapper.innerHTML = '<div id="pandadoc-enrollment-embed"></div>';
+      // Clear any stray child iframes from a prior mount.
+      target.innerHTML = "";
 
       const { Signing } = await import("pandadoc-signing");
       if (cancelled) return;
@@ -240,16 +213,11 @@ export default function EnrollmentSigningPage() {
       const signing = new Signing("pandadoc-enrollment-embed", { debugMode: true });
       signing
         .on("document.completed", async () => {
-          await fetch("/api/family-payment", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              registration_school_years_id: yearId,
-              enrollment_agreement_status: "completed",
-              is_enrollment_agreement_signed: true,
-            }),
+          await patchRegProgress({
+            enrollment_agreement_status: "completed",
+            is_enrollment_agreement_signed: true,
+            isEnrollment: true,
           });
-          await mutatePayment();
           setSigningSession(null);
           toast.success("Enrollment agreement signed successfully.");
         })
@@ -279,129 +247,153 @@ export default function EnrollmentSigningPage() {
     };
   }, []);
 
+  // The PandaDoc signing widget needs the full viewport width to render its
+  // desktop layout (document preview + side toolbars). A `max-w-4xl`
+  // constraint on this page collapses it to a cramped mobile-like view —
+  // so we let this page use a wider container than the rest of the flow.
+  const pageShell = "flex flex-1 flex-col gap-6 p-6 pb-0 mx-auto w-full max-w-6xl";
+
   if (loading) {
     return (
-      <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
+      <div className={pageShell}>
         <div className="text-center xl:text-left">
           <Skeleton className="h-7 w-56 mb-2" />
           <Skeleton className="h-4 w-72" />
         </div>
-        <Skeleton className="h-64 w-full rounded-lg" />
+        <Skeleton className="h-[70vh] w-full rounded-lg" />
       </div>
     );
   }
 
   return (
-    <>
-      <div className="flex flex-1 flex-col gap-6 p-6 pb-0 mx-auto w-full max-w-4xl">
-        <div className="flex items-start justify-between gap-4">
-          <div className="text-center xl:text-left">
-            <h1 className="text-2xl font-semibold">Enrollment Agreement</h1>
-            <p className="text-muted-foreground text-sm mt-1">
-              {isCompleted
-                ? "This document has been signed and completed."
-                : "Your enrollment agreement is being prepared by the admissions team. You will be notified when it is ready for your signature."}
-            </p>
-          </div>
-          {isCompleted && (
-            <div className="flex gap-2 shrink-0">
-              {pdfUrl && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => window.open(pdfUrl, "_blank")}
-                >
-                  View Document
-                </Button>
-              )}
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  autoInitRef.current = false;
-                  handleSign();
-                }}
-              >
-                Re-Sign Document
-              </Button>
-            </div>
-          )}
-        </div>
-
-        {/* Completed: Show PDF */}
-        {isCompleted && pdfUrl && (
-          <div className="relative rounded-lg border overflow-hidden" style={{ height: "70vh" }}>
-            {!pdfLoaded && (
-              <div className="absolute inset-0">
-                <Skeleton className="absolute inset-0 rounded-none" />
-              </div>
-            )}
-            <iframe
-              src={pdfUrl}
-              onLoad={() => setPdfLoaded(true)}
-              className={`w-full h-full border-none transition-opacity duration-300 ${
-                pdfLoaded ? "opacity-100" : "opacity-0"
-              }`}
-              title="Signed Enrollment Agreement"
-            />
-          </div>
-        )}
-
-        {/* Loading / preparing state */}
-        {(signingLoading || (!isCompleted && !signingSession)) && (
-          <div className="relative rounded-lg border overflow-hidden" style={{ height: "70vh" }}>
-            <Skeleton className="absolute inset-0 rounded-none" />
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className="flex items-center gap-2">
-                <Loader2 className="size-5 animate-spin text-muted-foreground" />
-                <span className="text-sm text-muted-foreground">Preparing enrollment agreement...</span>
-              </div>
-            </div>
-          </div>
-        )}
+    <div className={pageShell}>
+      <div>
+        <h1 className="text-2xl font-semibold text-center xl:text-left">Enrollment Agreement</h1>
+        <p className="text-muted-foreground text-sm mt-1 text-center xl:text-left">
+          {isCompleted
+            ? "This document has been signed and completed."
+            : signingSession
+              ? "Review and sign the enrollment agreement below."
+              : "Your enrollment agreement is being prepared. Signing will load in this page as soon as it's ready."}
+        </p>
       </div>
 
-      {/* PandaDoc Signing Modal */}
-      <Dialog
-        open={!!signingSession}
-        onOpenChange={(open) => {
-          if (!open) {
-            if (signingInstanceRef.current) {
-              signingInstanceRef.current.destroy();
-              signingInstanceRef.current = null;
+      {/* Completed: render the signed PDF inline. While the iframe is still
+          fetching the PDF bytes from the PandaDoc download proxy, show an
+          explicit spinner + message instead of a plain shimmer so parents
+          know something is happening rather than stuck. */}
+      {isCompleted && pdfUrl && (
+        <div className="relative rounded-lg border overflow-hidden" style={{ height: "70vh" }}>
+          {!pdfLoaded && (
+            <div className="absolute inset-0 flex items-center justify-center bg-muted/30">
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <Loader2 className="size-5 animate-spin" />
+                <span className="text-sm">Loading Signed PDF Document...</span>
+              </div>
+            </div>
+          )}
+          <iframe
+            src={pdfUrl}
+            onLoad={() => setPdfLoaded(true)}
+            className={`w-full h-full border-none transition-opacity duration-300 ${
+              pdfLoaded ? "opacity-100" : "opacity-0"
+            }`}
+            title="Signed Enrollment Agreement"
+          />
+        </div>
+      )}
+
+      {/* Active signing session — embed the PandaDoc widget directly in
+          place of the preparing skeleton. The widget mounts into this
+          container via the effect above. We force a min-height so the
+          widget renders desktop-width layout (PandaDoc breakpoints to a
+          cramped mobile view below ~900px). */}
+      {!isCompleted && signingSession && (
+        <div
+          className="relative rounded-lg border overflow-hidden bg-white w-full"
+          style={{ height: "80vh", minHeight: 720 }}
+        >
+          <style>{`
+            #pandadoc-enrollment-embed {
+              position: absolute;
+              inset: 0;
+              width: 100%;
+              height: 100%;
             }
-            if (pollingRef.current) {
-              clearTimeout(pollingRef.current);
-              pollingRef.current = null;
+            #pandadoc-enrollment-embed > * {
+              width: 100% !important;
+              height: 100% !important;
             }
-            setSigningSession(null);
-            mutatePayment();
-          }
-        }}
-      >
-        <DialogContent className="max-w-[95vw] sm:max-w-[95vw] w-full h-[90vh] flex flex-col p-0 gap-0">
-          <DialogHeader className="px-6 py-4 border-b shrink-0">
-            <DialogTitle>Sign Enrollment Agreement</DialogTitle>
-            <DialogDescription>
-              Review and sign the enrollment agreement below.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex-1 relative overflow-hidden">
-            <style>{`
-              #pandadoc-enrollment-wrapper {
-                position: absolute;
-                inset: 0;
-              }
-              #pandadoc-enrollment-wrapper iframe {
-                width: 100% !important;
-                height: 100% !important;
-                border: none;
-              }
-            `}</style>
-            <div id="pandadoc-enrollment-wrapper" className="absolute inset-0" />
+            #pandadoc-enrollment-embed iframe {
+              width: 100% !important;
+              height: 100% !important;
+              border: none !important;
+              display: block !important;
+            }
+          `}</style>
+          <div id="pandadoc-enrollment-embed" className="absolute inset-0" />
+        </div>
+      )}
+
+      {/* Preparing skeleton — shown while we're creating the PandaDoc and
+          waiting for a signing session to return. */}
+      {!isCompleted && !signingSession && (
+        <div className="relative rounded-lg border overflow-hidden" style={{ height: "70vh" }}>
+          <Skeleton className="absolute inset-0 rounded-none" />
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="flex items-center gap-2">
+              {signingLoading ? (
+                <>
+                  <Loader2 className="size-5 animate-spin text-muted-foreground" />
+                  <span className="text-sm text-muted-foreground">
+                    Preparing enrollment agreement...
+                  </span>
+                </>
+              ) : (
+                <span className="text-sm text-muted-foreground">
+                  Loading enrollment agreement...
+                </span>
+              )}
+            </div>
           </div>
-        </DialogContent>
-      </Dialog>
-    </>
+        </div>
+      )}
+
+      {/* Post-signing actions — replaces the layout's "Section Completed"
+          button with two explicit options: view the signed PDF or restart
+          the signing flow. Layout is 50/50 on mobile, inline on sm+. */}
+      {isCompleted && (
+        <div className="grid grid-cols-2 gap-2 border-t pt-6 pb-6">
+          {pdfUrl ? (
+            <Button
+              variant="outline"
+              className="w-full bg-white"
+              onClick={() => window.open(pdfUrl, "_blank")}
+            >
+              View Document
+            </Button>
+          ) : (
+            <div />
+          )}
+          <Button
+            variant="outline"
+            className="w-full bg-white"
+            onClick={async () => {
+              // Re-sign = un-latch the bool so the page swaps back to the
+              // signing embed, then start a fresh PandaDoc session.
+              autoInitRef.current = false;
+              try {
+                await setRegSection("isEnrollment", false);
+                await handleSign();
+              } catch (err) {
+                console.error("Failed to start re-sign:", err);
+              }
+            }}
+          >
+            Re-Sign Document
+          </Button>
+        </div>
+      )}
+    </div>
   );
 }

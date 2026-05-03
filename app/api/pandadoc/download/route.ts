@@ -29,14 +29,55 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const application = await xano.applications.getById(Number(applicationId));
-  if (!application || Number(application.registration_families_id) !== familyId) {
-    return NextResponse.json({ error: "Application not found" }, { status: 404 });
+  // Ownership check via family's own apps — robust to Xano returning the
+  // relation as an expanded object rather than a scalar id.
+  const familyApps = await xano.applications.getByFamilyId(familyId);
+  const application = familyApps.find(
+    (a) => Number(a.id) === Number(applicationId)
+  );
+  if (!application) {
+    return NextResponse.json(
+      { error: "Application not found for this family" },
+      { status: 404 }
+    );
   }
 
-  const owns =
+  // Ownership check — accept the document if its ID is stored in any of
+  // the three places a PandaDoc ID can currently live for this family:
+  //
+  //   1. `registration_application` (waiver + enrollment, per-student per-year)
+  //   2. `registration_student_registration_progress` (enrollment, per-family per-year)
+  //   3. `registration_student_registration` (the packet — legacy location
+  //      for waivers, still used as the client source of truth)
+  //
+  // This keeps the route working regardless of which table currently holds
+  // the canonical ID after the various migrations, and handles the realistic
+  // case where the application row's copy hasn't been back-filled yet.
+  let owns =
     application.liability_waiver_pandadoc_id === documentId ||
     application.enrollment_agreement_pandadoc_id === documentId;
+
+  if (!owns) {
+    const progressRow = await xano.studentRegistrationProgress.getByFamilyAndYear(
+      familyId,
+      application.registration_school_years_id
+    );
+    owns = progressRow?.enrollment_agreement_pandadoc_id === documentId;
+  }
+
+  if (!owns) {
+    // Last resort — check the student's registration packet row, which is
+    // where the waiver ID lives when saved through the /registration page.
+    try {
+      const packet = await xano.studentRegistration.getByStudentId(
+        application.registration_students_id
+      );
+      owns = packet?.liability_waiver_pandadoc_id === documentId;
+    } catch {
+      // Ignore — just leaves `owns` as false and we fall through to 404.
+    }
+  }
+
   if (!owns) {
     return NextResponse.json({ error: "Document not found" }, { status: 404 });
   }

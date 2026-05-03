@@ -1,43 +1,54 @@
-import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { NextRequest, NextResponse } from "next/server";
+import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
+import { xano } from "@/lib/xano";
 
 const BASE = process.env.XANO_API_BASE_URL;
 
+/**
+ * Counts dashboard backing route. Reads the enriched
+ * `/registration_families_all_details` endpoint for the application
+ * counts so they line up exactly with what the families + applications
+ * tables show, then layers on the inquiries + registrations counts from
+ * their own tables.
+ */
 export async function GET(req: NextRequest) {
   try {
     await requireAdmin();
-
     const { searchParams } = new URL(req.url);
-    const yearId = searchParams.get("yearId");
+    const yearIdParam = searchParams.get("yearId");
+    const yearId = yearIdParam ? Number(yearIdParam) : null;
 
-    // Fetch all data in parallel
-    const [inquiriesRes, applicationsRes, registrationsRes, studentsRes] =
+    const [familiesDetails, inquiriesRes, registrationsRes, studentsRes] =
       await Promise.all([
+        xano.families.getAllDetails(),
         fetch(`${BASE}/registration_inquiry`, { cache: "no-store" }),
-        fetch(`${BASE}/registration_application`, { cache: "no-store" }),
         fetch(`${BASE}/registration_student_registration`, { cache: "no-store" }),
         fetch(`${BASE}/registration_students`, { cache: "no-store" }),
       ]);
 
     const inquiries = inquiriesRes.ok ? await inquiriesRes.json() : [];
-    const allApplications = applicationsRes.ok ? await applicationsRes.json() : [];
     const registrations = registrationsRes.ok ? await registrationsRes.json() : [];
     const students = studentsRes.ok ? await studentsRes.json() : [];
 
-    // Filter applications by year if provided
+    // Flatten applications across families, then filter by year if asked.
+    const allApplications = familiesDetails.flatMap(
+      (f) => f.registration_students_id
+    );
     const applications = yearId
       ? allApplications.filter(
-          (a: { registration_school_years_id: number }) =>
-            Number(a.registration_school_years_id) === Number(yearId)
+          (a) => Number(a.registration_school_years_id) === yearId
         )
       : allApplications;
 
-    // Compute stats
+    // Counts. Each decision boolean is independent — admin flips one of
+    // offered/denied/accepted on a submitted app — so a simple per-flag
+    // tally is correct.
     const totalInquiries = inquiries.length;
     const totalApplications = applications.length;
-    const submitted = applications.filter((a: { isSubmitted: boolean }) => a.isSubmitted).length;
-    const offered = applications.filter((a: { isOffered: boolean }) => a.isOffered).length;
-    const accepted = applications.filter((a: { isAccepted: boolean }) => a.isAccepted).length;
+    const submitted = applications.filter((a) => a.isSubmitted).length;
+    const offered = applications.filter((a) => a.isOffered).length;
+    const accepted = applications.filter((a) => a.isAccepted).length;
+    const denied = applications.filter((a) => a.isDenied === true).length;
     const draft = totalApplications - submitted;
     const totalRegistrations = registrations.length;
     const completedRegistrations = registrations.filter(
@@ -45,7 +56,6 @@ export async function GET(req: NextRequest) {
     ).length;
     const totalStudents = students.length;
 
-    // Recent inquiries (last 30 days)
     const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
     const recentInquiries = inquiries.filter(
       (i: { created_at: number }) => i.created_at > thirtyDaysAgo
@@ -62,6 +72,7 @@ export async function GET(req: NextRequest) {
         submitted,
         offered,
         accepted,
+        denied,
       },
       registrations: {
         total: totalRegistrations,

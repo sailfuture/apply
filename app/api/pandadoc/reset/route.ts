@@ -34,27 +34,43 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const application = await xano.applications.getById(applicationId);
-  if (!application || Number(application.registration_families_id) !== familyId) {
-    return NextResponse.json({ error: "Application not found" }, { status: 404 });
+  // Ownership check via the family's own app list — avoids flaky 404s from
+  // Xano returning registration_families_id as a relation object.
+  const familyApps = await xano.applications.getByFamilyId(familyId);
+  const application = familyApps.find(
+    (a) => Number(a.id) === Number(applicationId)
+  );
+  if (!application) {
+    return NextResponse.json(
+      { error: "Application not found for this family" },
+      { status: 404 }
+    );
   }
 
-  const fields =
-    type === "liability_waiver"
-      ? {
-          liability_waiver_pandadoc_id: null,
-          liability_waiver_status: null,
-          liability_waiver_sent_at: null,
-          liability_waiver_pdf_url: null,
-        }
-      : {
-          enrollment_agreement_pandadoc_id: null,
-          enrollment_agreement_status: null,
-          enrollment_agreement_sent_at: null,
-          enrollment_agreement_pdf_url: null,
-        };
-
-  await xano.applications.update(applicationId, fields as Record<string, unknown>);
+  if (type === "liability_waiver") {
+    // Per-student — reset fields on the application row.
+    await xano.applications.update(applicationId, {
+      liability_waiver_pandadoc_id: null,
+      liability_waiver_status: null,
+      liability_waiver_sent_at: null,
+      liability_waiver_pdf_url: null,
+    } as Record<string, unknown>);
+  } else {
+    // Family-level — reset fields on the registration progress row, plus
+    // un-latch `isEnrollment` so the section falls back to in-progress.
+    const progressRow = await xano.studentRegistrationProgress.resolve(
+      familyId,
+      application.registration_school_years_id
+    );
+    await xano.studentRegistrationProgress.update(progressRow.id, {
+      enrollment_agreement_pandadoc_id: "",
+      enrollment_agreement_status: "",
+      enrollment_agreement_sent: null,
+      enrollment_agreement_pdf_url: "",
+      is_enrollment_agreement_signed: false,
+      isEnrollment: false,
+    });
+  }
 
   return NextResponse.json({ success: true });
 }
