@@ -368,6 +368,28 @@ export interface XanoRegistrationDetails extends XanoStudentRegistration {
 }
 
 /**
+ * One cell in the per-year scholarship award matrix. The matrix axes are
+ * household size (rows) and income brackets (columns); each row in this
+ * table is a single cell with its dollar amount. A 7×6 matrix = 42 rows.
+ *
+ * Cells are independently PATCH-able so the admin matrix editor can
+ * persist a single cell change without re-sending the rest of the
+ * matrix. `income_max` is nullable to model the rightmost "and up"
+ * column (no upper bound).
+ *
+ * Stored in the `registration_school_year_award_brackets` Xano table.
+ */
+export interface XanoSchoolYearAwardBracket {
+  id: number;
+  created_at: number;
+  registration_school_years_id: number;
+  household_size: number;
+  income_min: number;
+  income_max: number | null;
+  award_amount: number;
+}
+
+/**
  * Aggregated admin view of one family's application+scholarship state for
  * a specific school year. Backed by the `admin_family_application` Xano
  * endpoint, which takes `registration_families_id` and
@@ -1182,6 +1204,81 @@ export const xano = {
         method: "DELETE",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+    },
+  },
+
+  /**
+   * Per-year scholarship award matrix. One row = one cell at
+   * (household_size × income_bracket). The admin matrix editor reads
+   * `getByYear` on mount, then PATCHes individual cells as they're
+   * edited. Adding a household-size row or income-bracket column means
+   * inserting one new row per existing column / row respectively.
+   */
+  schoolYearAwardBrackets: {
+    async getByYear(yearId: number): Promise<XanoSchoolYearAwardBracket[]> {
+      const url = new URL(
+        `${getBaseUrl()}/registration_school_year_award_brackets`
+      );
+      url.searchParams.set(
+        "registration_school_years_id",
+        String(yearId)
+      );
+      const res = await fetch(url.toString(), { cache: "no-store" });
+      if (!res.ok) {
+        // Return [] instead of throwing on 404/empty-table so a freshly
+        // configured year (with no matrix yet) renders an empty grid
+        // rather than a hard error.
+        if (res.status === 404) return [];
+        throw new Error(
+          `Xano error ${res.status}: ${await res.text()}`
+        );
+      }
+      const items = await res.json();
+      return Array.isArray(items) ? items : [];
+    },
+
+    async create(
+      data: Omit<XanoSchoolYearAwardBracket, "id" | "created_at">
+    ): Promise<XanoSchoolYearAwardBracket> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_school_year_award_brackets`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        }
+      );
+      if (!res.ok)
+        throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async update(
+      id: number,
+      data: Partial<
+        Omit<XanoSchoolYearAwardBracket, "id" | "created_at">
+      >
+    ): Promise<XanoSchoolYearAwardBracket> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_school_year_award_brackets/${id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        }
+      );
+      if (!res.ok)
+        throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async delete(id: number): Promise<void> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_school_year_award_brackets/${id}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok)
+        throw new Error(`Xano error ${res.status}: ${await res.text()}`);
     },
   },
 
