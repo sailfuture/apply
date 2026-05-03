@@ -135,7 +135,7 @@ export default function AdminFamilySectionPage() {
   const backHref = `/admin/families/${familyId}${yearId ? `?yearId=${yearId}` : ""}`;
 
   return (
-    <div className="space-y-6 p-6 max-w-4xl">
+    <div className="space-y-6 p-6">
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-3">
           <Link href={backHref}>
@@ -190,7 +190,14 @@ function FamilyEditor({
   onSaved: () => void;
 }) {
   if (!family) return <SectionSkeleton />;
-  const parents = family.registration_parents_id ?? [];
+  // Xano's expanded relation sometimes mixes full parent objects with
+  // bare ID numbers in the same array. Filter to only the objects that
+  // actually carry an `id`, otherwise React's key check trips on the
+  // numeric entries (and `parent.email` etc. are undefined too).
+  const parents = (family.registration_parents_id ?? []).filter(
+    (p): p is Parent =>
+      !!p && typeof p === "object" && typeof (p as { id?: unknown }).id === "number"
+  );
   return (
     <div className="space-y-4">
       <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
@@ -415,7 +422,12 @@ function StudentsEditor({
 }) {
   if (!family) return <SectionSkeleton />;
   const apps: XanoApplication[] = detail?.application ?? [];
-  const students = family.registration_students_id ?? [];
+  // Same filter as parents — Xano's expanded relation occasionally
+  // returns bare student IDs alongside the full objects.
+  const students = (family.registration_students_id ?? []).filter(
+    (s): s is Student =>
+      !!s && typeof s === "object" && typeof (s as { id?: unknown }).id === "number"
+  );
   if (students.length === 0) {
     return (
       <Card>
@@ -813,7 +825,12 @@ function TestingEditor({
 }) {
   if (!family) return <SectionSkeleton />;
   const apps: XanoApplication[] = detail?.application ?? [];
-  const students = family.registration_students_id ?? [];
+  // Filter out bare ID entries Xano sometimes mixes into the
+  // expanded relation array — see FamilyEditor for context.
+  const students = (family.registration_students_id ?? []).filter(
+    (s): s is Student =>
+      !!s && typeof s === "object" && typeof (s as { id?: unknown }).id === "number"
+  );
   if (students.length === 0) {
     return (
       <Card>
@@ -993,7 +1010,12 @@ function TransportationEditor({
 }) {
   if (!family) return <SectionSkeleton />;
   const apps: XanoApplication[] = detail?.application ?? [];
-  const students = family.registration_students_id ?? [];
+  // Filter out bare ID entries Xano sometimes mixes into the
+  // expanded relation array — see FamilyEditor for context.
+  const students = (family.registration_students_id ?? []).filter(
+    (s): s is Student =>
+      !!s && typeof s === "object" && typeof (s as { id?: unknown }).id === "number"
+  );
   if (students.length === 0) {
     return (
       <Card>
@@ -1163,6 +1185,15 @@ function Section({
   );
 }
 
+/**
+ * `FieldRow` and `TextareaRow` always render real `<Input>` /
+ * `<textarea>` elements — the same chrome regardless of mode — and
+ * just toggle `disabled` based on `editing`. Earlier versions
+ * swapped between `<Input>` and a plain `<p>`, which made view-mode
+ * read as "no fields here at all" instead of "this is a form, but
+ * locked." Disabled inputs keep the border + label affordance so
+ * the structure of the form stays visible at all times.
+ */
 function FieldRow({
   label,
   value,
@@ -1181,18 +1212,15 @@ function FieldRow({
   return (
     <Field>
       {label ? <FieldLabel className="text-xs">{label}</FieldLabel> : null}
-      {editing ? (
-        <Input
-          type={type}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder={placeholder}
-        />
-      ) : (
-        <p className="text-sm font-medium pt-2 whitespace-pre-wrap">
-          {value || "—"}
-        </p>
-      )}
+      <Input
+        type={type}
+        value={value}
+        disabled={!editing}
+        readOnly={!editing}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="border-input disabled:opacity-100 disabled:bg-muted/30 disabled:cursor-default"
+      />
     </Field>
   );
 }
@@ -1213,16 +1241,16 @@ function TextareaRow({
   return (
     <Field>
       <FieldLabel className="text-xs">{label}</FieldLabel>
-      {editing ? (
-        <textarea
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder={placeholder}
-          className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-        />
-      ) : (
-        <p className="text-sm whitespace-pre-wrap pt-2">{value || "—"}</p>
-      )}
+      <textarea
+        value={value}
+        disabled={!editing}
+        readOnly={!editing}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className={`flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${
+          !editing ? "bg-muted/30 cursor-default" : ""
+        }`}
+      />
     </Field>
   );
 }

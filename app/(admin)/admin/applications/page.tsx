@@ -2,6 +2,8 @@
 
 import { useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+
+type AdminRouter = ReturnType<typeof useRouter>;
 import useSWR from "swr";
 import { CheckCircle2, Circle, ChevronRight } from "lucide-react";
 import { DataTable, type ColumnDef } from "@/components/admin/data-table";
@@ -96,23 +98,41 @@ export default function ApplicationsPage() {
   );
 
   const all = useMemo(() => (Array.isArray(data) ? data : []), [data]);
-  const filtered = useMemo(() => {
-    if (filter === "all") return all;
-    return all.filter((r) => deriveFilter(r) === filter);
-  }, [all, filter]);
+
+  // Pre-bucketed by status — cheaper than filtering on every render
+  // and lets us render each table group from a single source of truth.
+  const groups = useMemo(() => {
+    const submitted: AppProgressRow[] = [];
+    const inProgress: AppProgressRow[] = [];
+    const notStarted: AppProgressRow[] = [];
+    for (const r of all) {
+      const f = deriveFilter(r);
+      if (f === "submitted") submitted.push(r);
+      else if (f === "in_progress") inProgress.push(r);
+      else notStarted.push(r);
+    }
+    return { submitted, inProgress, notStarted };
+  }, [all]);
+
+  // Apply the optional filter on top of the buckets — when a filter is
+  // selected, only that bucket gets shown.
+  const visibleGroups = useMemo(() => {
+    if (filter === "all") return groups;
+    return {
+      submitted: filter === "submitted" ? groups.submitted : [],
+      inProgress: filter === "in_progress" ? groups.inProgress : [],
+      notStarted: filter === "not_started" ? groups.notStarted : [],
+    };
+  }, [filter, groups]);
 
   const counts = useMemo(() => {
-    const result: Record<ProgressFilter, number> = {
+    return {
       all: all.length,
-      submitted: 0,
-      in_progress: 0,
-      not_started: 0,
-    };
-    for (const r of all) {
-      result[deriveFilter(r)] += 1;
-    }
-    return result;
-  }, [all]);
+      submitted: groups.submitted.length,
+      in_progress: groups.inProgress.length,
+      not_started: groups.notStarted.length,
+    } satisfies Record<ProgressFilter, number>;
+  }, [all, groups]);
 
   function openSection(row: AppProgressRow, slug: string) {
     router.push(
@@ -264,29 +284,111 @@ export default function ApplicationsPage() {
           Pick a school year above to view its applications.
         </div>
       ) : (
-        <>
-          <DataTable<AppProgressRow>
+        // Three discrete table groups — Submitted / In Progress / Not
+        // Started — instead of one big filterable table. Admins
+        // overwhelmingly want to triage submitted apps first, then
+        // chase in-progress families, then ignore not-started rows
+        // unless they're scanning. Each group has its own header with
+        // a count and only renders when it has rows (or is the
+        // exclusive selection from the status filter).
+        <div className="space-y-8">
+          <ApplicationsGroup
+            title="Submitted"
+            description="Awaiting admissions decision."
+            rows={visibleGroups.submitted}
+            isLoading={isLoading && filter !== "in_progress" && filter !== "not_started"}
+            error={error}
             columns={columns}
-            data={filtered}
-            isLoading={isLoading}
-            searchPlaceholder="Search by family name…"
-            // Row click goes to the family overview; section-cell clicks
-            // override this via stopPropagation above and route to the
-            // per-section page instead.
-            onRowClick={(row) => {
-              router.push(
-                `/admin/families/${row.family_id}?yearId=${row.year_id}`
-              );
-            }}
+            router={router}
+            tone="blue"
           />
-
-          {!isLoading && !error && filtered.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              No families match the current filter for this school year.
-            </p>
-          ) : null}
-        </>
+          <ApplicationsGroup
+            title="In Progress"
+            description="Started but not yet submitted by the family."
+            rows={visibleGroups.inProgress}
+            isLoading={
+              isLoading && filter !== "submitted" && filter !== "not_started"
+            }
+            error={error}
+            columns={columns}
+            router={router}
+            tone="amber"
+          />
+          <ApplicationsGroup
+            title="Not Started"
+            description="Family has a progress row but hasn't completed any sections."
+            rows={visibleGroups.notStarted}
+            isLoading={
+              isLoading && filter !== "submitted" && filter !== "in_progress"
+            }
+            error={error}
+            columns={columns}
+            router={router}
+            tone="slate"
+          />
+        </div>
       )}
     </div>
+  );
+}
+
+/**
+ * One status-bucket section. Renders a header (title + count + tone
+ * dot) above its own DataTable; suppresses entirely when there are no
+ * rows AND we're not loading, so the page doesn't render three
+ * "no rows" placeholders. Each table row is clickable and routes to
+ * the family overview just like the unified table did.
+ */
+function ApplicationsGroup({
+  title,
+  description,
+  rows,
+  isLoading,
+  error,
+  columns,
+  router,
+  tone,
+}: {
+  title: string;
+  description: string;
+  rows: AppProgressRow[];
+  isLoading: boolean;
+  error: unknown;
+  columns: ColumnDef<AppProgressRow>[];
+  router: AdminRouter;
+  tone: "blue" | "amber" | "slate";
+}) {
+  // Skip rendering the section entirely when it's empty and not in
+  // flight — clutters the page otherwise. (Error + loading still
+  // render so the user sees feedback for the active group.)
+  if (!isLoading && !error && rows.length === 0) return null;
+  const dotClass =
+    tone === "blue"
+      ? "bg-blue-500"
+      : tone === "amber"
+        ? "bg-amber-500"
+        : "bg-slate-400";
+  return (
+    <section>
+      <header className="flex items-baseline gap-3 mb-3">
+        <span className={cn("inline-block size-2 rounded-full", dotClass)} />
+        <h2 className="text-lg font-semibold">{title}</h2>
+        <span className="text-sm tabular-nums text-muted-foreground">
+          ({rows.length})
+        </span>
+        <p className="text-xs text-muted-foreground ml-2">{description}</p>
+      </header>
+      <DataTable<AppProgressRow>
+        columns={columns}
+        data={rows}
+        isLoading={isLoading}
+        searchPlaceholder={`Search ${title.toLowerCase()}…`}
+        onRowClick={(row) => {
+          router.push(
+            `/admin/families/${row.family_id}?yearId=${row.year_id}`
+          );
+        }}
+      />
+    </section>
   );
 }
