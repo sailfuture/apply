@@ -1053,40 +1053,11 @@ export default function ScholarshipPage() {
     }
   }, [saving, scholarshipChoice, scholarshipLocked, updateSaveOptions, setScholarshipLocked]);
 
-  // Auto-revoke completion when a freshly added student lacks a SUFS
-  // award ID. The Financial Aid section's gate requires every per-year
-  // app to carry a SUFS award id; a new student's app starts at 0, so
-  // the section's "complete" claim becomes stale the moment they're
-  // added on the Students page. Mirrors the same pattern on Family /
-  // Students / Testing.
-  const autoRevokedScholarshipRef = useRef(false);
-  useEffect(() => {
-    if (!scholarshipLocked) {
-      autoRevokedScholarshipRef.current = false;
-      return;
-    }
-    if (loading || sufsApplications.length === 0) return;
-    const visible = sufsApplications.filter((a) =>
-      sufsStudents.some((s) => s.id === a.registration_students_id)
-    );
-    if (visible.length === 0) return;
-    const allHaveAward = visible.every(
-      (a) => typeof a.sufs_award_id === "number" && a.sufs_award_id > 0
-    );
-    if (allHaveAward) return;
-    if (autoRevokedScholarshipRef.current) return;
-    autoRevokedScholarshipRef.current = true;
-    void setScholarshipLocked(false);
-    toast.message(
-      "A new student needs a Step Up Award ID — please review and re-complete this section."
-    );
-  }, [
-    sufsApplications,
-    sufsStudents,
-    scholarshipLocked,
-    loading,
-    setScholarshipLocked,
-  ]);
+  // Section unlock when a new student is added is now handled inline
+  // by the Students page's `handleAddToYear` (it PATCHes the relevant
+  // section bools to false on the same family-progress row this page
+  // reads). The previous useEffect-based revoke here race'd the
+  // layout's pointer-events-none wrapper.
 
   useEffect(() => {
     if (savedSnapshotRef.current === "" || savingRef.current) return;

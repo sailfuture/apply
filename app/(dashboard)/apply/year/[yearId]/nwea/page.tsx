@@ -144,34 +144,11 @@ export default function InitialTestingStepPage() {
     }
   }, [testingLocked, savingAppId, updateSaveOptions, setProgressSection]);
 
-  // Auto-revoke completion when a freshly added student's app row
-  // arrives without NWEA scheduled/complete. Without this, marking
-  // testing complete locks the bool, and a later add-student leaves the
-  // section claiming "complete" while the new student has neither flag
-  // set — the parent doesn't know they need to revisit this page.
-  const autoRevokedTestingRef = useRef(false);
-  useEffect(() => {
-    if (!testingLocked) {
-      autoRevokedTestingRef.current = false;
-      return;
-    }
-    if (loading || applications.length === 0) return;
-    const visible = applications.filter((a) =>
-      students.some((s) => s.id === a.registration_students_id)
-    );
-    if (visible.length === 0) return;
-    const allScheduled = visible.every(
-      (a) =>
-        a.nwea_testing_complete === true || a.nwea_testing_scheduled === true
-    );
-    if (allScheduled) return;
-    if (autoRevokedTestingRef.current) return;
-    autoRevokedTestingRef.current = true;
-    void setProgressSection("testing_completed", false);
-    toast.message(
-      "A new student needs NWEA scheduling — please review and re-complete this section."
-    );
-  }, [applications, students, testingLocked, loading, setProgressSection]);
+  // Section unlock when a new student is added is now handled inline
+  // by the Students page's `handleAddToYear` (it PATCHes the relevant
+  // section bools to false on the same family-progress row this page
+  // reads). Keeping the auto-revoke here too just doubles up the work
+  // and re-introduces the layout-race bug that motivated the move.
 
   async function toggleScheduled(appId: number, current: boolean) {
     const newVal = !current;

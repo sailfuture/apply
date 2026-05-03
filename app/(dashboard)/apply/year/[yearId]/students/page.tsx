@@ -313,6 +313,53 @@ export default function StudentsStepPage() {
         const newApp = await res.json();
         setApplications((prev) => [...prev, newApp]);
         setSavedApplications((prev) => [...prev, newApp]);
+
+        // Adding a student invalidates any previously-completed section
+        // whose validation depends on per-student data. Flip those bools
+        // proactively, here in the same async path as the add — putting
+        // this in a useEffect on `applications` was racing the layout's
+        // pointer-events-none wrapper, which blocked the parent from
+        // editing the brand-new student's empty fields. Doing it inline
+        // means the unlock is part of the same network round trip the
+        // user just initiated. Family is intentionally NOT touched —
+        // adding a student doesn't change the parents.
+        const ap = isReapplyFlow
+          ? null
+          : flowRef.current.applyProgress.progress;
+        if (ap) {
+          const patch: Record<string, boolean> = {};
+          if (ap.students_completed) patch.students_completed = false;
+          if (ap.financial_aid_completed) patch.financial_aid_completed = false;
+          if (ap.testing_completed) patch.testing_completed = false;
+          if (Object.keys(patch).length > 0) {
+            try {
+              await fetch(`/api/family-progress?yearId=${yearId}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(patch),
+              });
+              // Force the SWR cache to re-fetch so the layout's bottom-bar
+              // immediately reflects the new "in progress" state.
+              mutate(`/api/family-progress?yearId=${yearId}`);
+              const labels = Object.keys(patch)
+                .map((k) =>
+                  k === "students_completed"
+                    ? "Students"
+                    : k === "financial_aid_completed"
+                      ? "Financial Aid"
+                      : k === "testing_completed"
+                        ? "Initial Testing"
+                        : k
+                )
+                .join(", ");
+              toast.message(
+                `${labels} reopened — please review the new student's details.`
+              );
+            } catch (err) {
+              console.error("Failed to reopen sections after add:", err);
+            }
+          }
+        }
       } else {
         const body = await res.json().catch(() => null);
         setAddError(body?.error ?? `Failed to add student (${res.status})`);
@@ -528,31 +575,13 @@ export default function StudentsStepPage() {
     }
   }, [studentsLocked, updateSaveOptions, setStudentsLocked]);
 
-  // Auto-revoke completion when the section's validation regresses
-  // (e.g. the parent added a new student via the modal — the new app
-  // row has empty grade/school/etc., so the section is no longer
-  // genuinely complete even though the bool still says it is). We
-  // also alert the parent so they understand why the green check
-  // disappeared and what they need to fix.
-  const autoRevokedStudentsRef = useRef(false);
-  useEffect(() => {
-    if (!studentsLocked) {
-      autoRevokedStudentsRef.current = false;
-      return;
-    }
-    if (loading || applications.length === 0) return;
-    const allComplete = applications.every((a) => isAppComplete(a));
-    if (allComplete) return;
-    if (autoRevokedStudentsRef.current) return;
-    autoRevokedStudentsRef.current = true;
-    void setStudentsLocked(false).then(() => {
-      toast.message(
-        "A student was added or updated — please review and re-complete this section."
-      );
-    });
-    // isAppComplete is a stable function declaration; safe to omit.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [applications, studentsLocked, loading, setStudentsLocked]);
+  // Auto-revoke for the Students section is now handled inline inside
+  // `handleAddToYear` (the single point where a new student joins the
+  // application). Doing it via a useEffect on `applications` race'd the
+  // layout's pointer-events-none wrapper — there was a render where
+  // the section was still "completed" / interactions blocked while the
+  // parent was trying to edit the brand-new student's empty fields.
+  // The inline approach unlocks the section atomically with the add.
 
   // Auto-save on changes (debounced)
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
