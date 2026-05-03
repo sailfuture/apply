@@ -57,7 +57,11 @@ export default function AdminDashboardPage() {
   const searchParams = useSearchParams();
   const yearId = searchParams.get("yearId");
 
-  const { data: stats, isLoading: statsLoading } = useSWR<StatsResponse>(
+  const {
+    data: stats,
+    isLoading: statsLoading,
+    error: statsError,
+  } = useSWR<StatsResponse>(
     yearId ? `/api/admin/stats?yearId=${yearId}` : `/api/admin/stats`,
     fetcher
   );
@@ -72,7 +76,11 @@ export default function AdminDashboardPage() {
     fetcher
   );
 
-  if (statsLoading || !stats) {
+  // Loading skeleton ONLY during the initial in-flight fetch — once the
+  // request settles (success or error) we render the page so the chrome
+  // + per-card error states show. Returning the skeleton on every error
+  // would lock the page in a loading state forever.
+  if (statsLoading && !stats && !statsError) {
     return (
       <div className="space-y-6 p-6">
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -87,6 +95,23 @@ export default function AdminDashboardPage() {
       </div>
     );
   }
+
+  // Defensive defaults so the cards render even when stats fails. Each
+  // count falls back to 0 with the error surfaced as a banner above —
+  // the chrome (top nav, etc.) keeps working regardless.
+  const safeStats: StatsResponse = stats ?? {
+    inquiries: { total: 0, recent: 0 },
+    applications: {
+      total: 0,
+      draft: 0,
+      submitted: 0,
+      offered: 0,
+      accepted: 0,
+      denied: 0,
+    },
+    registrations: { total: 0, completed: 0, inProgress: 0 },
+    students: { total: 0 },
+  };
 
   // Defensive `Array.isArray` guards — even with the throwing fetcher
   // in place, a stale `data` shape (e.g. during a hot-reload mid-deploy)
@@ -118,30 +143,38 @@ export default function AdminDashboardPage() {
         <p className="text-sm text-muted-foreground mt-1">Overview of admissions activity.</p>
       </div>
 
+      {statsError ? (
+        <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          Stats failed to load:{" "}
+          {statsError instanceof Error ? statsError.message : "unknown error"}.
+          Counts shown below default to 0 until the next refresh.
+        </div>
+      ) : null}
+
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatsCard
           title="Inquiries"
-          value={stats.inquiries.total}
+          value={safeStats.inquiries.total}
           icon={<MessageSquare className="size-5" />}
-          description={`${stats.inquiries.recent} this month`}
+          description={`${safeStats.inquiries.recent} this month`}
         />
         <StatsCard
           title="Applications"
-          value={stats.applications.submitted}
+          value={safeStats.applications.submitted}
           icon={<FileText className="size-5" />}
-          description={`${stats.applications.draft} drafts, ${stats.applications.total} total`}
+          description={`${safeStats.applications.draft} drafts, ${safeStats.applications.total} total`}
         />
         <StatsCard
           title="Accepted"
-          value={stats.applications.accepted}
+          value={safeStats.applications.accepted}
           icon={<CheckCircle className="size-5" />}
-          description={`${stats.applications.offered} offered`}
+          description={`${safeStats.applications.offered} offered`}
         />
         <StatsCard
           title="Registered"
-          value={stats.registrations.completed}
+          value={safeStats.registrations.completed}
           icon={<ClipboardList className="size-5" />}
-          description={`${stats.registrations.inProgress} in progress`}
+          description={`${safeStats.registrations.inProgress} in progress`}
         />
       </div>
 

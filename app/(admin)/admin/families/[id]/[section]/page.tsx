@@ -1,22 +1,27 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useParams, useSearchParams, useRouter } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import useSWR from "swr";
+import { toast } from "sonner";
 import {
   ArrowLeft,
   CheckCircle2,
   Circle,
-  ExternalLink,
+  Loader2,
   Pencil,
+  X,
 } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Field, FieldLabel } from "@/components/ui/field";
 import { Skeleton } from "@/components/ui/skeleton";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { deriveApplicationStatus } from "@/lib/application-status";
 import { StatusBadge } from "@/components/admin/status-badge";
+import { StateSelect } from "@/components/state-select";
 import type {
   XanoAdminFamilyDetail,
   XanoApplication,
@@ -53,134 +58,61 @@ interface FamilyResponse {
   registration_students_id: Student[];
 }
 
-/**
- * Slug → metadata table. Adding a new section means adding a row here
- * and (if it requires bespoke rendering) a branch in the body switch
- * below. Slugs match the URLs the Applications + Re-Applications
- * tables route to from their per-section column buttons.
- *
- * Apply-flow slugs are bare (`family`, `students`, …); reapply-flow
- * slugs are prefixed with `reapply-` so a single dynamic route can
- * cleanly distinguish them.
- */
 const SECTION_META: Record<
   string,
   {
     label: string;
     flow: "apply" | "reapply";
-    progressKey:
-      | "family_completed"
-      | "students_completed"
-      | "financial_aid_completed"
-      | "testing_completed"
-      | "isFamilyDetails"
-      | "isStudentDetails"
-      | "isScholarship"
-      | "isTransportation";
-    /** Path under `/apply/year/[yearId]` (or `/reapply/year/[yearId]`)
-     *  the parent uses for this section. The "Open in apply view"
-     *  button deep-links to it so admins can review the live form. */
-    parentPath: string;
   }
 > = {
-  family: {
-    label: "Family",
-    flow: "apply",
-    progressKey: "family_completed",
-    parentPath: "family",
-  },
-  students: {
-    label: "Students",
-    flow: "apply",
-    progressKey: "students_completed",
-    parentPath: "students",
-  },
-  "financial-aid": {
-    label: "Financial Aid",
-    flow: "apply",
-    progressKey: "financial_aid_completed",
-    parentPath: "scholarship",
-  },
-  testing: {
-    label: "Initial Testing",
-    flow: "apply",
-    progressKey: "testing_completed",
-    parentPath: "nwea",
-  },
-  "reapply-family": {
-    label: "Family (Re-Application)",
-    flow: "reapply",
-    progressKey: "isFamilyDetails",
-    parentPath: "family",
-  },
-  "reapply-students": {
-    label: "Students (Re-Application)",
-    flow: "reapply",
-    progressKey: "isStudentDetails",
-    parentPath: "students",
-  },
+  family: { label: "Family Information", flow: "apply" },
+  students: { label: "Student Details", flow: "apply" },
+  "financial-aid": { label: "Financial Aid", flow: "apply" },
+  testing: { label: "Initial Testing", flow: "apply" },
+  "reapply-family": { label: "Family (Re-Application)", flow: "reapply" },
+  "reapply-students": { label: "Students (Re-Application)", flow: "reapply" },
   "reapply-financial-aid": {
     label: "Financial Aid (Re-Application)",
     flow: "reapply",
-    progressKey: "isScholarship",
-    parentPath: "scholarship",
   },
   "reapply-transportation": {
     label: "Transportation (Re-Application)",
     flow: "reapply",
-    progressKey: "isTransportation",
-    parentPath: "transportation",
   },
 };
 
+/**
+ * Per-section admin page that mirrors the parent-side application form
+ * for that section. Read-only by default — admins click "Edit" to flip
+ * inputs to editable, fill in any values that need correcting, then
+ * "Save" to PATCH the underlying Xano rows. Cancel discards local
+ * changes.
+ *
+ * Each section body is its own component so we can grow them
+ * independently — Family + Testing are inline editors today, Students
+ * + Financial Aid render the application data and link out for the
+ * full edit flow until those pages get their own admin form.
+ */
 export default function AdminFamilySectionPage() {
   const params = useParams();
   const searchParams = useSearchParams();
-  const router = useRouter();
   const familyId = params.id as string;
   const sectionSlug = params.section as string;
   const yearId = searchParams.get("yearId");
-
   const meta = SECTION_META[sectionSlug];
 
-  // Family + parents + students — used across all section views for the
-  // header label, so always fetch.
-  const { data: family } = useSWR<FamilyResponse>(
+  const { data: family, mutate: refreshFamily } = useSWR<FamilyResponse>(
     familyId ? `/api/admin/families/${familyId}` : null,
     fetcher
   );
 
-  // Per-year applications + scholarship — only fetched when the section
-  // needs it. Wrapped in a hook-friendly conditional via key=null.
-  const needsAppDetail =
-    !!yearId &&
-    !!meta &&
-    (meta.progressKey === "family_completed" ||
-      meta.progressKey === "students_completed" ||
-      meta.progressKey === "financial_aid_completed" ||
-      meta.progressKey === "testing_completed" ||
-      meta.progressKey === "isFamilyDetails" ||
-      meta.progressKey === "isStudentDetails" ||
-      meta.progressKey === "isScholarship" ||
-      meta.progressKey === "isTransportation");
-  const { data: detail } = useSWR<XanoAdminFamilyDetail>(
-    needsAppDetail
-      ? `/api/admin/family-applications?familyId=${familyId}&yearId=${yearId}`
-      : null,
-    adminFetcher
-  );
-
-  const sectionComplete = useMemo(() => {
-    if (!meta) return false;
-    // Pull completion from whichever progress source matches the flow.
-    // Both progress endpoints return the bool of the same name we keyed
-    // off in SECTION_META.
-    // For now we surface the bool via SWR on the existing per-year
-    // family-progress endpoints (consumed by the parent flow) since the
-    // admin doesn't have its own per-family progress fetch yet — easy
-    // upgrade path.
-    return false;
-  }, [meta]);
+  const { data: detail, mutate: refreshDetail } =
+    useSWR<XanoAdminFamilyDetail>(
+      yearId
+        ? `/api/admin/family-applications?familyId=${familyId}&yearId=${yearId}`
+        : null,
+      adminFetcher
+    );
 
   if (!meta) {
     return (
@@ -189,7 +121,9 @@ export default function AdminFamilySectionPage() {
           Unknown section &ldquo;{sectionSlug}&rdquo;.
         </p>
         <Button asChild variant="outline">
-          <Link href={`/admin/families/${familyId}${yearId ? `?yearId=${yearId}` : ""}`}>
+          <Link
+            href={`/admin/families/${familyId}${yearId ? `?yearId=${yearId}` : ""}`}
+          >
             <ArrowLeft className="size-4 mr-1.5" />
             Back to family
           </Link>
@@ -199,12 +133,9 @@ export default function AdminFamilySectionPage() {
   }
 
   const backHref = `/admin/families/${familyId}${yearId ? `?yearId=${yearId}` : ""}`;
-  const parentEditHref = yearId
-    ? `/${meta.flow}/year/${yearId}/${meta.parentPath}`
-    : "#";
 
   return (
-    <div className="space-y-6 p-6">
+    <div className="space-y-6 p-6 max-w-4xl">
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-3">
           <Link href={backHref}>
@@ -216,197 +147,533 @@ export default function AdminFamilySectionPage() {
             <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               {family?.family_name || `Family #${familyId}`}
             </p>
-            <h1 className="text-2xl font-semibold mt-1">
-              {meta.label}
-            </h1>
-            <div className="flex items-center gap-2 mt-2">
-              {sectionComplete ? (
-                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-700">
-                  <CheckCircle2 className="size-4 text-green-600" /> Complete
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                  <Circle className="size-4" /> Not yet complete
-                </span>
-              )}
-            </div>
+            <h1 className="text-2xl font-semibold mt-1">{meta.label}</h1>
           </div>
         </div>
-
-        {/* "Open in apply view" — admin opens the live form in a new
-            tab so they can see exactly what the parent sees. Edit-on-
-            behalf via admin impersonation is the next step; for now
-            this gives admins a way into the canonical form. */}
-        <Button asChild variant="outline" className="bg-white">
-          <a href={parentEditHref} target="_blank" rel="noopener noreferrer">
-            <Pencil className="size-4 mr-1.5" />
-            Open in apply view
-            <ExternalLink className="size-3.5 ml-1.5" />
-          </a>
-        </Button>
       </div>
 
-      {/* Section body — switches on slug for now. Each rendering uses
-          read-only cards that mirror what the parent sees on their
-          actual form. As we wire admin-side editing, individual
-          branches grow inline form controls. */}
       {sectionSlug === "family" || sectionSlug === "reapply-family" ? (
-        <FamilyBody family={family} />
+        <FamilyEditor family={family} onSaved={() => refreshFamily()} />
       ) : sectionSlug === "students" || sectionSlug === "reapply-students" ? (
-        <StudentsBody family={family} detail={detail} />
+        <StudentsEditor
+          family={family}
+          detail={detail}
+          onSaved={() => refreshDetail()}
+        />
       ) : sectionSlug === "financial-aid" ||
         sectionSlug === "reapply-financial-aid" ? (
-        <FinancialAidBody scholarship={detail?.scholarship?.[0] ?? null} />
+        <FinancialAidEditor scholarship={detail?.scholarship?.[0] ?? null} />
       ) : sectionSlug === "testing" ? (
-        <TestingBody family={family} detail={detail} />
+        <TestingEditor
+          family={family}
+          detail={detail}
+          onSaved={() => refreshDetail()}
+        />
       ) : sectionSlug === "reapply-transportation" ? (
-        <TransportationBody family={family} detail={detail} />
+        <TransportationEditor
+          family={family}
+          detail={detail}
+          onSaved={() => refreshDetail()}
+        />
       ) : null}
     </div>
   );
 }
 
-function FamilyBody({ family }: { family: FamilyResponse | undefined }) {
+/* ─────────────────────── Family ─────────────────────── */
+
+function FamilyEditor({
+  family,
+  onSaved,
+}: {
+  family: FamilyResponse | undefined;
+  onSaved: () => void;
+}) {
   if (!family) return <SectionSkeleton />;
   const parents = family.registration_parents_id ?? [];
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Parents / Guardians</CardTitle>
-      </CardHeader>
-      <CardContent>
-        {parents.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
+    <div className="space-y-4">
+      <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+        Parents / Guardians
+      </h2>
+      {parents.length === 0 ? (
+        <Card>
+          <CardContent className="py-6 text-sm text-muted-foreground">
             No parents on file.
-          </p>
-        ) : (
-          <div className="space-y-3">
-            {parents.map((parent) => (
-              <div key={parent.id} className="rounded-md border p-3">
-                <p className="text-sm font-medium">
-                  {parent.first_name} {parent.last_name}
-                  {parent.relationship ? (
-                    <span className="ml-2 text-xs text-muted-foreground">
-                      ({parent.relationship})
-                    </span>
-                  ) : null}
-                </p>
-                <div className="mt-1 text-xs text-muted-foreground space-y-0.5">
-                  {parent.email ? <p>{parent.email}</p> : null}
-                  {parent.phone ? <p>{parent.phone}</p> : null}
-                  {parent.address_line_1 ? (
-                    <p>
-                      {parent.address_line_1}
-                      {parent.address_line_2
-                        ? `, ${parent.address_line_2}`
-                        : ""}
-                      {parent.city ? `, ${parent.city}` : ""}
-                      {parent.state ? ` ${parent.state}` : ""}
-                      {parent.zipcode ? ` ${parent.zipcode}` : ""}
-                    </p>
-                  ) : null}
-                </div>
-              </div>
-            ))}
+          </CardContent>
+        </Card>
+      ) : (
+        parents.map((parent) => (
+          <ParentCard key={parent.id} parent={parent} onSaved={onSaved} />
+        ))
+      )}
+    </div>
+  );
+}
+
+function ParentCard({
+  parent,
+  onSaved,
+}: {
+  parent: Parent;
+  onSaved: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(parent);
+  const [saving, setSaving] = useState(false);
+
+  // Re-seed the local draft if the parent prop changes (e.g. after a
+  // refresh) so we don't render stale values when the user opens edit
+  // mode on a different parent.
+  useEffect(() => setDraft(parent), [parent]);
+
+  function patch<K extends keyof Parent>(key: K, value: Parent[K]) {
+    setDraft((d) => ({ ...d, [key]: value }));
+  }
+
+  async function save() {
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/parents/${parent.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          first_name: draft.first_name,
+          last_name: draft.last_name,
+          email: draft.email,
+          phone: draft.phone,
+          relationship: draft.relationship,
+          address_line_1: draft.address_line_1,
+          address_line_2: draft.address_line_2,
+          city: draft.city,
+          state: draft.state,
+          zipcode: draft.zipcode,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error ?? `Save failed (${res.status})`);
+      }
+      toast.success("Parent updated.");
+      setEditing(false);
+      onSaved();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't save.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card className="overflow-hidden gap-0 py-0">
+      <CardHeader className="py-3 !pb-3 border-b">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-lg">
+            {draft.first_name || draft.last_name
+              ? `${draft.first_name} ${draft.last_name}`.trim()
+              : `Parent #${parent.id}`}
+            {draft.relationship ? (
+              <span className="ml-2 text-xs font-normal text-muted-foreground">
+                ({draft.relationship})
+              </span>
+            ) : null}
+          </CardTitle>
+          {editing ? (
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setEditing(false);
+                  setDraft(parent);
+                }}
+                disabled={saving}
+              >
+                <X className="size-4 mr-1" />
+                Cancel
+              </Button>
+              <Button size="sm" onClick={save} disabled={saving}>
+                {saving ? (
+                  <>
+                    <Loader2 className="size-4 mr-1 animate-spin" />
+                    Saving
+                  </>
+                ) : (
+                  "Save"
+                )}
+              </Button>
+            </div>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setEditing(true)}
+            >
+              <Pencil className="size-4 mr-1" />
+              Edit
+            </Button>
+          )}
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-6 py-5 bg-white">
+        <Section title="Name">
+          <div className="grid gap-4 grid-cols-2">
+            <FieldRow
+              label="First name"
+              value={draft.first_name}
+              editing={editing}
+              onChange={(v) => patch("first_name", v)}
+            />
+            <FieldRow
+              label="Last name"
+              value={draft.last_name}
+              editing={editing}
+              onChange={(v) => patch("last_name", v)}
+            />
           </div>
-        )}
+        </Section>
+        <Section title="Contact">
+          <div className="grid gap-4 grid-cols-1 sm:grid-cols-[2fr_1fr_1fr]">
+            <FieldRow
+              label="Email"
+              value={draft.email}
+              editing={editing}
+              onChange={(v) => patch("email", v)}
+              type="email"
+            />
+            <FieldRow
+              label="Phone"
+              value={draft.phone}
+              editing={editing}
+              onChange={(v) => patch("phone", v)}
+            />
+            <FieldRow
+              label="Relationship"
+              value={draft.relationship}
+              editing={editing}
+              onChange={(v) => patch("relationship", v)}
+              placeholder="e.g. Mother"
+            />
+          </div>
+        </Section>
+        <Section title="Address">
+          <div className="grid gap-4 grid-cols-1">
+            <FieldRow
+              label="Street address"
+              value={draft.address_line_1}
+              editing={editing}
+              onChange={(v) => patch("address_line_1", v)}
+            />
+            <FieldRow
+              label="Apt / suite"
+              value={draft.address_line_2}
+              editing={editing}
+              onChange={(v) => patch("address_line_2", v)}
+            />
+            <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
+              <FieldRow
+                label="City"
+                value={draft.city}
+                editing={editing}
+                onChange={(v) => patch("city", v)}
+              />
+              <Field>
+                <FieldLabel className="text-xs">State</FieldLabel>
+                {editing ? (
+                  <StateSelect
+                    value={draft.state}
+                    onChange={(v) => patch("state", v)}
+                  />
+                ) : (
+                  <p className="text-sm font-medium pt-2">{draft.state || "—"}</p>
+                )}
+              </Field>
+              <FieldRow
+                label="Zip"
+                value={draft.zipcode}
+                editing={editing}
+                onChange={(v) => patch("zipcode", v)}
+              />
+            </div>
+          </div>
+        </Section>
       </CardContent>
     </Card>
   );
 }
 
-function StudentsBody({
+/* ─────────────────────── Students ─────────────────────── */
+
+function StudentsEditor({
   family,
   detail,
+  onSaved,
 }: {
   family: FamilyResponse | undefined;
   detail: XanoAdminFamilyDetail | undefined;
+  onSaved: () => void;
 }) {
   if (!family) return <SectionSkeleton />;
-  const students = family.registration_students_id ?? [];
   const apps: XanoApplication[] = detail?.application ?? [];
+  const students = family.registration_students_id ?? [];
+  if (students.length === 0) {
+    return (
+      <Card>
+        <CardContent className="py-6 text-sm text-muted-foreground">
+          No students on file.
+        </CardContent>
+      </Card>
+    );
+  }
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Students</CardTitle>
-      </CardHeader>
-      <CardContent>
-        {students.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            No students on file.
-          </p>
-        ) : (
-          <div className="space-y-4">
-            {students.map((student) => {
-              const app = apps.find(
-                (a) => Number(a.registration_students_id) === student.id
-              );
-              const status = app
-                ? deriveApplicationStatus(app)
-                : null;
-              return (
-                <div key={student.id} className="rounded-md border p-4 space-y-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <p className="font-semibold text-sm">
-                        {student.first_name} {student.last_name}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {student.date_of_birth
-                          ? new Date(
-                              `${student.date_of_birth}T00:00:00`
-                            ).toLocaleDateString()
-                          : ""}
-                        {student.gender ? ` · ${student.gender}` : ""}
-                        {student.ethnicity ? ` · ${student.ethnicity}` : ""}
-                      </p>
-                    </div>
-                    {status ? <StatusBadge status={status} /> : null}
-                  </div>
+    <div className="space-y-4">
+      {students.map((student) => {
+        const app = apps.find(
+          (a) => Number(a.registration_students_id) === student.id
+        );
+        return (
+          <StudentAppCard
+            key={student.id}
+            student={student}
+            app={app}
+            onSaved={onSaved}
+          />
+        );
+      })}
+    </div>
+  );
+}
 
-                  {app ? (
-                    <DetailGrid
-                      rows={[
-                        ["Current grade", app.current_grade || "—"],
-                        ["Last grade", app.last_grade_completed || "—"],
-                        ["Previous school", app.current_previous_school || "—"],
-                        [
-                          "Bus",
-                          app.is_bus_transportation
-                            ? `Yes${app.bus_stop ? ` · ${app.bus_stop}` : ""}`
-                            : "No",
-                        ],
-                      ]}
-                    />
-                  ) : (
-                    <p className="text-xs text-muted-foreground italic">
-                      No application for this year.
-                    </p>
-                  )}
+function StudentAppCard({
+  student,
+  app,
+  onSaved,
+}: {
+  student: Student;
+  app: XanoApplication | undefined;
+  onSaved: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState({
+    current_grade: app?.current_grade ?? "",
+    last_grade_completed: app?.last_grade_completed ?? "",
+    current_previous_school: app?.current_previous_school ?? "",
+    describe_student_strengths: app?.describe_student_strengths ?? "",
+    describe_student_opportunities_for_growth:
+      app?.describe_student_opportunities_for_growth ?? "",
+    is_bus_transportation: app?.is_bus_transportation ?? false,
+    bus_stop: app?.bus_stop ?? "",
+  });
+  const [saving, setSaving] = useState(false);
 
-                  {app?.describe_student_strengths ? (
-                    <SectionRow
-                      label="Strengths"
-                      body={app.describe_student_strengths}
-                    />
-                  ) : null}
-                  {app?.describe_student_opportunities_for_growth ? (
-                    <SectionRow
-                      label="Opportunities for growth"
-                      body={app.describe_student_opportunities_for_growth}
-                    />
-                  ) : null}
-                </div>
-              );
-            })}
+  useEffect(() => {
+    setDraft({
+      current_grade: app?.current_grade ?? "",
+      last_grade_completed: app?.last_grade_completed ?? "",
+      current_previous_school: app?.current_previous_school ?? "",
+      describe_student_strengths: app?.describe_student_strengths ?? "",
+      describe_student_opportunities_for_growth:
+        app?.describe_student_opportunities_for_growth ?? "",
+      is_bus_transportation: app?.is_bus_transportation ?? false,
+      bus_stop: app?.bus_stop ?? "",
+    });
+  }, [app]);
+
+  const status = useMemo(
+    () => (app ? deriveApplicationStatus(app) : null),
+    [app]
+  );
+
+  async function save() {
+    if (!app) return;
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/admin/applications/${app.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(draft),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error ?? `Save failed (${res.status})`);
+      }
+      toast.success(
+        `${student.first_name} ${student.last_name} updated.`
+      );
+      setEditing(false);
+      onSaved();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't save.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card className="overflow-hidden gap-0 py-0">
+      <CardHeader className="py-3 !pb-3 border-b">
+        <div className="flex items-center justify-between">
+          <div>
+            <CardTitle className="text-lg">
+              {student.first_name} {student.last_name}
+            </CardTitle>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {student.date_of_birth
+                ? `DOB ${new Date(`${student.date_of_birth}T00:00:00`).toLocaleDateString()}`
+                : ""}
+              {student.gender ? ` · ${student.gender}` : ""}
+              {status ? null : null}
+            </p>
           </div>
-        )}
-      </CardContent>
+          <div className="flex items-center gap-2">
+            {status ? <StatusBadge status={status} /> : null}
+            {!app ? (
+              <span className="text-xs text-muted-foreground">No app</span>
+            ) : editing ? (
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={saving}
+                  onClick={() => {
+                    setEditing(false);
+                    setDraft({
+                      current_grade: app.current_grade ?? "",
+                      last_grade_completed: app.last_grade_completed ?? "",
+                      current_previous_school: app.current_previous_school ?? "",
+                      describe_student_strengths:
+                        app.describe_student_strengths ?? "",
+                      describe_student_opportunities_for_growth:
+                        app.describe_student_opportunities_for_growth ?? "",
+                      is_bus_transportation: app.is_bus_transportation ?? false,
+                      bus_stop: app.bus_stop ?? "",
+                    });
+                  }}
+                >
+                  <X className="size-4 mr-1" />
+                  Cancel
+                </Button>
+                <Button size="sm" onClick={save} disabled={saving}>
+                  {saving ? (
+                    <>
+                      <Loader2 className="size-4 mr-1 animate-spin" />
+                      Saving
+                    </>
+                  ) : (
+                    "Save"
+                  )}
+                </Button>
+              </>
+            ) : (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setEditing(true)}
+              >
+                <Pencil className="size-4 mr-1" />
+                Edit
+              </Button>
+            )}
+          </div>
+        </div>
+      </CardHeader>
+      {app ? (
+        <CardContent className="space-y-6 py-5 bg-white">
+          <Section title="Academic">
+            <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
+              <FieldRow
+                label="Last grade completed"
+                value={draft.last_grade_completed}
+                editing={editing}
+                onChange={(v) => setDraft((d) => ({ ...d, last_grade_completed: v }))}
+              />
+              <FieldRow
+                label="Current grade"
+                value={draft.current_grade}
+                editing={editing}
+                onChange={(v) => setDraft((d) => ({ ...d, current_grade: v }))}
+              />
+              <FieldRow
+                label="Previous school"
+                value={draft.current_previous_school}
+                editing={editing}
+                onChange={(v) =>
+                  setDraft((d) => ({ ...d, current_previous_school: v }))
+                }
+              />
+            </div>
+          </Section>
+          <Section title="About the student">
+            <div className="space-y-4">
+              <TextareaRow
+                label="Strengths"
+                value={draft.describe_student_strengths}
+                editing={editing}
+                onChange={(v) =>
+                  setDraft((d) => ({ ...d, describe_student_strengths: v }))
+                }
+              />
+              <TextareaRow
+                label="Opportunities for growth"
+                value={draft.describe_student_opportunities_for_growth}
+                editing={editing}
+                onChange={(v) =>
+                  setDraft((d) => ({
+                    ...d,
+                    describe_student_opportunities_for_growth: v,
+                  }))
+                }
+              />
+            </div>
+          </Section>
+          <Section title="Transportation">
+            <div className="flex items-center gap-3">
+              <input
+                type="checkbox"
+                id={`bus-${app.id}`}
+                checked={draft.is_bus_transportation}
+                disabled={!editing}
+                onChange={(e) =>
+                  setDraft((d) => ({
+                    ...d,
+                    is_bus_transportation: e.target.checked,
+                  }))
+                }
+                className="size-5 cursor-pointer rounded accent-primary"
+              />
+              <label
+                htmlFor={`bus-${app.id}`}
+                className="text-sm cursor-pointer"
+              >
+                Will use bus transportation
+              </label>
+              {draft.is_bus_transportation ? (
+                <FieldRow
+                  label=""
+                  value={draft.bus_stop}
+                  editing={editing}
+                  onChange={(v) => setDraft((d) => ({ ...d, bus_stop: v }))}
+                  placeholder="Bus stop name"
+                />
+              ) : null}
+            </div>
+          </Section>
+        </CardContent>
+      ) : (
+        <CardContent className="py-6 bg-white">
+          <p className="text-sm text-muted-foreground italic">
+            No application row for this year. Have the parent add this
+            student via the Students page.
+          </p>
+        </CardContent>
+      )}
     </Card>
   );
 }
 
-function FinancialAidBody({
+/* ─────────────────────── Financial Aid ─────────────────────── */
+
+function FinancialAidEditor({
   scholarship,
 }: {
   scholarship: XanoScholarship | null;
@@ -414,165 +681,593 @@ function FinancialAidBody({
   if (!scholarship) {
     return (
       <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Financial Aid</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <p className="text-sm text-muted-foreground">
-            No scholarship row for this family / year. The parent
-            hasn&rsquo;t opened the Financial Aid section yet.
-          </p>
+        <CardContent className="py-6 text-sm text-muted-foreground">
+          No scholarship row for this family / year. The parent
+          hasn&rsquo;t opened the Financial Aid section yet.
+        </CardContent>
+      </Card>
+    );
+  }
+  const path = scholarship.isOpportunityScholarship
+    ? "Full Opportunity Scholarship application"
+    : scholarship.isSNAPBenefits
+      ? "SNAP benefits path"
+      : scholarship.isNotParticipating
+        ? "Opted out of financial aid"
+        : "—";
+  return (
+    <Card className="overflow-hidden gap-0 py-0">
+      <CardHeader className="py-3 !pb-3 border-b">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-lg">Opportunity Scholarship</CardTitle>
+          <span className="text-xs text-muted-foreground">{path}</span>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-6 py-5 bg-white">
+        <Section title="Household">
+          <div className="grid gap-4 grid-cols-2">
+            <ReadonlyField
+              label="Adults"
+              value={String(scholarship.household_adults ?? 0)}
+            />
+            <ReadonlyField
+              label="Children"
+              value={String(scholarship.household_children ?? 0)}
+            />
+            <ReadonlyField
+              label="No contributing members"
+              value={scholarship.no_contributing_member ? "Yes" : "No"}
+            />
+            <ReadonlyField
+              label="Government benefits"
+              value={scholarship.government_benefits ? "Yes" : "No"}
+            />
+          </div>
+        </Section>
+        <Section title="Income (monthly)">
+          <div className="grid gap-4 grid-cols-2 sm:grid-cols-3">
+            {[
+              ["Business", scholarship.business_income_monthly],
+              ["Capital gains", scholarship.capital_gains_monthly],
+              ["Child support", scholarship.child_support_monthly],
+              ["Alimony", scholarship.alimony_monthly],
+              ["Trusts", scholarship.trusts_monthly],
+              ["Other", scholarship.other_income_monthly],
+            ].map(([label, value]) => (
+              <ReadonlyField
+                key={String(label)}
+                label={String(label)}
+                value={`$${(Number(value) || 0).toLocaleString()}`}
+              />
+            ))}
+          </div>
+        </Section>
+        <Section title="Assets">
+          <div className="grid gap-4 grid-cols-2 sm:grid-cols-3">
+            {[
+              ["Checking", scholarship.assets_checking],
+              ["Savings", scholarship.assets_savings],
+              ["Retirement", scholarship.assets_retirement_savings],
+              ["Securities", scholarship.assets_stocks_bonds_securities],
+              ["Trusts / inheritance", scholarship.assets_trusts_inheritance],
+              ["Business", scholarship.assets_business],
+            ].map(([label, value]) => (
+              <ReadonlyField
+                key={String(label)}
+                label={String(label)}
+                value={`$${(Number(value) || 0).toLocaleString()}`}
+              />
+            ))}
+          </div>
+        </Section>
+        <Section title="Debts">
+          <div className="grid gap-4 grid-cols-3">
+            <ReadonlyField
+              label="Credit cards"
+              value={`$${(scholarship.debts_credit_cards ?? 0).toLocaleString()}`}
+            />
+            <ReadonlyField
+              label="Student loans"
+              value={`$${(scholarship.debts_student_loans ?? 0).toLocaleString()}`}
+            />
+            <ReadonlyField
+              label="Personal loans"
+              value={`$${(scholarship.debts_personal_loans ?? 0).toLocaleString()}`}
+            />
+          </div>
+        </Section>
+        <Section title="Family contribution">
+          <ReadonlyField
+            label="Per month"
+            value={`$${(scholarship.family_contribution_per_month ?? 0).toLocaleString()}`}
+          />
+        </Section>
+        {scholarship.scholarship_advocacy_letter ? (
+          <Section title="Advocacy letter">
+            <p className="text-sm whitespace-pre-wrap rounded-md border bg-muted/30 p-3">
+              {scholarship.scholarship_advocacy_letter}
+            </p>
+          </Section>
+        ) : null}
+        <p className="text-xs text-muted-foreground italic">
+          Editing the full Opportunity Scholarship form (members, homes,
+          vehicles, benefits, supporting documents) is on the parent&rsquo;s
+          apply flow. The summary above is read-only here while we wire
+          the admin-side editor.
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+/* ─────────────────────── Testing ─────────────────────── */
+
+function TestingEditor({
+  family,
+  detail,
+  onSaved,
+}: {
+  family: FamilyResponse | undefined;
+  detail: XanoAdminFamilyDetail | undefined;
+  onSaved: () => void;
+}) {
+  if (!family) return <SectionSkeleton />;
+  const apps: XanoApplication[] = detail?.application ?? [];
+  const students = family.registration_students_id ?? [];
+  if (students.length === 0) {
+    return (
+      <Card>
+        <CardContent className="py-6 text-sm text-muted-foreground">
+          No students on file.
         </CardContent>
       </Card>
     );
   }
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">
-          Opportunity Scholarship
-          <span className="ml-2 text-xs font-normal text-muted-foreground">
-            {scholarship.isOpportunityScholarship
-              ? "· Full application"
-              : scholarship.isSNAPBenefits
-                ? "· SNAP benefits path"
-                : scholarship.isNotParticipating
-                  ? "· Opted out"
-                  : ""}
-          </span>
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        <DetailGrid
-          rows={[
-            [
-              "Household",
-              `${scholarship.household_adults ?? 0} adult${
-                (scholarship.household_adults ?? 0) === 1 ? "" : "s"
-              } · ${scholarship.household_children ?? 0} child${
-                (scholarship.household_children ?? 0) === 1 ? "" : "ren"
-              }`,
-            ],
-            [
-              "Government benefits",
-              scholarship.government_benefits ? "Yes" : "No",
-            ],
-            [
-              "No contributing members",
-              scholarship.no_contributing_member ? "Yes" : "No",
-            ],
-            [
-              "Family contribution / mo",
-              `$${(scholarship.family_contribution_per_month ?? 0).toLocaleString()}`,
-            ],
-          ]}
-        />
-        {scholarship.scholarship_advocacy_letter ? (
-          <SectionRow
-            label="Advocacy letter"
-            body={scholarship.scholarship_advocacy_letter}
+    <div className="space-y-4">
+      {students.map((student) => {
+        const app = apps.find(
+          (a) => Number(a.registration_students_id) === student.id
+        );
+        return (
+          <TestingCard
+            key={student.id}
+            student={student}
+            app={app}
+            onSaved={onSaved}
           />
-        ) : null}
-      </CardContent>
-    </Card>
+        );
+      })}
+    </div>
   );
 }
 
-function TestingBody({
-  family,
-  detail,
+function TestingCard({
+  student,
+  app,
+  onSaved,
 }: {
-  family: FamilyResponse | undefined;
-  detail: XanoAdminFamilyDetail | undefined;
+  student: Student;
+  app: XanoApplication | undefined;
+  onSaved: () => void;
 }) {
-  if (!family) return <SectionSkeleton />;
-  const apps: XanoApplication[] = detail?.application ?? [];
-  const students = family.registration_students_id ?? [];
+  const [editing, setEditing] = useState(false);
+  const [scheduled, setScheduled] = useState(!!app?.nwea_testing_scheduled);
+  const [complete, setComplete] = useState(!!app?.nwea_testing_complete);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setScheduled(!!app?.nwea_testing_scheduled);
+    setComplete(!!app?.nwea_testing_complete);
+  }, [app]);
+
+  async function save() {
+    if (!app) return;
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/admin/applications/${app.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          nwea_testing_scheduled: scheduled,
+          nwea_testing_complete: complete,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error ?? `Save failed (${res.status})`);
+      }
+      toast.success(
+        `${student.first_name} ${student.last_name} testing updated.`
+      );
+      setEditing(false);
+      onSaved();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't save.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">NWEA Testing</CardTitle>
+    <Card className="overflow-hidden gap-0 py-0">
+      <CardHeader className="py-3 !pb-3 border-b">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-lg">
+            {student.first_name} {student.last_name}
+          </CardTitle>
+          {!app ? (
+            <span className="text-xs text-muted-foreground">No app</span>
+          ) : editing ? (
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={saving}
+                onClick={() => {
+                  setEditing(false);
+                  setScheduled(!!app.nwea_testing_scheduled);
+                  setComplete(!!app.nwea_testing_complete);
+                }}
+              >
+                <X className="size-4 mr-1" />
+                Cancel
+              </Button>
+              <Button size="sm" onClick={save} disabled={saving}>
+                {saving ? (
+                  <>
+                    <Loader2 className="size-4 mr-1 animate-spin" />
+                    Saving
+                  </>
+                ) : (
+                  "Save"
+                )}
+              </Button>
+            </div>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setEditing(true)}
+            >
+              <Pencil className="size-4 mr-1" />
+              Edit
+            </Button>
+          )}
+        </div>
       </CardHeader>
-      <CardContent>
-        {students.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            No students on file.
+      {app ? (
+        <CardContent className="space-y-3 py-5 bg-white">
+          <CheckboxRow
+            id={`sched-${app.id}`}
+            label="NWEA testing scheduled"
+            checked={scheduled}
+            onChange={setScheduled}
+            disabled={!editing}
+          />
+          <CheckboxRow
+            id={`done-${app.id}`}
+            label="NWEA testing complete"
+            checked={complete}
+            onChange={setComplete}
+            disabled={!editing}
+          />
+          <p className="text-xs text-muted-foreground">
+            Status:{" "}
+            {complete ? (
+              <span className="inline-flex items-center gap-1 text-green-700">
+                <CheckCircle2 className="size-3.5" /> Complete
+              </span>
+            ) : scheduled ? (
+              <span className="inline-flex items-center gap-1 text-amber-700">
+                <Circle className="size-3.5" /> Scheduled
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 text-muted-foreground">
+                <Circle className="size-3.5" /> Not scheduled
+              </span>
+            )}
           </p>
-        ) : (
-          <div className="space-y-2">
-            {students.map((student) => {
-              const app = apps.find(
-                (a) => Number(a.registration_students_id) === student.id
-              );
-              const state = app?.nwea_testing_complete
-                ? "Complete"
-                : app?.nwea_testing_scheduled
-                  ? "Scheduled"
-                  : "Not scheduled";
-              return (
-                <div
-                  key={student.id}
-                  className="flex items-center justify-between rounded-md border px-3 py-2"
-                >
-                  <p className="text-sm font-medium">
-                    {student.first_name} {student.last_name}
-                  </p>
-                  <span className="text-xs text-muted-foreground">{state}</span>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </CardContent>
+        </CardContent>
+      ) : (
+        <CardContent className="py-6 bg-white">
+          <p className="text-sm text-muted-foreground italic">
+            No application row for this year.
+          </p>
+        </CardContent>
+      )}
     </Card>
   );
 }
 
-function TransportationBody({
+/* ─────────────────────── Transportation (Reapply) ─────────────────────── */
+
+function TransportationEditor({
   family,
   detail,
+  onSaved,
 }: {
   family: FamilyResponse | undefined;
   detail: XanoAdminFamilyDetail | undefined;
+  onSaved: () => void;
 }) {
   if (!family) return <SectionSkeleton />;
   const apps: XanoApplication[] = detail?.application ?? [];
   const students = family.registration_students_id ?? [];
+  if (students.length === 0) {
+    return (
+      <Card>
+        <CardContent className="py-6 text-sm text-muted-foreground">
+          No students on file.
+        </CardContent>
+      </Card>
+    );
+  }
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Transportation</CardTitle>
+    <div className="space-y-4">
+      {students.map((student) => {
+        const app = apps.find(
+          (a) => Number(a.registration_students_id) === student.id
+        );
+        return (
+          <TransportCard
+            key={student.id}
+            student={student}
+            app={app}
+            onSaved={onSaved}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function TransportCard({
+  student,
+  app,
+  onSaved,
+}: {
+  student: Student;
+  app: XanoApplication | undefined;
+  onSaved: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [bus, setBus] = useState(!!app?.is_bus_transportation);
+  const [stop, setStop] = useState(app?.bus_stop ?? "");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setBus(!!app?.is_bus_transportation);
+    setStop(app?.bus_stop ?? "");
+  }, [app]);
+
+  async function save() {
+    if (!app) return;
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/admin/applications/${app.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          is_bus_transportation: bus,
+          bus_stop: bus ? stop : "",
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error ?? `Save failed (${res.status})`);
+      }
+      toast.success("Transportation updated.");
+      setEditing(false);
+      onSaved();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't save.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card className="overflow-hidden gap-0 py-0">
+      <CardHeader className="py-3 !pb-3 border-b">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-lg">
+            {student.first_name} {student.last_name}
+          </CardTitle>
+          {!app ? (
+            <span className="text-xs text-muted-foreground">No app</span>
+          ) : editing ? (
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={saving}
+                onClick={() => {
+                  setEditing(false);
+                  setBus(!!app.is_bus_transportation);
+                  setStop(app.bus_stop ?? "");
+                }}
+              >
+                <X className="size-4 mr-1" />
+                Cancel
+              </Button>
+              <Button size="sm" onClick={save} disabled={saving}>
+                {saving ? (
+                  <>
+                    <Loader2 className="size-4 mr-1 animate-spin" />
+                    Saving
+                  </>
+                ) : (
+                  "Save"
+                )}
+              </Button>
+            </div>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setEditing(true)}
+            >
+              <Pencil className="size-4 mr-1" />
+              Edit
+            </Button>
+          )}
+        </div>
       </CardHeader>
-      <CardContent>
-        {students.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No students on file.</p>
-        ) : (
-          <div className="space-y-2">
-            {students.map((student) => {
-              const app = apps.find(
-                (a) => Number(a.registration_students_id) === student.id
-              );
-              const summary = app?.is_bus_transportation
-                ? `Bus${app.bus_stop ? ` · ${app.bus_stop}` : " · stop unset"}`
-                : "Self-transport";
-              return (
-                <div
-                  key={student.id}
-                  className="flex items-center justify-between rounded-md border px-3 py-2"
-                >
-                  <p className="text-sm font-medium">
-                    {student.first_name} {student.last_name}
-                  </p>
-                  <span className="text-xs text-muted-foreground">
-                    {summary}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </CardContent>
+      {app ? (
+        <CardContent className="space-y-3 py-5 bg-white">
+          <CheckboxRow
+            id={`bus-${app.id}`}
+            label="Will use bus transportation"
+            checked={bus}
+            onChange={setBus}
+            disabled={!editing}
+          />
+          {bus ? (
+            <FieldRow
+              label="Bus stop"
+              value={stop}
+              editing={editing}
+              onChange={setStop}
+              placeholder="e.g. Lakewood Pickup"
+            />
+          ) : null}
+        </CardContent>
+      ) : (
+        <CardContent className="py-6 bg-white">
+          <p className="text-sm text-muted-foreground italic">
+            No application row for this year.
+          </p>
+        </CardContent>
+      )}
     </Card>
+  );
+}
+
+/* ─────────────────────── Shared bits ─────────────────────── */
+
+function Section({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section>
+      <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
+        {title}
+      </h3>
+      {children}
+    </section>
+  );
+}
+
+function FieldRow({
+  label,
+  value,
+  editing,
+  onChange,
+  type = "text",
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  editing: boolean;
+  onChange: (v: string) => void;
+  type?: string;
+  placeholder?: string;
+}) {
+  return (
+    <Field>
+      {label ? <FieldLabel className="text-xs">{label}</FieldLabel> : null}
+      {editing ? (
+        <Input
+          type={type}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+        />
+      ) : (
+        <p className="text-sm font-medium pt-2 whitespace-pre-wrap">
+          {value || "—"}
+        </p>
+      )}
+    </Field>
+  );
+}
+
+function TextareaRow({
+  label,
+  value,
+  editing,
+  onChange,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  editing: boolean;
+  onChange: (v: string) => void;
+  placeholder?: string;
+}) {
+  return (
+    <Field>
+      <FieldLabel className="text-xs">{label}</FieldLabel>
+      {editing ? (
+        <textarea
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+        />
+      ) : (
+        <p className="text-sm whitespace-pre-wrap pt-2">{value || "—"}</p>
+      )}
+    </Field>
+  );
+}
+
+function CheckboxRow({
+  id,
+  label,
+  checked,
+  onChange,
+  disabled,
+}: {
+  id: string;
+  label: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <label
+      htmlFor={id}
+      className={`flex items-center gap-3 rounded-md border px-3 py-2 ${
+        disabled ? "opacity-70 cursor-default" : "cursor-pointer hover:bg-muted/30"
+      }`}
+    >
+      <input
+        id={id}
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+        className="size-5 cursor-pointer rounded accent-primary disabled:cursor-default"
+      />
+      <span className="text-sm font-medium">{label}</span>
+    </label>
+  );
+}
+
+function ReadonlyField({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex flex-col">
+      <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+        {label}
+      </span>
+      <span className="text-sm font-medium whitespace-pre-wrap">{value}</span>
+    </div>
   );
 }
 
@@ -588,33 +1283,5 @@ function SectionSkeleton() {
         <Skeleton className="h-32 w-full rounded-md" />
       </CardContent>
     </Card>
-  );
-}
-
-function DetailGrid({ rows }: { rows: [string, string][] }) {
-  return (
-    <div className="grid gap-x-6 gap-y-2 sm:grid-cols-2">
-      {rows.map(([label, value]) => (
-        <div key={label} className="flex flex-col">
-          <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-            {label}
-          </span>
-          <span className="text-sm font-medium whitespace-pre-wrap">
-            {value}
-          </span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function SectionRow({ label, body }: { label: string; body: string }) {
-  return (
-    <div>
-      <p className="text-[10px] uppercase tracking-wider text-muted-foreground mt-3 mb-1">
-        {label}
-      </p>
-      <p className="text-sm whitespace-pre-wrap">{body}</p>
-    </div>
   );
 }

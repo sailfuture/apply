@@ -5,11 +5,16 @@ import { xano } from "@/lib/xano";
 const BASE = process.env.XANO_API_BASE_URL;
 
 /**
- * Counts dashboard backing route. Reads the enriched
- * `/registration_families_all_details` endpoint for the application
- * counts so they line up exactly with what the families + applications
- * tables show, then layers on the inquiries + registrations counts from
- * their own tables.
+ * Counts dashboard backing route. Reads basic Xano tables via parallel
+ * fetches; each call is isolated with `Promise.allSettled` so a single
+ * failed read can't 500 the whole dashboard. Failures log to the server
+ * console with the underlying error.
+ *
+ * Application counts come from the basic `registration_application`
+ * list (filtered by year client-side) instead of the enriched
+ * `_all_details` endpoint — `_all_details` skips families without
+ * expanded data, so the totals here match what the Applications table
+ * shows by definition.
  */
 export async function GET(req: NextRequest) {
   try {
@@ -18,31 +23,70 @@ export async function GET(req: NextRequest) {
     const yearIdParam = searchParams.get("yearId");
     const yearId = yearIdParam ? Number(yearIdParam) : null;
 
-    const [familiesDetails, inquiriesRes, registrationsRes, studentsRes] =
-      await Promise.all([
-        xano.families.getAllDetails(),
-        fetch(`${BASE}/registration_inquiry`, { cache: "no-store" }),
-        fetch(`${BASE}/registration_student_registration`, { cache: "no-store" }),
-        fetch(`${BASE}/registration_students`, { cache: "no-store" }),
-      ]);
+    const [
+      appsResult,
+      inquiriesResult,
+      registrationsResult,
+      studentsResult,
+    ] = await Promise.allSettled([
+      xano.applications.getAll(),
+      fetch(`${BASE}/registration_inquiry`, { cache: "no-store" }).then((r) =>
+        r.ok ? r.json() : []
+      ),
+      fetch(`${BASE}/registration_student_registration`, { cache: "no-store" }).then(
+        (r) => (r.ok ? r.json() : [])
+      ),
+      fetch(`${BASE}/registration_students`, { cache: "no-store" }).then((r) =>
+        r.ok ? r.json() : []
+      ),
+    ]);
 
-    const inquiries = inquiriesRes.ok ? await inquiriesRes.json() : [];
-    const registrations = registrationsRes.ok ? await registrationsRes.json() : [];
-    const students = studentsRes.ok ? await studentsRes.json() : [];
+    if (appsResult.status === "rejected") {
+      console.error(
+        "[/api/admin/stats] failed to load applications:",
+        appsResult.reason
+      );
+    }
+    if (inquiriesResult.status === "rejected") {
+      console.error(
+        "[/api/admin/stats] failed to load inquiries:",
+        inquiriesResult.reason
+      );
+    }
+    if (registrationsResult.status === "rejected") {
+      console.error(
+        "[/api/admin/stats] failed to load registrations:",
+        registrationsResult.reason
+      );
+    }
+    if (studentsResult.status === "rejected") {
+      console.error(
+        "[/api/admin/stats] failed to load students:",
+        studentsResult.reason
+      );
+    }
 
-    // Flatten applications across families, then filter by year if asked.
-    const allApplications = familiesDetails.flatMap(
-      (f) => f.registration_students_id
-    );
+    const allApplications =
+      appsResult.status === "fulfilled" ? appsResult.value : [];
+    const inquiries =
+      inquiriesResult.status === "fulfilled"
+        ? (inquiriesResult.value as { created_at: number }[])
+        : [];
+    const registrations =
+      registrationsResult.status === "fulfilled"
+        ? (registrationsResult.value as { is_submitted: boolean }[])
+        : [];
+    const students =
+      studentsResult.status === "fulfilled"
+        ? (studentsResult.value as unknown[])
+        : [];
+
     const applications = yearId
       ? allApplications.filter(
           (a) => Number(a.registration_school_years_id) === yearId
         )
       : allApplications;
 
-    // Counts. Each decision boolean is independent — admin flips one of
-    // offered/denied/accepted on a submitted app — so a simple per-flag
-    // tally is correct.
     const totalInquiries = inquiries.length;
     const totalApplications = applications.length;
     const submitted = applications.filter((a) => a.isSubmitted).length;
@@ -52,20 +96,17 @@ export async function GET(req: NextRequest) {
     const draft = totalApplications - submitted;
     const totalRegistrations = registrations.length;
     const completedRegistrations = registrations.filter(
-      (r: { is_submitted: boolean }) => r.is_submitted
+      (r) => r.is_submitted
     ).length;
     const totalStudents = students.length;
 
     const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
     const recentInquiries = inquiries.filter(
-      (i: { created_at: number }) => i.created_at > thirtyDaysAgo
+      (i) => i.created_at > thirtyDaysAgo
     ).length;
 
     return NextResponse.json({
-      inquiries: {
-        total: totalInquiries,
-        recent: recentInquiries,
-      },
+      inquiries: { total: totalInquiries, recent: recentInquiries },
       applications: {
         total: totalApplications,
         draft,
@@ -79,9 +120,7 @@ export async function GET(req: NextRequest) {
         completed: completedRegistrations,
         inProgress: totalRegistrations - completedRegistrations,
       },
-      students: {
-        total: totalStudents,
-      },
+      students: { total: totalStudents },
     });
   } catch (err) {
     return handleAdminError(err);
