@@ -136,45 +136,39 @@ export default function SchoolYearDetailPage() {
         onDeleted={() => router.push("/admin/school-years")}
       />
 
-      {/* Tuition payment matrix — percentage of the year's base
-          tuition the family pays, given (household size × income
-          bracket). Lives on the shared award_brackets table with
-          isNetAssets=false. The MatrixCell renders the resulting
-          dollar amount under each cell using the year's `tuition`. */}
+      {/* Family Payment Matrix — single percentage cell drives both
+          tuition and transportation. e.g. 8% means the family pays
+          8% of base tuition + 8% of base transportation fees. The
+          MatrixCell renders both derived dollar amounts under each
+          input. Lives on registration_school_year_award_brackets. */}
       <BracketMatrixCard
         yearId={year.id}
-        title="Family Tuition Payment Matrix"
-        description={`The percentage of base tuition each family pays, given their household size (rows) and annual income bracket (columns). Base tuition for this year: ${formatCurrency(year.tuition)}. The dollar amount under each cell is calculated automatically. Cell edits save on blur.`}
+        title="Family Payment Matrix"
+        description={`The percentage of base tuition + transportation each family pays, given their household size (rows) and annual income bracket (columns). Base tuition: ${formatCurrency(year.tuition)} · base transportation: ${formatCurrency(year.transportation_fees)}. Each cell shows both derived dollar amounts. Cell edits save on blur.`}
         endpoint="/api/admin/school-year-brackets"
         valueField="tuition_payment"
         valueKind="percentage"
-        baseAmount={year.tuition}
-        flag={{ isNetAssets: false }}
-      />
-
-      {/* Transportation cost matrix — same shape as tuition, also
-          dollars, but stored on the same Xano table with the
-          isNetAssets discriminator flipped to true. */}
-      <BracketMatrixCard
-        yearId={year.id}
-        title="Transportation Cost Matrix"
-        description="The dollar amount each family pays for transportation given household size and income bracket. Same sliding-scale structure as tuition; lives on the same table with isNetAssets=true."
-        endpoint="/api/admin/school-year-brackets"
-        valueField="tuition_payment"
-        valueKind="currency"
-        flag={{ isNetAssets: true }}
+        derivations={[
+          { label: "Tuition", baseAmount: year.tuition },
+          { label: "Transport", baseAmount: year.transportation_fees },
+        ]}
       />
 
       {/* High-net-assets matrix — applies to families with net assets
           above $100k. Different table; cell values are percentages of
-          total tuition (0–100), not dollar amounts. */}
+          total tuition. The same percentage also drives transportation
+          for parity with the main matrix above. */}
       <BracketMatrixCard
         yearId={year.id}
-        title="Net Assets > $100k Tuition Percentage"
-        description="For families whose net assets exceed $100k. Each cell is the percentage of total tuition the family pays given their household size and net-asset bracket (e.g. 40 = 40% of tuition)."
+        title="Net Assets > $100k Payment Percentage"
+        description={`For families whose net assets exceed $100k. Each cell is the percentage of base tuition + transportation the family pays, given household size and net-asset bracket. Base tuition: ${formatCurrency(year.tuition)} · base transportation: ${formatCurrency(year.transportation_fees)}.`}
         endpoint="/api/admin/school-year-net-assets-brackets"
         valueField="tuition_percentage"
         valueKind="percentage"
+        derivations={[
+          { label: "Tuition", baseAmount: year.tuition },
+          { label: "Transport", baseAmount: year.transportation_fees },
+        ]}
         bracketAxisLabel="Net asset bracket"
       />
     </div>
@@ -572,12 +566,12 @@ interface BracketMatrixCardProps {
   valueField: string;
   /** Visual treatment of cell values + the input affordance. */
   valueKind: "currency" | "percentage";
-  /** When `valueKind` is "percentage", multiplying each cell's value
-   *  by `baseAmount / 100` yields the dollar figure rendered under
-   *  the input. Pass the year's `tuition` for the household-tuition
-   *  matrix; omit for matrices where the percentage is meaningful on
-   *  its own. */
-  baseAmount?: number;
+  /** When `valueKind` is "percentage", each entry adds a derived
+   *  dollar line under the cell input — e.g. `{ label: "Tuition",
+   *  baseAmount: 26000 }` renders "Tuition = $2,080" when the cell
+   *  value is 8. Pass multiple entries to surface several derivations
+   *  from the same percentage (tuition + transportation today). */
+  derivations?: Array<{ label: string; baseAmount: number }>;
   /** Optional discriminator merged into every POST + every GET filter
    *  string. Used so two card instances on the same page don't see
    *  each other's rows when they live on the same Xano table. */
@@ -595,7 +589,7 @@ function BracketMatrixCard({
   endpoint,
   valueField,
   valueKind,
-  baseAmount,
+  derivations,
   flag,
   bracketAxisLabel = "income bracket",
 }: BracketMatrixCardProps) {
@@ -1003,7 +997,7 @@ function BracketMatrixCard({
                           <MatrixCell
                             value={cellValue}
                             valueKind={valueKind}
-                            baseAmount={baseAmount}
+                            derivations={derivations}
                             onSave={(amount) => {
                               if (cell) {
                                 patchCell(cell.id, {
@@ -1154,21 +1148,21 @@ function BracketHeader({
  * input is treated as 0 so admins can clear a cell quickly.
  *
  * `valueKind` swaps the affordance between currency ("$" prefix) and
- * percentage ("%" suffix). When `valueKind` is "percentage" and a
- * `baseAmount` is provided, we render the calculated dollar amount
- * (`baseAmount * value / 100`) in muted text under the input so the
- * admin can sanity-check what the family will actually pay without
- * doing the math in their head.
+ * percentage ("%" suffix). When `valueKind` is "percentage" and one
+ * or more `derivations` are provided, we render a labelled dollar
+ * line per derivation under the input so the admin can sanity-check
+ * what the family will actually pay (across tuition + transportation,
+ * say) without doing the math.
  */
 function MatrixCell({
   value: initial,
   valueKind,
-  baseAmount,
+  derivations,
   onSave,
 }: {
   value: number;
   valueKind: "currency" | "percentage";
-  baseAmount?: number;
+  derivations?: Array<{ label: string; baseAmount: number }>;
   onSave: (amount: number) => void;
 }) {
   const [value, setValue] = useState(String(initial));
@@ -1188,17 +1182,18 @@ function MatrixCell({
   }
 
   // Live preview of the typed value (not just the saved one) so the
-  // dollar figure updates as the admin edits before blur.
+  // dollar figures update as the admin edits before blur.
   const draftNumeric =
     value === "" ? 0 : Number.isFinite(Number(value)) ? Number(value) : initial;
-  const showDerived =
-    valueKind === "percentage" &&
-    typeof baseAmount === "number" &&
-    Number.isFinite(baseAmount) &&
-    baseAmount > 0;
-  const derivedDollars = showDerived
-    ? (baseAmount as number) * (draftNumeric / 100)
-    : 0;
+  const validDerivations =
+    valueKind === "percentage" && derivations
+      ? derivations.filter(
+          (d) =>
+            typeof d.baseAmount === "number" &&
+            Number.isFinite(d.baseAmount) &&
+            d.baseAmount > 0
+        )
+      : [];
 
   return (
     <div className="space-y-0.5">
@@ -1231,10 +1226,18 @@ function MatrixCell({
           )}
         />
       </div>
-      {showDerived ? (
-        <p className="text-[11px] tabular-nums text-muted-foreground text-right pr-1">
-          = {formatCurrency(derivedDollars)}
-        </p>
+      {validDerivations.length > 0 ? (
+        <div className="px-1 pt-0.5 space-y-0">
+          {validDerivations.map((d) => (
+            <p
+              key={d.label}
+              className="flex items-center justify-between gap-2 text-[11px] tabular-nums text-muted-foreground"
+            >
+              <span>{d.label}</span>
+              <span>{formatCurrency(d.baseAmount * (draftNumeric / 100))}</span>
+            </p>
+          ))}
+        </div>
       ) : null}
     </div>
   );

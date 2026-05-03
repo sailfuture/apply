@@ -27,16 +27,7 @@ export async function GET(req: NextRequest) {
         { status: 400 }
       );
     }
-    // Optional `?isNetAssets=true|false` filter splits the table into
-    // its two semantic matrices: tuition (false) and transportation
-    // (true). When omitted, we return everything so a single fetch
-    // can rebuild whichever matrix the page needs.
-    const flagParam = req.nextUrl.searchParams.get("isNetAssets");
     const rows = await xano.schoolYearAwardBrackets.getByYear(yearId);
-    if (flagParam === "true" || flagParam === "false") {
-      const wanted = flagParam === "true";
-      return NextResponse.json(rows.filter((r) => r.isNetAssets === wanted));
-    }
     return NextResponse.json(rows);
   } catch (err) {
     return handleAdminError(err);
@@ -87,19 +78,12 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // The `isNetAssets` discriminator picks which matrix the new cell
-    // belongs to. Defaults to `false` (regular tuition) when omitted
-    // so existing clients that don't know about the flag stay
-    // backwards-compatible.
-    const isNetAssets = body?.isNetAssets === true;
-
     const created = await xano.schoolYearAwardBrackets.create({
       registration_school_years_id: yearId,
       household_size: householdSize,
       income_min: incomeMin,
       income_max: incomeMax,
       tuition_payment: Number.isFinite(tuitionPayment) ? tuitionPayment : 0,
-      isNetAssets,
     });
     return NextResponse.json(created, { status: 201 });
   } catch (err) {

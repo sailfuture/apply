@@ -48,9 +48,6 @@ export async function PATCH(
       const n = Number(body.award_amount);
       patch.tuition_payment = Number.isFinite(n) ? n : 0;
     }
-    if ("isNetAssets" in body) {
-      patch.isNetAssets = body.isNetAssets === true;
-    }
     if (Object.keys(patch).length === 0) {
       return NextResponse.json(
         { error: "No editable fields in body" },

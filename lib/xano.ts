@@ -368,22 +368,20 @@ export interface XanoRegistrationDetails extends XanoStudentRegistration {
 }
 
 /**
- * One cell in a per-year sliding-scale matrix. The matrix axes are
+ * One cell in the per-year family payment matrix. The matrix axes are
  * household size (rows) and annual-income brackets (columns); each row
  * in this table is a single cell.
  *
- * The same Xano table backs two distinct matrices, discriminated by
- * `isNetAssets`:
- *   - `false` → tuition matrix. `tuition_payment` is a **percentage
- *               (0–100)** of the school year's base tuition that the
- *               family pays. The actual dollar amount is derived at
- *               render time as `school_year.tuition * tuition_payment / 100`.
- *   - `true`  → transportation cost matrix. `tuition_payment` is a
- *               **flat dollar amount** the family pays for transport.
+ * `tuition_payment` is a **percentage (0–100)** of the year's base
+ * tuition AND base transportation fees that the family is expected
+ * to pay. Both dollar figures are derived at render time:
  *
- * The field name is `tuition_payment` for historical reasons (it used
- * to store dollars for both flavors). For the tuition matrix it now
- * holds a percentage; the field rename is deferred until we're sure
+ *   tuition_owed   = school_year.tuition           * tuition_payment / 100
+ *   transport_owed = school_year.transportation_fees * tuition_payment / 100
+ *
+ * The field name is `tuition_payment` for historical reasons (it
+ * used to store flat dollars before we collapsed tuition + transport
+ * into a single percentage). The rename is deferred until we're sure
  * we're done iterating on the shape.
  *
  * Cells are independently PATCH-able so the admin matrix editor can
@@ -400,10 +398,8 @@ export interface XanoSchoolYearAwardBracket {
   household_size: number;
   income_min: number;
   income_max: number | null;
-  /** Tuition matrix: percentage (0–100). Transportation matrix: dollars. */
+  /** Percentage (0–100) of base tuition + transportation the family pays. */
   tuition_payment: number;
-  /** Discriminator: false = tuition matrix, true = transportation matrix. */
-  isNetAssets: boolean;
 }
 
 /**
