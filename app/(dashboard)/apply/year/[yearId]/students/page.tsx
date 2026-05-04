@@ -96,6 +96,11 @@ interface Application {
   sufs_award_id: number;
   is_bus_transportation: boolean;
   bus_stop: string;
+  /** Snapshot of the formatted parent address the family used to pick
+   *  the bus stop. Empty string when transportation is off or no
+   *  guardian address was selected. Persisted alongside `bus_stop`
+   *  so the routing team has the literal pickup address. */
+  primary_home: string;
   current_previous_school: string;
   describe_student_strengths: string;
   describe_student_opportunities_for_growth: string;
@@ -168,6 +173,13 @@ export default function StudentsStepPage() {
   const [students, setStudents] = useState<Student[]>([]);
   const [applications, setApplications] = useState<Application[]>([]);
   const [busStops, setBusStops] = useState<BusStop[]>([]);
+  // UI-only — keyed by application id, holds which parent's address
+  // the family used to pick a stop. Not persisted (the actual stop
+  // is what gets saved on the application row); just a hint that
+  // grounds the dropdown for parents with two guardian addresses.
+  const [busAddressByApp, setBusAddressByApp] = useState<
+    Record<number, number>
+  >({});
   const [yearName, setYearName] = useState("");
   const [loading, setLoading] = useState(true);
   const [addingStudentId, setAddingStudentId] = useState<number | null>(null);
@@ -264,8 +276,14 @@ export default function StudentsStepPage() {
           fetch("/api/bus-stops"),
         ]);
       if (familyRes.ok) {
+        // `/api/families` returns `null` (not an empty object) when the
+        // family record can't be loaded — JSON.parse keeps that as
+        // `null` rather than throwing, so a naive `fam.parents` blows
+        // up with "Cannot read properties of null". Optional-chain the
+        // read so the page just falls through to an empty parents
+        // list when the endpoint hands us null.
         const fam = await familyRes.json();
-        setParents(fam.parents ?? []);
+        setParents(fam?.parents ?? []);
       }
       if (yearsRes.ok) {
         const years = await yearsRes.json();
@@ -279,7 +297,18 @@ export default function StudentsStepPage() {
       }
       if (appsRes.ok) {
         const allApps: Application[] = await appsRes.json();
-        const yearApps = allApps.filter((a) => a.registration_school_years_id === yearId);
+        const yearApps = allApps
+          .filter((a) => a.registration_school_years_id === yearId)
+          // Normalize string fields the local interface treats as
+          // required-strings — Xano returns null for blank text columns
+          // on rows that predate the addition of `primary_home`, and
+          // null leaks through `app.primary_home` reads as a falsy
+          // string that triggers React's controlled-input warning.
+          .map((a) => ({
+            ...a,
+            primary_home: a.primary_home ?? "",
+            bus_stop: a.bus_stop ?? "",
+          }));
         setApplications(yearApps);
         setSavedApplications(yearApps);
         // Keep all student cards open on initial load — don't auto-collapse
@@ -296,6 +325,30 @@ export default function StudentsStepPage() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // Hydrate the parent-address radio state from each application's
+  // saved `primary_home` string so a returning user doesn't have to
+  // re-pick the address before the bus-stop dropdown unlocks. Match
+  // by formatted-address string equality — same shape we write on
+  // selection, so equality round-trips cleanly. Runs after both
+  // applications + parents land so we know which radios to check.
+  useEffect(() => {
+    if (parents.length === 0 || applications.length === 0) return;
+    setBusAddressByApp((prev) => {
+      const next = { ...prev };
+      for (const app of applications) {
+        if (next[app.id]) continue;
+        if (!app.primary_home) continue;
+        const match = parents.find((p) => {
+          const line2 = p.address_line_2 ? `, ${p.address_line_2}` : "";
+          const full = `${p.address_line_1}${line2}, ${p.city} ${p.state} ${p.zipcode}`;
+          return full === app.primary_home;
+        });
+        if (match) next[app.id] = match.id;
+      }
+      return next;
+    });
+  }, [parents, applications]);
 
   async function handleAddToYear(studentId: number) {
     setAddingStudentId(studentId);
@@ -386,15 +439,19 @@ export default function StudentsStepPage() {
   }
 
   function isAppComplete(app: Application): boolean {
-    // Student Details completion — only the school-history fields on this page.
-    // SUFS lives on the Financial Aid step. Transportation + NWEA moved out.
-    // Trim before checking so whitespace-only values don't pass as complete.
+    // Student Details completion — school-history fields + transportation
+    // (transportation now lives on this step). NWEA still lives on its
+    // own step; SUFS lives on Financial Aid. Trim before checking so
+    // whitespace-only values don't pass as complete.
     const nonEmpty = (v: string | null | undefined) => !!v && v.trim().length > 0;
     if (!nonEmpty(app.current_previous_school)) return false;
     if (!nonEmpty(app.last_grade_completed)) return false;
     if (!nonEmpty(app.current_grade)) return false;
     if (!nonEmpty(app.describe_student_strengths)) return false;
     if (!nonEmpty(app.describe_student_opportunities_for_growth)) return false;
+    // Transportation: if the family opted in, they must pick a stop.
+    // Off = trivially complete (it's an explicit "no thanks").
+    if (app.is_bus_transportation && !nonEmpty(app.bus_stop)) return false;
     return true;
   }
 
@@ -422,6 +479,10 @@ export default function StudentsStepPage() {
     "current_previous_school",
     "last_grade_completed", "current_grade",
     "describe_student_strengths", "describe_student_opportunities_for_growth",
+    // Transportation moved onto this page — every change here should
+    // mark the application dirty so the autosave / save-all picks up
+    // the new value alongside the school-history fields.
+    "is_bus_transportation", "bus_stop", "primary_home",
   ];
 
   const isDirty = applications.some((app) => {
@@ -464,13 +525,19 @@ export default function StudentsStepPage() {
               method: "PATCH",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
-                // SUFS + transportation moved off this page — don't overwrite them here.
+                // SUFS lives on the Financial Aid step — not part of
+                // this save. Transportation is now part of this step
+                // (folded back from the standalone page) so its three
+                // fields ride along with the school-history saves.
                 current_previous_school: app.current_previous_school,
                 last_grade_completed: app.last_grade_completed,
                 current_grade: app.current_grade,
                 describe_student_strengths: app.describe_student_strengths,
                 describe_student_opportunities_for_growth:
                   app.describe_student_opportunities_for_growth,
+                is_bus_transportation: app.is_bus_transportation,
+                bus_stop: app.bus_stop,
+                primary_home: app.primary_home,
               }),
             });
             if (!res.ok) {
@@ -946,6 +1013,202 @@ export default function StudentsStepPage() {
                         />
                       </Field>
                     </div>
+                  </section>
+
+                  {/* ─── Transportation ───
+                      Per-student bus preferences live inside the
+                      student card now (was a standalone apply step).
+                      Three quick steps when the parent toggles bus
+                      transport on:
+                        1. The Switch above commits to bus.
+                        2. Pick which guardian's address the family
+                           wants the stop near (UI hint only — not
+                           persisted; keeps the picker grounded for
+                           parents with two addresses).
+                        3. Pick a stop from the school's published
+                           list. Each option shows the stop's name
+                           and street address so the parent knows
+                           exactly where pickup happens. */}
+                  <section className="border-t pt-5">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <h3 className="text-sm font-medium">Transportation</h3>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          Bus transportation is a per-family $1,500 fee. Toggle
+                          on for any students who&rsquo;ll ride.
+                        </p>
+                      </div>
+                      <Switch
+                        checked={app.is_bus_transportation}
+                        onCheckedChange={(v) =>
+                          setApplications((prev) =>
+                            prev.map((a) =>
+                              a.id === app.id
+                                ? {
+                                    ...a,
+                                    is_bus_transportation: v,
+                                    // Clear stop + captured address on
+                                    // disable so saves don't drag stale
+                                    // picks back to the server when a
+                                    // family changes their mind.
+                                    bus_stop: v ? a.bus_stop : "",
+                                    primary_home: v ? a.primary_home : "",
+                                  }
+                                : a
+                            )
+                          )
+                        }
+                        aria-label={`Bus transportation for ${student.first_name}`}
+                      />
+                    </div>
+                    {app.is_bus_transportation ? (
+                      <div className="grid gap-4 mt-4">
+                        {/* Step 2 — guardian address picker (UI hint).
+                            Renders one tile per parent with their
+                            address shown so the parent has the
+                            context they need to choose a stop. */}
+                        {parents.length > 0 ? (
+                          <Field>
+                            <FieldLabel className="text-xs">
+                              Use which address to pick a stop?
+                            </FieldLabel>
+                            <div className="grid gap-2 sm:grid-cols-2">
+                              {parents.map((p) => {
+                                const checked =
+                                  busAddressByApp[app.id] === p.id;
+                                const line2 = p.address_line_2
+                                  ? `, ${p.address_line_2}`
+                                  : "";
+                                const fullAddress = `${p.address_line_1}${line2}, ${p.city} ${p.state} ${p.zipcode}`;
+                                return (
+                                  <label
+                                    key={p.id}
+                                    className={`flex cursor-pointer items-start gap-3 rounded-md border p-3 text-sm transition-colors ${
+                                      checked
+                                        ? "border-primary bg-primary/5"
+                                        : "hover:bg-muted/30"
+                                    }`}
+                                  >
+                                    <input
+                                      type="radio"
+                                      name={`bus-address-${app.id}`}
+                                      checked={checked}
+                                      onChange={() => {
+                                        setBusAddressByApp((prev) => ({
+                                          ...prev,
+                                          [app.id]: p.id,
+                                        }));
+                                        // Capture the formatted address
+                                        // string onto the application —
+                                        // this is what the routing team
+                                        // reads as "where to pick up
+                                        // from." Persist it alongside
+                                        // the bus stop choice so a
+                                        // single-source-of-truth save
+                                        // covers both fields.
+                                        setApplications((prev) =>
+                                          prev.map((a) =>
+                                            a.id === app.id
+                                              ? { ...a, primary_home: fullAddress }
+                                              : a
+                                          )
+                                        );
+                                      }}
+                                      className="mt-1 size-4 cursor-pointer accent-primary"
+                                    />
+                                    <div className="min-w-0">
+                                      <p className="font-medium truncate">
+                                        {p.first_name} {p.last_name}
+                                      </p>
+                                      <p className="text-xs text-muted-foreground mt-0.5">
+                                        {p.address_line_1 ? (
+                                          fullAddress
+                                        ) : (
+                                          <span className="italic">
+                                            No address on file
+                                          </span>
+                                        )}
+                                      </p>
+                                    </div>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          </Field>
+                        ) : null}
+
+                        {/* Step 3 — pick a stop. Each item carries the
+                            stop name + address so the parent can
+                            cross-reference distance from their
+                            chosen guardian address above. */}
+                        <Field>
+                          <FieldLabel className="text-xs">
+                            Bus Stop{" "}
+                            <span className="text-red-400">*</span>
+                          </FieldLabel>
+                          <select
+                            className={`flex h-9 w-full items-center justify-between rounded-md border bg-background px-3 py-1 text-sm shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                              !app.bus_stop
+                                ? "border-red-400"
+                                : "border-input"
+                            }`}
+                            value={app.bus_stop || ""}
+                            onChange={(e) =>
+                              setApplications((prev) =>
+                                prev.map((a) =>
+                                  a.id === app.id
+                                    ? { ...a, bus_stop: e.target.value }
+                                    : a
+                                )
+                              )
+                            }
+                          >
+                            <option value="">
+                              {parents.length > 0 &&
+                              !busAddressByApp[app.id]
+                                ? "Pick an address above first…"
+                                : "Select a bus stop"}
+                            </option>
+                            {busStops.map((s) => (
+                              <option key={s.id} value={s.name}>
+                                {s.name}
+                                {s.address ? ` — ${s.address}` : ""}
+                              </option>
+                            ))}
+                          </select>
+                          {/* Selected-stop detail — show full address +
+                              pickup time so the parent can verify their
+                              choice without re-opening the menu. */}
+                          {app.bus_stop ? (
+                            (() => {
+                              const stop = busStops.find(
+                                (s) => s.name === app.bus_stop
+                              );
+                              if (!stop) return null;
+                              return (
+                                <p className="text-xs text-muted-foreground mt-1.5">
+                                  {stop.address ? `${stop.address} · ` : ""}
+                                  Pickup{" "}
+                                  {new Date(
+                                    stop.pick_up_time
+                                  ).toLocaleTimeString("en-US", {
+                                    hour: "numeric",
+                                    minute: "2-digit",
+                                  })}{" "}
+                                  · Drop-off{" "}
+                                  {new Date(
+                                    stop.drop_off_time
+                                  ).toLocaleTimeString("en-US", {
+                                    hour: "numeric",
+                                    minute: "2-digit",
+                                  })}
+                                </p>
+                              );
+                            })()
+                          ) : null}
+                        </Field>
+                      </div>
+                    ) : null}
                   </section>
                 </CardContent>
               </Card>

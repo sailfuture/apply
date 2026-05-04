@@ -405,6 +405,9 @@ export function useApplicationSteps(yearId: number) {
         number: 2,
         title: "Student Details",
         description: "",
+        // Transportation lives inside this step now — per-student
+        // bus toggles + stop pickers are rendered alongside the
+        // strengths/growth fields on the students page.
         status: getStatus(studentsDone, studentsStarted),
         detail: studentsDone ? "Complete" : studentsStarted ? "In progress" : "Not started",
         href: `${base}/students`,
@@ -433,7 +436,8 @@ export function useApplicationSteps(yearId: number) {
         number: 5,
         title: "Submit Application",
         description: "",
-        // NWEA does NOT gate Submit — testing typically happens after application is submitted.
+        // NWEA does NOT gate Submit — testing typically happens after
+        // the application is submitted.
         status: (familyDone && studentsDone && financialAidDone) ? "in_progress" as StepStatus : "not_started" as StepStatus,
         detail: (familyDone && studentsDone && financialAidDone) ? "Ready to submit" : "Locked",
         href: `#`,
@@ -463,13 +467,21 @@ export function useApplicationSteps(yearId: number) {
   const postEnrollmentSigned = regProgressData?.isEnrollment === true;
   const registrationComplete = regProgressData?.isRegistration === true;
   const volunteerAcknowledged = regProgressData?.isVolunteerHours === true;
+  // Volunteer Hours is always navigable from the moment registration
+  // opens — there's no preceding gate that needs to clear before the
+  // family can read the acknowledgment. So the side nav always shows
+  // the amber edit affordance (instead of the muted "locked" numbered
+  // circle) until the parent confirms it.
 
   // "Started" signals are independent of the completion bools so an
   // in-progress section shows as yellow instead of gray.
   const postEnrollmentStarted = !!regProgressData?.enrollment_agreement_pandadoc_id;
   // Each subsequent step unlocks once the prior section's bool is true.
   const registrationStarted = tuitionReviewed;
-  const volunteerStarted = registrationComplete;
+  // Force the "started" flag on so `getStatus` returns `in_progress`
+  // (amber edit pencil) rather than `not_started` (muted numbered
+  // circle). The family can land on this step at any time.
+  const volunteerStarted = true;
 
   const allRegistrationSectionsComplete =
     tuitionReviewed && postEnrollmentSigned && registrationComplete && volunteerAcknowledged;
@@ -505,7 +517,7 @@ export function useApplicationSteps(yearId: number) {
         title: "Volunteer Hours Acknowledgment",
         description: "Acknowledge the mandatory volunteer-hours commitment for the year.",
         status: getStatus(volunteerAcknowledged, volunteerStarted),
-        detail: volunteerAcknowledged ? "Acknowledged" : volunteerStarted ? "In progress" : "Locked",
+        detail: volunteerAcknowledged ? "Acknowledged" : "In progress",
         href: `${base}/volunteer-hours`,
       },
       {

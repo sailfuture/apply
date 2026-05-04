@@ -3,9 +3,15 @@ import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
 
 /**
- * Single-cell PATCH / DELETE for the per-year "high net assets"
- * percentage matrix. Cell values are 0–100 percentages of total
- * tuition.
+ * Single-row PATCH / DELETE for the per-year "high net assets"
+ * sliding scale. Each row is an asset bracket whose
+ * `percentage_of_total_tuition` is the share of base tuition the
+ * family pays.
+ *
+ * Field names align with the Xano columns:
+ *   - `net_asset_min`
+ *   - `net_asset_max` (nullable)
+ *   - `percentage_of_total_tuition` (decimal 0–100)
  */
 export async function PATCH(
   req: NextRequest,
@@ -21,26 +27,27 @@ export async function PATCH(
 
     const body = await req.json();
     const patch: Record<string, unknown> = {};
-    if ("household_size" in body) {
-      const n = Number(body.household_size);
-      if (Number.isFinite(n)) patch.household_size = n;
-    }
-    if ("income_min" in body) {
-      const n = Number(body.income_min);
-      if (Number.isFinite(n)) patch.income_min = n;
-    }
-    if ("income_max" in body) {
-      const raw = body.income_max;
+    if ("net_asset_min" in body) {
+      const raw = body.net_asset_min;
       if (raw === null || raw === "" || raw === undefined) {
-        patch.income_max = null;
+        patch.net_asset_min = null;
       } else {
         const n = Number(raw);
-        if (Number.isFinite(n)) patch.income_max = n;
+        if (Number.isFinite(n)) patch.net_asset_min = n;
       }
     }
-    if ("tuition_percentage" in body) {
-      const n = Number(body.tuition_percentage);
-      patch.tuition_percentage = Number.isFinite(n) ? n : 0;
+    if ("net_asset_max" in body) {
+      const raw = body.net_asset_max;
+      if (raw === null || raw === "" || raw === undefined) {
+        patch.net_asset_max = null;
+      } else {
+        const n = Number(raw);
+        if (Number.isFinite(n)) patch.net_asset_max = n;
+      }
+    }
+    if ("percentage_of_total_tuition" in body) {
+      const n = Number(body.percentage_of_total_tuition);
+      patch.percentage_of_total_tuition = Number.isFinite(n) ? n : 0;
     }
     if (Object.keys(patch).length === 0) {
       return NextResponse.json(

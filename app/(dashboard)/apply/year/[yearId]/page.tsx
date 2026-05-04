@@ -460,7 +460,17 @@ export default function YearOverviewPage() {
   // Reads the 4 section completion booleans from
   // `registration_family_application_progress` and surfaces a Fix link for
   // any section that isn't yet marked complete.
-  const { progress, submit: submitFamilyApplication } = useFamilyProgress(yearId);
+  const {
+    progress,
+    submit: submitFamilyApplication,
+    unsubmit: unsubmitFamilyApplication,
+  } = useFamilyProgress(yearId);
+  // Local state for the "Need to edit something?" warning modal —
+  // shown when the parent wants to drop out of review and edit fields
+  // again. Confirming flips `isSubmitted=false` + clears
+  // `submitted_at`, then the page re-renders the editable apply view.
+  const [unsubmitOpen, setUnsubmitOpen] = useState(false);
+  const [unsubmitting, setUnsubmitting] = useState(false);
   const isSubmitted = !!progress?.isSubmitted;
 
   // Post-registration: when the parent clicks Submit Registration we flip
@@ -611,8 +621,17 @@ export default function YearOverviewPage() {
         <div className="w-full max-w-2xl py-8">
           <div className="text-center mb-8">
             <div className="flex justify-center mb-4">
-              <div className="flex size-16 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-900/30">
-                <Clock className="size-8 text-amber-600 dark:text-amber-400" />
+              {/* Logo treatment matches the registration-in-review and
+                  accepted views so the parent sees a consistent
+                  visual across post-submit states. */}
+              <div className="rounded-full border-[6px] border-white dark:border-background shadow-sm">
+                <Image
+                  src="/logo.svg"
+                  alt="SailFuture Academy"
+                  width={64}
+                  height={64}
+                  className="size-16 rounded-full"
+                />
               </div>
             </div>
             <h1 className="text-2xl font-semibold">
@@ -644,7 +663,75 @@ export default function YearOverviewPage() {
               .
             </p>
           </div>
+
+          {/* Need-to-edit affordance — opens a warning modal that
+              unsubmits the application on confirm so the parent can
+              go back into the apply flow and change something. */}
+          <div className="mt-6 text-center">
+            <p className="text-sm text-muted-foreground mb-2">
+              Need to edit something?
+            </p>
+            <button
+              type="button"
+              onClick={() => setUnsubmitOpen(true)}
+              className="inline-flex items-center justify-center rounded-md border bg-background px-4 py-2 text-sm font-medium shadow-sm transition-colors hover:bg-muted/50"
+            >
+              Click here to edit your application
+            </button>
+          </div>
         </div>
+
+        <AlertDialog
+          open={unsubmitOpen}
+          onOpenChange={(open) => {
+            if (!unsubmitting) setUnsubmitOpen(open);
+          }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                Unsubmit your application to edit?
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                Your application will go back to the editable apply
+                flow and the admissions team will no longer see it as
+                ready to review. You can re-submit from the dashboard
+                once your edits are saved. Continue?
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={unsubmitting}>
+                Keep submitted
+              </AlertDialogCancel>
+              <AlertDialogAction
+                disabled={unsubmitting}
+                className="bg-amber-600 hover:bg-amber-700 text-white"
+                onClick={async (e) => {
+                  e.preventDefault();
+                  setUnsubmitting(true);
+                  try {
+                    await unsubmitFamilyApplication?.();
+                    toast.success(
+                      "Application unsubmitted — you can edit and re-submit from the dashboard."
+                    );
+                    setUnsubmitOpen(false);
+                  } catch (err) {
+                    console.error("Failed to unsubmit:", err);
+                    toast.error(
+                      err instanceof Error
+                        ? err.message
+                        : "Couldn't unsubmit — please try again."
+                    );
+                  } finally {
+                    setUnsubmitting(false);
+                  }
+                }}
+              >
+                {unsubmitting ? "Unsubmitting…" : "Yes, let me edit"}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
     );
   }

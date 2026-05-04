@@ -4,6 +4,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useApplicationSteps, type StepStatus } from "@/hooks/use-application-steps";
 import { useApplicationFlow } from "@/contexts/application-flow-context";
 import { Mail, Phone, HelpCircle, ArrowLeft } from "lucide-react";
+import { ParentNotesSheet } from "@/components/parent-notes-sheet";
 
 /* Short labels for the side nav — keeps everything single-line */
 const SHORT_LABELS: Record<string, string> = {
@@ -213,6 +214,11 @@ export function ApplicationSideNav({ yearId, onSubmitClick }: { yearId: number; 
         <div className="mt-4 rounded-xl bg-background p-4 shadow-sm border">
           <p className="text-sm font-medium text-foreground mb-3">Need extra support?</p>
           <div className="space-y-1.5">
+            {/* Notes from admissions — only renders when there's at
+                least one shared note, so the row appears organically
+                when admin pushes new context. Self-hides via the
+                component's internal length check. */}
+            <ParentNotesSheet variant="row" />
             <a
               href="mailto:admissions@sailfuture.org"
               className="flex items-center gap-2.5 rounded-lg px-2 py-2 text-sm text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-colors"

@@ -81,11 +81,17 @@ export async function GET(req: NextRequest) {
         ? (studentsResult.value as unknown[])
         : [];
 
+    // Hide soft-deleted (`isActive=false`) applications from every
+    // dashboard count. Treat `undefined` as active so legacy rows
+    // still surface.
+    const activeApplications = allApplications.filter(
+      (a) => (a as { isActive?: boolean }).isActive !== false
+    );
     const applications = yearId
-      ? allApplications.filter(
+      ? activeApplications.filter(
           (a) => Number(a.registration_school_years_id) === yearId
         )
-      : allApplications;
+      : activeApplications;
 
     const totalInquiries = inquiries.length;
     const totalApplications = applications.length;

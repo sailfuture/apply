@@ -76,6 +76,13 @@ export async function PATCH(req: NextRequest) {
     // Allowlist — admin can flip per-year decision flags + section
     // completion booleans (useful when correcting state), but not the
     // foreign keys or `id`. `last_edited` is bumped automatically.
+    //
+    // `is_archived` + `reason_for_archive` are scoped to the Archive
+    // affordance in the family detail header. The reason field is
+    // intentionally on the allowlist so the modal can pass the
+    // captured rationale alongside the flag flip in one round
+    // trip; the route doesn't enforce that reason is non-empty —
+    // that's the UI's job (text required on the modal).
     const ALLOWED: Array<keyof XanoFamilyApplicationProgress> = [
       "isAccepted",
       "isSubmitted",
@@ -85,6 +92,8 @@ export async function PATCH(req: NextRequest) {
       "financial_aid_completed",
       "testing_completed",
       "registration_type_id",
+      "is_archived",
+      "reason_for_archive",
     ];
     const patch: Record<string, unknown> = { last_edited: Date.now() };
     for (const key of ALLOWED) {

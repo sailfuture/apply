@@ -1,16 +1,36 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 
+/**
+ * Resolve the Xano upload endpoint. We accept the URL via the explicit
+ * `XANO_UPLOAD_URL` env var, OR derive it from `XANO_API_BASE_URL` —
+ * Xano's standard "upload attachment" endpoint always lives at
+ * `${api-base}/upload/attachment`, so deriving it removes a foot-gun
+ * where someone configures the api base but forgets to add the upload
+ * one. Production envs that already have an explicit override still
+ * win.
+ */
+function resolveUploadUrl(): string | null {
+  const explicit = process.env.XANO_UPLOAD_URL?.trim();
+  if (explicit) return explicit;
+  const apiBase = process.env.XANO_API_BASE_URL?.trim();
+  if (apiBase) return `${apiBase.replace(/\/+$/, "")}/upload/attachment`;
+  return null;
+}
+
 export async function POST(req: NextRequest) {
   const { userId } = await auth();
   if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const uploadUrl = process.env.XANO_UPLOAD_URL;
+  const uploadUrl = resolveUploadUrl();
   if (!uploadUrl) {
     return NextResponse.json(
-      { error: "XANO_UPLOAD_URL not configured" },
+      {
+        error:
+          "Upload not configured: set XANO_UPLOAD_URL (or XANO_API_BASE_URL, which we'll append /upload/attachment to) in the server env, then restart the Next dev server.",
+      },
       { status: 500 }
     );
   }

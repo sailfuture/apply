@@ -97,8 +97,35 @@ export interface XanoApplication {
   sufs_type: string;
   sufs_status: string;
   sufs_award_id: number;
+  /** Admin "I've verified this SUFS selection" flag. Predecessor of
+   *  `confirmed_scholarship` below — kept on the type for any
+   *  legacy rows that still carry it, but new writes go to
+   *  `confirmed_scholarship`. The Approve gate + per-student
+   *  Confirm Scholarship Award Amount button both read/write
+   *  `confirmed_scholarship` only. */
+  sufs_confirmed?: boolean;
+  /** Admin "I've reviewed this student's full scholarship award
+   *  (SUFS + Opportunity Scholarship) and locked it in" flag. The
+   *  per-student Confirm Scholarship Award Amount button on the
+   *  Scholarship Determination card flips this; the family-level
+   *  Approve gate requires every active student's
+   *  `confirmed_scholarship === true` before it'll fire.
+   *
+   *  Renamed from `sufs_confirmed` because the button covers more
+   *  than SUFS now — admin's per-student award includes the
+   *  Opportunity Scholarship cost determination too. Optional on
+   *  the type because legacy rows predate the column; the gate
+   *  treats undefined as `false` (admin still needs to confirm). */
+  confirmed_scholarship?: boolean;
   is_bus_transportation: boolean;
   bus_stop: string;
+  /** Captured snapshot of which parent address the family used to pick
+   *  the bus stop — written as a single formatted string so the
+   *  routing team has the literal pickup address tied to the student's
+   *  application without having to look up the parent record. Only set
+   *  when `is_bus_transportation` is true and a parent address was
+   *  selected. Optional because legacy rows predate the column. */
+  primary_home?: string;
   test_scores: Record<string, unknown> | null;
   nwea_testing_complete: boolean;
   nwea_testing_scheduled: boolean;
@@ -112,6 +139,13 @@ export interface XanoApplication {
    *  flip exactly one of the decision booleans on a submitted application.
    *  Optional because legacy rows predate the column. */
   isDenied?: boolean;
+  /** Soft-delete / inclusion flag. New applications are created with
+   *  `isActive = true`. When a parent removes a student from a year, we
+   *  flip this to `false` instead of deleting the row, so historical
+   *  data is preserved. Admin views filter to `isActive = true` only —
+   *  flagged optional because legacy rows predate the column and treat
+   *  missing/undefined as "active by default" downstream. */
+  isActive?: boolean;
   opportunity_scholarship_award_amount: number;
   // PandaDoc signing — waiver + enrollment agreement state.
   liability_waiver_pandadoc_id: string;
@@ -203,6 +237,14 @@ export interface XanoScholarship {
   debts_personal_loans: number;
   government_benefits: boolean;
   snap_benefits: Record<string, unknown>[];
+  /** Admin verification trail for the SNAP award letter. Same pattern
+   *  as the contributing-member `*_confirm` columns: the bool flips
+   *  when admin marks the document reviewed; the audit timestamp +
+   *  confirming-admin teacher id are server-stamped automatically.
+   *  All optional because the columns were added after launch. */
+  is_snap_confirmed?: boolean;
+  snap_confirm_time?: number | null;
+  snap_confirm_admin?: number;
   other_benefits: Record<string, unknown>[];
   family_contribution_per_month: number;
   scholarship_advocacy_letter: string;
@@ -212,7 +254,55 @@ export interface XanoScholarship {
    *  so a packet of letters can all live on one row. Replaces the older
    *  single-file `termination_letter` column. */
   unemployment_letter: Record<string, unknown>[];
+  /** Admin verification trail for the unemployment letter. Same shape
+   *  as SNAP above. NB: column is `is_unemployment_confirm` (no `_ed`
+   *  suffix) on Xano — typed faithfully. */
+  is_unemployment_confirm?: boolean;
+  unemployment_confirm_time?: number | null;
+  unemployment_confirm_admin?: number;
   last_edited: number | null;
+
+  /* ─────── Admin-only relation expansions ───────
+   * The `admin_family_application` Xano query optionally expands a
+   * single contributing member, a single home, and a single vehicle
+   * onto the scholarship row. Field names are Xano's auto-generated
+   * `_<table>_of_<table>` shape; aliased here as optional props so
+   * normal client-side reads (which don't fetch the admin endpoint)
+   * stay unaffected.
+   *
+   * Note: Xano's expansion currently surfaces a single object per
+   * relation, not an array. Families with multiple contributing
+   * members / homes / vehicles will only see the first. If the
+   * endpoint moves to multi-row expansion later, switch the type to
+   * `... | (... )[]` and handle both.
+   */
+  // Xano's expansion aliases gain numeric suffixes when the same
+  // relation is referenced more than once in a query — the
+  // `admin_family_application` query has gone through a few revisions
+  // and the suffixes drifted. Type both the suffix-less and
+  // numeric-suffixed variants so reads can fall back gracefully if
+  // Xano renames an alias later. Always read via
+  // `getScholarshipMember` / `getScholarshipHome` /
+  // `getScholarshipVehicle` (defined below) so the fallback chain
+  // lives in one place.
+  _registration_opportunity_scholarship_contributing_members_of_registration_opportunity_scholarship?:
+    | XanoScholarshipContributingMember
+    | null;
+  _registration_opportunity_scholarship_contributing_members_of_registration_opportunity_scholarship_1?:
+    | XanoScholarshipContributingMember
+    | null;
+  _registration_opportunity_scholarship_home_of_registration_opportunity_scholarship?:
+    | XanoScholarshipHome
+    | null;
+  _registration_opportunity_scholarship_home_of_registration_opportunity_scholarship_3?:
+    | XanoScholarshipHome
+    | null;
+  _registration_opportunity_scholarship_vehicles_of_registration_opportunity_scholarship?:
+    | XanoScholarshipVehicle
+    | null;
+  _registration_opportunity_scholarship_vehicles_of_registration_opportunity_scholarship_2?:
+    | XanoScholarshipVehicle
+    | null;
   isNotParticipating: boolean;
   isSNAPBenefits: boolean;
   isOpportunityScholarship: boolean;
@@ -227,6 +317,15 @@ export interface XanoScholarshipBenefit {
   /** Per-benefit documentation (award letter, approval notice, etc.).
    *  Multi-file array — one benefit can need several pages of paperwork. */
   benefit_documentation: Record<string, unknown>[];
+  /** Admin verification trail — same pattern as the contributing-member
+   *  `*_confirm` columns. The admin documents-review surface flips
+   *  `benefit_is_confirmed`; the API route auto-stamps the timestamp
+   *  (`benefit_confirm_time`) and the confirming admin's teacher id
+   *  (`benefit_confirm_admin`). All three optional because legacy
+   *  rows predate them. */
+  benefit_is_confirmed?: boolean;
+  benefit_confirm_time?: number | null;
+  benefit_confirm_admin?: number;
 }
 
 export interface XanoScholarshipContributingMember {
@@ -252,6 +351,45 @@ export interface XanoScholarshipContributingMember {
   paystub_2: Record<string, unknown>[];
   paystub_3: Record<string, unknown>[];
   paystub_4: Record<string, unknown>[];
+  /** Per-document confirmation bools. Each `*_confirm` mirrors a
+   *  matching file slot and flips to `true` once admin reviews that
+   *  specific upload and marks it correct. The overall `is_verified`
+   *  flag below is gated on all the relevant `*_confirm` values being
+   *  true (along with the declared method matching what's actually
+   *  uploaded), so admin can chip away at a member's documents one at
+   *  a time and the overall row only flips when everything checks out.
+   *  Optional because the columns were added after launch — undefined
+   *  is treated as `false` by every reader. */
+  w2_confirm?: boolean;
+  paystub_1_confirm?: boolean;
+  paystub_2_confirm?: boolean;
+  paystub_3_confirm?: boolean;
+  paystub_4_confirm?: boolean;
+  /** Audit trail for each per-document confirmation:
+   *   - `*_confirm_time` — millis timestamp set the moment admin marked
+   *     the slot confirmed. Cleared (set to null) on undo.
+   *   - `*_admin_confirm` — the confirming admin's teacher id
+   *     (numeric). 0 when unset. The admin documents-review surface
+   *     never writes these directly; the contributing-members PATCH
+   *     endpoint stamps them automatically when a `*_confirm` flag
+   *     is being flipped, so the audit trail can't drift away from
+   *     the boolean's actual state. */
+  w2_confirm_time?: number | null;
+  paystub_1_confirm_time?: number | null;
+  paystub_2_confirm_time?: number | null;
+  paystub_3_confirm_time?: number | null;
+  paystub_4_confirm_time?: number | null;
+  w2_admin_confirm?: number;
+  paystub_1_admin_confirm?: number;
+  paystub_2_admin_confirm?: number;
+  paystub_3_admin_confirm?: number;
+  paystub_4_admin_confirm?: number;
+  /** Admin-side overall verification flag. Set true when admin has
+   *  ticked every per-document confirm above and is satisfied the
+   *  uploaded packet matches the declared income. Hand-edits flow
+   *  through the admin contributing-members PATCH endpoint, which is
+   *  the only place these columns are exposed for write. */
+  is_verified?: boolean;
 }
 
 export interface XanoScholarshipHome {
@@ -372,17 +510,12 @@ export interface XanoRegistrationDetails extends XanoStudentRegistration {
  * household size (rows) and annual-income brackets (columns); each row
  * in this table is a single cell.
  *
- * `tuition_payment` is a **percentage (0–100)** of the year's base
- * tuition AND base transportation fees that the family is expected
- * to pay. Both dollar figures are derived at render time:
+ * `tuition_percentage` is a **percentage (0–100, decimal)** of the
+ * year's base tuition AND base transportation fees that the family is
+ * expected to pay. Both dollar figures are derived at render time:
  *
- *   tuition_owed   = school_year.tuition           * tuition_payment / 100
- *   transport_owed = school_year.transportation_fees * tuition_payment / 100
- *
- * The field name is `tuition_payment` for historical reasons (it
- * used to store flat dollars before we collapsed tuition + transport
- * into a single percentage). The rename is deferred until we're sure
- * we're done iterating on the shape.
+ *   tuition_owed   = school_year.tuition             * tuition_percentage / 100
+ *   transport_owed = school_year.transportation_fees * tuition_percentage / 100
  *
  * Cells are independently PATCH-able so the admin matrix editor can
  * persist a single cell change without re-sending the rest of the
@@ -398,19 +531,22 @@ export interface XanoSchoolYearAwardBracket {
   household_size: number;
   income_min: number;
   income_max: number | null;
-  /** Percentage (0–100) of base tuition + transportation the family pays. */
-  tuition_payment: number;
+  /** Percentage (0–100, decimal) of base tuition + transportation the family pays. */
+  tuition_percentage: number;
 }
 
 /**
- * One cell in the per-year "high net assets" matrix — applies to
- * families whose net assets exceed $100k. The matrix has the same
- * shape as the regular tuition matrix (household size × bracket), but
- * the cell value is a **percentage of total tuition** the family
- * pays, not a flat dollar amount.
+ * One row in the per-year "high net assets" sliding scale — applies
+ * to families whose net assets exceed $100k. Unlike the regular
+ * tuition matrix, this is a 1D list (asset bracket only — household
+ * size is irrelevant once a family clears the net-assets threshold).
  *
- * Example: a family with net assets in the $100k–$150k bracket might
- * pay 40% of tuition. The percentage is stored as a number 0–100.
+ * Column names differ from the regular award_brackets table because
+ * the semantics differ:
+ *   - `net_asset_min` / `net_asset_max` — the asset bracket bounds
+ *     (max is nullable for the rightmost "and up" row)
+ *   - `percentage_of_total_tuition` — share of base tuition the
+ *     family pays for that bracket (decimal, 0–100)
  *
  * Stored in the `registration_school_year_net_assets_bracket` Xano
  * table.
@@ -419,11 +555,10 @@ export interface XanoSchoolYearNetAssetsBracket {
   id: number;
   created_at: number;
   registration_school_years_id: number;
-  household_size: number;
-  income_min: number;
-  income_max: number | null;
-  /** Percentage of total tuition the family pays, 0–100. */
-  tuition_percentage: number;
+  net_asset_min: number;
+  net_asset_max: number | null;
+  /** Percentage of total tuition the family pays, 0–100 (decimal). */
+  percentage_of_total_tuition: number;
 }
 
 /**
@@ -465,9 +600,43 @@ export interface XanoAdminFamilyDetail {
 export interface XanoAdminNote {
   id: number;
   created_at: number;
+  /** Family the note belongs to. Mutually exclusive with
+   *  `registration_inquiry_id` — a note is tied to one or the other,
+   *  never both. Stored as `0`/`null` for inquiry-scoped notes. */
   registration_families_id: number;
   registration_students_id: number | null;
   registration_school_years_id: number | null;
+  /** Inquiry the note belongs to, if this is an inquiry-scoped note.
+   *  Optional because the column was added after launch and family
+   *  notes still have it null/undefined. */
+  registration_inquiry_id?: number | null;
+  /** Per-student registration progress row this note belongs to. Set
+   *  for notes that are about a specific student's post-acceptance
+   *  registration packet (e.g. a stalled volunteer-hours stage). All
+   *  three of these progress-row foreign keys are mutually exclusive
+   *  with each other and with `registration_inquiry_id` — pick one
+   *  scope at write time. Optional because the columns were added
+   *  after launch. */
+  registration_student_registration_progress_id?: number | null;
+  /** Re-apply family progress row this note belongs to. */
+  reapply_family_progress_id?: number | null;
+  /** Apply-flow family progress row this note belongs to. */
+  registration_family_application_progress_id?: number | null;
+  /** Freeform section key for scoping a note to a specific surface
+   *  inside the family detail page — e.g.
+   *  `contributing_member:42`, `scholarship.review`, or
+   *  `application:18.testing`. The admin Notes drawer for that
+   *  surface filters its timeline + writes new notes with this set
+   *  so a single family's comms log can splinter cleanly per-surface
+   *  without losing the unified timeline. Optional because legacy
+   *  notes (and any general family-wide note) leave it null. */
+  section?: string | null;
+  /** Parent visibility flag — admin opt-in. When true, the note is
+   *  surfaced to the parent on their side (read-only). False means
+   *  internal-only (the admin comms log). Default treats undefined
+   *  as `false` so legacy notes stay internal until explicitly
+   *  shared. */
+  is_shared_with_parent?: boolean;
   author_email: string;
   author_name: string;
   body: string;
@@ -493,6 +662,15 @@ export interface XanoInquiry {
   about_student: string;
   hear_about_us: string;
   messaging_opt_in: boolean;
+  /** Admin "we've reached out" flag. Optional because legacy rows
+   *  predate the column — undefined is treated as `false` everywhere
+   *  the value is read. */
+  isFollowedUp?: boolean;
+  /** Server-managed timestamp of the most recent note added to this
+   *  inquiry's comms log. Bumped automatically by the notes POST
+   *  endpoint; the inquiries PATCH endpoint does NOT expose it on
+   *  its allowlist so admins can't hand-edit it. */
+  last_reach_out?: number | null;
 }
 
 /** Lookup table — distinguishes new applicants from returning enrollments. */
@@ -534,6 +712,19 @@ export interface XanoFamilyApplicationProgress {
    *  row without a separate `apps?registration_families_id=…` round
    *  trip. May be missing on legacy rows; treat as empty when absent. */
   registration_application_id?: number[];
+  /** Admin-side archive flag. True once an admin has decided the
+   *  family's application for this year is no longer active (e.g.
+   *  duplicate, withdrawn, no follow-through). Mutually exclusive
+   *  with the active workflow — archived rows drop out of admin
+   *  review queues. Optional because the column was added after
+   *  launch; undefined/false both mean "not archived". */
+  is_archived?: boolean;
+  /** Required text reason captured at archive time. Surfaces in the
+   *  admin row's archive history and gives the next admin context
+   *  for why the family was set aside. Optional on the type because
+   *  legacy rows have it null; the archive UI requires non-empty
+   *  text on write. */
+  reason_for_archive?: string | null;
 }
 
 /**
@@ -1500,7 +1691,16 @@ export const xano = {
           return all.filter((b) => b.registration_opportunity_scholarship_id === scholarshipId);
         }
         const results: XanoScholarshipBenefit[] = await res.json();
-        return Array.isArray(results) ? results : [];
+        // Always filter client-side — Xano's auto GET doesn't honor
+        // arbitrary FK params so a 200 response can include every
+        // benefit in the table. Same reason the contributing-members
+        // helper filters here too.
+        return Array.isArray(results)
+          ? results.filter(
+              (b) =>
+                b.registration_opportunity_scholarship_id === scholarshipId
+            )
+          : [];
       } catch {
         const all = await this.getAll();
         return all.filter((b) => b.registration_opportunity_scholarship_id === scholarshipId);
@@ -1555,7 +1755,20 @@ export const xano = {
           return all.filter((m) => m.registration_opportunity_scholarship_id === scholarshipId);
         }
         const results: XanoScholarshipContributingMember[] = await res.json();
-        return Array.isArray(results) ? results : [];
+        // ALWAYS filter client-side — Xano's auto-generated GET on
+        // a child table treats query params as auxiliary filters, not
+        // as the listing predicate. When the param is something Xano
+        // doesn't recognize as a built-in (e.g. just the FK column
+        // name), the response is the FULL table — every contributing
+        // member for every scholarship in the system. Without this
+        // filter, the admin Financial Aid view would surface other
+        // families' members.
+        return Array.isArray(results)
+          ? results.filter(
+              (m) =>
+                m.registration_opportunity_scholarship_id === scholarshipId
+            )
+          : [];
       } catch {
         const all = await this.getAll();
         return all.filter((m) => m.registration_opportunity_scholarship_id === scholarshipId);
@@ -1794,6 +2007,46 @@ export const xano = {
       }
     },
 
+    /**
+     * Pull every per-student registration packet for an academic year.
+     *
+     * Backs the admin Enrolled Students list (filtered to
+     * `registrationConfirmed=true`) and the family-level registration
+     * detail page (one row per active student in the family). We
+     * fetch all packets and filter client-side because the underlying
+     * Xano table doesn't expose a cheap "by year" index — calls are
+     * cached `no-store` so admin always sees fresh state. Errors are
+     * logged and `[]` is returned so a transient Xano blip doesn't
+     * 500 the surface that depends on this list.
+     */
+    async getByYear(yearId: number): Promise<XanoStudentRegistration[]> {
+      try {
+        const res = await fetch(
+          `${getBaseUrl()}/registration_student_registration`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          console.error(
+            `[xano.studentRegistration.getByYear] ${res.status} for yearId=${yearId}: ${body}`
+          );
+          return [];
+        }
+        const items: XanoStudentRegistration[] = await res.json();
+        return Array.isArray(items)
+          ? items.filter(
+              (r) => Number(r.registration_school_years_id) === yearId
+            )
+          : [];
+      } catch (err) {
+        console.error(
+          `[xano.studentRegistration.getByYear] threw for yearId=${yearId}:`,
+          err
+        );
+        return [];
+      }
+    },
+
     async update(id: number, data: Partial<Omit<XanoStudentRegistration, "id" | "created_at">>): Promise<XanoStudentRegistration> {
       const res = await fetch(`${getBaseUrl()}/registration_student_registration/${id}`, {
         method: "PATCH",
@@ -1852,6 +2105,37 @@ export const xano = {
         return Array.isArray(items)
           ? items
               .filter((n) => n.registration_families_id === familyId)
+              // Family notes only — inquiry-scoped notes share the
+              // same table but live on a different foreign key. Filter
+              // them out so a stray match (e.g. shared ids across
+              // tables) doesn't bleed into the family timeline.
+              .filter(
+                (n) =>
+                  n.registration_inquiry_id === null ||
+                  n.registration_inquiry_id === undefined
+              )
+              .sort((a, b) => b.created_at - a.created_at)
+          : [];
+      } catch {
+        return [];
+      }
+    },
+
+    /** Inquiry-scoped variant. Same table, filtered to rows whose
+     *  `registration_inquiry_id` matches. Mutually exclusive with the
+     *  family timeline above — a single note is tied to one or the
+     *  other, not both. */
+    async getByInquiryId(inquiryId: number): Promise<XanoAdminNote[]> {
+      try {
+        const res = await fetch(
+          `${getBaseUrl()}/registration_admin_notes?registration_inquiry_id=${inquiryId}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) return [];
+        const items: XanoAdminNote[] = await res.json();
+        return Array.isArray(items)
+          ? items
+              .filter((n) => n.registration_inquiry_id === inquiryId)
               .sort((a, b) => b.created_at - a.created_at)
           : [];
       } catch {
@@ -2268,6 +2552,16 @@ export const xano = {
 
     async getById(id: number): Promise<XanoInquiry> {
       const res = await fetch(`${getBaseUrl()}/registration_inquiry/${id}`, { cache: "no-store" });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async update(id: number, patch: Partial<XanoInquiry>): Promise<XanoInquiry> {
+      const res = await fetch(`${getBaseUrl()}/registration_inquiry/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
       return res.json();
     },

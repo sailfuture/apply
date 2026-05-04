@@ -86,12 +86,39 @@ export function useFamilyProgress(yearId: number | null | undefined) {
     [yearId, key, trackAutosave, mutate]
   );
 
+  /**
+   * Reverse of `submit`. Flips `isSubmitted` back to `false` and
+   * clears `submitted_at` so the application drops out of the review
+   * stage and the parent can edit again. Used by the under-review
+   * page's "Need to edit something?" affordance and by admin-side
+   * unsubmit actions.
+   */
+  const unsubmit = useCallback(
+    async () => {
+      if (!yearId || !key) return;
+      const saved = await trackAutosave(
+        fetch(key, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ isSubmitted: false, submitted_at: null }),
+        }).then(async (res) => {
+          if (!res.ok) throw new Error(`Unsubmit failed (${res.status})`);
+          return res.json();
+        })
+      );
+      mutate(saved, { revalidate: false });
+      return saved;
+    },
+    [yearId, key, trackAutosave, mutate]
+  );
+
   return {
     progress: data ?? null,
     loading: isLoading,
     error,
     setSection,
     submit,
+    unsubmit,
     refresh: mutate,
   };
 }

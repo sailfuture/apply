@@ -46,11 +46,14 @@ export async function POST(req: NextRequest) {
       incomeMaxRaw === null || incomeMaxRaw === undefined || incomeMaxRaw === ""
         ? null
         : Number(incomeMaxRaw);
-    // Accept either `tuition_payment` (current canonical name) or the
-    // legacy `award_amount` so any in-flight client doesn't 400 during
-    // the rename window. `tuition_payment` wins if both are present.
-    const tuitionPayment = Number(
-      body?.tuition_payment ?? body?.award_amount
+    // Canonical field is `tuition_percentage` (decimal, 0–100). Accept
+    // legacy `tuition_payment` / `award_amount` field names too so a
+    // browser tab opened mid-rename doesn't 400. Canonical name wins
+    // when multiple are present.
+    const tuitionPercentage = Number(
+      body?.tuition_percentage ??
+        body?.tuition_payment ??
+        body?.award_amount
     );
 
     if (!Number.isFinite(yearId) || yearId <= 0) {
@@ -83,7 +86,9 @@ export async function POST(req: NextRequest) {
       household_size: householdSize,
       income_min: incomeMin,
       income_max: incomeMax,
-      tuition_payment: Number.isFinite(tuitionPayment) ? tuitionPayment : 0,
+      tuition_percentage: Number.isFinite(tuitionPercentage)
+        ? tuitionPercentage
+        : 0,
     });
     return NextResponse.json(created, { status: 201 });
   } catch (err) {

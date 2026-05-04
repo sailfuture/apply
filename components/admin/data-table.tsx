@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ChevronUp, ChevronDown, ChevronsUpDown } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 export interface ColumnDef<T> {
   key: string;
@@ -21,6 +22,17 @@ export interface ColumnDef<T> {
   searchable?: boolean;
   render?: (row: T) => React.ReactNode;
   accessor?: (row: T) => string | number | null | undefined;
+  /** Tailwind width class applied to BOTH the header and body cells
+   *  (e.g. `"w-[180px]"`, `"w-1/4"`). Set this when multiple tables on
+   *  the same page share columns and need their widths to line up
+   *  vertically — a `<table>` otherwise sizes columns purely from
+   *  content, so two siblings with the same headers can still drift.
+   *  Pair with `<Table className="table-fixed">` if rendering inside
+   *  a fixed-layout container. */
+  width?: string;
+  /** Tailwind alignment class for body cells (e.g. `"text-right"`).
+   *  Defaults to left-aligned. */
+  align?: "left" | "right" | "center";
 }
 
 interface DataTableProps<T> {
@@ -114,38 +126,47 @@ export function DataTable<T extends Record<string, unknown>>({
         />
       )}
 
-      {/* `bg-white` so the table sits flush on cards / colored page
-          backgrounds without inheriting tint. The header row gets a
-          muted band to mirror the look across the rest of the admin
-          surface. */}
+      {/* `table-fixed` only when at least one column actually has an
+          explicit `width` — otherwise content-based auto-sizing is
+          fine. With `fixed`, browsers honour the `w-...` class on the
+          first row of cells and distribute leftover space evenly to
+          width-less columns; with `auto`, those classes are
+          suggestions and content can override them. */}
       <div className="rounded-md border bg-white overflow-hidden">
-        <Table>
+        <Table
+          className={cn(columns.some((c) => c.width) && "table-fixed")}
+        >
           <TableHeader className="bg-muted/40">
             <TableRow className="hover:bg-muted/40">
               {columns.map((col) => (
                 <TableHead
                   key={col.key}
-                  className="text-xs font-semibold uppercase tracking-wider text-muted-foreground"
+                  className={cn(
+                    "text-xs font-semibold uppercase tracking-wider text-muted-foreground",
+                    col.width,
+                    col.align === "right" && "text-right",
+                    col.align === "center" && "text-center"
+                  )}
                 >
                   {col.sortable ? (
                     <button
                       type="button"
-                      className="inline-flex items-center gap-1 hover:text-foreground"
+                      className="inline-flex items-center gap-1 hover:text-foreground truncate"
                       onClick={() => toggleSort(col.key)}
                     >
-                      {col.header}
+                      <span className="truncate">{col.header}</span>
                       {sortKey === col.key ? (
                         sortDir === "asc" ? (
-                          <ChevronUp className="size-3.5" />
+                          <ChevronUp className="size-3.5 shrink-0" />
                         ) : (
-                          <ChevronDown className="size-3.5" />
+                          <ChevronDown className="size-3.5 shrink-0" />
                         )
                       ) : (
-                        <ChevronsUpDown className="size-3.5 opacity-40" />
+                        <ChevronsUpDown className="size-3.5 opacity-40 shrink-0" />
                       )}
                     </button>
                   ) : (
-                    col.header
+                    <span className="truncate">{col.header}</span>
                   )}
                 </TableHead>
               ))}
@@ -156,7 +177,7 @@ export function DataTable<T extends Record<string, unknown>>({
               <TableRow>
                 <TableCell
                   colSpan={columns.length}
-                  className="h-24 text-center text-muted-foreground"
+                  className="h-24 text-center text-sm text-muted-foreground"
                 >
                   No results found.
                 </TableCell>
@@ -169,7 +190,15 @@ export function DataTable<T extends Record<string, unknown>>({
                   onClick={() => onRowClick?.(row)}
                 >
                   {columns.map((col) => (
-                    <TableCell key={col.key}>
+                    <TableCell
+                      key={col.key}
+                      className={cn(
+                        "text-sm truncate",
+                        col.width,
+                        col.align === "right" && "text-right",
+                        col.align === "center" && "text-center"
+                      )}
+                    >
                       {col.render
                         ? col.render(row)
                         : String(row[col.key] ?? "")}

@@ -38,13 +38,10 @@ const STATUS_LABEL: Record<YearStatus, string> = {
   none: "—",
 };
 
-const STATUS_BADGE_CLASS: Record<YearStatus, string> = {
-  active: "bg-emerald-100 text-emerald-700 border-emerald-200",
-  next: "bg-blue-100 text-blue-700 border-blue-200",
-  past: "bg-slate-100 text-slate-600 border-slate-200",
-  future: "bg-amber-100 text-amber-700 border-amber-200",
-  none: "bg-muted text-muted-foreground border-border",
-};
+// Status pill is monochrome — every state uses the same muted badge
+// so the table reads as plain reference data, not a status dashboard.
+// The status word itself carries the semantic.
+const STATUS_BADGE_CLASS = "bg-muted text-muted-foreground border-border";
 
 function deriveStatus(y: XanoSchoolYear): YearStatus {
   if (y.isActive) return "active";
@@ -140,12 +137,15 @@ export default function AdminSchoolYearsPage() {
       </div>
 
       {error ? (
-        <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+        <div className="rounded-lg border border-border bg-muted/30 p-4 text-sm text-muted-foreground">
           Failed to load school years:{" "}
           {error instanceof Error ? error.message : "unknown error"}
         </div>
       ) : null}
 
+      {/* Single-line cells, monochrome, all body text at `text-sm`.
+          Status is its own column so it stays at the same size as
+          the year label rather than visually competing with it. */}
       <div className="rounded-lg border bg-white">
         <Table>
           <TableHeader className="bg-muted/40">
@@ -154,16 +154,22 @@ export default function AdminSchoolYearsPage() {
                 Year
               </TableHead>
               <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Status
+              </TableHead>
+              <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                 Dates
               </TableHead>
               <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                 Tuition
               </TableHead>
               <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Fees
+                Annual Fees
               </TableHead>
               <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Deadlines
+                Transport
+              </TableHead>
+              <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                App Deadline
               </TableHead>
               <TableHead className="text-right text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                 Actions
@@ -174,7 +180,7 @@ export default function AdminSchoolYearsPage() {
             {isLoading && years.length === 0 ? (
               Array.from({ length: 3 }).map((_, i) => (
                 <TableRow key={`skeleton-${i}`}>
-                  <TableCell colSpan={6}>
+                  <TableCell colSpan={8}>
                     <Skeleton className="h-9 w-full" />
                   </TableCell>
                 </TableRow>
@@ -182,7 +188,7 @@ export default function AdminSchoolYearsPage() {
             ) : years.length === 0 ? (
               <TableRow>
                 <TableCell
-                  colSpan={6}
+                  colSpan={8}
                   className="text-center text-sm text-muted-foreground py-10"
                 >
                   No school years yet. Click <strong>Add School Year</strong>{" "}
@@ -198,51 +204,34 @@ export default function AdminSchoolYearsPage() {
                     className="cursor-pointer"
                     onClick={() => router.push(`/admin/school-years/${y.id}`)}
                   >
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium">
-                          {y.year_name || `Year #${y.id}`}
+                    <TableCell className="text-sm font-medium truncate">
+                      {y.year_name || `Year #${y.id}`}
+                    </TableCell>
+                    <TableCell className="text-sm">
+                      {status !== "none" ? (
+                        <span
+                          className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${STATUS_BADGE_CLASS}`}
+                        >
+                          {STATUS_LABEL[status]}
                         </span>
-                        {status !== "none" ? (
-                          <span
-                            className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${STATUS_BADGE_CLASS[status]}`}
-                          >
-                            {STATUS_LABEL[status]}
-                          </span>
-                        ) : null}
-                      </div>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
                     </TableCell>
-                    <TableCell>
-                      <p className="text-sm">{formatDate(y.start_date)}</p>
-                      <p className="text-xs text-muted-foreground">
-                        to {formatDate(y.end_date)}
-                      </p>
+                    <TableCell className="text-sm truncate">
+                      {formatDate(y.start_date)} – {formatDate(y.end_date)}
                     </TableCell>
-                    <TableCell>
-                      <p className="font-medium">
-                        {formatCurrency(y.tuition)}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        OS award:{" "}
-                        {formatCurrency(y.opportunity_scholarship_award)}
-                      </p>
+                    <TableCell className="text-sm tabular-nums">
+                      {formatCurrency(y.tuition)}
                     </TableCell>
-                    <TableCell>
-                      <p className="text-sm">
-                        Annual: {formatCurrency(y.annual_fees)}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        Transport: {formatCurrency(y.transportation_fees)}
-                      </p>
+                    <TableCell className="text-sm tabular-nums">
+                      {formatCurrency(y.annual_fees)}
                     </TableCell>
-                    <TableCell>
-                      <p className="text-sm">
-                        App: {formatDate(y.application_deadline)}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        Scholarship:{" "}
-                        {formatDate(y.opportunity_scholarship_deadline)}
-                      </p>
+                    <TableCell className="text-sm tabular-nums">
+                      {formatCurrency(y.transportation_fees)}
+                    </TableCell>
+                    <TableCell className="text-sm truncate">
+                      {formatDate(y.application_deadline)}
                     </TableCell>
                     <TableCell className="text-right">
                       <div

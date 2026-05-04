@@ -42,43 +42,55 @@ interface AppProgressRow {
   isSubmitted: boolean;
   submitted_at: number | null;
   last_edited: number | null;
+  is_archived: boolean;
+  reason_for_archive: string | null;
   [key: string]: unknown;
 }
 
-type ProgressFilter = "all" | "submitted" | "in_progress" | "not_started";
+type ProgressFilter =
+  | "all"
+  | "submitted"
+  | "in_progress"
+  | "not_started"
+  | "archived";
 
 const FILTER_LABEL: Record<ProgressFilter, string> = {
   all: "All families",
   submitted: "Submitted",
   in_progress: "In progress",
   not_started: "Not started",
+  archived: "Archived",
 };
 
 function deriveFilter(row: AppProgressRow): ProgressFilter {
+  // Archived takes precedence — an archived row drops out of every
+  // active queue and only appears in the Archived card below.
+  if (row.is_archived) return "archived";
   if (row.isSubmitted) return "submitted";
   if (row.sections_complete > 0) return "in_progress";
   return "not_started";
 }
 
 /**
- * Per-section route slug. Same first three sections regardless of flow,
- * different fourth (Testing vs Transportation), and the reapply flow
- * uses `reapply-*` slugs to land on the right section editor.
+ * Hash anchors the family detail page exposes for in-page scrolling.
+ * Section pills on this list view jump straight to the matching
+ * section on the family detail page rather than opening a separate
+ * per-section editor — admin gets the full review layout (sidenav +
+ * notes drawer + every other section in context) and the page
+ * scrolls to whichever pill they clicked.
+ *
+ * Reapply rows reuse the same anchors. The family detail page renders
+ * the apply-flow section IDs regardless of flow type, so a reapply
+ * "Transportation" pill currently lands on `section-testing` (the
+ * closest analog at this point in the flow); admins can scroll from
+ * there to find transportation details if/when we surface them.
  */
-function sectionSlugs(row: AppProgressRow) {
-  if (row.flow_type === "reapply") {
-    return {
-      family: "reapply-family",
-      students: "reapply-students",
-      financial_aid: "reapply-financial-aid",
-      fourth: "reapply-transportation",
-    };
-  }
+function sectionAnchors(_row: AppProgressRow) {
   return {
-    family: "family",
-    students: "students",
-    financial_aid: "financial-aid",
-    fourth: "testing",
+    family: "section-family",
+    students: "section-students",
+    financial_aid: "section-financial-aid",
+    fourth: "section-testing",
   };
 }
 
@@ -88,8 +100,10 @@ function sectionSlugs(row: AppProgressRow) {
  * `flow_type` discriminator that pivots the fourth-section column
  * (Testing vs Transportation) and the section editor slugs.
  *
- * Tables are bucketed by status (Submitted / In Progress / Not Started)
- * so admins can triage submitted apps first and chase the rest later.
+ * The page renders three discrete tables — Submitted / In Progress /
+ * Not Started — that share the same column shape so widths line up
+ * vertically across the page. Cells are intentionally single-line +
+ * monochrome; click into a row for the full detail.
  */
 export default function ApplicationsPage() {
   const router = useRouter();
@@ -108,13 +122,15 @@ export default function ApplicationsPage() {
     const submitted: AppProgressRow[] = [];
     const inProgress: AppProgressRow[] = [];
     const notStarted: AppProgressRow[] = [];
+    const archived: AppProgressRow[] = [];
     for (const r of all) {
       const f = deriveFilter(r);
-      if (f === "submitted") submitted.push(r);
+      if (f === "archived") archived.push(r);
+      else if (f === "submitted") submitted.push(r);
       else if (f === "in_progress") inProgress.push(r);
       else notStarted.push(r);
     }
-    return { submitted, inProgress, notStarted };
+    return { submitted, inProgress, notStarted, archived };
   }, [all]);
 
   const visibleGroups = useMemo(() => {
@@ -123,6 +139,7 @@ export default function ApplicationsPage() {
       submitted: filter === "submitted" ? groups.submitted : [],
       inProgress: filter === "in_progress" ? groups.inProgress : [],
       notStarted: filter === "not_started" ? groups.notStarted : [],
+      archived: filter === "archived" ? groups.archived : [],
     };
   }, [filter, groups]);
 
@@ -132,48 +149,46 @@ export default function ApplicationsPage() {
       submitted: groups.submitted.length,
       in_progress: groups.inProgress.length,
       not_started: groups.notStarted.length,
+      archived: groups.archived.length,
     } satisfies Record<ProgressFilter, number>;
   }, [all, groups]);
 
-  function openSection(row: AppProgressRow, slug: string) {
+  // Navigate to the family detail page and let the URL hash trigger
+  // the page's own smooth-scroll handler (same code path the in-page
+  // sidenav uses). Note: Next's `router.push` reliably navigates
+  // _to_ the page but doesn't always trigger scrolling to the hash
+  // when the page is already client-cached, so we set the hash
+  // separately on a microtask after the push lands. The family
+  // detail page reads `window.location.hash` on mount.
+  function openSection(row: AppProgressRow, anchor: string) {
     router.push(
-      `/admin/families/${row.family_id}/${slug}?yearId=${row.year_id}`
+      `/admin/families/${row.family_id}?yearId=${row.year_id}#${anchor}`
     );
   }
 
+  // Shared column definitions across all three tables. `width` is set
+  // on every column so the three tables line up vertically — without
+  // it, each table's columns auto-size to its own content and the
+  // headers drift between groups.
   const columns: ColumnDef<AppProgressRow>[] = [
     {
       key: "family_name",
       header: "Family",
       sortable: true,
       searchable: true,
+      width: "w-[22%]",
       render: (row) => (
-        <div className="min-w-0">
-          <p className="truncate font-medium">{row.family_name}</p>
-          {row.primary_name || row.primary_email ? (
-            <p className="truncate text-xs text-muted-foreground">
-              {row.primary_name}
-              {row.primary_name && row.primary_email ? " · " : ""}
-              {row.primary_email}
-            </p>
-          ) : null}
-        </div>
+        <span className="block truncate font-medium">{row.family_name}</span>
       ),
     },
     {
       key: "flow_type",
       header: "Type",
       sortable: true,
+      width: "w-[10%]",
       render: (row) => (
-        <span
-          className={cn(
-            "inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider",
-            row.flow_type === "reapply"
-              ? "bg-purple-50 text-purple-700 border-purple-200"
-              : "bg-sky-50 text-sky-700 border-sky-200"
-          )}
-        >
-          {row.flow_type === "reapply" ? "Re-Apply" : "New"}
+        <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+          {row.flow_type === "reapply" ? "Reapply" : "New"}
         </span>
       ),
     },
@@ -181,17 +196,22 @@ export default function ApplicationsPage() {
       key: "student_count",
       header: "Students",
       sortable: true,
-      render: (row) =>
-        row.student_count === 1 ? "1 student" : `${row.student_count} students`,
+      width: "w-[8%]",
+      render: (row) => (
+        <span className="block truncate">
+          {row.student_count === 1 ? "1" : `${row.student_count}`}
+        </span>
+      ),
     },
     {
       key: "family_done",
       header: "Family",
       sortable: true,
+      width: "w-[10%]",
       render: (row) => (
         <SectionPill
           complete={row.family_done}
-          onClick={() => openSection(row, sectionSlugs(row).family)}
+          onClick={() => openSection(row, sectionAnchors(row).family)}
           label={`Family for ${row.family_name}`}
         />
       ),
@@ -200,10 +220,11 @@ export default function ApplicationsPage() {
       key: "students_done",
       header: "Students",
       sortable: true,
+      width: "w-[10%]",
       render: (row) => (
         <SectionPill
           complete={row.students_done}
-          onClick={() => openSection(row, sectionSlugs(row).students)}
+          onClick={() => openSection(row, sectionAnchors(row).students)}
           label={`Students for ${row.family_name}`}
         />
       ),
@@ -212,11 +233,12 @@ export default function ApplicationsPage() {
       key: "financial_aid_done",
       header: "Financial Aid",
       sortable: true,
+      width: "w-[10%]",
       render: (row) => (
         <SectionPill
           complete={row.financial_aid_done}
           onClick={() =>
-            openSection(row, sectionSlugs(row).financial_aid)
+            openSection(row, sectionAnchors(row).financial_aid)
           }
           label={`Financial Aid for ${row.family_name}`}
         />
@@ -226,50 +248,40 @@ export default function ApplicationsPage() {
       key: "fourth_done",
       header: "Testing / Transport",
       sortable: true,
+      width: "w-[10%]",
       render: (row) => (
         <SectionPill
           complete={row.fourth_done}
-          onClick={() => openSection(row, sectionSlugs(row).fourth)}
+          onClick={() => openSection(row, sectionAnchors(row).fourth)}
           label={`${row.fourth_label} for ${row.family_name}`}
-          fallbackText={row.fourth_label}
         />
       ),
     },
-    {
-      key: "isSubmitted",
-      header: "Status",
-      sortable: true,
-      render: (row) => {
-        const f = deriveFilter(row);
-        const cls =
-          f === "submitted"
-            ? "bg-blue-100 text-blue-700 border-blue-200"
-            : f === "in_progress"
-              ? "bg-amber-100 text-amber-700 border-amber-200"
-              : "bg-slate-100 text-slate-600 border-slate-200";
-        return (
-          <span
-            className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ${cls}`}
-          >
-            {FILTER_LABEL[f]}
-          </span>
-        );
-      },
-    },
+    // Status column was removed — the surrounding section card already
+    // names the bucket ("SUBMITTED", "IN PROGRESS", "NOT STARTED",
+    // "ARCHIVED"), so re-stamping every row with the same label is
+    // redundant noise. The Submitted-date column below carries the
+    // only status nuance that varies row-to-row.
     {
       key: "submitted_at",
       header: "Submitted",
       sortable: true,
-      render: (row) =>
-        row.submitted_at
-          ? new Date(row.submitted_at).toLocaleDateString()
-          : "—",
+      width: "w-[10%]",
+      render: (row) => (
+        <span className="block truncate">
+          {row.submitted_at
+            ? new Date(row.submitted_at).toLocaleDateString()
+            : "—"}
+        </span>
+      ),
     },
     {
       key: "id",
       header: "",
+      width: "w-[40px]",
+      align: "right",
       render: () => (
-        <ChevronRight className="size-4 text-muted-foreground" />
+        <ChevronRight className="size-4 text-muted-foreground inline" />
       ),
     },
   ];
@@ -305,7 +317,7 @@ export default function ApplicationsPage() {
       </div>
 
       {error ? (
-        <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+        <div className="rounded-lg border border-border bg-muted/30 p-4 text-sm text-muted-foreground">
           Failed to load applications:{" "}
           {error instanceof Error ? error.message : "unknown error"}
         </div>
@@ -320,16 +332,23 @@ export default function ApplicationsPage() {
           <ApplicationsGroup
             title="Submitted"
             description="Awaiting admissions decision."
+            // Section status dot — green = "ready for admin action"
+            // (everything in this card is fully submitted). Tone matches
+            // the per-section green-check used in the row cells.
+            dotColor="bg-green-500"
             rows={visibleGroups.submitted}
             isLoading={isLoading && filter !== "in_progress" && filter !== "not_started"}
             error={error}
             columns={columns}
             router={router}
-            tone="blue"
           />
           <ApplicationsGroup
             title="In Progress"
             description="Started but not yet submitted by the family."
+            // Yellow = "in flight, waiting on the family." Same amber
+            // family used by the in-progress step circle on the
+            // parent-side side nav for visual consistency.
+            dotColor="bg-amber-500"
             rows={visibleGroups.inProgress}
             isLoading={
               isLoading && filter !== "submitted" && filter !== "not_started"
@@ -337,11 +356,13 @@ export default function ApplicationsPage() {
             error={error}
             columns={columns}
             router={router}
-            tone="amber"
           />
           <ApplicationsGroup
             title="Not Started"
             description="Family has a progress row but hasn't completed any sections."
+            // Red = "no movement." Lets admin spot stalled families at a
+            // glance without reading the section pills.
+            dotColor="bg-red-500"
             rows={visibleGroups.notStarted}
             isLoading={
               isLoading && filter !== "submitted" && filter !== "in_progress"
@@ -349,7 +370,26 @@ export default function ApplicationsPage() {
             error={error}
             columns={columns}
             router={router}
-            tone="slate"
+          />
+          {/* Archived — admin retired the row via the family detail
+              page's Archive button. Surfaces here so admin can find
+              the row again (and read the captured reason) without
+              digging through Xano. Slate dot keeps the visual
+              hierarchy below the active queues. */}
+          <ApplicationsGroup
+            title="Archived"
+            description="Set aside by admin. Click into a row to read the reason or unarchive."
+            dotColor="bg-slate-400"
+            rows={visibleGroups.archived}
+            isLoading={
+              isLoading &&
+              filter !== "submitted" &&
+              filter !== "in_progress" &&
+              filter !== "not_started"
+            }
+            error={error}
+            columns={columns}
+            router={router}
           />
         </div>
       )}
@@ -361,21 +401,17 @@ function SectionPill({
   complete,
   onClick,
   label,
-  fallbackText,
 }: {
   complete: boolean;
   onClick: () => void;
   label: string;
-  fallbackText?: string;
 }) {
   return (
     <button
       type="button"
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium transition-colors",
-        complete
-          ? "text-emerald-700 hover:bg-emerald-50"
-          : "text-muted-foreground hover:bg-muted"
+        "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs transition-colors hover:bg-muted",
+        complete ? "text-foreground" : "text-muted-foreground"
       )}
       onClick={(e) => {
         e.stopPropagation();
@@ -384,13 +420,13 @@ function SectionPill({
       title={`Open ${label}`}
     >
       {complete ? (
-        <CheckCircle2 className="size-4 text-green-600" />
+        // Green check is the only color in the table — explicit signal
+        // that the section is done. Everything else stays monochrome.
+        <CheckCircle2 className="size-3.5 shrink-0 text-green-600" />
       ) : (
-        <Circle className="size-4 text-muted-foreground/40" />
+        <Circle className="size-3.5 shrink-0" />
       )}
-      <span className="underline-offset-2 group-hover:underline">
-        {complete ? "Complete" : fallbackText ?? "Not yet"}
-      </span>
+      <span className="truncate">{complete ? "Done" : "—"}</span>
     </button>
   );
 }
@@ -403,7 +439,7 @@ function ApplicationsGroup({
   error,
   columns,
   router,
-  tone,
+  dotColor,
 }: {
   title: string;
   description: string;
@@ -412,25 +448,33 @@ function ApplicationsGroup({
   error: unknown;
   columns: ColumnDef<AppProgressRow>[];
   router: AdminRouter;
-  tone: "blue" | "amber" | "slate";
+  /** Tailwind bg-... class for the small status dot rendered before the
+   *  title — green for Submitted, amber for In Progress, red for Not
+   *  Started. Lives at the section-card level rather than inside the
+   *  table since the section IS the status. */
+  dotColor: string;
 }) {
   if (!isLoading && !error && rows.length === 0) return null;
-  const dotClass =
-    tone === "blue"
-      ? "bg-blue-500"
-      : tone === "amber"
-        ? "bg-amber-500"
-        : "bg-slate-400";
   return (
     <Card className="overflow-hidden bg-white py-0 gap-0">
       <CardHeader className="py-4 border-b bg-white">
-        <div className="flex items-center gap-3">
-          <span className={cn("inline-block size-2 rounded-full", dotClass)} />
-          <CardTitle className="text-lg">{title}</CardTitle>
-          <span className="text-sm tabular-nums text-muted-foreground">
+        <div className="flex items-baseline gap-3">
+          {/* `self-center` so the dot vertically aligns to the
+              uppercase title text rather than its baseline. */}
+          <span
+            className={cn(
+              "size-2.5 shrink-0 self-center rounded-full",
+              dotColor
+            )}
+            aria-hidden
+          />
+          <CardTitle className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+            {title}
+          </CardTitle>
+          <span className="text-xs tabular-nums text-muted-foreground">
             ({rows.length})
           </span>
-          <p className="text-xs text-muted-foreground ml-2">{description}</p>
+          <p className="text-xs text-muted-foreground">{description}</p>
         </div>
       </CardHeader>
       <CardContent className="p-4 bg-white">

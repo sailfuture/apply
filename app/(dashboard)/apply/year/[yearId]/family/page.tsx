@@ -188,6 +188,38 @@ export default function FamilyStepPage() {
     }
   }
 
+  /**
+   * Onblur autosave for the family name. Goes through the same
+   * `trackAutosave` channel as the parent fields so the global
+   * SaveStatusPill picks it up. We only fire when the trimmed value
+   * is non-empty so accidental backspace-to-blank doesn't wipe a
+   * previously-saved name.
+   */
+  async function saveFamilyName(value: string) {
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    try {
+      await trackAutosave(
+        fetch("/api/families", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ family_name: trimmed }),
+        }).then(async (res) => {
+          if (!res.ok) {
+            const body = await res.text().catch(() => "");
+            throw new Error(`Save failed (${res.status}) ${body}`);
+          }
+          return res;
+        })
+      );
+      // Bump the cached family record so the global header / sidebar
+      // pick up the new name without a hard refresh.
+      mutate("/api/families");
+    } catch (err) {
+      console.error("Failed to save family name:", err);
+    }
+  }
+
   async function handleSaveAll() {
     setSaving(true);
     try {
@@ -408,6 +440,35 @@ export default function FamilyStepPage() {
             Add at least one primary parent or guardian for your family.
           </h1>
         </div>
+
+        {/* Editable family name. Initially seeded from the welcome
+            page ("<Last Name> Family") but parents can rewrite it
+            here any time during the application — autosaves on blur
+            via the global SaveStatusPill. */}
+        <Card className="overflow-hidden gap-0 py-0 ring-0 border">
+          <CardContent className="py-5 px-6 bg-white dark:bg-background">
+            <Field>
+              <FieldLabel htmlFor="family-name">Family name</FieldLabel>
+              <Input
+                id="family-name"
+                placeholder="e.g. The Walsh Family"
+                value={familyName}
+                onChange={(e) => setFamilyName(e.target.value)}
+                onBlur={(e) => saveFamilyName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    (e.target as HTMLInputElement).blur();
+                  }
+                }}
+                className={!familyName.trim() ? "border-2 border-red-400" : ""}
+              />
+              <p className="text-xs text-muted-foreground mt-1.5">
+                Shown on the dashboard, in the global header, and on
+                anything we send your family. Edits save on blur.
+              </p>
+            </Field>
+          </CardContent>
+        </Card>
 
         {parents.length === 0 ? (
           <div className="flex min-h-[20vh] items-center justify-center rounded-lg border">

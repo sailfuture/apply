@@ -39,14 +39,18 @@ export async function PATCH(
         if (Number.isFinite(n)) patch.income_max = n;
       }
     }
-    // Accept the canonical `tuition_payment` field; also fall back to
-    // the legacy `award_amount` so a stale tab doesn't 400 mid-rename.
-    if ("tuition_payment" in body) {
+    // Canonical cell value is `tuition_percentage`. Accept legacy
+    // names (`tuition_payment`, `award_amount`) too so a stale browser
+    // tab doesn't 400 during the rename window.
+    if ("tuition_percentage" in body) {
+      const n = Number(body.tuition_percentage);
+      patch.tuition_percentage = Number.isFinite(n) ? n : 0;
+    } else if ("tuition_payment" in body) {
       const n = Number(body.tuition_payment);
-      patch.tuition_payment = Number.isFinite(n) ? n : 0;
+      patch.tuition_percentage = Number.isFinite(n) ? n : 0;
     } else if ("award_amount" in body) {
       const n = Number(body.award_amount);
-      patch.tuition_payment = Number.isFinite(n) ? n : 0;
+      patch.tuition_percentage = Number.isFinite(n) ? n : 0;
     }
     if (Object.keys(patch).length === 0) {
       return NextResponse.json(

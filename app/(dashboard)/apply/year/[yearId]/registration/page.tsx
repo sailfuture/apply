@@ -142,6 +142,11 @@ interface Application {
   id: number;
   registration_students_id: number;
   registration_school_years_id: number;
+  /** Soft-delete flag — `false` means the parent removed this student
+   *  from the year. We hide inactive apps from the registration roster
+   *  so removed students don't auto-preload back in. Treat undefined
+   *  as active for legacy rows that predate the column. */
+  isActive?: boolean;
 }
 
 interface FileMetadata {
@@ -782,9 +787,16 @@ export default function RegistrationPage() {
   const signingInstanceRef = useRef<{ destroy: () => void } | null>(null);
   const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Derived: year applications and enrolled students
+  // Derived: year applications and enrolled students. Inactive apps
+  // (`isActive=false`) are excluded — when a parent removes a student
+  // from the year, that student shouldn't auto-preload back into the
+  // registration roster.
   const yearApps: Application[] = applicationsData
-    ? (applicationsData as Application[]).filter((a) => a.registration_school_years_id === yearId)
+    ? (applicationsData as Application[]).filter(
+        (a) =>
+          a.registration_school_years_id === yearId &&
+          a.isActive !== false
+      )
     : [];
 
   const enrolledStudents: Student[] = (() => {
@@ -1055,11 +1067,14 @@ export default function RegistrationPage() {
       // in concurrent/strict mode), so by the time the `if` check below runs the
       // Set could still be empty. This is why students with saved registrations
       // weren't being auto-selected on reload.
+      //
+      // We now pre-select **every** active student (not just the ones with a
+      // saved registration row) so the parent doesn't have to manually
+      // click "Add Student" for each one — every isActive=true app
+      // means that student needs a registration packet.
       const existingIds = new Set<number>();
-      enrolledStudents.forEach((s, i) => {
-        if (results[i] && results[i]!.id) {
-          existingIds.add(s.id);
-        }
+      enrolledStudents.forEach((s) => {
+        existingIds.add(s.id);
       });
 
       setRegistrations((prev) => {

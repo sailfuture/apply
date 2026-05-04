@@ -108,9 +108,14 @@ export async function GET(req: NextRequest) {
       parentsByFamily.set(family.id, matched);
     }
 
+    // Per-family active-student count for the requested year. One
+    // application row = one student. `isActive=false` rows are
+    // soft-deleted (kept for history) and excluded from admin counts.
+    // Treat `undefined` as active so legacy rows still count.
     const appsByFamily = new Map<number, number>();
     for (const a of apps) {
       if (Number(a.registration_school_years_id) !== yearId) continue;
+      if (a.isActive === false) continue;
       const fid = Number(a.registration_families_id);
       appsByFamily.set(fid, (appsByFamily.get(fid) ?? 0) + 1);
     }
@@ -154,6 +159,11 @@ export async function GET(req: NextRequest) {
         isSubmitted: !!p.isSubmitted,
         submitted_at: p.submitted_at,
         last_edited: p.last_edited,
+        // Surface the archive flag + reason so the page can split
+        // archived rows into their own card. `is_archived` is
+        // optional on legacy rows; treat missing as `false`.
+        is_archived: p.is_archived === true,
+        reason_for_archive: p.reason_for_archive ?? null,
       };
     });
 
@@ -181,6 +191,12 @@ export async function GET(req: NextRequest) {
         isSubmitted: !!p.isSubmitted,
         submitted_at: null,
         last_edited: p.last_edited,
+        // Reapply rows don't carry an archive column today — leave
+        // the field on the row so the type stays uniform across
+        // both flows; admin's Archive button only writes to the
+        // initial apply progress row.
+        is_archived: false,
+        reason_for_archive: null,
       };
     });
 
@@ -224,4 +240,6 @@ export interface UnifiedAppRow {
   isSubmitted: boolean;
   submitted_at: number | null;
   last_edited: number | null;
+  is_archived: boolean;
+  reason_for_archive: string | null;
 }

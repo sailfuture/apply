@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
-import { CheckCircle2, Circle, ChevronRight } from "lucide-react";
+import { CheckCircle2, Circle, ChevronRight, Inbox } from "lucide-react";
 import { DataTable, type ColumnDef } from "@/components/admin/data-table";
 import {
   Card,
@@ -19,7 +19,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { adminFetcher } from "@/lib/admin-fetcher";
-import { cn } from "@/lib/utils";
 
 interface RegStudentRow {
   id: number;
@@ -65,12 +64,13 @@ function deriveFilter(row: RegStudentRow): ProgressFilter {
 }
 
 /**
- * Admin Registrations list — one row per student who's been confirmed
- * to be starting in the selected year (i.e. their `registration_application`
- * row has `isAccepted=true`). The four post-acceptance sections (Tuition,
- * Enrollment Agreement, Registration Packet, Volunteer Hours) are still
- * tracked at the family level today, so multiple student rows from the
- * same family will share the same section dots — that's expected.
+ * Admin Registrations list — one row per accepted student for the
+ * selected year. Three tables (Submitted / In Progress / Not Started)
+ * with shared column widths so the headers line up across groups.
+ *
+ * Cells are deliberately single-line + monochrome. Click into a row
+ * to land on the family detail page where post-acceptance details
+ * live.
  */
 export default function RegistrationsPage() {
   const router = useRouter();
@@ -116,22 +116,38 @@ export default function RegistrationsPage() {
     } satisfies Record<ProgressFilter, number>;
   }, [all, groups]);
 
+  // Shared column shape across all three tables so widths line up
+  // vertically — see the matching pattern on the Applications page.
   const columns: ColumnDef<RegStudentRow>[] = [
     {
       key: "student_full_name",
       header: "Student",
       sortable: true,
       searchable: true,
+      width: "w-[24%]",
       render: (row) => (
-        <div className="min-w-0">
-          <p className="truncate font-medium">{row.student_full_name}</p>
-          <p className="truncate text-xs text-muted-foreground">
-            {row.student_grade ? (
-              <>Grade {row.student_grade} · </>
-            ) : null}
-            {row.family_name}
-          </p>
-        </div>
+        <span className="block truncate font-medium">
+          {row.student_full_name}
+        </span>
+      ),
+    },
+    {
+      key: "student_grade",
+      header: "Grade",
+      sortable: true,
+      width: "w-[8%]",
+      render: (row) => (
+        <span className="block truncate">{row.student_grade || "—"}</span>
+      ),
+    },
+    {
+      key: "family_name",
+      header: "Family",
+      sortable: true,
+      searchable: true,
+      width: "w-[18%]",
+      render: (row) => (
+        <span className="block truncate">{row.family_name}</span>
       ),
     },
     {
@@ -139,96 +155,66 @@ export default function RegistrationsPage() {
       header: "Primary Contact",
       sortable: true,
       searchable: true,
-      render: (row) =>
-        row.primary_name || row.primary_email ? (
-          <div className="min-w-0">
-            <p className="truncate text-sm">{row.primary_name}</p>
-            <p className="truncate text-xs text-muted-foreground">
-              {row.primary_email}
-            </p>
-          </div>
-        ) : (
-          <span className="text-xs text-muted-foreground">—</span>
-        ),
+      width: "w-[20%]",
+      render: (row) => (
+        <span className="block truncate">
+          {row.primary_email || row.primary_name || "—"}
+        </span>
+      ),
     },
     {
       key: "sections_complete",
-      header: "Packet Progress",
+      header: "Packet",
       sortable: true,
+      width: "w-[10%]",
       render: (row) => (
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-medium tabular-nums text-muted-foreground">
+        <span className="inline-flex items-center gap-2">
+          <span className="text-xs tabular-nums text-muted-foreground">
             {row.sections_complete}/{row.sections_total}
           </span>
           <SectionDots row={row} />
-        </div>
+        </span>
       ),
     },
     {
       key: "enrollment_agreement_status",
-      header: "Enrollment Agreement",
+      header: "Agreement",
       sortable: true,
+      width: "w-[10%]",
       render: (row) => {
-        if (row.is_enrollment_agreement_signed) {
-          return (
-            <span className="inline-flex items-center rounded-full border bg-emerald-50 text-emerald-700 border-emerald-200 px-2.5 py-0.5 text-xs font-medium">
-              Signed
-            </span>
-          );
-        }
-        if (row.enrollment_agreement_status === "sent") {
-          return (
-            <span className="inline-flex items-center rounded-full border bg-amber-50 text-amber-700 border-amber-200 px-2.5 py-0.5 text-xs font-medium">
-              Sent
-            </span>
-          );
-        }
-        if (row.enrollment_agreement_status) {
-          return (
-            <span className="inline-flex items-center rounded-full border bg-slate-100 text-slate-700 border-slate-200 px-2.5 py-0.5 text-xs font-medium capitalize">
-              {row.enrollment_agreement_status}
-            </span>
-          );
-        }
-        return <span className="text-xs text-muted-foreground">—</span>;
-      },
-    },
-    {
-      key: "registration_submitted",
-      header: "Status",
-      sortable: true,
-      render: (row) => {
-        const f = deriveFilter(row);
-        const cls =
-          f === "submitted"
-            ? "bg-blue-100 text-blue-700 border-blue-200"
-            : f === "in_progress"
-              ? "bg-amber-100 text-amber-700 border-amber-200"
-              : "bg-slate-100 text-slate-600 border-slate-200";
+        const label = row.is_enrollment_agreement_signed
+          ? "Signed"
+          : row.enrollment_agreement_status === "sent"
+            ? "Sent"
+            : row.enrollment_agreement_status || "—";
         return (
-          <span
-            className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ${cls}`}
-          >
-            {FILTER_LABEL[f]}
+          <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+            {label}
           </span>
         );
       },
     },
-    {
-      key: "registration_submitted_date",
-      header: "Submitted",
-      sortable: true,
-      render: (row) =>
-        row.registration_submitted_date
-          ? new Date(row.registration_submitted_date).toLocaleDateString()
-          : "—",
-    },
+    // Status column was removed — the surrounding section card already
+    // names the bucket ("SUBMITTED", "IN PROGRESS", "NOT STARTED"), so
+    // re-stamping every row with the same label is redundant noise.
+    // The packet-section dots above carry the per-row nuance.
     {
       key: "id",
       header: "",
-      render: () => <ChevronRight className="size-4 text-muted-foreground" />,
+      width: "w-[40px]",
+      align: "right",
+      render: () => (
+        <ChevronRight className="size-4 text-muted-foreground inline" />
+      ),
     },
   ];
+
+  // True empty state — neither loading nor an error, year is selected,
+  // but there are zero accepted students for the year. Shown ONCE
+  // (not per-group) since rendering three "no rows" placeholders
+  // adds noise.
+  const showEmptyState =
+    !!yearId && !isLoading && !error && all.length === 0;
 
   return (
     <div className="p-6 space-y-6">
@@ -262,7 +248,7 @@ export default function RegistrationsPage() {
       </div>
 
       {error ? (
-        <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+        <div className="rounded-lg border border-border bg-muted/30 p-4 text-sm text-muted-foreground">
           Failed to load registrations:{" "}
           {error instanceof Error ? error.message : "unknown error"}
         </div>
@@ -272,6 +258,8 @@ export default function RegistrationsPage() {
         <div className="rounded-lg border bg-white px-6 py-12 text-center text-sm text-muted-foreground">
           Pick a school year above to view its registrations.
         </div>
+      ) : showEmptyState ? (
+        <RegistrationsEmptyState />
       ) : (
         <div className="space-y-8">
           <RegistrationsGroup
@@ -283,10 +271,9 @@ export default function RegistrationsPage() {
             }
             error={error}
             columns={columns}
-            tone="blue"
             onRowClick={(row) =>
               router.push(
-                `/admin/families/${row.family_id}?yearId=${row.year_id}`
+                `/admin/registrations/${row.family_id}?yearId=${row.year_id}`
               )
             }
           />
@@ -299,10 +286,9 @@ export default function RegistrationsPage() {
             }
             error={error}
             columns={columns}
-            tone="amber"
             onRowClick={(row) =>
               router.push(
-                `/admin/families/${row.family_id}?yearId=${row.year_id}`
+                `/admin/registrations/${row.family_id}?yearId=${row.year_id}`
               )
             }
           />
@@ -315,16 +301,39 @@ export default function RegistrationsPage() {
             }
             error={error}
             columns={columns}
-            tone="slate"
             onRowClick={(row) =>
               router.push(
-                `/admin/families/${row.family_id}?yearId=${row.year_id}`
+                `/admin/registrations/${row.family_id}?yearId=${row.year_id}`
               )
             }
           />
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Shown when no students are accepted for the year yet. A registration
+ * row only exists once an admin flips a per-student `isAccepted`, so
+ * this state is "no acceptance decisions made yet" — the action the
+ * admin needs to take is over on the Applications page.
+ */
+function RegistrationsEmptyState() {
+  return (
+    <Card className="bg-white">
+      <CardContent className="py-16 px-6 text-center">
+        <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-full bg-muted">
+          <Inbox className="size-6 text-muted-foreground" />
+        </div>
+        <h3 className="text-base font-semibold">No registrations yet</h3>
+        <p className="mt-1 text-sm text-muted-foreground max-w-md mx-auto">
+          A student appears here once they&rsquo;ve been accepted for
+          this academic year. Head to <strong>Applications</strong> to
+          review submitted apps and accept families.
+        </p>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -335,7 +344,6 @@ function RegistrationsGroup({
   isLoading,
   error,
   columns,
-  tone,
   onRowClick,
 }: {
   title: string;
@@ -344,26 +352,20 @@ function RegistrationsGroup({
   isLoading: boolean;
   error: unknown;
   columns: ColumnDef<RegStudentRow>[];
-  tone: "blue" | "amber" | "slate";
   onRowClick: (row: RegStudentRow) => void;
 }) {
   if (!isLoading && !error && rows.length === 0) return null;
-  const dotClass =
-    tone === "blue"
-      ? "bg-blue-500"
-      : tone === "amber"
-        ? "bg-amber-500"
-        : "bg-slate-400";
   return (
     <Card className="overflow-hidden bg-white py-0 gap-0">
       <CardHeader className="py-4 border-b bg-white">
-        <div className="flex items-center gap-3">
-          <span className={cn("inline-block size-2 rounded-full", dotClass)} />
-          <CardTitle className="text-lg">{title}</CardTitle>
-          <span className="text-sm tabular-nums text-muted-foreground">
+        <div className="flex items-baseline gap-3">
+          <CardTitle className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+            {title}
+          </CardTitle>
+          <span className="text-xs tabular-nums text-muted-foreground">
             ({rows.length})
           </span>
-          <p className="text-xs text-muted-foreground ml-2">{description}</p>
+          <p className="text-xs text-muted-foreground">{description}</p>
         </div>
       </CardHeader>
       <CardContent className="p-4 bg-white">
@@ -379,6 +381,12 @@ function RegistrationsGroup({
   );
 }
 
+/**
+ * Four packet-section dots — Tuition / Enrollment Agreement /
+ * Registration Packet / Volunteer Hours. Green check on completion
+ * matches the Applications page section pills; everything else stays
+ * monochrome.
+ */
 function SectionDots({ row }: { row: RegStudentRow }) {
   const sections = [
     { key: "tuition", complete: row.isTuition, label: "Tuition" },
@@ -399,22 +407,22 @@ function SectionDots({ row }: { row: RegStudentRow }) {
     },
   ];
   return (
-    <div className="flex items-center gap-1">
+    <span className="inline-flex items-center gap-1">
       {sections.map((s) =>
         s.complete ? (
           <CheckCircle2
             key={s.key}
-            className="size-3.5 text-green-600"
+            className="size-3 text-green-600"
             aria-label={`${s.label} complete`}
           />
         ) : (
           <Circle
             key={s.key}
-            className="size-3.5 text-muted-foreground/40"
+            className="size-3 text-muted-foreground/40"
             aria-label={`${s.label} not complete`}
           />
         )
       )}
-    </div>
+    </span>
   );
 }

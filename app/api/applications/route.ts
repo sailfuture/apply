@@ -107,6 +107,11 @@ export async function POST(req: NextRequest) {
     isSubmitted: false,
     isOffered: false,
     isAccepted: false,
+    // Newly-created application rows always start active. Admin views
+    // filter on `isActive=true` so removing a student from the year
+    // (which flips this to false) hides them from the admin pipeline
+    // without losing the row.
+    isActive: true,
     opportunity_scholarship_award_amount: 0,
     liability_waiver_pandadoc_id: "",
     liability_waiver_status: "",

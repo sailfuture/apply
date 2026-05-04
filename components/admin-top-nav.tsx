@@ -34,6 +34,7 @@ const NAV_ITEMS: NavItem[] = [
   // on each row), so the standalone Re-Applications nav item is gone.
   { title: "Applications", href: "/admin/applications" },
   { title: "Registrations", href: "/admin/registrations" },
+  { title: "Enrolled", href: "/admin/enrolled" },
   { title: "School Years", href: "/admin/school-years" },
 ];
 

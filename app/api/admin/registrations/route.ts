@@ -6,14 +6,26 @@ import { xano } from "@/lib/xano";
  * Admin Registrations list — one row per **student who has been
  * confirmed to be starting** in the requested academic year.
  *
- * "Confirmed to be starting" === per-student application row with
- * `isAccepted=true` for the year. We pivot off of
- * `registration_application` (already one row per student per year)
- * rather than the family-level progress row, so a family with three
- * students where only two are accepted shows two registration rows.
+ * "Confirmed to be starting" === the family's per-year
+ * `registration_family_application_progress.isAccepted` is true.
+ * Acceptance is owned at the family level (the Approve button on the
+ * Scholarship Determination card flips the family-progress row, not
+ * the per-student application rows), so we filter applications by
+ * family membership in the accepted set rather than the per-student
+ * `isAccepted` flag.
+ *
+ * Per-student `isAccepted` is still honored as a fallback — legacy
+ * rows that pre-date the family-level approval flow may still carry
+ * it, and we don't want to silently hide them.
+ *
+ * Pivoting off `registration_application` (one row per student per
+ * year) keeps the row shape per-student: a family with three
+ * students where only two are active shows two registration rows.
  *
  * Joins:
- *   - `xano.applications.getAll()` filtered to (year, isAccepted=true)
+ *   - `xano.applications.getAll()` for the year's per-student rows
+ *   - `xano.familyApplicationProgress.getByYear(year)` to find which
+ *     families have been accepted
  *   - `xano.students.getAll()` for student names + DOB
  *   - `xano.families.getAll()` for the family label
  *   - `xano.parents.getAll()` for the primary parent's name + email
@@ -50,12 +62,14 @@ export async function GET(req: NextRequest) {
       familiesResult,
       parentsResult,
       progressResult,
+      familyProgressResult,
     ] = await Promise.allSettled([
       xano.applications.getAll(),
       xano.students.getAll(),
       xano.families.getAll(),
       xano.parents.getAll(),
       xano.studentRegistrationProgress.getByYear(yearId),
+      xano.familyApplicationProgress.getByYear(yearId),
     ]);
 
     if (appsResult.status === "rejected") {
@@ -88,6 +102,12 @@ export async function GET(req: NextRequest) {
         progressResult.reason
       );
     }
+    if (familyProgressResult.status === "rejected") {
+      console.error(
+        "[/api/admin/registrations] failed to load family application progress:",
+        familyProgressResult.reason
+      );
+    }
 
     const apps =
       appsResult.status === "fulfilled" ? appsResult.value : [];
@@ -99,6 +119,10 @@ export async function GET(req: NextRequest) {
       parentsResult.status === "fulfilled" ? parentsResult.value : [];
     const progressRows =
       progressResult.status === "fulfilled" ? progressResult.value : [];
+    const familyProgressRows =
+      familyProgressResult.status === "fulfilled"
+        ? familyProgressResult.value
+        : [];
 
     const studentById = new Map(students.map((s) => [s.id, s]));
     const familyById = new Map(families.map((f) => [f.id, f]));
@@ -120,11 +144,36 @@ export async function GET(req: NextRequest) {
       progressRows.map((p) => [p.registration_families_id, p])
     );
 
-    const acceptedApps = apps.filter(
-      (a) =>
-        Number(a.registration_school_years_id) === yearId &&
-        (a as { isAccepted?: boolean }).isAccepted === true
+    // Set of family ids whose per-year application progress row says
+    // accepted. The Approve flow on the Scholarship Determination card
+    // patches `isAccepted=true` on this row, NOT on the per-student
+    // application rows — so this is the authoritative source for
+    // "is this family approved to start?" Without this set, accepted
+    // families would never appear under Registrations because the
+    // legacy per-student `isAccepted` filter never gets flipped.
+    const acceptedFamilyIds = new Set(
+      familyProgressRows
+        .filter((p) => p.isAccepted === true)
+        .map((p) => p.registration_families_id)
     );
+
+    // Show students whose family is accepted for the year (or, as a
+    // fallback, whose per-student application row has the legacy
+    // `isAccepted=true` flag — preserves visibility for any rows
+    // approved before the family-level flow). `isActive=false` is a
+    // soft delete (parent removed the student from the year) — keep
+    // historical, hide from admin pipeline. `undefined` isActive
+    // counts as active so legacy rows still appear.
+    const acceptedApps = apps.filter((a) => {
+      if (Number(a.registration_school_years_id) !== yearId) return false;
+      if ((a as { isActive?: boolean }).isActive === false) return false;
+      const familyAccepted = acceptedFamilyIds.has(
+        Number(a.registration_families_id)
+      );
+      const legacyStudentAccepted =
+        (a as { isAccepted?: boolean }).isAccepted === true;
+      return familyAccepted || legacyStudentAccepted;
+    });
 
     const rows: RegistrationStudentRow[] = acceptedApps.map((app) => {
       const studentId = Number(app.registration_students_id);

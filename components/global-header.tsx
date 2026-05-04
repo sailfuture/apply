@@ -20,6 +20,9 @@ export function GlobalHeader() {
   // / Student Registration" suffix and just show the school name.
   const isDashboard = pathname.startsWith("/dashboard");
   const isReapply = pathname.startsWith("/reapply");
+  // The /welcome page is pre-application onboarding — no need for the
+  // "Student Application" suffix yet, just show the school name.
+  const isWelcome = pathname.startsWith("/welcome");
 
   // Detect URL-driven registration vs application chrome. With the
   // family-level `isAccepted` flag gone (it moved to the per-year
@@ -47,7 +50,9 @@ export function GlobalHeader() {
       ? "SailFuture Academy Re-Application"
       : isRegistrationFlow
         ? "SailFuture Academy Student Registration"
-        : "SailFuture Academy Student Application";
+        : isWelcome
+          ? "SailFuture Academy"
+          : "SailFuture Academy Student Application";
 
   // Logo click routes by lifecycle stage. Each branch returns a
   // destination that's already correct for the user — no chained

@@ -133,6 +133,9 @@ export async function POST(req: NextRequest) {
       isSubmitted: false,
       isOffered: false,
       isAccepted: false,
+      // New year's application starts active regardless of last
+      // year's flag. Admin views filter on `isActive=true`.
+      isActive: true,
       opportunity_scholarship_award_amount: 0,
       // PandaDoc identifiers reset — last year's signed docs aren't valid
       // for this year's enrollment.

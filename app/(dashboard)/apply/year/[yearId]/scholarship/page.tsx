@@ -803,6 +803,16 @@ export default function ScholarshipPage() {
     return () => unregisterOnBack();
   }, [showForm, registerOnBack, unregisterOnBack]);
 
+  // Opening the full Opportunity Scholarship form should land the
+  // parent at the top — they were probably mid-scroll on the path
+  // chooser when they clicked "Apply", and starting the form mid-page
+  // hides the page header + first input.
+  useEffect(() => {
+    if (showForm) {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  }, [showForm]);
+
   // Keep all sections open — no auto-collapse on completion
 
   async function ensureScholarship(): Promise<number | null> {
@@ -1965,83 +1975,6 @@ export default function ScholarshipPage() {
               </div>
             </section>
 
-            {/* Monthly Income */}
-            <section>
-              <h3 className="text-lg font-medium">
-                Other Money Your Household Receives Each Month
-              </h3>
-              <p className="text-sm text-muted-foreground mt-1 mb-6 max-w-2xl">
-                Not from a job (for example: child support or side income).
-              </p>
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                <Field>
-                  <FieldLabel className="text-xs">Money from a Business or Side Job</FieldLabel>
-                  <CurrencyInput
-                    value={businessIncome}
-                    onChange={setBusinessIncome}
-                    disabled={isReadonly}
-                  />
-                </Field>
-                <Field>
-                  <FieldLabel className="text-xs">Money from Investments (if any)</FieldLabel>
-                  <CurrencyInput
-                    value={capitalGains}
-                    onChange={setCapitalGains}
-                    disabled={isReadonly}
-                  />
-                </Field>
-                <Field>
-                  <FieldLabel className="text-xs">Child Support</FieldLabel>
-                  <CurrencyInput
-                    value={childSupport}
-                    onChange={setChildSupport}
-                    disabled={isReadonly}
-                  />
-                </Field>
-                <Field>
-                  <FieldLabel className="text-xs">Alimony / Spousal Support</FieldLabel>
-                  <CurrencyInput
-                    value={alimony}
-                    onChange={setAlimony}
-                    disabled={isReadonly}
-                  />
-                </Field>
-                <Field>
-                  <FieldLabel className="text-xs">Money from Trusts or Inheritance</FieldLabel>
-                  <CurrencyInput
-                    value={trustsIncome}
-                    onChange={setTrustsIncome}
-                    disabled={isReadonly}
-                  />
-                </Field>
-                <Field>
-                  <FieldLabel className="text-xs">Other Income</FieldLabel>
-                  <CurrencyInput
-                    value={otherIncome}
-                    onChange={setOtherIncome}
-                    disabled={isReadonly}
-                  />
-                </Field>
-              </div>
-              {otherIncome > 0 && (
-                <div className="mt-4">
-                  <Field>
-                    <FieldLabel className="text-xs">
-                      Describe Other Income
-                    </FieldLabel>
-                    <Input
-                      value={describeOtherIncome}
-                      onChange={(e) => setDescribeOtherIncome(e.target.value)}
-                      disabled={isReadonly}
-                      placeholder="Describe the source of other income"
-                    />
-                  </Field>
-                </div>
-              )}
-            </section>
-
-            <Separator />
-
             {/* Government Benefits */}
             <section>
               <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
@@ -2582,6 +2515,100 @@ export default function ScholarshipPage() {
             )}
         </Card>
 
+        {/* Other Household Income — passive / non-wage income that
+            doesn't come from any single contributing member. Lives in
+            its own card below Contributing Members so the form flow is
+            "list the people, then list the other income streams". */}
+        <Card className="overflow-hidden gap-0 py-0 ring-0 border">
+          <CardHeader className="border-b py-3 !pb-3">
+            <div className="min-w-0">
+              <CardTitle className="text-lg">
+                Other Money Your Household Receives Each Month
+              </CardTitle>
+              <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
+                Not from a job (for example: child support or side income).
+              </p>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-6 py-5 bg-white dark:bg-background">
+            <section>
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                <Field>
+                  <FieldLabel className="text-xs">
+                    Money from a Business or Side Job
+                  </FieldLabel>
+                  <CurrencyInput
+                    value={businessIncome}
+                    onChange={setBusinessIncome}
+                    disabled={isReadonly}
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel className="text-xs">
+                    Money from Investments (if any)
+                  </FieldLabel>
+                  <CurrencyInput
+                    value={capitalGains}
+                    onChange={setCapitalGains}
+                    disabled={isReadonly}
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel className="text-xs">Child Support</FieldLabel>
+                  <CurrencyInput
+                    value={childSupport}
+                    onChange={setChildSupport}
+                    disabled={isReadonly}
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel className="text-xs">
+                    Alimony / Spousal Support
+                  </FieldLabel>
+                  <CurrencyInput
+                    value={alimony}
+                    onChange={setAlimony}
+                    disabled={isReadonly}
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel className="text-xs">
+                    Money from Trusts or Inheritance
+                  </FieldLabel>
+                  <CurrencyInput
+                    value={trustsIncome}
+                    onChange={setTrustsIncome}
+                    disabled={isReadonly}
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel className="text-xs">Other Income</FieldLabel>
+                  <CurrencyInput
+                    value={otherIncome}
+                    onChange={setOtherIncome}
+                    disabled={isReadonly}
+                  />
+                </Field>
+              </div>
+              {otherIncome > 0 && (
+                <div className="mt-4">
+                  <Field>
+                    <FieldLabel className="text-xs">
+                      Describe Other Income
+                    </FieldLabel>
+                    <Input
+                      value={describeOtherIncome}
+                      onChange={(e) => setDescribeOtherIncome(e.target.value)}
+                      disabled={isReadonly}
+                      placeholder="Describe the source of other income"
+                    />
+                  </Field>
+                </div>
+              )}
+            </section>
+          </CardContent>
+        </Card>
+
         {/* Family Household Assets */}
         <Card className="overflow-hidden gap-0 py-0 ring-0 border">
           <CardHeader className="border-b py-3 !pb-3">
@@ -2850,9 +2877,14 @@ export default function ScholarshipPage() {
                           />
                         </Field>
                         <Field>
-                          <FieldLabel className="text-xs">
-                            Amount You Still Owe{" "}
-                            <span className="text-muted-foreground font-normal">
+                          {/* `whitespace-nowrap` + `truncate` keeps the
+                              label on one line at narrow widths; the
+                              "(Enter $0 if none)" hint elides if it
+                              doesn't fit so "Amount You Still Owe"
+                              never wraps to a second line. */}
+                          <FieldLabel className="text-xs flex items-center gap-1 min-w-0 whitespace-nowrap">
+                            <span className="shrink-0">Amount You Still Owe</span>
+                            <span className="text-muted-foreground font-normal truncate">
                               (Enter $0 if none)
                             </span>
                           </FieldLabel>
@@ -3011,9 +3043,14 @@ export default function ScholarshipPage() {
                           />
                         </Field>
                         <Field>
-                          <FieldLabel className="text-xs">
-                            Amount You Still Owe{" "}
-                            <span className="text-muted-foreground font-normal">
+                          {/* `whitespace-nowrap` + `truncate` keeps the
+                              label on one line at narrow widths; the
+                              "(Enter $0 if none)" hint elides if it
+                              doesn't fit so "Amount You Still Owe"
+                              never wraps to a second line. */}
+                          <FieldLabel className="text-xs flex items-center gap-1 min-w-0 whitespace-nowrap">
+                            <span className="shrink-0">Amount You Still Owe</span>
+                            <span className="text-muted-foreground font-normal truncate">
                               (Enter $0 if none)
                             </span>
                           </FieldLabel>
@@ -3053,6 +3090,34 @@ export default function ScholarshipPage() {
             </section>
           </CardContent>
         </Card>
+
+        {/* Financial Summary — auto-calculated from the income,
+            assets, and debts the family entered above. Lives right
+            before the Tuition Contribution card so the admin / family
+            can see the full financial picture before deciding what to
+            contribute. Read-only on purpose: every number is derived,
+            so editing one of them would mean editing somewhere else
+            in the form. Skeleton state while the initial scholarship
+            row is in-flight so we don't flash zeros. */}
+        <FinancialSummaryCard
+          loading={loading}
+          members={members}
+          businessIncome={businessIncome}
+          capitalGains={capitalGains}
+          childSupport={childSupport}
+          alimony={alimony}
+          trustsIncome={trustsIncome}
+          otherIncome={otherIncome}
+          assetsChecking={assetsChecking}
+          assetsSavings={assetsSavings}
+          assetsRetirement={assetsRetirement}
+          assetsStocks={assetsStocks}
+          assetsTrusts={assetsTrusts}
+          assetsBusiness={assetsBusiness}
+          debtsCreditCards={debtsCreditCards}
+          debtsStudentLoans={debtsStudentLoans}
+          debtsPersonalLoans={debtsPersonalLoans}
+        />
 
         {/* Family Contribution & Advocacy */}
         <Card className="overflow-hidden gap-0 py-0 ring-0 border">
@@ -3643,5 +3708,245 @@ function MultiFileUpload({
       </AlertDialog>
     </>
   );
+}
+
+/* ─────────────────────── Financial Summary Card ─────────────────────── */
+
+/**
+ * Live financial overview for the Opportunity Scholarship form.
+ * Sits right before "Your Tuition Contribution" so the family can
+ * sanity-check the full picture (annual income, total assets,
+ * personal debt, annual net) before deciding what they can pay each
+ * month.
+ *
+ * Rendered as a 2-column table (label / value) rather than a row of
+ * card tiles — denser and easier to scan when there are several
+ * summary lines. Every number is derived from form state above, so
+ * the table is read-only by design — editing a row would mean
+ * editing the source field anyway.
+ *
+ * "Annual Net" combines flow + stock per the project's chosen
+ * formula: annual income + total assets − total debts. (Yes, mixing
+ * yearly and lump-sum figures; documented here so the math isn't
+ * surprising.)
+ */
+function FinancialSummaryCard({
+  loading,
+  members,
+  businessIncome,
+  capitalGains,
+  childSupport,
+  alimony,
+  trustsIncome,
+  otherIncome,
+  assetsChecking,
+  assetsSavings,
+  assetsRetirement,
+  assetsStocks,
+  assetsTrusts,
+  assetsBusiness,
+  debtsCreditCards,
+  debtsStudentLoans,
+  debtsPersonalLoans,
+}: {
+  /** When true, renders a skeleton instead of the table. Hooked up
+   *  to the page-level scholarship-load flag so we don't flash a
+   *  table full of $0s before the saved row hydrates. */
+  loading?: boolean;
+  members: Array<{ estimated_annual_income?: number }>;
+  businessIncome: number;
+  capitalGains: number;
+  childSupport: number;
+  alimony: number;
+  trustsIncome: number;
+  otherIncome: number;
+  assetsChecking: number;
+  assetsSavings: number;
+  assetsRetirement: number;
+  assetsStocks: number;
+  assetsTrusts: number;
+  assetsBusiness: number;
+  debtsCreditCards: number;
+  debtsStudentLoans: number;
+  debtsPersonalLoans: number;
+}) {
+  // Wages: each contributing member's stated annual income.
+  // Passive: monthly fields × 12 to land on the same yearly axis.
+  const wagesAnnual = members.reduce(
+    (acc, m) => acc + (m.estimated_annual_income ?? 0),
+    0
+  );
+  const passiveAnnual =
+    (businessIncome +
+      capitalGains +
+      childSupport +
+      alimony +
+      trustsIncome +
+      otherIncome) *
+    12;
+  const totalAnnualIncome = wagesAnnual + passiveAnnual;
+
+  const totalAssets =
+    assetsChecking +
+    assetsSavings +
+    assetsRetirement +
+    assetsStocks +
+    assetsTrusts +
+    assetsBusiness;
+
+  const totalDebts =
+    debtsCreditCards + debtsStudentLoans + debtsPersonalLoans;
+
+  // Project-defined formula: income + assets − debts. Mixes flow
+  // (annual income) with stock (assets / debts), which is unusual
+  // but matches the spec the OS form is built against.
+  const familyNet = totalAnnualIncome + totalAssets - totalDebts;
+
+  // Each row carries its own color tone:
+  //   - "positive" — income / assets / a non-negative net are good
+  //                  outcomes for the family, render green when the
+  //                  value is non-zero
+  //   - "negative" — personal debt is a liability, always render red
+  //                  when nonzero (so "$0 debt" stays foreground)
+  //   - "auto"     — Family Net flips green/red on sign
+  type Tone = "positive" | "negative" | "auto";
+  const rows: Array<{
+    label: string;
+    note?: string;
+    value: number;
+    tone: Tone;
+    isFinal?: boolean;
+  }> = [
+    {
+      label: "Annual income",
+      note: `${formatSummaryCurrency(wagesAnnual)} wages + ${formatSummaryCurrency(passiveAnnual)} passive`,
+      value: totalAnnualIncome,
+      tone: "positive",
+    },
+    {
+      label: "Total assets",
+      note: "Checking, savings, retirement, securities, trusts, business",
+      value: totalAssets,
+      tone: "positive",
+    },
+    {
+      label: "Personal debt / liabilities",
+      note: "Credit cards, student loans, personal loans",
+      value: -totalDebts, // displayed as a subtraction in the table
+      tone: "negative",
+    },
+    {
+      label: "Family Net",
+      note: "Annual income + total assets − personal debt",
+      value: familyNet,
+      tone: "auto",
+      isFinal: true,
+    },
+  ];
+
+  return (
+    <Card className="overflow-hidden gap-0 py-0 ring-0 border">
+      <CardHeader className="border-b py-3 !pb-3">
+        <div className="min-w-0">
+          <CardTitle className="text-lg">Financial Summary</CardTitle>
+          <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
+            Auto-calculated from the income, assets, and debts entered
+            above. Edit any line by adjusting the source field — this
+            table updates live.
+          </p>
+        </div>
+      </CardHeader>
+      <CardContent className="p-0 bg-white dark:bg-background">
+        {loading ? (
+          // Skeletons share `px-6` so they line up under the card
+          // header text — see comment on the live table below for why
+          // we chose 6 instead of the 4 the rest of the admin tables
+          // use.
+          <div className="px-6 py-4 space-y-3">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div
+                key={i}
+                className="flex items-center justify-between gap-4"
+              >
+                <Skeleton className="h-4 w-40" />
+                <Skeleton className="h-4 w-24" />
+              </div>
+            ))}
+          </div>
+        ) : (
+          // `px-6` on every cell so the leftmost column lines up with
+          // the card-header copy above (which uses the default
+          // shadcn CardHeader padding of `px-6`). With `px-4` the
+          // table sat ~8px to the left of the header, breaking the
+          // visual column.
+          <table className="w-full text-sm">
+            <thead className="bg-muted/40">
+              <tr>
+                <th className="text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground px-6 py-2">
+                  Metric
+                </th>
+                <th className="text-right text-xs font-semibold uppercase tracking-wider text-muted-foreground px-6 py-2 w-[140px]">
+                  Amount
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {rows.map((r) => {
+                // Each row picks its own tone:
+                //   positive → green when nonzero (income, assets)
+                //   negative → red when nonzero (personal debt)
+                //   auto     → green ≥ 0, red < 0 (Family Net)
+                let toneClass = "";
+                if (r.tone === "positive" && r.value !== 0) {
+                  toneClass = "text-green-600";
+                } else if (r.tone === "negative" && r.value !== 0) {
+                  toneClass = "text-red-600";
+                } else if (r.tone === "auto") {
+                  toneClass = r.value < 0 ? "text-red-600" : "text-green-600";
+                }
+                return (
+                  <tr
+                    key={r.label}
+                    className={r.isFinal ? "bg-muted/20" : ""}
+                  >
+                    <td className="px-6 py-3 align-top">
+                      <p
+                        className={`truncate ${r.isFinal ? "font-semibold" : "font-medium"}`}
+                      >
+                        {r.label}
+                      </p>
+                      {r.note ? (
+                        <p className="text-[11px] text-muted-foreground leading-tight mt-0.5 truncate">
+                          {r.note}
+                        </p>
+                      ) : null}
+                    </td>
+                    <td
+                      className={`px-6 py-3 text-right tabular-nums text-sm ${
+                        r.isFinal ? "font-semibold" : ""
+                      } ${toneClass}`}
+                    >
+                      {formatSummaryCurrency(r.value)}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function formatSummaryCurrency(n: number): string {
+  // Match the rest of the page's currency formatting: leading $, no
+  // decimals, locale separators. Negatives render with a minus sign.
+  const abs = Math.abs(n).toLocaleString("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  });
+  return n < 0 ? `-${abs}` : abs;
 }
 

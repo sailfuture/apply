@@ -43,7 +43,18 @@ export async function GET(req: NextRequest) {
         { status: 404 }
       );
     }
-    return NextResponse.json(detail);
+    // Hide inactive applications from admin views. `isActive=false` is
+    // a soft delete — the row still exists for historical reasons but
+    // the student isn't enrolled in this year's pipeline anymore.
+    // Treat `undefined` as active so legacy rows (predating the
+    // column) keep showing up.
+    const filteredDetail = {
+      ...detail,
+      application: (detail.application ?? []).filter(
+        (a) => a.isActive !== false
+      ),
+    };
+    return NextResponse.json(filteredDetail);
   } catch (err) {
     return handleAdminError(err);
   }
