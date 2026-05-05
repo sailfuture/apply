@@ -44,6 +44,15 @@ export async function GET(req: NextRequest) {
     // auto-generated GET doesn't honor arbitrary text filters.
     const sectionParam = req.nextUrl.searchParams.get("section");
 
+    // Optional `?phase=registration&yearId=Y` — calls the dedicated
+    // Xano query that returns only notes tagged for the registration
+    // phase of this (family, year). Used by the family registration
+    // detail page so admin doesn't see apply-phase comms mixed in.
+    // Other phases (apply / reapply) still go through the catch-all
+    // `getByFamilyId` and rely on client-side filter pills.
+    const phaseParam = req.nextUrl.searchParams.get("phase");
+    const yearIdParam = req.nextUrl.searchParams.get("yearId");
+
     if (inquiryIdParam) {
       const inquiryId = Number(inquiryIdParam);
       if (!Number.isFinite(inquiryId)) {
@@ -65,6 +74,25 @@ export async function GET(req: NextRequest) {
         { status: 400 }
       );
     }
+
+    if (phaseParam === "registration") {
+      const yearId = Number(yearIdParam);
+      if (!Number.isFinite(yearId) || yearId <= 0) {
+        return NextResponse.json(
+          { error: "yearId is required when phase=registration" },
+          { status: 400 }
+        );
+      }
+      const notes =
+        await xano.adminNotes.getByFamilyAndYearForRegistration(
+          familyId,
+          yearId
+        );
+      return NextResponse.json(
+        sectionParam ? notes.filter((n) => n.section === sectionParam) : notes
+      );
+    }
+
     const notes = await xano.adminNotes.getByFamilyId(familyId);
     return NextResponse.json(
       sectionParam ? notes.filter((n) => n.section === sectionParam) : notes
@@ -111,6 +139,45 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Phase tagging — when the caller is the registration detail
+    // page it passes `phase=registration` + `registration_school_years_id`,
+    // and we stamp the family's progress-row id on the note so the
+    // dedicated `registration_admin_notes_by_registration` query can
+    // surface it back. Resolves the progress row first (creates one
+    // if missing — same race-safe path admin actions use) so the FK
+    // is always populated. Apply / reapply phases use their own FK
+    // columns and don't go through this branch.
+    const phaseParam =
+      typeof body?.phase === "string" ? body.phase : null;
+    const yearForPhase = optionalNumber(
+      body?.registration_school_years_id
+    );
+    let registrationProgressId: number | null = optionalNumber(
+      body?.registration_student_registration_progress_id
+    );
+    if (
+      phaseParam === "registration" &&
+      familyId &&
+      yearForPhase &&
+      !registrationProgressId
+    ) {
+      try {
+        const progressRow =
+          await xano.studentRegistrationProgress.resolve(
+            familyId,
+            yearForPhase
+          );
+        registrationProgressId = progressRow?.id ?? null;
+      } catch (err) {
+        console.error(
+          "[/api/admin/notes POST] failed to resolve registration progress row:",
+          err
+        );
+        // Don't fail the note write — fall through with a null FK so
+        // admin still sees their note saved on the family timeline.
+      }
+    }
+
     // For family notes, `registration_families_id` is the required FK
     // on Xano. For inquiry-scoped notes we still send a families id
     // (Xano column is non-nullable on legacy rows) — set to 0 so
@@ -118,10 +185,9 @@ export async function POST(req: NextRequest) {
     const note = await xano.adminNotes.create({
       registration_families_id: familyId ?? 0,
       registration_students_id: optionalNumber(body?.registration_students_id),
-      registration_school_years_id: optionalNumber(
-        body?.registration_school_years_id
-      ),
+      registration_school_years_id: yearForPhase,
       registration_inquiry_id: inquiryId ?? null,
+      registration_student_registration_progress_id: registrationProgressId,
       author_email: admin.email,
       author_name: admin.name,
       body: trimmedBody,

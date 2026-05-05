@@ -63,15 +63,26 @@ export async function GET(req: NextRequest) {
 
       if (application) {
         if (type === "liability_waiver") {
-          // Per-student — write to the application row.
-          if (application.liability_waiver_status !== normalizedStatus) {
-            const updateData: Record<string, unknown> = {
+          // Per-student — write to the packet
+          // (`registration_student_registration`). Resolved-or-created
+          // so a status callback for a doc the parent kicked off
+          // before completing the rest of their packet still has a
+          // row to land on.
+          const packetRow = await xano.studentRegistration.resolve(
+            application.registration_students_id,
+            application.registration_school_years_id
+          );
+          if (packetRow.liability_waiver_status !== normalizedStatus) {
+            const updateData: Partial<
+              import("@/lib/xano").XanoStudentRegistration
+            > = {
               liability_waiver_status: normalizedStatus,
             };
             if (normalizedStatus === "completed") {
-              updateData.liability_waiver_pdf_url = getDocumentDownloadUrl(documentId);
+              updateData.liability_waiver_pdf_url =
+                getDocumentDownloadUrl(documentId);
             }
-            await xano.applications.update(appId, updateData);
+            await xano.studentRegistration.update(packetRow.id, updateData);
           }
         } else {
           // Enrollment agreement is family-level — write to the

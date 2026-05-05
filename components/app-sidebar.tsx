@@ -29,7 +29,10 @@ import Image from "next/image"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
+import useSWR from "swr"
 import { useFamily, useSchoolYears, useApplications, useScholarship } from "@/hooks/use-api"
+
+const swrFetcher = (url: string) => fetch(url).then((r) => r.json())
 
 const staticNavSecondary = [
   {
@@ -82,11 +85,34 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const scholarshipComplete = !!(scholarshipData && scholarshipData.id)
 
   const firstApp = yearApps[0] as {
-    liability_waiver_status?: string | null
+    registration_students_id?: number
     enrollment_agreement_status?: string | null
   } | undefined
 
-  const liabilityComplete = firstApp?.liability_waiver_status === "completed"
+  // Liability-waiver status moved off the application row onto the
+  // per-student packet. Fetch packets for the year and match the
+  // first application's student to read its waiver status.
+  const { data: packetsData } = useSWR<
+    | {
+        registration_students_id?: number
+        liability_waiver_status?: string | null
+      }[]
+    | null
+  >(
+    targetYearId ? `/api/student-registration?yearId=${targetYearId}` : null,
+    swrFetcher,
+    { revalidateOnFocus: false, dedupingInterval: 10000 }
+  )
+  const firstPacket = React.useMemo(() => {
+    if (!packetsData || !firstApp?.registration_students_id) return null
+    return (
+      packetsData.find(
+        (p) => p?.registration_students_id === firstApp.registration_students_id
+      ) ?? null
+    )
+  }, [packetsData, firstApp])
+
+  const liabilityComplete = firstPacket?.liability_waiver_status === "completed"
   const enrollmentComplete = firstApp?.enrollment_agreement_status === "completed"
 
   const navMain = React.useMemo(() => {

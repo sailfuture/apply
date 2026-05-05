@@ -103,10 +103,9 @@ export async function POST(req: NextRequest) {
           isOffered: false,
           isAccepted: false,
           opportunity_scholarship_award_amount: 0,
-          liability_waiver_pandadoc_id: "",
-          liability_waiver_status: "",
-          liability_waiver_sent_at: null,
-          liability_waiver_pdf_url: "",
+          // Liability-waiver fields removed from the application row —
+          // they live on `registration_student_registration` (the
+          // packet) and reset on the per-year packet clone below.
           enrollment_agreement_pandadoc_id: "",
           enrollment_agreement_status: "",
           enrollment_agreement_sent_at: null,
@@ -138,11 +137,9 @@ export async function POST(req: NextRequest) {
       isActive: true,
       opportunity_scholarship_award_amount: 0,
       // PandaDoc identifiers reset — last year's signed docs aren't valid
-      // for this year's enrollment.
-      liability_waiver_pandadoc_id: "",
-      liability_waiver_status: "",
-      liability_waiver_sent_at: null,
-      liability_waiver_pdf_url: "",
+      // for this year's enrollment. Liability-waiver fields removed from
+      // the application row; they reset on the per-year packet clone
+      // below where they actually live.
       enrollment_agreement_pandadoc_id: "",
       enrollment_agreement_status: "",
       enrollment_agreement_sent_at: null,

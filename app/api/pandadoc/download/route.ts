@@ -42,39 +42,39 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  // Ownership check — accept the document if its ID is stored in any of
-  // the three places a PandaDoc ID can currently live for this family:
+  // Ownership check — accept the document if its ID is stored in
+  // either of the two tables a PandaDoc ID can live in for this
+  // family:
   //
-  //   1. `registration_application` (waiver + enrollment, per-student per-year)
-  //   2. `registration_student_registration_progress` (enrollment, per-family per-year)
-  //   3. `registration_student_registration` (the packet — legacy location
-  //      for waivers, still used as the client source of truth)
+  //   1. `registration_student_registration` (the packet — canonical
+  //      location for liability waivers, per-student per-year)
+  //   2. `registration_student_registration_progress` (per-family
+  //      per-year — canonical location for enrollment agreements)
   //
-  // This keeps the route working regardless of which table currently holds
-  // the canonical ID after the various migrations, and handles the realistic
-  // case where the application row's copy hasn't been back-filled yet.
+  // The waiver columns used to live on `registration_application`
+  // too, but those have been removed; the packet is the single source
+  // of truth now.
   let owns =
-    application.liability_waiver_pandadoc_id === documentId ||
     application.enrollment_agreement_pandadoc_id === documentId;
 
   if (!owns) {
-    const progressRow = await xano.studentRegistrationProgress.getByFamilyAndYear(
-      familyId,
-      application.registration_school_years_id
-    );
+    const progressRow =
+      await xano.studentRegistrationProgress.getByFamilyAndYear(
+        familyId,
+        application.registration_school_years_id
+      );
     owns = progressRow?.enrollment_agreement_pandadoc_id === documentId;
   }
 
   if (!owns) {
-    // Last resort — check the student's registration packet row, which is
-    // where the waiver ID lives when saved through the /registration page.
     try {
-      const packet = await xano.studentRegistration.getByStudentId(
-        application.registration_students_id
+      const packet = await xano.studentRegistration.getByStudentAndYear(
+        application.registration_students_id,
+        application.registration_school_years_id
       );
       owns = packet?.liability_waiver_pandadoc_id === documentId;
     } catch {
-      // Ignore — just leaves `owns` as false and we fall through to 404.
+      // Ignore — leaves `owns = false` and we fall through to 404.
     }
   }
 

@@ -131,6 +131,25 @@ export function useApplicationSteps(yearId: number) {
     { revalidateOnFocus: false, dedupingInterval: 10000 }
   );
 
+  // Per-student packets for the year — needed because the
+  // liability-waiver fields moved off the application row onto this
+  // packet table. The sidenav reads the first packet's status to
+  // decide whether the waiver step is complete / in-progress.
+  // Returns `null` (not `[]`) until the fetch lands so we can tell
+  // "loading" from "none yet" downstream.
+  const { data: packetsData } = useSWR<
+    | {
+        registration_students_id?: number;
+        liability_waiver_status?: string | null;
+        liability_waiver_pandadoc_id?: string | null;
+      }[]
+    | null
+  >(
+    yearId ? `/api/student-registration?yearId=${yearId}` : null,
+    fetcher,
+    { revalidateOnFocus: false, dedupingInterval: 10000 }
+  );
+
   const loading = !familyData || !yearsData || !appsData;
 
   const schoolYear = useMemo(() => {
@@ -359,9 +378,8 @@ export function useApplicationSteps(yearId: number) {
 
   const firstApp = yearApps[0] as
     | {
-        liability_waiver_status?: string | null;
+        registration_students_id?: number;
         enrollment_agreement_status?: string | null;
-        liability_waiver_pandadoc_id?: string | null;
         enrollment_agreement_pandadoc_id?: string | null;
         isSubmitted?: boolean;
         isOffered?: boolean;
@@ -369,9 +387,21 @@ export function useApplicationSteps(yearId: number) {
       }
     | undefined;
 
+  // Liability-waiver state lives on the per-student packet now.
+  // Match the first application's student to its packet, then read
+  // status + pandadoc_id from there.
+  const firstPacket = (() => {
+    if (!packetsData || !firstApp?.registration_students_id) return null;
+    return (
+      packetsData.find(
+        (p) => p?.registration_students_id === firstApp.registration_students_id
+      ) ?? null
+    );
+  })();
+
   const liabilityComplete =
-    firstApp?.liability_waiver_status === "completed";
-  const liabilitySent = !!firstApp?.liability_waiver_pandadoc_id;
+    firstPacket?.liability_waiver_status === "completed";
+  const liabilitySent = !!firstPacket?.liability_waiver_pandadoc_id;
   const enrollmentComplete =
     firstApp?.enrollment_agreement_status === "completed";
   const enrollmentSent = !!firstApp?.enrollment_agreement_pandadoc_id;

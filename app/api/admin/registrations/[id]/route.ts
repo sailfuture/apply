@@ -3,33 +3,38 @@ import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
 import type {
   XanoApplication,
+  XanoEmergencyContact,
   XanoFamily,
   XanoParent,
   XanoStudent,
   XanoStudentRegistration,
   XanoStudentRegistrationProgress,
-  XanoSchoolYear,
 } from "@/lib/xano";
 
 /**
  * Admin GET — aggregated family registration view.
  *
- * Returns the data the family-focused registration detail page needs
- * to render the four packet section cards (Tuition / Enrollment
- * Agreement / Registration Packet / Volunteer Hours) plus the
- * per-student row table inside the Registration Packet card.
+ * Returns everything the family-focused registration detail page
+ * needs to render the four packet section cards (Tuition / Enrollment
+ * Agreement / Registration Packet / Volunteer Hours) including the
+ * full per-student packet contents (sizes, medical, file uploads,
+ * waiver state) and the family's emergency contacts roster.
  *
  * Strategy:
- *   - Family + parents + students + applications come from the
- *     `admin_family_application` aggregate query (one shot, year-scoped)
+ *   - `admin_family_application` aggregate gives us family + parents
+ *     + students + apps for the year in one call
  *   - Family-level `registration_student_registration_progress` row
  *     holds the four packet booleans + tuition / enrollment-agreement
- *     fields; we resolve-or-create so the page can render even before
+ *     fields; resolved-or-created so the page renders even before
  *     the parent has touched a single section
- *   - Per-student `registration_student_registration` packets come
- *     from a year-scoped fetch and are filtered to the family's
- *     active applications (so the page shows only students who are
- *     actually enrolling for this year)
+ *   - Per-student `registration_student_registration` packets pulled
+ *     for the year and joined to active applications. We surface the
+ *     ENTIRE packet shape (not just confirmation state) so the page
+ *     can render the parent-facing form as a read-only summary —
+ *     mirrors the application page's "view what the parent sees"
+ *     pattern.
+ *   - Emergency contacts pulled by family id since they're family-
+ *     scoped, not per-student
  *
  * Each lookup is wrapped in try/catch and missing data falls back to
  * sensible defaults so a single Xano hiccup never 500s the page.
@@ -63,17 +68,21 @@ export async function GET(
       );
     }
 
-    // Aggregate first — gives us family + parents + students + apps
-    // for the year in a single Xano call. Falls back to per-table
-    // fetches if the aggregate fails (e.g. partial Xano outage).
-    const [aggResult, progressResult, packetsResult, parentsResult, studentsResult] =
-      await Promise.allSettled([
-        xano.applications.getAdminFamilyDetail(familyId, yearId),
-        xano.studentRegistrationProgress.resolve(familyId, yearId),
-        xano.studentRegistration.getByYear(yearId),
-        xano.parents.getAll(),
-        xano.students.getAll(),
-      ]);
+    const [
+      aggResult,
+      progressResult,
+      packetsResult,
+      parentsResult,
+      studentsResult,
+      emergencyResult,
+    ] = await Promise.allSettled([
+      xano.applications.getAdminFamilyDetail(familyId, yearId),
+      xano.studentRegistrationProgress.resolve(familyId, yearId),
+      xano.studentRegistration.getByYear(yearId),
+      xano.parents.getAll(),
+      xano.students.getAll(),
+      xano.emergencyContacts.getByFamilyId(familyId),
+    ]);
 
     if (aggResult.status === "rejected") {
       console.error(
@@ -93,6 +102,12 @@ export async function GET(
         packetsResult.reason
       );
     }
+    if (emergencyResult.status === "rejected") {
+      console.error(
+        "[/api/admin/registrations/[id]] emergency contacts failed:",
+        emergencyResult.reason
+      );
+    }
 
     const agg =
       aggResult.status === "fulfilled" ? aggResult.value : null;
@@ -104,12 +119,10 @@ export async function GET(
       parentsResult.status === "fulfilled" ? parentsResult.value : [];
     const studentsAll =
       studentsResult.status === "fulfilled" ? studentsResult.value : [];
+    const emergencyContacts =
+      emergencyResult.status === "fulfilled" ? emergencyResult.value : [];
 
     if (!agg) {
-      // Aggregate is the source of truth for family/year context — if
-      // it's missing the page can't render meaningfully. Return 404
-      // so the client knows to redirect rather than show a half-empty
-      // shell.
       return NextResponse.json(
         { error: "Family not found for this year" },
         { status: 404 }
@@ -117,27 +130,20 @@ export async function GET(
     }
 
     const family: XanoFamily | null = agg.family
-      ? // `XanoFamily` shape needs `_emergency_contacts_of_registration_families`
-        // — the aggregate query doesn't include it. Cast through unknown
-        // since the field is optional in the upstream type and unused
-        // here.
+      ? // Aggregate omits the emergency-contacts back-reference; cast
+        // through unknown since we don't read that field here.
         ((agg.family as unknown) as XanoFamily)
       : null;
-    const schoolYear: XanoSchoolYear = agg.school_year;
+    const schoolYear = agg.school_year;
     const apps: XanoApplication[] = Array.isArray(agg.application)
       ? agg.application
       : [];
 
-    // Active apps drive the packet table — soft-deleted students
-    // (parent removed them from the year) shouldn't show up under
-    // Registration Packet even if a packet row still exists.
     const activeApps = apps.filter((a) => a.isActive !== false);
     const activeStudentIds = new Set(
       activeApps.map((a) => Number(a.registration_students_id))
     );
 
-    // Pre-compute student + packet lookups so the row mapper below is
-    // a straight join.
     const studentById = new Map(studentsAll.map((s) => [s.id, s]));
     const packetByStudentId = new Map<number, XanoStudentRegistration>();
     for (const p of allPackets) {
@@ -147,9 +153,6 @@ export async function GET(
       }
     }
 
-    // Primary parent — lowest id wins (mirrors the convention in the
-    // applications + registrations list endpoints so the same
-    // contact shows up across surfaces).
     const parentIds = family ? xano.families.getParentIds(family) : [];
     const familyParents = parents.filter((p) => parentIds.includes(p.id));
     const sortedParents = familyParents
@@ -157,30 +160,31 @@ export async function GET(
       .sort((a, b) => a.id - b.id);
     const primary: XanoParent | null = sortedParents[0] ?? null;
 
-    // Per-student rows for the Registration Packet card. Each row
-    // carries the student name + DOB + grade + the packet's
-    // confirmation state so the UI can render a single table without
-    // chasing further joins.
-    const studentRows = activeApps.map((app) => {
-      const studentId = Number(app.registration_students_id);
-      const student: XanoStudent | null = studentById.get(studentId) ?? null;
-      const packet: XanoStudentRegistration | null =
-        packetByStudentId.get(studentId) ?? null;
-      return {
-        application_id: app.id,
-        student_id: studentId,
-        student_first_name: student?.first_name ?? "",
-        student_last_name: student?.last_name ?? "",
-        student_full_name: student
-          ? `${student.first_name ?? ""} ${student.last_name ?? ""}`.trim()
-          : `Student #${studentId}`,
-        student_grade: app.current_grade ?? "",
-        packet_id: packet?.id ?? null,
-        registrationConfirmed: !!packet?.registrationConfirmed,
-        liability_waiver_status: packet?.liability_waiver_status ?? "",
-        liability_waiver_pdf_url: packet?.liability_waiver_pdf_url ?? "",
-      };
-    });
+    // Per-student packet rows — the entire `XanoStudentRegistration`
+    // shape, plus the joined student bio fields the page uses for the
+    // section header (name, DOB, grade). Returning the full packet
+    // lets the client render every parent-facing field as a
+    // disabled-input summary the same way the application page does.
+    const studentRows: AdminFamilyRegistrationStudentRow[] = activeApps.map(
+      (app) => {
+        const studentId = Number(app.registration_students_id);
+        const student: XanoStudent | null = studentById.get(studentId) ?? null;
+        const packet: XanoStudentRegistration | null =
+          packetByStudentId.get(studentId) ?? null;
+        return {
+          application_id: app.id,
+          student_id: studentId,
+          student_first_name: student?.first_name ?? "",
+          student_last_name: student?.last_name ?? "",
+          student_full_name: student
+            ? `${student.first_name ?? ""} ${student.last_name ?? ""}`.trim()
+            : `Student #${studentId}`,
+          student_date_of_birth: student?.date_of_birth ?? "",
+          student_grade: app.current_grade ?? "",
+          packet,
+        };
+      }
+    );
 
     return NextResponse.json({
       family: family
@@ -207,6 +211,7 @@ export async function GET(
       },
       progress: progress as XanoStudentRegistrationProgress | null,
       students: studentRows,
+      emergency_contacts: emergencyContacts as XanoEmergencyContact[],
     } satisfies AdminFamilyRegistrationResponse);
   } catch (err) {
     return handleAdminError(err);
@@ -214,10 +219,10 @@ export async function GET(
 }
 
 /**
- * Response shape the family registration detail page consumes. Kept
- * narrow on purpose — we only return the fields the four section
- * cards + the per-student table need, so the response stays small
- * even for large families.
+ * Response shape the family registration detail page consumes. Carries
+ * the full per-student packet object so the page can render every
+ * parent-facing field as a disabled summary input, plus the family-
+ * scoped emergency contacts roster.
  */
 export interface AdminFamilyRegistrationResponse {
   family: { id: number; family_name: string } | null;
@@ -237,6 +242,7 @@ export interface AdminFamilyRegistrationResponse {
   };
   progress: XanoStudentRegistrationProgress | null;
   students: AdminFamilyRegistrationStudentRow[];
+  emergency_contacts: XanoEmergencyContact[];
 }
 
 export interface AdminFamilyRegistrationStudentRow {
@@ -245,10 +251,8 @@ export interface AdminFamilyRegistrationStudentRow {
   student_first_name: string;
   student_last_name: string;
   student_full_name: string;
+  student_date_of_birth: string;
   student_grade: string;
-  /** Per-student packet id; null if the parent hasn't started one yet. */
-  packet_id: number | null;
-  registrationConfirmed: boolean;
-  liability_waiver_status: string;
-  liability_waiver_pdf_url: string;
+  /** Full packet object; null when the parent hasn't started one yet. */
+  packet: XanoStudentRegistration | null;
 }

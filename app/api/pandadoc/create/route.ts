@@ -59,10 +59,21 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Waiver lives on the per-student application row; enrollment agreement
-  // lives on the family-level registration progress row. Resolve whichever
-  // record applies for this `type` so the field lookups that follow target
-  // the right table.
+  // Resolve whichever record this doc type lives on so the field
+  // lookups + writes below target the right table:
+  //   - waiver → per-student `registration_student_registration`
+  //     (the packet). Resolved-or-created so the parent can sign a
+  //     waiver before they've started filling out the rest of the
+  //     packet.
+  //   - enrollment agreement → family-level
+  //     `registration_student_registration_progress` row.
+  const packetRow =
+    type === "liability_waiver"
+      ? await xano.studentRegistration.resolve(
+          application.registration_students_id,
+          application.registration_school_years_id
+        )
+      : null;
   const progressRow =
     type === "enrollment_agreement"
       ? await xano.studentRegistrationProgress.resolve(
@@ -78,7 +89,10 @@ export async function POST(req: NextRequest) {
     ? "liability_waiver_status"
     : "enrollment_agreement_status";
 
-  const sourceRecord = (progressRow ?? application) as unknown as Record<string, unknown>;
+  const sourceRecord = (packetRow ?? progressRow ?? application) as unknown as Record<
+    string,
+    unknown
+  >;
   const existingDocId = sourceRecord[pandadocIdField] as string | null;
   const existingStatus = sourceRecord[statusField] as string | null;
 
@@ -148,17 +162,18 @@ export async function POST(req: NextRequest) {
     const sessionId = await createSigningSession(doc.id, recipientEmail);
 
     // Target table depends on doc type:
-    // - waiver → per-student `registration_application` row (same as before)
-    // - enrollment agreement → family-level `..._progress` row (absorbed
-    //   from the retired families_payment table)
+    //   - waiver → per-student `registration_student_registration`
+    //     packet (resolved/created above)
+    //   - enrollment agreement → family-level `..._progress` row
+    //     (absorbed from the retired families_payment table)
     if (type === "enrollment_agreement" && progressRow) {
       await xano.studentRegistrationProgress.update(progressRow.id, {
         enrollment_agreement_pandadoc_id: doc.id,
         enrollment_agreement_status: "sent",
         enrollment_agreement_sent: new Date().toISOString(),
       });
-    } else {
-      await xano.applications.update(applicationId, {
+    } else if (type === "liability_waiver" && packetRow) {
+      await xano.studentRegistration.update(packetRow.id, {
         liability_waiver_pandadoc_id: doc.id,
         liability_waiver_status: "sent",
         liability_waiver_sent_at: new Date().toISOString(),

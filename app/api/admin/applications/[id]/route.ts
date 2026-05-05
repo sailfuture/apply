@@ -120,10 +120,10 @@ export async function PATCH(
       "isDenied",
       "isActive",
       "opportunity_scholarship_award_amount",
-      "liability_waiver_pandadoc_id",
-      "liability_waiver_status",
-      "liability_waiver_sent_at",
-      "liability_waiver_pdf_url",
+      // Liability-waiver fields removed — they live on the per-student
+      // `registration_student_registration` packet now. Use
+      // `/api/admin/student-registration/[id]` to PATCH waiver state
+      // instead.
       "enrollment_agreement_pandadoc_id",
       "enrollment_agreement_status",
       "enrollment_agreement_sent_at",

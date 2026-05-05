@@ -113,10 +113,9 @@ export async function POST(req: NextRequest) {
     // without losing the row.
     isActive: true,
     opportunity_scholarship_award_amount: 0,
-    liability_waiver_pandadoc_id: "",
-    liability_waiver_status: "",
-    liability_waiver_sent_at: null,
-    liability_waiver_pdf_url: "",
+    // Liability-waiver fields removed — they live on
+    // `registration_student_registration` (the per-student packet)
+    // and get initialized when the packet itself is created.
     enrollment_agreement_pandadoc_id: "",
     enrollment_agreement_status: "",
     enrollment_agreement_sent_at: null,

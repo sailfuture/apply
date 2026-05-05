@@ -98,6 +98,30 @@ interface Props {
    * the icon or "Add note".
    */
   triggerLabel?: string;
+  /**
+   * Lifecycle phase scope. When set, the drawer pre-filters its
+   * timeline to a single phase via a server-side query and stamps
+   * the corresponding phase FK on every note it composes — so notes
+   * written from that surface stay tied to the surface that wrote
+   * them.
+   *
+   *   - `"registration"` — uses the
+   *     `registration_admin_notes_by_registration` Xano query
+   *     (filters to notes with this family/year's
+   *     `registration_student_registration_progress_id`); writes
+   *     stamp the same FK so the round-trip closes
+   *   - `undefined` (default) — drawer reads ALL family notes and
+   *     applies the client-side phase pill filter; writes don't
+   *     stamp a phase FK
+   *
+   * Apply / reapply phases don't have dedicated server endpoints
+   * yet so they still fall through to the client-side filter — this
+   * prop only kicks in when the registration scope is needed.
+   *
+   * Requires `defaultYearId` to be set when phase=registration —
+   * the server endpoint takes both family and year as inputs.
+   */
+  phase?: "registration";
 }
 
 /**
@@ -120,15 +144,22 @@ export function FamilyNotesSheet({
   section,
   title,
   triggerLabel,
+  phase,
 }: Props) {
   const [open, setOpen] = useState(false);
-  // SWR key carries the section filter so each scoped drawer maps
-  // to its own cache entry — adding a note inside a section's
-  // drawer revalidates only that scope, not the whole family
-  // timeline (and vice versa).
+  // SWR key carries phase + section filters so each scope maps to
+  // its own cache entry — adding a note inside a section's drawer
+  // revalidates only that scope, and a phase-scoped drawer (e.g.
+  // the registration detail page) hits the dedicated server
+  // endpoint that filters at the Xano layer instead of pulling all
+  // family notes back to filter client-side.
+  const phaseQuery =
+    phase === "registration" && defaultYearId
+      ? `&phase=registration&yearId=${defaultYearId}`
+      : "";
   const swrKey = section
-    ? `/api/admin/notes?familyId=${familyId}&section=${encodeURIComponent(section)}`
-    : `/api/admin/notes?familyId=${familyId}`;
+    ? `/api/admin/notes?familyId=${familyId}&section=${encodeURIComponent(section)}${phaseQuery}`
+    : `/api/admin/notes?familyId=${familyId}${phaseQuery}`;
   const { data, isLoading, mutate } = useSWR<XanoAdminNote[]>(swrKey, fetcher, {
     revalidateOnFocus: false,
   });
@@ -153,11 +184,13 @@ export function FamilyNotesSheet({
   // `notes` derivation that drives every downstream group + the
   // empty-state branches.
   const [phaseFilter, setPhaseFilter] = useState<NotePhase | "all">("all");
-  // Filtered notes for this drawer. Section-scoped drawers ignore
-  // the phase axis (the whole list is already a section), so we
-  // bypass the filter when `section` is set.
+  // Filtered notes for this drawer. Section-scoped drawers and
+  // phase-scoped drawers (`phase="registration"`, etc.) ignore the
+  // client-side phase pills — the whole list is already pre-filtered
+  // server-side, so adding another axis would just hide notes
+  // without giving admin a way back.
   const notes =
-    section || phaseFilter === "all"
+    section || phase || phaseFilter === "all"
       ? allNotes
       : allNotes.filter((n) => derivePhase(n) === phaseFilter);
   const pinned = notes.filter((n) => n.is_pinned);
@@ -209,6 +242,11 @@ export function FamilyNotesSheet({
           registration_families_id: familyId,
           registration_students_id: defaultStudentId ?? null,
           registration_school_years_id: defaultYearId ?? null,
+          // Pass the phase tag so the server stamps the matching FK
+          // (`registration_student_registration_progress_id` for
+          // registration, etc.) — keeps round-trip cache reads
+          // pointed at the same scoped query that fetched this list.
+          phase: phase ?? null,
           body: body.trim(),
           category,
           is_pinned: false,
@@ -364,7 +402,7 @@ export function FamilyNotesSheet({
               log without leaving the sheet. Pills mirror the
               composer's category-pill treatment so the two filter
               rows feel of-a-piece. */}
-          {!section ? (
+          {!section && !phase ? (
             <div className="border-b bg-muted/10 px-4 py-2.5">
               <div
                 className="flex flex-wrap gap-1.5"

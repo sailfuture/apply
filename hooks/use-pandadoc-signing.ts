@@ -4,12 +4,26 @@ import { mutateApplications } from "@/hooks/use-api";
 
 interface Application {
   id: number;
-  liability_waiver_pandadoc_id: string | null;
-  liability_waiver_status: string | null;
-  liability_waiver_pdf_url: string | null;
+  registration_students_id: number;
   enrollment_agreement_pandadoc_id: string | null;
   enrollment_agreement_status: string | null;
   enrollment_agreement_pdf_url: string | null;
+}
+
+/**
+ * Per-student registration packet shape this hook needs. Carries
+ * just the waiver fields — the full `XanoStudentRegistration` is
+ * heavier than the hook should depend on, and callers already have
+ * a typed packet row from `/api/student-registration`. Keyed by
+ * `registration_students_id` so the hook can find the matching
+ * packet for the student whose waiver is being signed.
+ */
+interface PacketForWaiver {
+  id: number;
+  registration_students_id: number;
+  liability_waiver_pandadoc_id: string | null;
+  liability_waiver_status: string | null;
+  liability_waiver_pdf_url: string | null;
 }
 
 export interface SigningSession {
@@ -21,7 +35,20 @@ export interface SigningSession {
 
 export function usePandaDocSigning(
   applications: Application[],
-  onRefresh: () => Promise<void>
+  onRefresh: () => Promise<void>,
+  /**
+   * Per-student registration packets for the year — needed because
+   * liability-waiver state moved from the application row to the
+   * packet. The hook joins the first application's
+   * `registration_students_id` to the matching packet to find
+   * waiver fields.
+   *
+   * Defaults to `[]` so callers that haven't loaded packets yet
+   * (or only care about the enrollment-agreement flow) don't have
+   * to pass a third argument. Waiver-related affordances will read
+   * empty / null until packets land.
+   */
+  packets: PacketForWaiver[] = []
 ) {
   const [signingLoading, setSigningLoading] = useState<string | null>(null);
   const [signingSession, setSigningSession] = useState<SigningSession | null>(
@@ -102,15 +129,32 @@ export function usePandaDocSigning(
     };
   }, [signingSession, onRefresh]);
 
+  /**
+   * Find the packet for the first application's student. The waiver
+   * flow is per-student per-year; we only ever sign for the first
+   * application in the list (multi-student waiver flows go through
+   * the per-student `/registration` page directly). Returns `null`
+   * when no packet exists yet — `getDocField` etc. fall back to
+   * empty values, matching the pre-packet behavior.
+   */
+  function packetForFirstApp(): PacketForWaiver | null {
+    if (applications.length === 0) return null;
+    const studentId = applications[0].registration_students_id;
+    return (
+      packets.find((p) => p.registration_students_id === studentId) ?? null
+    );
+  }
+
   function getDocField(type: "liability_waiver" | "enrollment_agreement") {
     if (applications.length === 0)
       return { pandadocId: null, status: null, pdfUrl: null };
     const app = applications[0];
     if (type === "liability_waiver") {
+      const packet = packetForFirstApp();
       return {
-        pandadocId: app.liability_waiver_pandadoc_id,
-        status: app.liability_waiver_status,
-        pdfUrl: app.liability_waiver_pdf_url,
+        pandadocId: packet?.liability_waiver_pandadoc_id ?? null,
+        status: packet?.liability_waiver_status ?? null,
+        pdfUrl: packet?.liability_waiver_pdf_url ?? null,
       };
     }
     return {
@@ -125,7 +169,7 @@ export function usePandaDocSigning(
     const app = applications[0];
     const docId =
       type === "liability_waiver"
-        ? app.liability_waiver_pandadoc_id
+        ? packetForFirstApp()?.liability_waiver_pandadoc_id
         : app.enrollment_agreement_pandadoc_id;
     if (!docId) return;
     window.open(
@@ -139,7 +183,7 @@ export function usePandaDocSigning(
     const app = applications[0];
     const docId =
       type === "liability_waiver"
-        ? app.liability_waiver_pandadoc_id
+        ? packetForFirstApp()?.liability_waiver_pandadoc_id
         : app.enrollment_agreement_pandadoc_id;
     if (!docId) return;
     setPdfViewerDoc({

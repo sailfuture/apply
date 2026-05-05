@@ -147,11 +147,12 @@ export interface XanoApplication {
    *  missing/undefined as "active by default" downstream. */
   isActive?: boolean;
   opportunity_scholarship_award_amount: number;
-  // PandaDoc signing — waiver + enrollment agreement state.
-  liability_waiver_pandadoc_id: string;
-  liability_waiver_status: string;
-  liability_waiver_sent_at: string | null;
-  liability_waiver_pdf_url: string;
+  // PandaDoc enrollment-agreement state. Liability-waiver fields used
+  // to live here too but moved to `registration_student_registration`
+  // (the per-student packet) — those fields are no longer on this
+  // table. Enrollment agreement is currently authored on the
+  // family-level progress row instead, so these may also be legacy
+  // depending on cycle.
   enrollment_agreement_pandadoc_id: string;
   enrollment_agreement_status: string;
   enrollment_agreement_sent_at: string | null;
@@ -915,6 +916,162 @@ export interface XanoStudentRegistration {
 }
 
 const pendingEnsure = new Map<string, Promise<XanoParent>>();
+
+/**
+ * In-flight `resolve()` calls for the two per-year progress tables.
+ * Keyed by `${tableTag}:${familyId}:${yearId}` so a single Node
+ * process collapses concurrent first-time creates into one Xano
+ * `POST` instead of racing past the "exists?" check. Cross-process
+ * races (multiple Next.js instances behind a load balancer, or this
+ * server + a Xano webhook handler) still need the post-create
+ * dedupe inside `_doResolveProgress` — but in single-instance dev
+ * and most production deployments this mutex alone collapses 99% of
+ * the dupe-creating races.
+ */
+const pendingProgressResolve = new Map<
+  string,
+  Promise<XanoStudentRegistrationProgress | XanoFamilyApplicationProgress>
+>();
+
+/**
+ * Shared post-create dedupe used by both progress tables' `resolve()`
+ * methods. After our create lands we re-query to see if a parallel
+ * caller (different process / webhook firing at the same time) also
+ * created a row for this `(family, year)`. If multiple exist, the
+ * most-recently-edited row wins (id-asc tiebreaker, deterministic
+ * across processes); the losers get hard-deleted so future reads
+ * converge on a single row.
+ *
+ * Edits are merged into the keeper before deletion: if a loser has
+ * a non-empty value where the keeper is empty (e.g. parent flipped
+ * `isTuition=true` on the loser before we noticed), we copy that
+ * value across so we never lose progress to dedupe. Boolean true,
+ * non-zero numbers, non-empty strings, and non-null objects all
+ * count as "non-empty" — see `mergeProgressFields` for the exact
+ * predicate.
+ *
+ * If the dedupe fails (e.g. Xano DELETE 5xx) we surface a warning
+ * and return the keeper anyway — the next `resolve()` will retry
+ * the cleanup.
+ */
+async function dedupeProgressRows<
+  T extends {
+    id: number;
+    created_at?: number;
+    last_edited: number | null;
+  },
+>(
+  matches: T[],
+  tableTag: string,
+  deleteFn: (id: number) => Promise<void>,
+  updateFn: (id: number, patch: Partial<T>) => Promise<T>
+): Promise<T> {
+  if (matches.length === 1) return matches[0];
+
+  // Sort: last_edited desc, id asc — deterministic so every caller
+  // converges on the same keeper.
+  const sorted = matches.slice().sort((a, b) => {
+    const aEdit = a.last_edited ?? a.created_at ?? 0;
+    const bEdit = b.last_edited ?? b.created_at ?? 0;
+    if (aEdit !== bEdit) return bEdit - aEdit;
+    return a.id - b.id;
+  });
+  const keeper = sorted[0];
+  const losers = sorted.slice(1);
+
+  console.warn(
+    `[${tableTag}.resolve] ${matches.length} duplicate rows detected; keeping id=${keeper.id} and deleting ${losers
+      .map((l) => l.id)
+      .join(",")}`
+  );
+
+  // Merge any non-empty fields from losers into the keeper so dedupe
+  // can't lose data.
+  const merged = mergeProgressFields(keeper, losers);
+  const mergedKeys = Object.keys(merged);
+  let final = keeper;
+  if (mergedKeys.length > 0) {
+    try {
+      final = await updateFn(keeper.id, merged as Partial<T>);
+    } catch (err) {
+      console.warn(
+        `[${tableTag}.resolve] merge into keeper id=${keeper.id} failed:`,
+        err
+      );
+    }
+  }
+
+  // Delete the losers in parallel — failures don't block the
+  // resolve (the next call will retry).
+  await Promise.allSettled(
+    losers.map((l) =>
+      deleteFn(l.id).catch((err) => {
+        console.warn(
+          `[${tableTag}.resolve] delete of loser id=${l.id} failed:`,
+          err
+        );
+      })
+    )
+  );
+
+  return final;
+}
+
+/**
+ * Return the subset of fields from `losers` that should be copied
+ * onto `keeper` because the keeper's value is empty. Used by the
+ * post-create dedupe to make sure parent-flipped flags aren't lost
+ * when the row that received the flip happens to be the row we're
+ * about to delete.
+ *
+ * Predicate: a value is "non-empty" if it's `true`, a non-zero
+ * number, a non-empty string, or a non-null object/array. `false` /
+ * `0` / `""` / `null` / `undefined` all count as empty so legitimate
+ * defaults don't override real data on the keeper.
+ */
+function mergeProgressFields<T extends Record<string, unknown>>(
+  keeper: T,
+  losers: T[]
+): Partial<T> {
+  const result: Record<string, unknown> = {};
+  // Skip the columns Xano owns or that are scoped to the row's
+  // identity — copying these would cause a self-overwrite or break
+  // foreign-key invariants.
+  const SKIP = new Set([
+    "id",
+    "created_at",
+    "registration_families_id",
+    "registration_school_years_id",
+    "last_edited",
+  ]);
+  const isNonEmpty = (v: unknown): boolean => {
+    if (v === null || v === undefined) return false;
+    if (typeof v === "boolean") return v === true;
+    if (typeof v === "number") return v !== 0 && Number.isFinite(v);
+    if (typeof v === "string") return v.trim().length > 0;
+    if (Array.isArray(v)) return v.length > 0;
+    if (typeof v === "object") return Object.keys(v as object).length > 0;
+    return false;
+  };
+  // Walk every key the keeper or any loser knows about so we don't
+  // miss columns absent on the keeper.
+  const allKeys = new Set<string>();
+  for (const k of Object.keys(keeper)) allKeys.add(k);
+  for (const l of losers) for (const k of Object.keys(l)) allKeys.add(k);
+  for (const key of allKeys) {
+    if (SKIP.has(key)) continue;
+    const keeperVal = (keeper as Record<string, unknown>)[key];
+    if (isNonEmpty(keeperVal)) continue;
+    // Find the first loser with a non-empty value for this column.
+    const winner = losers.find((l) =>
+      isNonEmpty((l as Record<string, unknown>)[key])
+    );
+    if (winner) {
+      result[key] = (winner as Record<string, unknown>)[key];
+    }
+  }
+  return result as Partial<T>;
+}
 
 export function ensureParentRecord(
   clerkUserId: string,
@@ -2008,6 +2165,98 @@ export const xano = {
     },
 
     /**
+     * Year-scoped variant of `getByStudentId`. The packet table is
+     * (student, year) — a student can have packets across multiple
+     * years for re-enrollment — so callers that care about the
+     * current year's packet need to filter explicitly. Used by the
+     * PandaDoc waiver flows (which now write to this table) and the
+     * waiver download ownership check.
+     */
+    async getByStudentAndYear(
+      studentId: number,
+      yearId: number
+    ): Promise<XanoStudentRegistration | null> {
+      try {
+        const res = await fetch(
+          `${getBaseUrl()}/registration_student_registration?registration_students_id=${studentId}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) return null;
+        const results = await res.json();
+        const items = Array.isArray(results) ? results : [];
+        const match = items.find(
+          (r: XanoStudentRegistration) =>
+            r.registration_students_id === studentId &&
+            Number(r.registration_school_years_id) === yearId
+        );
+        return match ?? null;
+      } catch {
+        return null;
+      }
+    },
+
+    /**
+     * Fetch-or-create the per (student, year) packet. Used by the
+     * PandaDoc waiver routes since waiver state lives on the packet
+     * but a parent may trigger the waiver before they've started
+     * filling out the rest of the registration form — in which case
+     * a minimal packet needs to exist for the waiver fields to land
+     * on. Defaults mirror the empty-row shape Xano expects on a
+     * fresh POST.
+     *
+     * `registration_type_id` defaults to `1` (new enrollment) since
+     * that's the apply-flow default; pass an explicit value when
+     * resolving for a re-enrollment cycle.
+     */
+    async resolve(
+      studentId: number,
+      yearId: number,
+      registration_type_id: number = 1
+    ): Promise<XanoStudentRegistration> {
+      const existing = await this.getByStudentAndYear(studentId, yearId);
+      if (existing) return existing;
+      return this.create({
+        registration_students_id: studentId,
+        registration_school_years_id: yearId,
+        registration_type_id,
+        shirt_size: "",
+        pant_size: "",
+        swim_level: "",
+        birth_certificate: {},
+        school_health_form: {},
+        transcripts: {},
+        iep: {},
+        ssn_card: {},
+        immunization_forms: {},
+        passport: {},
+        immunization_form: {},
+        student_state_id: {},
+        allergies: "",
+        iep_description: "",
+        dietary_restrictions: "",
+        prescription_medications: "",
+        health_conditions: "",
+        vision_impairments: "",
+        hearing_impairments: "",
+        is_student_on_medicaid: false,
+        medicaid_number: 0,
+        medicaid_provider: "",
+        carry_epi_pen: false,
+        epipen_explainer: "",
+        permission_for_acetaminophen: "",
+        additional_health_information: "",
+        interested_in_counseling_services: "",
+        other_adults_approved_for_pickup: "",
+        prohibited_adults: "",
+        liability_waiver_pandadoc_id: "",
+        liability_waiver_status: "",
+        liability_waiver_sent_at: null,
+        liability_waiver_pdf_url: "",
+        registrationConfirmed: false,
+      });
+    },
+
+    /**
      * Pull every per-student registration packet for an academic year.
      *
      * Backs the admin Enrolled Students list (filtered to
@@ -2121,6 +2370,58 @@ export const xano = {
       }
     },
 
+    /**
+     * Registration-phase notes only, scoped to a single (family,
+     * year). Backed by the dedicated Xano query
+     * `registration_admin_notes_by_registration` — server-side filter
+     * narrows to notes tagged with this family/year's
+     * `registration_student_registration_progress_id`, which is the
+     * FK the registration detail page stamps on every note it
+     * composes.
+     *
+     * Used by the family registration detail page's notes drawer so
+     * admin only sees registration-phase comms in that surface, not
+     * the full apply-phase history. The unified family-wide drawer
+     * still uses `getByFamilyId` to show everything.
+     *
+     * Errors return [] silently — the drawer renders a "no notes
+     * yet" empty state when this happens, which is the same UX as
+     * a real empty timeline.
+     */
+    async getByFamilyAndYearForRegistration(
+      familyId: number,
+      yearId: number
+    ): Promise<XanoAdminNote[]> {
+      try {
+        const url = new URL(
+          `${getBaseUrl()}/registration_admin_notes_by_registration`
+        );
+        url.searchParams.set("registration_families_id", String(familyId));
+        url.searchParams.set("registration_school_years_id", String(yearId));
+        const res = await fetch(url.toString(), { cache: "no-store" });
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          console.error(
+            `[xano.adminNotes.getByFamilyAndYearForRegistration] ${res.status} for family=${familyId} year=${yearId}: ${body}`
+          );
+          return [];
+        }
+        const items = await res.json();
+        return Array.isArray(items)
+          ? items.slice().sort(
+              (a: XanoAdminNote, b: XanoAdminNote) =>
+                b.created_at - a.created_at
+            )
+          : [];
+      } catch (err) {
+        console.error(
+          `[xano.adminNotes.getByFamilyAndYearForRegistration] threw for family=${familyId} year=${yearId}:`,
+          err
+        );
+        return [];
+      }
+    },
+
     /** Inquiry-scoped variant. Same table, filtered to rows whose
      *  `registration_inquiry_id` matches. Mutually exclusive with the
      *  family timeline above — a single note is tied to one or the
@@ -2192,18 +2493,55 @@ export const xano = {
   },
 
   familyApplicationProgress: {
-    /** Fetch-or-create the row for this family + year. Mirrors the
-     *  pattern used by `studentRegistrationProgress.resolve` and
-     *  `reapplyFamilyProgress.resolve` so server-side callers can
-     *  always PATCH against an existing row. */
+    /**
+     * Fetch-or-create the row for this family + year, race-safe
+     * against concurrent first-time creates.
+     *
+     * See the matching note on `studentRegistrationProgress.resolve`
+     * for the full story — same race condition, same two-layer
+     * defense (in-process mutex + post-create dedupe with
+     * field-merging into the keeper). Underlying Xano table has no
+     * unique index either, so without this guard concurrent callers
+     * (parent /apply load + admin /admin/applications load + a
+     * webhook firing) all race past the "exists?" check and each
+     * create their own row.
+     */
     async resolve(
       familyId: number,
       yearId: number,
       registration_type_id: number = 1
     ): Promise<XanoFamilyApplicationProgress> {
-      const existing = await this.getByFamilyAndYear(familyId, yearId);
-      if (existing) return existing;
-      return this.create({
+      const lockKey = `familyApplicationProgress:${familyId}:${yearId}`;
+      const inflight = pendingProgressResolve.get(lockKey);
+      if (inflight) return inflight as Promise<XanoFamilyApplicationProgress>;
+      const promise = this._doResolve(
+        familyId,
+        yearId,
+        registration_type_id
+      ).finally(() => {
+        pendingProgressResolve.delete(lockKey);
+      });
+      pendingProgressResolve.set(lockKey, promise);
+      return promise;
+    },
+
+    async _doResolve(
+      familyId: number,
+      yearId: number,
+      registration_type_id: number
+    ): Promise<XanoFamilyApplicationProgress> {
+      const all = await this._getAllMatches(familyId, yearId);
+      if (all.length === 1) return all[0];
+      if (all.length > 1) {
+        return dedupeProgressRows(
+          all,
+          "xano.familyApplicationProgress",
+          (id) => this.delete(id),
+          (id, patch) => this.update(id, patch)
+        );
+      }
+
+      const created = await this.create({
         registration_families_id: familyId,
         registration_school_years_id: yearId,
         family_completed: false,
@@ -2217,6 +2555,42 @@ export const xano = {
         registration_type_id,
         registration_application_id: [],
       });
+
+      const after = await this._getAllMatches(familyId, yearId);
+      if (after.length <= 1) return after[0] ?? created;
+      return dedupeProgressRows(
+        after,
+        "xano.familyApplicationProgress",
+        (id) => this.delete(id),
+        (id, patch) => this.update(id, patch)
+      );
+    },
+
+    /**
+     * Read every row matching `(familyId, yearId)`. Used by
+     * `_doResolve`'s pre- and post-create checks; the dedupe helper
+     * sorts + merges + cleans up.
+     */
+    async _getAllMatches(
+      familyId: number,
+      yearId: number
+    ): Promise<XanoFamilyApplicationProgress[]> {
+      try {
+        const res = await fetch(
+          `${getBaseUrl()}/registration_family_application_progress?registration_families_id=${familyId}&registration_school_years_id=${yearId}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) return [];
+        const results = await res.json();
+        const items = Array.isArray(results) ? results : [];
+        return items.filter(
+          (r: XanoFamilyApplicationProgress) =>
+            r.registration_families_id === familyId &&
+            r.registration_school_years_id === yearId
+        );
+      } catch {
+        return [];
+      }
     },
 
     /** All progress rows for a school year — backs the admin Applications
@@ -2252,7 +2626,16 @@ export const xano = {
       }
     },
 
-    /** Fetch the single row for this family + year, or null. */
+    /**
+     * Fetch the single row for this family + year, or null.
+     *
+     * See the matching note on `studentRegistrationProgress.getByFamilyAndYear`
+     * for the duplicate-row story — same race condition applies here
+     * since neither table has a Xano-side unique index. We collapse
+     * to the most-recently-edited row (id-asc tiebreaker) so every
+     * caller converges deterministically, and log a warning when
+     * dupes are detected for one-time cleanup.
+     */
     async getByFamilyAndYear(
       familyId: number,
       yearId: number
@@ -2265,13 +2648,31 @@ export const xano = {
         if (!res.ok) return null;
         const results = await res.json();
         const items = Array.isArray(results) ? results : [];
-        return (
-          items.find(
-            (r: XanoFamilyApplicationProgress) =>
-              r.registration_families_id === familyId &&
-              r.registration_school_years_id === yearId
-          ) ?? null
+        const matches = items.filter(
+          (r: XanoFamilyApplicationProgress) =>
+            r.registration_families_id === familyId &&
+            r.registration_school_years_id === yearId
         );
+        if (matches.length === 0) return null;
+        if (matches.length > 1) {
+          console.warn(
+            `[xano.familyApplicationProgress.getByFamilyAndYear] ${matches.length} duplicate progress rows for family=${familyId} year=${yearId}: ids=${matches
+              .map((m: XanoFamilyApplicationProgress) => m.id)
+              .join(",")} — picking most-recently-edited`
+          );
+        }
+        const sorted = matches.slice().sort(
+          (
+            a: XanoFamilyApplicationProgress,
+            b: XanoFamilyApplicationProgress
+          ) => {
+            const aEdit = a.last_edited ?? a.created_at ?? 0;
+            const bEdit = b.last_edited ?? b.created_at ?? 0;
+            if (aEdit !== bEdit) return bEdit - aEdit;
+            return a.id - b.id;
+          }
+        );
+        return sorted[0];
       } catch {
         return null;
       }
@@ -2306,6 +2707,24 @@ export const xano = {
       );
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
       return res.json();
+    },
+
+    /**
+     * Used by the post-create dedupe in `resolve()` to clean up rows
+     * created by losing-race callers. Hard delete because Xano won't
+     * enforce uniqueness on its own — the only way to converge to one
+     * row per (family, year) is to remove the strays.
+     */
+    async delete(id: number): Promise<void> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_family_application_progress/${id}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok) {
+        throw new Error(
+          `Xano error ${res.status}: ${await res.text().catch(() => "")}`
+        );
+      }
     },
   },
 
@@ -2418,17 +2837,76 @@ export const xano = {
   },
 
   studentRegistrationProgress: {
-    /** Fetch-or-create the single row for this family + year. Used by every
-     *  server-side caller (app-flow GET route, PandaDoc webhook handlers,
-     *  etc.) so there is always a row to PATCH against. */
+    /**
+     * Fetch-or-create the single row for this family + year, race-safe
+     * against concurrent first-time creates.
+     *
+     * Used by every server-side caller (parent app-flow GET, PandaDoc
+     * webhook handlers, admin GET/PATCH routes) so there's always a
+     * row to PATCH against. The previous implementation was a simple
+     * "GET → CREATE if missing" that left a wide race window: two
+     * callers would both see "no row" and both create their own,
+     * producing duplicates that admin couldn't reconcile.
+     *
+     * The fix has two layers:
+     *   1. **In-process mutex** (`pendingProgressResolve`) coalesces
+     *      concurrent calls within a single Node process to one
+     *      create. Solves the parent-page-load + admin-page-load
+     *      race that's the dominant source of dupes.
+     *   2. **Post-create dedupe** re-queries after the create and
+     *      collapses any duplicates (cross-process races, or
+     *      pre-existing dupes from before this fix shipped) into
+     *      a single keeper. Non-empty fields from loser rows are
+     *      merged into the keeper before deletion so dedupe never
+     *      loses data — see `mergeProgressFields` for the predicate.
+     *
+     * Real fix is a Xano-side unique index on
+     * `(registration_families_id, registration_school_years_id)`;
+     * this client-side defense is the next-best thing.
+     */
     async resolve(
       familyId: number,
       yearId: number,
       registration_type_id: number = 1
     ): Promise<XanoStudentRegistrationProgress> {
-      const existing = await this.getByFamilyAndYear(familyId, yearId);
-      if (existing) return existing;
-      return this.create({
+      const lockKey = `studentRegistrationProgress:${familyId}:${yearId}`;
+      const inflight = pendingProgressResolve.get(lockKey);
+      if (inflight)
+        return inflight as Promise<XanoStudentRegistrationProgress>;
+      const promise = this._doResolve(
+        familyId,
+        yearId,
+        registration_type_id
+      ).finally(() => {
+        pendingProgressResolve.delete(lockKey);
+      });
+      pendingProgressResolve.set(lockKey, promise);
+      return promise;
+    },
+
+    async _doResolve(
+      familyId: number,
+      yearId: number,
+      registration_type_id: number
+    ): Promise<XanoStudentRegistrationProgress> {
+      // First check — a row may already exist from a previous
+      // session, which is the common case after the first time
+      // this family + year hit the API.
+      const all = await this._getAllMatches(familyId, yearId);
+      if (all.length === 1) return all[0];
+      if (all.length > 1) {
+        // Pre-existing dupes from before this fix shipped — collapse
+        // them now without creating yet another row.
+        return dedupeProgressRows(
+          all,
+          "xano.studentRegistrationProgress",
+          (id) => this.delete(id),
+          (id, patch) => this.update(id, patch)
+        );
+      }
+
+      // No row yet — create one.
+      const created = await this.create({
         registration_families_id: familyId,
         registration_school_years_id: yearId,
         registration_type_id,
@@ -2453,6 +2931,45 @@ export const xano = {
         submitted_date: null,
         isSubmitted: false,
       });
+
+      // Re-check — if a parallel process raced past us, we now
+      // have multiple rows. Dedupe and return the keeper.
+      const after = await this._getAllMatches(familyId, yearId);
+      if (after.length <= 1) return after[0] ?? created;
+      return dedupeProgressRows(
+        after,
+        "xano.studentRegistrationProgress",
+        (id) => this.delete(id),
+        (id, patch) => this.update(id, patch)
+      );
+    },
+
+    /**
+     * Read every row matching `(familyId, yearId)` without any
+     * de-duping or sorting. Used by `_doResolve`'s pre- and post-
+     * create checks — both need the raw set of duplicates so the
+     * shared dedupe helper can sort + merge + clean up.
+     */
+    async _getAllMatches(
+      familyId: number,
+      yearId: number
+    ): Promise<XanoStudentRegistrationProgress[]> {
+      try {
+        const res = await fetch(
+          `${getBaseUrl()}/registration_student_registration_progress?registration_families_id=${familyId}&registration_school_years_id=${yearId}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) return [];
+        const results = await res.json();
+        const items = Array.isArray(results) ? results : [];
+        return items.filter(
+          (r: XanoStudentRegistrationProgress) =>
+            r.registration_families_id === familyId &&
+            r.registration_school_years_id === yearId
+        );
+      } catch {
+        return [];
+      }
     },
 
     /** All registration-progress rows for a school year — backs the
@@ -2486,7 +3003,27 @@ export const xano = {
       }
     },
 
-    /** Fetch the single row for this family + year, or null. */
+    /**
+     * Fetch the single row for this family + year, or null.
+     *
+     * The underlying Xano table has no uniqueness constraint on
+     * `(registration_families_id, registration_school_years_id)`, so
+     * concurrent first-time `resolve()` calls (parent loads /apply
+     * + admin opens the family at the same time, or two PandaDoc
+     * webhook fires landing simultaneously) can race past the
+     * "exists?" check and each create their own row. Once that's
+     * happened, every downstream PATCH/read sees one of the
+     * duplicates and the others get stranded.
+     *
+     * The defensive fix: when the upstream returns multiple matches,
+     * collapse to a single row by picking the one most likely to be
+     * the "live" copy — most-recently-edited wins, with the lowest
+     * id breaking ties so we always converge on the same row from
+     * any caller. Also logs a warning when dupes are detected so
+     * server logs reveal the data inconsistency for one-time
+     * cleanup. Real fix is a Xano-side unique index; this just
+     * stops the bleed.
+     */
     async getByFamilyAndYear(
       familyId: number,
       yearId: number
@@ -2499,13 +3036,33 @@ export const xano = {
         if (!res.ok) return null;
         const results = await res.json();
         const items = Array.isArray(results) ? results : [];
-        return (
-          items.find(
-            (r: XanoStudentRegistrationProgress) =>
-              r.registration_families_id === familyId &&
-              r.registration_school_years_id === yearId
-          ) ?? null
+        const matches = items.filter(
+          (r: XanoStudentRegistrationProgress) =>
+            r.registration_families_id === familyId &&
+            r.registration_school_years_id === yearId
         );
+        if (matches.length === 0) return null;
+        if (matches.length > 1) {
+          console.warn(
+            `[xano.studentRegistrationProgress.getByFamilyAndYear] ${matches.length} duplicate progress rows for family=${familyId} year=${yearId}: ids=${matches
+              .map((m: XanoStudentRegistrationProgress) => m.id)
+              .join(",")} — picking most-recently-edited`
+          );
+        }
+        // Sort: last_edited desc, then id asc (stable tie-break so
+        // every caller picks the same row).
+        const sorted = matches.slice().sort(
+          (
+            a: XanoStudentRegistrationProgress,
+            b: XanoStudentRegistrationProgress
+          ) => {
+            const aEdit = a.last_edited ?? a.created_at ?? 0;
+            const bEdit = b.last_edited ?? b.created_at ?? 0;
+            if (aEdit !== bEdit) return bEdit - aEdit;
+            return a.id - b.id;
+          }
+        );
+        return sorted[0];
       } catch {
         return null;
       }
@@ -2540,6 +3097,24 @@ export const xano = {
       );
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
       return res.json();
+    },
+
+    /**
+     * Used by the post-create dedupe in `resolve()` to clean up rows
+     * created by losing-race callers. Hard delete because Xano won't
+     * enforce uniqueness on its own — the only way to converge to one
+     * row per (family, year) is to remove the strays.
+     */
+    async delete(id: number): Promise<void> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_student_registration_progress/${id}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok) {
+        throw new Error(
+          `Xano error ${res.status}: ${await res.text().catch(() => "")}`
+        );
+      }
     },
   },
 

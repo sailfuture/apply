@@ -1,72 +1,63 @@
 "use client";
 
 import { useState } from "react";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import useSWR from "swr";
 import { toast } from "sonner";
 import {
   ArrowLeft,
+  Check,
   CheckCircle2,
   ExternalLink,
   Loader2,
+  SquarePen,
   Undo2,
 } from "lucide-react";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Field, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { FamilyNotesSheet } from "@/components/admin/family-notes-sheet";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { cn } from "@/lib/utils";
-import type { AdminFamilyRegistrationResponse } from "@/app/api/admin/registrations/[id]/route";
+import type {
+  AdminFamilyRegistrationResponse,
+  AdminFamilyRegistrationStudentRow,
+} from "@/app/api/admin/registrations/[id]/route";
+import type { XanoEmergencyContact } from "@/lib/xano";
+
+const xanoBase =
+  process.env.NEXT_PUBLIC_XANO_BASE ?? "https://xsc3-mvx7-r86m.n7e.xano.io";
 
 /**
  * Admin family-focused registration detail page.
  *
- * URL: `/admin/registrations/[id]?yearId=X` (the dynamic segment is
- * the family id — same shape as `/admin/families/[id]` so admin can
- * tab between an apply-flow view and a registration-flow view of the
- * same family).
+ * Mirrors the visual rhythm of the apply-flow family detail page at
+ * `/admin/families/[id]`:
  *
- * Renders four packet section cards stacked vertically:
+ *   - Sticky left side nav with green/amber section dots
+ *   - SectionShell cards with Notes + per-section action buttons
+ *   - Disabled-input "view-only summary" for every parent-facing field
+ *   - Section anchors so admin can deep-link or smooth-scroll
  *
- *   1. Tuition — family-level signature + monthly payment snapshot
- *   2. Enrollment Agreement — PandaDoc status + signed PDF link
- *   3. Registration Packet — per-student rows with `registrationConfirmed`
- *      toggle. The packet content itself (medical forms, file uploads)
- *      lives on the parent flow; admin sees the rollup state and
- *      flips the confirm bit when review is complete.
- *   4. Volunteer Hours — printed name + signature acknowledgment
+ * Sections (in left-nav / page order):
+ *   1. Tuition — printed name + signature on file + monthly snapshot
+ *   2. Enrollment Agreement — PandaDoc status, inline PDF preview
+ *      when signed, printed name input
+ *   3. Registration Packet — one sub-card per active student with the
+ *      full packet contents (sizes, medical, file uploads, emergency
+ *      contacts, liability waiver) + per-student `registrationConfirmed`
+ *      toggle
+ *   4. Volunteer Hours — printed name + signature on file
  *
- * All four section cards read from the family-level
- * `registration_student_registration_progress` row except the
- * Registration Packet table, which joins the per-student
- * `registration_student_registration` packets.
- *
- * Admin actions are minimal on purpose: each card has a single
- * "Mark Confirmed / Reset" toggle that flips the corresponding
- * boolean on the family-progress row, plus a per-student confirm
- * toggle inside the Registration Packet card. Anything more invasive
- * (re-send PandaDoc, void signature, etc.) lives behind future
- * affordances we'll add as the workflow demands them.
+ * Admin can flip the four section booleans on the family-progress
+ * row, plus the per-student `registrationConfirmed` flag.
  */
 export default function FamilyRegistrationDetailPage() {
   const params = useParams<{ id: string }>();
   const searchParams = useSearchParams();
-  const router = useRouter();
   const yearId = searchParams.get("yearId");
   const familyId = Number(params.id);
 
@@ -83,8 +74,7 @@ export default function FamilyRegistrationDetailPage() {
 
   if (!yearId) {
     return (
-      <div className="p-6 space-y-4">
-        <BackLink href={backHref} />
+      <div className="p-6 max-w-7xl mx-auto">
         <div className="rounded-lg border bg-white px-6 py-12 text-center text-sm text-muted-foreground">
           Pick a school year above to view the family&rsquo;s registration.
         </div>
@@ -94,11 +84,8 @@ export default function FamilyRegistrationDetailPage() {
 
   if (isLoading && !data) {
     return (
-      <div className="p-6 space-y-4">
-        <BackLink href={backHref} />
+      <div className="p-6 max-w-7xl mx-auto space-y-4">
         <Skeleton className="h-12 w-72" />
-        <Skeleton className="h-48 w-full" />
-        <Skeleton className="h-48 w-full" />
         <Skeleton className="h-48 w-full" />
         <Skeleton className="h-48 w-full" />
       </div>
@@ -107,8 +94,7 @@ export default function FamilyRegistrationDetailPage() {
 
   if (error || !data) {
     return (
-      <div className="p-6 space-y-4">
-        <BackLink href={backHref} />
+      <div className="p-6 max-w-7xl mx-auto">
         <div className="rounded-lg border bg-white px-6 py-12 text-center text-sm text-muted-foreground">
           {error instanceof Error
             ? error.message
@@ -118,145 +104,523 @@ export default function FamilyRegistrationDetailPage() {
     );
   }
 
-  const { family, primary, school_year, progress, students } = data;
+  const { family, primary, school_year, progress, students, emergency_contacts } =
+    data;
   const familyName =
     family?.family_name?.trim() || `Family #${family?.id ?? familyId}`;
 
-  /**
-   * Refetch helper. Each card-level admin action revalidates this
-   * SWR key so the section pill + table state reflect the latest
-   * Xano truth without a full reload.
-   */
   const refresh = () => {
     void mutate();
   };
 
-  return (
-    <div className="p-6 space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <div className="min-w-0">
-          <BackLink href={backHref} />
-          <h1 className="mt-2 text-2xl font-semibold truncate">
-            {familyName}
-            {school_year?.year_name ? (
-              <span className="ml-2 text-base font-normal text-muted-foreground">
-                · {school_year.year_name}
-              </span>
-            ) : null}
-          </h1>
-          {primary ? (
-            <p className="mt-1 text-sm text-muted-foreground">
-              {`${primary.first_name ?? ""} ${primary.last_name ?? ""}`.trim() ||
-                "—"}
-              {primary.email ? ` · ${primary.email}` : ""}
-              {primary.phone ? ` · ${primary.phone}` : ""}
-            </p>
-          ) : null}
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <FamilyNotesSheet
-            familyId={Number(family?.id ?? familyId)}
-            defaultYearId={Number(yearId)}
-          />
-          {/* Quick jump back to the apply-flow detail page — useful
-              when admin needs to reference scholarship state or
-              parent records mid-registration review. */}
-          <Button asChild variant="outline" size="sm" className="bg-white">
-            <Link
-              href={`/admin/families/${family?.id ?? familyId}?yearId=${yearId}`}
-            >
-              View application
-              <ExternalLink className="size-3.5 ml-1.5" />
-            </Link>
-          </Button>
-        </div>
-      </div>
+  // Per-section completion state — drives the green/amber dot in the
+  // side nav AND the colored status dot in each `SectionShell` header.
+  const sectionStatus = {
+    tuition: !!progress?.isTuition,
+    enrollment: !!progress?.isEnrollment,
+    registration:
+      !!progress?.isRegistration &&
+      students.length > 0 &&
+      students.every((s) => !!s.packet?.registrationConfirmed),
+    volunteer: !!progress?.isVolunteerHours,
+  };
 
-      <div className="space-y-6">
-        <section id="section-tuition" className="scroll-mt-20">
-          <TuitionCard
-            familyId={Number(family?.id ?? familyId)}
-            yearId={Number(yearId)}
-            progress={progress}
-            schoolYear={school_year}
-            onChanged={refresh}
+  return (
+    <div className="p-6 max-w-7xl mx-auto flex gap-6">
+      {/* Sticky left side nav. Same `position: fixed` workaround the
+          family detail page uses so Radix scroll-locking doesn't
+          jump it to the top of the document when a Select/Dialog
+          opens. */}
+      <aside className="hidden xl:block w-[220px] shrink-0">
+        <div
+          className="fixed top-20 w-[220px]"
+          style={{ left: "max(1.5rem, calc(50vw - 616px))" }}
+        >
+          <RegistrationSideNav
+            backHref={backHref}
+            sectionStatus={sectionStatus}
           />
+        </div>
+      </aside>
+
+      <main className="flex-1 min-w-0 space-y-6">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h1 className="text-2xl font-semibold truncate">
+              {familyName}
+              {school_year?.year_name ? (
+                <span className="ml-2 text-base font-normal text-muted-foreground">
+                  · {school_year.year_name}
+                </span>
+              ) : null}
+            </h1>
+            {primary ? (
+              <p className="mt-1 text-sm text-muted-foreground">
+                {`${primary.first_name ?? ""} ${primary.last_name ?? ""}`.trim() ||
+                  "—"}
+                {primary.email ? ` · ${primary.email}` : ""}
+                {primary.phone ? ` · ${primary.phone}` : ""}
+              </p>
+            ) : null}
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {/* Page-header notes drawer is phase-scoped too — hits
+                the dedicated `..._by_registration` Xano query so
+                admin only sees registration-phase comms by default,
+                not the full apply-phase backlog. */}
+            <FamilyNotesSheet
+              familyId={Number(family?.id ?? familyId)}
+              defaultYearId={Number(yearId)}
+              phase="registration"
+            />
+            <Button asChild variant="outline" size="sm" className="bg-white">
+              <Link
+                href={`/admin/families/${family?.id ?? familyId}?yearId=${yearId}`}
+              >
+                View application
+                <ExternalLink className="size-3.5 ml-1.5" />
+              </Link>
+            </Button>
+          </div>
+        </div>
+
+        <section id="section-tuition" className="scroll-mt-20">
+          <SectionShell
+            title="Tuition"
+            status={sectionStatus.tuition ? "complete" : "in_progress"}
+            notes={{
+              familyId: Number(family?.id ?? familyId),
+              yearId: Number(yearId),
+              section: "section-tuition",
+              title: "Notes — Tuition",
+            }}
+            action={
+              <SectionConfirmButton
+                familyId={Number(family?.id ?? familyId)}
+                yearId={Number(yearId)}
+                field="isTuition"
+                confirmed={sectionStatus.tuition}
+                onChanged={refresh}
+              />
+            }
+          >
+            <TuitionBlock
+              progress={progress}
+              schoolYear={school_year}
+            />
+          </SectionShell>
         </section>
 
         <section id="section-enrollment" className="scroll-mt-20">
-          <EnrollmentAgreementCard
-            familyId={Number(family?.id ?? familyId)}
-            yearId={Number(yearId)}
-            progress={progress}
-            onChanged={refresh}
-          />
+          <SectionShell
+            title="Enrollment Agreement"
+            status={sectionStatus.enrollment ? "complete" : "in_progress"}
+            notes={{
+              familyId: Number(family?.id ?? familyId),
+              yearId: Number(yearId),
+              section: "section-enrollment",
+              title: "Notes — Enrollment Agreement",
+            }}
+            action={
+              <SectionConfirmButton
+                familyId={Number(family?.id ?? familyId)}
+                yearId={Number(yearId)}
+                field="isEnrollment"
+                confirmed={sectionStatus.enrollment}
+                onChanged={refresh}
+              />
+            }
+          >
+            <EnrollmentAgreementBlock progress={progress} />
+          </SectionShell>
         </section>
 
         <section id="section-registration" className="scroll-mt-20">
-          <RegistrationPacketCard
-            familyId={Number(family?.id ?? familyId)}
-            yearId={Number(yearId)}
-            progress={progress}
-            students={students}
-            onChanged={refresh}
-          />
+          <SectionShell
+            title="Registration Packet"
+            status={sectionStatus.registration ? "complete" : "in_progress"}
+            notes={{
+              familyId: Number(family?.id ?? familyId),
+              yearId: Number(yearId),
+              section: "section-registration",
+              title: "Notes — Registration Packet",
+            }}
+            action={
+              <SectionConfirmButton
+                familyId={Number(family?.id ?? familyId)}
+                yearId={Number(yearId)}
+                field="isRegistration"
+                confirmed={!!progress?.isRegistration}
+                onChanged={refresh}
+              />
+            }
+          >
+            <RegistrationPacketBlock
+              students={students}
+              emergencyContacts={emergency_contacts}
+              onChanged={refresh}
+            />
+          </SectionShell>
         </section>
 
         <section id="section-volunteer" className="scroll-mt-20">
-          <VolunteerHoursCard
-            familyId={Number(family?.id ?? familyId)}
-            yearId={Number(yearId)}
-            progress={progress}
-            onChanged={refresh}
-          />
+          <SectionShell
+            title="Volunteer Hours"
+            status={sectionStatus.volunteer ? "complete" : "in_progress"}
+            notes={{
+              familyId: Number(family?.id ?? familyId),
+              yearId: Number(yearId),
+              section: "section-volunteer",
+              title: "Notes — Volunteer Hours",
+            }}
+            action={
+              <SectionConfirmButton
+                familyId={Number(family?.id ?? familyId)}
+                yearId={Number(yearId)}
+                field="isVolunteerHours"
+                confirmed={sectionStatus.volunteer}
+                onChanged={refresh}
+              />
+            }
+          >
+            <VolunteerHoursBlock progress={progress} />
+          </SectionShell>
         </section>
+      </main>
+    </div>
+  );
+}
+
+/* ─────────────────────── Side nav ─────────────────────── */
+
+/**
+ * Sticky left nav — pixel-aligned with the apply-flow's
+ * `FamilyDetailNav` so admin sees the same vocabulary on both
+ * surfaces. Green check = complete; amber square-pen = in progress.
+ */
+function RegistrationSideNav({
+  backHref,
+  sectionStatus,
+}: {
+  backHref: string;
+  sectionStatus: {
+    tuition: boolean;
+    enrollment: boolean;
+    registration: boolean;
+    volunteer: boolean;
+  };
+}) {
+  const items: Array<{
+    key: string;
+    label: string;
+    href: string;
+    complete: boolean;
+  }> = [
+    {
+      key: "tuition",
+      label: "Tuition",
+      href: "#section-tuition",
+      complete: sectionStatus.tuition,
+    },
+    {
+      key: "enrollment",
+      label: "Enrollment Agreement",
+      href: "#section-enrollment",
+      complete: sectionStatus.enrollment,
+    },
+    {
+      key: "registration",
+      label: "Registration",
+      href: "#section-registration",
+      complete: sectionStatus.registration,
+    },
+    {
+      key: "volunteer",
+      label: "Volunteer Hours",
+      href: "#section-volunteer",
+      complete: sectionStatus.volunteer,
+    },
+  ];
+
+  function handleNavClick(
+    e: React.MouseEvent<HTMLAnchorElement>,
+    href: string
+  ) {
+    if (!href.startsWith("#")) return;
+    const id = href.slice(1);
+    const target = document.getElementById(id);
+    if (!target) return;
+    e.preventDefault();
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (typeof window !== "undefined") {
+      window.history.replaceState(null, "", href);
+    }
+  }
+
+  return (
+    <div className="rounded-xl bg-background p-1.5 shadow-sm border">
+      <div className="overflow-hidden rounded-lg border">
+        <div className="divide-y">
+          <Link
+            href={backHref}
+            className="flex w-full items-center gap-3 px-3 py-3 text-left text-sm transition-colors hover:bg-muted/30"
+          >
+            <div className="flex size-6 shrink-0 items-center justify-center rounded-full border-2 border-muted-foreground/30 text-muted-foreground">
+              <ArrowLeft className="size-3" />
+            </div>
+            <span className="truncate font-medium text-muted-foreground">
+              Registrations
+            </span>
+          </Link>
+          {items.map((item) => (
+            <a
+              key={item.key}
+              href={item.href}
+              onClick={(e) => handleNavClick(e, item.href)}
+              className="flex w-full items-center gap-3 px-3 py-3 text-left text-sm transition-colors hover:bg-muted/30"
+            >
+              <NavCircle complete={item.complete} />
+              <span
+                className={cn(
+                  "truncate",
+                  item.complete
+                    ? "font-semibold text-foreground"
+                    : "font-medium text-muted-foreground"
+                )}
+              >
+                {item.label}
+              </span>
+            </a>
+          ))}
+        </div>
       </div>
     </div>
   );
 }
 
-function BackLink({ href }: { href: string }) {
+/**
+ * Status circle for a sidebar nav row — pixel-aligned with
+ * `FamilyDetailNav.NavCircle` from the apply-flow page so both
+ * admin surfaces use the same visual vocabulary.
+ */
+function NavCircle({ complete }: { complete: boolean }) {
+  if (complete) {
+    return (
+      <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-green-500 text-white">
+        <Check className="size-4" />
+      </div>
+    );
+  }
   return (
-    <Link
-      href={href}
-      className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-    >
-      <ArrowLeft className="size-3" />
-      Back to registrations
-    </Link>
+    <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-amber-500 text-white">
+      <SquarePen className="size-4" />
+    </div>
   );
 }
 
+/* ─────────────────────── Section shell ─────────────────────── */
+
+type SectionStatus = "complete" | "in_progress" | "not_started";
+
+const STATUS_DOT_CLASS: Record<SectionStatus, string> = {
+  complete: "bg-green-500",
+  in_progress: "bg-yellow-500",
+  not_started: "bg-red-500",
+};
+
+const STATUS_LABEL: Record<SectionStatus, string> = {
+  complete: "Complete",
+  in_progress: "In progress",
+  not_started: "Not started",
+};
+
 /**
- * Status pill rendered at the top-right of each section card.
- * Confirmed = filled green; Pending = neutral outline. Visually
- * cheap, consistent across all four cards so admin can scan
- * "what's left to confirm" by skimming the right edge of the page.
+ * Shared section card chrome — title + status dot, optional Notes
+ * drawer trigger, optional right-aligned action button (Mark
+ * Confirmed / Reset). Visual rhythm matches the apply-flow
+ * `SectionShell` so the two admin surfaces feel like the same page.
  */
-function StatusPill({ confirmed }: { confirmed: boolean }) {
+function SectionShell({
+  title,
+  status,
+  notes,
+  action,
+  children,
+}: {
+  title: string;
+  status?: SectionStatus;
+  /**
+   * Notes drawer config. `yearId` + `phase="registration"` are
+   * baked in here (rather than per-call) because every section
+   * card on this page belongs to the same registration phase, so
+   * threading them through every call site would just be
+   * boilerplate. The drawer hits the dedicated
+   * `registration_admin_notes_by_registration` Xano query and
+   * stamps the matching FK on writes.
+   */
+  notes?: {
+    familyId: number;
+    yearId: number;
+    section: string;
+    title: string;
+  };
+  action?: React.ReactNode;
+  children: React.ReactNode;
+}) {
   return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium uppercase tracking-wider",
-        confirmed
-          ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-          : "border-border bg-muted text-muted-foreground"
-      )}
-    >
-      {confirmed ? (
-        <CheckCircle2 className="size-3" />
+    <Card className="overflow-hidden gap-0 py-0 bg-white">
+      <CardHeader className="py-3 !pb-3 border-b">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 min-w-0">
+            {status ? (
+              <span
+                className={cn(
+                  "inline-block size-2.5 rounded-full shrink-0",
+                  STATUS_DOT_CLASS[status]
+                )}
+                aria-label={STATUS_LABEL[status]}
+                title={STATUS_LABEL[status]}
+              />
+            ) : null}
+            <CardTitle className="text-base truncate">{title}</CardTitle>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {notes ? (
+              <FamilyNotesSheet
+                familyId={notes.familyId}
+                section={notes.section}
+                title={notes.title}
+                phase="registration"
+                defaultYearId={notes.yearId}
+              />
+            ) : null}
+            {action}
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-6 py-5 bg-white">{children}</CardContent>
+    </Card>
+  );
+}
+
+function SectionGroup({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section>
+      <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
+        {title}
+      </h3>
+      {children}
+    </section>
+  );
+}
+
+/* ─────────────────────── Disabled-field primitives ─────────────────────── */
+
+function valueIsEmpty(v: string | number | null | undefined): boolean {
+  if (v === null || v === undefined) return true;
+  if (typeof v === "number") return v === 0;
+  const s = v.trim();
+  return s === "" || s === "—" || s === "0" || s === "$0" || s === "$0.00";
+}
+
+/**
+ * Read-only `<Input>` rendered as a real form field — same affordance
+ * the apply-flow detail page uses, so admin sees consistent UI on
+ * both surfaces. `required` flags missing data with a red border so
+ * an in-progress packet is glance-able.
+ */
+function DisabledField({
+  label,
+  value,
+  type = "text",
+  placeholder,
+  required,
+}: {
+  label?: string;
+  value: string | number | null | undefined;
+  type?: string;
+  placeholder?: string;
+  required?: boolean;
+}) {
+  const display =
+    value === null || value === undefined || value === "" ? "" : String(value);
+  const isMissing = required && valueIsEmpty(value);
+  return (
+    <Field>
+      {label ? (
+        <FieldLabel className="text-xs">
+          {label}
+          {required ? (
+            <span className="ml-1 text-red-500" aria-label="required">
+              *
+            </span>
+          ) : null}
+        </FieldLabel>
       ) : null}
-      {confirmed ? "Confirmed" : "Pending"}
-    </span>
+      <Input
+        type={type}
+        value={display}
+        disabled
+        readOnly
+        placeholder={placeholder}
+        onChange={() => {}}
+        aria-invalid={isMissing || undefined}
+        className={cn(
+          "disabled:opacity-100 disabled:bg-white disabled:cursor-default",
+          isMissing
+            ? "border-red-500 ring-1 ring-red-500/20"
+            : "border-input"
+        )}
+      />
+    </Field>
   );
 }
 
-/**
- * Generic confirm/reset action button for the family-level booleans
- * (`isTuition`, `isEnrollment`, `isVolunteerHours`). The Registration
- * Packet card has per-student logic so it doesn't use this — it
- * computes its own rollup state.
- */
+function DisabledTextarea({
+  label,
+  value,
+  required,
+}: {
+  label: string;
+  value: string | null | undefined;
+  required?: boolean;
+}) {
+  const isMissing = required && valueIsEmpty(value);
+  return (
+    <Field>
+      <FieldLabel className="text-xs">
+        {label}
+        {required ? (
+          <span className="ml-1 text-red-500" aria-label="required">
+            *
+          </span>
+        ) : null}
+      </FieldLabel>
+      <textarea
+        value={value ?? ""}
+        disabled
+        readOnly
+        onChange={() => {}}
+        aria-invalid={isMissing || undefined}
+        className={cn(
+          "flex min-h-[80px] w-full rounded-md border bg-white px-3 py-2 text-sm placeholder:text-muted-foreground cursor-default opacity-100",
+          isMissing
+            ? "border-red-500 ring-1 ring-red-500/20"
+            : "border-input"
+        )}
+      />
+    </Field>
+  );
+}
+
+/* ─────────────────────── Confirm action ─────────────────────── */
+
 function SectionConfirmButton({
   familyId,
   yearId,
@@ -278,11 +642,7 @@ function SectionConfirmButton({
       const res = await fetch("/api/admin/registration-progress", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          familyId,
-          yearId,
-          [field]: !confirmed,
-        }),
+        body: JSON.stringify({ familyId, yearId, [field]: !confirmed }),
       });
       if (!res.ok) {
         const errBody = await res.json().catch(() => null);
@@ -318,303 +678,215 @@ function SectionConfirmButton({
   );
 }
 
-/**
- * One row of `<dt>/<dd>` styled metadata. Used in every section card
- * for the read-only fact list (printed name, signed timestamp, etc.).
- * `value` falls back to an em-dash so empty fields still align in
- * the grid.
- */
-function FactRow({ label, value }: { label: string; value: React.ReactNode }) {
+/* ─────────────────────── Tuition block ─────────────────────── */
+
+function TuitionBlock({
+  progress,
+  schoolYear,
+}: {
+  progress: AdminFamilyRegistrationResponse["progress"];
+  schoolYear: AdminFamilyRegistrationResponse["school_year"];
+}) {
+  const monthlyTuition = progress?.monthly_tuition_payment ?? 0;
+  const monthlyTransport = progress?.monthly_transportation_payment ?? 0;
+  const printedName = progress?.name ?? "";
+
   return (
-    <div className="flex items-baseline justify-between gap-3 py-1.5 border-b last:border-0">
-      <span className="text-xs uppercase tracking-wider text-muted-foreground">
-        {label}
-      </span>
-      <span className="text-sm text-foreground text-right truncate">
-        {value || "—"}
-      </span>
+    <div className="rounded-md border bg-muted/10 p-4 space-y-5">
+      <SectionGroup title="Monthly Snapshot">
+        <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
+          <DisabledField
+            label="School Year"
+            value={schoolYear.year_name || ""}
+            placeholder="—"
+          />
+          <DisabledField
+            label="Monthly Tuition"
+            value={`$${monthlyTuition.toLocaleString()}`}
+          />
+          <DisabledField
+            label="Monthly Transportation"
+            value={`$${monthlyTransport.toLocaleString()}`}
+          />
+        </div>
+      </SectionGroup>
+      <SectionGroup title="Acknowledgement">
+        <div className="grid gap-4 grid-cols-1">
+          <DisabledField
+            label="Printed name"
+            value={printedName}
+            placeholder="—"
+            required
+          />
+          <SignaturePreview
+            label="Signature"
+            signature={
+              progress?.tuition_scholarship_signature ?? progress?.signature_data ?? null
+            }
+          />
+        </div>
+      </SectionGroup>
     </div>
   );
 }
 
-interface TuitionCardProps {
-  familyId: number;
-  yearId: number;
-  progress: AdminFamilyRegistrationResponse["progress"];
-  schoolYear: AdminFamilyRegistrationResponse["school_year"];
-  onChanged: () => void;
-}
-function TuitionCard({
-  familyId,
-  yearId,
-  progress,
-  schoolYear,
-  onChanged,
-}: TuitionCardProps) {
-  const confirmed = !!progress?.isTuition;
-  const monthlyTuition = progress?.monthly_tuition_payment ?? 0;
-  const monthlyTransport = progress?.monthly_transportation_payment ?? 0;
-  const printedName = progress?.name?.trim() ?? "";
-  const signed = !!progress?.tuition_scholarship_signature;
+/* ─────────────────────── Enrollment Agreement block ─────────────────────── */
 
-  return (
-    <Card className="bg-white py-0 gap-0 overflow-hidden">
-      <CardHeader className="py-4 border-b bg-muted/20">
-        <div className="flex items-center justify-between gap-3">
-          <CardTitle className="text-base">Tuition</CardTitle>
-          <StatusPill confirmed={confirmed} />
-        </div>
-        <p className="text-xs text-muted-foreground">
-          Family acknowledged the tuition + scholarship breakdown for{" "}
-          {schoolYear.year_name || "the year"}.
-        </p>
-      </CardHeader>
-      <CardContent className="p-5 space-y-4">
-        <div className="space-y-0.5">
-          <FactRow
-            label="Monthly Tuition"
-            value={`$${monthlyTuition.toLocaleString()}`}
-          />
-          <FactRow
-            label="Monthly Transportation"
-            value={`$${monthlyTransport.toLocaleString()}`}
-          />
-          <FactRow label="Printed Name" value={printedName} />
-          <FactRow
-            label="Signature"
-            value={signed ? "On file" : "Not signed"}
-          />
-        </div>
-        <div className="flex justify-end pt-2">
-          <SectionConfirmButton
-            familyId={familyId}
-            yearId={yearId}
-            field="isTuition"
-            confirmed={confirmed}
-            onChanged={onChanged}
-          />
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-interface EnrollmentAgreementCardProps {
-  familyId: number;
-  yearId: number;
-  progress: AdminFamilyRegistrationResponse["progress"];
-  onChanged: () => void;
-}
-function EnrollmentAgreementCard({
-  familyId,
-  yearId,
+function EnrollmentAgreementBlock({
   progress,
-  onChanged,
-}: EnrollmentAgreementCardProps) {
-  const confirmed = !!progress?.isEnrollment;
+}: {
+  progress: AdminFamilyRegistrationResponse["progress"];
+}) {
   const pdId = progress?.enrollment_agreement_pandadoc_id ?? "";
   const pdStatus = progress?.enrollment_agreement_status ?? "";
   const pdSent = progress?.enrollment_agreement_sent;
   const pdfUrl = progress?.enrollment_agreement_pdf_url ?? "";
   const isSigned = !!progress?.is_enrollment_agreement_signed;
+  // Printed name on the enrollment agreement reuses the family-level
+  // `name` field on the progress row; the parent flow writes both
+  // simultaneously when they sign on /enrollment-signing.
+  const printedName = progress?.name ?? "";
 
   return (
-    <Card className="bg-white py-0 gap-0 overflow-hidden">
-      <CardHeader className="py-4 border-b bg-muted/20">
-        <div className="flex items-center justify-between gap-3">
-          <CardTitle className="text-base">Enrollment Agreement</CardTitle>
-          <StatusPill confirmed={confirmed} />
-        </div>
-        <p className="text-xs text-muted-foreground">
-          Tuition contract sent through PandaDoc. Mirror state shown
-          here once the family signs.
-        </p>
-      </CardHeader>
-      <CardContent className="p-5 space-y-4">
-        <div className="space-y-0.5">
-          <FactRow
-            label="PandaDoc Status"
+    <div className="rounded-md border bg-muted/10 p-4 space-y-5">
+      <SectionGroup title="PandaDoc">
+        <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
+          <DisabledField
+            label="Status"
             value={
               isSigned
                 ? "Signed"
                 : pdStatus
                   ? formatPdStatus(pdStatus)
-                  : "Not sent"
+                  : ""
             }
+            placeholder="Not sent"
           />
-          <FactRow
-            label="Sent"
-            value={formatTimestamp(pdSent)}
+          <DisabledField label="Sent" value={formatTimestamp(pdSent)} />
+          <DisabledField
+            label="Document ID"
+            value={pdId}
+            placeholder="—"
           />
-          <FactRow
-            label="PandaDoc ID"
-            value={pdId ? <span className="font-mono text-xs">{pdId}</span> : ""}
+        </div>
+      </SectionGroup>
+      <SectionGroup title="Acknowledgement">
+        <div className="grid gap-4 grid-cols-1">
+          <DisabledField
+            label="Printed name"
+            value={printedName}
+            placeholder="—"
+            required={isSigned}
           />
-          <FactRow
-            label="Signed PDF"
-            value={
-              pdfUrl ? (
-                <a
-                  href={pdfUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-1 text-blue-600 hover:underline"
-                >
-                  Open
-                  <ExternalLink className="size-3" />
+          <SignaturePreview
+            label="Signature"
+            signature={progress?.signature_data ?? null}
+          />
+        </div>
+      </SectionGroup>
+      {/* Inline PDF preview when signed — admin can scan the
+          completed agreement without leaving the page. We embed
+          via `<iframe>` (rather than `<object>` / `<embed>`) so the
+          browser's built-in PDF viewer renders consistently across
+          Chromium and Safari. Falls back to a simple link when the
+          URL isn't yet populated. */}
+      {pdfUrl ? (
+        <SectionGroup title="Signed PDF">
+          <div className="space-y-2">
+            <div className="rounded-md border bg-white overflow-hidden">
+              <iframe
+                src={pdfUrl}
+                className="w-full h-[640px]"
+                title="Enrollment agreement"
+              />
+            </div>
+            <div className="flex justify-end">
+              <Button asChild variant="outline" size="sm" className="bg-white">
+                <a href={pdfUrl} target="_blank" rel="noreferrer">
+                  Open in new tab
+                  <ExternalLink className="size-3.5 ml-1.5" />
                 </a>
-              ) : (
-                ""
-              )
-            }
-          />
-        </div>
-        <div className="flex justify-end pt-2">
-          <SectionConfirmButton
-            familyId={familyId}
-            yearId={yearId}
-            field="isEnrollment"
-            confirmed={confirmed}
-            onChanged={onChanged}
-          />
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-interface RegistrationPacketCardProps {
-  familyId: number;
-  yearId: number;
-  progress: AdminFamilyRegistrationResponse["progress"];
-  students: AdminFamilyRegistrationResponse["students"];
-  onChanged: () => void;
-}
-function RegistrationPacketCard({
-  familyId,
-  yearId,
-  progress,
-  students,
-  onChanged,
-}: RegistrationPacketCardProps) {
-  // Family-level packet boolean still gates the parent flow even
-  // though confirmation now happens per student. We surface it
-  // alongside the per-student rollup so admin can see both axes.
-  const familyConfirmed = !!progress?.isRegistration;
-  const total = students.length;
-  const confirmedCount = students.filter(
-    (s) => s.registrationConfirmed
-  ).length;
-  const allStudentsConfirmed = total > 0 && confirmedCount === total;
-
-  return (
-    <Card className="bg-white py-0 gap-0 overflow-hidden">
-      <CardHeader className="py-4 border-b bg-muted/20">
-        <div className="flex items-center justify-between gap-3">
-          <CardTitle className="text-base">Registration Packet</CardTitle>
-          <StatusPill confirmed={familyConfirmed && allStudentsConfirmed} />
-        </div>
-        <p className="text-xs text-muted-foreground">
-          Per-student packet review. Flip{" "}
-          <span className="font-medium">Confirmed</span> on each row once
-          the medical forms, emergency contacts, and uploads have been
-          reviewed.
-        </p>
-      </CardHeader>
-      <CardContent className="p-5 space-y-4">
-        {total === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            No active students for this year.
-          </p>
-        ) : (
-          <div className="rounded-md border bg-white">
-            <Table>
-              <TableHeader>
-                <TableRow className="bg-muted/40">
-                  <TableHead className="text-xs">Student</TableHead>
-                  <TableHead className="text-xs w-[70px]">Grade</TableHead>
-                  <TableHead className="text-xs">Liability Waiver</TableHead>
-                  <TableHead className="text-xs w-[140px]">Status</TableHead>
-                  <TableHead className="text-xs text-right w-[170px]">
-                    Action
-                  </TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {students.map((s) => (
-                  <StudentPacketRow
-                    key={s.student_id}
-                    row={s}
-                    onChanged={onChanged}
-                  />
-                ))}
-              </TableBody>
-            </Table>
+              </Button>
+            </div>
           </div>
-        )}
-
-        <div className="flex items-center justify-between gap-3 pt-2">
-          <span className="text-xs text-muted-foreground tabular-nums">
-            {confirmedCount} of {total} students confirmed
-          </span>
-          <SectionConfirmButton
-            familyId={familyId}
-            yearId={yearId}
-            field="isRegistration"
-            confirmed={familyConfirmed}
-            onChanged={onChanged}
-          />
-        </div>
-      </CardContent>
-    </Card>
+        </SectionGroup>
+      ) : null}
+    </div>
   );
 }
 
-/**
- * Per-student row inside the Registration Packet card. The Confirm
- * toggle here writes `registrationConfirmed` on the
- * `registration_student_registration` packet — the field that gates
- * the Enrolled Students list. Rows where the parent hasn't started
- * a packet yet show a disabled placeholder (we can't confirm
- * something that doesn't exist), with copy that nudges admin to wait
- * on the family.
- */
-function StudentPacketRow({
+/* ─────────────────────── Registration Packet block ─────────────────────── */
+
+function RegistrationPacketBlock({
+  students,
+  emergencyContacts,
+  onChanged,
+}: {
+  students: AdminFamilyRegistrationStudentRow[];
+  emergencyContacts: XanoEmergencyContact[];
+  onChanged: () => void;
+}) {
+  if (students.length === 0) {
+    return (
+      <div className="rounded-md border bg-muted/10 p-4 text-sm text-muted-foreground">
+        No active students for this year.
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-5">
+      {students.map((row) => (
+        <StudentPacketBlock
+          key={row.student_id}
+          row={row}
+          onChanged={onChanged}
+        />
+      ))}
+      {/* Emergency contacts are family-scoped, not per-student, so
+          they live in their own block beneath the student cards
+          rather than being duplicated under each one. */}
+      <EmergencyContactsBlock contacts={emergencyContacts} />
+    </div>
+  );
+}
+
+const SHIRT_SIZES = ["XS", "S", "M", "L", "XL", "XXL"];
+const SWIM_LEVELS = ["None", "Beginner", "Intermediate", "Advanced"];
+
+function StudentPacketBlock({
   row,
   onChanged,
 }: {
-  row: AdminFamilyRegistrationResponse["students"][number];
+  row: AdminFamilyRegistrationStudentRow;
   onChanged: () => void;
 }) {
   const [saving, setSaving] = useState(false);
-  const hasPacket = row.packet_id != null;
+  const packet = row.packet;
+  const hasPacket = packet != null;
 
   async function toggleConfirmed() {
-    if (!hasPacket || row.packet_id == null) return;
+    if (!packet) return;
     setSaving(true);
     try {
-      const res = await fetch(
-        `/api/admin/student-registration/${row.packet_id}`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            registrationConfirmed: !row.registrationConfirmed,
-          }),
-        }
-      );
+      const res = await fetch(`/api/admin/student-registration/${packet.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          registrationConfirmed: !packet.registrationConfirmed,
+        }),
+      });
       if (!res.ok) {
         const errBody = await res.json().catch(() => null);
         throw new Error(errBody?.error ?? `Update failed (${res.status})`);
       }
       toast.success(
-        row.registrationConfirmed
+        packet.registrationConfirmed
           ? `${row.student_full_name} marked pending.`
           : `${row.student_full_name} marked confirmed.`
       );
       onChanged();
     } catch (err) {
-      console.error("[StudentPacketRow.toggleConfirmed]", err);
+      console.error("[StudentPacketBlock.toggleConfirmed]", err);
       toast.error(err instanceof Error ? err.message : "Couldn't update.");
     } finally {
       setSaving(false);
@@ -622,149 +894,477 @@ function StudentPacketRow({
   }
 
   return (
-    <TableRow>
-      <TableCell className="text-sm font-medium align-middle truncate">
-        {row.student_full_name}
-      </TableCell>
-      <TableCell className="text-sm align-middle">
-        {row.student_grade || "—"}
-      </TableCell>
-      <TableCell className="text-sm align-middle">
-        {row.liability_waiver_pdf_url ? (
-          <a
-            href={row.liability_waiver_pdf_url}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-1 text-blue-600 hover:underline"
+    <div className="rounded-md border bg-muted/10 p-4 space-y-5">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold truncate">
+            {row.student_full_name}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {row.student_grade ? `Grade ${row.student_grade}` : "—"}
+            {row.student_date_of_birth
+              ? ` · DOB ${row.student_date_of_birth}`
+              : ""}
+          </p>
+        </div>
+        {hasPacket ? (
+          <Button
+            variant={packet?.registrationConfirmed ? "outline" : "default"}
+            size="sm"
+            onClick={toggleConfirmed}
+            disabled={saving}
+            className={cn(packet?.registrationConfirmed && "bg-white")}
           >
-            Open
-            <ExternalLink className="size-3" />
-          </a>
-        ) : row.liability_waiver_status ? (
-          <span className="text-xs text-muted-foreground">
-            {formatPdStatus(row.liability_waiver_status)}
-          </span>
+            {saving ? (
+              <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+            ) : packet?.registrationConfirmed ? (
+              <Undo2 className="size-3.5 mr-1.5" />
+            ) : (
+              <CheckCircle2 className="size-3.5 mr-1.5" />
+            )}
+            {packet?.registrationConfirmed ? "Reset" : "Confirm Packet"}
+          </Button>
         ) : (
-          <span className="text-muted-foreground">—</span>
-        )}
-      </TableCell>
-      <TableCell className="align-middle">
-        {!hasPacket ? (
           <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
             Not started
           </span>
-        ) : row.registrationConfirmed ? (
-          <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-800">
-            <CheckCircle2 className="size-2.5" />
-            Confirmed
-          </span>
-        ) : (
-          <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-            Pending
-          </span>
         )}
-      </TableCell>
-      <TableCell className="text-right align-middle">
-        <Button
-          variant={row.registrationConfirmed ? "outline" : "default"}
-          size="sm"
-          onClick={toggleConfirmed}
-          disabled={!hasPacket || saving}
-          className={cn(
-            "min-w-[140px]",
-            row.registrationConfirmed && "bg-white"
-          )}
-        >
-          {saving ? (
-            <Loader2 className="size-3.5 mr-1.5 animate-spin" />
-          ) : row.registrationConfirmed ? (
-            <Undo2 className="size-3.5 mr-1.5" />
-          ) : (
-            <CheckCircle2 className="size-3.5 mr-1.5" />
-          )}
-          {row.registrationConfirmed ? "Reset" : "Mark Confirmed"}
-        </Button>
-      </TableCell>
-    </TableRow>
+      </div>
+
+      {!hasPacket ? (
+        <p className="text-sm text-muted-foreground">
+          The family hasn&rsquo;t opened this packet yet. Check back once
+          they&rsquo;ve started filling out the registration page.
+        </p>
+      ) : (
+        <>
+          <SectionGroup title="Sizes">
+            <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
+              <DisabledField
+                label="Shirt size"
+                value={packet ? formatChoice(packet.shirt_size, SHIRT_SIZES) : ""}
+                required
+              />
+              <DisabledField
+                label="Pant size"
+                value={packet?.pant_size ?? ""}
+                required
+              />
+              <DisabledField
+                label="Swim level"
+                value={packet ? formatChoice(packet.swim_level, SWIM_LEVELS) : ""}
+                required
+              />
+            </div>
+          </SectionGroup>
+
+          <SectionGroup title="Documents">
+            <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
+              <FilePreviewRow
+                label="Birth Certificate"
+                file={packet?.birth_certificate}
+                required
+              />
+              <FilePreviewRow
+                label="School Health Form"
+                file={packet?.school_health_form}
+                required
+              />
+              <FilePreviewRow
+                label="Transcripts"
+                file={packet?.transcripts}
+                required
+              />
+              <FilePreviewRow
+                label="Immunization Forms"
+                file={packet?.immunization_forms}
+                required
+              />
+              <FilePreviewRow label="IEP" file={packet?.iep} />
+              <FilePreviewRow label="SSN Card" file={packet?.ssn_card} />
+              <FilePreviewRow label="Passport" file={packet?.passport} />
+              <FilePreviewRow
+                label="Student State ID"
+                file={packet?.student_state_id}
+              />
+            </div>
+          </SectionGroup>
+
+          <SectionGroup title="Health">
+            <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
+              <DisabledField
+                label="On Medicaid"
+                value={
+                  packet?.is_student_on_medicaid === true ? "Yes" : "No"
+                }
+              />
+              <DisabledField
+                label="Medicaid Provider"
+                value={packet?.medicaid_provider ?? ""}
+              />
+              <DisabledField
+                label="Medicaid #"
+                value={
+                  packet?.medicaid_number ? String(packet.medicaid_number) : ""
+                }
+              />
+              <DisabledField
+                label="Carries EpiPen"
+                value={packet?.carry_epi_pen === true ? "Yes" : "No"}
+              />
+            </div>
+            <div className="mt-3 grid gap-4 grid-cols-1">
+              <DisabledTextarea
+                label="Allergies"
+                value={packet?.allergies ?? ""}
+              />
+              <DisabledTextarea
+                label="Dietary restrictions"
+                value={packet?.dietary_restrictions ?? ""}
+              />
+              <DisabledTextarea
+                label="Prescription medications"
+                value={packet?.prescription_medications ?? ""}
+              />
+              <DisabledTextarea
+                label="Health conditions"
+                value={packet?.health_conditions ?? ""}
+              />
+              <DisabledTextarea
+                label="Vision impairments"
+                value={packet?.vision_impairments ?? ""}
+              />
+              <DisabledTextarea
+                label="Hearing impairments"
+                value={packet?.hearing_impairments ?? ""}
+              />
+              <DisabledTextarea
+                label="EpiPen explainer"
+                value={packet?.epipen_explainer ?? ""}
+              />
+              <DisabledTextarea
+                label="Permission for acetaminophen"
+                value={packet?.permission_for_acetaminophen ?? ""}
+              />
+              <DisabledTextarea
+                label="Additional health information"
+                value={packet?.additional_health_information ?? ""}
+              />
+              <DisabledTextarea
+                label="Interested in counseling services"
+                value={packet?.interested_in_counseling_services ?? ""}
+              />
+              <DisabledTextarea
+                label="IEP description"
+                value={packet?.iep_description ?? ""}
+              />
+            </div>
+          </SectionGroup>
+
+          <SectionGroup title="Pickup Permissions">
+            <div className="grid gap-4 grid-cols-1">
+              <DisabledTextarea
+                label="Other adults approved for pickup"
+                value={packet?.other_adults_approved_for_pickup ?? ""}
+              />
+              <DisabledTextarea
+                label="Prohibited adults"
+                value={packet?.prohibited_adults ?? ""}
+              />
+            </div>
+          </SectionGroup>
+
+          <SectionGroup title="Liability Waiver">
+            <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
+              <DisabledField
+                label="Status"
+                value={
+                  packet?.liability_waiver_status
+                    ? formatPdStatus(packet.liability_waiver_status)
+                    : ""
+                }
+                placeholder="Not sent"
+              />
+              <DisabledField
+                label="Sent"
+                value={
+                  packet?.liability_waiver_sent_at
+                    ? formatTimestamp(packet.liability_waiver_sent_at)
+                    : "—"
+                }
+              />
+              <DisabledField
+                label="Document ID"
+                value={packet?.liability_waiver_pandadoc_id ?? ""}
+                placeholder="—"
+              />
+            </div>
+            {packet?.liability_waiver_pdf_url ? (
+              <div className="mt-3 space-y-2">
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Signed PDF
+                </p>
+                <div className="rounded-md border bg-white overflow-hidden">
+                  <iframe
+                    src={packet.liability_waiver_pdf_url}
+                    className="w-full h-[480px]"
+                    title={`Liability waiver — ${row.student_full_name}`}
+                  />
+                </div>
+                <div className="flex justify-end">
+                  <Button
+                    asChild
+                    variant="outline"
+                    size="sm"
+                    className="bg-white"
+                  >
+                    <a
+                      href={packet.liability_waiver_pdf_url}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Open in new tab
+                      <ExternalLink className="size-3.5 ml-1.5" />
+                    </a>
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+          </SectionGroup>
+        </>
+      )}
+    </div>
   );
 }
 
-interface VolunteerHoursCardProps {
-  familyId: number;
-  yearId: number;
-  progress: AdminFamilyRegistrationResponse["progress"];
-  onChanged: () => void;
-}
-function VolunteerHoursCard({
-  familyId,
-  yearId,
-  progress,
-  onChanged,
-}: VolunteerHoursCardProps) {
-  const confirmed = !!progress?.isVolunteerHours;
-  const printedName = progress?.name_volunteer?.trim() ?? "";
-  const hasSignature =
-    !!progress?.signature_data_volunteer ||
-    !!progress?.volunteer_signature_data;
-
+function EmergencyContactsBlock({
+  contacts,
+}: {
+  contacts: XanoEmergencyContact[];
+}) {
   return (
-    <Card className="bg-white py-0 gap-0 overflow-hidden">
-      <CardHeader className="py-4 border-b bg-muted/20">
-        <div className="flex items-center justify-between gap-3">
-          <CardTitle className="text-base">Volunteer Hours</CardTitle>
-          <StatusPill confirmed={confirmed} />
-        </div>
-        <p className="text-xs text-muted-foreground">
-          Family acknowledged the 40 hour / year volunteer commitment
-          (8 hours per academic term).
+    <div className="rounded-md border bg-muted/10 p-4 space-y-4">
+      <p className="text-sm font-semibold">Emergency Contacts</p>
+      {contacts.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          No emergency contacts on file for this family.
         </p>
-      </CardHeader>
-      <CardContent className="p-5 space-y-4">
-        <div className="space-y-0.5">
-          <FactRow label="Printed Name" value={printedName} />
-          <FactRow
-            label="Signature"
-            value={hasSignature ? "On file" : "Not signed"}
-          />
+      ) : (
+        <div className="space-y-4">
+          {contacts.map((c) => (
+            <div
+              key={c.id}
+              className="rounded-md border bg-white p-3 space-y-3"
+            >
+              <p className="text-sm font-medium">
+                {`${c.first_name ?? ""} ${c.last_name ?? ""}`.trim() ||
+                  `Contact #${c.id}`}
+                {c.relationship ? (
+                  <span className="ml-2 text-xs font-normal text-muted-foreground">
+                    · {c.relationship}
+                  </span>
+                ) : null}
+              </p>
+              <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
+                <DisabledField label="Email" value={c.email} type="email" />
+                <DisabledField label="Phone" value={c.phone} />
+              </div>
+              <div className="grid gap-3 grid-cols-1">
+                <DisabledField
+                  label="Street address"
+                  value={c.address_line_1}
+                />
+                {c.address_line_2 ? (
+                  <DisabledField label="Apt / suite" value={c.address_line_2} />
+                ) : null}
+                <div className="grid gap-3 grid-cols-1 sm:grid-cols-3">
+                  <DisabledField label="City" value={c.city} />
+                  <DisabledField label="State" value={c.state} />
+                  <DisabledField label="Zip" value={c.zipcode} />
+                </div>
+              </div>
+            </div>
+          ))}
         </div>
-        <div className="flex justify-end pt-2">
-          <SectionConfirmButton
-            familyId={familyId}
-            yearId={yearId}
-            field="isVolunteerHours"
-            confirmed={confirmed}
-            onChanged={onChanged}
+      )}
+    </div>
+  );
+}
+
+/* ─────────────────────── Volunteer Hours block ─────────────────────── */
+
+function VolunteerHoursBlock({
+  progress,
+}: {
+  progress: AdminFamilyRegistrationResponse["progress"];
+}) {
+  const printedName = progress?.name_volunteer ?? "";
+  const sig =
+    progress?.signature_data_volunteer ??
+    progress?.volunteer_signature_data ??
+    null;
+  return (
+    <div className="rounded-md border bg-muted/10 p-4 space-y-5">
+      <SectionGroup title="Acknowledgement">
+        <div className="grid gap-4 grid-cols-1">
+          <DisabledField
+            label="Printed name"
+            value={printedName}
+            placeholder="—"
+            required
           />
+          <SignaturePreview label="Signature" signature={sig} />
         </div>
-      </CardContent>
-    </Card>
+      </SectionGroup>
+    </div>
+  );
+}
+
+/* ─────────────────────── File / signature primitives ─────────────────────── */
+
+interface XanoFileMetadata {
+  url?: string;
+  path?: string;
+  mime?: string;
+  name?: string;
+}
+
+/**
+ * Resolve a viewable URL for a Xano file metadata blob. Prefers the
+ * explicit `url` Xano sometimes emits; falls back to building one
+ * from the `path`. Mirrors the helper in
+ * `documents-to-review-block.tsx` so file behavior is consistent
+ * across admin surfaces.
+ */
+function fileViewUrl(file: unknown): string | null {
+  if (!file || typeof file !== "object") return null;
+  const f = file as XanoFileMetadata;
+  if (typeof f.url === "string" && f.url.length > 0) return f.url;
+  if (typeof f.path === "string" && f.path.startsWith("/")) {
+    return `${xanoBase}${f.path}`;
+  }
+  return null;
+}
+
+function FilePreviewRow({
+  label,
+  file,
+  required,
+}: {
+  label: string;
+  file: unknown;
+  required?: boolean;
+}) {
+  const url = fileViewUrl(file);
+  const isMissing = required && !url;
+  return (
+    <div className="space-y-1">
+      <p className="text-xs">
+        {label}
+        {required ? (
+          <span className="ml-1 text-red-500" aria-label="required">
+            *
+          </span>
+        ) : null}
+      </p>
+      <div
+        className={cn(
+          "flex items-center justify-between gap-2 rounded-md border bg-white px-3 py-2 text-xs",
+          isMissing ? "border-red-500" : "border-input"
+        )}
+      >
+        {url ? (
+          <a
+            href={url}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 text-blue-600 hover:underline truncate"
+          >
+            View file
+            <ExternalLink className="size-3" />
+          </a>
+        ) : (
+          <span className="text-muted-foreground">Not uploaded</span>
+        )}
+      </div>
+    </div>
   );
 }
 
 /**
- * Render PandaDoc statuses in a friendlier form. Status strings come
- * straight from the webhook ("document.sent", "document.completed",
- * etc.) — the leading "document." prefix is noise, and the
- * underscore-separated tail reads better Title Cased.
+ * Inline signature preview — renders the image when Xano stores it as
+ * a vault file (most common shape: `{ url, path, mime, ... }`),
+ * otherwise drops to a textual "On file" / "Not signed" indicator
+ * inside a `DisabledField`. Either way, the field is labeled the
+ * same way as the rest of the form so admin can scan straight down
+ * the page.
  */
+function SignaturePreview({
+  label,
+  signature,
+}: {
+  label: string;
+  signature: Record<string, unknown> | null | undefined;
+}) {
+  const url = fileViewUrl(signature);
+  if (url) {
+    return (
+      <Field>
+        <FieldLabel className="text-xs">{label}</FieldLabel>
+        <div className="rounded-md border bg-white p-3">
+          {/* `<img>` rather than `next/image` because Xano vault URLs
+              aren't on the configured remote-image whitelist. The
+              signature is small + already cached behind the vault
+              CDN, so the loss of next/image optimization is fine. */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={url}
+            alt={`${label} preview`}
+            className="max-h-24 object-contain"
+          />
+        </div>
+      </Field>
+    );
+  }
+  return (
+    <DisabledField
+      label={label}
+      value={signature ? "On file" : ""}
+      placeholder="Not signed"
+    />
+  );
+}
+
+/* ─────────────────────── Format helpers ─────────────────────── */
+
 function formatPdStatus(status: string): string {
   const cleaned = status.replace(/^document\./, "").replace(/_/g, " ");
   if (!cleaned) return status;
   return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
 }
 
-/**
- * Render the enrollment-agreement `sent` timestamp. Xano stores it
- * as either an ISO string or epoch ms (the field is typed
- * `string | number | null` upstream); we accept both and fall
- * through to "—" on null/empty.
- */
 function formatTimestamp(value: string | number | null | undefined): string {
   if (!value) return "—";
-  const ts =
-    typeof value === "number"
-      ? value
-      : Date.parse(value);
+  const ts = typeof value === "number" ? value : Date.parse(value);
   if (!Number.isFinite(ts)) return "—";
   return new Date(ts).toLocaleString();
+}
+
+/**
+ * Display helper — Xano stores choice fields as raw strings (the
+ * lower-case key the parent form posted). When the canonical option
+ * list uses Title Case (e.g. "Beginner") we surface the canonical
+ * spelling; otherwise pass through whatever's stored. Unknown values
+ * still render so admin can spot data drift instead of swallowing
+ * it.
+ */
+function formatChoice(
+  value: string | null | undefined,
+  options: readonly string[]
+): string {
+  if (!value) return "";
+  const exact = options.find((o) => o === value);
+  if (exact) return exact;
+  const ci = options.find((o) => o.toLowerCase() === value.toLowerCase());
+  return ci ?? value;
 }

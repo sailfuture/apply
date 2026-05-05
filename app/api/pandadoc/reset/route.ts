@@ -48,13 +48,20 @@ export async function POST(req: NextRequest) {
   }
 
   if (type === "liability_waiver") {
-    // Per-student — reset fields on the application row.
-    await xano.applications.update(applicationId, {
-      liability_waiver_pandadoc_id: null,
-      liability_waiver_status: null,
+    // Per-student — reset waiver fields on the packet
+    // (`registration_student_registration`). Resolved-or-created so
+    // a reset request for a doc whose packet was deleted out from
+    // under it still lands on a clean row instead of 404'ing.
+    const packetRow = await xano.studentRegistration.resolve(
+      application.registration_students_id,
+      application.registration_school_years_id
+    );
+    await xano.studentRegistration.update(packetRow.id, {
+      liability_waiver_pandadoc_id: "",
+      liability_waiver_status: "",
       liability_waiver_sent_at: null,
-      liability_waiver_pdf_url: null,
-    } as Record<string, unknown>);
+      liability_waiver_pdf_url: "",
+    });
   } else {
     // Family-level — reset fields on the registration progress row, plus
     // un-latch `isEnrollment` so the section falls back to in-progress.

@@ -1,10 +1,17 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import useSWR from "swr";
 import { useParams } from "next/navigation";
 import { useApplicationFlow } from "@/contexts/application-flow-context";
 import { useApplications, useFamily, mutateApplications } from "@/hooks/use-api";
 import { usePandaDocSigning } from "@/hooks/use-pandadoc-signing";
+
+// Local fetcher for the per-student packets — they hold the waiver
+// state that used to live on the application row. We could lift this
+// into `use-api` but the only caller right now is this page (and the
+// admin pages, which fetch packets through the admin endpoint).
+const packetsFetcher = (url: string) => fetch(url).then((r) => r.json());
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -36,6 +43,24 @@ export default function WaiverPage() {
   const { data: familyData, mutate: mutateFamily } = useFamily();
   const { data: appsData, mutate: mutateApps } = useApplications();
 
+  // Packets carry waiver state now (moved off the application row).
+  // Fetched per-year so the hook can join the first application's
+  // student to its packet.
+  const { data: packetsData, mutate: mutatePackets } = useSWR<
+    | {
+        id: number;
+        registration_students_id: number;
+        liability_waiver_pandadoc_id: string | null;
+        liability_waiver_status: string | null;
+        liability_waiver_pdf_url: string | null;
+      }[]
+    | null
+  >(
+    yearId ? `/api/student-registration?yearId=${yearId}` : null,
+    packetsFetcher,
+    { revalidateOnFocus: false }
+  );
+
   const applications = useMemo(() => {
     if (!appsData) return [];
     return (appsData as { registration_school_years_id: number }[]).filter(
@@ -43,13 +68,24 @@ export default function WaiverPage() {
     );
   }, [appsData, yearId]);
 
+  const packets = useMemo(
+    () => (Array.isArray(packetsData) ? packetsData : []),
+    [packetsData]
+  );
+
   const fetchData = useCallback(async () => {
-    await Promise.all([mutateFamily(), mutateApps(), mutateApplications()]);
-  }, [mutateFamily, mutateApps]);
+    await Promise.all([
+      mutateFamily(),
+      mutateApps(),
+      mutatePackets(),
+      mutateApplications(),
+    ]);
+  }, [mutateFamily, mutateApps, mutatePackets]);
 
   const signing = usePandaDocSigning(
     applications as unknown as Parameters<typeof usePandaDocSigning>[0],
-    fetchData
+    fetchData,
+    packets
   );
 
   const docField = signing.getDocField("liability_waiver");
@@ -96,10 +132,17 @@ export default function WaiverPage() {
 
   const pdfUrl = useMemo(() => {
     if (!isCompleted || applications.length === 0) return null;
-    const app = applications[0] as unknown as { id: number; liability_waiver_pandadoc_id?: string | null };
-    if (!app.liability_waiver_pandadoc_id) return null;
-    return `/api/pandadoc/download?documentId=${app.liability_waiver_pandadoc_id}&applicationId=${app.id}`;
-  }, [isCompleted, applications]);
+    const app = applications[0] as unknown as {
+      id: number;
+      registration_students_id: number;
+    };
+    // Waiver pandadoc id lives on the per-student packet now.
+    const packet = packets.find(
+      (p) => p.registration_students_id === app.registration_students_id
+    );
+    if (!packet?.liability_waiver_pandadoc_id) return null;
+    return `/api/pandadoc/download?documentId=${packet.liability_waiver_pandadoc_id}&applicationId=${app.id}`;
+  }, [isCompleted, applications, packets]);
 
   if (loading) {
     return (
