@@ -93,7 +93,24 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const notes = await xano.adminNotes.getByFamilyId(familyId);
+    let notes = await xano.adminNotes.getByFamilyId(familyId);
+
+    // `phase=application` is the inverse of `phase=registration`:
+    // strip out any note that's tagged for the registration phase
+    // (`registration_student_registration_progress_id` set), so the
+    // family detail (apply-flow) drawers don't leak registration
+    // comms into the application timeline. Apply-phase notes plus
+    // general communication notes pass through. Reapply-phase notes
+    // also pass through since this filter is binary (registration
+    // vs everything else); the client-side phase pills can narrow
+    // further.
+    if (phaseParam === "application") {
+      notes = notes.filter((n) => {
+        const id = n.registration_student_registration_progress_id;
+        return id == null || id === 0;
+      });
+    }
+
     return NextResponse.json(
       sectionParam ? notes.filter((n) => n.section === sectionParam) : notes
     );
@@ -139,14 +156,27 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Phase tagging — when the caller is the registration detail
-    // page it passes `phase=registration` + `registration_school_years_id`,
-    // and we stamp the family's progress-row id on the note so the
-    // dedicated `registration_admin_notes_by_registration` query can
-    // surface it back. Resolves the progress row first (creates one
-    // if missing — same race-safe path admin actions use) so the FK
-    // is always populated. Apply / reapply phases use their own FK
-    // columns and don't go through this branch.
+    // Phase tagging — the caller passes `phase=...` along with
+    // `registration_school_years_id`, and we stamp the matching
+    // progress-row FK on the note so the dedicated per-phase Xano
+    // queries surface it back. Each phase has its own column on
+    // `registration_admin_notes`:
+    //
+    //   - application  → `registration_family_application_progress_id`
+    //                    (resolves the per-year apply-flow progress row)
+    //   - registration → `registration_student_registration_progress_id`
+    //                    (resolves the per-year registration packet
+    //                     progress row)
+    //   - reapply      → `reapply_family_progress_id` (not currently
+    //                    plumbed through any UI but the column exists
+    //                    on Xano; we'd add a branch here when a reapply
+    //                    drawer ships)
+    //
+    // Each `resolve()` is race-safe (in-process mutex + post-create
+    // dedupe). If the resolve fails we log and fall through with a
+    // null FK rather than failing the note write — admin still sees
+    // their note saved on the family timeline, and the next visit
+    // to that surface will retry the resolve.
     const phaseParam =
       typeof body?.phase === "string" ? body.phase : null;
     const yearForPhase = optionalNumber(
@@ -154,6 +184,9 @@ export async function POST(req: NextRequest) {
     );
     let registrationProgressId: number | null = optionalNumber(
       body?.registration_student_registration_progress_id
+    );
+    let applicationProgressId: number | null = optionalNumber(
+      body?.registration_family_application_progress_id
     );
     if (
       phaseParam === "registration" &&
@@ -173,8 +206,26 @@ export async function POST(req: NextRequest) {
           "[/api/admin/notes POST] failed to resolve registration progress row:",
           err
         );
-        // Don't fail the note write — fall through with a null FK so
-        // admin still sees their note saved on the family timeline.
+      }
+    }
+    if (
+      phaseParam === "application" &&
+      familyId &&
+      yearForPhase &&
+      !applicationProgressId
+    ) {
+      try {
+        const progressRow =
+          await xano.familyApplicationProgress.resolve(
+            familyId,
+            yearForPhase
+          );
+        applicationProgressId = progressRow?.id ?? null;
+      } catch (err) {
+        console.error(
+          "[/api/admin/notes POST] failed to resolve application progress row:",
+          err
+        );
       }
     }
 
@@ -188,6 +239,7 @@ export async function POST(req: NextRequest) {
       registration_school_years_id: yearForPhase,
       registration_inquiry_id: inquiryId ?? null,
       registration_student_registration_progress_id: registrationProgressId,
+      registration_family_application_progress_id: applicationProgressId,
       author_email: admin.email,
       author_name: admin.name,
       body: trimmedBody,

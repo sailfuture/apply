@@ -110,18 +110,27 @@ interface Props {
    *     (filters to notes with this family/year's
    *     `registration_student_registration_progress_id`); writes
    *     stamp the same FK so the round-trip closes
+   *   - `"application"` — inverse of registration: strips out any
+   *     note that's tagged for the registration phase. Used on the
+   *     apply-flow family detail page so registration comms don't
+   *     leak into the application timeline. Writes don't stamp a
+   *     phase FK (apply-phase notes are identified by NOT having
+   *     the registration FK).
    *   - `undefined` (default) — drawer reads ALL family notes and
    *     applies the client-side phase pill filter; writes don't
    *     stamp a phase FK
    *
-   * Apply / reapply phases don't have dedicated server endpoints
-   * yet so they still fall through to the client-side filter — this
-   * prop only kicks in when the registration scope is needed.
+   * Reapply phase doesn't have a dedicated server endpoint yet so
+   * it still falls through to the client-side filter — this prop
+   * only kicks in when the registration vs application split is
+   * needed.
    *
    * Requires `defaultYearId` to be set when phase=registration —
    * the server endpoint takes both family and year as inputs.
+   * `phase=application` doesn't strictly require yearId but it's
+   * passed along when present for consistency.
    */
-  phase?: "registration";
+  phase?: "registration" | "application";
 }
 
 /**
@@ -148,15 +157,23 @@ export function FamilyNotesSheet({
 }: Props) {
   const [open, setOpen] = useState(false);
   // SWR key carries phase + section filters so each scope maps to
-  // its own cache entry — adding a note inside a section's drawer
-  // revalidates only that scope, and a phase-scoped drawer (e.g.
-  // the registration detail page) hits the dedicated server
-  // endpoint that filters at the Xano layer instead of pulling all
-  // family notes back to filter client-side.
+  // its own cache entry. Two phase modes hit different server-side
+  // filters:
+  //   - registration → the dedicated
+  //     `registration_admin_notes_by_registration` query (only
+  //     notes with the registration progress FK set)
+  //   - application → the standard family GET, server-side filtered
+  //     to drop notes WITH the registration FK set (so apply
+  //     drawers don't show registration comms)
+  // Both result in distinct SWR cache keys so flipping between an
+  // apply-flow detail page and a registration detail page doesn't
+  // serve the wrong cache.
   const phaseQuery =
     phase === "registration" && defaultYearId
       ? `&phase=registration&yearId=${defaultYearId}`
-      : "";
+      : phase === "application"
+        ? `&phase=application${defaultYearId ? `&yearId=${defaultYearId}` : ""}`
+        : "";
   const swrKey = section
     ? `/api/admin/notes?familyId=${familyId}&section=${encodeURIComponent(section)}${phaseQuery}`
     : `/api/admin/notes?familyId=${familyId}${phaseQuery}`;

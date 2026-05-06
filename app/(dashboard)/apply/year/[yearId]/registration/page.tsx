@@ -1407,11 +1407,37 @@ export default function RegistrationPage() {
         })
       );
 
-      // Refresh emergency contacts to get real IDs for newly created ones
+      // Refresh emergency contacts ONLY to map temp IDs onto their
+      // real server-assigned IDs for newly-persisted (`_isNew`)
+      // contacts. Do NOT replace the whole local list with the
+      // server's response — that races mid-typing edits: the parent
+      // types "abc", autosave fires with "ab" already inflight, the
+      // server responds with "ab", and the wholesale state replace
+      // wipes the "c" the parent just added. The bug shows up as
+      // characters getting "deleted" while the user types.
+      //
+      // We match newly-persisted server rows to local `_isNew` rows
+      // by index of contacts the server has that we don't recognize
+      // locally. Already-persisted contacts (real id, in our local
+      // map) keep their typed-but-not-yet-saved values intact.
       const ecRes = await fetch("/api/emergency-contacts");
       if (ecRes.ok) {
-        const contacts: EmergencyContact[] = await ecRes.json();
-        setEmergencyContacts(contacts);
+        const serverContacts: EmergencyContact[] = await ecRes.json();
+        setEmergencyContacts((prev) => {
+          const persistedLocalIds = new Set(
+            prev.filter((c) => !c._isNew).map((c) => c.id)
+          );
+          const newlyPersisted = serverContacts.filter(
+            (sc) => !persistedLocalIds.has(sc.id)
+          );
+          let nextIdx = 0;
+          return prev.map((c) => {
+            if (!c._isNew) return c;
+            const match = newlyPersisted[nextIdx];
+            nextIdx += 1;
+            return match ? { ...c, id: match.id, _isNew: false } : c;
+          });
+        });
       }
     } catch (err) {
       console.error("Failed to save registration:", err);
@@ -1859,6 +1885,7 @@ export default function RegistrationPage() {
                                   className={!ec.first_name ? "border-2 border-red-400" : ""}
                                   placeholder="First name"
                                   value={ec.first_name || ""}
+                                  autoComplete="given-name"
                                   onChange={(e) => updateContactLocal(ec.id, "first_name", e.target.value)}
                                 />
                               </Field>
@@ -1868,6 +1895,7 @@ export default function RegistrationPage() {
                                   className={!ec.last_name ? "border-2 border-red-400" : ""}
                                   placeholder="Last name"
                                   value={ec.last_name || ""}
+                                  autoComplete="family-name"
                                   onChange={(e) => updateContactLocal(ec.id, "last_name", e.target.value)}
                                 />
                               </Field>
@@ -1889,6 +1917,7 @@ export default function RegistrationPage() {
                                   className={showValidation && !ec.email ? "border-2 border-red-400" : ""}
                                   placeholder="email@example.com"
                                   value={ec.email || ""}
+                                  autoComplete="email"
                                   onChange={(e) => updateContactLocal(ec.id, "email", e.target.value)}
                                 />
                               </Field>
@@ -1898,6 +1927,8 @@ export default function RegistrationPage() {
                                   className={!ec.phone ? "border-2 border-red-400" : ""}
                                   placeholder="(555) 555-5555"
                                   value={ec.phone || ""}
+                                  type="tel"
+                                  autoComplete="tel"
                                   onChange={(e) => updateContactLocal(ec.id, "phone", e.target.value)}
                                 />
                               </Field>
@@ -1906,7 +1937,12 @@ export default function RegistrationPage() {
 
                           <Separator />
 
-                          {/* Address */}
+                          {/* Address — `autoComplete` tokens unlock the
+                              browser's saved-address dropdown so parents
+                              don't retype the same address on every
+                              year's renewal. Standard tokens map to
+                              the OS-level address book on most
+                              devices. */}
                           <section>
                             <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
                               Address
@@ -1919,6 +1955,7 @@ export default function RegistrationPage() {
                                     className={showValidation && !ec.address_line_1 ? "border-2 border-red-400" : ""}
                                     placeholder="123 Main Street"
                                     value={ec.address_line_1 || ""}
+                                    autoComplete="address-line1"
                                     onChange={(e) => updateContactLocal(ec.id, "address_line_1", e.target.value)}
                                   />
                                 </Field>
@@ -1927,6 +1964,7 @@ export default function RegistrationPage() {
                                   <Input
                                     placeholder="Apt 4B"
                                     value={ec.address_line_2 || ""}
+                                    autoComplete="address-line2"
                                     onChange={(e) => updateContactLocal(ec.id, "address_line_2", e.target.value)}
                                   />
                                 </Field>
@@ -1938,6 +1976,7 @@ export default function RegistrationPage() {
                                     className={showValidation && !ec.city ? "border-2 border-red-400" : ""}
                                     placeholder="St. Petersburg"
                                     value={ec.city || ""}
+                                    autoComplete="address-level2"
                                     onChange={(e) => updateContactLocal(ec.id, "city", e.target.value)}
                                   />
                                 </Field>
@@ -1955,6 +1994,7 @@ export default function RegistrationPage() {
                                     className={showValidation && !ec.zipcode ? "border-2 border-red-400" : ""}
                                     placeholder="33701"
                                     value={ec.zipcode || ""}
+                                    autoComplete="postal-code"
                                     onChange={(e) => updateContactLocal(ec.id, "zipcode", e.target.value)}
                                   />
                                 </Field>

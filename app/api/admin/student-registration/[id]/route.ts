@@ -27,7 +27,7 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    await requireAdmin();
+    const { admin } = await requireAdmin();
     const { id: idParam } = await params;
     const id = Number(idParam);
     if (!Number.isFinite(id) || id <= 0) {
@@ -39,11 +39,18 @@ export async function PATCH(
 
     const body = await req.json();
 
-    // Tight allowlist — admin can flip the confirm flag and patch the
-    // liability-waiver state, nothing else. Editing the rest of the
-    // packet (medical info, file uploads, etc.) belongs on the
-    // parent-side flow — those are facts the family records, not
-    // admin overrides.
+    // Tight allowlist — admin can flip the confirm flag (auto-stamps
+    // audit pair below) and patch the liability-waiver state, nothing
+    // else. Editing the rest of the packet (medical info, file
+    // uploads, etc.) belongs on the parent-side flow — those are
+    // facts the family records, not admin overrides.
+    //
+    // The audit columns `registration_confirmed_admin_time` and
+    // `regisration_admin_confirmed_admin` (the typo on the column
+    // name matches the live Xano schema and is intentional) are NOT
+    // on the body allowlist; we stamp them here from the requesting
+    // admin's display name + Date.now() based on the bool's new
+    // value. Mirrors the audit pattern in `/api/admin/family-progress`.
     const ALLOWED: Array<keyof XanoStudentRegistration> = [
       "registrationConfirmed",
       "liability_waiver_pandadoc_id",
@@ -54,6 +61,20 @@ export async function PATCH(
     const patch: Record<string, unknown> = {};
     for (const key of ALLOWED) {
       if (key in body) patch[key] = body[key];
+    }
+
+    // Auto-stamp the audit pair when `registrationConfirmed` is in
+    // the patch. true → time = now, admin = display name; false →
+    // time = null, admin = "". Keeps the audit in sync with whatever
+    // bool admin just flipped.
+    if ("registrationConfirmed" in patch) {
+      const next = patch.registrationConfirmed === true;
+      patch.registration_confirmed_admin_time = next ? Date.now() : null;
+      // Note: the column name has a typo ("regisration_*") — keep
+      // it exactly as Xano has it, do not "correct" client-side.
+      patch.regisration_admin_confirmed_admin = next
+        ? admin?.name ?? ""
+        : "";
     }
 
     if (Object.keys(patch).length === 0) {

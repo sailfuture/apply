@@ -120,8 +120,11 @@ export async function GET(req: NextRequest) {
       primaryByFamily.set(f.id, matched[0] ?? null);
     }
 
-    // Only confirmed packets — `registrationConfirmed=true` is the
-    // admin's "this student is enrolled" signal. Drop everything else.
+    // Pivot off the per-packet `registrationConfirmed` flag — the
+    // admin verification on the registration packet is the
+    // authoritative "this student is enrolled" signal. Verification
+    // is per-year (one packet per student per year) so re-enrolling
+    // students get a fresh verify each cycle.
     const confirmedPackets = packets.filter(
       (p) => p.registrationConfirmed === true
     );
@@ -129,17 +132,22 @@ export async function GET(req: NextRequest) {
     const rows: EnrolledStudentRow[] = confirmedPackets.flatMap((packet) => {
       const studentId = Number(packet.registration_students_id);
       const student = studentById.get(studentId) ?? null;
-      // Need the application row to find the family + grade. If the
-      // app was deleted out from under a confirmed packet (rare),
-      // skip the row — admin can re-confirm from a fresh app.
+      // Year scope: skip students without an active app for the
+      // requested year. The `getByYear` packet fetch already filters
+      // by year, but defensively re-check via the application map.
       const app = appByStudent.get(studentId);
       if (!app) return [];
       const familyId = Number(app.registration_families_id);
       const family = familyById.get(familyId) ?? null;
       const primary = primaryByFamily.get(familyId) ?? null;
+      // Audit "enrolled at" timestamp prefers the packet's
+      // `registration_confirmed_admin_time` (when admin actually
+      // clicked Verify); falls back to packet.created_at for legacy
+      // rows that pre-date the audit columns.
+      const enrolledAt =
+        packet.registration_confirmed_admin_time ?? packet.created_at ?? 0;
       return [
         {
-          // Packet id is the row's natural key — unique per (student, year).
           id: packet.id,
           packet_id: packet.id,
           student_id: studentId,
@@ -158,7 +166,7 @@ export async function GET(req: NextRequest) {
             ? `${primary.first_name ?? ""} ${primary.last_name ?? ""}`.trim()
             : "",
           primary_email: primary?.email ?? "",
-          confirmed_at: packet.created_at,
+          confirmed_at: enrolledAt,
           liability_waiver_status: packet.liability_waiver_status ?? "",
           liability_waiver_pdf_url: packet.liability_waiver_pdf_url ?? "",
         },

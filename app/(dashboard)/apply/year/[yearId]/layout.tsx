@@ -21,7 +21,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { CheckCircle2, Loader2 } from "lucide-react";
-import { useMemo, useCallback, useState } from "react";
+import { useEffect, useMemo, useCallback, useState } from "react";
 import {
   ApplicationFlowProvider,
   useApplicationFlow,
@@ -87,6 +87,27 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
   const REGISTRATION_SEGMENTS = new Set(["tuition", "enrollment-signing", "registration", "volunteer-hours"]);
   const currentSegment = pathname.replace(basePath, "").replace(/^\//, "").split("/")[0] || "";
   const isRegistrationPage = REGISTRATION_SEGMENTS.has(currentSegment);
+
+  // Kick the parent back to the dashboard if their acceptance has
+  // been revoked while they're on a post-acceptance page (tuition,
+  // enrollment-signing, registration packet, volunteer hours). Only
+  // these four pages are gated on acceptance — the apply-phase pages
+  // (family / students / scholarship / nwea) are valid regardless
+  // and stay accessible.
+  //
+  // Triggers on every change to `progress.isAccepted`, so the redirect
+  // fires on page mount, on route changes within the apply tree, and
+  // any time SWR revalidates the progress cache (e.g. after the parent
+  // navigates between pages or hits manual refresh). For the
+  // mid-session admin-revokes case, the kick-out lands the next time
+  // SWR refreshes — typically the parent's next interaction.
+  useEffect(() => {
+    if (!isRegistrationPage) return;
+    if (!progress) return; // still loading or errored — don't bounce
+    if (progress.isAccepted === false) {
+      router.replace("/dashboard");
+    }
+  }, [isRegistrationPage, progress, router]);
 
   // The modal sources its sections + submit action from whichever lifecycle
   // phase the user is currently in. Registration pages → the four post-

@@ -25,6 +25,7 @@ import { useRef } from "react";
 import { toast } from "sonner";
 import { GlobalSaveStatusPill } from "@/components/save-status-pill";
 import { useFamilyProgress } from "@/hooks/use-family-progress";
+import { cn } from "@/lib/utils";
 
 interface Student {
   id: number;
@@ -311,16 +312,28 @@ export default function InitialTestingStepPage() {
                     </CardHeader>
 
                     <CardContent className="space-y-4 py-5 bg-white dark:bg-background">
-                      {/* Schedule — white outline button. Parents must come in
-                          for initial testing; no self-upload option. */}
+                      {/* Schedule — primary CTA in blue. Once the parent
+                          flips the "I've scheduled" confirmation below,
+                          the button greys out: there's nothing left to do
+                          on this card and re-clicking the booking flow
+                          would just confuse them. The disabled state uses
+                          a muted gray fill (rather than the default
+                          opacity dim) to read as "complete" rather than
+                          "broken". */}
                       <Button
                         type="button"
-                        variant="outline"
-                        className="w-full bg-white"
+                        className={cn(
+                          "w-full",
+                          scheduled &&
+                            "bg-muted text-muted-foreground cursor-default disabled:opacity-100 hover:bg-muted"
+                        )}
+                        disabled={scheduled}
                         onClick={() => setScheduleDialogOpen(true)}
                       >
                         <Calendar className="size-4 mr-1.5 shrink-0" />
-                        Click to Schedule NWEA Testing
+                        {scheduled
+                          ? "NWEA Testing Scheduled"
+                          : "Click to Schedule NWEA Testing"}
                       </Button>
                     </CardContent>
                   </Card>

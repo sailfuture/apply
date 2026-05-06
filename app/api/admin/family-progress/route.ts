@@ -53,9 +53,41 @@ export async function GET(req: NextRequest) {
  * Only a small allowlist of fields is patchable; passing anything else
  * is silently ignored.
  */
+/**
+ * Section-confirm pairs — the bool is the canonical confirm flag
+ * the UI reads/writes. The matching `*_admin_confirm_time`
+ * timestamp + `*_admin_confirm_admin` admin-name string are auto-
+ * stamped here so clients can't hand-write them.
+ *
+ * Testing has no `testing_admin_confirm_admin` column on Xano (the
+ * schema only tracks the bool + time for that section), so its
+ * `adminKey` is null and we skip the name stamp for it.
+ */
+const SECTION_CONFIRM_PAIRS: Array<{
+  confirmKey: keyof XanoFamilyApplicationProgress;
+  timeKey: keyof XanoFamilyApplicationProgress;
+  adminKey: keyof XanoFamilyApplicationProgress | null;
+}> = [
+  {
+    confirmKey: "family_admin_confirm",
+    timeKey: "family_admin_confirm_time",
+    adminKey: "family_admin_confirm_admin",
+  },
+  {
+    confirmKey: "students_admin_confirm",
+    timeKey: "students_admin_confirm_time",
+    adminKey: "students_admin_confirm_admin",
+  },
+  {
+    confirmKey: "testing_admin_confirm",
+    timeKey: "testing_admin_confirm_time",
+    adminKey: null,
+  },
+];
+
 export async function PATCH(req: NextRequest) {
   try {
-    await requireAdmin();
+    const { admin } = await requireAdmin();
     const body = await req.json();
 
     const familyId = Number(body?.familyId);
@@ -83,6 +115,13 @@ export async function PATCH(req: NextRequest) {
     // captured rationale alongside the flag flip in one round
     // trip; the route doesn't enforce that reason is non-empty —
     // that's the UI's job (text required on the modal).
+    //
+    // Section-admin-confirm bools are on the allowlist; the matching
+    // `*_admin_confirm_time` + `*_admin_confirm_admin` audit columns
+    // are NOT allowed from the body — we stamp them here from the
+    // admin's display name + Date.now() based on the bool's new
+    // value. Mirrors the audit pattern in
+    // `/api/admin/scholarships/[id]`.
     const ALLOWED: Array<keyof XanoFamilyApplicationProgress> = [
       "isAccepted",
       "isSubmitted",
@@ -94,10 +133,30 @@ export async function PATCH(req: NextRequest) {
       "registration_type_id",
       "is_archived",
       "reason_for_archive",
+      "family_admin_confirm",
+      "students_admin_confirm",
+      "testing_admin_confirm",
     ];
     const patch: Record<string, unknown> = { last_edited: Date.now() };
     for (const key of ALLOWED) {
       if (key in body) patch[key] = body[key];
+    }
+
+    // Auto-stamp the audit pair for every section-confirm bool that
+    // appears in the patch. true → time = now, admin = display name;
+    // false → time = null, admin = "". Testing has no admin column
+    // on Xano so its adminKey is null and we skip that field; the
+    // bool + time still get written.
+    const now = Date.now();
+    const adminName = admin?.name ?? "";
+    for (const pair of SECTION_CONFIRM_PAIRS) {
+      if (pair.confirmKey in patch) {
+        const next = patch[pair.confirmKey] === true;
+        patch[pair.timeKey] = next ? now : null;
+        if (pair.adminKey) {
+          patch[pair.adminKey] = next ? adminName : "";
+        }
+      }
     }
 
     if (Object.keys(patch).length <= 1) {
@@ -115,3 +174,9 @@ export async function PATCH(req: NextRequest) {
     return handleAdminError(err);
   }
 }
+
+// `adminTeacherIdAsNumber` was used to stamp the section-confirm
+// audit teacher-id column, but the live Xano schema typed those
+// columns as boolean so the int write 400'd. Helper removed for
+// now; restore alongside re-enabling the audit-id stamp loop above
+// if/when the column types are corrected.

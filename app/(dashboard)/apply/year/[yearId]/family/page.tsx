@@ -560,6 +560,7 @@ export default function FamilyStepPage() {
                           className={!parent.first_name ? "border-2 border-red-400" : ""}
                           placeholder="Jane"
                           value={parent.first_name || ""}
+                          autoComplete="given-name"
                           onChange={(e) =>
                             updateParentLocal(parent.id, "first_name", e.target.value)
                           }
@@ -574,6 +575,7 @@ export default function FamilyStepPage() {
                           className={!parent.last_name ? "border-2 border-red-400" : ""}
                           placeholder="Walsh"
                           value={parent.last_name || ""}
+                          autoComplete="family-name"
                           onChange={(e) =>
                             updateParentLocal(parent.id, "last_name", e.target.value)
                           }
@@ -597,6 +599,7 @@ export default function FamilyStepPage() {
                           type="email"
                           placeholder="email@example.com"
                           value={parent.email || ""}
+                          autoComplete="email"
                           onChange={(e) =>
                             updateParentLocal(parent.id, "email", e.target.value)
                           }
@@ -612,6 +615,8 @@ export default function FamilyStepPage() {
                           className={!parent.phone ? "border-2 border-red-400" : ""}
                           placeholder="(555) 555-5555"
                           value={parent.phone || ""}
+                          autoComplete="tel"
+                          type="tel"
                           onChange={(e) =>
                             updateParentLocal(parent.id, "phone", e.target.value)
                           }
@@ -651,10 +656,20 @@ export default function FamilyStepPage() {
                           <FieldLabel className="text-xs">
                             Street Address{" "}
                                                      </FieldLabel>
+                          {/* Standard `autoComplete` tokens unlock the
+                              browser's saved-address dropdown (and
+                              password-manager address autofill). Each
+                              field uses the spec'd token for its
+                              role: `address-line1` / `address-line2` /
+                              `address-level2` (city) / `address-level1`
+                              (state) / `postal-code`. Without these,
+                              browsers fall back to ad-hoc heuristics
+                              and most users see no suggestions. */}
                           <Input
                             className={!parent.address_line_1 ? "border-2 border-red-400" : ""}
                             placeholder="123 Main Street"
                             value={parent.address_line_1 || ""}
+                            autoComplete="address-line1"
                             onChange={(e) =>
                               updateParentLocal(parent.id, "address_line_1", e.target.value)
                             }
@@ -670,6 +685,7 @@ export default function FamilyStepPage() {
                           <Input
                             placeholder="Apt 4B"
                             value={parent.address_line_2 || ""}
+                            autoComplete="address-line2"
                             onChange={(e) =>
                               updateParentLocal(parent.id, "address_line_2", e.target.value)
                             }
@@ -687,6 +703,7 @@ export default function FamilyStepPage() {
                             className={!parent.city ? "border-2 border-red-400" : ""}
                             placeholder="St. Petersburg"
                             value={parent.city || ""}
+                            autoComplete="address-level2"
                             onChange={(e) =>
                               updateParentLocal(parent.id, "city", e.target.value)
                             }
@@ -715,6 +732,7 @@ export default function FamilyStepPage() {
                             className={!parent.zipcode ? "border-2 border-red-400" : ""}
                             placeholder="33701"
                             value={parent.zipcode || ""}
+                            autoComplete="postal-code"
                             onChange={(e) =>
                               updateParentLocal(parent.id, "zipcode", e.target.value)
                             }

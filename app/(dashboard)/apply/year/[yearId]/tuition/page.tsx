@@ -6,7 +6,13 @@ import { useUser } from "@clerk/nextjs";
 import { toast } from "sonner";
 import { useApplicationFlow } from "@/contexts/application-flow-context";
 import { useStudentRegistrationProgress } from "@/hooks/use-student-registration-progress";
-import { useStudents, useApplications, useSchoolYears } from "@/hooks/use-api";
+import {
+  useStudents,
+  useApplications,
+  useSchoolYears,
+  useFamily,
+  useScholarship,
+} from "@/hooks/use-api";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -91,6 +97,22 @@ export default function TuitionPage() {
   const { data: students } = useStudents();
   const { data: applications } = useApplications();
   const { data: yearsData } = useSchoolYears();
+  // Scholarship row determines whether the family is on the SNAP
+  // path. SNAP families' tuition AND transport are fully absorbed
+  // by the Opportunity Scholarship — the line items still display
+  // (the parent should see exactly what they signed up for), but
+  // the OS coverage gets bumped to cover transport too, so the
+  // subtotal collapses to the annual admin fee only.
+  const { data: familyData } = useFamily();
+  const familyIdForScholarship =
+    (familyData as { id?: number } | undefined)?.id ?? null;
+  const { data: scholarshipData } = useScholarship(
+    familyIdForScholarship,
+    yearId
+  );
+  const isSnapFamily =
+    (scholarshipData as { isSNAPBenefits?: boolean } | null)?.isSNAPBenefits ===
+    true;
 
   const [submitting, setSubmitting] = useState(false);
   const [signatureMeta, setSignatureMeta] = useState<Record<string, unknown> | null>(null);
@@ -251,14 +273,44 @@ export default function TuitionPage() {
       // Step Up status from application
       const stepUpStatus = app.sufs_status ?? "";
 
-      // Opportunity scholarship per student
-      const scholarshipAmount = app.opportunity_scholarship_award_amount ?? null;
+      // The `opportunity_scholarship_award_amount` field stores the
+      // amount the family will pay toward tuition — NOT a scholarship
+      // discount. The Opportunity Scholarship covers everything that
+      // remains after SUFS and the family's portion.
+      //
+      // Defaults to 0 when missing/null so the OS line appears as a
+      // full-coverage scholarship, not a placeholder.
+      const familyPaysForTuition =
+        app.opportunity_scholarship_award_amount ?? 0;
 
-      // Remaining = tuition - awards (not including fees)
-      const remaining = Math.max(0, tuition - stepUpAmount - (scholarshipAmount ?? 0));
-
+      // Transport line item is driven solely by what the parent
+      // selected via `is_bus_transportation` on this student's
+      // application — true → show the fee, false → show N/A.
+      // Whether the parent actually owes that transport is a
+      // separate concern handled by the SNAP branch below.
       const usesTransport = !!app.is_bus_transportation;
-      const subtotal = remaining + adminFees + (usesTransport ? transportFees : 0);
+      const transportApplicable = usesTransport ? transportFees : 0;
+
+      // OS coverage + subtotal differ on the SNAP path:
+      //   - Non-SNAP: OS covers `tuition − SUFS − familyPays`. Family
+      //     owes their portion + admin + transport (if bus).
+      //   - SNAP: OS covers `tuition + transport − SUFS − familyPays`
+      //     so the line item still displays but is offset by the
+      //     scholarship. Family owes admin only.
+      //
+      // The line items themselves render the same in both cases —
+      // SNAP awareness only shifts how much OS absorbs and what
+      // ends up in the subtotal.
+      const scholarshipCoverage = isSnapFamily
+        ? Math.max(
+            0,
+            tuition + transportApplicable - stepUpAmount - familyPaysForTuition
+          )
+        : Math.max(0, tuition - stepUpAmount - familyPaysForTuition);
+
+      const subtotal = isSnapFamily
+        ? familyPaysForTuition + adminFees
+        : familyPaysForTuition + adminFees + transportApplicable;
 
       rows.push({
         studentName: `${student.first_name} ${student.last_name}`,
@@ -266,8 +318,15 @@ export default function TuitionPage() {
         stepUpStatus,
         stepUpType: sufsType,
         stepUpAmount,
-        scholarshipAmount,
-        remaining,
+        // `scholarshipAmount` field on the row now represents OS
+        // *coverage* (what scholarship pays for), shown as a negative
+        // discount on the breakdown — the family-paid portion is
+        // already baked into `subtotal` and doesn't need its own
+        // line.
+        scholarshipAmount: scholarshipCoverage,
+        // `remaining` is unused by the renderer but kept on the row
+        // shape for any caller that introspects the breakdown.
+        remaining: scholarshipCoverage,
         adminFees,
         transportFees,
         usesTransport,
@@ -277,7 +336,7 @@ export default function TuitionPage() {
     }
 
     return rows;
-  }, [students, applications, schoolYear, yearId]);
+  }, [students, applications, schoolYear, yearId, isSnapFamily]);
 
   // Totals
   const grandTotal = studentRows.reduce((sum, r) => sum + r.subtotal, 0);
@@ -404,6 +463,60 @@ export default function TuitionPage() {
                       <td className="px-4 py-3 text-right font-medium">${formatCurrency(row.tuition)}</td>
                     </tr>
 
+                    {/* Admin Fee — moved up under Annual Tuition so the
+                        family sees the base school costs (tuition + fees)
+                        before the awards that offset them. */}
+                    <tr className="border-t">
+                      <td className="px-4 py-3 text-muted-foreground">
+                        <span className="inline-flex items-center gap-1.5">
+                          Annual Admin Fee
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <button type="button" className="inline-flex text-muted-foreground/50 hover:text-muted-foreground transition-colors">
+                                <HelpCircle className="size-3.5" />
+                              </button>
+                            </TooltipTrigger>
+                            <TooltipContent side="top" className="max-w-xs text-xs">
+                              <p>The annual administrative fee covers registration, technology, materials, and other operational costs for the school year. This fee is required for all enrolled students.</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-right font-medium">${formatCurrency(row.adminFees)}</td>
+                    </tr>
+
+                    {/* Transport Fee — also moved up so all base school
+                        costs sit together before the awards. */}
+                    <tr className="border-t">
+                      <td className="px-4 py-3 text-muted-foreground">
+                        <span className="inline-flex items-center gap-1.5">
+                          Transportation Fee
+                          {!row.usesTransport && (
+                            <span className="text-xs text-muted-foreground/60">(N/A)</span>
+                          )}
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <button type="button" className="inline-flex text-muted-foreground/50 hover:text-muted-foreground transition-colors">
+                                <HelpCircle className="size-3.5" />
+                              </button>
+                            </TooltipTrigger>
+                            <TooltipContent side="top" className="max-w-xs text-xs">
+                              {row.usesTransport ? (
+                                <p>Bus transportation has been selected for this student.{row.busStop ? ` Assigned bus stop: ${row.busStop}.` : ""}</p>
+                              ) : (
+                                <p>Bus transportation was not selected for this student. This fee does not apply.</p>
+                              )}
+                            </TooltipContent>
+                          </Tooltip>
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-right font-medium">
+                        {row.usesTransport
+                          ? `$${formatCurrency(row.transportFees)}`
+                          : <span className="text-muted-foreground">—</span>}
+                      </td>
+                    </tr>
+
                     {/* Step Up Status */}
                     <tr className="border-t">
                       <td className="px-4 py-3 text-muted-foreground">Step Up for Students Award Status</td>
@@ -468,57 +581,6 @@ export default function TuitionPage() {
                       </td>
                     </tr>
 
-                    {/* Admin Fee */}
-                    <tr className="border-t">
-                      <td className="px-4 py-3 text-muted-foreground">
-                        <span className="inline-flex items-center gap-1.5">
-                          Annual Admin Fee
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <button type="button" className="inline-flex text-muted-foreground/50 hover:text-muted-foreground transition-colors">
-                                <HelpCircle className="size-3.5" />
-                              </button>
-                            </TooltipTrigger>
-                            <TooltipContent side="top" className="max-w-xs text-xs">
-                              <p>The annual administrative fee covers registration, technology, materials, and other operational costs for the school year. This fee is required for all enrolled students.</p>
-                            </TooltipContent>
-                          </Tooltip>
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-right font-medium">${formatCurrency(row.adminFees)}</td>
-                    </tr>
-
-                    {/* Transport Fee */}
-                    <tr className="border-t">
-                      <td className="px-4 py-3 text-muted-foreground">
-                        <span className="inline-flex items-center gap-1.5">
-                          Transportation Fee
-                          {!row.usesTransport && (
-                            <span className="text-xs text-muted-foreground/60">(N/A)</span>
-                          )}
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <button type="button" className="inline-flex text-muted-foreground/50 hover:text-muted-foreground transition-colors">
-                                <HelpCircle className="size-3.5" />
-                              </button>
-                            </TooltipTrigger>
-                            <TooltipContent side="top" className="max-w-xs text-xs">
-                              {row.usesTransport ? (
-                                <p>Bus transportation has been selected for this student.{row.busStop ? ` Assigned bus stop: ${row.busStop}.` : ""}</p>
-                              ) : (
-                                <p>Bus transportation was not selected for this student. This fee does not apply.</p>
-                              )}
-                            </TooltipContent>
-                          </Tooltip>
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-right font-medium">
-                        {row.usesTransport
-                          ? `$${formatCurrency(row.transportFees)}`
-                          : <span className="text-muted-foreground">—</span>}
-                      </td>
-                    </tr>
-
                     {/* Student subtotal */}
                     <tr className="border-t bg-muted/20">
                       <td className="px-4 py-3 font-medium">Subtotal — {row.studentName}</td>
@@ -527,9 +589,19 @@ export default function TuitionPage() {
                   </Fragment>
                 ))}
 
-                {/* Grand total footer */}
+                {/* Grand total footer — title carries the school year
+                    in parens so the family always knows which year's
+                    receipt they're looking at without scrolling back to
+                    the page header. */}
                 <tr className="border-t-2 bg-white">
-                  <td className="px-4 py-3 font-bold">Total Due</td>
+                  <td className="px-4 py-3 font-bold">
+                    Total Annual Due
+                    {(schoolYear as { year_name?: string } | null)?.year_name ? (
+                      <span className="ml-1.5 font-normal text-muted-foreground">
+                        — School Year ({(schoolYear as { year_name: string }).year_name})
+                      </span>
+                    ) : null}
+                  </td>
                   <td className="px-4 py-3 text-right font-bold">${formatCurrency(grandTotal)}</td>
                 </tr>
                 <tr className="border-t bg-white">

@@ -78,6 +78,50 @@ export async function PATCH(
     }
 
     const updated = await xano.scholarship.update(id, patch);
+
+    // SNAP-confirm cascade — backup safeguard. Once admin confirms
+    // SNAP benefits, the Opportunity Scholarship auto-rebates the
+    // family's tuition + transport, so any stale
+    // `opportunity_scholarship_award_amount` value sitting on the
+    // application rows would be misleading (admin would see a dollar
+    // figure on a row whose tuition is now $0). We clear those
+    // amounts to `null` on every active application for this family
+    // / year so the rows reflect the post-confirm reality.
+    //
+    // Best-effort: failures here are logged but don't roll back the
+    // confirmation itself — the scholarship row's `is_snap_confirmed`
+    // flip is the source of truth, and the cascade can be retried by
+    // un-confirming + re-confirming if it fails. Un-confirm doesn't
+    // restore the prior amounts (admin re-enters them manually if
+    // needed).
+    if (
+      "is_snap_confirmed" in patch &&
+      patch.is_snap_confirmed === true
+    ) {
+      try {
+        const familyId = updated.registration_families_id;
+        const yearId = updated.registration_school_years_id;
+        const apps = await xano.applications.getByFamilyId(familyId);
+        const yearApps = apps.filter(
+          (a) =>
+            Number(a.registration_school_years_id) === yearId &&
+            (a as { isActive?: boolean }).isActive !== false
+        );
+        await Promise.allSettled(
+          yearApps.map((app) =>
+            xano.applications.update(app.id, {
+              opportunity_scholarship_award_amount: null,
+            })
+          )
+        );
+      } catch (err) {
+        console.error(
+          "[/api/admin/scholarships/[id]] SNAP cascade failed:",
+          err
+        );
+      }
+    }
+
     return NextResponse.json(updated);
   } catch (err) {
     return handleAdminError(err);

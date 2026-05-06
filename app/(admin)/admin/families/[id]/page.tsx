@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import Link from "next/link";
@@ -92,6 +92,15 @@ interface Student {
   gender: string;
   ethnicity: string;
   isAccepted: boolean;
+  /** Admin-only NWEA initial-screening scores + dates. Live on the
+   *  student row so re-enrolling kids keep their score history.
+   *  Optional because legacy rows pre-date the columns. Inputs in
+   *  the Initial Testing card on this page write through
+   *  `/api/admin/students/[id]`. */
+  initial_screening_nwea_math?: number | null;
+  initial_screening_nwea_reading?: number | null;
+  initial_screening_nwea_math_date?: string | null;
+  initial_screening_nwea_reading_date?: string | null;
 }
 
 interface FamilyResponse {
@@ -247,6 +256,9 @@ export default function FamilyDetailPage() {
   // Per-year progress row — owns the family-level `isAccepted` flag
   // that the Decision card flips, plus the four per-section completion
   // booleans the sidebar uses to render its check / pencil icons.
+  // Also surfaces the section-confirm columns (bool + time + admin
+  // name) so the section footers can render their Confirmed/Undo
+  // state without a second round trip.
   const { data: progress, mutate: refreshProgress } = useSWR<{
     id: number;
     isAccepted: boolean;
@@ -256,12 +268,60 @@ export default function FamilyDetailPage() {
     students_completed?: boolean;
     financial_aid_completed?: boolean;
     testing_completed?: boolean;
+    family_admin_confirm?: boolean;
+    family_admin_confirm_time?: number | null;
+    family_admin_confirm_admin?: string;
+    students_admin_confirm?: boolean;
+    students_admin_confirm_time?: number | null;
+    students_admin_confirm_admin?: string;
+    testing_admin_confirm?: boolean;
+    testing_admin_confirm_time?: number | null;
   } | null>(
     familyId && yearId
       ? `/api/admin/family-progress?familyId=${familyId}&yearId=${yearId}`
       : null,
     adminFetcher
   );
+
+  // Per-section confirm action — wraps the admin family-progress
+  // PATCH so each section's footer can toggle its bool with one
+  // call. Tracks the in-flight section locally so the spinner is
+  // scoped to whichever section admin clicked. The audit name comes
+  // from the `*_admin_confirm_admin` string column the route
+  // auto-stamps; no client-side teacher-id lookup needed anymore.
+  const [savingSection, setSavingSection] = useState<
+    "family" | "students" | "testing" | null
+  >(null);
+  async function toggleSectionConfirmed(
+    section: "family" | "students" | "testing",
+    next: boolean
+  ) {
+    if (!familyId || !yearId) return;
+    setSavingSection(section);
+    try {
+      const field = `${section}_admin_confirm`;
+      const res = await fetch(`/api/admin/family-progress`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          familyId: Number(familyId),
+          yearId: Number(yearId),
+          [field]: next,
+        }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Update failed (${res.status})`);
+      }
+      toast.success(next ? "Section confirmed." : "Confirmation cleared.");
+      refreshProgress();
+    } catch (err) {
+      console.error(`[toggleSectionConfirmed.${section}] failed:`, err);
+      toast.error(err instanceof Error ? err.message : "Couldn't update.");
+    } finally {
+      setSavingSection(null);
+    }
+  }
 
   const backHref = yearId
     ? `/admin/applications?yearId=${yearId}`
@@ -388,9 +448,15 @@ export default function FamilyDetailPage() {
               whether a year is selected; the Decision actions only
               render when we have a year context. */}
           <div className="flex items-center gap-2 shrink-0">
+            {/* Page-header notes drawer is phase-scoped to
+                "application" so registration-phase comms (written
+                from /admin/registrations/[id]) don't leak into the
+                apply-flow timeline. Section-scoped drawers below
+                inherit the same scope. */}
             <FamilyNotesSheet
               familyId={family.id}
               defaultYearId={yearId ? Number(yearId) : null}
+              phase="application"
             />
             {yearId ? (
               <FamilyDecisionActions
@@ -451,6 +517,15 @@ export default function FamilyDetailPage() {
               progress?.family_completed,
               parents.length > 0
             )}
+            confirm={{
+              sectionLabel: "Family",
+              confirmed: progress?.family_admin_confirm === true,
+              parentCompleted: progress?.family_completed === true,
+              confirmTime: progress?.family_admin_confirm_time ?? null,
+              confirmedByName: progress?.family_admin_confirm_admin?.trim() || null,
+              saving: savingSection === "family",
+              onToggle: (next) => toggleSectionConfirmed("family", next),
+            }}
           >
             {parents.length === 0 ? (
               <p className="text-sm text-muted-foreground">
@@ -480,6 +555,16 @@ export default function FamilyDetailPage() {
               progress?.students_completed,
               students.length > 0
             )}
+            confirm={{
+              sectionLabel: "Students",
+              confirmed: progress?.students_admin_confirm === true,
+              parentCompleted: progress?.students_completed === true,
+              confirmTime: progress?.students_admin_confirm_time ?? null,
+              confirmedByName:
+                progress?.students_admin_confirm_admin?.trim() || null,
+              saving: savingSection === "students",
+              onToggle: (next) => toggleSectionConfirmed("students", next),
+            }}
           >
             {students.length === 0 ? (
               <p className="text-sm text-muted-foreground">
@@ -585,6 +670,19 @@ export default function FamilyDetailPage() {
                     a.nwea_testing_complete === true
                 )
               )}
+              confirm={{
+                sectionLabel: "Testing",
+                confirmed: progress?.testing_admin_confirm === true,
+                parentCompleted: progress?.testing_completed === true,
+                confirmTime: progress?.testing_admin_confirm_time ?? null,
+                // Testing has no `testing_admin_confirm_admin`
+                // column on Xano, so the audit name is always null
+                // for this section. Caption renders "Confirmed · 2
+                // hr ago" without a name.
+                confirmedByName: null,
+                saving: savingSection === "testing",
+                onToggle: (next) => toggleSectionConfirmed("testing", next),
+              }}
             >
               {detailLoading && !detail ? (
                 <Skeleton className="h-32 w-full rounded-md" />
@@ -604,6 +702,7 @@ export default function FamilyDetailPage() {
                         key={student.id}
                         student={student}
                         app={app}
+                        onSaved={refreshDetail}
                       />
                     );
                   })}
@@ -839,6 +938,7 @@ function SectionShell({
   editHref,
   status,
   notes,
+  confirm,
   children,
 }: {
   title: string;
@@ -856,10 +956,39 @@ function SectionShell({
     section: string;
     title: string;
   };
+  /**
+   * Optional admin section-confirm footer. When present, the card
+   * renders a divider + footer with `Confirm Section` / `Undo`
+   * action and an "audit caption" ("Confirmed by Hunter Thompson ·
+   * 2 hr ago") on the left when confirmed. Card body greys to a
+   * muted background while confirmed so admin can scan which
+   * sections still need review by skimming for the white cards.
+   *
+   * Approach B (auto-unconfirm): the parent's family-progress
+   * cascade clears the confirm flag whenever a section's
+   * `*_completed` is flipped, so the only way to keep this confirm
+   * sticky is to leave it admin-only.
+   */
+  confirm?: SectionConfirmConfig;
   children: React.ReactNode;
 }) {
+  const confirmed = !!confirm?.confirmed;
+  const parentCompleted = !!confirm?.parentCompleted;
+  // Whole-card mute when the family has marked the section
+  // complete. We drop opacity on the entire `<Card>` (header +
+  // body + footer) rather than only the body so the title /
+  // status badge / Edit button all read as part of the same
+  // settled state. Mirrors the parent flow's "Section Completed"
+  // visual treatment. Footer buttons stay clickable — opacity
+  // dims their look but doesn't disable them.
+  const fullyDone = parentCompleted;
   return (
-    <Card className="overflow-hidden gap-0 py-0 bg-white">
+    <Card
+      className={cn(
+        "overflow-hidden gap-0 py-0 bg-white transition-opacity",
+        fullyDone && "opacity-60"
+      )}
+    >
       <CardHeader className="py-3 !pb-3 border-b">
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-2 min-w-0">
@@ -874,17 +1003,39 @@ function SectionShell({
               />
             ) : null}
             <CardTitle className="text-base truncate">{title}</CardTitle>
+            {/* Title status badge — three-state pill that mirrors the
+                section's verify state at a glance:
+                  - verified → green "Verified"
+                  - section uses the verify pattern but isn't
+                    verified yet → amber "Needs Verification"
+                  - section doesn't take a verify config → no badge
+                Admin can scan the page top-to-bottom and see which
+                sections still need their attention. */}
+            {confirm ? (
+              confirmed ? (
+                <span className="ml-1 inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-800">
+                  <CheckCircle2 className="size-2.5" />
+                  Verified
+                </span>
+              ) : (
+                <span className="ml-1 inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-amber-800">
+                  Needs Verification
+                </span>
+              )
+            ) : null}
           </div>
           {/* Notes + Edit pair, docked at the right of the section
               header. Notes opens a section-filtered drawer (its own
-              SWR cache key, its own POST scope); Edit jumps to the
-              per-section editor route. */}
+              SWR cache key, its own POST scope) scoped to the
+              application phase so registration-phase comms don't
+              leak in; Edit jumps to the per-section editor route. */}
           <div className="flex items-center gap-2 shrink-0">
             {notes ? (
               <FamilyNotesSheet
                 familyId={notes.familyId}
                 section={notes.section}
                 title={notes.title}
+                phase="application"
               />
             ) : null}
             {editHref ? (
@@ -903,8 +1054,185 @@ function SectionShell({
           </div>
         </div>
       </CardHeader>
-      <CardContent className="space-y-6 py-5 bg-white">{children}</CardContent>
+      {/* Body keeps a constant background — the whole-card opacity
+          handles the muted look when `fullyDone`. Stacking
+          `bg-muted/30` on top of an opacity-reduced parent doubled
+          the dimming and made the text harder to read. */}
+      <CardContent className="space-y-6 py-5 bg-white">
+        {children}
+      </CardContent>
+      {/* Section-confirm footer — divider + caption on left, action
+          on right. Renders only when a `confirm` config is passed;
+          otherwise the card ends at its content as before. */}
+      {confirm ? <SectionConfirmFooter confirm={confirm} /> : null}
     </Card>
+  );
+}
+
+/**
+ * Config shape for the optional section-confirm footer on
+ * `SectionShell`. `confirmed` drives the visual state; `confirmTime`
+ * + `confirmedByName` populate the audit caption when confirmed;
+ * `onToggle` is the click handler the footer button calls
+ * (typically a wrapper around the admin family-progress PATCH).
+ */
+interface SectionConfirmConfig {
+  /** Short name for the section, used in the action button label
+   *  ("Confirm Family", "Confirm Students", "Confirm Testing").
+   *  Distinct from the card's full title because the title may carry
+   *  qualifiers (e.g. "Students · 2026-2027") while the button label
+   *  needs to stay stable + scannable. */
+  sectionLabel: string;
+  confirmed: boolean;
+  /** Whether the parent has marked this section complete on their
+   *  side (`*_completed` on the family-progress row). Drives the
+   *  card-body gray-out: we only mute the section when BOTH the
+   *  parent has completed it AND admin has verified — otherwise the
+   *  gray reads as a premature lock-in. */
+  parentCompleted: boolean;
+  confirmTime: number | null;
+  confirmedByName: string | null;
+  /** Mid-PATCH spinner gate. */
+  saving: boolean;
+  /** Called with the next desired bool (true → confirm, false → undo). */
+  onToggle: (next: boolean) => void;
+}
+
+/**
+ * Footer for `SectionShell` rendering the confirm/undo action +
+ * audit caption. Lives on its own component so the conditional
+ * render at the bottom of `SectionShell` stays clean.
+ */
+function SectionConfirmFooter({ confirm }: { confirm: SectionConfirmConfig }) {
+  const {
+    sectionLabel,
+    confirmed,
+    confirmTime,
+    confirmedByName,
+    saving,
+    onToggle,
+  } = confirm;
+  const [undoOpen, setUndoOpen] = useState(false);
+
+  return (
+    <div className="border-t bg-white px-5 py-3 flex items-center justify-between gap-3">
+      {/* Audit caption slot — three states:
+          - saving: skeleton bar so the audit "by X · 2 hr ago"
+            slides in smoothly instead of popping in/out as the
+            PATCH round-trips
+          - confirmed: actual caption with admin name + time
+          - unconfirmed: empty (nothing to say yet) */}
+      {saving ? (
+        <Skeleton className="h-3 w-48" />
+      ) : (
+        <span className="text-xs text-muted-foreground truncate">
+          {confirmed ? (
+            <>
+              {confirmedByName ? (
+                <>
+                  Confirmed by{" "}
+                  <span className="font-medium text-foreground">
+                    {confirmedByName}
+                  </span>
+                </>
+              ) : (
+                "Confirmed"
+              )}
+              {confirmTime ? (
+                <span> · {formatNoteTimestamp(confirmTime)}</span>
+              ) : null}
+            </>
+          ) : null}
+        </span>
+      )}
+
+      {/* Two visual states:
+          - unconfirmed → single primary "Confirm <Section>" button
+          - confirmed → muted "Confirmed" pill + an Undo button next
+            to it that opens a warning modal before clearing the
+            audit. Two buttons (rather than one toggle) makes the
+            "this is locked, but you can unlock it" intent explicit
+            and prevents an accidental click from wiping the audit
+            stamp. */}
+      {confirmed ? (
+        <div className="flex items-center gap-2 shrink-0">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled
+            className="bg-muted text-muted-foreground cursor-default disabled:opacity-100"
+          >
+            <CheckCircle2 className="size-3.5 mr-1.5" />
+            {sectionLabel} Section Verified
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setUndoOpen(true)}
+            disabled={saving}
+            className="bg-white"
+          >
+            {saving ? (
+              <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+            ) : (
+              <Undo2 className="size-3.5 mr-1.5" />
+            )}
+            Undo {sectionLabel}
+          </Button>
+          <AlertDialog open={undoOpen} onOpenChange={setUndoOpen}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>
+                  Undo {sectionLabel} confirmation?
+                </AlertDialogTitle>
+                <AlertDialogDescription>
+                  This clears the admin confirmation on the{" "}
+                  {sectionLabel} section. The audit stamp (who and
+                  when) will be removed and the section drops back
+                  to pending review. You can re-confirm at any time.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel disabled={saving}>
+                  Cancel
+                </AlertDialogCancel>
+                <AlertDialogAction
+                  disabled={saving}
+                  className="bg-amber-600 hover:bg-amber-700 text-white"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    onToggle(false);
+                    setUndoOpen(false);
+                  }}
+                >
+                  {saving ? (
+                    <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                  ) : null}
+                  Yes, undo
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </div>
+      ) : (
+        <Button
+          type="button"
+          variant="default"
+          size="sm"
+          onClick={() => onToggle(true)}
+          disabled={saving}
+        >
+          {saving ? (
+            <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+          ) : (
+            <CheckCircle2 className="size-3.5 mr-1.5" />
+          )}
+          Confirm {sectionLabel}
+        </Button>
+      )}
+    </div>
   );
 }
 
@@ -1142,26 +1470,211 @@ function StudentApplicationBlock({
 function TestingBlock({
   student,
   app,
+  onSaved,
 }: {
   student: Student;
   app: XanoApplication | undefined;
+  /** Called after a successful PATCH so the parent page can refresh
+   *  its detail SWR cache (and the section-confirm cascade can pick
+   *  up the new data). */
+  onSaved?: () => void;
 }) {
+  // Local mirror of the four admin-editable NWEA fields. Inputs
+  // commit on blur — comparing against the persisted `student`
+  // value and PATCHing only the diff so concurrent edits to other
+  // fields don't get clobbered. Mirrors the pattern used by
+  // `<DecisionStudentRow>` for SUFS edits.
+  //
+  // Note: NWEA scores live on the STUDENT row now, not the per-year
+  // application row. Re-enrolling students keep their score history
+  // since the data isn't year-scoped. PATCH targets
+  // `/api/admin/students/[id]` accordingly.
+  const [draft, setDraft] = useState({
+    math:
+      student.initial_screening_nwea_math != null
+        ? String(student.initial_screening_nwea_math)
+        : "",
+    reading:
+      student.initial_screening_nwea_reading != null
+        ? String(student.initial_screening_nwea_reading)
+        : "",
+    mathDate: student.initial_screening_nwea_math_date ?? "",
+    readingDate: student.initial_screening_nwea_reading_date ?? "",
+  });
+  const [savingField, setSavingField] = useState<string | null>(null);
+
+  // Re-hydrate the draft when the underlying student row changes
+  // (e.g. SWR revalidation after admin edits something on a sibling
+  // student). Without this, an external refresh would render stale
+  // values on top of the new ones.
+  useEffect(() => {
+    setDraft({
+      math:
+        student.initial_screening_nwea_math != null
+          ? String(student.initial_screening_nwea_math)
+          : "",
+      reading:
+        student.initial_screening_nwea_reading != null
+          ? String(student.initial_screening_nwea_reading)
+          : "",
+      mathDate: student.initial_screening_nwea_math_date ?? "",
+      readingDate: student.initial_screening_nwea_reading_date ?? "",
+    });
+  }, [student]);
+
+  async function patchField(
+    field:
+      | "initial_screening_nwea_math"
+      | "initial_screening_nwea_reading"
+      | "initial_screening_nwea_math_date"
+      | "initial_screening_nwea_reading_date",
+    value: number | string | null
+  ) {
+    setSavingField(field);
+    try {
+      const res = await fetch(`/api/admin/students/${student.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ [field]: value }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Save failed (${res.status})`);
+      }
+      onSaved?.();
+    } catch (err) {
+      console.error(`[TestingBlock.patchField.${field}]`, err);
+      toast.error(err instanceof Error ? err.message : "Couldn't save score.");
+    } finally {
+      setSavingField(null);
+    }
+  }
+
   return (
     <div className="rounded-md border bg-muted/10 p-4 space-y-4">
       <p className="text-sm font-semibold">
         {student.first_name} {student.last_name}
       </p>
       {app ? (
-        <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
-          <DisabledField
-            label="NWEA scheduled"
-            value={app.nwea_testing_scheduled ? "Yes" : "No"}
-          />
-          <DisabledField
-            label="NWEA complete"
-            value={app.nwea_testing_complete ? "Yes" : "No"}
-          />
-        </div>
+        <>
+          {/* Parent-set scheduling state — read-only on this surface
+              since it's flipped by the parent flow's NWEA page. */}
+          <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
+            <DisabledField
+              label="NWEA scheduled"
+              value={app.nwea_testing_scheduled ? "Yes" : "No"}
+            />
+            <DisabledField
+              label="NWEA complete"
+              value={app.nwea_testing_complete ? "Yes" : "No"}
+            />
+          </div>
+
+          {/* Admin-only initial-screening RIT scores + dates. Recorded
+              after the student completes initial testing at the
+              academy. Parents never see these — the parent allowlist
+              excludes them and the apply-flow NWEA page doesn't
+              render them. */}
+          <div className="space-y-3">
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Initial screening (admin-entered)
+            </p>
+            <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
+              <Field>
+                <FieldLabel className="text-xs">Math RIT score</FieldLabel>
+                <Input
+                  value={draft.math}
+                  type="number"
+                  inputMode="numeric"
+                  placeholder="—"
+                  onChange={(e) =>
+                    setDraft((d) => ({ ...d, math: e.target.value }))
+                  }
+                  onBlur={() => {
+                    const trimmed = draft.math.trim();
+                    if (trimmed === "") {
+                      if (student.initial_screening_nwea_math == null) return;
+                      patchField("initial_screening_nwea_math", null);
+                      return;
+                    }
+                    const next = Number(trimmed);
+                    if (!Number.isFinite(next)) return;
+                    if (next === student.initial_screening_nwea_math) return;
+                    patchField("initial_screening_nwea_math", next);
+                  }}
+                  disabled={savingField === "initial_screening_nwea_math"}
+                  className="border-input"
+                />
+              </Field>
+              <Field>
+                <FieldLabel className="text-xs">Math test date</FieldLabel>
+                <Input
+                  value={draft.mathDate}
+                  type="date"
+                  onChange={(e) =>
+                    setDraft((d) => ({ ...d, mathDate: e.target.value }))
+                  }
+                  onBlur={() => {
+                    const next = draft.mathDate || null;
+                    if (next === (student.initial_screening_nwea_math_date ?? null))
+                      return;
+                    patchField("initial_screening_nwea_math_date", next);
+                  }}
+                  disabled={savingField === "initial_screening_nwea_math_date"}
+                  className="border-input"
+                />
+              </Field>
+              <Field>
+                <FieldLabel className="text-xs">Reading RIT score</FieldLabel>
+                <Input
+                  value={draft.reading}
+                  type="number"
+                  inputMode="numeric"
+                  placeholder="—"
+                  onChange={(e) =>
+                    setDraft((d) => ({ ...d, reading: e.target.value }))
+                  }
+                  onBlur={() => {
+                    const trimmed = draft.reading.trim();
+                    if (trimmed === "") {
+                      if (student.initial_screening_nwea_reading == null) return;
+                      patchField("initial_screening_nwea_reading", null);
+                      return;
+                    }
+                    const next = Number(trimmed);
+                    if (!Number.isFinite(next)) return;
+                    if (next === student.initial_screening_nwea_reading) return;
+                    patchField("initial_screening_nwea_reading", next);
+                  }}
+                  disabled={savingField === "initial_screening_nwea_reading"}
+                  className="border-input"
+                />
+              </Field>
+              <Field>
+                <FieldLabel className="text-xs">Reading test date</FieldLabel>
+                <Input
+                  value={draft.readingDate}
+                  type="date"
+                  onChange={(e) =>
+                    setDraft((d) => ({ ...d, readingDate: e.target.value }))
+                  }
+                  onBlur={() => {
+                    const next = draft.readingDate || null;
+                    if (
+                      next === (student.initial_screening_nwea_reading_date ?? null)
+                    )
+                      return;
+                    patchField("initial_screening_nwea_reading_date", next);
+                  }}
+                  disabled={
+                    savingField === "initial_screening_nwea_reading_date"
+                  }
+                  className="border-input"
+                />
+              </Field>
+            </div>
+          </div>
+        </>
       ) : (
         <p className="text-xs italic text-muted-foreground">
           No application row for this year.
@@ -1580,12 +2093,34 @@ function DecisionCard({
   apps: XanoApplication[];
   schoolYear: XanoSchoolYear | null;
   scholarship: XanoScholarship | null;
-  progress: { id: number; isAccepted: boolean; isSubmitted: boolean } | null;
+  progress: {
+    id: number;
+    isAccepted: boolean;
+    isSubmitted: boolean;
+    /** Section-verify bools — drive the Approve gate. Family /
+     *  Students / Testing all need admin verification before the
+     *  Approve button unlocks. Optional on the type because legacy
+     *  rows pre-date the columns. */
+    family_admin_confirm?: boolean;
+    students_admin_confirm?: boolean;
+    testing_admin_confirm?: boolean;
+  } | null;
   loading: boolean;
   onChanged: () => void;
 }) {
   const accepted = progress?.isAccepted === true;
   const familySubmitted = progress?.isSubmitted === true;
+  // Section-verify gate — Approve is blocked until each of the
+  // three sections (Family / Students / Testing) is verified by
+  // admin. `unverifiedSections` lists the human-readable labels
+  // that haven't been verified yet so the gate-block reason can
+  // tell admin what to fix.
+  const unverifiedSections: string[] = [];
+  if (progress?.family_admin_confirm !== true) unverifiedSections.push("Family");
+  if (progress?.students_admin_confirm !== true)
+    unverifiedSections.push("Students");
+  if (progress?.testing_admin_confirm !== true)
+    unverifiedSections.push("Testing");
   const anySubmitted =
     familySubmitted ||
     apps.some((a) => (a as { isSubmitted?: boolean }).isSubmitted);
@@ -1658,6 +2193,26 @@ function DecisionCard({
     netAssetsCells: netAssetsCells ?? [],
   });
 
+  // Snapshot the line-item totals alongside the monthly figure so the
+  // `registration_families_payment` row keeps a per-receipt breakdown,
+  // not just a rolled-up monthly amount. Downstream tuition/billing
+  // surfaces can render the receipt without having to re-derive from
+  // per-student rows.
+  //
+  // - Annual fee: $500 × active students. Every family pays this.
+  // - Transportation total: null for SNAP families (transport is
+  //   waived for them), otherwise the sum of per-student transport
+  //   for students whose `is_bus_transportation=true`.
+  //
+  // Reuses the `activeApps` variable computed above for the SUFS
+  // gate, so we don't double-filter.
+  const annualFeeTotal =
+    (schoolYear?.annual_fees ?? 0) * activeApps.length;
+  const transportationTotal = scholarship?.isSNAPBenefits
+    ? null
+    : activeApps.filter((a) => a.is_bus_transportation === true).length *
+      (schoolYear?.transportation_fees ?? 0);
+
   return (
     <Card className="overflow-hidden gap-0 py-0 bg-white border-emerald-200">
       <CardHeader className="py-3 !pb-3 border-b bg-emerald-50/40">
@@ -1718,19 +2273,6 @@ function DecisionCard({
               the offer.
             </p>
 
-            {/* Financial picture + matrix bracket — read-only context
-                so admins don't have to bounce to the Financial Aid
-                section to make a per-student determination below. */}
-            <ScholarshipReviewBlock
-              yearId={yearId}
-              scholarship={scholarship}
-              schoolYear={schoolYear}
-              apps={apps}
-              familyId={familyId}
-              loading={loading}
-              onScholarshipChanged={onChanged}
-            />
-
             <div className="space-y-4">
               {students.map((student) => {
                 const app = apps.find(
@@ -1752,6 +2294,49 @@ function DecisionCard({
                 );
               })}
             </div>
+
+            {/* Documents to Review — lifted out of
+                `ScholarshipReviewBlock` so the card flow reads:
+                  SUFS rows above
+                  → Documents to Review (this block)
+                  → Scholarship Review (matrix tables below)
+                  → Student-Specific Payments
+                Confirming every doc here is part of the gate on the
+                per-student Confirm Scholarship Award Amount button
+                + the family-level Approve. */}
+            {scholarship ? (
+              <DocumentsToReviewBlock
+                scholarship={scholarship}
+                familyId={familyId}
+                onScholarshipChanged={onChanged}
+              />
+            ) : null}
+
+            {/* Scholarship Review — Pay Matrix or Net Assets bracket
+                + (on SNAP path) the SNAP cost determination. Read-
+                only context that supports the per-student
+                determination rows above. */}
+            <ScholarshipReviewBlock
+              yearId={yearId}
+              scholarship={scholarship}
+              schoolYear={schoolYear}
+              apps={apps}
+              familyId={familyId}
+              loading={loading}
+              onScholarshipChanged={onChanged}
+            />
+
+            {/* Student-Specific Payments — per-student tuition
+                receipt mirroring the parent's /tuition page. Sits at
+                the bottom of the card right above the family-level
+                Approve footer so admin sees the same numbers the
+                family will see immediately before clicking Approve. */}
+            <TuitionBreakdownTable
+              students={students}
+              apps={apps}
+              schoolYear={schoolYear}
+              isSnapFamily={scholarship?.isSNAPBenefits === true}
+            />
 
             {/* Family-level decision footer — Reject + Approve. One
                 set per family (not per student) since these are
@@ -1792,7 +2377,10 @@ function DecisionCard({
                   allSufsConfirmed={allSufsConfirmed}
                   unconfirmedCount={unconfirmedCount}
                   allDocsConfirmed={allDocsConfirmed}
+                  unverifiedSections={unverifiedSections}
                   monthlyTuitionPayment={monthlyTuitionPayment}
+                  annualFeeTotal={annualFeeTotal}
+                  transportationTotal={transportationTotal}
                   onApproved={onChanged}
                 />
               </div>
@@ -1802,6 +2390,247 @@ function DecisionCard({
       </CardContent>
     </Card>
   );
+}
+
+/**
+ * Per-student tuition receipt rendered at the bottom of the
+ * Scholarship Determination card. Mirrors the parent-side
+ * /tuition page row-by-row so admin sees the exact figures the
+ * family will see — the two surfaces share the same math:
+ *
+ *   familyPaysForTuition = opportunity_scholarship_award_amount ?? 0
+ *   scholarshipCoverage  = (SNAP ? tuition + transport : tuition)
+ *                          − SUFS − familyPaysForTuition
+ *   subtotal             = familyPaysForTuition + adminFee
+ *                          + (SNAP ? 0 : transport)
+ *
+ * SNAP path bumps the OS coverage to absorb transport so the
+ * subtotal collapses to the annual admin fee — same behavior the
+ * family-payment row writes (`transportation_total = null`).
+ *
+ * Active-only: students whose application row has `isActive=false`
+ * (soft-deleted from the year) are filtered out so the receipt
+ * matches the cohort the family will actually pay for.
+ */
+function TuitionBreakdownTable({
+  students,
+  apps,
+  schoolYear,
+  isSnapFamily,
+}: {
+  students: Student[];
+  apps: XanoApplication[];
+  schoolYear: XanoSchoolYear | null;
+  isSnapFamily: boolean;
+}) {
+  if (!schoolYear) return null;
+  const tuition = schoolYear.tuition ?? 0;
+  const adminFee = schoolYear.annual_fees ?? 0;
+  const transportFee = schoolYear.transportation_fees ?? 0;
+
+  // Build one row group per active student; skip students whose app
+  // is soft-deleted so the totals match the family-payment snapshot
+  // the Approve button writes.
+  const rows = students
+    .map((student) => {
+      const app = apps.find(
+        (a) => Number(a.registration_students_id) === student.id
+      );
+      if (!app) return null;
+      if ((app as { isActive?: boolean }).isActive === false) return null;
+      return { student, app };
+    })
+    .filter(
+      (r): r is { student: Student; app: XanoApplication } => r !== null
+    );
+
+  if (rows.length === 0) return null;
+
+  const lineItems = rows.map(({ student, app }) => {
+    const stepUpAmount = sufsAmountFor(app.sufs_type ?? "", schoolYear);
+    const stepUpStatus = app.sufs_status ?? "";
+    const stepUpType = app.sufs_type ?? "";
+    const familyPaysForTuition = app.opportunity_scholarship_award_amount ?? 0;
+    const usesTransport = !!app.is_bus_transportation;
+    const transportApplicable = usesTransport ? transportFee : 0;
+    const scholarshipCoverage = isSnapFamily
+      ? Math.max(
+          0,
+          tuition + transportApplicable - stepUpAmount - familyPaysForTuition
+        )
+      : Math.max(0, tuition - stepUpAmount - familyPaysForTuition);
+    const subtotal = isSnapFamily
+      ? familyPaysForTuition + adminFee
+      : familyPaysForTuition + adminFee + transportApplicable;
+    return {
+      studentName: `${student.first_name} ${student.last_name}`.trim(),
+      tuition,
+      adminFee,
+      transportFee,
+      usesTransport,
+      stepUpAmount,
+      stepUpStatus,
+      stepUpType,
+      scholarshipCoverage,
+      subtotal,
+    };
+  });
+
+  const grandTotal = lineItems.reduce((sum, r) => sum + r.subtotal, 0);
+
+  return (
+    <div className="rounded-lg border bg-white overflow-hidden">
+      <table className="w-full text-sm">
+        <tbody>
+          {lineItems.map((row, idx) => (
+            <Fragment key={idx}>
+              <tr className="bg-muted/40 border-t first:border-t-0">
+                <td colSpan={2} className="px-4 py-3">
+                  <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    Student
+                  </span>
+                  <span className="mx-2 text-muted-foreground">—</span>
+                  <span className="font-semibold text-foreground">
+                    {row.studentName}
+                  </span>
+                </td>
+              </tr>
+
+              <tr className="border-t">
+                <td className="px-4 py-3 text-muted-foreground">
+                  Annual Tuition
+                </td>
+                <td className="px-4 py-3 text-right font-medium tabular-nums">
+                  ${formatCurrency2(row.tuition)}
+                </td>
+              </tr>
+
+              <tr className="border-t">
+                <td className="px-4 py-3 text-muted-foreground">
+                  Annual Admin Fee
+                </td>
+                <td className="px-4 py-3 text-right font-medium tabular-nums">
+                  ${formatCurrency2(row.adminFee)}
+                </td>
+              </tr>
+
+              <tr className="border-t">
+                <td className="px-4 py-3 text-muted-foreground">
+                  Transportation Fee
+                  {!row.usesTransport ? (
+                    <span className="ml-1.5 text-xs text-muted-foreground/60">
+                      (N/A)
+                    </span>
+                  ) : null}
+                </td>
+                <td className="px-4 py-3 text-right font-medium tabular-nums">
+                  {row.usesTransport ? (
+                    `$${formatCurrency2(row.transportFee)}`
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
+                </td>
+              </tr>
+
+              <tr className="border-t">
+                <td className="px-4 py-3 text-muted-foreground">
+                  Step Up for Students Award Status
+                </td>
+                <td className="px-4 py-3 text-right text-sm">
+                  {row.stepUpStatus ? (
+                    <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                      {row.stepUpStatus}
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
+                </td>
+              </tr>
+
+              <tr className="border-t">
+                <td className="px-4 py-3 text-muted-foreground">
+                  Step Up for Students Award Type
+                </td>
+                <td className="px-4 py-3 text-right font-medium">
+                  {row.stepUpType
+                    ? SUFS_TIERS.find((t) => t.key === row.stepUpType)?.label ??
+                      row.stepUpType
+                    : "—"}
+                </td>
+              </tr>
+
+              <tr className="border-t">
+                <td className="px-4 py-3 text-muted-foreground">
+                  Step Up for Students Award Amount
+                </td>
+                <td className="px-4 py-3 text-right font-medium tabular-nums text-green-600">
+                  {row.stepUpAmount > 0
+                    ? `-$${formatCurrency2(row.stepUpAmount)}`
+                    : "$0.00"}
+                </td>
+              </tr>
+
+              <tr className="border-t">
+                <td className="px-4 py-3 text-muted-foreground">
+                  Opportunity Scholarship Award
+                </td>
+                <td className="px-4 py-3 text-right font-medium tabular-nums text-green-600">
+                  {row.scholarshipCoverage > 0
+                    ? `-$${formatCurrency2(row.scholarshipCoverage)}`
+                    : <span className="text-muted-foreground">—</span>}
+                </td>
+              </tr>
+
+              <tr className="border-t bg-muted/20">
+                <td className="px-4 py-3 font-medium">
+                  Subtotal — {row.studentName}
+                </td>
+                <td className="px-4 py-3 text-right font-semibold tabular-nums">
+                  ${formatCurrency2(row.subtotal)}
+                </td>
+              </tr>
+            </Fragment>
+          ))}
+
+          <tr className="border-t-2 bg-white">
+            <td className="px-4 py-3 font-bold">
+              Total Annual Due
+              {schoolYear.year_name ? (
+                <span className="ml-1.5 font-normal text-muted-foreground">
+                  — School Year ({schoolYear.year_name})
+                </span>
+              ) : null}
+            </td>
+            <td className="px-4 py-3 text-right font-bold tabular-nums">
+              ${formatCurrency2(grandTotal)}
+            </td>
+          </tr>
+          <tr className="border-t bg-white">
+            <td className="px-4 py-3 font-bold">
+              Monthly Payment (Aug – Jul, 12 months)
+            </td>
+            <td className="px-4 py-3 text-right font-bold tabular-nums">
+              ${formatCurrency2(grandTotal / 12)}/mo
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/**
+ * 2-decimal currency formatter shared by `TuitionBreakdownTable`
+ * rows. Matches the parent /tuition page so the two surfaces read
+ * identically. Distinct from `formatCurrencyZero` (which strips
+ * decimals for matrix-bracket displays) — the receipt always shows
+ * cents.
+ */
+function formatCurrency2(value: number): string {
+  return value.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
 }
 
 /**
@@ -1825,7 +2654,10 @@ function ApproveFamilyButton({
   allSufsConfirmed,
   unconfirmedCount,
   allDocsConfirmed,
+  unverifiedSections,
   monthlyTuitionPayment,
+  annualFeeTotal,
+  transportationTotal,
   onApproved,
 }: {
   familyId: number;
@@ -1838,11 +2670,26 @@ function ApproveFamilyButton({
    *  requires this — admin can't approve a family with unreviewed
    *  income docs, even if the per-student awards are confirmed. */
   allDocsConfirmed: boolean;
+  /** List of section labels that haven't been verified yet (a
+   *  subset of `["Family", "Students", "Testing"]`). Empty array
+   *  means every section is verified. Drives the gate-block reason
+   *  string on the Approve button — admin can't approve until each
+   *  section has admin verification. */
+  unverifiedSections: string[];
   /** Monthly snapshot computed at the DecisionCard level. Sent
    *  alongside the family-progress PATCH so the
    *  `registration_families_payment` row holds a copy of the
    *  authoritative payment amount at approval time. */
   monthlyTuitionPayment: number;
+  /** Annual fee total — `$500 × active students`. Snapshotted
+   *  alongside the monthly figure so the family-payment row holds
+   *  the line-item breakdown, not just a rolled-up monthly. */
+  annualFeeTotal: number;
+  /** Annual transportation total. `null` for SNAP families (transport
+   *  is waived); a number for non-SNAP families. Pass-through to the
+   *  family-payment POST as-is so SNAP rows write `null` and
+   *  downstream consumers can render N/A. */
+  transportationTotal: number | null;
   onApproved: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -1876,6 +2723,12 @@ function ApproveFamilyButton({
             familyId,
             yearId,
             monthly_tuition_payment: monthlyTuitionPayment,
+            // Line-item snapshot — admin fee always set, transport
+            // explicitly null for SNAP families (waived) or a number
+            // otherwise. The route preserves the null vs. undefined
+            // distinction so SNAP rows write null rather than 0.
+            annual_fee_total: annualFeeTotal,
+            transportation_total: transportationTotal,
             isFamilyAccepted: true,
           }),
         });
@@ -1903,6 +2756,8 @@ function ApproveFamilyButton({
 
   // Gate-check helper — drives the disabled state's hover title.
   // Returns null when the gate passes, an error message otherwise.
+  // Order matters: the most actionable / earliest-in-flow gate
+  // surfaces first so admin sees "do this before that" guidance.
   const gateBlockReason = (() => {
     if (!allDocsConfirmed) {
       return "Confirm every document under Documents to review before approving.";
@@ -1911,6 +2766,15 @@ function ApproveFamilyButton({
       return `Confirm scholarship award for ${unconfirmedCount} student${
         unconfirmedCount === 1 ? "" : "s"
       } before approving.`;
+    }
+    // Section-verify gate — Family / Students / Testing each need
+    // admin verification before approval. Tells admin which
+    // specific sections are still pending so they can scroll up
+    // and verify them.
+    if (unverifiedSections.length > 0) {
+      return `Verify the ${unverifiedSections.join(
+        ", "
+      )} section${unverifiedSections.length === 1 ? "" : "s"} before approving.`;
     }
     return null;
   })();
@@ -2610,16 +3474,13 @@ function ScholarshipReviewBlock({
           <span className="size-2 rounded-full bg-emerald-500" aria-hidden />
           SNAP benefits pre-qualification
         </div>
-        {/* Documents to Review on the SNAP path — uses the same flat
-            table the non-SNAP path renders, just with a single row
-            (the SNAP award letter) instead of contributing members
-            + benefits. Keeps the doc-confirm visual consistent
-            across every path. */}
-        <DocumentsToReviewBlock
-          scholarship={scholarship}
-          familyId={familyId}
-          onScholarshipChanged={onScholarshipChanged}
-        />
+        {/* `DocumentsToReviewBlock` was previously rendered inline
+            here on both the SNAP and non-SNAP paths. It now lives at
+            the `DecisionCard` level so the card flow reads as: SUFS
+            rows → Documents to Review → Scholarship Review (this
+            block) → Student-Specific Payments. Keeping it lifted to
+            one render also avoids the prior duplicate render across
+            the two `ScholarshipReviewBlock` branches. */}
 
         {/* SNAP Cost Determination — same wrapper shell as Pay
             Matrix Determination so both paths read consistently;
@@ -3090,18 +3951,11 @@ function ScholarshipReviewBlock({
         />
       )}
 
-      {/* Documents to review — every file-upload section the parent's
-          scholarship form collected (SNAP, unemployment, contributing
-          members + per-file confirms, government benefits) lands
-          here as a single flat table so admin can verify everything
-          in one place. The Confirm Scholarship Award Amount button
-          on each per-student row is gated on every confirmable doc
-          here being marked confirmed. */}
-      <DocumentsToReviewBlock
-        scholarship={scholarship}
-        familyId={familyId}
-        onScholarshipChanged={onScholarshipChanged}
-      />
+      {/* `DocumentsToReviewBlock` moved out — now rendered once at
+          the `DecisionCard` level (between the per-student SUFS
+          rows and this block) so the card flow reads:
+            SUFS rows → Documents to Review → Scholarship Review →
+            Student-Specific Payments. */}
     </div>
   );
 }

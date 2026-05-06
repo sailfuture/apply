@@ -94,10 +94,14 @@ export function AdminTopNav({ admin }: { admin: AdminUser | null }) {
                 key={item.href}
                 href={buildHref(item.href)}
                 className={cn(
-                  "inline-flex items-center whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                  "inline-flex items-center whitespace-nowrap rounded-md px-3 py-1.5 text-sm transition-colors",
+                  // Active link: bold + filled pill so the user's
+                  // current page is unmistakable. Inactive links
+                  // stay medium-weight so the bar reads as a calm
+                  // row rather than competing for attention.
                   active
-                    ? "bg-muted text-foreground"
-                    : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+                    ? "bg-muted text-foreground font-bold"
+                    : "font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground"
                 )}
               >
                 {item.title}

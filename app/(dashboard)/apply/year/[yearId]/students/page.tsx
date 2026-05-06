@@ -293,6 +293,15 @@ export default function StudentsStepPage() {
       let loadedStudents: Student[] = [];
       if (studentsRes.ok) {
         loadedStudents = await studentsRes.json();
+        // Sort students by id ASC (creation order). Xano doesn't
+        // guarantee a deterministic order on filtered GETs, so the
+        // newly-added student would otherwise float to the top and
+        // disrupt the parent's mental model ("the kid I just added
+        // is at the bottom"). Sorting client-side keeps the page
+        // stable regardless of Xano's response order.
+        loadedStudents = loadedStudents
+          .slice()
+          .sort((a, b) => a.id - b.id);
         setStudents(loadedStudents);
       }
       if (appsRes.ok) {
@@ -308,7 +317,11 @@ export default function StudentsStepPage() {
             ...a,
             primary_home: a.primary_home ?? "",
             bus_stop: a.bus_stop ?? "",
-          }));
+          }))
+          // Match the students sort: id ASC = creation order, so a
+          // freshly-added student lands at the bottom of the list,
+          // not the top.
+          .sort((a, b) => a.id - b.id);
         setApplications(yearApps);
         setSavedApplications(yearApps);
         // Keep all student cards open on initial load — don't auto-collapse

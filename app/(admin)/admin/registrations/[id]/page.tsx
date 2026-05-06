@@ -11,6 +11,7 @@ import {
   CheckCircle2,
   ExternalLink,
   Loader2,
+  Pencil,
   SquarePen,
   Undo2,
 } from "lucide-react";
@@ -18,10 +19,22 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { FamilyNotesSheet } from "@/components/admin/family-notes-sheet";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { cn } from "@/lib/utils";
+import { formatNoteTimestamp } from "@/lib/format-note-time";
 import type {
   AdminFamilyRegistrationResponse,
   AdminFamilyRegistrationStudentRow,
@@ -68,6 +81,13 @@ export default function FamilyRegistrationDetailPage() {
   const { data, isLoading, error, mutate } =
     useSWR<AdminFamilyRegistrationResponse>(swrKey, adminFetcher);
 
+  // Tracks which section is mid-PATCH so the spinner inside that
+  // section's verify footer is scoped — clicking Verify on Tuition
+  // doesn't gray out Enrollment's button.
+  const [savingSection, setSavingSection] = useState<
+    "tuition" | "enrollment" | "volunteer" | null
+  >(null);
+
   const backHref = yearId
     ? `/admin/registrations?yearId=${yearId}`
     : "/admin/registrations";
@@ -113,16 +133,67 @@ export default function FamilyRegistrationDetailPage() {
     void mutate();
   };
 
+  // Builder for the per-section editor route. Mirrors the
+  // `sectionHref` helper on the apply-flow page so the Edit button
+  // on each registration section card opens the matching editor at
+  // `/admin/registrations/[familyId]/[section]?yearId=X`.
+  const regSectionHref = (slug: string) =>
+    `/admin/registrations/${family?.id ?? familyId}/${slug}${
+      yearId ? `?yearId=${yearId}` : ""
+    }`;
+
   // Per-section completion state — drives the green/amber dot in the
   // side nav AND the colored status dot in each `SectionShell` header.
   const sectionStatus = {
     tuition: !!progress?.isTuition,
     enrollment: !!progress?.isEnrollment,
+    // Registration completion is derived purely from per-student
+    // `registrationConfirmed` — there's no section-level verify
+    // button on this card. A section is complete when there's at
+    // least one student AND every active student's packet has been
+    // confirmed.
     registration:
-      !!progress?.isRegistration &&
       students.length > 0 &&
       students.every((s) => !!s.packet?.registrationConfirmed),
     volunteer: !!progress?.isVolunteerHours,
+  };
+
+  // Per-section verify state — wraps the admin registration-progress
+  // PATCH so each section's footer can flip its bool with one call.
+  // Tracks the in-flight section locally so the spinner is scoped to
+  // whichever section admin clicked. The audit name lives directly
+  // on the row's `*_admin_confirm_admin` string column — no lookup
+  // needed.
+  const verifyToggle = (
+    field: "tuition_admin_confirm" | "enrollment_admin_confirm" | "volunteer_admin_confirm",
+    next: boolean,
+    section: "tuition" | "enrollment" | "volunteer"
+  ) => {
+    setSavingSection(section);
+    void (async () => {
+      try {
+        const res = await fetch(`/api/admin/registration-progress`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            familyId: Number(family?.id ?? familyId),
+            yearId: Number(yearId),
+            [field]: next,
+          }),
+        });
+        if (!res.ok) {
+          const errBody = await res.json().catch(() => null);
+          throw new Error(errBody?.error ?? `Update failed (${res.status})`);
+        }
+        toast.success(next ? "Section verified." : "Verification cleared.");
+        refresh();
+      } catch (err) {
+        console.error(`[verifyToggle.${section}]`, err);
+        toast.error(err instanceof Error ? err.message : "Couldn't update.");
+      } finally {
+        setSavingSection(null);
+      }
+    })();
   };
 
   return (
@@ -188,21 +259,24 @@ export default function FamilyRegistrationDetailPage() {
           <SectionShell
             title="Tuition"
             status={sectionStatus.tuition ? "complete" : "in_progress"}
+            editHref={regSectionHref("tuition")}
             notes={{
               familyId: Number(family?.id ?? familyId),
               yearId: Number(yearId),
               section: "section-tuition",
               title: "Notes — Tuition",
             }}
-            action={
-              <SectionConfirmButton
-                familyId={Number(family?.id ?? familyId)}
-                yearId={Number(yearId)}
-                field="isTuition"
-                confirmed={sectionStatus.tuition}
-                onChanged={refresh}
-              />
-            }
+            verify={{
+              sectionLabel: "Tuition",
+              verified: progress?.tuition_admin_confirm === true,
+              parentCompleted: progress?.isTuition === true,
+              verifiedTime: progress?.tuition_admin_confirm_time ?? null,
+              verifiedByName:
+                progress?.tuition_admin_confirm_admin?.trim() || null,
+              saving: savingSection === "tuition",
+              onToggle: (next) =>
+                verifyToggle("tuition_admin_confirm", next, "tuition"),
+            }}
           >
             <TuitionBlock
               progress={progress}
@@ -215,45 +289,47 @@ export default function FamilyRegistrationDetailPage() {
           <SectionShell
             title="Enrollment Agreement"
             status={sectionStatus.enrollment ? "complete" : "in_progress"}
+            editHref={regSectionHref("enrollment")}
             notes={{
               familyId: Number(family?.id ?? familyId),
               yearId: Number(yearId),
               section: "section-enrollment",
               title: "Notes — Enrollment Agreement",
             }}
-            action={
-              <SectionConfirmButton
-                familyId={Number(family?.id ?? familyId)}
-                yearId={Number(yearId)}
-                field="isEnrollment"
-                confirmed={sectionStatus.enrollment}
-                onChanged={refresh}
-              />
-            }
+            verify={{
+              sectionLabel: "Enrollment",
+              verified: progress?.enrollment_admin_confirm === true,
+              parentCompleted: progress?.isEnrollment === true,
+              verifiedTime: progress?.enrollment_admin_confirm_time ?? null,
+              verifiedByName:
+                progress?.enrollment_admin_confirm_admin?.trim() || null,
+              saving: savingSection === "enrollment",
+              onToggle: (next) =>
+                verifyToggle("enrollment_admin_confirm", next, "enrollment"),
+            }}
           >
             <EnrollmentAgreementBlock progress={progress} />
           </SectionShell>
         </section>
 
         <section id="section-registration" className="scroll-mt-20">
+          {/* No section-level Mark Confirmed button on this card —
+              registration packet review is per-student (each row in
+              `RegistrationPacketBlock` owns its own Mark Confirmed
+              toggle that flips `registrationConfirmed` on the
+              packet). The family-level `isRegistration` flag isn't
+              flipped from this UI; section completion derives from
+              the per-student flags below. */}
           <SectionShell
             title="Registration Packet"
             status={sectionStatus.registration ? "complete" : "in_progress"}
+            editHref={regSectionHref("registration")}
             notes={{
               familyId: Number(family?.id ?? familyId),
               yearId: Number(yearId),
               section: "section-registration",
               title: "Notes — Registration Packet",
             }}
-            action={
-              <SectionConfirmButton
-                familyId={Number(family?.id ?? familyId)}
-                yearId={Number(yearId)}
-                field="isRegistration"
-                confirmed={!!progress?.isRegistration}
-                onChanged={refresh}
-              />
-            }
           >
             <RegistrationPacketBlock
               students={students}
@@ -267,21 +343,24 @@ export default function FamilyRegistrationDetailPage() {
           <SectionShell
             title="Volunteer Hours"
             status={sectionStatus.volunteer ? "complete" : "in_progress"}
+            editHref={regSectionHref("volunteer")}
             notes={{
               familyId: Number(family?.id ?? familyId),
               yearId: Number(yearId),
               section: "section-volunteer",
               title: "Notes — Volunteer Hours",
             }}
-            action={
-              <SectionConfirmButton
-                familyId={Number(family?.id ?? familyId)}
-                yearId={Number(yearId)}
-                field="isVolunteerHours"
-                confirmed={sectionStatus.volunteer}
-                onChanged={refresh}
-              />
-            }
+            verify={{
+              sectionLabel: "Volunteer Hours",
+              verified: progress?.volunteer_admin_confirm === true,
+              parentCompleted: progress?.isVolunteerHours === true,
+              verifiedTime: progress?.volunteer_admin_confirm_time ?? null,
+              verifiedByName:
+                progress?.volunteer_admin_confirm_admin?.trim() || null,
+              saving: savingSection === "volunteer",
+              onToggle: (next) =>
+                verifyToggle("volunteer_admin_confirm", next, "volunteer"),
+            }}
           >
             <VolunteerHoursBlock progress={progress} />
           </SectionShell>
@@ -436,15 +515,22 @@ const STATUS_LABEL: Record<SectionStatus, string> = {
 
 /**
  * Shared section card chrome — title + status dot, optional Notes
- * drawer trigger, optional right-aligned action button (Mark
- * Confirmed / Reset). Visual rhythm matches the apply-flow
+ * drawer trigger, optional verify-section footer with audit caption
+ * + Undo warning modal. Visual rhythm matches the apply-flow
  * `SectionShell` so the two admin surfaces feel like the same page.
+ *
+ * Verify footer (when `verify` is passed) renders below content with
+ * a horizontal divider; the audit caption ("Verified by Mr.
+ * Thompson · 2 hr ago") sits on the left, the Confirmed pill +
+ * Undo button on the right when verified, or just a single Verify
+ * button when unverified.
  */
 function SectionShell({
   title,
   status,
   notes,
-  action,
+  editHref,
+  verify,
   children,
 }: {
   title: string;
@@ -464,11 +550,40 @@ function SectionShell({
     section: string;
     title: string;
   };
-  action?: React.ReactNode;
+  /**
+   * Optional admin Edit link. When set, an Edit button renders in
+   * the header next to Notes — same affordance the apply-flow
+   * `SectionShell` exposes — so admin can jump into a per-section
+   * editor route to amend the registration packet data on behalf
+   * of the family.
+   */
+  editHref?: string;
+  /**
+   * Optional admin section-verify footer config. Same shape as the
+   * apply-flow's `SectionConfirmConfig` but renamed to "Verify" for
+   * the registration phase to match the user's chosen vocabulary
+   * (admin "verifies" registration sections; admin "confirms"
+   * application sections).
+   */
+  verify?: SectionVerifyConfig;
   children: React.ReactNode;
 }) {
+  const verified = !!verify?.verified;
+  const parentCompleted = !!verify?.parentCompleted;
+  // Whole-card mute when the family has marked the section
+  // complete. Drops opacity on the entire `<Card>` (header + body
+  // + footer) rather than only the body so the title / status
+  // badge / Edit button all read as part of the same settled
+  // state. Mirrors the apply-flow `SectionShell` and the parent
+  // flow's "Section Completed" treatment.
+  const fullyDone = parentCompleted;
   return (
-    <Card className="overflow-hidden gap-0 py-0 bg-white">
+    <Card
+      className={cn(
+        "overflow-hidden gap-0 py-0 bg-white transition-opacity",
+        fullyDone && "opacity-60"
+      )}
+    >
       <CardHeader className="py-3 !pb-3 border-b">
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-2 min-w-0">
@@ -483,7 +598,28 @@ function SectionShell({
               />
             ) : null}
             <CardTitle className="text-base truncate">{title}</CardTitle>
+            {/* Title status badge — three-state pill mirroring the
+                section's verify state at a glance. Same pattern as
+                the apply-flow page so admin can scan both surfaces
+                identically. */}
+            {verify ? (
+              verified ? (
+                <span className="ml-1 inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-800">
+                  <CheckCircle2 className="size-2.5" />
+                  Verified
+                </span>
+              ) : (
+                <span className="ml-1 inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-amber-800">
+                  Needs Verification
+                </span>
+              )
+            ) : null}
           </div>
+          {/* Notes + Edit pair docked right of the header — same
+              affordance pair the apply-flow SectionShell exposes.
+              Notes opens a section-filtered drawer; Edit jumps to
+              a per-section editor route under
+              `/admin/registrations/[id]/[section]`. */}
           <div className="flex items-center gap-2 shrink-0">
             {notes ? (
               <FamilyNotesSheet
@@ -494,12 +630,185 @@ function SectionShell({
                 defaultYearId={notes.yearId}
               />
             ) : null}
-            {action}
+            {editHref ? (
+              <Button
+                asChild
+                variant="outline"
+                size="sm"
+                className="bg-white"
+              >
+                <Link href={editHref}>
+                  <Pencil className="size-4 mr-1" />
+                  Edit
+                </Link>
+              </Button>
+            ) : null}
           </div>
         </div>
       </CardHeader>
-      <CardContent className="space-y-6 py-5 bg-white">{children}</CardContent>
+      {/* Body keeps a constant background — the whole-card opacity
+          handles the muted look when `fullyDone`. Stacking
+          `bg-muted/30` on top of an opacity-reduced parent doubled
+          the dimming and made the text harder to read. */}
+      <CardContent className="space-y-6 py-5 bg-white">
+        {children}
+      </CardContent>
+      {verify ? <SectionVerifyFooter verify={verify} /> : null}
     </Card>
+  );
+}
+
+/**
+ * Config for the optional verify footer on `SectionShell`. Mirrors
+ * the apply-flow `SectionConfirmConfig` — different verb ("Verify"
+ * vs "Confirm") but same audit-pair semantics underneath.
+ */
+interface SectionVerifyConfig {
+  /** Short label used in the action button ("Verify Tuition",
+   *  "Verify Enrollment", "Verify Volunteer Hours"). */
+  sectionLabel: string;
+  verified: boolean;
+  /** Whether the parent has marked this section complete on their
+   *  side (`isTuition` / `isEnrollment` / `isVolunteerHours`).
+   *  Drives the card-body gray-out: we only mute the section when
+   *  BOTH the parent has completed it AND admin has verified —
+   *  otherwise the gray reads as a premature lock-in. */
+  parentCompleted: boolean;
+  verifiedTime: number | null;
+  verifiedByName: string | null;
+  /** Mid-PATCH spinner gate. */
+  saving: boolean;
+  /** Called with the next desired bool (true → verify, false → undo). */
+  onToggle: (next: boolean) => void;
+}
+
+/**
+ * Footer for `SectionShell` rendering the verify/undo action +
+ * audit caption. Two states:
+ *   - unverified → single primary "Verify <Section>" button
+ *   - verified → muted "Verified" pill + Undo button that opens a
+ *     warning modal before clearing the audit. Modal prevents an
+ *     accidental click from wiping who/when verified.
+ */
+function SectionVerifyFooter({ verify }: { verify: SectionVerifyConfig }) {
+  const {
+    sectionLabel,
+    verified,
+    verifiedTime,
+    verifiedByName,
+    saving,
+    onToggle,
+  } = verify;
+  const [undoOpen, setUndoOpen] = useState(false);
+
+  return (
+    <div className="border-t bg-white px-5 py-3 flex items-center justify-between gap-3">
+      {/* Audit caption slot — skeleton during save so the actual
+          "Verified by X · 2 hr ago" text slides in smoothly
+          instead of popping on/off across the round-trip. Same
+          three-state pattern as the apply-flow footer. */}
+      {saving ? (
+        <Skeleton className="h-3 w-48" />
+      ) : (
+        <span className="text-xs text-muted-foreground truncate">
+          {verified ? (
+            <>
+              {verifiedByName ? (
+                <>
+                  Verified by{" "}
+                  <span className="font-medium text-foreground">
+                    {verifiedByName}
+                  </span>
+                </>
+              ) : (
+                "Verified"
+              )}
+              {verifiedTime ? (
+                <span> · {formatNoteTimestamp(verifiedTime)}</span>
+              ) : null}
+            </>
+          ) : null}
+        </span>
+      )}
+      {verified ? (
+        <div className="flex items-center gap-2 shrink-0">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled
+            className="bg-muted text-muted-foreground cursor-default disabled:opacity-100"
+          >
+            <CheckCircle2 className="size-3.5 mr-1.5" />
+            {sectionLabel} Section Verified
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setUndoOpen(true)}
+            disabled={saving}
+            className="bg-white"
+          >
+            {saving ? (
+              <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+            ) : (
+              <Undo2 className="size-3.5 mr-1.5" />
+            )}
+            Undo {sectionLabel}
+          </Button>
+          <AlertDialog open={undoOpen} onOpenChange={setUndoOpen}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>
+                  Undo {sectionLabel} verification?
+                </AlertDialogTitle>
+                <AlertDialogDescription>
+                  This clears the admin verification on the{" "}
+                  {sectionLabel} section. The audit stamp (who and
+                  when) will be removed and the section drops back
+                  to pending review. You can re-verify at any time.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel disabled={saving}>
+                  Cancel
+                </AlertDialogCancel>
+                <AlertDialogAction
+                  disabled={saving}
+                  className="bg-amber-600 hover:bg-amber-700 text-white"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    onToggle(false);
+                    setUndoOpen(false);
+                  }}
+                >
+                  {saving ? (
+                    <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                  ) : null}
+                  Yes, undo
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </div>
+      ) : (
+        <Button
+          type="button"
+          variant="default"
+          size="sm"
+          onClick={() => onToggle(true)}
+          disabled={saving}
+        >
+          {saving ? (
+            <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+          ) : (
+            <CheckCircle2 className="size-3.5 mr-1.5" />
+          )}
+          Verify {sectionLabel}
+        </Button>
+      )}
+    </div>
   );
 }
 
@@ -616,65 +925,6 @@ function DisabledTextarea({
         )}
       />
     </Field>
-  );
-}
-
-/* ─────────────────────── Confirm action ─────────────────────── */
-
-function SectionConfirmButton({
-  familyId,
-  yearId,
-  field,
-  confirmed,
-  onChanged,
-}: {
-  familyId: number;
-  yearId: number;
-  field: "isTuition" | "isEnrollment" | "isRegistration" | "isVolunteerHours";
-  confirmed: boolean;
-  onChanged: () => void;
-}) {
-  const [saving, setSaving] = useState(false);
-
-  async function run() {
-    setSaving(true);
-    try {
-      const res = await fetch("/api/admin/registration-progress", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ familyId, yearId, [field]: !confirmed }),
-      });
-      if (!res.ok) {
-        const errBody = await res.json().catch(() => null);
-        throw new Error(errBody?.error ?? `Update failed (${res.status})`);
-      }
-      toast.success(confirmed ? "Marked pending." : "Marked confirmed.");
-      onChanged();
-    } catch (err) {
-      console.error(`[SectionConfirmButton.${field}]`, err);
-      toast.error(err instanceof Error ? err.message : "Couldn't update.");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <Button
-      variant={confirmed ? "outline" : "default"}
-      size="sm"
-      onClick={run}
-      disabled={saving}
-      className={cn(confirmed && "bg-white")}
-    >
-      {saving ? (
-        <Loader2 className="size-3.5 mr-1.5 animate-spin" />
-      ) : confirmed ? (
-        <Undo2 className="size-3.5 mr-1.5" />
-      ) : (
-        <CheckCircle2 className="size-3.5 mr-1.5" />
-      )}
-      {confirmed ? "Reset" : "Mark Confirmed"}
-    </Button>
   );
 }
 
@@ -861,32 +1111,42 @@ function StudentPacketBlock({
   onChanged: () => void;
 }) {
   const [saving, setSaving] = useState(false);
+  const [undoOpen, setUndoOpen] = useState(false);
   const packet = row.packet;
   const hasPacket = packet != null;
+  // Admin verification lives on the per-packet
+  // `registration_student_registration` row — `registrationConfirmed`
+  // bool plus the audit pair `registration_confirmed_admin_time` and
+  // `regisration_admin_confirmed_admin` (typo on the column name
+  // intentional, matches Xano). Re-enrolling students get a fresh
+  // verify state per year since each year creates its own packet.
+  // The detail API surfaces these on the row's `is_verified*` fields
+  // so the UI can stay agnostic about which table they live in.
+  const verified = row.is_verified === true;
+  const verifiedTime = row.is_admin_verified_time ?? null;
+  const verifiedByName = row.is_admin_verified_admin?.trim() || null;
 
-  async function toggleConfirmed() {
+  async function toggleVerified(next: boolean) {
     if (!packet) return;
     setSaving(true);
     try {
       const res = await fetch(`/api/admin/student-registration/${packet.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          registrationConfirmed: !packet.registrationConfirmed,
-        }),
+        body: JSON.stringify({ registrationConfirmed: next }),
       });
       if (!res.ok) {
         const errBody = await res.json().catch(() => null);
         throw new Error(errBody?.error ?? `Update failed (${res.status})`);
       }
       toast.success(
-        packet.registrationConfirmed
-          ? `${row.student_full_name} marked pending.`
-          : `${row.student_full_name} marked confirmed.`
+        next
+          ? `${row.student_full_name} verified.`
+          : `${row.student_full_name} verification cleared.`
       );
       onChanged();
     } catch (err) {
-      console.error("[StudentPacketBlock.toggleConfirmed]", err);
+      console.error("[StudentPacketBlock.toggleVerified]", err);
       toast.error(err instanceof Error ? err.message : "Couldn't update.");
     } finally {
       setSaving(false);
@@ -894,42 +1154,51 @@ function StudentPacketBlock({
   }
 
   return (
-    <div className="rounded-md border bg-muted/10 p-4 space-y-5">
+    <div
+      className={cn(
+        "rounded-md border bg-muted/10 overflow-hidden transition-opacity",
+        // Whole-card mute when admin has verified AND the packet
+        // exists. Drops opacity on the entire student block — header
+        // + body + footer — so the verified state reads as one
+        // settled unit. Footer Undo button stays clickable; opacity
+        // dims it visually but doesn't disable.
+        verified && hasPacket && "opacity-60"
+      )}
+    >
+      <div className="p-4 space-y-5">
       <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
+        <div className="min-w-0 flex items-center gap-2 flex-wrap">
           <p className="text-sm font-semibold truncate">
             {row.student_full_name}
           </p>
-          <p className="text-xs text-muted-foreground">
-            {row.student_grade ? `Grade ${row.student_grade}` : "—"}
-            {row.student_date_of_birth
-              ? ` · DOB ${row.student_date_of_birth}`
-              : ""}
-          </p>
+          {/* Three-state title badge mirroring the section cards
+              elsewhere — green Verified pill when verified, amber
+              Needs Verification pill otherwise. Gives admin a
+              skim-the-page sense of which students are still
+              pending. */}
+          {verified ? (
+            <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-800">
+              <CheckCircle2 className="size-2.5" />
+              Verified
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-amber-800">
+              Needs Verification
+            </span>
+          )}
         </div>
-        {hasPacket ? (
-          <Button
-            variant={packet?.registrationConfirmed ? "outline" : "default"}
-            size="sm"
-            onClick={toggleConfirmed}
-            disabled={saving}
-            className={cn(packet?.registrationConfirmed && "bg-white")}
-          >
-            {saving ? (
-              <Loader2 className="size-3.5 mr-1.5 animate-spin" />
-            ) : packet?.registrationConfirmed ? (
-              <Undo2 className="size-3.5 mr-1.5" />
-            ) : (
-              <CheckCircle2 className="size-3.5 mr-1.5" />
-            )}
-            {packet?.registrationConfirmed ? "Reset" : "Confirm Packet"}
-          </Button>
-        ) : (
-          <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+        {!hasPacket ? (
+          <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground shrink-0">
             Not started
           </span>
-        )}
+        ) : null}
       </div>
+      <p className="text-xs text-muted-foreground">
+        {row.student_grade ? `Grade ${row.student_grade}` : "—"}
+        {row.student_date_of_birth
+          ? ` · DOB ${row.student_date_of_birth}`
+          : ""}
+      </p>
 
       {!hasPacket ? (
         <p className="text-sm text-muted-foreground">
@@ -938,27 +1207,34 @@ function StudentPacketBlock({
         </p>
       ) : (
         <>
-          <SectionGroup title="Sizes">
+          {/* ── Uniform & Activities ──────────────────────────────
+              Mirrors the parent flow's `Uniform & Activities`
+              section header + 3-col grid so the admin view reads
+              as the same form the parent filled out. */}
+          <SectionGroup title="Uniform & Activities">
             <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
               <DisabledField
-                label="Shirt size"
+                label="Shirt Size"
                 value={packet ? formatChoice(packet.shirt_size, SHIRT_SIZES) : ""}
                 required
               />
               <DisabledField
-                label="Pant size"
+                label="Pant Size"
                 value={packet?.pant_size ?? ""}
                 required
               />
               <DisabledField
-                label="Swim level"
+                label="Swim Level"
                 value={packet ? formatChoice(packet.swim_level, SWIM_LEVELS) : ""}
                 required
               />
             </div>
           </SectionGroup>
 
-          <SectionGroup title="Documents">
+          <Separator />
+
+          {/* ── Required Documents ──────────────────────────────── */}
+          <SectionGroup title="Required Documents *">
             <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
               <FilePreviewRow
                 label="Birth Certificate"
@@ -980,6 +1256,14 @@ function StudentPacketBlock({
                 file={packet?.immunization_forms}
                 required
               />
+            </div>
+          </SectionGroup>
+
+          <Separator />
+
+          {/* ── Optional Documents ──────────────────────────────── */}
+          <SectionGroup title="Optional Documents">
+            <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
               <FilePreviewRow label="IEP" file={packet?.iep} />
               <FilePreviewRow label="SSN Card" file={packet?.ssn_card} />
               <FilePreviewRow label="Passport" file={packet?.passport} />
@@ -990,7 +1274,10 @@ function StudentPacketBlock({
             </div>
           </SectionGroup>
 
-          <SectionGroup title="Health">
+          <Separator />
+
+          {/* ── Health & Medical ────────────────────────────────── */}
+          <SectionGroup title="Health & Medical">
             <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
               <DisabledField
                 label="On Medicaid"
@@ -1013,7 +1300,11 @@ function StudentPacketBlock({
                 value={packet?.carry_epi_pen === true ? "Yes" : "No"}
               />
             </div>
-            <div className="mt-3 grid gap-4 grid-cols-1">
+            {/* Medical narrative fields — 2-col on sm+ so the
+                textareas don't stack into a single tall column.
+                Most fields read as "none" / short notes in
+                practice, so two-up scans cleanly. */}
+            <div className="mt-3 grid gap-4 grid-cols-1 sm:grid-cols-2">
               <DisabledTextarea
                 label="Allergies"
                 value={packet?.allergies ?? ""}
@@ -1061,8 +1352,11 @@ function StudentPacketBlock({
             </div>
           </SectionGroup>
 
+          <Separator />
+
+          {/* ── Pickup Permissions ──────────────────────────────── */}
           <SectionGroup title="Pickup Permissions">
-            <div className="grid gap-4 grid-cols-1">
+            <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
               <DisabledTextarea
                 label="Other adults approved for pickup"
                 value={packet?.other_adults_approved_for_pickup ?? ""}
@@ -1073,6 +1367,8 @@ function StudentPacketBlock({
               />
             </div>
           </SectionGroup>
+
+          <Separator />
 
           <SectionGroup title="Liability Waiver">
             <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
@@ -1133,6 +1429,128 @@ function StudentPacketBlock({
           </SectionGroup>
         </>
       )}
+      </div>
+
+      {/* Verify footer — divider + audit caption on left, action
+          on right. Mirrors the SectionShell verify footer pattern
+          so per-student review reads identically to per-section
+          review. Wired to the new `is_verified` flag on the student
+          row (not the per-packet `registrationConfirmed` flag).
+          The Undo button opens a warning modal so the audit stamp
+          can't be wiped accidentally. */}
+      <div className="border-t bg-white px-4 py-3 flex items-center justify-between gap-3">
+        {/* Audit caption slot — skeleton during save so the
+            "Verified by X · 2 hr ago" line doesn't pop on/off as
+            the per-student verify PATCH round-trips. Same pattern
+            as the section-shell footers above. */}
+        {saving ? (
+          <Skeleton className="h-3 w-48" />
+        ) : (
+          <span className="text-xs text-muted-foreground truncate">
+            {verified ? (
+              <>
+                {verifiedByName ? (
+                  <>
+                    Verified by{" "}
+                    <span className="font-medium text-foreground">
+                      {verifiedByName}
+                    </span>
+                  </>
+                ) : (
+                  "Verified"
+                )}
+                {verifiedTime ? (
+                  <span> · {formatNoteTimestamp(verifiedTime)}</span>
+                ) : null}
+              </>
+            ) : null}
+          </span>
+        )}
+        {verified ? (
+          <div className="flex items-center gap-2 shrink-0">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled
+              className="bg-muted text-muted-foreground cursor-default disabled:opacity-100"
+            >
+              <CheckCircle2 className="size-3.5 mr-1.5" />
+              {row.student_full_name} Verified
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setUndoOpen(true)}
+              disabled={saving}
+              className="bg-white"
+            >
+              {saving ? (
+                <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+              ) : (
+                <Undo2 className="size-3.5 mr-1.5" />
+              )}
+              Undo
+            </Button>
+            <AlertDialog open={undoOpen} onOpenChange={setUndoOpen}>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>
+                    Undo verification for {row.student_full_name}?
+                  </AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This clears the admin verification on{" "}
+                    {row.student_full_name}&rsquo;s registration. The
+                    audit stamp (who and when) will be removed and
+                    the student drops back to pending review. You
+                    can re-verify at any time.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel disabled={saving}>
+                    Cancel
+                  </AlertDialogCancel>
+                  <AlertDialogAction
+                    disabled={saving}
+                    className="bg-amber-600 hover:bg-amber-700 text-white"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      toggleVerified(false);
+                      setUndoOpen(false);
+                    }}
+                  >
+                    {saving ? (
+                      <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                    ) : null}
+                    Yes, undo
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          </div>
+        ) : (
+          <Button
+            type="button"
+            variant="default"
+            size="sm"
+            onClick={() => toggleVerified(true)}
+            disabled={saving || !hasPacket}
+            title={
+              hasPacket
+                ? `Verify ${row.student_full_name}'s registration`
+                : "The family hasn't started this student's packet yet."
+            }
+          >
+            {saving ? (
+              <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+            ) : (
+              <CheckCircle2 className="size-3.5 mr-1.5" />
+            )}
+            Verify {row.student_full_name} Registration
+          </Button>
+        )}
+      </div>
     </div>
   );
 }

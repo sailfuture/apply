@@ -96,6 +96,55 @@ export async function PATCH(req: NextRequest) {
     if (key in body) patch[key] = body[key];
   }
 
+  // Auto-unconfirm cascade (Approach B): when the parent flips a
+  // section's `*_completed`, clear the matching admin section-
+  // confirm pair. Admin confirmation represents "I've reviewed the
+  // current state of this section" — if the parent has unlocked +
+  // edited that section's data (which flips `*_completed=false`),
+  // the prior admin review is stale and shouldn't survive.
+  //
+  // Cleared atomically alongside the parent's PATCH so a partial
+  // update can't leave a section confirmed against changed data.
+  // FinAid is intentionally absent since there's no
+  // `financial_aid_admin_confirm` column — the Scholarship
+  // Determination card has its own per-student confirmation flow.
+  // Testing has no `testing_admin_confirm_admin` column on Xano
+  // either; its `adminKey` is null and gets skipped below.
+  const SECTION_CASCADE: Array<{
+    completedKey: string;
+    confirmKey: string;
+    timeKey: string;
+    adminKey: string | null;
+  }> = [
+    {
+      completedKey: "family_completed",
+      confirmKey: "family_admin_confirm",
+      timeKey: "family_admin_confirm_time",
+      adminKey: "family_admin_confirm_admin",
+    },
+    {
+      completedKey: "students_completed",
+      confirmKey: "students_admin_confirm",
+      timeKey: "students_admin_confirm_time",
+      adminKey: "students_admin_confirm_admin",
+    },
+    {
+      completedKey: "testing_completed",
+      confirmKey: "testing_admin_confirm",
+      timeKey: "testing_admin_confirm_time",
+      adminKey: null,
+    },
+  ];
+  for (const pair of SECTION_CASCADE) {
+    if (pair.completedKey in patch) {
+      patch[pair.confirmKey] = false;
+      patch[pair.timeKey] = null;
+      if (pair.adminKey) {
+        patch[pair.adminKey] = "";
+      }
+    }
+  }
+
   const row = await resolveProgress(familyId, yearId);
   const updated = await xano.familyApplicationProgress.update(row.id, patch);
   return NextResponse.json(updated, { status: 200 });

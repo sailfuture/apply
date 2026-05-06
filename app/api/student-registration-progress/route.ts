@@ -103,6 +103,49 @@ export async function PATCH(req: NextRequest) {
     if (key in body) patch[key] = body[key];
   }
 
+  // Auto-unconfirm cascade (Approach B): when the parent flips a
+  // section's parent-completion bool, clear the matching admin
+  // verify pair atomically. Admin verification represents "I've
+  // reviewed the current state of this section" — if the parent
+  // just unlocked + edited the section, the prior admin review is
+  // stale and shouldn't survive.
+  //
+  // Registration packet has no family-level admin verify here (it's
+  // per-student via `registrationConfirmed`), so there's no
+  // `isRegistration` cascade entry.
+  const VERIFY_CASCADE: Array<{
+    completedKey: string;
+    confirmKey: string;
+    timeKey: string;
+    adminKey: string;
+  }> = [
+    {
+      completedKey: "isTuition",
+      confirmKey: "tuition_admin_confirm",
+      timeKey: "tuition_admin_confirm_time",
+      adminKey: "tuition_admin_confirm_admin",
+    },
+    {
+      completedKey: "isEnrollment",
+      confirmKey: "enrollment_admin_confirm",
+      timeKey: "enrollment_admin_confirm_time",
+      adminKey: "enrollment_admin_confirm_admin",
+    },
+    {
+      completedKey: "isVolunteerHours",
+      confirmKey: "volunteer_admin_confirm",
+      timeKey: "volunteer_admin_confirm_time",
+      adminKey: "volunteer_admin_confirm_admin",
+    },
+  ];
+  for (const pair of VERIFY_CASCADE) {
+    if (pair.completedKey in patch) {
+      patch[pair.confirmKey] = false;
+      patch[pair.timeKey] = null;
+      patch[pair.adminKey] = "";
+    }
+  }
+
   const row = await resolveProgress(familyId, yearId);
 
   // Derive `submitted_date`: once all four section bools are true, stamp

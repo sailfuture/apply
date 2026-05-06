@@ -80,6 +80,33 @@ export interface XanoStudent {
   student_state_id: Record<string, unknown>[];
   iep: Record<string, unknown>[];
   ssn_card: Record<string, unknown>[];
+
+  /** Admin-only initial-screening NWEA scores + dates. Recorded
+   *  after the student completes initial testing at the academy.
+   *  Live on the student row (not the per-year application) since
+   *  test scores follow the student across cycles. Optional on the
+   *  type — values are null until admin enters them through the
+   *  Initial Testing card on the family detail page. */
+  initial_screening_nwea_math?: number | null;
+  initial_screening_nwea_reading?: number | null;
+  initial_screening_nwea_math_date?: string | null;
+  initial_screening_nwea_reading_date?: string | null;
+
+  /** Admin verification flag for the student's registration packet.
+   *  Renamed from the per-packet `registrationConfirmed` so the
+   *  audit lives on the student (one source of truth across
+   *  multiple year packets). Verify Student Name Registration
+   *  button on the family registration detail page flips this. */
+  is_verified?: boolean;
+  /** Timestamp when admin verified the student. */
+  is_admin_verified_time?: number | null;
+  /** Display name of the admin who verified the student. */
+  is_admin_verified_admin?: string;
+  /** Last-edited timestamp on the student row. Bumped whenever any
+   *  admin or parent write changes the row; surfaced on the admin
+   *  enrolled-detail page so admin can see at a glance how recent
+   *  the data is. */
+  last_edited_time?: number | null;
 }
 
 export interface XanoApplication {
@@ -129,6 +156,22 @@ export interface XanoApplication {
   test_scores: Record<string, unknown> | null;
   nwea_testing_complete: boolean;
   nwea_testing_scheduled: boolean;
+  /** Admin-only NWEA RIT score for the math screening, recorded
+   *  after the student completes initial testing at the academy.
+   *  Null until admin enters it from the Initial Testing card on
+   *  the family detail page. Parents never see or write this
+   *  field — it's gated to the admin allowlist. */
+  initial_screening_nwea_math?: number | null;
+  /** Admin-only NWEA RIT score for the reading screening. Same
+   *  gating as `initial_screening_nwea_math`. */
+  initial_screening_nwea_reading?: number | null;
+  /** Date the math screening was administered (ISO `YYYY-MM-DD`).
+   *  Stored as a string so a missing time component doesn't drift
+   *  with timezone math. */
+  initial_screening_nwea_math_date?: string | null;
+  /** Date the reading screening was administered. Same shape as
+   *  `initial_screening_nwea_math_date`. */
+  initial_screening_nwea_reading_date?: string | null;
   last_grade_completed: string;
   current_grade: string;
   isSubmitted: boolean;
@@ -146,7 +189,17 @@ export interface XanoApplication {
    *  flagged optional because legacy rows predate the column and treat
    *  missing/undefined as "active by default" downstream. */
   isActive?: boolean;
-  opportunity_scholarship_award_amount: number;
+  /**
+   * Family's annual out-of-pocket toward tuition for this student.
+   * The Opportunity Scholarship covers everything between SUFS and
+   * this amount. Stored as a number for non-SNAP families; gets
+   * PATCH'd to `null` once admin confirms SNAP benefits, since SNAP
+   * families' tuition + transport are auto-rebated by the
+   * Opportunity Scholarship and admin shouldn't see a stale dollar
+   * figure on the row. Optional/null on the type so the SNAP
+   * cascade can clear it.
+   */
+  opportunity_scholarship_award_amount: number | null;
   // PandaDoc enrollment-agreement state. Liability-waiver fields used
   // to live here too but moved to `registration_student_registration`
   // (the per-student packet) — those fields are no longer on this
@@ -202,6 +255,18 @@ export interface XanoFamilyPayment {
   signature_data: Record<string, unknown> | null;
   registration_fee_waiver_id: number | null;
   monthly_tuition_payment: number;
+  /** Total annual admin fees the family owes for the year — `$500 × N`
+   *  for N active students. Snapshotted at family approval time so the
+   *  billing surfaces don't have to recompute from per-student rows.
+   *  Optional on the type because legacy rows pre-date the column. */
+  annual_fee_total?: number | null;
+  /** Total annual transportation the family owes for the year. Sum of
+   *  per-student transport fees for students whose
+   *  `is_bus_transportation=true`. Set to `null` for SNAP families
+   *  (transportation is waived for them) so downstream consumers can
+   *  render N/A rather than `$0` and avoid charging in error.
+   *  Optional on the type because legacy rows pre-date the column. */
+  transportation_total?: number | null;
   tuition_reviewed: boolean;
   tuition_reviewed_at: number | null;
   tuition_reviewed_by: string;
@@ -726,6 +791,32 @@ export interface XanoFamilyApplicationProgress {
    *  legacy rows have it null; the archive UI requires non-empty
    *  text on write. */
   reason_for_archive?: string | null;
+
+  // ── Admin section-confirm pairs ────────────────────────────────
+  // Each section has up to three columns: a bool flag, an audit
+  // timestamp, and (for Family + Students only) an audit admin name
+  // string. Testing intentionally omits the admin string column —
+  // there's no `testing_admin_confirm_admin` on Xano, so we skip it.
+  //
+  // Admin clicks `Confirm <Section>` on the apply-flow detail page;
+  // we flip `*_admin_confirm` true, stamp `Date.now()` on
+  // `*_admin_confirm_time`, and stamp the admin's display name on
+  // `*_admin_confirm_admin`. Approach B: when the parent edits any
+  // data belonging to that section, the bool auto-clears back to
+  // false, time → null, admin → "".
+  //
+  // Financial Aid is intentionally absent — the Scholarship
+  // Determination card already has its own per-student confirmation
+  // flow (`confirmed_scholarship` on each app), so a section-level
+  // duplicate would be redundant.
+  family_admin_confirm?: boolean;
+  family_admin_confirm_time?: number | null;
+  family_admin_confirm_admin?: string;
+  students_admin_confirm?: boolean;
+  students_admin_confirm_time?: number | null;
+  students_admin_confirm_admin?: string;
+  testing_admin_confirm?: boolean;
+  testing_admin_confirm_time?: number | null;
 }
 
 /**
@@ -847,6 +938,33 @@ export interface XanoStudentRegistrationProgress {
    *  the durable bool the enrolled-family dashboard reads to decide whether
    *  to render the active registration flow or the post-enrollment view. */
   isSubmitted: boolean;
+
+  // ── Admin section-verify pairs ─────────────────────────────────
+  // Three columns per section: a bool flag + audit timestamp + audit
+  // admin name string. Admin clicks "Verify <Section>" on the
+  // registration detail page — we flip the bool true, stamp
+  // `Date.now()` on `*_admin_confirm_time`, and stamp the admin's
+  // display name on `*_admin_confirm_admin`. Approach B: when the
+  // parent edits any data belonging to that section (i.e. flips the
+  // matching `isXxx` parent-completion bool back to false), the
+  // verify pair auto-clears.
+  //
+  // Mirrors the audit pattern on
+  // `registration_family_application_progress` for the apply-flow
+  // section confirms. Three sections track admin verification on
+  // this row: Tuition, Enrollment, Volunteer Hours. The Registration
+  // Packet section's confirmation is per-student (lives on
+  // `registration_student_registration.registrationConfirmed`), so
+  // there's no `registration_admin_confirm*` triplet here.
+  tuition_admin_confirm?: boolean;
+  tuition_admin_confirm_time?: number | null;
+  tuition_admin_confirm_admin?: string;
+  enrollment_admin_confirm?: boolean;
+  enrollment_admin_confirm_time?: number | null;
+  enrollment_admin_confirm_admin?: string;
+  volunteer_admin_confirm?: boolean;
+  volunteer_admin_confirm_time?: number | null;
+  volunteer_admin_confirm_admin?: string;
 }
 
 export interface XanoEmergencyContact {
@@ -911,8 +1029,24 @@ export interface XanoStudentRegistration {
   /** Admin-set flag — flips true when the admissions team has reviewed
    *  and confirmed this student's registration. The enrolled-family
    *  dashboard only unlocks once every student on the family for a given
-   *  year has this set. */
+   *  year has this set.
+   *
+   *  Note: the canonical "is this student verified?" flag now lives on
+   *  the student row as `is_verified` (one source of truth across
+   *  multi-year packets). This per-packet flag stays for backward
+   *  compatibility with legacy data + parent-side dashboard reads. */
   registrationConfirmed: boolean;
+  /** Audit timestamp + admin name for `registrationConfirmed`.
+   *  Optional because the columns were added after launch — note the
+   *  `regisration_*` typo on the second column matches the live Xano
+   *  schema and shouldn't be "corrected" client-side. */
+  registration_confirmed_admin_time?: number | null;
+  regisration_admin_confirmed_admin?: string;
+  /** Last-edited timestamp on the packet row. Bumped whenever any
+   *  admin or parent write changes the row; useful for audit /
+   *  staleness checks alongside the parallel `last_edited_time` on
+   *  the student row. */
+  last_edited_time?: number | null;
 }
 
 const pendingEnsure = new Map<string, Promise<XanoParent>>();
@@ -1363,6 +1497,12 @@ export const xano = {
     },
 
     async getByFamilyId(familyId: number): Promise<XanoStudent[]> {
+      // Sorted by id ASC = creation order so a newly-added student
+      // lands at the end of the list rather than floating to the
+      // top. Matches the parallel sort on `applications.getByFamilyId`
+      // — the students page indexes both arrays by student id, so
+      // their orders need to agree for the rendered list to look
+      // right.
       try {
         const res = await fetch(
           `${getBaseUrl()}/registration_students?registration_families_id=${familyId}`,
@@ -1370,14 +1510,20 @@ export const xano = {
         );
         if (!res.ok) {
           const all = await this.getAll();
-          return all.filter((s) => s.registration_families_id === familyId && !s.isArchived);
+          return all
+            .filter((s) => s.registration_families_id === familyId && !s.isArchived)
+            .sort((a, b) => a.id - b.id);
         }
         const results: XanoStudent[] = await res.json();
         const items = Array.isArray(results) ? results : [];
-        return items.filter((s) => s.registration_families_id === familyId && !s.isArchived);
+        return items
+          .filter((s) => s.registration_families_id === familyId && !s.isArchived)
+          .sort((a, b) => a.id - b.id);
       } catch {
         const all = await this.getAll();
-        return all.filter((s) => s.registration_families_id === familyId && !s.isArchived);
+        return all
+          .filter((s) => s.registration_families_id === familyId && !s.isArchived)
+          .sort((a, b) => a.id - b.id);
       }
     },
   },
@@ -1455,6 +1601,14 @@ export const xano = {
     },
 
     async getByFamilyId(familyId: number): Promise<XanoApplication[]> {
+      // Result is sorted by id ASC so a newly-added student lands at
+      // the END of the list, not the top — matches the parent's
+      // mental model on the apply-flow students page ("the kid I
+      // just added is the last one"). Xano's filtered GETs don't
+      // guarantee a deterministic order, so without this sort the
+      // students page (and other surfaces that index `applications[0]`
+      // as "the family's first student", like the waiver flow) would
+      // behave inconsistently across reloads.
       try {
         const res = await fetch(
           `${getBaseUrl()}/registration_application?registration_families_id=${familyId}`,
@@ -1462,13 +1616,19 @@ export const xano = {
         );
         if (!res.ok) {
           const all = await this.getAll();
-          return all.filter((a) => a.registration_families_id === familyId);
+          return all
+            .filter((a) => a.registration_families_id === familyId)
+            .sort((a, b) => a.id - b.id);
         }
         const results: XanoApplication[] = await res.json();
-        return Array.isArray(results) ? results : [];
+        return Array.isArray(results)
+          ? results.slice().sort((a, b) => a.id - b.id)
+          : [];
       } catch {
         const all = await this.getAll();
-        return all.filter((a) => a.registration_families_id === familyId);
+        return all
+          .filter((a) => a.registration_families_id === familyId)
+          .sort((a, b) => a.id - b.id);
       }
     },
 
@@ -2374,10 +2534,19 @@ export const xano = {
      * Registration-phase notes only, scoped to a single (family,
      * year). Backed by the dedicated Xano query
      * `registration_admin_notes_by_registration` — server-side filter
-     * narrows to notes tagged with this family/year's
+     * is supposed to narrow to notes tagged with this family/year's
      * `registration_student_registration_progress_id`, which is the
      * FK the registration detail page stamps on every note it
      * composes.
+     *
+     * Belt-and-braces filter on the client too: we only keep notes
+     * whose `registration_student_registration_progress_id` is
+     * actually set (non-null + non-zero). Without this guard, if the
+     * Xano endpoint returns broadly (e.g. all family/year notes
+     * regardless of FK), apply-phase notes would leak into the
+     * registration detail page's drawer. The frontend filter makes
+     * the contract explicit: registration drawer = only notes
+     * tagged for the registration phase.
      *
      * Used by the family registration detail page's notes drawer so
      * admin only sees registration-phase comms in that surface, not
@@ -2407,12 +2576,17 @@ export const xano = {
           return [];
         }
         const items = await res.json();
-        return Array.isArray(items)
-          ? items.slice().sort(
-              (a: XanoAdminNote, b: XanoAdminNote) =>
-                b.created_at - a.created_at
-            )
-          : [];
+        if (!Array.isArray(items)) return [];
+        return items
+          .filter((n: XanoAdminNote) => {
+            const id = n.registration_student_registration_progress_id;
+            return id != null && id !== 0;
+          })
+          .slice()
+          .sort(
+            (a: XanoAdminNote, b: XanoAdminNote) =>
+              b.created_at - a.created_at
+          );
       } catch (err) {
         console.error(
           `[xano.adminNotes.getByFamilyAndYearForRegistration] threw for family=${familyId} year=${yearId}:`,

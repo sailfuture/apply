@@ -20,18 +20,30 @@ import { xano } from "@/lib/xano";
  *   - `familyId` (required)
  *   - `yearId` (required)
  *   - `monthly_tuition_payment` (required) — the family's monthly
- *     total for the year, divided by 12 across all student
- *     applications. Includes tuition + transport + admin fee on
- *     the matrix path; SNAP path uses (tuition + admin fee − SUFS)
- *     with transport waived.
+ *     total for the year. Equals `(annual_fee_total + sum of
+ *     per-student opportunity_scholarship_award_amount + transport
+ *     where applicable) / 12`. SNAP-confirmed families collapse to
+ *     `annual_fee_total / 12` since their tuition + transport are
+ *     auto-rebated by the Opportunity Scholarship.
+ *   - `annual_fee_total` (optional) — total admin/annual fees for
+ *     the year, typically `$500 × N students`. Snapshotted alongside
+ *     the monthly figure so downstream callers can break the
+ *     receipt back into its line items without re-deriving from per
+ *     student rows.
+ *   - `transportation_total` (optional) — total transportation the
+ *     family owes for the year. Pass `null` (explicit) for SNAP
+ *     families to indicate transport is waived; pass a number for
+ *     non-SNAP families (sum of per-student transport for students
+ *     whose `is_bus_transportation=true`). Pass `0` (or omit) when
+ *     no students elected bus transport but the family is not SNAP.
  *   - `isFamilyAccepted` (optional, defaults to true) — usually
  *     called from the Approve flow so this is `true`; left
  *     pluggable for future surfaces that snapshot before approval.
  *
  * Strategy:
  *   - If a row already exists for (family, year), PATCH the
- *     monthly amount + `isFamilyAccepted`.
- *   - Otherwise CREATE a row with the captured amount.
+ *     amount fields + `isFamilyAccepted`.
+ *   - Otherwise CREATE a row with the captured amounts.
  *
  * Other columns on the row (signature, enrollment_agreement_*,
  * tuition_reviewed, etc.) are owned by downstream surfaces and
@@ -65,6 +77,48 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Optional snapshots — null means "explicitly null" (e.g.
+    // SNAP transport waiver), undefined means "don't change". We
+    // distinguish the two so passing `transportation_total: null`
+    // from the client clears the column rather than being silently
+    // dropped.
+    const hasAnnualFeeTotal =
+      body && Object.prototype.hasOwnProperty.call(body, "annual_fee_total");
+    const annualFeeTotal: number | null | undefined = hasAnnualFeeTotal
+      ? body.annual_fee_total === null
+        ? null
+        : Number(body.annual_fee_total)
+      : undefined;
+    if (
+      hasAnnualFeeTotal &&
+      annualFeeTotal !== null &&
+      !Number.isFinite(annualFeeTotal as number)
+    ) {
+      return NextResponse.json(
+        { error: "annual_fee_total must be a number or null" },
+        { status: 400 }
+      );
+    }
+
+    const hasTransportTotal =
+      body &&
+      Object.prototype.hasOwnProperty.call(body, "transportation_total");
+    const transportationTotal: number | null | undefined = hasTransportTotal
+      ? body.transportation_total === null
+        ? null
+        : Number(body.transportation_total)
+      : undefined;
+    if (
+      hasTransportTotal &&
+      transportationTotal !== null &&
+      !Number.isFinite(transportationTotal as number)
+    ) {
+      return NextResponse.json(
+        { error: "transportation_total must be a number or null" },
+        { status: 400 }
+      );
+    }
+
     const isFamilyAccepted =
       typeof body?.isFamilyAccepted === "boolean"
         ? body.isFamilyAccepted
@@ -75,10 +129,17 @@ export async function POST(req: NextRequest) {
       yearId
     );
     if (existing) {
-      const updated = await xano.familyPayments.update(existing.id, {
+      const patch: Record<string, unknown> = {
         monthly_tuition_payment: monthly,
         isFamilyAccepted,
-      });
+      };
+      if (annualFeeTotal !== undefined) {
+        patch.annual_fee_total = annualFeeTotal;
+      }
+      if (transportationTotal !== undefined) {
+        patch.transportation_total = transportationTotal;
+      }
+      const updated = await xano.familyPayments.update(existing.id, patch);
       return NextResponse.json(updated);
     }
 
@@ -91,6 +152,10 @@ export async function POST(req: NextRequest) {
       signature_data: null,
       registration_fee_waiver_id: null,
       monthly_tuition_payment: monthly,
+      annual_fee_total:
+        annualFeeTotal === undefined ? null : annualFeeTotal,
+      transportation_total:
+        transportationTotal === undefined ? null : transportationTotal,
       tuition_reviewed: false,
       tuition_reviewed_at: null,
       tuition_reviewed_by: "",

@@ -214,7 +214,15 @@ export function DocumentsToReviewBlock({
           scholarship path.
         </p>
       ) : (
-        <Table className="text-sm">
+        // `table-fixed` is critical here — without it, the long
+        // file names in the File(s) column (e.g. PandaDoc-style
+        // screencapture URLs) push the table wider than the
+        // container and force horizontal scroll. With fixed
+        // layout, every column respects its declared width and
+        // the inner truncate styles inside <FileLink> can clip
+        // the names with an ellipsis. The non-px columns add up
+        // to ~43%, leaving roughly half the row for files.
+        <Table className="text-sm table-fixed">
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead className="w-[28%] text-[10px] uppercase tracking-wider text-muted-foreground">
@@ -815,23 +823,36 @@ function FileLink({
     // Match the Document column's body text size — both `text-sm`
     // — so a row's left and middle cells read as one unit instead
     // of competing fonts.
-    <li className="flex items-center gap-2 text-sm">
+    //
+    // `min-w-0` is threaded through every flex level (li, a, the
+    // file-name span) because flex items default to
+    // `min-width: auto` which lets long text overflow the parent.
+    // Without min-w-0 the truncate classes are no-ops — the link
+    // expands the table cell instead of clipping. The size suffix
+    // is `shrink-0 whitespace-nowrap` so it stays readable while
+    // the filename does the truncating.
+    <li className="flex items-center gap-2 text-sm min-w-0">
       <FileText className="size-3.5 shrink-0 text-muted-foreground" />
       {href ? (
         <a
           href={href}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-foreground underline-offset-2 hover:underline truncate inline-flex items-center gap-1"
+          title={name}
+          className="text-foreground underline-offset-2 hover:underline inline-flex items-center gap-1 min-w-0 flex-1"
         >
-          <span className="truncate">{name}</span>
+          <span className="truncate min-w-0">{name}</span>
           <ExternalLink className="size-3 shrink-0 text-muted-foreground" />
         </a>
       ) : (
-        <span className="truncate">{name}</span>
+        <span className="truncate min-w-0 flex-1" title={name}>
+          {name}
+        </span>
       )}
       {sizeKb ? (
-        <span className="text-xs text-muted-foreground">· {sizeKb}</span>
+        <span className="text-xs text-muted-foreground shrink-0 whitespace-nowrap">
+          · {sizeKb}
+        </span>
       ) : null}
     </li>
   );

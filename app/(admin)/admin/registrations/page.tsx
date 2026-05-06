@@ -20,6 +20,13 @@ import {
 } from "@/components/ui/select";
 import { adminFetcher } from "@/lib/admin-fetcher";
 
+/**
+ * Per-student row shape returned by the registrations API. Multiple
+ * students from the same family share family + packet fields (the
+ * post-acceptance packet booleans live on the family-level
+ * `registration_student_registration_progress` row), so we collapse
+ * them to one family row on the client below.
+ */
 interface RegStudentRow {
   id: number;
   application_id: number;
@@ -45,32 +52,123 @@ interface RegStudentRow {
   last_edited: number | null;
   enrollment_agreement_status: string;
   is_enrollment_agreement_signed: boolean;
+}
+
+/**
+ * Aggregated per-family row that drives the table on this page. Built
+ * by collapsing every accepted-student row for the same family into
+ * one. The packet booleans + agreement state are family-level (every
+ * student row in the same family carries identical values), so we
+ * pick them off the first row. `students` keeps a list of names so
+ * the row's "Students" cell can show the cohort at a glance without
+ * a sub-list.
+ */
+interface RegFamilyRow {
+  /** Stable row id — `family_id` is unique within a year, so this
+   *  doubles as the React key. */
+  id: number;
+  family_id: number;
+  year_id: number;
+  family_name: string;
+  primary_name: string;
+  primary_email: string;
+  /** Number of accepted students in this family for the year. */
+  student_count: number;
+  /** Comma-joined display string ("Maxual Thompson, Thomas Haugh"),
+   *  truncated by the cell's `truncate` class. */
+  student_names: string;
+  isTuition: boolean;
+  isEnrollment: boolean;
+  isRegistration: boolean;
+  isVolunteerHours: boolean;
+  sections_complete: number;
+  sections_total: number;
+  registration_submitted: boolean;
+  registration_submitted_date: number | null;
+  last_edited: number | null;
+  enrollment_agreement_status: string;
+  is_enrollment_agreement_signed: boolean;
+  /** Index signature so the row matches `DataTable`'s
+   *  `<T extends Record<string, unknown>>` constraint without a cast.
+   *  Mirrors the pattern used on the Applications + Enrolled pages. */
   [key: string]: unknown;
 }
 
 type ProgressFilter = "all" | "submitted" | "in_progress" | "not_started";
 
 const FILTER_LABEL: Record<ProgressFilter, string> = {
-  all: "All students",
+  all: "All families",
   submitted: "Submitted",
   in_progress: "In progress",
   not_started: "Not started",
 };
 
-function deriveFilter(row: RegStudentRow): ProgressFilter {
+function deriveFilter(row: RegFamilyRow): ProgressFilter {
   if (row.registration_submitted) return "submitted";
   if (row.sections_complete > 0) return "in_progress";
   return "not_started";
 }
 
 /**
- * Admin Registrations list — one row per accepted student for the
- * selected year. Three tables (Submitted / In Progress / Not Started)
- * with shared column widths so the headers line up across groups.
+ * Fold per-student rows into per-family rows. Every student in the
+ * same family shares the packet booleans + agreement state (those
+ * live on the family-level progress row), so we read them off the
+ * first match and just append student names + bump the count.
  *
- * Cells are deliberately single-line + monochrome. Click into a row
- * to land on the family detail page where post-acceptance details
- * live.
+ * Sort: alphabetical by family name. The outer page resorts within
+ * each progress group anyway, so this primary sort is just for
+ * deterministic order before grouping.
+ */
+function aggregateByFamily(rows: RegStudentRow[]): RegFamilyRow[] {
+  const byFamily = new Map<number, RegFamilyRow>();
+  for (const r of rows) {
+    const existing = byFamily.get(r.family_id);
+    if (existing) {
+      existing.student_count += 1;
+      existing.student_names = [
+        existing.student_names,
+        r.student_full_name,
+      ]
+        .filter(Boolean)
+        .join(", ");
+      continue;
+    }
+    byFamily.set(r.family_id, {
+      id: r.family_id,
+      family_id: r.family_id,
+      year_id: r.year_id,
+      family_name: r.family_name,
+      primary_name: r.primary_name,
+      primary_email: r.primary_email,
+      student_count: 1,
+      student_names: r.student_full_name,
+      isTuition: r.isTuition,
+      isEnrollment: r.isEnrollment,
+      isRegistration: r.isRegistration,
+      isVolunteerHours: r.isVolunteerHours,
+      sections_complete: r.sections_complete,
+      sections_total: r.sections_total,
+      registration_submitted: r.registration_submitted,
+      registration_submitted_date: r.registration_submitted_date,
+      last_edited: r.last_edited,
+      enrollment_agreement_status: r.enrollment_agreement_status,
+      is_enrollment_agreement_signed: r.is_enrollment_agreement_signed,
+    });
+  }
+  return Array.from(byFamily.values()).sort((a, b) =>
+    a.family_name.localeCompare(b.family_name)
+  );
+}
+
+/**
+ * Admin Registrations list — one row per family with at least one
+ * accepted student for the selected year. Three tables (Submitted /
+ * In Progress / Not Started) with shared column widths so the
+ * headers line up across groups.
+ *
+ * Per-student confirmation happens after click-through to the
+ * family registration detail page (the four section cards there;
+ * Registration Packet has the per-student Mark Confirmed buttons).
  */
 export default function RegistrationsPage() {
   const router = useRouter();
@@ -83,12 +181,15 @@ export default function RegistrationsPage() {
     adminFetcher
   );
 
-  const all = useMemo(() => (Array.isArray(data) ? data : []), [data]);
+  const all = useMemo(
+    () => aggregateByFamily(Array.isArray(data) ? data : []),
+    [data]
+  );
 
   const groups = useMemo(() => {
-    const submitted: RegStudentRow[] = [];
-    const inProgress: RegStudentRow[] = [];
-    const notStarted: RegStudentRow[] = [];
+    const submitted: RegFamilyRow[] = [];
+    const inProgress: RegFamilyRow[] = [];
+    const notStarted: RegFamilyRow[] = [];
     for (const r of all) {
       const f = deriveFilter(r);
       if (f === "submitted") submitted.push(r);
@@ -117,37 +218,16 @@ export default function RegistrationsPage() {
   }, [all, groups]);
 
   // Shared column shape across all three tables so widths line up
-  // vertically — see the matching pattern on the Applications page.
-  const columns: ColumnDef<RegStudentRow>[] = [
-    {
-      key: "student_full_name",
-      header: "Student",
-      sortable: true,
-      searchable: true,
-      width: "w-[24%]",
-      render: (row) => (
-        <span className="block truncate font-medium">
-          {row.student_full_name}
-        </span>
-      ),
-    },
-    {
-      key: "student_grade",
-      header: "Grade",
-      sortable: true,
-      width: "w-[8%]",
-      render: (row) => (
-        <span className="block truncate">{row.student_grade || "—"}</span>
-      ),
-    },
+  // vertically — same pattern the Applications page uses.
+  const columns: ColumnDef<RegFamilyRow>[] = [
     {
       key: "family_name",
       header: "Family",
       sortable: true,
       searchable: true,
-      width: "w-[18%]",
+      width: "w-[22%]",
       render: (row) => (
-        <span className="block truncate">{row.family_name}</span>
+        <span className="block truncate font-medium">{row.family_name}</span>
       ),
     },
     {
@@ -155,7 +235,7 @@ export default function RegistrationsPage() {
       header: "Primary Contact",
       sortable: true,
       searchable: true,
-      width: "w-[20%]",
+      width: "w-[22%]",
       render: (row) => (
         <span className="block truncate">
           {row.primary_email || row.primary_name || "—"}
@@ -163,10 +243,27 @@ export default function RegistrationsPage() {
       ),
     },
     {
+      key: "student_names",
+      header: "Students",
+      sortable: true,
+      searchable: true,
+      width: "w-[28%]",
+      render: (row) => (
+        <span className="inline-flex items-center gap-2 min-w-0 max-w-full">
+          <span className="text-xs tabular-nums text-muted-foreground shrink-0">
+            {row.student_count}
+          </span>
+          <span className="block truncate" title={row.student_names}>
+            {row.student_names || "—"}
+          </span>
+        </span>
+      ),
+    },
+    {
       key: "sections_complete",
       header: "Packet",
       sortable: true,
-      width: "w-[10%]",
+      width: "w-[12%]",
       render: (row) => (
         <span className="inline-flex items-center gap-2">
           <span className="text-xs tabular-nums text-muted-foreground">
@@ -194,10 +291,6 @@ export default function RegistrationsPage() {
         );
       },
     },
-    // Status column was removed — the surrounding section card already
-    // names the bucket ("SUBMITTED", "IN PROGRESS", "NOT STARTED"), so
-    // re-stamping every row with the same label is redundant noise.
-    // The packet-section dots above carry the per-row nuance.
     {
       key: "id",
       header: "",
@@ -210,7 +303,7 @@ export default function RegistrationsPage() {
   ];
 
   // True empty state — neither loading nor an error, year is selected,
-  // but there are zero accepted students for the year. Shown ONCE
+  // but there are zero accepted families for the year. Shown ONCE
   // (not per-group) since rendering three "no rows" placeholders
   // adds noise.
   const showEmptyState =
@@ -222,10 +315,10 @@ export default function RegistrationsPage() {
         <div>
           <h1 className="text-2xl font-bold">Registrations</h1>
           <p className="text-sm text-muted-foreground">
-            One row per student who&rsquo;s been accepted for the
-            selected academic year. Click into a row to land on the
-            family detail page where post-acceptance packets and
-            decision details live.
+            One row per family with at least one accepted student for
+            the selected year. Click into a row to land on the family
+            detail page where post-acceptance packets and per-student
+            confirmation live.
           </p>
         </div>
         <Select
@@ -314,10 +407,10 @@ export default function RegistrationsPage() {
 }
 
 /**
- * Shown when no students are accepted for the year yet. A registration
- * row only exists once an admin flips a per-student `isAccepted`, so
- * this state is "no acceptance decisions made yet" — the action the
- * admin needs to take is over on the Applications page.
+ * Shown when no families are accepted for the year yet. A registration
+ * row only exists once an admin Approves a family, so this state is
+ * "no acceptance decisions made yet" — the action the admin needs to
+ * take is over on the Applications page.
  */
 function RegistrationsEmptyState() {
   return (
@@ -328,9 +421,10 @@ function RegistrationsEmptyState() {
         </div>
         <h3 className="text-base font-semibold">No registrations yet</h3>
         <p className="mt-1 text-sm text-muted-foreground max-w-md mx-auto">
-          A student appears here once they&rsquo;ve been accepted for
-          this academic year. Head to <strong>Applications</strong> to
-          review submitted apps and accept families.
+          A family appears here once at least one student has been
+          accepted for this academic year. Head to{" "}
+          <strong>Applications</strong> to review submitted apps and
+          accept families.
         </p>
       </CardContent>
     </Card>
@@ -348,11 +442,11 @@ function RegistrationsGroup({
 }: {
   title: string;
   description: string;
-  rows: RegStudentRow[];
+  rows: RegFamilyRow[];
   isLoading: boolean;
   error: unknown;
-  columns: ColumnDef<RegStudentRow>[];
-  onRowClick: (row: RegStudentRow) => void;
+  columns: ColumnDef<RegFamilyRow>[];
+  onRowClick: (row: RegFamilyRow) => void;
 }) {
   if (!isLoading && !error && rows.length === 0) return null;
   return (
@@ -369,7 +463,7 @@ function RegistrationsGroup({
         </div>
       </CardHeader>
       <CardContent className="p-4 bg-white">
-        <DataTable<RegStudentRow>
+        <DataTable<RegFamilyRow>
           columns={columns}
           data={rows}
           isLoading={isLoading}
@@ -387,7 +481,7 @@ function RegistrationsGroup({
  * matches the Applications page section pills; everything else stays
  * monochrome.
  */
-function SectionDots({ row }: { row: RegStudentRow }) {
+function SectionDots({ row }: { row: RegFamilyRow }) {
   const sections = [
     { key: "tuition", complete: row.isTuition, label: "Tuition" },
     {

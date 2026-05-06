@@ -16,14 +16,67 @@ import { formatRelativeShort } from "@/lib/format-note-time";
 import type { EnrolledStudentRow } from "@/app/api/admin/enrolled/route";
 
 /**
+ * Order grades in the natural school sequence rather than
+ * alphabetical. Numeric grades sort lowest-first; non-numeric
+ * labels (e.g. "K", "Pre-K") drop to the end alphabetically — they
+ * shouldn't appear in the SailFuture cohort but the fallback keeps
+ * unexpected values rendering instead of crashing the sort.
+ */
+function gradeSortKey(grade: string): [number, string] {
+  const trimmed = (grade ?? "").trim();
+  if (!trimmed) return [Number.MAX_SAFE_INTEGER, "zz"];
+  const n = Number(trimmed);
+  if (Number.isFinite(n)) return [n, ""];
+  return [Number.MAX_SAFE_INTEGER - 1, trimmed.toLowerCase()];
+}
+
+/**
+ * Group enrolled students by their incoming grade level so admin
+ * can scan cohort sizes and per-grade rosters at a glance. Returns
+ * an ordered array (not a Map) so React render order is stable —
+ * grouped lowest grade → highest, with unknown / blank grades at
+ * the bottom under "No grade".
+ */
+function groupByGrade(
+  rows: EnrolledStudentRow[]
+): Array<{ grade: string; rows: EnrolledStudentRow[] }> {
+  const buckets = new Map<string, EnrolledStudentRow[]>();
+  for (const r of rows) {
+    const key = (r.student_grade ?? "").trim() || "—";
+    const arr = buckets.get(key) ?? [];
+    arr.push(r);
+    buckets.set(key, arr);
+  }
+  return Array.from(buckets.entries())
+    .map(([grade, rs]) => ({
+      grade,
+      // Within each grade, alphabetical by last name then first name
+      // so the roster reads like a class list.
+      rows: rs.slice().sort((a, b) => {
+        const last = a.student_last_name.localeCompare(b.student_last_name);
+        if (last !== 0) return last;
+        return a.student_first_name.localeCompare(b.student_first_name);
+      }),
+    }))
+    .sort((a, b) => {
+      const [aNum, aStr] = gradeSortKey(a.grade);
+      const [bNum, bStr] = gradeSortKey(b.grade);
+      if (aNum !== bNum) return aNum - bNum;
+      return aStr.localeCompare(bStr);
+    });
+}
+
+/**
  * Admin Enrolled Students list — one row per student whose
  * registration packet has been admin-confirmed
  * (`registrationConfirmed=true`) for the selected academic year.
  *
- * Single sortable / searchable table. No grouping — once a student
- * lands here they're enrolled, full stop. Click into a row to land
- * on the family registration detail page where admin can re-open the
- * packet to view confirmations or reset state.
+ * Grouped by incoming grade level so admin can scan cohort sizes
+ * at a glance. Within each grade, students are ordered by last +
+ * first name (class-list style).
+ *
+ * Click into a row to land on the per-student detail page where
+ * admin can review only that student's information.
  *
  * Data source: `registration_student_registration` packets filtered
  * by `registrationConfirmed=true` for the year. We don't maintain a
@@ -41,14 +94,19 @@ export default function EnrolledStudentsPage() {
   );
 
   const rows = useMemo(() => (Array.isArray(data) ? data : []), [data]);
+  const grouped = useMemo(() => groupByGrade(rows), [rows]);
 
+  // Shared column shape across all grade groups so widths line up
+  // vertically. `student_grade` column was dropped — the grade lives
+  // in the group header now, and repeating it on every row was
+  // redundant noise.
   const columns: ColumnDef<EnrolledStudentRow>[] = [
     {
       key: "student_full_name",
       header: "Student",
       sortable: true,
       searchable: true,
-      width: "w-[24%]",
+      width: "w-[28%]",
       render: (row) => (
         <span className="block truncate font-medium">
           {row.student_full_name}
@@ -56,20 +114,11 @@ export default function EnrolledStudentsPage() {
       ),
     },
     {
-      key: "student_grade",
-      header: "Grade",
-      sortable: true,
-      width: "w-[8%]",
-      render: (row) => (
-        <span className="block truncate">{row.student_grade || "—"}</span>
-      ),
-    },
-    {
       key: "family_name",
       header: "Family",
       sortable: true,
       searchable: true,
-      width: "w-[20%]",
+      width: "w-[22%]",
       render: (row) => (
         <span className="block truncate">{row.family_name}</span>
       ),
@@ -79,7 +128,7 @@ export default function EnrolledStudentsPage() {
       header: "Primary Contact",
       sortable: true,
       searchable: true,
-      width: "w-[22%]",
+      width: "w-[24%]",
       render: (row) => (
         <span className="block truncate">
           {row.primary_email || row.primary_name || "—"}
@@ -92,9 +141,8 @@ export default function EnrolledStudentsPage() {
       sortable: true,
       width: "w-[10%]",
       // Compact relative timestamp ("2d", "May 2") matches the docs
-      // review table's Time column, so the two surfaces feel
-      // consistent. Hover title shows the absolute timestamp for
-      // anyone who needs it.
+      // review table's Time column. Hover title shows the absolute
+      // timestamp.
       render: (row) => (
         <span
           className="text-sm tabular-nums text-muted-foreground"
@@ -146,8 +194,8 @@ export default function EnrolledStudentsPage() {
         <h1 className="text-2xl font-bold">Enrolled Students</h1>
         <p className="text-sm text-muted-foreground">
           Students whose registration packet has been admin-confirmed
-          for the selected year. Click into a row to land on the
-          family&rsquo;s registration detail.
+          for the selected year, grouped by incoming grade. Click a
+          row to see only that student&rsquo;s details.
         </p>
       </div>
 
@@ -165,34 +213,22 @@ export default function EnrolledStudentsPage() {
       ) : showEmptyState ? (
         <EnrolledEmptyState />
       ) : (
-        <Card className="overflow-hidden bg-white py-0 gap-0">
-          <CardHeader className="py-4 border-b bg-white">
-            <div className="flex items-baseline gap-3">
-              <CardTitle className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-                Enrolled
-              </CardTitle>
-              <span className="text-xs tabular-nums text-muted-foreground">
-                ({rows.length})
-              </span>
-              <p className="text-xs text-muted-foreground">
-                Confirmed for {yearId ? "this year" : "the selected year"}.
-              </p>
-            </div>
-          </CardHeader>
-          <CardContent className="p-4 bg-white">
-            <DataTable<EnrolledStudentRow>
-              columns={columns}
-              data={rows}
+        <div className="space-y-8">
+          {grouped.map((group) => (
+            <EnrolledGradeGroup
+              key={group.grade}
+              grade={group.grade}
+              rows={group.rows}
               isLoading={isLoading}
-              searchPlaceholder="Search enrolled students…"
+              columns={columns}
               onRowClick={(row) =>
                 router.push(
-                  `/admin/registrations/${row.family_id}?yearId=${row.year_id}`
+                  `/admin/enrolled/${row.student_id}?yearId=${row.year_id}`
                 )
               }
             />
-          </CardContent>
-        </Card>
+          ))}
+        </div>
       )}
     </div>
   );
@@ -216,6 +252,53 @@ function EnrolledEmptyState() {
           confirmed. Head to <strong>Registrations</strong> to review
           and confirm packets per student.
         </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * One grade-level group on the Enrolled page. Same chrome as the
+ * Registrations groups (uppercase tracking-wide title + count
+ * badge + description) so the two pages feel like the same product.
+ *
+ * "Grade —" renders for students whose `current_grade` is empty;
+ * shouldn't happen in the cohort but the fallback keeps the
+ * surface defensive against missing data.
+ */
+function EnrolledGradeGroup({
+  grade,
+  rows,
+  isLoading,
+  columns,
+  onRowClick,
+}: {
+  grade: string;
+  rows: EnrolledStudentRow[];
+  isLoading: boolean;
+  columns: ColumnDef<EnrolledStudentRow>[];
+  onRowClick: (row: EnrolledStudentRow) => void;
+}) {
+  return (
+    <Card className="overflow-hidden bg-white py-0 gap-0">
+      <CardHeader className="py-4 border-b bg-white">
+        <div className="flex items-baseline gap-3">
+          <CardTitle className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+            Grade {grade}
+          </CardTitle>
+          <span className="text-xs tabular-nums text-muted-foreground">
+            ({rows.length})
+          </span>
+        </div>
+      </CardHeader>
+      <CardContent className="p-4 bg-white">
+        <DataTable<EnrolledStudentRow>
+          columns={columns}
+          data={rows}
+          isLoading={isLoading}
+          searchPlaceholder={`Search Grade ${grade}…`}
+          onRowClick={onRowClick}
+        />
       </CardContent>
     </Card>
   );

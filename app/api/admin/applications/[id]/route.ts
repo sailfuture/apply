@@ -112,6 +112,10 @@ export async function PATCH(
       "test_scores",
       "nwea_testing_complete",
       "nwea_testing_scheduled",
+      // NWEA admin RIT scores + dates moved off the application row
+      // onto `registration_students` — they're per-student permanent
+      // data, not per-year. Use `/api/admin/students/[id]` to PATCH
+      // those instead.
       "last_grade_completed",
       "current_grade",
       "isSubmitted",

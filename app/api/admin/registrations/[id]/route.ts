@@ -182,6 +182,17 @@ export async function GET(
           student_date_of_birth: student?.date_of_birth ?? "",
           student_grade: app.current_grade ?? "",
           packet,
+          // Admin verification triplet — lives on the per-packet
+          // `registration_student_registration` row (each year a
+          // student re-enrolls gets its own packet, with its own
+          // verify state). Surfaced here so the per-student card
+          // can render the "Verify {Name} Registration" footer +
+          // audit caption without an extra fetch.
+          is_verified: packet?.registrationConfirmed === true,
+          is_admin_verified_time:
+            packet?.registration_confirmed_admin_time ?? null,
+          is_admin_verified_admin:
+            packet?.regisration_admin_confirmed_admin ?? "",
         };
       }
     );
@@ -255,4 +266,8 @@ export interface AdminFamilyRegistrationStudentRow {
   student_grade: string;
   /** Full packet object; null when the parent hasn't started one yet. */
   packet: XanoStudentRegistration | null;
+  /** Admin verification triplet pulled from the student row. */
+  is_verified: boolean;
+  is_admin_verified_time: number | null;
+  is_admin_verified_admin: string;
 }
