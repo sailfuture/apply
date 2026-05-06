@@ -1234,26 +1234,32 @@ function StudentPacketBlock({
           <Separator />
 
           {/* ── Required Documents ──────────────────────────────── */}
+          {/* Each document category is an array on the student row
+              (parents can upload multiple files per category, e.g.
+              two pages of a passport). `FilePreviewGroup` renders
+              one row per uploaded file with truncated filenames +
+              Open links, matching the parent-side multi-upload
+              affordance. */}
           <SectionGroup title="Required Documents *">
             <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
-              <FilePreviewRow
+              <FilePreviewGroup
                 label="Birth Certificate"
-                file={packet?.birth_certificate}
+                files={row.student_documents.birth_certificate}
                 required
               />
-              <FilePreviewRow
+              <FilePreviewGroup
                 label="School Health Form"
-                file={packet?.school_health_form}
+                files={row.student_documents.school_health_form}
                 required
               />
-              <FilePreviewRow
+              <FilePreviewGroup
                 label="Transcripts"
-                file={packet?.transcripts}
+                files={row.student_documents.transcripts}
                 required
               />
-              <FilePreviewRow
+              <FilePreviewGroup
                 label="Immunization Forms"
-                file={packet?.immunization_forms}
+                files={row.student_documents.immunization_forms}
                 required
               />
             </div>
@@ -1264,12 +1270,21 @@ function StudentPacketBlock({
           {/* ── Optional Documents ──────────────────────────────── */}
           <SectionGroup title="Optional Documents">
             <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
-              <FilePreviewRow label="IEP" file={packet?.iep} />
-              <FilePreviewRow label="SSN Card" file={packet?.ssn_card} />
-              <FilePreviewRow label="Passport" file={packet?.passport} />
-              <FilePreviewRow
+              <FilePreviewGroup
+                label="IEP"
+                files={row.student_documents.iep}
+              />
+              <FilePreviewGroup
+                label="SSN Card"
+                files={row.student_documents.ssn_card}
+              />
+              <FilePreviewGroup
+                label="Passport"
+                files={row.student_documents.passport}
+              />
+              <FilePreviewGroup
                 label="Student State ID"
-                file={packet?.student_state_id}
+                files={row.student_documents.student_state_id}
               />
             </div>
           </SectionGroup>
@@ -1703,6 +1718,104 @@ function FilePreviewRow({
           </a>
         ) : (
           <span className="text-muted-foreground">Not uploaded</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Multi-file variant of `FilePreviewRow` — renders the same labeled
+ * box but with one row per uploaded file (truncated filename + Open
+ * link). Used for the document categories that live on the student
+ * row (birth certificate, transcripts, IEP, etc.) where parents can
+ * upload multiple files per category.
+ *
+ * Behavior:
+ *   - Empty array → "Not uploaded" (red border when `required`),
+ *     identical to the empty state of `FilePreviewRow` so the form
+ *     reads consistently.
+ *   - Any files present → red border drops (a required category is
+ *     considered satisfied as soon as one file is on the row), then
+ *     each file renders as a row inside the box with its (truncated)
+ *     filename.
+ *
+ * Filenames truncate via CSS so the full name is always available
+ * via the `title` tooltip and reflows on resize.
+ */
+function FilePreviewGroup({
+  label,
+  files,
+  required,
+}: {
+  label: string;
+  files: Record<string, unknown>[] | null | undefined;
+  required?: boolean;
+}) {
+  const entries = Array.isArray(files) ? files : [];
+  const hasAny = entries.length > 0;
+  const isMissing = required && !hasAny;
+  return (
+    <div className="space-y-1">
+      <p className="text-xs">
+        {label}
+        {required ? (
+          <span className="ml-1 text-red-500" aria-label="required">
+            *
+          </span>
+        ) : null}
+        {hasAny && entries.length > 1 ? (
+          <span className="ml-1.5 text-muted-foreground/70">
+            ({entries.length})
+          </span>
+        ) : null}
+      </p>
+      <div
+        className={cn(
+          "rounded-md border bg-white px-3 py-2 text-xs",
+          isMissing ? "border-red-500" : "border-input",
+          hasAny ? "space-y-1" : ""
+        )}
+      >
+        {!hasAny ? (
+          <span className="text-muted-foreground">Not uploaded</span>
+        ) : (
+          entries.map((f, idx) => {
+            const url = fileViewUrl(f);
+            const name =
+              typeof (f as { name?: unknown }).name === "string"
+                ? (f as { name: string }).name
+                : `File ${idx + 1}`;
+            // `path` is unique per file in the Xano vault, so it
+            // disambiguates re-uploads of the same filename.
+            const path =
+              typeof (f as { path?: unknown }).path === "string"
+                ? (f as { path: string }).path
+                : `idx-${idx}`;
+            return (
+              <div
+                key={path}
+                className="flex items-center justify-between gap-2 min-w-0"
+              >
+                {url ? (
+                  <a
+                    href={url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 text-blue-600 hover:underline min-w-0"
+                    title={name}
+                  >
+                    <span className="truncate max-w-[14rem]">{name}</span>
+                    <ExternalLink className="size-3 shrink-0" />
+                  </a>
+                ) : (
+                  <span className="text-muted-foreground italic truncate">
+                    {name} · unavailable
+                  </span>
+                )}
+              </div>
+            );
+          })
         )}
       </div>
     </div>

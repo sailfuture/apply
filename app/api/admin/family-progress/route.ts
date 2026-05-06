@@ -59,6 +59,13 @@ export async function GET(req: NextRequest) {
  * timestamp + `*_admin_confirm_admin` admin-name string are auto-
  * stamped here so clients can't hand-write them.
  *
+ * `completedKey` is the matching parent-side completion flag for
+ * the section. When admin verifies (sets the confirm bool to
+ * `true`), we also flip the parent-completion flag to `true` so
+ * the parent's sidenav reflects "section done" without the parent
+ * having to remember to click Complete. Admin verification is the
+ * strongest signal — if admin says it's good, it's good.
+ *
  * Testing has no `testing_admin_confirm_admin` column on Xano (the
  * schema only tracks the bool + time for that section), so its
  * `adminKey` is null and we skip the name stamp for it.
@@ -67,21 +74,25 @@ const SECTION_CONFIRM_PAIRS: Array<{
   confirmKey: keyof XanoFamilyApplicationProgress;
   timeKey: keyof XanoFamilyApplicationProgress;
   adminKey: keyof XanoFamilyApplicationProgress | null;
+  completedKey: keyof XanoFamilyApplicationProgress;
 }> = [
   {
     confirmKey: "family_admin_confirm",
     timeKey: "family_admin_confirm_time",
     adminKey: "family_admin_confirm_admin",
+    completedKey: "family_completed",
   },
   {
     confirmKey: "students_admin_confirm",
     timeKey: "students_admin_confirm_time",
     adminKey: "students_admin_confirm_admin",
+    completedKey: "students_completed",
   },
   {
     confirmKey: "testing_admin_confirm",
     timeKey: "testing_admin_confirm_time",
     adminKey: null,
+    completedKey: "testing_completed",
   },
 ];
 
@@ -142,11 +153,28 @@ export async function PATCH(req: NextRequest) {
       if (key in body) patch[key] = body[key];
     }
 
-    // Auto-stamp the audit pair for every section-confirm bool that
-    // appears in the patch. true → time = now, admin = display name;
-    // false → time = null, admin = "". Testing has no admin column
-    // on Xano so its adminKey is null and we skip that field; the
-    // bool + time still get written.
+    // Auto-stamp the audit pair + cascade to parent-completion for
+    // every section-confirm bool that appears in the patch.
+    //
+    // On verify (true):
+    //   - time = now, admin = display name
+    //   - matching `*_completed` flips to `true` so the parent's
+    //     sidenav reflects "section done" — admin's verify is the
+    //     strongest signal, overrides whatever in-progress edit
+    //     state the parent was in
+    //
+    // On un-verify (false):
+    //   - time = null, admin = ""
+    //   - DO NOT touch `*_completed` — un-verifying is "I need to
+    //     re-review", not "the parent has more work to do." If the
+    //     parent had completed it previously, that stays. The
+    //     existing parent-side cascade already clears the verify
+    //     pair when the parent flips `*_completed=false`, so the
+    //     two directions stay coherent.
+    //
+    // Testing has no admin column on Xano so its adminKey is null
+    // and we skip that field; the bool + time + completion still
+    // get written.
     const now = Date.now();
     const adminName = admin?.name ?? "";
     for (const pair of SECTION_CONFIRM_PAIRS) {
@@ -155,6 +183,9 @@ export async function PATCH(req: NextRequest) {
         patch[pair.timeKey] = next ? now : null;
         if (pair.adminKey) {
           patch[pair.adminKey] = next ? adminName : "";
+        }
+        if (next) {
+          patch[pair.completedKey] = true;
         }
       }
     }

@@ -313,7 +313,7 @@ export default function FamilyDetailPage() {
         const errBody = await res.json().catch(() => null);
         throw new Error(errBody?.error ?? `Update failed (${res.status})`);
       }
-      toast.success(next ? "Section confirmed." : "Confirmation cleared.");
+      toast.success(next ? "Section verified." : "Verification cleared.");
       refreshProgress();
     } catch (err) {
       console.error(`[toggleSectionConfirmed.${section}] failed:`, err);
@@ -974,14 +974,21 @@ function SectionShell({
 }) {
   const confirmed = !!confirm?.confirmed;
   const parentCompleted = !!confirm?.parentCompleted;
-  // Whole-card mute when the family has marked the section
-  // complete. We drop opacity on the entire `<Card>` (header +
-  // body + footer) rather than only the body so the title /
-  // status badge / Edit button all read as part of the same
-  // settled state. Mirrors the parent flow's "Section Completed"
-  // visual treatment. Footer buttons stay clickable — opacity
-  // dims their look but doesn't disable them.
-  const fullyDone = parentCompleted;
+  // Whole-card mute kicks in only when admin has *verified* the
+  // section. The parent marking it complete (`*_completed`) on its
+  // own isn't enough — that's still pending review on our side, and
+  // a premature gray-out reads as "this is settled" before admin has
+  // actually looked. Drops opacity on the entire `<Card>` so the
+  // title, status badge, and Edit button read as one settled unit.
+  // Footer buttons stay clickable — opacity dims their look but
+  // doesn't disable them. `parentCompleted` is still surfaced via
+  // the status dot (yellow → in progress, green → done) so admin
+  // can scan progress without relying on the mute alone.
+  const fullyDone = confirmed;
+  // Silence the unused-var warning — `parentCompleted` used to
+  // drive `fullyDone` and is kept on the props for future surfaces
+  // that may want to reintroduce the parent-completion mute.
+  void parentCompleted;
   return (
     <Card
       className={cn(
@@ -1120,8 +1127,8 @@ function SectionConfirmFooter({ confirm }: { confirm: SectionConfirmConfig }) {
           - saving: skeleton bar so the audit "by X · 2 hr ago"
             slides in smoothly instead of popping in/out as the
             PATCH round-trips
-          - confirmed: actual caption with admin name + time
-          - unconfirmed: empty (nothing to say yet) */}
+          - verified: actual caption with admin name + time
+          - unverified: empty (nothing to say yet) */}
       {saving ? (
         <Skeleton className="h-3 w-48" />
       ) : (
@@ -1130,13 +1137,13 @@ function SectionConfirmFooter({ confirm }: { confirm: SectionConfirmConfig }) {
             <>
               {confirmedByName ? (
                 <>
-                  Confirmed by{" "}
+                  Verified by{" "}
                   <span className="font-medium text-foreground">
                     {confirmedByName}
                   </span>
                 </>
               ) : (
-                "Confirmed"
+                "Verified"
               )}
               {confirmTime ? (
                 <span> · {formatNoteTimestamp(confirmTime)}</span>
@@ -1147,8 +1154,8 @@ function SectionConfirmFooter({ confirm }: { confirm: SectionConfirmConfig }) {
       )}
 
       {/* Two visual states:
-          - unconfirmed → single primary "Confirm <Section>" button
-          - confirmed → muted "Confirmed" pill + an Undo button next
+          - unverified → single primary "Verify <Section>" button
+          - verified → muted "Verified" pill + an Undo button next
             to it that opens a warning modal before clearing the
             audit. Two buttons (rather than one toggle) makes the
             "this is locked, but you can unlock it" intent explicit
@@ -1185,13 +1192,13 @@ function SectionConfirmFooter({ confirm }: { confirm: SectionConfirmConfig }) {
             <AlertDialogContent>
               <AlertDialogHeader>
                 <AlertDialogTitle>
-                  Undo {sectionLabel} confirmation?
+                  Undo {sectionLabel} verification?
                 </AlertDialogTitle>
                 <AlertDialogDescription>
-                  This clears the admin confirmation on the{" "}
+                  This clears the admin verification on the{" "}
                   {sectionLabel} section. The audit stamp (who and
                   when) will be removed and the section drops back
-                  to pending review. You can re-confirm at any time.
+                  to pending review. You can re-verify at any time.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
@@ -1229,7 +1236,7 @@ function SectionConfirmFooter({ confirm }: { confirm: SectionConfirmConfig }) {
           ) : (
             <CheckCircle2 className="size-3.5 mr-1.5" />
           )}
-          Confirm {sectionLabel}
+          Verify {sectionLabel}
         </Button>
       )}
     </div>
@@ -2213,49 +2220,82 @@ function DecisionCard({
     : activeApps.filter((a) => a.is_bus_transportation === true).length *
       (schoolYear?.transportation_fees ?? 0);
 
+  // Tri-state edit status that drives the small colored dot in the
+  // header — same vocabulary as the rest of the page's section
+  // cards (red / yellow / green). The mapping:
+  //   - accepted (green) → admin has approved the family
+  //   - submitted but not yet accepted (yellow) → in-progress review
+  //   - not yet submitted (red) → nothing to act on
+  // Keeps the visual rhythm consistent with the Family / Students /
+  // Testing sections above: skim the dots top-to-bottom to see what
+  // still needs attention.
+  const decisionStatus: SectionStatus = accepted
+    ? "complete"
+    : anySubmitted
+    ? "in_progress"
+    : "not_started";
+
   return (
-    <Card className="overflow-hidden gap-0 py-0 bg-white border-emerald-200">
-      <CardHeader className="py-3 !pb-3 border-b bg-emerald-50/40">
+    <Card
+      className={cn(
+        "overflow-hidden gap-0 py-0 bg-white transition-opacity",
+        // Whole-card mute mirrors the SectionShell behavior: once
+        // admin has accepted the family, the card's work is done,
+        // gray it out so it stops competing with the still-live
+        // sections above. Revoke lives in the page header for
+        // reversal — opacity dim doesn't block clicks.
+        accepted && "opacity-60"
+      )}
+    >
+      <CardHeader className="py-3 !pb-3 border-b">
         <div className="flex items-center justify-between gap-3">
-          {/* Title-only header — the prior shield icon read as
-              "approval / authority" and competed with the rest of
-              the page's monochrome header treatment. */}
-          <CardTitle className="text-base">Scholarship Determination</CardTitle>
-          {/* Status badge stays in the card header for context; the
-              actual Approve / Return Application buttons live in the
-              page header up top. */}
-          {accepted ? (
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 text-emerald-700 border border-emerald-200 px-2.5 py-0.5 text-xs font-medium">
-              <CheckCircle2 className="size-3.5" />
-              Accepted
-            </span>
-          ) : anySubmitted ? (
-            // Neutral muted tone — keeps the page's monochrome read
-            // for "no decision yet" and reserves color (green) for
-            // the resolved Accepted state. Earlier blue was loud and
-            // implied a positive status that hasn't been earned yet.
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-muted text-muted-foreground border border-border px-2.5 py-0.5 text-xs font-medium">
-              Awaiting decision
-            </span>
-          ) : (
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200 px-2.5 py-0.5 text-xs font-medium">
-              Not yet submitted
-            </span>
-          )}
+          <div className="flex items-center gap-2 min-w-0">
+            {/* Edit-status dot — same red/yellow/green vocabulary as
+                the section cards above so admin can scan the page
+                top-to-bottom and see "where am I, what still needs
+                me" at a glance. */}
+            <span
+              className={cn(
+                "inline-block size-2.5 rounded-full shrink-0",
+                STATUS_DOT_CLASS[decisionStatus]
+              )}
+              aria-label={STATUS_LABEL[decisionStatus]}
+              title={STATUS_LABEL[decisionStatus]}
+            />
+            <CardTitle className="text-base truncate">
+              Scholarship Determination
+            </CardTitle>
+            {/* Status pill stays for the resolved Accepted state —
+                a single positive badge next to the title reads as
+                "this is done." Pre-acceptance states are conveyed by
+                the dot + the footer button; no badge so the header
+                stays quiet. */}
+            {accepted ? (
+              <span className="ml-1 inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-800">
+                <CheckCircle2 className="size-2.5" />
+                Accepted
+              </span>
+            ) : null}
+          </div>
+          {/* Notes drawer — section-scoped to "scholarship_determination"
+              so the comms thread for the decision review lives next to
+              the work. Mirrors the per-section Notes affordance on the
+              Family / Students / Testing cards above. */}
+          <div className="flex items-center gap-2 shrink-0">
+            <FamilyNotesSheet
+              familyId={familyId}
+              section="scholarship_determination"
+              title="Scholarship Determination"
+              phase="application"
+            />
+          </div>
         </div>
       </CardHeader>
-      <CardContent
-        className={cn(
-          "space-y-6 py-5 bg-white transition-opacity",
-          // Once accepted, the entire Decision card content fades
-          // out. Admin can still read everything (so we don't fully
-          // hide it) but the visual cue says "this work is done."
-          // Revoke lives in the page header for reversal — the
-          // gray-out doesn't block clicks since admin may still
-          // want to copy/inspect text.
-          accepted && "opacity-60"
-        )}
-      >
+      {/* Body keeps a constant background — the whole-card opacity
+          handles the muted look when accepted. Stacking `bg-muted/30`
+          on top of an opacity-reduced parent doubled the dimming and
+          made the text harder to read. */}
+      <CardContent className="space-y-6 py-5 bg-white">
         {loading ? (
           <Skeleton className="h-48 w-full rounded-md" />
         ) : students.length === 0 ? (
@@ -2338,56 +2378,60 @@ function DecisionCard({
               isSnapFamily={scholarship?.isSNAPBenefits === true}
             />
 
-            {/* Family-level decision footer — Reject + Approve. One
-                set per family (not per student) since these are
-                family-wide actions. Hidden once the family is
-                accepted; the card grays out and the Revoke
-                affordance lives in the page header.
-
-                Layout (left → right, decreasing severity to right):
-                  - Archive [Reject] [Approve]
-                  - When the family hasn't submitted yet, Reject
-                    drops out (nothing to send back); the layout
-                    collapses to Archive + Approve. */}
-            {!accepted ? (
-              <div
-                className={cn(
-                  "grid gap-2 pt-2 border-t",
-                  familySubmitted ? "grid-cols-3" : "grid-cols-2"
-                )}
-              >
-                <ArchiveApplicationButton
-                  familyId={familyId}
-                  yearId={yearId}
-                  familyName={familyName}
-                  onArchived={onChanged}
-                />
-                {familySubmitted ? (
-                  <RejectApplicationButton
-                    familyId={familyId}
-                    yearId={yearId}
-                    familyName={familyName}
-                    onRejected={onChanged}
-                  />
-                ) : null}
-                <ApproveFamilyButton
-                  familyId={familyId}
-                  yearId={yearId}
-                  familyName={familyName}
-                  allSufsConfirmed={allSufsConfirmed}
-                  unconfirmedCount={unconfirmedCount}
-                  allDocsConfirmed={allDocsConfirmed}
-                  unverifiedSections={unverifiedSections}
-                  monthlyTuitionPayment={monthlyTuitionPayment}
-                  annualFeeTotal={annualFeeTotal}
-                  transportationTotal={transportationTotal}
-                  onApproved={onChanged}
-                />
-              </div>
-            ) : null}
           </>
         )}
       </CardContent>
+      {/* Family-level decision footer — Archive / Reject / Approve.
+          Lives outside <CardContent> so it mirrors the
+          SectionConfirmFooter pattern on the Family / Students /
+          Testing cards above: divider + bg-white footer that anchors
+          the resolving action at the bottom of the card. Hidden once
+          accepted (Revoke moves to the page header so admin doesn't
+          click it from inside the muted card body).
+
+          Layout (left → right, decreasing severity to right):
+            - Archive [Reject] [Approve]
+            - When the family hasn't submitted yet, Reject drops out
+              (nothing to send back); the grid collapses to two
+              columns. */}
+      {!accepted && !loading && students.length > 0 ? (
+        <div className="border-t bg-white px-5 py-3">
+          <div
+            className={cn(
+              "grid gap-2",
+              familySubmitted ? "grid-cols-3" : "grid-cols-2"
+            )}
+          >
+            <ArchiveApplicationButton
+              familyId={familyId}
+              yearId={yearId}
+              familyName={familyName}
+              onArchived={onChanged}
+            />
+            {familySubmitted ? (
+              <RejectApplicationButton
+                familyId={familyId}
+                yearId={yearId}
+                familyName={familyName}
+                onRejected={onChanged}
+              />
+            ) : null}
+            <ApproveFamilyButton
+              familyId={familyId}
+              yearId={yearId}
+              familyName={familyName}
+              allSufsConfirmed={allSufsConfirmed}
+              unconfirmedCount={unconfirmedCount}
+              allDocsConfirmed={allDocsConfirmed}
+              unverifiedSections={unverifiedSections}
+              monthlyTuitionPayment={monthlyTuitionPayment}
+              annualFeeTotal={annualFeeTotal}
+              transportationTotal={transportationTotal}
+              onApproved={onChanged}
+            />
+          </div>
+        </div>
+      ) : null}
     </Card>
   );
 }

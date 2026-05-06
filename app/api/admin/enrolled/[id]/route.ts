@@ -155,7 +155,44 @@ function shapeStudent(s: XanoStudent) {
      *  Surfaced on the enrolled-detail page header so admin can see
      *  data staleness at a glance ("Last edited 3 days ago"). */
     last_edited_time: s.last_edited_time ?? null,
+    /** Evergreen document arrays — these live on the student row
+     *  (not the per-year packet) so they survive re-enrollment. The
+     *  parent flow writes here via `/api/students/[id]`; the admin
+     *  enrolled detail page renders the lists from this surface.
+     *
+     *  Each entry is Xano's file metadata blob:
+     *  `{ name, path, url?, mime, size, meta }`. We pass them
+     *  through as `unknown[]` rather than a tighter type because
+     *  Xano sometimes returns extra keys (`type`, `access`,
+     *  `tmpl`, …) we don't care about — the UI's renderer is
+     *  defensive about shape. */
+    birth_certificate: normalizeFileArray(s.birth_certificate),
+    school_health_form: normalizeFileArray(s.school_health_form),
+    transcripts: normalizeFileArray(s.transcripts),
+    iep: normalizeFileArray(s.iep),
+    ssn_card: normalizeFileArray(s.ssn_card),
+    immunization_forms: normalizeFileArray(s.immunization_forms),
+    passport: normalizeFileArray(s.passport),
+    student_state_id: normalizeFileArray(s.student_state_id),
   };
+}
+
+/**
+ * Coerce Xano's file column into an array of file blobs. Xano
+ * historically wavered between `[]`, `null`, and `{}` for empty
+ * file columns — the live schema uses `[]`, but we tolerate the
+ * old shapes so a partial migration doesn't crash the page. Any
+ * non-array value (including a single object) is normalized to
+ * `[]` and a warning is logged so we can spot stragglers.
+ */
+function normalizeFileArray(raw: unknown): Record<string, unknown>[] {
+  if (Array.isArray(raw)) {
+    return raw.filter(
+      (entry): entry is Record<string, unknown> =>
+        typeof entry === "object" && entry !== null
+    );
+  }
+  return [];
 }
 
 function shapeApp(a: XanoApplication) {
@@ -183,6 +220,19 @@ function shapePacket(p: XanoStudentRegistration) {
   return {
     id: p.id,
     registrationConfirmed: p.registrationConfirmed === true,
+    /** Audit pair on `registrationConfirmed` — surfaced on the page so
+     *  admin sees "Confirmed by Mr. Thompson · Oct 28" next to the
+     *  badge. The column name with the typo (`regisration_*`) is
+     *  intentional — matches the live Xano schema. */
+    registration_confirmed_admin_time:
+      p.registration_confirmed_admin_time ?? null,
+    registration_confirmed_admin_name:
+      p.regisration_admin_confirmed_admin ?? "",
+    /** Last write to the packet row. Surfaced alongside the student's
+     *  `last_edited_time` in the page header so admin can spot stale
+     *  packet data (parent edited bio recently but never updated the
+     *  packet, etc.). */
+    last_edited_time: p.last_edited_time ?? p.last_updated ?? null,
     shirt_size: p.shirt_size ?? "",
     pant_size: p.pant_size ?? "",
     swim_level: p.swim_level ?? "",
@@ -217,6 +267,7 @@ function shapePacket(p: XanoStudentRegistration) {
     student_state_id: p.student_state_id ?? null,
     liability_waiver_pandadoc_id: p.liability_waiver_pandadoc_id ?? "",
     liability_waiver_status: p.liability_waiver_status ?? "",
+    liability_waiver_sent_at: p.liability_waiver_sent_at ?? null,
     liability_waiver_pdf_url: p.liability_waiver_pdf_url ?? "",
   };
 }

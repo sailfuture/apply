@@ -146,15 +146,25 @@ export default function EnrolledStudentDetailPage() {
               ) : null}
             </p>
           ) : null}
-          {/* Data staleness — most recent write to this student row.
-              Helps admin spot stale records before reviewing
-              enrollment ("last edited 6 months ago" → check with
-              the family before relying on this data). */}
+          {/* Data staleness — most recent write to either the student
+              row or the per-year packet. Two timestamps because edits
+              can land on either: bio + docs land on the student row,
+              medical / sizing / waiver land on the packet. Showing
+              both helps admin spot mismatches ("bio updated yesterday
+              but packet hasn't been touched since June"). */}
           {student.last_edited_time ? (
             <p className="mt-0.5 text-xs text-muted-foreground/80">
-              Last edited{" "}
+              Student edited{" "}
               <span title={new Date(student.last_edited_time).toLocaleString()}>
                 {formatNoteTimestamp(student.last_edited_time)}
+              </span>
+            </p>
+          ) : null}
+          {packet?.last_edited_time ? (
+            <p className="mt-0.5 text-xs text-muted-foreground/80">
+              Packet edited{" "}
+              <span title={new Date(packet.last_edited_time).toLocaleString()}>
+                {formatNoteTimestamp(packet.last_edited_time)}
               </span>
             </p>
           ) : null}
@@ -334,16 +344,50 @@ function PacketCard({
       <CardHeader className="py-3 !pb-3 border-b">
         <div className="flex items-center justify-between gap-3">
           <CardTitle className="text-base">Registration Packet</CardTitle>
-          {packet.registrationConfirmed ? (
-            <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-800">
-              <CheckCircle2 className="size-2.5" />
-              Confirmed
-            </span>
-          ) : (
-            <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-              Pending
-            </span>
-          )}
+          <div className="flex flex-col items-end gap-0.5">
+            {packet.registrationConfirmed ? (
+              <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-800">
+                <CheckCircle2 className="size-2.5" />
+                Confirmed
+              </span>
+            ) : (
+              <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                Pending
+              </span>
+            )}
+            {/* Audit caption — only renders on confirmed packets that
+                carry the audit pair (legacy rows predate the columns,
+                so we tolerate either piece being missing). Mirrors the
+                section-confirm captions on the family detail page so
+                admin sees who/when across surfaces. */}
+            {packet.registrationConfirmed &&
+            (packet.registration_confirmed_admin_name ||
+              packet.registration_confirmed_admin_time) ? (
+              <span
+                className="text-[10px] text-muted-foreground/80"
+                title={
+                  packet.registration_confirmed_admin_time
+                    ? new Date(
+                        packet.registration_confirmed_admin_time
+                      ).toLocaleString()
+                    : undefined
+                }
+              >
+                {packet.registration_confirmed_admin_name
+                  ? `by ${packet.registration_confirmed_admin_name}`
+                  : ""}
+                {packet.registration_confirmed_admin_name &&
+                packet.registration_confirmed_admin_time
+                  ? " · "
+                  : ""}
+                {packet.registration_confirmed_admin_time
+                  ? formatNoteTimestamp(
+                      packet.registration_confirmed_admin_time
+                    )
+                  : ""}
+              </span>
+            ) : null}
+          </div>
         </div>
       </CardHeader>
       <CardContent
@@ -446,23 +490,39 @@ function PacketCard({
           <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
             Documents
           </p>
+          {/* The waiver is per-packet (single PDF returned by PandaDoc).
+              Every other document category lives on the *student* row
+              as an array of file blobs — parents can upload multiple
+              pages per category — so we render a separate row per
+              file instead of a single "Open" link. */}
           <ul className="text-sm space-y-1.5">
-            <FileLine label="Liability waiver (signed)" url={packet.liability_waiver_pdf_url} />
-            <FileLine label="Birth certificate" file={packet.birth_certificate} />
-            <FileLine label="School health form" file={packet.school_health_form} />
-            <FileLine label="Transcripts" file={packet.transcripts} />
-            <FileLine label="IEP" file={packet.iep} />
-            <FileLine label="SSN card" file={packet.ssn_card} />
-            <FileLine label="Immunization forms" file={packet.immunization_forms} />
-            <FileLine label="Passport" file={packet.passport} />
             <FileLine
-              label="Immunization form"
-              file={packet.immunization_form}
+              label="Liability waiver (signed)"
+              url={packet.liability_waiver_pdf_url}
+              /* Status caption — only render on packets where the
+                 waiver has been kicked off but isn't fully signed
+                 yet, so admin can spot "sent 6 weeks ago, never
+                 returned" rows at a glance. PandaDoc completed
+                 packets carry a PDF URL and the FileLine renders
+                 "Open" — no caption needed in that case. */
+              caption={
+                !packet.liability_waiver_pdf_url &&
+                packet.liability_waiver_status &&
+                packet.liability_waiver_sent_at
+                  ? `${packet.liability_waiver_status} · sent ${formatNoteTimestamp(
+                      new Date(packet.liability_waiver_sent_at).getTime()
+                    )}`
+                  : undefined
+              }
             />
-            <FileLine
-              label="State ID"
-              file={packet.student_state_id}
-            />
+            <FileGroup label="Birth certificate" files={student.birth_certificate} />
+            <FileGroup label="School health form" files={student.school_health_form} />
+            <FileGroup label="Transcripts" files={student.transcripts} />
+            <FileGroup label="IEP" files={student.iep} />
+            <FileGroup label="SSN card" files={student.ssn_card} />
+            <FileGroup label="Immunization forms" files={student.immunization_forms} />
+            <FileGroup label="Passport" files={student.passport} />
+            <FileGroup label="State ID" files={student.student_state_id} />
           </ul>
         </div>
       </CardContent>
@@ -589,17 +649,28 @@ function FileLine({
   label,
   file,
   url,
+  caption,
 }: {
   label: string;
   /** Xano file metadata blob — could be object or array (legacy). */
   file?: Record<string, unknown> | null;
   /** Direct URL fallback (used by the liability waiver PDF). */
   url?: string;
+  /** Optional muted caption rendered under the label — used to show
+   *  in-progress status on the waiver row ("sent · 2 weeks ago"). */
+  caption?: string;
 }) {
   const resolvedUrl = url || resolveFileUrl(file);
   return (
     <li className="flex items-center justify-between gap-3 border-t first:border-t-0 py-1.5">
-      <span className="text-sm text-muted-foreground">{label}</span>
+      <div className="min-w-0">
+        <span className="text-sm text-muted-foreground">{label}</span>
+        {caption ? (
+          <p className="text-[11px] text-muted-foreground/70 mt-0.5">
+            {caption}
+          </p>
+        ) : null}
+      </div>
       {resolvedUrl ? (
         <a
           href={resolvedUrl}
@@ -637,4 +708,121 @@ function resolveFileUrl(file: Record<string, unknown> | null | undefined): strin
     return `${base}${path}`;
   }
   return null;
+}
+
+/**
+ * Renders a labeled group of files for one document category — used
+ * for the document arrays that live on the student row (birth
+ * certificate, transcripts, IEP, etc.). Parents can upload multiple
+ * pages per category, so a single row would lose detail.
+ *
+ * Layout:
+ *   - Empty array → single "Not uploaded" row, mirroring the old
+ *     `FileLine` look so the section reads consistently.
+ *   - One file → single row with truncated filename + Open link.
+ *   - Multiple files → header row with the category label + count,
+ *     then one indented row per file.
+ *
+ * Filename truncation lives in CSS (`truncate` + `max-w-*`) rather
+ * than JS so the text reflows on resize and the full filename is
+ * always available via the `title` attribute on hover.
+ */
+function FileGroup({
+  label,
+  files,
+}: {
+  label: string;
+  files: Record<string, unknown>[] | null | undefined;
+}) {
+  const entries = Array.isArray(files) ? files : [];
+  if (entries.length === 0) {
+    return (
+      <li className="flex items-center justify-between gap-3 border-t first:border-t-0 py-1.5">
+        <span className="text-sm text-muted-foreground">{label}</span>
+        <span className="text-xs italic text-muted-foreground/70">
+          Not uploaded
+        </span>
+      </li>
+    );
+  }
+  if (entries.length === 1) {
+    const f = entries[0];
+    const url = resolveFileUrl(f);
+    const name =
+      typeof (f as { name?: unknown }).name === "string"
+        ? ((f as { name: string }).name)
+        : "";
+    return (
+      <li className="flex items-center justify-between gap-3 border-t first:border-t-0 py-1.5">
+        <span className="text-sm text-muted-foreground shrink-0">{label}</span>
+        {url ? (
+          <a
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline min-w-0"
+            title={name || undefined}
+          >
+            <span className="truncate max-w-[18rem]">
+              {name || "Open"}
+            </span>
+            <ExternalLink className="size-3 shrink-0" />
+          </a>
+        ) : (
+          <span className="text-xs italic text-muted-foreground/70">
+            Unavailable
+          </span>
+        )}
+      </li>
+    );
+  }
+  return (
+    <li className="border-t first:border-t-0 py-1.5">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-sm text-muted-foreground">{label}</span>
+        <span className="text-xs text-muted-foreground/70">
+          {entries.length} files
+        </span>
+      </div>
+      <ul className="mt-1.5 space-y-1 pl-3">
+        {entries.map((f, idx) => {
+          const url = resolveFileUrl(f);
+          const name =
+            typeof (f as { name?: unknown }).name === "string"
+              ? ((f as { name: string }).name)
+              : `File ${idx + 1}`;
+          // `path` is unique per file in Xano's vault, so it's a
+          // stable key across re-renders even when `name` collides
+          // (parents sometimes upload `image.png` twice).
+          const path =
+            typeof (f as { path?: unknown }).path === "string"
+              ? ((f as { path: string }).path)
+              : `idx-${idx}`;
+          return (
+            <li
+              key={path}
+              className="flex items-center justify-between gap-3"
+            >
+              {url ? (
+                <a
+                  href={url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline min-w-0"
+                  title={name}
+                >
+                  <span className="truncate max-w-[18rem]">{name}</span>
+                  <ExternalLink className="size-3 shrink-0" />
+                </a>
+              ) : (
+                <span className="text-xs italic text-muted-foreground/70">
+                  {name} · unavailable
+                </span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </li>
+  );
 }

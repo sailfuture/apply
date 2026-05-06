@@ -23,11 +23,18 @@ import type { XanoStudentRegistrationProgress } from "@/lib/xano";
  */
 
 /**
- * Section-verify pairs — three columns per section that get stamped
- * together when admin clicks "Verify <Section>" on the registration
- * detail page. The bool is what the UI reads/writes; the time +
- * admin name are auto-managed here so clients don't have to (and
- * can't) hand-write them.
+ * Section-verify pairs — four columns per section: the bool, the
+ * audit time, the audit admin name, and the matching parent-side
+ * completion flag. The bool is what the UI reads/writes; time +
+ * admin name are auto-managed here so clients can't hand-write
+ * them.
+ *
+ * `completedKey` cascades on verify: when admin sets the verify
+ * bool to `true`, we also flip `isXxx=true` so the parent's
+ * sidenav reflects "section done" without the parent having to
+ * remember to click Complete. Admin verification is the strongest
+ * signal — if admin says it's good, the parent stops being asked
+ * to finish it.
  *
  * Three sections track admin verification on this row: Tuition,
  * Enrollment, Volunteer Hours. The Registration Packet's
@@ -42,21 +49,25 @@ const SECTION_VERIFY_PAIRS: Array<{
   confirmKey: keyof XanoStudentRegistrationProgress;
   timeKey: keyof XanoStudentRegistrationProgress;
   adminKey: keyof XanoStudentRegistrationProgress;
+  completedKey: keyof XanoStudentRegistrationProgress;
 }> = [
   {
     confirmKey: "tuition_admin_confirm",
     timeKey: "tuition_admin_confirm_time",
     adminKey: "tuition_admin_confirm_admin",
+    completedKey: "isTuition",
   },
   {
     confirmKey: "enrollment_admin_confirm",
     timeKey: "enrollment_admin_confirm_time",
     adminKey: "enrollment_admin_confirm_admin",
+    completedKey: "isEnrollment",
   },
   {
     confirmKey: "volunteer_admin_confirm",
     timeKey: "volunteer_admin_confirm_time",
     adminKey: "volunteer_admin_confirm_admin",
+    completedKey: "isVolunteerHours",
   },
 ];
 
@@ -121,11 +132,22 @@ export async function PATCH(req: NextRequest) {
       if (key in body) patch[key] = body[key];
     }
 
-    // Auto-stamp the audit pair for every section-verify bool that
-    // appears in the patch. true → time = now, admin = display name;
-    // false → time = null, admin = "". Stays in sync with whatever
-    // bool admin just flipped without forcing the client to send the
-    // audit fields.
+    // Auto-stamp the audit pair + cascade to parent-completion
+    // for every section-verify bool that appears in the patch.
+    //
+    // On verify (true):
+    //   - time = now, admin = display name
+    //   - matching `isXxx` flips to `true` so the parent's
+    //     sidenav reflects "section done" — admin's verify
+    //     overrides the parent's in-progress state
+    //
+    // On un-verify (false):
+    //   - time = null, admin = ""
+    //   - DO NOT touch `isXxx` — un-verifying is "I need to
+    //     re-review", not "kick the parent back to editing".
+    //     The existing parent-side cascade clears the verify pair
+    //     when the parent flips `isXxx=false`, so the two
+    //     directions stay coherent.
     const now = Date.now();
     const adminName = admin?.name ?? "";
     for (const pair of SECTION_VERIFY_PAIRS) {
@@ -133,6 +155,9 @@ export async function PATCH(req: NextRequest) {
         const next = patch[pair.confirmKey] === true;
         patch[pair.timeKey] = next ? now : null;
         patch[pair.adminKey] = next ? adminName : "";
+        if (next) {
+          patch[pair.completedKey] = true;
+        }
       }
     }
 

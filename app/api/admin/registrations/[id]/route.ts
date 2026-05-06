@@ -182,6 +182,23 @@ export async function GET(
           student_date_of_birth: student?.date_of_birth ?? "",
           student_grade: app.current_grade ?? "",
           packet,
+          // Evergreen document uploads live on the *student* row as
+          // arrays of file blobs (not on the per-year packet — those
+          // columns are legacy / empty). Parents can upload multiple
+          // files per category, so the row carries the raw arrays;
+          // the per-student card renders one row per file.
+          student_documents: {
+            birth_certificate: normalizeFileArray(student?.birth_certificate),
+            school_health_form: normalizeFileArray(
+              student?.school_health_form
+            ),
+            transcripts: normalizeFileArray(student?.transcripts),
+            iep: normalizeFileArray(student?.iep),
+            ssn_card: normalizeFileArray(student?.ssn_card),
+            immunization_forms: normalizeFileArray(student?.immunization_forms),
+            passport: normalizeFileArray(student?.passport),
+            student_state_id: normalizeFileArray(student?.student_state_id),
+          },
           // Admin verification triplet — lives on the per-packet
           // `registration_student_registration` row (each year a
           // student re-enrolls gets its own packet, with its own
@@ -266,8 +283,39 @@ export interface AdminFamilyRegistrationStudentRow {
   student_grade: string;
   /** Full packet object; null when the parent hasn't started one yet. */
   packet: XanoStudentRegistration | null;
+  /** Evergreen document arrays from the student row (not the packet).
+   *  One file blob per upload — parents can upload multiple per
+   *  category. Each entry carries Xano's `{ name, path, url?, mime,
+   *  size }` shape. */
+  student_documents: {
+    birth_certificate: Record<string, unknown>[];
+    school_health_form: Record<string, unknown>[];
+    transcripts: Record<string, unknown>[];
+    iep: Record<string, unknown>[];
+    ssn_card: Record<string, unknown>[];
+    immunization_forms: Record<string, unknown>[];
+    passport: Record<string, unknown>[];
+    student_state_id: Record<string, unknown>[];
+  };
   /** Admin verification triplet pulled from the student row. */
   is_verified: boolean;
   is_admin_verified_time: number | null;
   is_admin_verified_admin: string;
+}
+
+/**
+ * Coerce Xano's file column into an array of file blobs. Xano has
+ * historically returned `[]`, `null`, or `{}` for empty file
+ * columns — the live schema settled on `[]`, but we tolerate the
+ * older shapes so a partial migration doesn't crash the page.
+ * Mirrors the helper in `/api/admin/enrolled/[id]`.
+ */
+function normalizeFileArray(raw: unknown): Record<string, unknown>[] {
+  if (Array.isArray(raw)) {
+    return raw.filter(
+      (entry): entry is Record<string, unknown> =>
+        typeof entry === "object" && entry !== null
+    );
+  }
+  return [];
 }

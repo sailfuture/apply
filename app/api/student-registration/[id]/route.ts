@@ -25,6 +25,9 @@ export async function PATCH(
     body.medicaid_number = Number.isFinite(n) ? n : 0;
   }
 
+  // `last_edited_time` is auto-stamped by `xano.studentRegistration.update`
+  // — every caller (parent, admin, PandaDoc) gets it for free, so we
+  // don't add it to the body here.
   const updated = await xano.studentRegistration.update(Number(id), body);
 
   return NextResponse.json(updated, { status: 200 });

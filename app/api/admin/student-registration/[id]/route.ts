@@ -84,9 +84,119 @@ export async function PATCH(
       );
     }
 
+    // `last_edited_time` is auto-stamped by `xano.studentRegistration.update`
+    // — every caller (admin, parent, PandaDoc) gets it for free, so
+    // we don't add it to the patch here.
     const updated = await xano.studentRegistration.update(id, patch);
+
+    // Cascade: when admin verifies a packet (registrationConfirmed
+    // flips to true), check whether every active student in the
+    // family now has a confirmed packet for the same year. If so,
+    // flip the family-level `isRegistration` on the registration
+    // progress row so the parent's sidenav reflects "Registration
+    // Packet section done" without the parent having to do
+    // anything.
+    //
+    // Best-effort: failures here are logged but don't fail the
+    // verify itself. Asymmetric on un-verify — un-verifying ONE
+    // student's packet doesn't flip `isRegistration` back to
+    // false (the family's overall section status is fuzzier than
+    // a single student's verify state). Admin can manually clear
+    // it via the section-confirm flow if needed.
+    if (
+      "registrationConfirmed" in patch &&
+      patch.registrationConfirmed === true
+    ) {
+      try {
+        await cascadeFamilyRegistrationCompleted(updated);
+      } catch (err) {
+        console.error(
+          "[/api/admin/student-registration/[id]] cascade to family isRegistration failed:",
+          err
+        );
+      }
+    }
+
     return NextResponse.json(updated);
   } catch (err) {
     return handleAdminError(err);
+  }
+}
+
+/**
+ * After admin verifies a per-student packet, walk the family's
+ * active applications for the same year and check whether every
+ * one of them has a confirmed packet. If yes, flip the family's
+ * `registration_student_registration_progress.isRegistration` to
+ * `true` so the parent-side sidenav shows the section as complete.
+ *
+ * Skipped when:
+ *   - The family has no active apps for the year (shouldn't happen
+ *     post-acceptance but defensively handled — we don't want to
+ *     mark `isRegistration=true` on an empty cohort)
+ *   - Any active student is missing a packet, or has one that
+ *     isn't confirmed yet
+ *
+ * Doesn't downgrade `isRegistration` to `false` — that's a
+ * different concern handled by the parent-side cascade when they
+ * unlock + edit something.
+ */
+async function cascadeFamilyRegistrationCompleted(
+  packet: XanoStudentRegistration
+): Promise<void> {
+  const studentId = Number(packet.registration_students_id);
+  const yearId = Number(packet.registration_school_years_id);
+  if (!studentId || !yearId) return;
+
+  // Find the family. Packets carry a student FK but no direct family
+  // FK, so we need the student row. Prefer the addon-embedded student
+  // (`_registration_students_2`) when present — Xano's packet GET
+  // includes it — and fall back to a `students.getById` hop only
+  // when the embed is missing (list endpoints, older callers).
+  const familyId =
+    packet._registration_students_2?.registration_families_id ??
+    (await xano.students.getById(studentId)).registration_families_id;
+  if (!familyId) return;
+
+  // Active apps for this family + year define the cohort that has
+  // to be fully verified before isRegistration can flip true.
+  const apps = await xano.applications.getByFamilyId(familyId);
+  const activeApps = apps.filter(
+    (a) =>
+      Number(a.registration_school_years_id) === yearId &&
+      a.isActive !== false
+  );
+  if (activeApps.length === 0) return;
+
+  // Pull every packet for the year once, then index by student id
+  // so the per-app lookup below is O(1).
+  const allPackets = await xano.studentRegistration.getByYear(yearId);
+  const packetByStudent = new Map<number, XanoStudentRegistration>();
+  for (const p of allPackets) {
+    packetByStudent.set(Number(p.registration_students_id), p);
+  }
+  // The just-updated packet we wrote above might not be in the
+  // year-scoped fetch yet (cache races, etc.); slot it in by hand.
+  packetByStudent.set(studentId, packet);
+
+  const allConfirmed = activeApps.every((app) => {
+    const sId = Number(app.registration_students_id);
+    const p = packetByStudent.get(sId);
+    return p?.registrationConfirmed === true;
+  });
+  if (!allConfirmed) return;
+
+  // Resolve-or-create the family progress row, then flip
+  // `isRegistration` if it isn't already true. Last-edited bump is
+  // automatic via the resolve/update flow.
+  const progress = await xano.studentRegistrationProgress.resolve(
+    familyId,
+    yearId
+  );
+  if (progress.isRegistration !== true) {
+    await xano.studentRegistrationProgress.update(progress.id, {
+      isRegistration: true,
+      last_edited: Date.now(),
+    });
   }
 }

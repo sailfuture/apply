@@ -1047,6 +1047,17 @@ export interface XanoStudentRegistration {
    *  staleness checks alongside the parallel `last_edited_time` on
    *  the student row. */
   last_edited_time?: number | null;
+  /** Legacy / Xano-side mirror of `last_edited_time`. Some rows
+   *  carry both columns; we don't write `last_updated` from this
+   *  codebase but include it on the type so reads don't lose
+   *  information. */
+  last_updated?: number | null;
+  /** Addon: when the GET endpoint includes the `registration_students`
+   *  row inline, it surfaces as `_registration_students_2`. Optional
+   *  because list endpoints / filtered queries may not include it.
+   *  Used by the per-student verify cascade to skip a separate
+   *  `students.getById` hop. */
+  _registration_students_2?: XanoStudent;
 }
 
 const pendingEnsure = new Map<string, Promise<XanoParent>>();
@@ -2456,11 +2467,22 @@ export const xano = {
       }
     },
 
-    async update(id: number, data: Partial<Omit<XanoStudentRegistration, "id" | "created_at">>): Promise<XanoStudentRegistration> {
+    async update(
+      id: number,
+      data: Partial<Omit<XanoStudentRegistration, "id" | "created_at">>
+    ): Promise<XanoStudentRegistration> {
+      // Always stamp `last_edited_time` to reflect the most recent
+      // write — applies to every caller (parent flow, admin
+      // verification, PandaDoc webhooks, etc.) so the staleness
+      // surfaces (admin enrolled-detail "Last edited 3 days ago",
+      // etc.) stay honest without each call site remembering to
+      // set it. Caller-supplied values are intentionally
+      // overridden — the source of truth is "right now".
+      const body = { ...data, last_edited_time: Date.now() };
       const res = await fetch(`${getBaseUrl()}/registration_student_registration/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
+        body: JSON.stringify(body),
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
       return res.json();
