@@ -2008,6 +2008,20 @@ export const xano = {
         ) ?? null;
       }
     },
+
+    /**
+     * Delete a scholarship row by id. Used by the admin
+     * `/api/admin/family-applications/[id]` cascade — callers MUST
+     * delete the scholarship's children (contributing members,
+     * homes, vehicles, benefits) before this fires, otherwise Xano
+     * will reject the delete on FK constraint.
+     */
+    async delete(id: number): Promise<void> {
+      const res = await fetch(`${getBaseUrl()}/registration_opportunity_scholarship/${id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+    },
   },
 
   scholarshipBenefits: {
@@ -2312,6 +2326,19 @@ export const xano = {
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
       return res.json();
+    },
+
+    /**
+     * Delete the legacy `registration_families_payment` row by id.
+     * Used by the admin family-application cascade delete to wipe
+     * the per-(family, year) payment snapshot when an application
+     * is being removed end-to-end.
+     */
+    async delete(id: number): Promise<void> {
+      const res = await fetch(`${getBaseUrl()}/registration_families_payment/${id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
     },
   },
 

@@ -6,6 +6,7 @@ import useSWR from "swr";
 import Link from "next/link";
 import { toast } from "sonner";
 import {
+  AlertCircle,
   Archive,
   ArrowLeft,
   Check,
@@ -15,6 +16,7 @@ import {
   Loader2,
   Pencil,
   SquarePen,
+  Trash2,
   Undo2,
   XCircle,
 } from "lucide-react";
@@ -469,6 +471,21 @@ export default function FamilyDetailPage() {
                   refreshDetail();
                   refreshProgress();
                 }}
+              />
+            ) : null}
+            {/* Delete application — destructive, admin-only escape
+                hatch when a family record needs to be wiped (test
+                rows, duplicate apps, accidental submissions). Wipes
+                every per-(family, year) row plus the scholarship
+                cluster underneath; family / parents / students stay
+                so a future re-application is still possible. Only
+                renders when a year is selected (the cascade is
+                year-scoped). */}
+            {yearId ? (
+              <DeleteApplicationButton
+                familyId={Number(familyId)}
+                yearId={Number(yearId)}
+                familyName={family.family_name}
               />
             ) : null}
           </div>
@@ -2081,6 +2098,43 @@ function formatCurrencyZero(value: number): string {
   });
 }
 
+/**
+ * Compute a single human-readable reason the Approve button should
+ * stay blocked, or `null` when nothing's blocking. Drives both the
+ * `disabled` state on the Approve button itself AND a visible
+ * banner rendered above the action row — admin previously had to
+ * hover the button's `title` tooltip to discover why it was greyed
+ * out, which most users never did.
+ *
+ * Order matters: the reason returned here is the FIRST gate that's
+ * failing in the order admin should fix things. Documents-to-review
+ * is the earliest step in the flow, so it surfaces first; then
+ * per-student scholarship confirmations; finally section verifies.
+ */
+function computeApproveBlockReason(input: {
+  allDocsConfirmed: boolean;
+  allSufsConfirmed: boolean;
+  unconfirmedCount: number;
+  unverifiedSections: string[];
+}): string | null {
+  if (!input.allDocsConfirmed) {
+    return "Confirm every document under Documents to review before approving.";
+  }
+  if (!input.allSufsConfirmed) {
+    return `Confirm scholarship award for ${input.unconfirmedCount} student${
+      input.unconfirmedCount === 1 ? "" : "s"
+    } before approving.`;
+  }
+  if (input.unverifiedSections.length > 0) {
+    return `Verify the ${input.unverifiedSections.join(
+      ", "
+    )} section${
+      input.unverifiedSections.length === 1 ? "" : "s"
+    } before approving.`;
+  }
+  return null;
+}
+
 function DecisionCard({
   familyId,
   yearId,
@@ -2395,7 +2449,29 @@ function DecisionCard({
               (nothing to send back); the grid collapses to two
               columns. */}
       {!accepted && !loading && students.length > 0 ? (
-        <div className="border-t bg-white px-5 py-3">
+        <div className="border-t bg-white px-5 py-3 space-y-2">
+          {/* Visible Approve-gate banner. The Approve button keeps
+              its `title` tooltip + `disabled` state, but most users
+              never hovered a greyed-out button to find out why —
+              showing the reason inline above the action row turns
+              "I clicked and nothing happened" into a clear
+              instruction. Computed from the same helper the button
+              uses, so the two surfaces can't drift. */}
+          {(() => {
+            const reason = computeApproveBlockReason({
+              allDocsConfirmed,
+              allSufsConfirmed,
+              unconfirmedCount,
+              unverifiedSections,
+            });
+            if (!reason) return null;
+            return (
+              <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                <AlertCircle className="size-4 shrink-0 mt-0.5" />
+                <span>{reason}</span>
+              </div>
+            );
+          })()}
           <div
             className={cn(
               "grid gap-2",
@@ -2848,26 +2924,12 @@ function ApproveFamilyButton({
   // Returns null when the gate passes, an error message otherwise.
   // Order matters: the most actionable / earliest-in-flow gate
   // surfaces first so admin sees "do this before that" guidance.
-  const gateBlockReason = (() => {
-    if (!allDocsConfirmed) {
-      return "Confirm every document under Documents to review before approving.";
-    }
-    if (!allSufsConfirmed) {
-      return `Confirm scholarship award for ${unconfirmedCount} student${
-        unconfirmedCount === 1 ? "" : "s"
-      } before approving.`;
-    }
-    // Section-verify gate — Family / Students / Testing each need
-    // admin verification before approval. Tells admin which
-    // specific sections are still pending so they can scroll up
-    // and verify them.
-    if (unverifiedSections.length > 0) {
-      return `Verify the ${unverifiedSections.join(
-        ", "
-      )} section${unverifiedSections.length === 1 ? "" : "s"} before approving.`;
-    }
-    return null;
-  })();
+  const gateBlockReason = computeApproveBlockReason({
+    allDocsConfirmed,
+    allSufsConfirmed,
+    unconfirmedCount,
+    unverifiedSections,
+  });
 
   return (
     <>
@@ -3198,6 +3260,193 @@ function ArchiveApplicationButton({
                 <Archive className="size-4 mr-1.5" />
               )}
               Archive application
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+/**
+ * Admin escape hatch — hard-delete a family's per-year application
+ * AND every row that hangs off it (apply-flow scholarship cluster,
+ * student application rows, registration packets, progress rows,
+ * payment snapshot). Family / parents / students stay so the
+ * record survives for re-application; this is for wiping the
+ * year-scoped data only.
+ *
+ * Dropped behind a typed-confirmation modal because the cascade is
+ * irreversible — the admin has to type the family name (or "delete"
+ * if no name is on file) before the destructive button unlocks.
+ * Mirrors the safety affordance on similar admin nukes elsewhere.
+ *
+ * On success, navigates back to the Applications list since the
+ * page we're sitting on no longer has data to render. Failures
+ * are toasted with the upstream error so admin can tell whether
+ * the cascade partially landed.
+ */
+function DeleteApplicationButton({
+  familyId,
+  yearId,
+  familyName,
+}: {
+  familyId: number;
+  yearId: number;
+  familyName: string;
+}) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [confirmText, setConfirmText] = useState("");
+  const [deleting, setDeleting] = useState(false);
+
+  // Required typed confirmation — defaults to the family name when
+  // it's on file, falls back to the literal string "delete" so the
+  // affordance still works for unnamed/blank families. Comparison
+  // is case-insensitive + trim-tolerant since admin will sometimes
+  // type "Smith" with a trailing space.
+  const expected = (familyName || "delete").trim();
+  const matches =
+    confirmText.trim().toLowerCase() === expected.toLowerCase();
+
+  async function runDelete() {
+    if (!matches) return;
+    setDeleting(true);
+    try {
+      const res = await fetch(
+        `/api/admin/family-applications/${familyId}?yearId=${yearId}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Delete failed (${res.status})`);
+      }
+      const result = (await res.json()) as {
+        ok?: boolean;
+        failures?: Array<{ step: string; message: string }>;
+      };
+      // Surface partial-failure info: if the route reports any
+      // step's row didn't delete, warn admin so they can retry or
+      // check the underlying Xano table directly.
+      if (Array.isArray(result.failures) && result.failures.length > 0) {
+        console.warn(
+          "[DeleteApplicationButton] partial cascade:",
+          result.failures
+        );
+        toast.warning(
+          `Deleted with ${result.failures.length} leftover row${
+            result.failures.length === 1 ? "" : "s"
+          }. Check console for details.`
+        );
+      } else {
+        toast.success(
+          `${familyName || "Family"}'s application deleted for the year.`
+        );
+      }
+      setOpen(false);
+      setConfirmText("");
+      router.push(`/admin/applications?yearId=${yearId}`);
+    } catch (err) {
+      console.error("[DeleteApplicationButton.runDelete] failed:", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't delete.");
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  return (
+    <>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={deleting}
+        onClick={() => setOpen(true)}
+        // Red text + border so the action reads as destructive even
+        // before the modal opens. `bg-white` keeps it from competing
+        // with the colored Approve button down the page.
+        className="bg-white border-red-200 text-red-700 hover:bg-red-50 hover:text-red-700"
+        title="Permanently delete this family's application for the year"
+      >
+        <Trash2 className="size-4 mr-1.5" />
+        Delete application
+      </Button>
+
+      <Dialog
+        open={open}
+        onOpenChange={(o) => {
+          if (deleting) return;
+          setOpen(o);
+          if (!o) setConfirmText("");
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-red-700">
+              Delete {familyName || "this family"}&rsquo;s application?
+            </DialogTitle>
+            <DialogDescription>
+              This wipes the family&rsquo;s application row, all per-student
+              applications, the scholarship + every contributing
+              member / home / vehicle / benefit underneath it, both
+              progress rows for the year, and the payment snapshot.
+              The family, parents, students, and emergency contacts
+              stay so the record survives for re-application.
+              <br />
+              <br />
+              <span className="font-medium text-foreground">
+                This can&rsquo;t be undone.
+              </span>{" "}
+              Type{" "}
+              <span className="font-mono text-xs px-1.5 py-0.5 rounded bg-muted text-foreground">
+                {expected}
+              </span>{" "}
+              below to confirm.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label
+              htmlFor="delete-confirm"
+              className="text-xs font-medium"
+            >
+              Confirmation
+            </Label>
+            <Input
+              id="delete-confirm"
+              value={confirmText}
+              onChange={(e) => setConfirmText(e.target.value)}
+              placeholder={expected}
+              disabled={deleting}
+              autoComplete="off"
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={deleting}
+              onClick={() => {
+                if (deleting) return;
+                setOpen(false);
+                setConfirmText("");
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              disabled={deleting || !matches}
+              onClick={() => void runDelete()}
+              className="bg-red-600 hover:bg-red-700 text-white disabled:opacity-50"
+            >
+              {deleting ? (
+                <Loader2 className="size-4 mr-1.5 animate-spin" />
+              ) : (
+                <Trash2 className="size-4 mr-1.5" />
+              )}
+              Yes, delete application
             </Button>
           </DialogFooter>
         </DialogContent>
