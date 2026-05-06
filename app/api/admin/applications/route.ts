@@ -49,12 +49,18 @@ export async function GET(req: NextRequest) {
       familiesResult,
       parentsResult,
       appsResult,
+      studentsResult,
     ] = await Promise.allSettled([
       xano.familyApplicationProgress.getByYear(yearId),
       xano.reapplyFamilyProgress.getByYear(yearId),
       xano.families.getAll(),
       xano.parents.getAll(),
       xano.applications.getAll(),
+      // Pulled here so we can surface a per-family student-names
+      // string ("Maxual Thompson, Thomas Haugh") on every row.
+      // The registrations list does the same thing — keeps the two
+      // surfaces feeling consistent.
+      xano.students.getAll(),
     ]);
 
     if (applyResult.status === "rejected") {
@@ -87,6 +93,12 @@ export async function GET(req: NextRequest) {
         appsResult.reason
       );
     }
+    if (studentsResult.status === "rejected") {
+      console.error(
+        "[/api/admin/applications] failed to load students list:",
+        studentsResult.reason
+      );
+    }
 
     const applyRows =
       applyResult.status === "fulfilled" ? applyResult.value : [];
@@ -97,6 +109,9 @@ export async function GET(req: NextRequest) {
     const parents =
       parentsResult.status === "fulfilled" ? parentsResult.value : [];
     const apps = appsResult.status === "fulfilled" ? appsResult.value : [];
+    const studentsAll =
+      studentsResult.status === "fulfilled" ? studentsResult.value : [];
+    const studentById = new Map(studentsAll.map((s) => [s.id, s]));
 
     const familyById = new Map(families.map((f) => [f.id, f]));
 
@@ -108,22 +123,39 @@ export async function GET(req: NextRequest) {
       parentsByFamily.set(family.id, matched);
     }
 
-    // Per-family active-student count for the requested year. One
+    // Per-family active-student bucket for the requested year. One
     // application row = one student. `isActive=false` rows are
     // soft-deleted (kept for history) and excluded from admin counts.
-    // Treat `undefined` as active so legacy rows still count.
-    const appsByFamily = new Map<number, number>();
+    // Treat `undefined` as active so legacy rows still count. We
+    // collect the student ids per family (rather than just counting)
+    // so the API can surface a comma-joined names string per row,
+    // matching the registrations list.
+    const studentIdsByFamily = new Map<number, number[]>();
     for (const a of apps) {
       if (Number(a.registration_school_years_id) !== yearId) continue;
       if (a.isActive === false) continue;
       const fid = Number(a.registration_families_id);
-      appsByFamily.set(fid, (appsByFamily.get(fid) ?? 0) + 1);
+      const sid = Number(a.registration_students_id);
+      const arr = studentIdsByFamily.get(fid) ?? [];
+      arr.push(sid);
+      studentIdsByFamily.set(fid, arr);
     }
 
     function lookupLabel(familyId: number) {
       const family = familyById.get(familyId) ?? null;
       const familyParents = parentsByFamily.get(familyId) ?? [];
       const primary = familyParents[0] ?? null;
+      const studentIds = studentIdsByFamily.get(familyId) ?? [];
+      // Build the display name list in id order — same approach the
+      // registrations route uses so re-enrolling students with two
+      // packets across years sort consistently across surfaces.
+      const studentNames = studentIds
+        .map((sid) => {
+          const s = studentById.get(sid);
+          if (!s) return "";
+          return `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim();
+        })
+        .filter(Boolean);
       return {
         family_name:
           family?.family_name?.trim() || `Family #${familyId}`,
@@ -131,7 +163,8 @@ export async function GET(req: NextRequest) {
           ? `${primary.first_name ?? ""} ${primary.last_name ?? ""}`.trim()
           : "",
         primary_email: primary?.email ?? "",
-        student_count: appsByFamily.get(familyId) ?? 0,
+        student_count: studentIds.length,
+        student_names: studentNames.join(", "),
       };
     }
 
@@ -230,6 +263,11 @@ export interface UnifiedAppRow {
   primary_name: string;
   primary_email: string;
   student_count: number;
+  /** Comma-joined display string of every active student name on
+   *  the family for the year (e.g. "Maxual Thompson, Thomas Haugh").
+   *  Surfaced so the table can show the cohort without an extra
+   *  lookup. Mirrors the registrations list's `student_names`. */
+  student_names: string;
   family_done: boolean;
   students_done: boolean;
   financial_aid_done: boolean;

@@ -49,7 +49,13 @@ const SECTION_VERIFY_PAIRS: Array<{
   confirmKey: keyof XanoStudentRegistrationProgress;
   timeKey: keyof XanoStudentRegistrationProgress;
   adminKey: keyof XanoStudentRegistrationProgress;
-  completedKey: keyof XanoStudentRegistrationProgress;
+  /** Optional — when set, flipping the verify bool to `true` also
+   *  flips this parent-completion bool to `true` (admin verify
+   *  overrides parent in-progress state). Sections without a
+   *  matching parent-completion column (e.g. emergency contacts,
+   *  which is family-evergreen) leave this `null` and skip the
+   *  cascade. */
+  completedKey: keyof XanoStudentRegistrationProgress | null;
 }> = [
   {
     confirmKey: "tuition_admin_confirm",
@@ -68,6 +74,15 @@ const SECTION_VERIFY_PAIRS: Array<{
     timeKey: "volunteer_admin_confirm_time",
     adminKey: "volunteer_admin_confirm_admin",
     completedKey: "isVolunteerHours",
+  },
+  {
+    // Emergency contacts — no parent-completion bool to cascade
+    // into. Audit pair (time + admin name) still gets stamped, but
+    // we leave the family's other state untouched.
+    confirmKey: "emergency_contacts_admin_confirm",
+    timeKey: "emergency_contacts_admin_confirm_time",
+    adminKey: "emergency_contacts_admin_confirm_admin",
+    completedKey: null,
   },
 ];
 
@@ -126,6 +141,7 @@ export async function PATCH(req: NextRequest) {
       "tuition_admin_confirm",
       "enrollment_admin_confirm",
       "volunteer_admin_confirm",
+      "emergency_contacts_admin_confirm",
     ];
     const patch: Record<string, unknown> = { last_edited: Date.now() };
     for (const key of ALLOWED) {
@@ -155,7 +171,7 @@ export async function PATCH(req: NextRequest) {
         const next = patch[pair.confirmKey] === true;
         patch[pair.timeKey] = next ? now : null;
         patch[pair.adminKey] = next ? adminName : "";
-        if (next) {
+        if (next && pair.completedKey) {
           patch[pair.completedKey] = true;
         }
       }

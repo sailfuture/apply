@@ -85,7 +85,11 @@ export default function FamilyRegistrationDetailPage() {
   // section's verify footer is scoped — clicking Verify on Tuition
   // doesn't gray out Enrollment's button.
   const [savingSection, setSavingSection] = useState<
-    "tuition" | "enrollment" | "volunteer" | null
+    | "tuition"
+    | "enrollment"
+    | "volunteer"
+    | "emergency_contacts"
+    | null
   >(null);
 
   const backHref = yearId
@@ -155,6 +159,10 @@ export default function FamilyRegistrationDetailPage() {
     registration:
       students.length > 0 &&
       students.every((s) => !!s.packet?.registrationConfirmed),
+    // Emergency contacts has no parent-completion bool, so the
+    // side nav's "complete" green tracks the verify state — admin
+    // verification is the only signal we have.
+    emergency_contacts: progress?.emergency_contacts_admin_confirm === true,
     volunteer: !!progress?.isVolunteerHours,
   };
 
@@ -165,9 +173,17 @@ export default function FamilyRegistrationDetailPage() {
   // on the row's `*_admin_confirm_admin` string column — no lookup
   // needed.
   const verifyToggle = (
-    field: "tuition_admin_confirm" | "enrollment_admin_confirm" | "volunteer_admin_confirm",
+    field:
+      | "tuition_admin_confirm"
+      | "enrollment_admin_confirm"
+      | "volunteer_admin_confirm"
+      | "emergency_contacts_admin_confirm",
     next: boolean,
-    section: "tuition" | "enrollment" | "volunteer"
+    section:
+      | "tuition"
+      | "enrollment"
+      | "volunteer"
+      | "emergency_contacts"
   ) => {
     setSavingSection(section);
     void (async () => {
@@ -339,6 +355,51 @@ export default function FamilyRegistrationDetailPage() {
           </SectionShell>
         </section>
 
+        {/* Emergency contacts get their own SectionShell now — the
+            parent column lives in `registration_student_registration_progress`
+            as a verify triplet (no parent-completion bool, since
+            emergency contacts are evergreen "exists or doesn't"
+            data with no in-progress state). Status dot derives
+            purely from contact count: green when at least one
+            contact exists, red when the family has none on file. */}
+        <section id="section-emergency-contacts" className="scroll-mt-20">
+          <SectionShell
+            title="Emergency Contacts"
+            status={
+              emergency_contacts.length > 0 ? "complete" : "not_started"
+            }
+            notes={{
+              familyId: Number(family?.id ?? familyId),
+              yearId: Number(yearId),
+              section: "section-emergency-contacts",
+              title: "Notes — Emergency Contacts",
+            }}
+            verify={{
+              sectionLabel: "Emergency Contacts",
+              verified:
+                progress?.emergency_contacts_admin_confirm === true,
+              // No matching `is_*` parent-completion bool exists
+              // for this section — admin verify is the only state
+              // we track, so `parentCompleted` is always false.
+              parentCompleted: false,
+              verifiedTime:
+                progress?.emergency_contacts_admin_confirm_time ?? null,
+              verifiedByName:
+                progress?.emergency_contacts_admin_confirm_admin?.trim() ||
+                null,
+              saving: savingSection === "emergency_contacts",
+              onToggle: (next) =>
+                verifyToggle(
+                  "emergency_contacts_admin_confirm",
+                  next,
+                  "emergency_contacts"
+                ),
+            }}
+          >
+            <EmergencyContactsBlock contacts={emergency_contacts} />
+          </SectionShell>
+        </section>
+
         <section id="section-volunteer" className="scroll-mt-20">
           <SectionShell
             title="Volunteer Hours"
@@ -386,6 +447,7 @@ function RegistrationSideNav({
     tuition: boolean;
     enrollment: boolean;
     registration: boolean;
+    emergency_contacts: boolean;
     volunteer: boolean;
   };
 }) {
@@ -412,6 +474,12 @@ function RegistrationSideNav({
       label: "Registration",
       href: "#section-registration",
       complete: sectionStatus.registration,
+    },
+    {
+      key: "emergency_contacts",
+      label: "Emergency Contacts",
+      href: "#section-emergency-contacts",
+      complete: sectionStatus.emergency_contacts,
     },
     {
       key: "volunteer",
@@ -570,13 +638,17 @@ function SectionShell({
 }) {
   const verified = !!verify?.verified;
   const parentCompleted = !!verify?.parentCompleted;
-  // Whole-card mute when the family has marked the section
-  // complete. Drops opacity on the entire `<Card>` (header + body
-  // + footer) rather than only the body so the title / status
-  // badge / Edit button all read as part of the same settled
-  // state. Mirrors the apply-flow `SectionShell` and the parent
-  // flow's "Section Completed" treatment.
-  const fullyDone = parentCompleted;
+  // Whole-card mute kicks in only when admin has *verified* the
+  // section. The parent flipping their completion bool isn't
+  // enough — that's still pending review on our side, and a
+  // premature gray-out reads as "this is settled" before admin
+  // has actually looked. Mirrors the apply-flow SectionShell.
+  const fullyDone = verified;
+  // Parent-completion is still surfaced via the status dot so
+  // admin can see in-progress vs done at a glance; reference it
+  // here to keep the prop on the API even though we no longer
+  // mute on it.
+  void parentCompleted;
   return (
     <Card
       className={cn(
@@ -881,7 +953,12 @@ function DisabledField({
         onChange={() => {}}
         aria-invalid={isMissing || undefined}
         className={cn(
-          "disabled:opacity-100 disabled:bg-white disabled:cursor-default",
+          // Bump to h-10 so DisabledField, FilePreviewRow, and
+          // FilePreviewGroup all sit on the same baseline height.
+          // Shadcn's default Input is h-9 which sat ~4px shorter
+          // than the file boxes, making the form read as
+          // mismatched.
+          "h-10 disabled:opacity-100 disabled:bg-white disabled:cursor-default",
           isMissing
             ? "border-red-500 ring-1 ring-red-500/20"
             : "border-input"
@@ -1083,6 +1160,13 @@ function RegistrationPacketBlock({
       </div>
     );
   }
+  // Emergency contacts get their own SectionShell now (rendered by
+  // the parent layout), so this block only stacks the per-student
+  // packet cards. The `emergencyContacts` prop is intentionally
+  // unused here; kept on the signature so the parent can keep
+  // passing them as a single bag of family-scoped data without
+  // having to refactor adjacent surfaces.
+  void emergencyContacts;
   return (
     <div className="space-y-5">
       {students.map((row) => (
@@ -1092,10 +1176,6 @@ function RegistrationPacketBlock({
           onChanged={onChanged}
         />
       ))}
-      {/* Emergency contacts are family-scoped, not per-student, so
-          they live in their own block beneath the student cards
-          rather than being duplicated under each one. */}
-      <EmergencyContactsBlock contacts={emergencyContacts} />
     </div>
   );
 }
@@ -1702,7 +1782,11 @@ function FilePreviewRow({
       </p>
       <div
         className={cn(
-          "flex items-center justify-between gap-2 rounded-md border bg-white px-3 py-2 text-xs",
+          // `h-10` matches the bumped DisabledField input so single-
+          // file boxes line up flush with the disabled inputs in the
+          // same row. text-sm + px-3 keeps the file link weight close
+          // to the disabled input text without pushing it into bold.
+          "flex h-10 items-center justify-between gap-2 rounded-md border bg-white px-3 text-sm",
           isMissing ? "border-red-500" : "border-input"
         )}
       >
@@ -1772,9 +1856,13 @@ function FilePreviewGroup({
       </p>
       <div
         className={cn(
-          "rounded-md border bg-white px-3 py-2 text-xs",
-          isMissing ? "border-red-500" : "border-input",
-          hasAny ? "space-y-1" : ""
+          // Empty / single-file: render as a 40px tall row so the
+          // box matches the bumped DisabledField input height. Multi-
+          // file: drop the fixed height so the list grows naturally;
+          // `py-2` stands in to keep top/bottom breathing room.
+          "rounded-md border bg-white px-3 text-sm",
+          entries.length <= 1 ? "flex h-10 items-center" : "py-2 space-y-1",
+          isMissing ? "border-red-500" : "border-input"
         )}
       >
         {!hasAny ? (

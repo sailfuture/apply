@@ -32,6 +32,8 @@ interface AppProgressRow {
   primary_name: string;
   primary_email: string;
   student_count: number;
+  /** Comma-joined active-student names for the family + year. */
+  student_names: string;
   family_done: boolean;
   students_done: boolean;
   financial_aid_done: boolean;
@@ -69,29 +71,6 @@ function deriveFilter(row: AppProgressRow): ProgressFilter {
   if (row.isSubmitted) return "submitted";
   if (row.sections_complete > 0) return "in_progress";
   return "not_started";
-}
-
-/**
- * Hash anchors the family detail page exposes for in-page scrolling.
- * Section pills on this list view jump straight to the matching
- * section on the family detail page rather than opening a separate
- * per-section editor — admin gets the full review layout (sidenav +
- * notes drawer + every other section in context) and the page
- * scrolls to whichever pill they clicked.
- *
- * Reapply rows reuse the same anchors. The family detail page renders
- * the apply-flow section IDs regardless of flow type, so a reapply
- * "Transportation" pill currently lands on `section-testing` (the
- * closest analog at this point in the flow); admins can scroll from
- * there to find transportation details if/when we surface them.
- */
-function sectionAnchors(_row: AppProgressRow) {
-  return {
-    family: "section-family",
-    students: "section-students",
-    financial_aid: "section-financial-aid",
-    fourth: "section-testing",
-  };
 }
 
 /**
@@ -153,23 +132,17 @@ export default function ApplicationsPage() {
     } satisfies Record<ProgressFilter, number>;
   }, [all, groups]);
 
-  // Navigate to the family detail page and let the URL hash trigger
-  // the page's own smooth-scroll handler (same code path the in-page
-  // sidenav uses). Note: Next's `router.push` reliably navigates
-  // _to_ the page but doesn't always trigger scrolling to the hash
-  // when the page is already client-cached, so we set the hash
-  // separately on a microtask after the push lands. The family
-  // detail page reads `window.location.hash` on mount.
-  function openSection(row: AppProgressRow, anchor: string) {
-    router.push(
-      `/admin/families/${row.family_id}?yearId=${row.year_id}#${anchor}`
-    );
-  }
-
-  // Shared column definitions across all three tables. `width` is set
-  // on every column so the three tables line up vertically — without
-  // it, each table's columns auto-size to its own content and the
+  // Shared column definitions across all four tables. `width` is set
+  // on every column so the tables line up vertically — without it,
+  // each table's columns auto-size to its own content and the
   // headers drift between groups.
+  //
+  // Layout mirrors the registrations list: family / primary / cohort
+  // / sections-as-dots / submitted date. Per-section anchor jumps
+  // (the previous `SectionPill` cells) were collapsed into a single
+  // `SectionDots` cell; row-click opens the family detail page and
+  // admin scrolls to whichever section they need from there. That
+  // removed a lot of header noise without losing real navigation.
   const columns: ColumnDef<AppProgressRow>[] = [
     {
       key: "family_name",
@@ -182,10 +155,22 @@ export default function ApplicationsPage() {
       ),
     },
     {
+      key: "primary_email",
+      header: "Primary Contact",
+      sortable: true,
+      searchable: true,
+      width: "w-[20%]",
+      render: (row) => (
+        <span className="block truncate">
+          {row.primary_email || row.primary_name || "—"}
+        </span>
+      ),
+    },
+    {
       key: "flow_type",
       header: "Type",
       sortable: true,
-      width: "w-[10%]",
+      width: "w-[8%]",
       render: (row) => (
         <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
           {row.flow_type === "reapply" ? "Reapply" : "New"}
@@ -193,75 +178,36 @@ export default function ApplicationsPage() {
       ),
     },
     {
-      key: "student_count",
+      key: "student_names",
       header: "Students",
       sortable: true,
-      width: "w-[8%]",
+      searchable: true,
+      width: "w-[24%]",
       render: (row) => (
-        <span className="block truncate">
-          {row.student_count === 1 ? "1" : `${row.student_count}`}
+        <span className="inline-flex items-center gap-2 min-w-0 max-w-full">
+          <span className="text-xs tabular-nums text-muted-foreground shrink-0">
+            {row.student_count}
+          </span>
+          <span className="block truncate" title={row.student_names}>
+            {row.student_names || "—"}
+          </span>
         </span>
       ),
     },
     {
-      key: "family_done",
-      header: "Family",
+      key: "sections_complete",
+      header: "Sections",
       sortable: true,
-      width: "w-[10%]",
+      width: "w-[12%]",
       render: (row) => (
-        <SectionPill
-          complete={row.family_done}
-          onClick={() => openSection(row, sectionAnchors(row).family)}
-          label={`Family for ${row.family_name}`}
-        />
+        <span className="inline-flex items-center gap-2">
+          <span className="text-xs tabular-nums text-muted-foreground">
+            {row.sections_complete}/{row.sections_total}
+          </span>
+          <SectionDots row={row} />
+        </span>
       ),
     },
-    {
-      key: "students_done",
-      header: "Students",
-      sortable: true,
-      width: "w-[10%]",
-      render: (row) => (
-        <SectionPill
-          complete={row.students_done}
-          onClick={() => openSection(row, sectionAnchors(row).students)}
-          label={`Students for ${row.family_name}`}
-        />
-      ),
-    },
-    {
-      key: "financial_aid_done",
-      header: "Financial Aid",
-      sortable: true,
-      width: "w-[10%]",
-      render: (row) => (
-        <SectionPill
-          complete={row.financial_aid_done}
-          onClick={() =>
-            openSection(row, sectionAnchors(row).financial_aid)
-          }
-          label={`Financial Aid for ${row.family_name}`}
-        />
-      ),
-    },
-    {
-      key: "fourth_done",
-      header: "Testing / Transport",
-      sortable: true,
-      width: "w-[10%]",
-      render: (row) => (
-        <SectionPill
-          complete={row.fourth_done}
-          onClick={() => openSection(row, sectionAnchors(row).fourth)}
-          label={`${row.fourth_label} for ${row.family_name}`}
-        />
-      ),
-    },
-    // Status column was removed — the surrounding section card already
-    // names the bucket ("SUBMITTED", "IN PROGRESS", "NOT STARTED",
-    // "ARCHIVED"), so re-stamping every row with the same label is
-    // redundant noise. The Submitted-date column below carries the
-    // only status nuance that varies row-to-row.
     {
       key: "submitted_at",
       header: "Submitted",
@@ -397,37 +343,48 @@ export default function ApplicationsPage() {
   );
 }
 
-function SectionPill({
-  complete,
-  onClick,
-  label,
-}: {
-  complete: boolean;
-  onClick: () => void;
-  label: string;
-}) {
+/**
+ * Four sections rendered as small dots — Family / Students /
+ * Financial Aid / Testing-or-Transportation. Mirrors the
+ * `SectionDots` on the registrations list so the two surfaces
+ * read identically. Click-through to specific section anchors
+ * was dropped when this column collapsed; row click on the
+ * surrounding row opens the family detail page where every
+ * section is reachable via the in-page side nav.
+ */
+function SectionDots({ row }: { row: AppProgressRow }) {
+  const sections = [
+    { key: "family", complete: row.family_done, label: "Family" },
+    { key: "students", complete: row.students_done, label: "Students" },
+    {
+      key: "financial_aid",
+      complete: row.financial_aid_done,
+      label: "Financial Aid",
+    },
+    {
+      key: "fourth",
+      complete: row.fourth_done,
+      label: row.fourth_label,
+    },
+  ];
   return (
-    <button
-      type="button"
-      className={cn(
-        "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs transition-colors hover:bg-muted",
-        complete ? "text-foreground" : "text-muted-foreground"
+    <span className="inline-flex items-center gap-1">
+      {sections.map((s) =>
+        s.complete ? (
+          <CheckCircle2
+            key={s.key}
+            className="size-3 text-green-600"
+            aria-label={`${s.label} complete`}
+          />
+        ) : (
+          <Circle
+            key={s.key}
+            className="size-3 text-muted-foreground/40"
+            aria-label={`${s.label} not complete`}
+          />
+        )
       )}
-      onClick={(e) => {
-        e.stopPropagation();
-        onClick();
-      }}
-      title={`Open ${label}`}
-    >
-      {complete ? (
-        // Green check is the only color in the table — explicit signal
-        // that the section is done. Everything else stays monochrome.
-        <CheckCircle2 className="size-3.5 shrink-0 text-green-600" />
-      ) : (
-        <Circle className="size-3.5 shrink-0" />
-      )}
-      <span className="truncate">{complete ? "Done" : "—"}</span>
-    </button>
+    </span>
   );
 }
 

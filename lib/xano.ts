@@ -965,6 +965,14 @@ export interface XanoStudentRegistrationProgress {
   volunteer_admin_confirm?: boolean;
   volunteer_admin_confirm_time?: number | null;
   volunteer_admin_confirm_admin?: string;
+  /** Emergency-contacts section verify triplet. No matching parent-
+   *  completion bool exists for this section (emergency contacts are
+   *  family-evergreen — they exist or they don't, with no in-progress
+   *  state), so the verify→complete cascade other sections use is
+   *  skipped here. */
+  emergency_contacts_admin_confirm?: boolean;
+  emergency_contacts_admin_confirm_time?: number | null;
+  emergency_contacts_admin_confirm_admin?: string;
 }
 
 export interface XanoEmergencyContact {
