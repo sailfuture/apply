@@ -75,6 +75,7 @@ export async function GET(
       parentsResult,
       studentsResult,
       emergencyResult,
+      paymentResult,
     ] = await Promise.allSettled([
       xano.applications.getAdminFamilyDetail(familyId, yearId),
       xano.studentRegistrationProgress.resolve(familyId, yearId),
@@ -82,6 +83,14 @@ export async function GET(
       xano.parents.getAll(),
       xano.students.getAll(),
       xano.emergencyContacts.getByFamilyId(familyId),
+      // Legacy `registration_families_payment` row — pulled here as a
+      // fallback for the Tuition card's monthly snapshot. The Approve
+      // flow snapshots the monthly tuition + transport onto BOTH this
+      // legacy row and the registration progress row, but families
+      // approved before the dual-write fix landed only carry the
+      // amounts on this legacy row. Reading both lets us paper over
+      // that delta until the legacy table is fully retired.
+      xano.familyPayments.getByFamilyAndYear(familyId, yearId),
     ]);
 
     if (aggResult.status === "rejected") {
@@ -108,6 +117,12 @@ export async function GET(
         emergencyResult.reason
       );
     }
+    if (paymentResult.status === "rejected") {
+      console.error(
+        "[/api/admin/registrations/[id]] family payment fallback failed:",
+        paymentResult.reason
+      );
+    }
 
     const agg =
       aggResult.status === "fulfilled" ? aggResult.value : null;
@@ -121,6 +136,37 @@ export async function GET(
       studentsResult.status === "fulfilled" ? studentsResult.value : [];
     const emergencyContacts =
       emergencyResult.status === "fulfilled" ? emergencyResult.value : [];
+    const familyPayment =
+      paymentResult.status === "fulfilled" ? paymentResult.value : null;
+
+    // Backfill the progress row's monthly columns from the legacy
+    // `registration_families_payment` row when missing. Conditions:
+    //   - Progress column reads as 0 / undefined (default).
+    //   - Legacy column carries a real value.
+    // The legacy `transportation_total` is annual; convert to monthly
+    // before comparing/assigning. Mutates the in-memory `progress`
+    // only — Xano isn't written from here. This is a read-side
+    // shim; the durable fix lives on the Approve flow's dual-write.
+    if (progress && familyPayment) {
+      if (
+        (!progress.monthly_tuition_payment ||
+          progress.monthly_tuition_payment === 0) &&
+        familyPayment.monthly_tuition_payment > 0
+      ) {
+        progress.monthly_tuition_payment =
+          familyPayment.monthly_tuition_payment;
+      }
+      if (
+        (!progress.monthly_transportation_payment ||
+          progress.monthly_transportation_payment === 0) &&
+        typeof familyPayment.transportation_total === "number" &&
+        familyPayment.transportation_total > 0
+      ) {
+        progress.monthly_transportation_payment =
+          Math.round((familyPayment.transportation_total / 12) * 100) /
+          100;
+      }
+    }
 
     if (!agg) {
       return NextResponse.json(

@@ -2787,6 +2787,52 @@ function ApproveFamilyButton({
         console.error("[ApproveFamilyButton] snapshot threw:", snapErr);
       }
 
+      // Mirror the snapshot onto `registration_student_registration_progress`
+      // — the registration-flow detail page (`/admin/registrations/[id]`)
+      // reads its Tuition card from `monthly_tuition_payment` +
+      // `monthly_transportation_payment` on this row, so the legacy
+      // `registration_families_payment` snapshot above isn't enough on
+      // its own. Without this PATCH, the registrations page renders
+      // $0 / $0 in the Monthly Snapshot grid even though the family
+      // has been accepted with real numbers.
+      //
+      // `monthly_transportation_payment` is the monthly figure (the
+      // column above is the annualized total — divide by 12). SNAP
+      // families have `transportationTotal === null` (transport
+      // waived); we collapse to 0 there since the column is typed
+      // as `number` rather than nullable.
+      try {
+        const monthlyTransport =
+          transportationTotal == null
+            ? 0
+            : Math.round((transportationTotal / 12) * 100) / 100;
+        const regSnapRes = await fetch(
+          `/api/admin/registration-progress`,
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              familyId,
+              yearId,
+              monthly_tuition_payment: monthlyTuitionPayment,
+              monthly_transportation_payment: monthlyTransport,
+            }),
+          }
+        );
+        if (!regSnapRes.ok) {
+          const regErr = await regSnapRes.json().catch(() => null);
+          console.error(
+            "[ApproveFamilyButton] registration-progress snapshot failed:",
+            regErr
+          );
+        }
+      } catch (regErr) {
+        console.error(
+          "[ApproveFamilyButton] registration-progress snapshot threw:",
+          regErr
+        );
+      }
+
       toast.success(`${familyName || "Family"} approved for this year.`);
       setOpen(false);
       onApproved();
