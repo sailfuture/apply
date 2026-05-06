@@ -874,32 +874,49 @@ export default function ScholarshipPage() {
         }),
       });
 
-      const memberPatches = members.map((m) =>
-        fetch(`/api/scholarship-items/contributing-members/${m.id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            first_name: m.first_name,
-            last_name: m.last_name,
-            address_1: m.address_1,
-            address_2: m.address_2,
-            city: m.city,
-            state: m.state,
-            zipcode: m.zipcode,
-            estimated_annual_income: m.estimated_annual_income,
-            isW2: m.isW2,
-            isPayStubs: m.isPayStubs,
-            // Each verification slot is now a multi-file array. Normalize
-            // before PATCH so legacy single-object rows get rewritten as
-            // arrays the first time they save through the new UI.
-            w2: toFileArray(m.w2),
-            paystub_1: toFileArray(m.paystub_1),
-            paystub_2: toFileArray(m.paystub_2),
-            paystub_3: toFileArray(m.paystub_3),
-            paystub_4: toFileArray(m.paystub_4),
-          }),
+      // Skip members whose `id` is missing — the autosave shouldn't
+      // fire a PATCH against `/api/scholarship-items/contributing-members/undefined`
+      // (which would bottom out as `Number("undefined") === NaN` on the
+      // route side and either 404 against Xano or, worse, silently
+      // mutate an unrelated row). If we ever ship a member into local
+      // state without a real id, we want to know about it loudly.
+      const memberPatches = members
+        .filter((m) => {
+          if (!Number.isFinite(m.id) || (m.id as number) <= 0) {
+            console.warn(
+              "[handleSave] skipping contributing-member PATCH; missing id:",
+              m
+            );
+            return false;
+          }
+          return true;
         })
-      );
+        .map((m) =>
+          fetch(`/api/scholarship-items/contributing-members/${m.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              first_name: m.first_name,
+              last_name: m.last_name,
+              address_1: m.address_1,
+              address_2: m.address_2,
+              city: m.city,
+              state: m.state,
+              zipcode: m.zipcode,
+              estimated_annual_income: m.estimated_annual_income,
+              isW2: m.isW2,
+              isPayStubs: m.isPayStubs,
+              // Each verification slot is now a multi-file array. Normalize
+              // before PATCH so legacy single-object rows get rewritten as
+              // arrays the first time they save through the new UI.
+              w2: toFileArray(m.w2),
+              paystub_1: toFileArray(m.paystub_1),
+              paystub_2: toFileArray(m.paystub_2),
+              paystub_3: toFileArray(m.paystub_3),
+              paystub_4: toFileArray(m.paystub_4),
+            }),
+          })
+        );
 
       const homePatches = homes.map((h) =>
         fetch(`/api/scholarship-items/homes/${h.id}`, {
@@ -1109,13 +1126,36 @@ export default function ScholarshipPage() {
     setAddingMember(true);
     try {
       const sid = await ensureScholarship();
-      if (!sid) return;
+      if (!sid) {
+        toast.error(
+          "Couldn't get the scholarship row. Refresh and try again."
+        );
+        return;
+      }
       const res = await fetch(`/api/scholarship/${sid}/contributing-members`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({}),
       });
-      if (res.ok) setMembers([...members, await res.json()]);
+      if (!res.ok) {
+        // Surface the real Xano/route error so a silent backend
+        // rejection (e.g. schema-required field added on Xano) is
+        // actually visible to the user instead of just leaving the
+        // members list unchanged.
+        const errBody = await res.json().catch(() => null);
+        const message =
+          errBody?.error ?? `Add member failed (${res.status})`;
+        console.error("[addMember] failed:", res.status, errBody);
+        toast.error(message);
+        return;
+      }
+      const created = await res.json();
+      setMembers([...members, created]);
+    } catch (err) {
+      console.error("[addMember] threw:", err);
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't add member."
+      );
     } finally {
       setAddingMember(false);
     }

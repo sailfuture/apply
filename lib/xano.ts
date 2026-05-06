@@ -1303,6 +1303,36 @@ async function _doEnsureParentRecord(
   });
 }
 
+/**
+ * Normalize a contributing-member row's primary key. Xano sometimes
+ * exposes the PK under a custom column name
+ * (`registration_opportunity_scholarship_contributing_members_id`)
+ * — typically when the table's PK has been renamed in the schema
+ * editor or when the row is fetched through certain join shapes.
+ * Callers in this codebase universally read `id`; this helper
+ * promotes the custom column into `id` when the standard one is
+ * missing, so a Xano-side rename doesn't silently break the parent
+ * flow's PATCH/DELETE round-trips.
+ *
+ * Defensive on shape — accepts any object and returns it cast to
+ * `XanoScholarshipContributingMember`. The cast is safe because all
+ * other fields on the type are read defensively at the call sites.
+ */
+function normalizeContributingMemberPK(
+  raw: Record<string, unknown>
+): XanoScholarshipContributingMember {
+  const out = { ...raw };
+  if (
+    (out.id === undefined || out.id === null) &&
+    typeof out.registration_opportunity_scholarship_contributing_members_id ===
+      "number"
+  ) {
+    out.id =
+      out.registration_opportunity_scholarship_contributing_members_id;
+  }
+  return out as unknown as XanoScholarshipContributingMember;
+}
+
 export const xano = {
   parents: {
     async create(data: Omit<XanoParent, "id" | "created_at">) {
@@ -2052,7 +2082,16 @@ export const xano = {
         body: JSON.stringify(data),
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
-      return res.json() as Promise<XanoScholarshipContributingMember>;
+      // Xano sometimes exposes the table's primary key under a custom
+      // column name (e.g. `registration_opportunity_scholarship_contributing_members_id`)
+      // when the row is fetched through certain join paths or after a
+      // PK rename in the schema editor. Normalize so callers can keep
+      // reading `id` regardless of which column name comes back —
+      // missing this would leave the parent flow's
+      // `setMembers([...members, created])` with an undefined `id`,
+      // which would silently break every subsequent PATCH/DELETE.
+      const raw = (await res.json()) as Record<string, unknown>;
+      return normalizeContributingMemberPK(raw);
     },
 
     async getAll(): Promise<XanoScholarshipContributingMember[]> {
@@ -2060,7 +2099,8 @@ export const xano = {
         cache: "no-store",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
-      return res.json();
+      const raw = (await res.json()) as Record<string, unknown>[];
+      return Array.isArray(raw) ? raw.map(normalizeContributingMemberPK) : [];
     },
 
     async update(id: number, data: Partial<Omit<XanoScholarshipContributingMember, "id" | "created_at">>) {
@@ -2070,7 +2110,8 @@ export const xano = {
         body: JSON.stringify(data),
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
-      return res.json() as Promise<XanoScholarshipContributingMember>;
+      const raw = (await res.json()) as Record<string, unknown>;
+      return normalizeContributingMemberPK(raw);
     },
 
     async delete(id: number): Promise<void> {
@@ -2090,7 +2131,10 @@ export const xano = {
           const all = await this.getAll();
           return all.filter((m) => m.registration_opportunity_scholarship_id === scholarshipId);
         }
-        const results: XanoScholarshipContributingMember[] = await res.json();
+        const raw = (await res.json()) as Record<string, unknown>[];
+        const normalized = Array.isArray(raw)
+          ? raw.map(normalizeContributingMemberPK)
+          : [];
         // ALWAYS filter client-side — Xano's auto-generated GET on
         // a child table treats query params as auxiliary filters, not
         // as the listing predicate. When the param is something Xano
@@ -2099,12 +2143,10 @@ export const xano = {
         // member for every scholarship in the system. Without this
         // filter, the admin Financial Aid view would surface other
         // families' members.
-        return Array.isArray(results)
-          ? results.filter(
-              (m) =>
-                m.registration_opportunity_scholarship_id === scholarshipId
-            )
-          : [];
+        return normalized.filter(
+          (m) =>
+            m.registration_opportunity_scholarship_id === scholarshipId
+        );
       } catch {
         const all = await this.getAll();
         return all.filter((m) => m.registration_opportunity_scholarship_id === scholarshipId);
