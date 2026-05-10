@@ -2228,7 +2228,24 @@ export const xano = {
           return all.filter((h) => h.registration_opportunity_scholarship_id === scholarshipId);
         }
         const results: XanoScholarshipHome[] = await res.json();
-        return Array.isArray(results) ? results : [];
+        // ALWAYS filter client-side — Xano's auto-generated GET on a
+        // child table treats query params as auxiliary filters, not
+        // as the listing predicate. When the param is something Xano
+        // doesn't recognize as a built-in (e.g. just the FK column
+        // name), the response is the FULL table — every home for
+        // every scholarship in the system. Without this filter, the
+        // admin Financial Aid view would surface other families'
+        // homes alongside the one we want.
+        //
+        // Mirrors the same defense on
+        // `scholarshipContributingMembers.getByScholarshipId` — same
+        // Xano shape, same trap.
+        return Array.isArray(results)
+          ? results.filter(
+              (h) =>
+                h.registration_opportunity_scholarship_id === scholarshipId
+            )
+          : [];
       } catch {
         const all = await this.getAll();
         return all.filter((h) => h.registration_opportunity_scholarship_id === scholarshipId);
@@ -2283,7 +2300,18 @@ export const xano = {
           return all.filter((v) => v.registration_opportunity_scholarship_id === scholarshipId);
         }
         const results: XanoScholarshipVehicle[] = await res.json();
-        return Array.isArray(results) ? results : [];
+        // Same client-side filter as the homes helper above — Xano's
+        // auto-generated child-table GET ignores arbitrary FK
+        // predicates and returns the full table, so the parent
+        // `?registration_opportunity_scholarship_id=X` is silently
+        // dropped. Filter here so callers can't surface another
+        // family's vehicles even when Xano hands them over.
+        return Array.isArray(results)
+          ? results.filter(
+              (v) =>
+                v.registration_opportunity_scholarship_id === scholarshipId
+            )
+          : [];
       } catch {
         const all = await this.getAll();
         return all.filter((v) => v.registration_opportunity_scholarship_id === scholarshipId);
