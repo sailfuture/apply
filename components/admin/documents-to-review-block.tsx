@@ -94,6 +94,21 @@ interface Props {
    *  immediately. SWR doesn't auto-revalidate the parent's
    *  /family-applications cache on its own. */
   onScholarshipChanged?: () => void;
+  /** When the parent fetched contributing members and benefits via
+   *  the composite scholarship-details endpoint, pass them in here.
+   *  The block skips its own SWR fetches when an override is
+   *  provided, eliminating duplicate filtered round-trips against
+   *  Xano's child-list endpoints. Both overrides are independent —
+   *  passing one without the other is fine (the missing side falls
+   *  back to its own SWR fetch). */
+  membersOverride?: XanoScholarshipContributingMember[];
+  benefitsOverride?: XanoScholarshipBenefit[];
+  /** Called after a successful per-slot confirm PATCH so the parent
+   *  can refetch the composite endpoint and re-render the table
+   *  with updated audit columns. Independent of
+   *  `onScholarshipChanged` (which refetches the scholarship row
+   *  itself). */
+  onChildrenChanged?: () => void;
 }
 
 /**
@@ -125,17 +140,54 @@ export function DocumentsToReviewBlock({
   scholarship,
   familyId: _familyId,
   onScholarshipChanged,
+  membersOverride,
+  benefitsOverride,
+  onChildrenChanged,
 }: Props) {
-  const membersSwrKey = `/api/admin/contributing-members?scholarshipId=${scholarship.id}`;
-  const { data: membersData, isLoading: membersLoading, mutate: mutateMembers } = useSWR<
+  // Skip the per-table SWR fetch when the parent already handed an
+  // override array down — the composite scholarship-details
+  // endpoint serves the same data pre-filtered, so a parallel
+  // fetch here would just duplicate the work (and re-trigger every
+  // time SWR revalidates). Passing `null` to `useSWR` disables it.
+  const membersSwrKey =
+    membersOverride !== undefined
+      ? null
+      : `/api/admin/contributing-members?scholarshipId=${scholarship.id}`;
+  const { data: membersData, isLoading: membersFetchLoading, mutate: mutateMembersInternal } = useSWR<
     XanoScholarshipContributingMember[]
   >(membersSwrKey, adminFetcher);
-  const benefitsSwrKey = scholarship.government_benefits
-    ? `/api/admin/scholarship-benefits?scholarshipId=${scholarship.id}`
-    : null;
-  const { data: benefitsData, isLoading: benefitsLoading, mutate: mutateBenefits } = useSWR<
+  const benefitsSwrKey =
+    benefitsOverride !== undefined
+      ? null
+      : scholarship.government_benefits
+        ? `/api/admin/scholarship-benefits?scholarshipId=${scholarship.id}`
+        : null;
+  const { data: benefitsData, isLoading: benefitsFetchLoading, mutate: mutateBenefitsInternal } = useSWR<
     XanoScholarshipBenefit[]
   >(benefitsSwrKey, adminFetcher);
+  // When an override is in play we have data immediately (the
+  // parent already fetched it); skip the loading flicker.
+  const membersLoading =
+    membersOverride !== undefined ? false : membersFetchLoading;
+  const benefitsLoading =
+    benefitsOverride !== undefined ? false : benefitsFetchLoading;
+  // Bubble per-slot confirm flips back to the parent so its
+  // composite cache stays in sync. Falls back to no-op when the
+  // parent didn't wire the callback (e.g. legacy callers).
+  const mutateMembers = async () => {
+    if (membersOverride !== undefined) {
+      onChildrenChanged?.();
+    } else {
+      await mutateMembersInternal();
+    }
+  };
+  const mutateBenefits = async () => {
+    if (benefitsOverride !== undefined) {
+      onChildrenChanged?.();
+    } else {
+      await mutateBenefitsInternal();
+    }
+  };
 
   // Admin lookup — feeds the "Confirmed by Hunter Thompson" captions
   // under each confirmed row. The endpoint just exposes the same
@@ -153,8 +205,8 @@ export function DocumentsToReviewBlock({
   // scoped to that one row rather than blanket-spinning everything.
   const [savingSlot, setSavingSlot] = useState<string | null>(null);
 
-  const members = membersData ?? [];
-  const benefits = benefitsData ?? [];
+  const members = membersOverride ?? membersData ?? [];
+  const benefits = benefitsOverride ?? benefitsData ?? [];
 
   // Build the flat row list. Each row carries its own confirmation
   // descriptor when applicable (contributing-member slots + government

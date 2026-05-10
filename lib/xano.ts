@@ -1984,7 +1984,86 @@ export const xano = {
         cache: "no-store",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
-      return res.json();
+      const raw = (await res.json()) as Record<string, unknown>;
+      // Xano's single-row endpoint now returns a composite shape:
+      //   { opportunity_scholarship: {...}, homes, vehicles,
+      //     contributing_members, benefits }
+      // Existing callers expect the flat scholarship row back, so we
+      // unwrap when the addon shape is present. New callers that want
+      // the children too should use `getByIdWithChildren` below
+      // instead of unpacking the wrapped result twice.
+      if (
+        raw &&
+        typeof raw === "object" &&
+        raw.opportunity_scholarship &&
+        typeof raw.opportunity_scholarship === "object"
+      ) {
+        return raw.opportunity_scholarship as XanoScholarship;
+      }
+      return raw as unknown as XanoScholarship;
+    },
+
+    /**
+     * Fetch a scholarship + every child row Xano joins on the
+     * single-row endpoint in one call. Mirrors the live Xano response
+     * shape:
+     *   { opportunity_scholarship, homes, vehicles,
+     *     contributing_members, benefits }
+     *
+     * Use this instead of stitching together separate
+     * `getByScholarshipId` calls for each child table — Xano's
+     * auto-generated child list endpoints don't honor arbitrary FK
+     * predicates and we'd otherwise need to apply per-table
+     * client-side filters anyway. One round trip, single source of
+     * truth, no risk of one filter drifting from the others.
+     */
+    async getByIdWithChildren(id: number): Promise<{
+      scholarship: XanoScholarship;
+      homes: XanoScholarshipHome[];
+      vehicles: XanoScholarshipVehicle[];
+      contributing_members: XanoScholarshipContributingMember[];
+      benefits: XanoScholarshipBenefit[];
+    }> {
+      const res = await fetch(`${getBaseUrl()}/registration_opportunity_scholarship/${id}`, {
+        cache: "no-store",
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      const raw = (await res.json()) as Record<string, unknown>;
+      // Defensive across both response shapes — older callers may
+      // still see the flat-row endpoint while the schema change
+      // ripples through, so we tolerate either:
+      //   - `{ opportunity_scholarship: {...}, homes: [...], ... }`
+      //   - `{ ...flatXanoScholarshipFields }`
+      const scholarship =
+        raw.opportunity_scholarship &&
+        typeof raw.opportunity_scholarship === "object"
+          ? (raw.opportunity_scholarship as XanoScholarship)
+          : (raw as unknown as XanoScholarship);
+      const homes = Array.isArray(raw.homes)
+        ? (raw.homes as XanoScholarshipHome[])
+        : [];
+      const vehicles = Array.isArray(raw.vehicles)
+        ? (raw.vehicles as XanoScholarshipVehicle[])
+        : [];
+      const contributing_members_raw = Array.isArray(raw.contributing_members)
+        ? (raw.contributing_members as Record<string, unknown>[])
+        : [];
+      // Run each member through the PK normalizer so callers can
+      // keep reading `member.id` even when Xano hands back the
+      // custom-named primary key column on this addon shape.
+      const contributing_members = contributing_members_raw.map(
+        normalizeContributingMemberPK
+      );
+      const benefits = Array.isArray(raw.benefits)
+        ? (raw.benefits as XanoScholarshipBenefit[])
+        : [];
+      return {
+        scholarship,
+        homes,
+        vehicles,
+        contributing_members,
+        benefits,
+      };
     },
 
     async update(id: number, data: Partial<Omit<XanoScholarship, "id" | "created_at">>) {

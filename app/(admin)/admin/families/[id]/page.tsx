@@ -1776,27 +1776,33 @@ function ScholarshipBlock({
    *  `*_confirm` columns) updates without manual reload. */
   onScholarshipChanged?: () => void;
 }) {
-  // Purchased houses + vehicles live on their own Xano tables keyed
-  // off the scholarship; fetch alongside the main payload so the
-  // Assets summary renders the full picture rather than just the
-  // dollar totals on the scholarship row. SWR caches by URL, so any
-  // sibling surface (Documents to Review, the Determination card)
-  // that subscribes to the same keys gets the same response without
-  // extra fetches.
-  const { data: homesData, isLoading: homesLoading } = useSWR<
-    XanoScholarshipHome[]
-  >(
-    `/api/admin/scholarship-homes?scholarshipId=${scholarship.id}`,
-    adminFetcher
-  );
-  const { data: vehiclesData, isLoading: vehiclesLoading } = useSWR<
-    XanoScholarshipVehicle[]
-  >(
-    `/api/admin/scholarship-vehicles?scholarshipId=${scholarship.id}`,
-    adminFetcher
-  );
-  const homes = homesData ?? [];
-  const vehicles = vehiclesData ?? [];
+  // Single composite fetch — Xano's `/registration_opportunity_scholarship/{id}`
+  // endpoint returns the scholarship row + every child table
+  // (homes, vehicles, contributing members, benefits) pre-joined
+  // and pre-filtered by FK. Doing one request instead of four
+  // separate filtered fetches removes a whole class of "did we
+  // remember to filter?" bugs (Xano's child-list endpoints
+  // silently ignore arbitrary FK predicates).
+  type ScholarshipDetails = {
+    scholarship: XanoScholarship;
+    homes: XanoScholarshipHome[];
+    vehicles: XanoScholarshipVehicle[];
+    contributing_members: XanoScholarshipContributingMember[];
+    benefits: XanoScholarshipBenefit[];
+  };
+  const { data: details, isLoading: detailsLoading, mutate: mutateDetails } =
+    useSWR<ScholarshipDetails>(
+      `/api/admin/scholarship-details?id=${scholarship.id}`,
+      adminFetcher
+    );
+  const homes = details?.homes ?? [];
+  const vehicles = details?.vehicles ?? [];
+  const members = details?.contributing_members ?? [];
+  const benefits = details?.benefits ?? [];
+  // Children loading state — separate from "we have the
+  // scholarship row" since the parent already handed that in.
+  const homesLoading = detailsLoading && !details;
+  const vehiclesLoading = detailsLoading && !details;
   // Opt-out + SNAP short-circuits. The Opportunity Scholarship form
   // is the only thing that fills in the household / income / asset
   // / debt fields below, so on either of those alternate paths the
@@ -2072,6 +2078,22 @@ function ScholarshipBlock({
       <DocumentsToReviewBlock
         scholarship={scholarship}
         familyId={familyId}
+        // Pass the pre-fetched arrays from the composite endpoint
+        // so the table skips its own SWR fetches against
+        // `/api/admin/contributing-members?scholarshipId=…` and
+        // `/api/admin/scholarship-benefits?scholarshipId=…` — both
+        // of which previously fell into the same Xano filter trap
+        // and shipped unrelated families' rows through until we
+        // added defensive client-side filters. Single fetch = single
+        // source of truth, no filter drift.
+        membersOverride={members}
+        benefitsOverride={benefits}
+        // When admin verifies a doc inside the table, refetch the
+        // composite endpoint so this block re-renders with the
+        // updated audit columns (the table calls SWR's mutate on
+        // its own keys; we also need our composite cache to
+        // refresh).
+        onChildrenChanged={() => void mutateDetails()}
         onScholarshipChanged={onScholarshipChanged}
       />
     </div>
