@@ -583,7 +583,14 @@ function TestingCard({
           <ReadField
             label="Math RIT score"
             value={
-              app.initial_screening_nwea_math != null
+              // Treat stored 0 the same as null — the Xano column
+              // defaults to 0, NWEA RIT scores are realistically
+              // 100–300, so a 0 is invariably the unset state and
+              // should render as the em-dash placeholder rather than
+              // a literal "0". Mirrors the same coercion in the
+              // family-detail TestingBlock.
+              app.initial_screening_nwea_math != null &&
+              app.initial_screening_nwea_math !== 0
                 ? String(app.initial_screening_nwea_math)
                 : ""
             }
@@ -595,7 +602,8 @@ function TestingCard({
           <ReadField
             label="Reading RIT score"
             value={
-              app.initial_screening_nwea_reading != null
+              app.initial_screening_nwea_reading != null &&
+              app.initial_screening_nwea_reading !== 0
                 ? String(app.initial_screening_nwea_reading)
                 : ""
             }

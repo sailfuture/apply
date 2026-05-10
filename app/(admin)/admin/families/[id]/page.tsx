@@ -1491,6 +1491,22 @@ function StudentApplicationBlock({
   );
 }
 
+/**
+ * Coerce a stored NWEA RIT score into the string the draft input
+ * renders. The Xano schema columns default to `0` (not `null`) on
+ * insert, so a student who's never had a score entered still comes
+ * back with `0` from the API. NWEA RIT scores are realistically in
+ * the 100–300 range — a stored `0` is invariably the unset state,
+ * not a real score. Normalize both `null` and `0` to an empty
+ * string so the input renders the dash placeholder, keeping the
+ * Math and Reading rows visually consistent regardless of which
+ * default the underlying column happens to have.
+ */
+function nweaScoreToDraft(value: number | null | undefined): string {
+  if (value == null || value === 0) return "";
+  return String(value);
+}
+
 function TestingBlock({
   student,
   app,
@@ -1514,14 +1530,8 @@ function TestingBlock({
   // since the data isn't year-scoped. PATCH targets
   // `/api/admin/students/[id]` accordingly.
   const [draft, setDraft] = useState({
-    math:
-      student.initial_screening_nwea_math != null
-        ? String(student.initial_screening_nwea_math)
-        : "",
-    reading:
-      student.initial_screening_nwea_reading != null
-        ? String(student.initial_screening_nwea_reading)
-        : "",
+    math: nweaScoreToDraft(student.initial_screening_nwea_math),
+    reading: nweaScoreToDraft(student.initial_screening_nwea_reading),
     mathDate: student.initial_screening_nwea_math_date ?? "",
     readingDate: student.initial_screening_nwea_reading_date ?? "",
   });
@@ -1533,14 +1543,8 @@ function TestingBlock({
   // values on top of the new ones.
   useEffect(() => {
     setDraft({
-      math:
-        student.initial_screening_nwea_math != null
-          ? String(student.initial_screening_nwea_math)
-          : "",
-      reading:
-        student.initial_screening_nwea_reading != null
-          ? String(student.initial_screening_nwea_reading)
-          : "",
+      math: nweaScoreToDraft(student.initial_screening_nwea_math),
+      reading: nweaScoreToDraft(student.initial_screening_nwea_reading),
       mathDate: student.initial_screening_nwea_math_date ?? "",
       readingDate: student.initial_screening_nwea_reading_date ?? "",
     });
@@ -1617,7 +1621,14 @@ function TestingBlock({
                   onBlur={() => {
                     const trimmed = draft.math.trim();
                     if (trimmed === "") {
-                      if (student.initial_screening_nwea_math == null) return;
+                      // Treat stored 0 the same as null — both render
+                      // as "no score entered" and we don't want a tab-
+                      // out to spuriously PATCH null over a 0 default.
+                      if (
+                        student.initial_screening_nwea_math == null ||
+                        student.initial_screening_nwea_math === 0
+                      )
+                        return;
                       patchField("initial_screening_nwea_math", null);
                       return;
                     }
@@ -1661,7 +1672,13 @@ function TestingBlock({
                   onBlur={() => {
                     const trimmed = draft.reading.trim();
                     if (trimmed === "") {
-                      if (student.initial_screening_nwea_reading == null) return;
+                      // Treat stored 0 the same as null — see the
+                      // matching note on the Math handler above.
+                      if (
+                        student.initial_screening_nwea_reading == null ||
+                        student.initial_screening_nwea_reading === 0
+                      )
+                        return;
                       patchField("initial_screening_nwea_reading", null);
                       return;
                     }
@@ -4977,7 +4994,7 @@ function DecisionStudentRow({
           {!approveCtx.accepted ? (
             <Button
               type="button"
-              variant={sufsConfirmed ? "secondary" : "outline"}
+              variant={sufsConfirmed ? "secondary" : "default"}
               size="lg"
               disabled={
                 confirming ||
@@ -4985,11 +5002,21 @@ function DecisionStudentRow({
                 (!sufsConfirmed && !approveCtx.allDocsConfirmed)
               }
               onClick={toggleConfirmed}
+              // Active state is blue — sits between the white card
+              // body and the green Approve action down at the footer,
+              // so admin's eye is pulled to the per-student confirm
+              // first, then the family-level approve once every row
+              // is locked in. Confirmed state keeps the muted look
+              // since the affordance is terminal (one-shot commit).
+              // `disabled:bg-blue-600` keeps the color through the
+              // gated state — the gating is conveyed by `cursor-not-
+              // allowed` from the `disabled` attribute + the title
+              // tooltip, not by graying the button out further.
               className={cn(
                 "w-full",
                 sufsConfirmed
                   ? "bg-muted text-muted-foreground cursor-default disabled:opacity-100"
-                  : "bg-white"
+                  : "bg-blue-600 hover:bg-blue-700 text-white disabled:bg-blue-600 disabled:opacity-60"
               )}
               title={
                 sufsConfirmed
