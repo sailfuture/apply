@@ -1417,12 +1417,12 @@ function StudentApplicationBlock({
           <SectionGroup title="Academic">
             <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
               <DisabledField
-                label="Last grade completed"
+                label="Current grade"
                 value={app.last_grade_completed}
                 required
               />
               <DisabledField
-                label="Current grade"
+                label="Incoming grade"
                 value={app.current_grade}
                 required
               />

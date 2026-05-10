@@ -84,8 +84,8 @@ export function familyRequirements(parents: unknown[]): Requirement[] {
 
 export const studentApplicationSchema = z.object({
   current_previous_school: requiredString("Current / previous school is required"),
-  last_grade_completed: requiredString("Last grade completed is required"),
-  current_grade: requiredString("Current grade is required"),
+  last_grade_completed: requiredString("Current grade is required"),
+  current_grade: requiredString("Incoming grade is required"),
   describe_student_strengths: requiredString("Student strengths are required"),
   describe_student_opportunities_for_growth: requiredString("Opportunities for growth are required"),
 });

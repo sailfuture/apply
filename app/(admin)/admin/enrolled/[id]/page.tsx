@@ -244,12 +244,12 @@ function StudentBioCard({
           <ReadField label="Date of birth" value={student.date_of_birth} />
           <ReadField label="Gender" value={student.gender} />
           <ReadField label="Ethnicity" value={student.ethnicity} />
-          <ReadField label="Current grade" value={app?.current_grade ?? ""} />
+          <ReadField label="Incoming grade" value={app?.current_grade ?? ""} />
         </div>
         {app ? (
           <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
             <ReadField
-              label="Last grade completed"
+              label="Current grade"
               value={app.last_grade_completed}
             />
             <ReadField

@@ -589,13 +589,13 @@ function StudentAppCard({
           <Section title="Academic">
             <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
               <FieldRow
-                label="Last grade completed"
+                label="Current grade"
                 value={draft.last_grade_completed}
                 editing={editing}
                 onChange={(v) => setDraft((d) => ({ ...d, last_grade_completed: v }))}
               />
               <FieldRow
-                label="Current grade"
+                label="Incoming grade"
                 value={draft.current_grade}
                 editing={editing}
                 onChange={(v) => setDraft((d) => ({ ...d, current_grade: v }))}

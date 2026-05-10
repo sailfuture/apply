@@ -949,7 +949,7 @@ export default function StudentsStepPage() {
                       </Field>
                       <Field>
                         <FieldLabel className="text-xs">
-                          Last Grade Completed
+                          Current Grade
                         </FieldLabel>
                         <Input
                           className={!app.last_grade_completed ? "border-2 border-red-400" : ""}
@@ -968,7 +968,7 @@ export default function StudentsStepPage() {
                       </Field>
                       <Field>
                         <FieldLabel className="text-xs">
-                          Current Grade
+                          Incoming Grade
                         </FieldLabel>
                         <Input
                           className={!app.current_grade ? "border-2 border-red-400" : ""}

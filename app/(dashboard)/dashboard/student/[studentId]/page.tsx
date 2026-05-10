@@ -245,8 +245,8 @@ export default function StudentDetailPage() {
           <h2 className="text-sm font-semibold mb-3">Academic Information</h2>
           <DetailTable
             rows={[
-              ["Current Grade", val(application.current_grade)],
-              ["Last Grade Completed", val(application.last_grade_completed)],
+              ["Incoming Grade", val(application.current_grade)],
+              ["Current Grade", val(application.last_grade_completed)],
               ["Previous School", val(application.current_previous_school)],
               [
                 "Bus Transportation",
