@@ -15,7 +15,7 @@ import {
   ExternalLink,
   Loader2,
   Pencil,
-  SquarePen,
+  Search,
   Trash2,
   Undo2,
   XCircle,
@@ -932,13 +932,16 @@ function FamilyDetailNav({
 }
 
 /**
- * Status circle for a sidebar nav row. Two visual modes — kept
- * pixel-aligned with the parent-side `ApplicationSideNav.StepCircle`
- * so admin and parent surfaces use the same visual vocabulary:
- *   - `complete`: filled green circle with a white checkmark
- *     (`bg-green-500` + `<Check>`)
- *   - editable section, not yet complete: filled amber circle with
- *     a white square-pen (`bg-amber-500` + `<SquarePen>`)
+ * Status circle for a sidebar nav row. Two visual modes — admin
+ * surface uses verify state (not parent completion) to drive the
+ * mode:
+ *   - `complete`: admin has verified this section → filled green
+ *     circle with a white checkmark (`bg-green-500` + `<Check>`)
+ *   - not yet verified: filled amber circle with a white search
+ *     icon (`bg-amber-500` + `<Search>`), conveying "this needs
+ *     your review." Search reads as "look at this and verify"
+ *     better than the prior pencil, which implied an open edit
+ *     action — admin verifies more than they edit on these cards.
  */
 function NavCircle({ complete }: { complete: boolean }) {
   if (complete) {
@@ -950,7 +953,7 @@ function NavCircle({ complete }: { complete: boolean }) {
   }
   return (
     <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-amber-500 text-white">
-      <SquarePen className="size-4" />
+      <Search className="size-4" />
     </div>
   );
 }
@@ -1814,48 +1817,50 @@ function ScholarshipBlock({
   // scholarship row" since the parent already handed that in.
   const homesLoading = detailsLoading && !details;
   const vehiclesLoading = detailsLoading && !details;
-  // Opt-out + SNAP short-circuits. The Opportunity Scholarship form
-  // is the only thing that fills in the household / income / asset
-  // / debt fields below, so on either of those alternate paths the
-  // form fields are all defaults and rendering them just looks like
-  // data is missing. Show a notice + the relevant document(s)
-  // instead so the section reads as "here's what they actually
-  // submitted" rather than "the parent skipped this."
-  if (scholarship.isNotParticipating) {
-    return (
-      <div className="space-y-3">
-        <p className="text-xs text-muted-foreground">
-          The family opted out of the SailFuture Opportunity Scholarship
-          for this year. No financial information was collected.
-        </p>
-        <DisabledField
-          label="Opportunity Scholarship status"
-          value="Opted out"
-        />
-      </div>
-    );
-  }
-
-  if (scholarship.isSNAPBenefits) {
-    return (
-      <div className="space-y-3">
-        <p className="text-xs text-muted-foreground">
-          The family pre-qualifies via SNAP benefits. The full
-          Opportunity Scholarship form was skipped — only the SNAP
-          award letter is on file. Confirm the document under the
-          Scholarship Determination card.
-        </p>
-        <DisabledField
-          label="Opportunity Scholarship status"
-          value="SNAP benefits"
-        />
-      </div>
-    );
-  }
+  // Path-aware notices replace the prior short-circuit returns. The
+  // opt-out / SNAP paths used to early-return with just a one-liner,
+  // which hid contributing members + homes + vehicles even when the
+  // parent had entered them under a previous path before switching.
+  // We now surface a banner up top so admin sees which path the
+  // family is on, then ALWAYS render the houses / vehicles /
+  // contributing-members docs underneath so nothing on file slips
+  // out of view. The household / income / asset / debt form fields
+  // stay path-gated since they're truly empty on non-Opportunity-
+  // Scholarship rows and rendering a wall of $0s would be misleading.
+  const onFullForm =
+    !scholarship.isNotParticipating && !scholarship.isSNAPBenefits;
 
   return (
     <div className="space-y-6">
-      <SectionGroup title="Household">
+      {scholarship.isNotParticipating ? (
+        <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          <AlertCircle className="size-4 shrink-0 mt-0.5" />
+          <span>
+            The family opted out of the SailFuture Opportunity Scholarship
+            for this year. Any data shown below was entered before they
+            switched paths.
+          </span>
+        </div>
+      ) : null}
+      {scholarship.isSNAPBenefits ? (
+        <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          <AlertCircle className="size-4 shrink-0 mt-0.5" />
+          <span>
+            The family pre-qualifies via SNAP benefits. Confirm the SNAP
+            award letter in the Documents to Review table below.
+          </span>
+        </div>
+      ) : null}
+      {!onFullForm ? (
+        <DisabledField
+          label="Opportunity Scholarship status"
+          value={
+            scholarship.isNotParticipating ? "Opted out" : "SNAP benefits"
+          }
+        />
+      ) : null}
+      {onFullForm ? (
+        <SectionGroup title="Household">
         <div className="grid gap-4 grid-cols-2 sm:grid-cols-4">
           <DisabledField
             label="Adults"
@@ -1875,15 +1880,9 @@ function ScholarshipBlock({
           />
         </div>
       </SectionGroup>
+      ) : null}
 
-      {/* Contributing-members + every other file-upload section
-          (SNAP, unemployment, benefit docs) now lives under the
-          Scholarship Determination card — that's where admin makes
-          the verification + decision. Financial Aid stays focused
-          on the household / income / asset numbers the parent
-          submitted; uploaded paperwork is reviewed alongside the
-          determination context. */}
-
+      {onFullForm ? (
       <SectionGroup title="Income (monthly)">
         <div className="grid gap-4 grid-cols-2 sm:grid-cols-3">
           <DisabledField
@@ -1912,7 +1911,9 @@ function ScholarshipBlock({
           />
         </div>
       </SectionGroup>
+      ) : null}
 
+      {onFullForm ? (
       <SectionGroup title="Assets">
         <div className="grid gap-4 grid-cols-2 sm:grid-cols-3">
           <DisabledField
@@ -1941,6 +1942,7 @@ function ScholarshipBlock({
           />
         </div>
       </SectionGroup>
+      ) : null}
 
       {/* Purchased Houses — empty array still renders a notice row so
           admin sees that the section was reviewed and the family
@@ -2041,40 +2043,44 @@ function ScholarshipBlock({
         )}
       </SectionGroup>
 
-      <SectionGroup title="Debts">
-        <div className="grid gap-4 grid-cols-3">
-          <DisabledField
-            label="Credit cards"
-            value={formatCurrency(scholarship.debts_credit_cards)}
-          />
-          <DisabledField
-            label="Student loans"
-            value={formatCurrency(scholarship.debts_student_loans)}
-          />
-          <DisabledField
-            label="Personal loans"
-            value={formatCurrency(scholarship.debts_personal_loans)}
-          />
-        </div>
-      </SectionGroup>
+      {onFullForm ? (
+        <>
+          <SectionGroup title="Debts">
+            <div className="grid gap-4 grid-cols-3">
+              <DisabledField
+                label="Credit cards"
+                value={formatCurrency(scholarship.debts_credit_cards)}
+              />
+              <DisabledField
+                label="Student loans"
+                value={formatCurrency(scholarship.debts_student_loans)}
+              />
+              <DisabledField
+                label="Personal loans"
+                value={formatCurrency(scholarship.debts_personal_loans)}
+              />
+            </div>
+          </SectionGroup>
 
-      <SectionGroup title="Family contribution">
-        <DisabledField
-          label="Per month"
-          value={formatCurrency(scholarship.family_contribution_per_month)}
-        />
-      </SectionGroup>
+          <SectionGroup title="Family contribution">
+            <DisabledField
+              label="Per month"
+              value={formatCurrency(scholarship.family_contribution_per_month)}
+            />
+          </SectionGroup>
 
-      {scholarship.scholarship_advocacy_letter ? (
-        <SectionGroup title="Advocacy letter">
-          <DisabledTextarea
-            label=""
-            value={scholarship.scholarship_advocacy_letter}
-          />
-        </SectionGroup>
+          {scholarship.scholarship_advocacy_letter ? (
+            <SectionGroup title="Advocacy letter">
+              <DisabledTextarea
+                label=""
+                value={scholarship.scholarship_advocacy_letter}
+              />
+            </SectionGroup>
+          ) : null}
+
+          <SignaturePreview signature={scholarship.signature} />
+        </>
       ) : null}
-
-      <SignaturePreview signature={scholarship.signature} />
 
       {/* Documents to Review — W-2 / pay-stub uploads per contributing
           member, plus government-benefit award letters when the
