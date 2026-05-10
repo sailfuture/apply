@@ -67,6 +67,8 @@ import type {
   XanoScholarship,
   XanoScholarshipBenefit,
   XanoScholarshipContributingMember,
+  XanoScholarshipHome,
+  XanoScholarshipVehicle,
   XanoSchoolYear,
 } from "@/lib/xano";
 
@@ -278,6 +280,11 @@ export default function FamilyDetailPage() {
     students_admin_confirm_admin?: string;
     testing_admin_confirm?: boolean;
     testing_admin_confirm_time?: number | null;
+    /** Financial Aid verify uses Xano's live column names — see
+     *  the note on the shared `XanoFamilyApplicationProgress` type. */
+    financial_aid_admin_complete?: boolean;
+    financial_aid_admin_time?: number | null;
+    financial_aid_admin_confirm_admin?: string;
   } | null>(
     familyId && yearId
       ? `/api/admin/family-progress?familyId=${familyId}&yearId=${yearId}`
@@ -292,16 +299,24 @@ export default function FamilyDetailPage() {
   // from the `*_admin_confirm_admin` string column the route
   // auto-stamps; no client-side teacher-id lookup needed anymore.
   const [savingSection, setSavingSection] = useState<
-    "family" | "students" | "testing" | null
+    "family" | "students" | "financial_aid" | "testing" | null
   >(null);
   async function toggleSectionConfirmed(
-    section: "family" | "students" | "testing",
+    section: "family" | "students" | "financial_aid" | "testing",
     next: boolean
   ) {
     if (!familyId || !yearId) return;
     setSavingSection(section);
     try {
-      const field = `${section}_admin_confirm`;
+      // Financial Aid uses Xano's live column name
+      // (`financial_aid_admin_complete`) — the rest of the sections
+      // follow the `*_admin_confirm` suffix convention. Branch here
+      // so we PATCH the right column without having to special-case
+      // it inside the route.
+      const field =
+        section === "financial_aid"
+          ? "financial_aid_admin_complete"
+          : `${section}_admin_confirm`;
       const res = await fetch(`/api/admin/family-progress`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -650,6 +665,23 @@ export default function FamilyDetailPage() {
                 progress?.financial_aid_completed,
                 !!scholarship
               )}
+              confirm={{
+                sectionLabel: "Financial Aid",
+                confirmed:
+                  progress?.financial_aid_admin_complete === true,
+                // No separate parent-completion bool for this
+                // section — parent saves as they fill it out, so
+                // admin verify is the only "this is good" signal.
+                parentCompleted:
+                  progress?.financial_aid_admin_complete === true,
+                confirmTime: progress?.financial_aid_admin_time ?? null,
+                confirmedByName:
+                  progress?.financial_aid_admin_confirm_admin?.trim() ||
+                  null,
+                saving: savingSection === "financial_aid",
+                onToggle: (next) =>
+                  toggleSectionConfirmed("financial_aid", next),
+              }}
             >
               {detailLoading && !detail ? (
                 <Skeleton className="h-48 w-full rounded-md" />
@@ -657,6 +689,7 @@ export default function FamilyDetailPage() {
                 <ScholarshipBlock
                   scholarship={scholarship}
                   familyId={family.id}
+                  onScholarshipChanged={refreshDetail}
                 />
               ) : (
                 <p className="text-sm text-muted-foreground">
@@ -1730,14 +1763,40 @@ function TestingBlock({
 function ScholarshipBlock({
   scholarship,
   familyId,
+  onScholarshipChanged,
 }: {
   scholarship: XanoScholarship;
-  /** Reserved for future surfaces inside the Financial Aid section
-   *  that need to scope notes / actions back to the family record.
-   *  Currently unused since the documents review (and its notes)
-   *  moved entirely to the Scholarship Determination card. */
+  /** Family id is forwarded to `DocumentsToReviewBlock` so future
+   *  surfaces (e.g. a section-scoped notes drawer on a specific
+   *  contributing-member row) can scope back to the family record
+   *  without a second prop. */
   familyId: number;
+  /** Re-fetches the surrounding family-detail payload after a doc
+   *  verify lands, so the Approve gate (which reads the same
+   *  `*_confirm` columns) updates without manual reload. */
+  onScholarshipChanged?: () => void;
 }) {
+  // Purchased houses + vehicles live on their own Xano tables keyed
+  // off the scholarship; fetch alongside the main payload so the
+  // Assets summary renders the full picture rather than just the
+  // dollar totals on the scholarship row. SWR caches by URL, so any
+  // sibling surface (Documents to Review, the Determination card)
+  // that subscribes to the same keys gets the same response without
+  // extra fetches.
+  const { data: homesData, isLoading: homesLoading } = useSWR<
+    XanoScholarshipHome[]
+  >(
+    `/api/admin/scholarship-homes?scholarshipId=${scholarship.id}`,
+    adminFetcher
+  );
+  const { data: vehiclesData, isLoading: vehiclesLoading } = useSWR<
+    XanoScholarshipVehicle[]
+  >(
+    `/api/admin/scholarship-vehicles?scholarshipId=${scholarship.id}`,
+    adminFetcher
+  );
+  const homes = homesData ?? [];
+  const vehicles = vehiclesData ?? [];
   // Opt-out + SNAP short-circuits. The Opportunity Scholarship form
   // is the only thing that fills in the household / income / asset
   // / debt fields below, so on either of those alternate paths the
@@ -1866,6 +1925,105 @@ function ScholarshipBlock({
         </div>
       </SectionGroup>
 
+      {/* Purchased Houses — empty array still renders a notice row so
+          admin sees that the section was reviewed and the family
+          declared no homes (rather than a missing section). One row
+          per home: type, full address, total value, outstanding
+          debt. */}
+      <SectionGroup title="Purchased Houses">
+        {homesLoading ? (
+          <Skeleton className="h-12 w-full rounded-md" />
+        ) : homes.length === 0 ? (
+          <p className="text-xs italic text-muted-foreground">
+            No purchased houses declared.
+          </p>
+        ) : (
+          <div className="space-y-3">
+            {homes.map((home, idx) => (
+              <div
+                key={home.id}
+                className="rounded-md border bg-muted/10 p-3 space-y-3"
+              >
+                <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  Home {idx + 1}
+                </p>
+                <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
+                  <DisabledField label="Type" value={home.type ?? ""} />
+                  <DisabledField
+                    label="Address"
+                    value={formatStreetAddress(home)}
+                  />
+                  <DisabledField
+                    label="City / State / Zip"
+                    value={[home.city, home.state, home.zipcode]
+                      .filter(Boolean)
+                      .join(", ")}
+                  />
+                  <DisabledField
+                    label="Total value"
+                    value={formatCurrency(home.total_value)}
+                  />
+                  <DisabledField
+                    label="Outstanding debt"
+                    value={formatCurrency(home.outstanding_debt)}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </SectionGroup>
+
+      {/* Purchased Vehicles — same shape as houses but the per-row
+          fields are vehicle metadata (make / model / year). Empty
+          state mirrors the houses block so the section reads as
+          "reviewed and declared none" rather than a gap. */}
+      <SectionGroup title="Purchased Vehicles">
+        {vehiclesLoading ? (
+          <Skeleton className="h-12 w-full rounded-md" />
+        ) : vehicles.length === 0 ? (
+          <p className="text-xs italic text-muted-foreground">
+            No purchased vehicles declared.
+          </p>
+        ) : (
+          <div className="space-y-3">
+            {vehicles.map((vehicle, idx) => (
+              <div
+                key={vehicle.id}
+                className="rounded-md border bg-muted/10 p-3 space-y-3"
+              >
+                <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  Vehicle {idx + 1}
+                </p>
+                <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
+                  <DisabledField label="Type" value={vehicle.type ?? ""} />
+                  <DisabledField
+                    label="Make"
+                    value={vehicle.car_make ?? ""}
+                  />
+                  <DisabledField
+                    label="Model"
+                    value={vehicle.car_model ?? ""}
+                  />
+                  <DisabledField
+                    label="Year"
+                    value={vehicle.car_year ?? ""}
+                  />
+                  <DisabledField
+                    label="Total value"
+                    value={formatCurrency(vehicle.total_value)}
+                  />
+                  <DisabledField
+                    label="Remaining debt"
+                    value={formatCurrency(vehicle.remaining_debt)}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </SectionGroup>
+
       <SectionGroup title="Debts">
         <div className="grid gap-4 grid-cols-3">
           <DisabledField
@@ -1900,8 +2058,39 @@ function ScholarshipBlock({
       ) : null}
 
       <SignaturePreview signature={scholarship.signature} />
+
+      {/* Documents to Review — W-2 / pay-stub uploads per contributing
+          member, plus government-benefit award letters when the
+          family declared them. The table renders the same Mark
+          Confirmed / Undo verify pattern that used to live inside
+          the Scholarship Determination card; moving it up here keeps
+          the Financial Aid section's data + supporting documents
+          together. The Approve gate still reads the same `*_confirm`
+          Xano columns, so flipping a row here also unlocks both the
+          per-student Confirm Scholarship Award Amount button and
+          the family-level Approve. */}
+      <DocumentsToReviewBlock
+        scholarship={scholarship}
+        familyId={familyId}
+        onScholarshipChanged={onScholarshipChanged}
+      />
     </div>
   );
+}
+
+/**
+ * Render a Xano address pair as a single street line. The home and
+ * vehicle Xano rows surface address_1 + address_2 separately for
+ * editing; on read-only summary views we collapse to one line so
+ * the admin grid stays at two columns wide.
+ */
+function formatStreetAddress(home: {
+  address_1?: string;
+  address_2?: string;
+}): string {
+  const a1 = home.address_1?.trim() ?? "";
+  const a2 = home.address_2?.trim() ?? "";
+  return [a1, a2].filter(Boolean).join(", ");
 }
 
 /* ─────────────────────── Disabled input primitives ─────────────────────── */
@@ -2176,27 +2365,33 @@ function DecisionCard({
     isAccepted: boolean;
     isSubmitted: boolean;
     /** Section-verify bools — drive the Approve gate. Family /
-     *  Students / Testing all need admin verification before the
-     *  Approve button unlocks. Optional on the type because legacy
-     *  rows pre-date the columns. */
+     *  Students / Financial Aid / Testing all need admin verification
+     *  before the Approve button unlocks. Optional on the type
+     *  because legacy rows pre-date the columns. */
     family_admin_confirm?: boolean;
     students_admin_confirm?: boolean;
     testing_admin_confirm?: boolean;
+    /** Financial Aid verify uses the live Xano column name
+     *  (`*_admin_complete`) rather than the `_admin_confirm` suffix
+     *  the other sections use — see the matching note on
+     *  `XanoFamilyApplicationProgress`. */
+    financial_aid_admin_complete?: boolean;
   } | null;
   loading: boolean;
   onChanged: () => void;
 }) {
   const accepted = progress?.isAccepted === true;
   const familySubmitted = progress?.isSubmitted === true;
-  // Section-verify gate — Approve is blocked until each of the
-  // three sections (Family / Students / Testing) is verified by
-  // admin. `unverifiedSections` lists the human-readable labels
-  // that haven't been verified yet so the gate-block reason can
-  // tell admin what to fix.
+  // Section-verify gate — Approve is blocked until each section is
+  // verified by admin. `unverifiedSections` lists the human-readable
+  // labels that haven't been verified yet so the gate-block reason
+  // can tell admin what to fix.
   const unverifiedSections: string[] = [];
   if (progress?.family_admin_confirm !== true) unverifiedSections.push("Family");
   if (progress?.students_admin_confirm !== true)
     unverifiedSections.push("Students");
+  if (progress?.financial_aid_admin_complete !== true)
+    unverifiedSections.push("Financial Aid");
   if (progress?.testing_admin_confirm !== true)
     unverifiedSections.push("Testing");
   const anySubmitted =
@@ -2406,22 +2601,14 @@ function DecisionCard({
               })}
             </div>
 
-            {/* Documents to Review — lifted out of
-                `ScholarshipReviewBlock` so the card flow reads:
-                  SUFS rows above
-                  → Documents to Review (this block)
-                  → Scholarship Review (matrix tables below)
-                  → Student-Specific Payments
-                Confirming every doc here is part of the gate on the
-                per-student Confirm Scholarship Award Amount button
-                + the family-level Approve. */}
-            {scholarship ? (
-              <DocumentsToReviewBlock
-                scholarship={scholarship}
-                familyId={familyId}
-                onScholarshipChanged={onChanged}
-              />
-            ) : null}
+            {/* Documents to Review moved up into the Financial Aid
+                SectionShell (the W-2 / pay stub uploads are part of
+                the family's financial picture, not the per-student
+                determination). The Approve gate still reads the same
+                `*_confirm` Xano columns, so confirming a row in the
+                Financial Aid surface still unlocks both the per-
+                student Confirm Scholarship Award Amount button and
+                the family-level Approve from this card. */}
 
             {/* Scholarship Review — Pay Matrix or Net Assets bracket
                 + (on SNAP path) the SNAP cost determination. Read-

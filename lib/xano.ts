@@ -805,10 +805,15 @@ export interface XanoFamilyApplicationProgress {
   // data belonging to that section, the bool auto-clears back to
   // false, time → null, admin → "".
   //
-  // Financial Aid is intentionally absent — the Scholarship
-  // Determination card already has its own per-student confirmation
-  // flow (`confirmed_scholarship` on each app), so a section-level
-  // duplicate would be redundant.
+  // The Financial Aid section's verify triplet was added separately
+  // from the apply-flow triplets above so the column names differ:
+  // `*_admin_complete` instead of `*_admin_confirm`, and
+  // `*_admin_time` instead of `*_admin_confirm_time`. The admin
+  // family-progress route accepts the canonical
+  // `financial_aid_admin_confirm` boolean as input and writes it to
+  // `financial_aid_admin_complete` on Xano (along with the time +
+  // admin name pair) so the rest of the codebase can keep the
+  // confirm-suffix naming convention internally.
   family_admin_confirm?: boolean;
   family_admin_confirm_time?: number | null;
   family_admin_confirm_admin?: string;
@@ -817,6 +822,14 @@ export interface XanoFamilyApplicationProgress {
   students_admin_confirm_admin?: string;
   testing_admin_confirm?: boolean;
   testing_admin_confirm_time?: number | null;
+  /** Financial Aid section-verify triplet. Naming on Xano:
+   *  `financial_aid_admin_complete` (bool),
+   *  `financial_aid_admin_time` (epoch ms),
+   *  `financial_aid_admin_confirm_admin` (string). The bool gates
+   *  the Approve flow alongside the other section verifies. */
+  financial_aid_admin_complete?: boolean;
+  financial_aid_admin_time?: number | null;
+  financial_aid_admin_confirm_admin?: string;
 }
 
 /**
