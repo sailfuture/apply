@@ -796,17 +796,21 @@ function FamilyDetailNav({
   yearId: string | null;
   progress: {
     isAccepted?: boolean;
-    family_completed?: boolean;
-    students_completed?: boolean;
-    financial_aid_completed?: boolean;
-    testing_completed?: boolean;
+    family_admin_confirm?: boolean;
+    students_admin_confirm?: boolean;
+    financial_aid_admin_complete?: boolean;
+    testing_admin_confirm?: boolean;
   } | null;
   hasScholarship: boolean;
 }) {
-  // Mirror the parent app's two visual states: complete (green check)
-  // vs in-progress (amber edit). For admin we don't bother
-  // distinguishing "not started" — every section is editable, so the
-  // edit affordance applies whenever it isn't yet complete.
+  // Admin nav tracks admin-verify state, not parent-completion. The
+  // parent's nav (on /apply/...) uses the same green-check / amber
+  // icon pattern keyed on `*_completed` columns; this surface tracks
+  // the matching `*_admin_confirm` (or `_admin_complete` on Financial
+  // Aid) audit bool so the icon flips green only after admin clicks
+  // Verify on the section — not when the parent merely marked it
+  // done. Lets admin scan the nav and see what still needs review at
+  // a glance regardless of where the parent is in their flow.
   //
   // Notes intentionally absent — comms log is now a fixed bottom-right
   // sheet trigger handled outside this nav.
@@ -818,6 +822,9 @@ function FamilyDetailNav({
     show: boolean;
   }> = [
     {
+      // Decision is admin's own signal already; "complete" === "the
+      // family has been accepted for the year." No separate verify
+      // step for this row.
       key: "decision",
       label: "Decision",
       href: "#section-decision",
@@ -828,28 +835,32 @@ function FamilyDetailNav({
       key: "family",
       label: "Family",
       href: "#section-family",
-      complete: progress?.family_completed === true,
+      complete: progress?.family_admin_confirm === true,
       show: true,
     },
     {
       key: "students",
       label: "Students",
       href: "#section-students",
-      complete: progress?.students_completed === true,
+      complete: progress?.students_admin_confirm === true,
       show: true,
     },
     {
+      // Financial Aid uses the divergent live column name
+      // (`financial_aid_admin_complete`) — see the type comment on
+      // `XanoFamilyApplicationProgress` for why the suffix differs
+      // from the other three.
       key: "financial-aid",
       label: "Financial Aid",
       href: "#section-financial-aid",
-      complete: progress?.financial_aid_completed === true,
+      complete: progress?.financial_aid_admin_complete === true,
       show: !!yearId && hasScholarship,
     },
     {
       key: "testing",
       label: "Testing",
       href: "#section-testing",
-      complete: progress?.testing_completed === true,
+      complete: progress?.testing_admin_confirm === true,
       show: !!yearId,
     },
   ];
@@ -2524,14 +2535,16 @@ function DecisionCard({
     : "not_started";
 
   return (
+    <>
     <Card
       className={cn(
         "overflow-hidden gap-0 py-0 bg-white transition-opacity",
         // Whole-card mute mirrors the SectionShell behavior: once
         // admin has accepted the family, the card's work is done,
         // gray it out so it stops competing with the still-live
-        // sections above. Revoke lives in the page header for
-        // reversal — opacity dim doesn't block clicks.
+        // sections above. The Acceptance card below carries the
+        // Revoke affordance so admin can still reverse from the
+        // post-acceptance surface.
         accepted && "opacity-60"
       )}
     >
@@ -2646,95 +2659,142 @@ function DecisionCard({
               onScholarshipChanged={onChanged}
             />
 
-            {/* Student-Specific Payments — per-student tuition
-                receipt mirroring the parent's /tuition page. Sits at
-                the bottom of the card right above the family-level
-                Approve footer so admin sees the same numbers the
-                family will see immediately before clicking Approve. */}
-            <TuitionBreakdownTable
-              students={students}
-              apps={apps}
-              schoolYear={schoolYear}
-              isSnapFamily={scholarship?.isSNAPBenefits === true}
-            />
-
+            {/* Student-Specific Payments + the family-level Approve /
+                Revoke / Archive / Reject actions moved into their
+                own Acceptance card rendered below this one. The
+                Scholarship Determination card now ends with the
+                Scholarship Review block so it stays focused on
+                "what's the family's situation and award" — the
+                "is this family accepted?" question gets its own
+                surface with its own footer. */}
           </>
         )}
       </CardContent>
-      {/* Family-level decision footer — Archive / Reject / Approve.
-          Lives outside <CardContent> so it mirrors the
-          SectionConfirmFooter pattern on the Family / Students /
-          Testing cards above: divider + bg-white footer that anchors
-          the resolving action at the bottom of the card. Hidden once
-          accepted (Revoke moves to the page header so admin doesn't
-          click it from inside the muted card body).
-
-          Layout (left → right, decreasing severity to right):
-            - Archive [Reject] [Approve]
-            - When the family hasn't submitted yet, Reject drops out
-              (nothing to send back); the grid collapses to two
-              columns. */}
-      {!accepted && !loading && students.length > 0 ? (
+    </Card>
+    {/* Acceptance card — student receipt(s) + the family-level
+        Approve / Revoke decision in the footer. Lives as a sibling
+        of the Scholarship Determination card so admin sees the
+        same numbers the family will see, then takes action right
+        below them. */}
+    {!loading && students.length > 0 ? (
+      <Card
+        id="section-acceptance"
+        className={cn(
+          "overflow-hidden gap-0 py-0 bg-white scroll-mt-20 transition-opacity"
+        )}
+      >
+        <CardHeader className="py-3 !pb-3 border-b">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 min-w-0">
+              <span
+                className={cn(
+                  "inline-block size-2.5 rounded-full shrink-0",
+                  STATUS_DOT_CLASS[decisionStatus]
+                )}
+                aria-label={STATUS_LABEL[decisionStatus]}
+                title={STATUS_LABEL[decisionStatus]}
+              />
+              <CardTitle className="text-base truncate">
+                Acceptance
+              </CardTitle>
+              {accepted ? (
+                <span className="ml-1 inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-800">
+                  <CheckCircle2 className="size-2.5" />
+                  Accepted
+                </span>
+              ) : null}
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-6 py-5 bg-white">
+          {/* Per-student tuition receipt — mirrors the parent's
+              /tuition page row-by-row so admin sees the exact
+              figures the family will see immediately before
+              approving or revoking. */}
+          <TuitionBreakdownTable
+            students={students}
+            apps={apps}
+            schoolYear={schoolYear}
+            isSnapFamily={scholarship?.isSNAPBenefits === true}
+          />
+        </CardContent>
+        {/* Footer mirrors the SectionConfirmFooter pattern: divider
+            + bg-white px-5 py-3 anchor row. Two paths:
+              - Not accepted yet → Approve gate banner + Archive /
+                [Reject] / Approve grid (Reject only when submitted,
+                so the grid collapses to two columns otherwise).
+              - Accepted → single Revoke acceptance button on the
+                right, since the rest of the actions don't apply
+                post-acceptance. Revoke used to live in the page
+                header; consolidated here so all family-level
+                decision actions sit on the same surface. */}
         <div className="border-t bg-white px-5 py-3 space-y-2">
-          {/* Visible Approve-gate banner. The Approve button keeps
-              its `title` tooltip + `disabled` state, but most users
-              never hovered a greyed-out button to find out why —
-              showing the reason inline above the action row turns
-              "I clicked and nothing happened" into a clear
-              instruction. Computed from the same helper the button
-              uses, so the two surfaces can't drift. */}
-          {(() => {
-            const reason = computeApproveBlockReason({
-              allDocsConfirmed,
-              allSufsConfirmed,
-              unconfirmedCount,
-              unverifiedSections,
-            });
-            if (!reason) return null;
-            return (
-              <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                <AlertCircle className="size-4 shrink-0 mt-0.5" />
-                <span>{reason}</span>
+          {!accepted ? (
+            <>
+              {(() => {
+                const reason = computeApproveBlockReason({
+                  allDocsConfirmed,
+                  allSufsConfirmed,
+                  unconfirmedCount,
+                  unverifiedSections,
+                });
+                if (!reason) return null;
+                return (
+                  <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                    <AlertCircle className="size-4 shrink-0 mt-0.5" />
+                    <span>{reason}</span>
+                  </div>
+                );
+              })()}
+              <div
+                className={cn(
+                  "grid gap-2",
+                  familySubmitted ? "grid-cols-3" : "grid-cols-2"
+                )}
+              >
+                <ArchiveApplicationButton
+                  familyId={familyId}
+                  yearId={yearId}
+                  familyName={familyName}
+                  onArchived={onChanged}
+                />
+                {familySubmitted ? (
+                  <RejectApplicationButton
+                    familyId={familyId}
+                    yearId={yearId}
+                    familyName={familyName}
+                    onRejected={onChanged}
+                  />
+                ) : null}
+                <ApproveFamilyButton
+                  familyId={familyId}
+                  yearId={yearId}
+                  familyName={familyName}
+                  allSufsConfirmed={allSufsConfirmed}
+                  unconfirmedCount={unconfirmedCount}
+                  allDocsConfirmed={allDocsConfirmed}
+                  unverifiedSections={unverifiedSections}
+                  monthlyTuitionPayment={monthlyTuitionPayment}
+                  annualFeeTotal={annualFeeTotal}
+                  transportationTotal={transportationTotal}
+                  onApproved={onChanged}
+                />
               </div>
-            );
-          })()}
-          <div
-            className={cn(
-              "grid gap-2",
-              familySubmitted ? "grid-cols-3" : "grid-cols-2"
-            )}
-          >
-            <ArchiveApplicationButton
-              familyId={familyId}
-              yearId={yearId}
-              familyName={familyName}
-              onArchived={onChanged}
-            />
-            {familySubmitted ? (
-              <RejectApplicationButton
+            </>
+          ) : (
+            <div className="flex items-center justify-end">
+              <RevokeAcceptanceButton
                 familyId={familyId}
                 yearId={yearId}
                 familyName={familyName}
-                onRejected={onChanged}
+                onRevoked={onChanged}
               />
-            ) : null}
-            <ApproveFamilyButton
-              familyId={familyId}
-              yearId={yearId}
-              familyName={familyName}
-              allSufsConfirmed={allSufsConfirmed}
-              unconfirmedCount={unconfirmedCount}
-              allDocsConfirmed={allDocsConfirmed}
-              unverifiedSections={unverifiedSections}
-              monthlyTuitionPayment={monthlyTuitionPayment}
-              annualFeeTotal={annualFeeTotal}
-              transportationTotal={transportationTotal}
-              onApproved={onChanged}
-            />
-          </div>
+            </div>
+          )}
         </div>
-      ) : null}
-    </Card>
+      </Card>
+    ) : null}
+    </>
   );
 }
 
@@ -5388,33 +5448,87 @@ function FamilyDecisionActions({
     }
   }
 
+  // `pending`, `patchProgress`, and `saving` used to back the page-
+  // header Revoke button — now consolidated into the Acceptance
+  // card's footer (`RevokeAcceptanceButton`). Left in place so any
+  // future page-header decision affordances can reuse them without
+  // rewiring; reference them here so the unused-var lint stays
+  // quiet.
+  void pending;
+  void patchProgress;
+  void saving;
+  void accepted;
+
+  // Page header no longer renders Revoke (moved into the Acceptance
+  // card footer); apps prop is also now redundant here but kept on
+  // the signature so the parent's call site doesn't need to change.
+  void apps;
+
+  return null;
+}
+
+/**
+ * Standalone Revoke acceptance button + confirmation modal. Used by
+ * the Acceptance card's footer when the family is in the accepted
+ * state. Mirrors the patch flow `FamilyDecisionActions` used to
+ * own; extracted so multiple surfaces can render the affordance
+ * without duplicating the modal copy.
+ */
+function RevokeAcceptanceButton({
+  familyId,
+  yearId,
+  familyName,
+  onRevoked,
+}: {
+  familyId: number;
+  yearId: number;
+  familyName: string;
+  onRevoked: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  async function runRevoke() {
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/admin/family-progress`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ familyId, yearId, isAccepted: false }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Update failed (${res.status})`);
+      }
+      toast.success(`Acceptance revoked for ${familyName || "family"}.`);
+      setOpen(false);
+      onRevoked();
+    } catch (err) {
+      console.error("[RevokeAcceptanceButton.runRevoke] failed:", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't revoke.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <>
-      <div className="flex items-center gap-2 shrink-0">
-        {/* Revoke acceptance — only renders when the family is
-            accepted. Approve / Reject / Archive all live inside
-            the Scholarship Determination card's footer (per the
-            decision flow that lives there); the page header just
-            keeps the post-acceptance reversal affordance. */}
-        {accepted ? (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={saving}
-            onClick={() => setPending("revoke")}
-            className="bg-white"
-          >
-            <XCircle className="size-4 mr-1.5" />
-            Revoke acceptance
-          </Button>
-        ) : null}
-      </div>
+      <Button
+        type="button"
+        variant="outline"
+        size="lg"
+        disabled={saving}
+        onClick={() => setOpen(true)}
+        className="bg-white"
+      >
+        <XCircle className="size-4 mr-1.5" />
+        Revoke acceptance
+      </Button>
 
       <AlertDialog
-        open={pending !== null}
-        onOpenChange={(open) => {
-          if (!open && !saving) setPending(null);
+        open={open}
+        onOpenChange={(next) => {
+          if (!next && !saving) setOpen(next);
         }}
       >
         <AlertDialogContent>
@@ -5435,10 +5549,7 @@ function FamilyDecisionActions({
               className="bg-red-600 hover:bg-red-700 text-white"
               onClick={(e) => {
                 e.preventDefault();
-                void patchProgress({ isAccepted: false });
-                toast.success(
-                  `Acceptance revoked for ${familyName || "family"}.`
-                );
+                void runRevoke();
               }}
             >
               {saving ? (
