@@ -137,75 +137,22 @@ export default function EnrolledStudentDetailPage() {
 
   return (
     <div className="p-6 space-y-6">
-      <div className="space-y-3">
-        <BackLink href={backHref} />
+      {/* Header: H1 + family/primary sub-text + last-edited captions.
+          Action row + Back button moved down to sit right above the
+          first card so the header reads as pure context and the
+          actions land closer to the content they affect. */}
+      <div className="space-y-1">
         <h1 className="text-2xl font-semibold truncate">{fullName}</h1>
-        {/* Sub-text row holds the family / primary contact context
-            on the left and all action buttons on the right. Same
-            line so admin's eye can see the student's context AND
-            their actions in one glance without scrolling. */}
-        <div className="flex items-center justify-between gap-3 flex-wrap">
-          <p className="text-sm text-muted-foreground min-w-0">
-            {family?.family_name ? <span>{family.family_name}</span> : null}
-            {family?.family_name && primary ? <span> · </span> : null}
-            {primary ? (
-              <span>
-                {`${primary.first_name ?? ""} ${primary.last_name ?? ""}`.trim()}
-                {primary.email ? ` · ${primary.email}` : ""}
-              </span>
-            ) : null}
-          </p>
-          {/* Action row order (left→right): Delete (destructive
-              soft-remove from enrolled), Unenroll (the formal
-              "student has left" path), View family registration
-              (cross-surface jump), Edit (far right, the primary
-              forward action). */}
-          <div className="flex items-center gap-2 shrink-0 flex-wrap">
-            {packet ? (
-              <RemoveStudentButton
-                packetId={packet.id}
-                studentName={fullName}
-                onRemoved={() => {
-                  // Soft-delete: registrationConfirmed=false moves
-                  // the row out of the enrolled list. Push admin
-                  // back to the list since this student no longer
-                  // belongs on this page.
-                  void mutate();
-                  window.location.href = backHref;
-                }}
-              />
-            ) : null}
-            <UnenrollStudentButton
-              studentId={student.id}
-              studentName={fullName}
-              currentlyUnenrolled={student.isArchived === true}
-              existingReason={student.unenrollment_reason ?? ""}
-              existingDate={student.unenrollment_date ?? ""}
-              existingNotes={student.unenrollment_notes ?? ""}
-              onChanged={() => {
-                void mutate();
-              }}
-            />
-            {family ? (
-              <Button asChild variant="outline" size="sm" className="bg-white">
-                <Link
-                  href={`/admin/registrations/${family.id}?yearId=${yearId}`}
-                >
-                  View family registration
-                  <ExternalLink className="size-3.5 ml-1.5" />
-                </Link>
-              </Button>
-            ) : null}
-            {editHref ? (
-              <Button asChild variant="outline" size="sm" className="bg-white">
-                <Link href={editHref}>
-                  <Pencil className="size-3.5 mr-1.5" />
-                  Edit
-                </Link>
-              </Button>
-            ) : null}
-          </div>
-        </div>
+        <p className="text-sm text-muted-foreground min-w-0">
+          {family?.family_name ? <span>{family.family_name}</span> : null}
+          {family?.family_name && primary ? <span> · </span> : null}
+          {primary ? (
+            <span>
+              {`${primary.first_name ?? ""} ${primary.last_name ?? ""}`.trim()}
+              {primary.email ? ` · ${primary.email}` : ""}
+            </span>
+          ) : null}
+        </p>
         {/* Data staleness — most recent write to either the student
             row or the per-year packet. Two timestamps because edits
             can land on either: bio + docs land on the student row,
@@ -228,6 +175,61 @@ export default function EnrolledStudentDetailPage() {
             </span>
           </p>
         ) : null}
+      </div>
+      {/* Action row sits right above the Student Information card.
+          Order left→right: Back to list (returns to the enrolled
+          roster) · Delete (soft-remove from enrolled) · Unenroll
+          (formal "student has left") · View family registration
+          (cross-surface jump) · Edit (far right, primary forward
+          action). All five share the outline+white button family
+          so they read as one consistent group. */}
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <BackLink href={backHref} />
+        <div className="flex items-center gap-2 shrink-0 flex-wrap">
+          {packet ? (
+            <RemoveStudentButton
+              packetId={packet.id}
+              studentName={fullName}
+              onRemoved={() => {
+                // Soft-delete: registrationConfirmed=false moves
+                // the row out of the enrolled list. Push admin
+                // back to the list since this student no longer
+                // belongs on this page.
+                void mutate();
+                window.location.href = backHref;
+              }}
+            />
+          ) : null}
+          <UnenrollStudentButton
+            studentId={student.id}
+            studentName={fullName}
+            currentlyUnenrolled={student.isArchived === true}
+            existingReason={student.unenrollment_reason ?? ""}
+            existingDate={student.unenrollment_date ?? ""}
+            existingNotes={student.unenrollment_notes ?? ""}
+            onChanged={() => {
+              void mutate();
+            }}
+          />
+          {family ? (
+            <Button asChild variant="outline" size="sm" className="bg-white">
+              <Link
+                href={`/admin/registrations/${family.id}?yearId=${yearId}`}
+              >
+                View family registration
+                <ExternalLink className="size-3.5 ml-1.5" />
+              </Link>
+            </Button>
+          ) : null}
+          {editHref ? (
+            <Button asChild variant="outline" size="sm" className="bg-white">
+              <Link href={editHref}>
+                <Pencil className="size-3.5 mr-1.5" />
+                Edit
+              </Link>
+            </Button>
+          ) : null}
+        </div>
       </div>
 
       <StudentBioCard student={student} app={app} />
@@ -278,7 +280,7 @@ function StudentBioCard({
   return (
     <Card className="overflow-hidden gap-0 py-0 bg-white">
       <CardHeader className="py-3 !pb-3 border-b">
-        <CardTitle className="text-base">Student</CardTitle>
+        <CardTitle className="text-base">Student Information</CardTitle>
       </CardHeader>
       <CardContent className="space-y-6 py-5 bg-white">
         <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
@@ -408,36 +410,20 @@ function PacketCard({
                 Pending
               </span>
             )}
-            {/* Audit caption — only renders on confirmed packets that
-                carry the audit pair (legacy rows predate the columns,
-                so we tolerate either piece being missing). Mirrors the
-                section-confirm captions on the family detail page so
-                admin sees who/when across surfaces. */}
-            {packet.registrationConfirmed &&
-            (packet.registration_confirmed_admin_name ||
-              packet.registration_confirmed_admin_time) ? (
+            {/* Last-edited sub-text under the status pill. Surfaces
+                the packet row's `last_edited_time` so admin can see
+                at a glance when this packet was last touched —
+                useful for spotting stale data (parent uploaded
+                docs months ago but never came back) or recent
+                changes (parent updated medical fields yesterday).
+                Bumped server-side on every PATCH so it always
+                reflects the freshest write. */}
+            {packet.last_edited_time ? (
               <span
                 className="text-[10px] text-muted-foreground/80"
-                title={
-                  packet.registration_confirmed_admin_time
-                    ? new Date(
-                        packet.registration_confirmed_admin_time
-                      ).toLocaleString()
-                    : undefined
-                }
+                title={new Date(packet.last_edited_time).toLocaleString()}
               >
-                {packet.registration_confirmed_admin_name
-                  ? `by ${packet.registration_confirmed_admin_name}`
-                  : ""}
-                {packet.registration_confirmed_admin_name &&
-                packet.registration_confirmed_admin_time
-                  ? " · "
-                  : ""}
-                {packet.registration_confirmed_admin_time
-                  ? formatNoteTimestamp(
-                      packet.registration_confirmed_admin_time
-                    )
-                  : ""}
+                Last edited {formatNoteTimestamp(packet.last_edited_time)}
               </span>
             ) : null}
           </div>
@@ -579,28 +565,62 @@ function PacketCard({
           </ul>
         </div>
       </CardContent>
-      {/* Confirmation footer mirrors the SectionShell footer used on
-          the apply-flow family detail page so admin sees the same
-          "Confirm / Undo" affordance everywhere. Spinner gates the
-          double-click. */}
-      <div className="border-t bg-white px-5 py-3 flex items-center justify-end gap-3">
-        <Button
-          type="button"
-          variant={packet.registrationConfirmed ? "outline" : "default"}
-          size="sm"
-          onClick={toggleConfirmed}
-          disabled={saving}
-          className={cn(packet.registrationConfirmed && "bg-white")}
-        >
-          {saving ? (
-            <Loader2 className="size-3.5 mr-1.5 animate-spin" />
-          ) : packet.registrationConfirmed ? (
-            <Undo2 className="size-3.5 mr-1.5" />
-          ) : (
-            <CheckCircle2 className="size-3.5 mr-1.5" />
-          )}
-          {packet.registrationConfirmed ? "Undo Confirmation" : "Confirm Packet"}
-        </Button>
+      {/* Footer.
+          - Pre-confirm: Confirm Packet button (admin's only way to
+            flip the bool from this page).
+          - Post-confirm: audit caption "Confirmed by Mr. Thompson
+            · 4d" so admin sees who locked the packet and when.
+            Undo isn't surfaced here intentionally — un-confirming
+            a packet belongs on the family registration detail
+            page's per-student Mark Pending affordance, not this
+            read-only-summary surface. */}
+      <div className="border-t bg-white px-5 py-3 flex items-center justify-between gap-3">
+        {packet.registrationConfirmed ? (
+          <p className="text-sm text-muted-foreground truncate">
+            {packet.registration_confirmed_admin_name ? (
+              <>
+                Confirmed by{" "}
+                <span className="font-medium text-foreground">
+                  {packet.registration_confirmed_admin_name}
+                </span>
+              </>
+            ) : (
+              "Confirmed"
+            )}
+            {packet.registration_confirmed_admin_time ? (
+              <span
+                title={new Date(
+                  packet.registration_confirmed_admin_time
+                ).toLocaleString()}
+              >
+                {" · "}
+                {formatNoteTimestamp(
+                  packet.registration_confirmed_admin_time
+                )}
+              </span>
+            ) : null}
+          </p>
+        ) : (
+          <>
+            <span className="text-sm text-muted-foreground">
+              This packet hasn&rsquo;t been admin-confirmed yet.
+            </span>
+            <Button
+              type="button"
+              variant="default"
+              size="sm"
+              onClick={toggleConfirmed}
+              disabled={saving}
+            >
+              {saving ? (
+                <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+              ) : (
+                <CheckCircle2 className="size-3.5 mr-1.5" />
+              )}
+              Confirm Packet
+            </Button>
+          </>
+        )}
       </div>
     </Card>
   );

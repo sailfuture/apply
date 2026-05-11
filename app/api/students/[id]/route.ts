@@ -20,7 +20,13 @@ export async function PATCH(
   const body = await req.json();
 
   try {
-    const updated = await xano.students.update(studentId, body);
+    // Bump `last_edited_time` on every write — parent edits land
+    // here from the apply-flow students page and the registration
+    // packet, and the enrolled detail page's last-edited captions
+    // need to reflect those changes. Mirrors the admin students
+    // route's same bump.
+    const patch = { ...body, last_edited_time: Date.now() };
+    const updated = await xano.students.update(studentId, patch);
     return NextResponse.json(updated);
   } catch (err) {
     console.error("Failed to update student:", err);

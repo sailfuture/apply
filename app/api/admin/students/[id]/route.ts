@@ -170,6 +170,14 @@ export async function PATCH(
       );
     }
 
+    // Bump `last_edited_time` on every write so the enrolled
+    // detail page's "Student edited 4d ago" caption stays
+    // current and the Registration Packet card's last-edited
+    // sub-text reflects what just changed. Added after the
+    // empty-patch check so a no-op body still 400s rather than
+    // logging a meaningless timestamp bump.
+    (patch as Record<string, unknown>).last_edited_time = now;
+
     // Route through the admin API group when any admin-only
     // column is in the patch — those columns were added against
     // the `2GcBXyoA` query and aren't on the default group's CRUD
