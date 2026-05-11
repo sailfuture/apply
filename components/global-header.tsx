@@ -85,7 +85,15 @@ export function GlobalHeader() {
   })();
 
   return (
-    <header className="fixed top-0 left-0 right-0 z-50 border-b bg-white">
+    // `sticky` (not `fixed`) — Radix-based dropdowns/dialogs lock
+    // body scroll by adding `padding-right` to the body to
+    // compensate for the scrollbar disappearance. A `position: fixed`
+    // header is anchored to the viewport and doesn't shift with the
+    // body, so it visually slides offscreen the moment a Select
+    // opens. Sticky lives in the document flow and respects the
+    // body padding, so the header stays anchored when Radix locks
+    // scroll. Matches the admin top nav's pattern.
+    <header className="sticky top-0 z-50 border-b bg-white">
       <div className="mx-auto flex h-14 items-center justify-between px-4 lg:px-6">
         {/* Left: Logo (clickable) + Title + Family name */}
         <div className="flex items-center gap-3">

@@ -38,14 +38,22 @@ export function AppChrome({ children }: { children: React.ReactNode }) {
 
   return (
     <>
+      {/* Header sits in document flow via `sticky` (not `fixed`) so
+          Radix's scroll-lock body padding-right keeps it aligned
+          when a Select/Dialog opens. The Suspense fallback matches
+          the real header's positioning so layout reserves the same
+          14px slot during hydration. `<main>` no longer needs the
+          `pt-14` spacer it had when the header was fixed — the
+          sticky header takes its own space at the top of the
+          document. */}
       <Suspense
         fallback={
-          <header className="fixed top-0 left-0 right-0 z-50 h-14 border-b bg-white" />
+          <header className="sticky top-0 z-50 h-14 border-b bg-white" />
         }
       >
         <GlobalHeader />
       </Suspense>
-      <main className="pt-14 pb-16 min-h-screen">
+      <main className="pb-16 min-h-screen">
         <TooltipProvider>{children}</TooltipProvider>
       </main>
       <GlobalFooter />

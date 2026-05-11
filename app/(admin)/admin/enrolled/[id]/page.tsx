@@ -19,6 +19,7 @@ import {
   Trash2,
   Undo2,
   UserMinus,
+  Users,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -237,6 +238,14 @@ export default function EnrolledStudentDetailPage() {
               void mutate();
             }}
           />
+          {family ? (
+            <Button asChild variant="outline" size="sm" className="bg-white">
+              <Link href={`/admin/families/${family.id}/overview`}>
+                <Users className="size-3.5 mr-1.5" />
+                Family overview
+              </Link>
+            </Button>
+          ) : null}
           {family ? (
             <Button asChild variant="outline" size="sm" className="bg-white">
               <Link

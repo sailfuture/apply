@@ -19,7 +19,6 @@ import {
   SquarePen,
   Trash2,
   Undo2,
-  Users,
   XCircle,
 } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -533,19 +532,6 @@ export default function FamilyDetailPage() {
               as the most-clicked utility. All four only render
               when a year is selected — they're year-scoped. */}
           <div className="flex items-center gap-2 shrink-0">
-            {/* Family overview link — cross-year read-only view of
-                everything about this family. Sits on the far left
-                because it's the "zoom out" affordance: admin
-                clicks here when they want the bigger picture
-                (other students, prior years, contacts, etc.)
-                without leaving for a different page. Available
-                whether or not a year is selected. */}
-            <Button asChild variant="outline" size="sm" className="bg-white">
-              <Link href={`/admin/families/${familyId}/overview`}>
-                <Users className="size-3.5 mr-1.5" />
-                Family overview
-              </Link>
-            </Button>
             {yearId ? (
               <DeleteApplicationButton
                 familyId={Number(familyId)}
@@ -657,11 +643,15 @@ export default function FamilyDetailPage() {
           </SectionShell>
         </section>
 
-        {/* Students — bio + per-app fields per student. */}
+        {/* Students — bio + per-app fields per student. The
+            section-level Edit affordance moved off this shell —
+            each `StudentApplicationBlock` below now ships its own
+            sub-header Edit button anchored to the student name, so
+            the cross-page editor link at the section level was
+            redundant. */}
         <section id="section-students" className="scroll-mt-20">
           <SectionShell
             title={`Students${yearMeta ? ` · ${yearMeta.year_name}` : ""}`}
-            editHref={sectionHref("students")}
             notes={{
               familyId: family.id,
               section: "section-students",
@@ -1820,21 +1810,9 @@ function EditableStudentDob({
   );
 }
 
-/**
- * Edit-mode toggle for the Student demographics section on the
- * StudentApplicationBlock (year-scoped student card). Read mode
- * renders the five fields (first name, last name, DOB, gender,
- * ethnicity) as DisabledField inputs with an Edit button on the
- * right of the section header. Click Edit → inputs become
- * editable + a blue Save button appears; click Save to PATCH the
- * student row in one atomic write. Cancel reverts the local draft.
- *
- * Distinct from `EditableStudentDob` above which is always-on
- * inline editing for just DOB. This component is a deliberate
- * "edit-the-whole-card" affordance — admin opts in by clicking
- * Edit, which prevents accidental edits and gives one explicit
- * Save action.
- */
+/** Valid choices for the Gender select in the Student edit mode.
+ *  Mirrors the same options the parent-side students form offers
+ *  so admin can't pick a value the parent never sees. */
 const GENDER_OPTIONS = [
   "Male",
   "Female",
@@ -1842,6 +1820,9 @@ const GENDER_OPTIONS = [
   "Prefer not to say",
 ] as const;
 
+/** Valid choices for the Ethnicity select — matches the parent
+ *  flow. NCES-aligned categories with a "Prefer not to say"
+ *  escape hatch. */
 const ETHNICITY_OPTIONS = [
   "American Indian or Alaska Native",
   "Asian",
@@ -1853,18 +1834,49 @@ const ETHNICITY_OPTIONS = [
   "Prefer not to say",
 ] as const;
 
-function EditableStudentDemographics({
+function StudentBio({
   student,
   onChanged,
 }: {
   student: Student;
   onChanged: () => void;
 }) {
+  return (
+    <div className="rounded-md border bg-muted/10 p-4 space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm font-semibold">
+          {student.first_name} {student.last_name}
+        </p>
+        {student.isAccepted ? <StatusBadge status="accepted" /> : null}
+      </div>
+      <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
+        <EditableStudentDob
+          studentId={student.id}
+          value={student.date_of_birth ?? ""}
+          onChanged={onChanged}
+        />
+        <DisabledField label="Gender" value={student.gender} required />
+        <DisabledField label="Ethnicity" value={student.ethnicity} required />
+      </div>
+    </div>
+  );
+}
+
+function StudentApplicationBlock({
+  student,
+  app,
+  onChanged,
+}: {
+  student: Student;
+  app: XanoApplication | undefined;
+  onChanged: () => void;
+}) {
+  // Edit state lives on the block itself so the sub-header (name)
+  // and body (demographics) can swap into edit mode together —
+  // first/last name inputs replace the header text in place,
+  // keeping the layout from jumping when Edit is clicked.
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
-  // Draft state mirrors the row fields — initialized from the
-  // student on every edit-mode entry so reopening always reflects
-  // the latest persisted values.
   const [draft, setDraft] = useState({
     first_name: student.first_name ?? "",
     last_name: student.last_name ?? "",
@@ -1889,9 +1901,8 @@ function EditableStudentDemographics({
   }
 
   async function runSave() {
-    // Build a patch of just the changed fields — keeps the
-    // network round-trip lean and avoids overwriting columns the
-    // edit form didn't touch.
+    // Only send fields that actually changed — keeps the patch
+    // lean and avoids overwriting columns the form didn't touch.
     const patch: Record<string, string> = {};
     if (draft.first_name !== (student.first_name ?? ""))
       patch.first_name = draft.first_name.trim();
@@ -1922,7 +1933,7 @@ function EditableStudentDemographics({
       setEditing(false);
       onChanged();
     } catch (err) {
-      console.error("[EditableStudentDemographics.runSave]", err);
+      console.error("[StudentApplicationBlock.runSave]", err);
       toast.error(err instanceof Error ? err.message : "Couldn't save.");
     } finally {
       setSaving(false);
@@ -1930,74 +1941,100 @@ function EditableStudentDemographics({
   }
 
   return (
-    <SectionGroup
-      title="Student"
-      trailing={
-        editing ? (
-          <div className="flex items-center gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={cancelEdit}
-              disabled={saving}
-              className="bg-white h-7"
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              onClick={() => void runSave()}
-              disabled={saving}
-              className="bg-blue-600 hover:bg-blue-700 text-white h-7"
-            >
-              {saving ? (
-                <Loader2 className="size-3.5 mr-1.5 animate-spin" />
-              ) : (
-                <Check className="size-3.5 mr-1.5" />
-              )}
-              Save
-            </Button>
+    <Card className="overflow-hidden gap-0 py-0 bg-muted/10">
+      {/* Sub-header — student name on the left + Edit (or Save/
+          Cancel) on the right. In edit mode the name swaps to
+          first/last name inputs sharing the same row, so the
+          layout doesn't jump when admin toggles into edit mode. */}
+      <CardHeader className="py-3 !pb-3 border-b bg-white">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            {editing ? (
+              <div className="grid gap-2 grid-cols-2 max-w-md">
+                <Field>
+                  <FieldLabel className="text-[10px]">First name</FieldLabel>
+                  <Input
+                    value={draft.first_name}
+                    onChange={(e) =>
+                      setDraft((d) => ({ ...d, first_name: e.target.value }))
+                    }
+                    disabled={saving}
+                    className="h-8"
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel className="text-[10px]">Last name</FieldLabel>
+                  <Input
+                    value={draft.last_name}
+                    onChange={(e) =>
+                      setDraft((d) => ({ ...d, last_name: e.target.value }))
+                    }
+                    disabled={saving}
+                    className="h-8"
+                  />
+                </Field>
+              </div>
+            ) : (
+              <CardTitle className="text-base truncate">
+                {student.first_name} {student.last_name}
+              </CardTitle>
+            )}
+            {!app && !editing ? (
+              <p className="mt-1 text-xs italic text-muted-foreground">
+                No application row for this year.
+              </p>
+            ) : null}
           </div>
-        ) : (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={enterEdit}
-            className="bg-white h-7"
-          >
-            <Pencil className="size-3.5 mr-1.5" />
-            Edit
-          </Button>
-        )
-      }
-    >
-      {editing ? (
-        <div className="space-y-4">
-          <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
-            <Field>
-              <FieldLabel>First name</FieldLabel>
-              <Input
-                value={draft.first_name}
-                onChange={(e) =>
-                  setDraft((d) => ({ ...d, first_name: e.target.value }))
-                }
-                disabled={saving}
-              />
-            </Field>
-            <Field>
-              <FieldLabel>Last name</FieldLabel>
-              <Input
-                value={draft.last_name}
-                onChange={(e) =>
-                  setDraft((d) => ({ ...d, last_name: e.target.value }))
-                }
-                disabled={saving}
-              />
-            </Field>
+          <div className="flex items-center gap-2 shrink-0">
+            {editing ? (
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={cancelEdit}
+                  disabled={saving}
+                  className="bg-white"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => void runSave()}
+                  disabled={saving}
+                  className="bg-blue-600 hover:bg-blue-700 text-white"
+                >
+                  {saving ? (
+                    <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                  ) : (
+                    <Check className="size-3.5 mr-1.5" />
+                  )}
+                  Save
+                </Button>
+              </>
+            ) : (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={enterEdit}
+                className="bg-white"
+              >
+                <Pencil className="size-3.5 mr-1.5" />
+                Edit
+              </Button>
+            )}
           </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-5 py-5 bg-muted/10">
+      {/* Demographics — DOB / Gender / Ethnicity. In edit mode the
+          three fields become editable inputs; first/last name
+          (above in the sub-header) are part of the same atomic
+          PATCH so admin sees one unified edit experience. */}
+      <SectionGroup title="Student">
+        {editing ? (
           <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
             <Field>
               <FieldLabel>Date of birth</FieldLabel>
@@ -2005,7 +2042,10 @@ function EditableStudentDemographics({
                 type="date"
                 value={draft.date_of_birth}
                 onChange={(e) =>
-                  setDraft((d) => ({ ...d, date_of_birth: e.target.value }))
+                  setDraft((d) => ({
+                    ...d,
+                    date_of_birth: e.target.value,
+                  }))
                 }
                 disabled={saving}
               />
@@ -2053,94 +2093,22 @@ function EditableStudentDemographics({
               </Select>
             </Field>
           </div>
-        </div>
-      ) : (
-        <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
-          <DisabledField
-            label="Date of birth"
-            value={
-              student.date_of_birth
-                ? new Date(`${student.date_of_birth}T00:00:00`).toLocaleDateString()
-                : ""
-            }
-            required
-          />
-          <DisabledField label="Gender" value={student.gender} required />
-          <DisabledField label="Ethnicity" value={student.ethnicity} required />
-        </div>
-      )}
-    </SectionGroup>
-  );
-}
-
-function StudentBio({
-  student,
-  onChanged,
-}: {
-  student: Student;
-  onChanged: () => void;
-}) {
-  return (
-    <div className="rounded-md border bg-muted/10 p-4 space-y-4">
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-sm font-semibold">
-          {student.first_name} {student.last_name}
-        </p>
-        {student.isAccepted ? <StatusBadge status="accepted" /> : null}
-      </div>
-      <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
-        <EditableStudentDob
-          studentId={student.id}
-          value={student.date_of_birth ?? ""}
-          onChanged={onChanged}
-        />
-        <DisabledField label="Gender" value={student.gender} required />
-        <DisabledField label="Ethnicity" value={student.ethnicity} required />
-      </div>
-    </div>
-  );
-}
-
-function StudentApplicationBlock({
-  student,
-  app,
-  onChanged,
-}: {
-  student: Student;
-  app: XanoApplication | undefined;
-  onChanged: () => void;
-}) {
-  return (
-    <div className="rounded-md border bg-muted/10 p-4 space-y-5">
-      {/* Header — student name only. The earlier "App #24 · Created
-          5/3/2026" subtitle and the Draft / status pill on the right
-          read as developer-facing metadata; admins making
-          determinations don't need either to do their job. The
-          Decision card up top already surfaces the application's
-          submitted/accepted state. */}
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-sm font-semibold">
-            {student.first_name} {student.last_name}
-          </p>
-          {!app ? (
-            <p className="text-xs italic text-muted-foreground">
-              No application row for this year.
-            </p>
-          ) : null}
-        </div>
-      </div>
-
-      {/* Demographics — sourced from the student record itself, not
-          the per-year app. Edit-mode toggle covers all five bio
-          fields (first name, last name, DOB, gender, ethnicity).
-          Click Edit → inputs become editable + a blue Save button
-          appears; click Save to PATCH the student row in one
-          atomic write. Cancel reverts the local draft. */}
-      <EditableStudentDemographics
-        student={student}
-        onChanged={onChanged}
-      />
+        ) : (
+          <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
+            <DisabledField
+              label="Date of birth"
+              value={
+                student.date_of_birth
+                  ? new Date(`${student.date_of_birth}T00:00:00`).toLocaleDateString()
+                  : ""
+              }
+              required
+            />
+            <DisabledField label="Gender" value={student.gender} required />
+            <DisabledField label="Ethnicity" value={student.ethnicity} required />
+          </div>
+        )}
+      </SectionGroup>
 
       {app ? (
         <>
@@ -2217,7 +2185,8 @@ function StudentApplicationBlock({
           </SectionGroup>
         </>
       ) : null}
-    </div>
+      </CardContent>
+    </Card>
   );
 }
 
