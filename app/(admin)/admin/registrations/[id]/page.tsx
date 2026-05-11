@@ -3055,13 +3055,14 @@ function RevokeAdmissionButton({
         size="lg"
         disabled={saving}
         onClick={() => setOpen(true)}
-        className="bg-white text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700 w-full"
+        className="bg-white w-full"
       >
         {/* ArrowLeft reads as "send this family back to the
             apply-flow" — they were accepted, this returns them to
-            the queue. Pairs visually with the Archive icon to the
-            left and the forward-motion Confirm icon to the
-            right. */}
+            the queue. Same neutral outline as the apply-flow
+            Reject button on the Acceptance card so the two
+            "step backward" affordances share the same visual
+            weight. */}
         <ArrowLeft className="size-4 mr-1.5" />
         Revoke admission
       </Button>
@@ -3441,16 +3442,12 @@ function FamilyRegistrationConfirmationCard({
           />
           {confirmed ? (
             <>
-              <Button
-                type="button"
-                variant="outline"
-                size="lg"
-                disabled
-                className="bg-muted text-muted-foreground cursor-default disabled:opacity-100 w-full"
-              >
-                <CheckCircle2 className="size-4 mr-1.5 shrink-0" />
-                <span className="truncate">Registration Confirmed</span>
-              </Button>
+              {/* Order in the grid (left→right) when confirmed:
+                  Archive · Revoke admission · Undo · Registration
+                  Confirmed. The Confirmed pill sits at the far
+                  right so it's the last thing admin's eye lands
+                  on — the headline state, not a button to
+                  click. */}
               <Button
                 type="button"
                 variant="outline"
@@ -3465,6 +3462,16 @@ function FamilyRegistrationConfirmationCard({
                   <Undo2 className="size-4 mr-1.5 shrink-0" />
                 )}
                 <span className="truncate">Undo</span>
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="lg"
+                disabled
+                className="bg-muted text-muted-foreground cursor-default disabled:opacity-100 w-full"
+              >
+                <CheckCircle2 className="size-4 mr-1.5 shrink-0" />
+                <span className="truncate">Registration Confirmed</span>
               </Button>
               <AlertDialog open={undoOpen} onOpenChange={setUndoOpen}>
                 <AlertDialogContent>

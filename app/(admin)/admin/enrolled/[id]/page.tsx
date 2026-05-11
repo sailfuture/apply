@@ -137,115 +137,97 @@ export default function EnrolledStudentDetailPage() {
 
   return (
     <div className="p-6 space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <div className="min-w-0">
-          <BackLink href={backHref} />
-          <h1 className="mt-2 text-2xl font-semibold truncate">
-            {fullName}
-            {school_year?.year_name ? (
-              <span className="ml-2 text-base font-normal text-muted-foreground">
-                · {school_year.year_name}
+      <div className="space-y-3">
+        <BackLink href={backHref} />
+        <h1 className="text-2xl font-semibold truncate">{fullName}</h1>
+        {/* Sub-text row holds the family / primary contact context
+            on the left and all action buttons on the right. Same
+            line so admin's eye can see the student's context AND
+            their actions in one glance without scrolling. */}
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <p className="text-sm text-muted-foreground min-w-0">
+            {family?.family_name ? <span>{family.family_name}</span> : null}
+            {family?.family_name && primary ? <span> · </span> : null}
+            {primary ? (
+              <span>
+                {`${primary.first_name ?? ""} ${primary.last_name ?? ""}`.trim()}
+                {primary.email ? ` · ${primary.email}` : ""}
               </span>
             ) : null}
-          </h1>
-          {/* Family + primary contact are context only — the rest of
-              this page is single-student. Click-through goes to the
-              family registration detail when admin needs the broader
-              view. */}
-          {family || primary ? (
-            <p className="mt-1 text-sm text-muted-foreground">
-              {family?.family_name ? (
-                <span>{family.family_name}</span>
-              ) : null}
-              {family?.family_name && primary ? <span> · </span> : null}
-              {primary ? (
-                <span>
-                  {`${primary.first_name ?? ""} ${primary.last_name ?? ""}`.trim()}
-                  {primary.email ? ` · ${primary.email}` : ""}
-                </span>
-              ) : null}
-            </p>
-          ) : null}
-          {/* Data staleness — most recent write to either the student
-              row or the per-year packet. Two timestamps because edits
-              can land on either: bio + docs land on the student row,
-              medical / sizing / waiver land on the packet. Showing
-              both helps admin spot mismatches ("bio updated yesterday
-              but packet hasn't been touched since June"). */}
-          {student.last_edited_time ? (
-            <p className="mt-0.5 text-xs text-muted-foreground/80">
-              Student edited{" "}
-              <span title={new Date(student.last_edited_time).toLocaleString()}>
-                {formatNoteTimestamp(student.last_edited_time)}
-              </span>
-            </p>
-          ) : null}
-          {packet?.last_edited_time ? (
-            <p className="mt-0.5 text-xs text-muted-foreground/80">
-              Packet edited{" "}
-              <span title={new Date(packet.last_edited_time).toLocaleString()}>
-                {formatNoteTimestamp(packet.last_edited_time)}
-              </span>
-            </p>
-          ) : null}
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          {/* Edit jumps to the family registration detail page where
-              admin can mutate the registration packet + flip the
-              verify state. Right next to View family registration so
-              the two destinations are visually paired. */}
-          {editHref ? (
-            <Button asChild variant="outline" size="sm" className="bg-white">
-              <Link href={editHref}>
-                <Pencil className="size-3.5 mr-1.5" />
-                Edit
-              </Link>
-            </Button>
-          ) : null}
-          {/* Remove vs Unenroll: deliberately two affordances.
-              `Remove` (trash) clears `registrationConfirmed=false`
-              — the quick "we confirmed in error" path. `Unenroll`
-              opens a richer modal that captures a reason + date
-              and sets `isArchived=true` — the deliberate "student
-              has officially left" path. Both drop the student
-              from the active enrolled list; the difference is the
-              audit trail they leave on the packet. */}
-          {packet ? (
-            <RemoveStudentButton
-              packetId={packet.id}
+          </p>
+          {/* Action row order (left→right): Delete (destructive
+              soft-remove from enrolled), Unenroll (the formal
+              "student has left" path), View family registration
+              (cross-surface jump), Edit (far right, the primary
+              forward action). */}
+          <div className="flex items-center gap-2 shrink-0 flex-wrap">
+            {packet ? (
+              <RemoveStudentButton
+                packetId={packet.id}
+                studentName={fullName}
+                onRemoved={() => {
+                  // Soft-delete: registrationConfirmed=false moves
+                  // the row out of the enrolled list. Push admin
+                  // back to the list since this student no longer
+                  // belongs on this page.
+                  void mutate();
+                  window.location.href = backHref;
+                }}
+              />
+            ) : null}
+            <UnenrollStudentButton
+              studentId={student.id}
               studentName={fullName}
-              onRemoved={() => {
-                // Soft-delete: registrationConfirmed=false moves
-                // the row out of the enrolled list. Push admin
-                // back to the list since this student no longer
-                // belongs on this page.
+              currentlyUnenrolled={student.isArchived === true}
+              existingReason={student.unenrollment_reason ?? ""}
+              existingDate={student.unenrollment_date ?? ""}
+              existingNotes={student.unenrollment_notes ?? ""}
+              onChanged={() => {
                 void mutate();
-                window.location.href = backHref;
               }}
             />
-          ) : null}
-          <UnenrollStudentButton
-            studentId={student.id}
-            studentName={fullName}
-            currentlyUnenrolled={student.isArchived === true}
-            existingReason={student.unenrollment_reason ?? ""}
-            existingDate={student.unenrollment_date ?? ""}
-            existingNotes={student.unenrollment_notes ?? ""}
-            onChanged={() => {
-              void mutate();
-            }}
-          />
-          {family ? (
-            <Button asChild variant="outline" size="sm" className="bg-white">
-              <Link
-                href={`/admin/registrations/${family.id}?yearId=${yearId}`}
-              >
-                View family registration
-                <ExternalLink className="size-3.5 ml-1.5" />
-              </Link>
-            </Button>
-          ) : null}
+            {family ? (
+              <Button asChild variant="outline" size="sm" className="bg-white">
+                <Link
+                  href={`/admin/registrations/${family.id}?yearId=${yearId}`}
+                >
+                  View family registration
+                  <ExternalLink className="size-3.5 ml-1.5" />
+                </Link>
+              </Button>
+            ) : null}
+            {editHref ? (
+              <Button asChild variant="outline" size="sm" className="bg-white">
+                <Link href={editHref}>
+                  <Pencil className="size-3.5 mr-1.5" />
+                  Edit
+                </Link>
+              </Button>
+            ) : null}
+          </div>
         </div>
+        {/* Data staleness — most recent write to either the student
+            row or the per-year packet. Two timestamps because edits
+            can land on either: bio + docs land on the student row,
+            medical / sizing / waiver land on the packet. Showing
+            both helps admin spot mismatches ("bio updated yesterday
+            but packet hasn't been touched since June"). */}
+        {student.last_edited_time ? (
+          <p className="text-xs text-muted-foreground/80">
+            Student edited{" "}
+            <span title={new Date(student.last_edited_time).toLocaleString()}>
+              {formatNoteTimestamp(student.last_edited_time)}
+            </span>
+          </p>
+        ) : null}
+        {packet?.last_edited_time ? (
+          <p className="text-xs text-muted-foreground/80">
+            Packet edited{" "}
+            <span title={new Date(packet.last_edited_time).toLocaleString()}>
+              {formatNoteTimestamp(packet.last_edited_time)}
+            </span>
+          </p>
+        ) : null}
       </div>
 
       <StudentBioCard student={student} app={app} />
@@ -253,6 +235,7 @@ export default function EnrolledStudentDetailPage() {
       <PacketCard
         packet={packet}
         student={student}
+        schoolYear={school_year}
         onChanged={() => void mutate()}
       />
 
@@ -261,15 +244,22 @@ export default function EnrolledStudentDetailPage() {
   );
 }
 
+/**
+ * Back-to-list affordance — outline button shape (not the older
+ * plain-text link variant) so it matches every other navigation
+ * button on the admin surface. Same `size="sm" + bg-white +
+ * outline` shape as the Edit / View family registration buttons
+ * in the action row below, so the page header reads as one
+ * consistent button family.
+ */
 function BackLink({ href }: { href: string }) {
   return (
-    <Link
-      href={href}
-      className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-    >
-      <ArrowLeft className="size-3" />
-      Back to enrolled students
-    </Link>
+    <Button asChild variant="outline" size="sm" className="bg-white">
+      <Link href={href}>
+        <ArrowLeft className="size-3.5 mr-1.5" />
+        Back to enrolled students
+      </Link>
+    </Button>
   );
 }
 
@@ -336,19 +326,27 @@ function StudentBioCard({
 function PacketCard({
   packet,
   student,
+  schoolYear,
   onChanged,
 }: {
   packet: AdminEnrolledStudentResponse["packet"];
   student: AdminEnrolledStudentResponse["student"];
+  schoolYear: AdminEnrolledStudentResponse["school_year"];
   onChanged: () => void;
 }) {
   const [saving, setSaving] = useState(false);
+  // Year suffix appended to the card title at the same font size
+  // as the title itself. Bullet-separated so the year reads as a
+  // peer label, not a subtitle.
+  const yearSuffix = schoolYear?.year_name ? ` · ${schoolYear.year_name}` : "";
 
   if (!packet) {
     return (
       <Card className="overflow-hidden gap-0 py-0 bg-white">
         <CardHeader className="py-3 !pb-3 border-b">
-          <CardTitle className="text-base">Registration Packet</CardTitle>
+          <CardTitle className="text-base">
+            Registration Packet{yearSuffix}
+          </CardTitle>
         </CardHeader>
         <CardContent className="py-5 bg-white">
           <p className="text-sm text-muted-foreground">
@@ -396,7 +394,9 @@ function PacketCard({
     <Card className="overflow-hidden gap-0 py-0 bg-white">
       <CardHeader className="py-3 !pb-3 border-b">
         <div className="flex items-center justify-between gap-3">
-          <CardTitle className="text-base">Registration Packet</CardTitle>
+          <CardTitle className="text-base">
+            Registration Packet{yearSuffix}
+          </CardTitle>
           <div className="flex flex-col items-end gap-0.5">
             {packet.registrationConfirmed ? (
               <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-800">
@@ -944,7 +944,7 @@ function RemoveStudentButton({
         className="bg-white text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700"
       >
         <Trash2 className="size-3.5 mr-1.5" />
-        Remove
+        Delete
       </Button>
       <AlertDialog
         open={open}
@@ -1157,11 +1157,11 @@ function UnenrollStudentButton({
     <>
       <Button
         type="button"
-        variant="outline"
+        variant="default"
         size="sm"
         disabled={saving}
         onClick={() => setOpen(true)}
-        className="bg-white text-amber-700 border-amber-200 hover:bg-amber-50 hover:text-amber-800"
+        className="bg-black text-white hover:bg-neutral-800"
       >
         <UserMinus className="size-3.5 mr-1.5" />
         Unenroll
@@ -1238,7 +1238,7 @@ function UnenrollStudentButton({
               type="button"
               disabled={saving || !reason.trim() || !date}
               onClick={() => void runUnenroll()}
-              className="bg-amber-600 hover:bg-amber-700 text-white"
+              className="bg-black text-white hover:bg-neutral-800"
             >
               {saving ? (
                 <Loader2 className="size-3.5 mr-1.5 animate-spin" />
