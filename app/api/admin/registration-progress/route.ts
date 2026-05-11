@@ -233,7 +233,7 @@ export async function PATCH(req: NextRequest) {
     // progress row above; the cascade is housekeeping.
     if (patch.isRegistrationConfirmed === true) {
       try {
-        await cascadeIsEnrolledTrue(familyId);
+        await cascadeIsEnrolledTrue(familyId, yearId);
       } catch (cascadeErr) {
         console.error(
           "[/api/admin/registration-progress] isEnrolled cascade failed:",
@@ -249,21 +249,47 @@ export async function PATCH(req: NextRequest) {
 }
 
 /**
- * Flip `isEnrolled=true` on every non-archived student in the
- * family. Skipped per-student when the flag is already true so we
- * don't re-PATCH no-op rows. Archived students (admin-unenrolled)
- * are deliberately left alone — re-enrolling a previously
- * unenrolled student is a separate flow (the Undo path on the
- * detail page).
+ * Flip `isEnrolled=true` on every non-archived family student WHO
+ * HAS AN ACTIVE APPLICATION for the year being confirmed. The
+ * year gate is important — a family can carry "orphan" student
+ * rows (kids added but never applied this cycle, or kids whose
+ * apps are for a different year), and those students shouldn't
+ * land in the enrolled cohort just because admin confirmed the
+ * family's registration. Previously the cascade swept every
+ * student attached to the family, which caused orphans to appear
+ * under the enrolled list with no application context.
+ *
+ * Skipped per-student when:
+ *   - The student has no active app for `yearId` (year gate)
+ *   - `isArchived === true` (admin-unenrolled)
+ *   - `isEnrolled === true` already (no-op write)
  *
  * Writes go through `updateOnAdminGroup` because `isEnrolled`
  * lives on the `2GcBXyoA` admin query alongside the other
  * admin-only student columns (doc confirms, unenrollment audit).
  */
-async function cascadeIsEnrolledTrue(familyId: number): Promise<void> {
-  const all = await xano.students.getByFamilyId(familyId);
+async function cascadeIsEnrolledTrue(
+  familyId: number,
+  yearId: number
+): Promise<void> {
+  const [all, apps] = await Promise.all([
+    xano.students.getByFamilyId(familyId),
+    xano.applications.getByFamilyId(familyId),
+  ]);
+  // Build a set of student ids that have an active app for the
+  // year. Treats `isActive === undefined` as active (legacy rows
+  // pre-date the column).
+  const studentsWithApp = new Set<number>();
+  for (const a of apps) {
+    if (Number(a.registration_school_years_id) !== yearId) continue;
+    if (a.isActive === false) continue;
+    studentsWithApp.add(Number(a.registration_students_id));
+  }
   const targets = all.filter(
-    (s) => s.isArchived !== true && s.isEnrolled !== true
+    (s) =>
+      s.isArchived !== true &&
+      s.isEnrolled !== true &&
+      studentsWithApp.has(s.id)
   );
   await Promise.all(
     targets.map((s) =>

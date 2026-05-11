@@ -3161,9 +3161,10 @@ function FamilyRegistrationConfirmationCard({
 
   const confirmed = progress?.isRegistrationConfirmed === true;
   const archived = progress?.isArchived === true;
-  const confirmedTime = progress?.registration_confirmed_time ?? null;
-  const confirmedByName =
-    progress?.registration_confirmed_admin?.trim() || null;
+  // `registration_confirmed_time` + `registration_confirmed_admin`
+  // still live on the row for audit; the footer caption that used
+  // to surface them was removed since the "Registration Confirmed"
+  // pill in the button row already conveys the state.
 
   // Section-verify checklist drives the gate-reason caption only
   // (the visual checklist is gone — its information is duplicated
@@ -3395,27 +3396,13 @@ function FamilyRegistrationConfirmationCard({
           backward") → Confirm Family Registration (the primary
           forward action). Equal-width buttons make the row read
           as one decision surface — no visual hierarchy hint that
-          one action is more important than another. The audit
-          caption ("Confirmed by … · 2h") moves above the row when
-          present so the buttons keep their full width. */}
-      <div className="border-t bg-white px-5 py-3 space-y-2">
-        {confirmed ? (
-          <p className="text-xs text-muted-foreground truncate">
-            {confirmedByName ? (
-              <>
-                Confirmed by{" "}
-                <span className="font-medium text-foreground">
-                  {confirmedByName}
-                </span>
-              </>
-            ) : (
-              "Confirmed"
-            )}
-            {confirmedTime ? (
-              <span> · {formatNoteTimestamp(confirmedTime)}</span>
-            ) : null}
-          </p>
-        ) : null}
+          one action is more important than another. The
+          "Confirmed by …" caption that used to sit above the
+          buttons was removed — the muted "Registration Confirmed"
+          pill in the button row already conveys the state, and
+          duplicating it as a caption made the footer feel
+          stacked. */}
+      <div className="border-t bg-white px-5 py-3">
         <div
           className={cn(
             "grid gap-2",

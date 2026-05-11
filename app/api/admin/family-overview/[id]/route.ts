@@ -89,6 +89,21 @@ export async function GET(
     }
     parents.sort((a, b) => a.id - b.id);
 
+    // Drop "orphan" student rows from the overview — students
+    // attached to the family record but who never had an
+    // application created (across any year). They sometimes get
+    // added as test data or via partial imports, and surfacing
+    // them under a family they never actually applied to is
+    // misleading. Cross-references the applications fetch above
+    // so we don't need a separate query.
+    const studentIdsWithApps = new Set<number>();
+    for (const a of applications) {
+      studentIdsWithApps.add(Number(a.registration_students_id));
+    }
+    const visibleStudents = students.filter((s) =>
+      studentIdsWithApps.has(s.id)
+    );
+
     return NextResponse.json({
       family: {
         id: family.id,
@@ -96,7 +111,7 @@ export async function GET(
         created_at: family.created_at,
       },
       parents,
-      students,
+      students: visibleStudents,
       emergency_contacts: emergencyContacts,
       applications,
     } satisfies AdminFamilyOverviewResponse);
