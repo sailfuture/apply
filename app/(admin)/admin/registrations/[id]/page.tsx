@@ -191,8 +191,19 @@ export default function FamilyRegistrationDetailPage() {
     progress,
     students,
     emergency_contacts,
-    scholarship,
   } = data;
+  // `scholarship` is a newer addition to the response shape, so
+  // tolerate a cached payload that was fetched before the API
+  // update landed (dev hot-reload, stale SWR cache from an open
+  // tab). Default to the all-false shape — equivalent to "no
+  // scholarship row on file," which is the conservative read.
+  const scholarship: AdminFamilyRegistrationResponse["scholarship"] =
+    data.scholarship ?? {
+      isOpportunityScholarship: false,
+      isSNAPBenefits: false,
+      isNotParticipating: false,
+      is_snap_confirmed: false,
+    };
   const familyName =
     family?.family_name?.trim() || `Family #${family?.id ?? familyId}`;
 
