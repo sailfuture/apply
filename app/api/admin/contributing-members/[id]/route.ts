@@ -22,15 +22,25 @@ import type { XanoScholarshipContributingMember } from "@/lib/xano";
  * audit columns on Xano (`*_confirm_time`, `*_admin_confirm`). The
  * route stamps both whenever the matching boolean is being written,
  * so the audit trail can't drift away from the actual confirmation
- * state — clients shouldn't (and can't) hand-write the timestamps
- * or admin id columns. Confirming stamps `Date.now()` + the admin's
- * teacher id; un-confirming clears them back to null / 0.
+ * state — clients shouldn't (and can't) hand-write the timestamp
+ * or admin-name columns. Confirming stamps `Date.now()` + the
+ * admin's display name; un-confirming clears them back to null /
+ * empty string. (The `*_admin_confirm` columns were originally
+ * typed `int` for teacher id but switched to `text` on Xano so the
+ * UI can render the name directly without a separate lookup.)
  */
 
 const CONFIRM_PAIRS = [
   {
+    // W-2's audit timestamp column is named `w2_confirmation`, NOT
+    // `w2_confirm_time` like the paystubs use. The Xano schema
+    // diverged from the paystub convention on this one column;
+    // PATCHing `w2_confirm_time` here would surface as an unknown
+    // column and Xano rejects the whole request — so `w2_confirm`
+    // never flips either. See `XanoScholarshipContributingMember`
+    // for the matching note.
     confirmKey: "w2_confirm",
-    timeKey: "w2_confirm_time",
+    timeKey: "w2_confirmation",
     adminKey: "w2_admin_confirm",
   },
   {
@@ -89,17 +99,18 @@ export async function PATCH(
     }
 
     // Stamp the matching audit columns alongside each `*_confirm`
-    // boolean. Numeric fallback to 0 when the admin has no
-    // teacherId on file (e.g. email-only admins) — the column type
-    // is int, so 0 is the "unknown admin" sentinel. The display
-    // surface treats 0 as "an admin" without a name.
-    const adminTeacherId = adminTeacherIdAsNumber(admin.teacherId);
+    // boolean. The admin-name string falls back to "" when admin
+    // has no name on file — UI treats empty as "an admin" without
+    // a name. Confirming records the admin's display name straight
+    // onto Xano so the rendered "Confirmed by Hunter Thompson"
+    // caption doesn't need a teacher-id → name lookup.
+    const adminName = admin?.name ?? "";
     const now = Date.now();
     for (const pair of CONFIRM_PAIRS) {
       if (pair.confirmKey in patch) {
         const next = patch[pair.confirmKey] === true;
         patch[pair.timeKey] = next ? now : null;
-        patch[pair.adminKey] = next ? adminTeacherId : 0;
+        patch[pair.adminKey] = next ? adminName : "";
       }
     }
 
@@ -111,13 +122,4 @@ export async function PATCH(
   } catch (err) {
     return handleAdminError(err);
   }
-}
-
-/** `teacherId` arrives as a string from the admin cache — Xano's
- *  audit columns are int. Coerce, with 0 as the "unknown" sentinel
- *  for admins without a numeric teacher row. */
-function adminTeacherIdAsNumber(raw: string | undefined): number {
-  if (!raw) return 0;
-  const n = Number(raw);
-  return Number.isFinite(n) ? n : 0;
 }

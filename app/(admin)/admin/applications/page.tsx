@@ -42,6 +42,10 @@ interface AppProgressRow {
   sections_complete: number;
   sections_total: number;
   isSubmitted: boolean;
+  /** True once admin has approved the family for the year. Lives on
+   *  the family-progress row and is flipped by the Approve button
+   *  on the family detail page. Drives the Accepted card. */
+  isAccepted: boolean;
   submitted_at: number | null;
   last_edited: number | null;
   is_archived: boolean;
@@ -51,6 +55,7 @@ interface AppProgressRow {
 
 type ProgressFilter =
   | "all"
+  | "accepted"
   | "submitted"
   | "in_progress"
   | "not_started"
@@ -58,6 +63,7 @@ type ProgressFilter =
 
 const FILTER_LABEL: Record<ProgressFilter, string> = {
   all: "All families",
+  accepted: "Accepted",
   submitted: "Submitted",
   in_progress: "In progress",
   not_started: "Not started",
@@ -67,7 +73,12 @@ const FILTER_LABEL: Record<ProgressFilter, string> = {
 function deriveFilter(row: AppProgressRow): ProgressFilter {
   // Archived takes precedence — an archived row drops out of every
   // active queue and only appears in the Archived card below.
+  // Accepted comes next: when admin has approved the family,
+  // `isSubmitted` is also true (set automatically by the
+  // family-progress PATCH route), so we'd double-count if we
+  // didn't lift accepted rows out of Submitted first.
   if (row.is_archived) return "archived";
+  if (row.isAccepted) return "accepted";
   if (row.isSubmitted) return "submitted";
   if (row.sections_complete > 0) return "in_progress";
   return "not_started";
@@ -98,6 +109,7 @@ export default function ApplicationsPage() {
   const all = useMemo(() => (Array.isArray(data) ? data : []), [data]);
 
   const groups = useMemo(() => {
+    const accepted: AppProgressRow[] = [];
     const submitted: AppProgressRow[] = [];
     const inProgress: AppProgressRow[] = [];
     const notStarted: AppProgressRow[] = [];
@@ -105,16 +117,18 @@ export default function ApplicationsPage() {
     for (const r of all) {
       const f = deriveFilter(r);
       if (f === "archived") archived.push(r);
+      else if (f === "accepted") accepted.push(r);
       else if (f === "submitted") submitted.push(r);
       else if (f === "in_progress") inProgress.push(r);
       else notStarted.push(r);
     }
-    return { submitted, inProgress, notStarted, archived };
+    return { accepted, submitted, inProgress, notStarted, archived };
   }, [all]);
 
   const visibleGroups = useMemo(() => {
     if (filter === "all") return groups;
     return {
+      accepted: filter === "accepted" ? groups.accepted : [],
       submitted: filter === "submitted" ? groups.submitted : [],
       inProgress: filter === "in_progress" ? groups.inProgress : [],
       notStarted: filter === "not_started" ? groups.notStarted : [],
@@ -125,6 +139,7 @@ export default function ApplicationsPage() {
   const counts = useMemo(() => {
     return {
       all: all.length,
+      accepted: groups.accepted.length,
       submitted: groups.submitted.length,
       in_progress: groups.inProgress.length,
       not_started: groups.notStarted.length,
@@ -252,7 +267,13 @@ export default function ApplicationsPage() {
           </SelectTrigger>
           <SelectContent>
             {(
-              ["all", "submitted", "in_progress", "not_started"] as const
+              [
+                "all",
+                "accepted",
+                "submitted",
+                "in_progress",
+                "not_started",
+              ] as const
             ).map((f) => (
               <SelectItem key={f} value={f}>
                 {FILTER_LABEL[f]} ({counts[f]})
@@ -275,15 +296,49 @@ export default function ApplicationsPage() {
         </div>
       ) : (
         <div className="space-y-8">
+          {/* Accepted — admin has approved this family for the
+              year via the family detail Accept button. Sits above
+              Submitted because acceptance is downstream of
+              submission and admin wants the highest-status rows up
+              top. The family-progress route auto-flips
+              `isSubmitted = true` on accept, so any accepted row
+              would otherwise also show up under Submitted; the
+              `deriveFilter` precedence keeps them in this one
+              bucket. */}
+          <ApplicationsGroup
+            title="Accepted"
+            description="Admin approved this family. Ready for tuition + enrollment signing."
+            // Green-500 — the brighter "done deal" green. Distinct
+            // from the blue used on Submitted so admin can scan
+            // the cards by color alone: green = approved and
+            // moving forward, blue = waiting on admin decision.
+            dotColor="bg-green-500"
+            rows={visibleGroups.accepted}
+            isLoading={
+              isLoading &&
+              filter !== "submitted" &&
+              filter !== "in_progress" &&
+              filter !== "not_started"
+            }
+            error={error}
+            columns={columns}
+            router={router}
+          />
           <ApplicationsGroup
             title="Submitted"
             description="Awaiting admissions decision."
-            // Section status dot — green = "ready for admin action"
-            // (everything in this card is fully submitted). Tone matches
-            // the per-section green-check used in the row cells.
-            dotColor="bg-green-500"
+            // Blue = "needs admin action." Distinct from Accepted's
+            // green so the two cards read differently at a glance —
+            // submitted families are queued for review, accepted
+            // families have already cleared that bar.
+            dotColor="bg-blue-500"
             rows={visibleGroups.submitted}
-            isLoading={isLoading && filter !== "in_progress" && filter !== "not_started"}
+            isLoading={
+              isLoading &&
+              filter !== "accepted" &&
+              filter !== "in_progress" &&
+              filter !== "not_started"
+            }
             error={error}
             columns={columns}
             router={router}
@@ -297,7 +352,10 @@ export default function ApplicationsPage() {
             dotColor="bg-amber-500"
             rows={visibleGroups.inProgress}
             isLoading={
-              isLoading && filter !== "submitted" && filter !== "not_started"
+              isLoading &&
+              filter !== "accepted" &&
+              filter !== "submitted" &&
+              filter !== "not_started"
             }
             error={error}
             columns={columns}
@@ -311,7 +369,10 @@ export default function ApplicationsPage() {
             dotColor="bg-red-500"
             rows={visibleGroups.notStarted}
             isLoading={
-              isLoading && filter !== "submitted" && filter !== "in_progress"
+              isLoading &&
+              filter !== "accepted" &&
+              filter !== "submitted" &&
+              filter !== "in_progress"
             }
             error={error}
             columns={columns}
@@ -329,6 +390,7 @@ export default function ApplicationsPage() {
             rows={visibleGroups.archived}
             isLoading={
               isLoading &&
+              filter !== "accepted" &&
               filter !== "submitted" &&
               filter !== "in_progress" &&
               filter !== "not_started"

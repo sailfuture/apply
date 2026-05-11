@@ -142,6 +142,16 @@ export async function PATCH(req: NextRequest) {
       "enrollment_admin_confirm",
       "volunteer_admin_confirm",
       "emergency_contacts_admin_confirm",
+      // Family-level registration-confirmed latch. The Family
+      // Registration Confirmation card on the registration detail
+      // page flips this; audit pair below (`registration_confirmed_time`
+      // / `registration_confirmed_admin`) is auto-stamped.
+      "isRegistrationConfirmed",
+      // Archive flag. Set true from the Archive button on the
+      // confirmation card; the family drops out of the active
+      // Registrations queues without losing any uploaded packet
+      // data. Mirrors `is_archived` on the apply-flow progress row.
+      "isArchived",
     ];
     const patch: Record<string, unknown> = { last_edited: Date.now() };
     for (const key of ALLOWED) {
@@ -175,6 +185,18 @@ export async function PATCH(req: NextRequest) {
           patch[pair.completedKey] = true;
         }
       }
+    }
+
+    // Family-level registration-confirmed audit. Same pattern as the
+    // section-verify pairs above, but separate because this isn't a
+    // section bool — it's the rollup the Family Registration
+    // Confirmation card flips. Confirm → time = now, admin = display
+    // name; unconfirm → time = null, admin = "". Clients can't hand-
+    // write these — the route owns them.
+    if ("isRegistrationConfirmed" in patch) {
+      const next = patch.isRegistrationConfirmed === true;
+      patch.registration_confirmed_time = next ? now : null;
+      patch.registration_confirmed_admin = next ? adminName : "";
     }
 
     if (Object.keys(patch).length <= 1) {

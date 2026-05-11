@@ -336,17 +336,25 @@ interface DocRowData {
    *  — the Undo button is always visible and just disabled when
    *  there's nothing to undo.
    *
-   *  Audit metadata (`confirmedAt`, `confirmedByAdmin`) is
-   *  populated from the row's matching `*_confirm_time` /
+   *  Audit metadata is populated from the matching `*_confirm_time` /
    *  `*_admin_confirm` columns when the boolean is true. The Doc
    *  row uses both to render a "Confirmed by Hunter · 2 hr ago"
-   *  caption under the action buttons. */
+   *  caption under the action buttons.
+   *
+   *  - `confirmedByName` — preferred. New schema stores the admin's
+   *    display name directly on the row's `*_admin_confirm` text
+   *    column, so the table can render the caption without a
+   *    teacher-id → name lookup.
+   *  - `confirmedByAdmin` — legacy teacher-id (number). Kept as a
+   *    fallback for older sibling tables (e.g. scholarship-level
+   *    SNAP / unemployment) whose columns are still typed `int`. */
   confirmation?: {
     confirmed: boolean;
     saving: boolean;
     onConfirm: () => Promise<void> | void;
     onUndo: () => Promise<void> | void;
     confirmedAt?: number | null;
+    confirmedByName?: string;
     confirmedByAdmin?: number;
   };
 }
@@ -498,7 +506,13 @@ function buildRows({
           label: "W-2",
           files: toFileArray(m.w2),
           confirmKey: "w2_confirm" as const,
-          timeKey: "w2_confirm_time" as const,
+          // Xano named the W-2 timestamp column `w2_confirmation`
+          // instead of `w2_confirm_time` — diverges from the
+          // paystub convention. Don't normalize away the
+          // divergence client-side or the PATCH gets rejected on
+          // unknown column. See the matching note on the type
+          // and the admin route's CONFIRM_PAIRS.
+          timeKey: "w2_confirmation" as const,
           adminKey: "w2_admin_confirm" as const,
         },
         {
@@ -588,11 +602,18 @@ function buildRows({
           }
         };
         // Audit metadata — only meaningful when the slot is
-        // currently confirmed. Cleared columns return null/0; pass
-        // them through anyway and let the row presenter decide
-        // whether to render the caption.
+        // currently confirmed. Cleared columns return null / empty
+        // string; pass them through anyway and let the row presenter
+        // decide whether to render the caption.
+        //
+        // The `*_admin_confirm` columns on contributing members are
+        // typed as text on Xano now (admin display name), so we
+        // read them as a string and pass through `confirmedByName`.
+        // Legacy rows that still carry a numeric teacher id will
+        // come through as a stringified number — harmless, just
+        // renders the number until the row is re-confirmed.
         const confirmedAt = mr[slot.timeKey] as number | null | undefined;
-        const confirmedByAdmin = mr[slot.adminKey] as number | undefined;
+        const confirmedByName = mr[slot.adminKey] as string | undefined;
         rows.push({
           key: slotPathKey,
           label: `${memberLabel} · ${slot.label}`,
@@ -603,7 +624,7 @@ function buildRows({
             onConfirm: () => patchSlot(true),
             onUndo: () => patchSlot(false),
             confirmedAt: confirmed ? confirmedAt ?? null : null,
-            confirmedByAdmin: confirmed ? confirmedByAdmin ?? 0 : 0,
+            confirmedByName: confirmed ? confirmedByName ?? "" : "",
           },
         });
       });
@@ -680,12 +701,24 @@ function DocRow({
   adminNameByTeacherId: Map<number, string>;
 }) {
   // Audit columns — only populated when the row is currently
-  // confirmed AND has a timestamp. Confirmed By resolves the
-  // teacher-id sentinel to a display name (0 → "an admin"); Time
-  // uses the same relative-time helper the notes timeline uses.
+  // confirmed AND has a timestamp. Confirmed By prefers the
+  // string `confirmedByName` (admin display name written directly
+  // by the contributing-members PATCH route now that the
+  // `*_admin_confirm` column is typed as text). Falls back to the
+  // legacy teacher-id lookup for sibling tables whose audit
+  // columns are still int (SNAP / unemployment on the
+  // scholarship row, government benefits).
+  //
+  // Xano left the original int default behind when the column type
+  // flipped to text, so rows that pre-date the rename come back as
+  // the literal string `"0"` rather than `""`. Treat `"0"` as the
+  // unset sentinel alongside empty/whitespace so we don't end up
+  // rendering "Confirmed by 0" on legacy data.
   const confirmedBy = (() => {
     if (!row.confirmation?.confirmed) return null;
     if (!row.confirmation.confirmedAt) return null;
+    const name = row.confirmation.confirmedByName?.trim();
+    if (name && name !== "0") return name;
     const adminId = row.confirmation.confirmedByAdmin ?? 0;
     return adminId > 0
       ? adminNameByTeacherId.get(adminId) ?? "an admin"

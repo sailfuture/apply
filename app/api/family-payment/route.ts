@@ -75,19 +75,20 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(updated);
   }
 
-  // Create new
+  // Create new — payload only carries columns that still exist on
+  // the live Xano schema. `registration_fee_waiver_id` and the
+  // `tuition_reviewed` triplet (`tuition_reviewed`,
+  // `tuition_reviewed_at`, `tuition_reviewed_by`) were retired
+  // from the table; sending them caused Xano to reject the create
+  // on unknown columns, which silently no-op'd the upsert.
   const payment = await xano.familyPayments.create({
     registration_families_id: familyId,
     registration_school_years_id: yearId,
     isFamilyAccepted: body.isFamilyAccepted ?? false,
     signature: body.signature ?? {},
-    name: body.name ?? body.tuition_reviewed_by ?? "",
+    name: body.name ?? "",
     signature_data: body.signature_data ?? null,
-    registration_fee_waiver_id: null,
-    monthly_tuition_payment: body.monthly_tuition_payment ?? 0,
-    tuition_reviewed: !!body.tuition_reviewed_by,
-    tuition_reviewed_at: body.tuition_reviewed_by ? Date.now() : null,
-    tuition_reviewed_by: body.tuition_reviewed_by ?? "",
+    monthly_tuition_payment: body.monthly_tuition_payment ?? null,
     enrollment_agreement_pandadoc_id: body.enrollment_agreement_pandadoc_id ?? "",
     enrollment_agreement_status: body.enrollment_agreement_status ?? "",
     enrollment_agreement_sent_at: body.enrollment_agreement_sent_at ?? null,

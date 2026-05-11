@@ -124,7 +124,10 @@ export async function GET(req: NextRequest) {
     // admin verification on the registration packet is the
     // authoritative "this student is enrolled" signal. Verification
     // is per-year (one packet per student per year) so re-enrolling
-    // students get a fresh verify each cycle.
+    // students get a fresh verify each cycle. The unenrollment
+    // filter below — applied per-row after the student lookup —
+    // drops students whose `isArchived` flag was set on the
+    // student row by the Unenroll affordance on the detail page.
     const confirmedPackets = packets.filter(
       (p) => p.registrationConfirmed === true
     );
@@ -132,6 +135,14 @@ export async function GET(req: NextRequest) {
     const rows: EnrolledStudentRow[] = confirmedPackets.flatMap((packet) => {
       const studentId = Number(packet.registration_students_id);
       const student = studentById.get(studentId) ?? null;
+      // Unenrolled students drop off the active enrolled roster —
+      // `isArchived === true` is admin's "officially left the
+      // program" signal (paired with `unenrollment_reason` /
+      // `_date` / `_notes` on the same row). Lives on the
+      // student row rather than the per-year packet so the
+      // unenrollment audit follows the student across re-
+      // enrollment attempts in future years.
+      if (student?.isArchived === true) return [];
       // Year scope: skip students without an active app for the
       // requested year. The `getByYear` packet fetch already filters
       // by year, but defensively re-check via the application map.

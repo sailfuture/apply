@@ -174,6 +174,15 @@ function shapeStudent(s: XanoStudent) {
     immunization_forms: normalizeFileArray(s.immunization_forms),
     passport: normalizeFileArray(s.passport),
     student_state_id: normalizeFileArray(s.student_state_id),
+    /** Unenrollment audit. Lives on the student row (not the
+     *  per-year packet) so the audit follows the student across
+     *  any re-enrollment attempts in future years. The Unenroll
+     *  modal on the detail page captures all four together;
+     *  re-enrolling clears all four together. */
+    isArchived: s.isArchived === true,
+    unenrollment_reason: s.unenrollment_reason ?? "",
+    unenrollment_date: s.unenrollment_date ?? null,
+    unenrollment_notes: s.unenrollment_notes ?? "",
   };
 }
 

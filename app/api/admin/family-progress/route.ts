@@ -95,19 +95,34 @@ const SECTION_CONFIRM_PAIRS: Array<{
     completedKey: "testing_completed",
   },
   {
-    // Financial Aid is the newest section-verify triplet; its Xano
-    // column names diverge from the others (`*_admin_complete` /
-    // `*_admin_time` instead of `*_admin_confirm` /
-    // `*_admin_confirm_time`) since it was added in a later schema
-    // pass. We keep the live column names here so the audit pair
-    // writes to the right place — the SECTION_CONFIRM_PAIRS loop
-    // is column-name agnostic. `completedKey: null` because the
-    // financial-aid section doesn't have a separate parent-completion
-    // bool to cascade (parent saves the form section by section; the
-    // admin verify is the only "this is good" signal).
-    confirmKey: "financial_aid_admin_complete",
-    timeKey: "financial_aid_admin_time",
+    // Financial Aid uses the same `*_admin_confirm` /
+    // `*_admin_confirm_time` / `*_admin_confirm_admin` column
+    // naming as Family / Students / Testing above. We briefly
+    // wired this against `*_admin_complete` / `*_admin_time`
+    // before the Xano schema was finalized; those columns don't
+    // exist, so PATCHes were silently rejected. `completedKey:
+    // null` because Financial Aid doesn't have a separate
+    // parent-completion bool to cascade (parent saves as they
+    // fill it out; admin verify is the only "this is good"
+    // signal).
+    confirmKey: "financial_aid_admin_confirm",
+    timeKey: "financial_aid_admin_confirm_time",
     adminKey: "financial_aid_admin_confirm_admin",
+    completedKey: null,
+  },
+  {
+    // Scholarship Determination — admin verifies after every per-
+    // student `confirmed_scholarship` is true. Note the
+    // timestamp column is `scholarship_complete_admin_time`
+    // (NOT `scholarship_admin_complete_time`) — the Xano schema
+    // word order diverges from the bool's order. See the matching
+    // note on `XanoFamilyApplicationProgress`. No parent-completion
+    // column for this section either — the parent doesn't
+    // participate in the scholarship determination; admin owns
+    // the section end-to-end.
+    confirmKey: "scholarship_admin_complete",
+    timeKey: "scholarship_complete_admin_time",
+    adminKey: "scholarship_admin_complete_admin",
     completedKey: null,
   },
 ];
@@ -163,11 +178,38 @@ export async function PATCH(req: NextRequest) {
       "family_admin_confirm",
       "students_admin_confirm",
       "testing_admin_confirm",
-      "financial_aid_admin_complete",
+      "financial_aid_admin_confirm",
+      "scholarship_admin_complete",
     ];
     const patch: Record<string, unknown> = { last_edited: Date.now() };
     for (const key of ALLOWED) {
       if (key in body) patch[key] = body[key];
+    }
+
+    // Resolve the row upfront so the auto-stamp logic below can
+    // inspect the pre-patch state (e.g. preserve an existing
+    // `submitted_at` rather than clobbering it with `now`). Cheaper
+    // than fetching twice; the update at the end of the route reuses
+    // this row's id.
+    const row = await xano.familyApplicationProgress.resolve(familyId, yearId);
+
+    // Acceptance implies submission. When admin accepts a family
+    // (`isAccepted = true`), force `isSubmitted = true` and stamp
+    // `submitted_at` if it isn't already set. Rationale: families
+    // hand-accepted by admin (paper apps transcribed by staff, or
+    // an admin-driven accept before the parent has hit the Submit
+    // button themselves) used to land with `isSubmitted = false`
+    // and disappear from the Submitted queue on the Applications
+    // list. Flipping submission alongside acceptance keeps those
+    // families visible in the queues they belong in. We only stamp
+    // `submitted_at` when the row doesn't already carry one — a
+    // real parent-submitted timestamp is preferred over the
+    // admin-acceptance time.
+    if (patch.isAccepted === true) {
+      if (patch.isSubmitted === undefined) patch.isSubmitted = true;
+      if (patch.submitted_at === undefined && !row.submitted_at) {
+        patch.submitted_at = Date.now();
+      }
     }
 
     // Auto-stamp the audit pair + cascade to parent-completion for
@@ -215,7 +257,6 @@ export async function PATCH(req: NextRequest) {
       );
     }
 
-    const row = await xano.familyApplicationProgress.resolve(familyId, yearId);
     const updated = await xano.familyApplicationProgress.update(row.id, patch);
     return NextResponse.json(updated);
   } catch (err) {

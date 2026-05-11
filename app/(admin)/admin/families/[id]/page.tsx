@@ -13,9 +13,10 @@ import {
   CheckCircle2,
   Circle,
   ExternalLink,
+  FileText,
   Loader2,
   Pencil,
-  Search,
+  SquarePen,
   Trash2,
   Undo2,
   XCircle,
@@ -280,11 +281,19 @@ export default function FamilyDetailPage() {
     students_admin_confirm_admin?: string;
     testing_admin_confirm?: boolean;
     testing_admin_confirm_time?: number | null;
-    /** Financial Aid verify uses Xano's live column names — see
-     *  the note on the shared `XanoFamilyApplicationProgress` type. */
-    financial_aid_admin_complete?: boolean;
-    financial_aid_admin_time?: number | null;
+    /** Financial Aid verify — same `*_admin_confirm` /
+     *  `*_admin_confirm_time` / `*_admin_confirm_admin` pattern as
+     *  Family / Students / Testing above. */
+    financial_aid_admin_confirm?: boolean;
+    financial_aid_admin_confirm_time?: number | null;
     financial_aid_admin_confirm_admin?: string;
+    /** Scholarship Determination verify triplet. Bool is
+     *  `scholarship_admin_complete` but the timestamp lives on
+     *  `scholarship_complete_admin_time` (word order flipped vs
+     *  the bool — see `XanoFamilyApplicationProgress`). */
+    scholarship_admin_complete?: boolean;
+    scholarship_complete_admin_time?: number | null;
+    scholarship_admin_complete_admin?: string;
   } | null>(
     familyId && yearId
       ? `/api/admin/family-progress?familyId=${familyId}&yearId=${yearId}`
@@ -299,23 +308,33 @@ export default function FamilyDetailPage() {
   // from the `*_admin_confirm_admin` string column the route
   // auto-stamps; no client-side teacher-id lookup needed anymore.
   const [savingSection, setSavingSection] = useState<
-    "family" | "students" | "financial_aid" | "testing" | null
+    | "family"
+    | "students"
+    | "financial_aid"
+    | "scholarship"
+    | "testing"
+    | null
   >(null);
   async function toggleSectionConfirmed(
-    section: "family" | "students" | "financial_aid" | "testing",
+    section:
+      | "family"
+      | "students"
+      | "financial_aid"
+      | "scholarship"
+      | "testing",
     next: boolean
   ) {
     if (!familyId || !yearId) return;
     setSavingSection(section);
     try {
-      // Financial Aid uses Xano's live column name
-      // (`financial_aid_admin_complete`) — the rest of the sections
-      // follow the `*_admin_confirm` suffix convention. Branch here
-      // so we PATCH the right column without having to special-case
-      // it inside the route.
+      // Most sections follow the `*_admin_confirm` column-naming
+      // convention (Family / Students / Testing / Financial Aid).
+      // Scholarship Determination uses `scholarship_admin_complete`
+      // — admin-owned section's bool was renamed when the section
+      // was added. Branch here so the right column gets the PATCH.
       const field =
-        section === "financial_aid"
-          ? "financial_aid_admin_complete"
+        section === "scholarship"
+          ? "scholarship_admin_complete"
           : `${section}_admin_confirm`;
       const res = await fetch(`/api/admin/family-progress`, {
         method: "PATCH",
@@ -372,6 +391,40 @@ export default function FamilyDetailPage() {
     return () => cancelAnimationFrame(handle);
   }, [isLoading, detailLoading]);
 
+  // Composite scholarship payload — fetched at the page level so
+  // the Financial Aid SectionShell can gate its Verify button on
+  // docs being confirmed (admin shouldn't be able to sign off on
+  // the section while income paperwork is still unreviewed). SWR
+  // dedupes by URL, so `ScholarshipBlock` subscribing to the same
+  // key inside the SectionShell body costs nothing — the page and
+  // the block share the response.
+  //
+  // CRITICAL: this hook lives BEFORE the `isLoading || !family`
+  // early return below. React's Rules of Hooks require every hook
+  // to be called in the same order on every render — putting this
+  // after the early return would skip the hook on the first render
+  // and call it on subsequent renders, which throws a hook-order
+  // mismatch in dev. The key reads `detail?.scholarship?.[0]?.id`
+  // directly so it works before `scholarship` is destructured
+  // post-return; SWR treats `null` as "disabled" until the id
+  // resolves.
+  const scholarshipIdForDetails: number | null =
+    typeof detail?.scholarship?.[0]?.id === "number"
+      ? (detail.scholarship[0].id as number)
+      : null;
+  const { data: scholarshipDetails } = useSWR<{
+    scholarship: XanoScholarship;
+    homes: unknown[];
+    vehicles: unknown[];
+    contributing_members: XanoScholarshipContributingMember[];
+    benefits: XanoScholarshipBenefit[];
+  }>(
+    scholarshipIdForDetails != null
+      ? `/api/admin/scholarship-details?id=${scholarshipIdForDetails}`
+      : null,
+    adminFetcher
+  );
+
   if (isLoading || !family) {
     return (
       <div className="space-y-6 p-6">
@@ -397,6 +450,17 @@ export default function FamilyDetailPage() {
   const familyApps: XanoApplication[] = detail?.application ?? [];
   const scholarship: XanoScholarship | null = detail?.scholarship?.[0] ?? null;
   const yearMeta = detail?.school_year ?? null;
+
+  // `allDocsConfirmed` derives from the composite payload fetched
+  // above (the useSWR call lives pre-early-return so the hook
+  // order stays stable across renders).
+  const allDocsConfirmed = scholarship
+    ? computeAllDocsConfirmed(
+        scholarship,
+        scholarshipDetails?.contributing_members ?? [],
+        scholarshipDetails?.benefits ?? []
+      )
+    : false;
 
   // When a year is selected, narrow the visible students to ones with
   // an active application for that year. Without a year we can't make
@@ -458,23 +522,22 @@ export default function FamilyDetailPage() {
               ) : null}
             </h1>
           </div>
-          {/* Header action row — Notes drawer trigger sits next to
-              the Decision actions (Return / Approve / Revoke) so
-              admin can pop open the comms log without scrolling.
-              Notes is family-scoped so it renders regardless of
-              whether a year is selected; the Decision actions only
-              render when we have a year context. */}
+          {/* Header action row — left-to-right order is deliberate:
+              destructive Delete on the far left so admin reaches
+              for it intentionally (not as muscle memory), Decision
+              actions in the middle (the daily work), Export PDF
+              just left of Notes (frequent enough to be page-level
+              but not the primary action), Notes on the far right
+              as the most-clicked utility. All four only render
+              when a year is selected — they're year-scoped. */}
           <div className="flex items-center gap-2 shrink-0">
-            {/* Page-header notes drawer is phase-scoped to
-                "application" so registration-phase comms (written
-                from /admin/registrations/[id]) don't leak into the
-                apply-flow timeline. Section-scoped drawers below
-                inherit the same scope. */}
-            <FamilyNotesSheet
-              familyId={family.id}
-              defaultYearId={yearId ? Number(yearId) : null}
-              phase="application"
-            />
+            {yearId ? (
+              <DeleteApplicationButton
+                familyId={Number(familyId)}
+                yearId={Number(yearId)}
+                familyName={family.family_name}
+              />
+            ) : null}
             {yearId ? (
               <FamilyDecisionActions
                 familyId={Number(familyId)}
@@ -488,21 +551,27 @@ export default function FamilyDetailPage() {
                 }}
               />
             ) : null}
-            {/* Delete application — destructive, admin-only escape
-                hatch when a family record needs to be wiped (test
-                rows, duplicate apps, accidental submissions). Wipes
-                every per-(family, year) row plus the scholarship
-                cluster underneath; family / parents / students stay
-                so a future re-application is still possible. Only
-                renders when a year is selected (the cascade is
-                year-scoped). */}
+            {/* Export PDF — moved up from the Scholarship
+                Determination card header so admin doesn't have to
+                scroll down to grab the family-acceptance summary.
+                Renders only when a year is selected since the PDF
+                is per-(family, year). */}
             {yearId ? (
-              <DeleteApplicationButton
+              <ExportPdfButton
                 familyId={Number(familyId)}
                 yearId={Number(yearId)}
-                familyName={family.family_name}
               />
             ) : null}
+            {/* Page-header notes drawer is phase-scoped to
+                "application" so registration-phase comms (written
+                from /admin/registrations/[id]) don't leak into the
+                apply-flow timeline. Section-scoped drawers below
+                inherit the same scope. */}
+            <FamilyNotesSheet
+              familyId={family.id}
+              defaultYearId={yearId ? Number(yearId) : null}
+              phase="application"
+            />
           </div>
         </div>
 
@@ -668,19 +737,40 @@ export default function FamilyDetailPage() {
               confirm={{
                 sectionLabel: "Financial Aid",
                 confirmed:
-                  progress?.financial_aid_admin_complete === true,
+                  progress?.financial_aid_admin_confirm === true,
                 // No separate parent-completion bool for this
                 // section — parent saves as they fill it out, so
                 // admin verify is the only "this is good" signal.
                 parentCompleted:
-                  progress?.financial_aid_admin_complete === true,
-                confirmTime: progress?.financial_aid_admin_time ?? null,
+                  progress?.financial_aid_admin_confirm === true,
+                confirmTime:
+                  progress?.financial_aid_admin_confirm_time ?? null,
                 confirmedByName:
                   progress?.financial_aid_admin_confirm_admin?.trim() ||
                   null,
                 saving: savingSection === "financial_aid",
                 onToggle: (next) =>
                   toggleSectionConfirmed("financial_aid", next),
+                // Section-level gate — Financial Aid surfaces a
+                // warning whenever Documents to Review still has
+                // unconfirmed items, but does NOT hard-block admin
+                // from verifying. `bypassable: true` keeps the
+                // Verify button enabled and routes the click
+                // through a confirm modal so admin has to
+                // acknowledge the override before the PATCH fires.
+                // Other sections (e.g. Scholarship) leave
+                // `bypassable` unset and the gate hard-disables
+                // verify — the docs gate is the only one we
+                // intentionally let admin punch through.
+                // Only applies in the pre-verify state; once the
+                // section is already verified, this gate doesn't
+                // re-block undoing.
+                disabled:
+                  progress?.financial_aid_admin_confirm !== true &&
+                  !allDocsConfirmed,
+                disabledReason:
+                  "Some documents under Documents to Review aren't confirmed yet.",
+                bypassable: true,
               }}
             >
               {detailLoading && !detail ? (
@@ -796,71 +886,103 @@ function FamilyDetailNav({
   yearId: string | null;
   progress: {
     isAccepted?: boolean;
+    family_completed?: boolean;
+    students_completed?: boolean;
+    financial_aid_completed?: boolean;
+    testing_completed?: boolean;
     family_admin_confirm?: boolean;
     students_admin_confirm?: boolean;
-    financial_aid_admin_complete?: boolean;
+    financial_aid_admin_confirm?: boolean;
     testing_admin_confirm?: boolean;
+    /** Scholarship Determination verify bool — flips the
+     *  Scholarship admin row's icon from gray pending to green
+     *  check, and unblocks the Acceptance gate alongside the four
+     *  parent-facing section verifies. */
+    scholarship_admin_complete?: boolean;
   } | null;
   hasScholarship: boolean;
 }) {
-  // Admin nav tracks admin-verify state, not parent-completion. The
-  // parent's nav (on /apply/...) uses the same green-check / amber
-  // icon pattern keyed on `*_completed` columns; this surface tracks
-  // the matching `*_admin_confirm` (or `_admin_complete` on Financial
-  // Aid) audit bool so the icon flips green only after admin clicks
-  // Verify on the section — not when the parent merely marked it
-  // done. Lets admin scan the nav and see what still needs review at
-  // a glance regardless of where the parent is in their flow.
+  // Nav main icon tracks PARENT completion (green check / amber edit
+  // pen), mirroring the parent-side app nav so admin's read of "is
+  // the family done with this section?" stays in lockstep with what
+  // the parent sees. Admin verification surfaces as a small trailing
+  // checkmark on the right side of the row — green when admin has
+  // verified, gray when still pending. The two indicators answer
+  // two different questions:
+  //
+  //   - Main circle  → has the FAMILY finished this section?
+  //   - End check    → has ADMIN reviewed and verified it?
   //
   // Notes intentionally absent — comms log is now a fixed bottom-right
   // sheet trigger handled outside this nav.
-  const items: Array<{
-    key: string;
-    label: string;
-    href: string;
-    complete: boolean;
-    show: boolean;
-  }> = [
+  //
+  // Rows split into two groups (admin-owned vs family-facing) so the
+  // render below can drop a bolder separator between them. The admin
+  // group at the top doesn't have a parent-completion signal — the
+  // main icon reads `isAccepted` so it flips green once the family
+  // is approved; no trailing verify check on these rows since admin
+  // verification is the action itself.
+  const adminItems: Array<NavItem> = [
     {
-      // Decision is admin's own signal already; "complete" === "the
-      // family has been accepted for the year." No separate verify
-      // step for this row.
-      key: "decision",
-      label: "Decision",
-      href: "#section-decision",
-      complete: progress?.isAccepted === true,
+      // Acceptance sits first so admin lands on the resolution
+      // surface — that's the action they're heading toward when
+      // they open this page. Scholarship follows as the supporting
+      // detail rather than the headline row.
+      key: "acceptance",
+      label: "Acceptance",
+      href: "#section-acceptance",
+      completed: progress?.isAccepted === true,
+      verified: null,
       show: !!yearId,
+      isAdmin: true,
     },
+    {
+      // Scholarship row's main icon tracks the section's verify
+      // bool (`scholarship_admin_complete`). Flips to the green
+      // check once admin verifies the Scholarship Determination
+      // card, satisfying its slot in the Acceptance gate. No
+      // trailing verify check since this row IS the verify
+      // surface.
+      key: "scholarship",
+      label: "Scholarship",
+      href: "#section-scholarship-determination",
+      completed: progress?.scholarship_admin_complete === true,
+      verified: null,
+      show: !!yearId,
+      isAdmin: true,
+    },
+  ];
+  const familyItems: Array<NavItem> = [
     {
       key: "family",
       label: "Family",
       href: "#section-family",
-      complete: progress?.family_admin_confirm === true,
+      completed: progress?.family_completed === true,
+      verified: progress?.family_admin_confirm === true,
       show: true,
     },
     {
       key: "students",
       label: "Students",
       href: "#section-students",
-      complete: progress?.students_admin_confirm === true,
+      completed: progress?.students_completed === true,
+      verified: progress?.students_admin_confirm === true,
       show: true,
     },
     {
-      // Financial Aid uses the divergent live column name
-      // (`financial_aid_admin_complete`) — see the type comment on
-      // `XanoFamilyApplicationProgress` for why the suffix differs
-      // from the other three.
       key: "financial-aid",
       label: "Financial Aid",
       href: "#section-financial-aid",
-      complete: progress?.financial_aid_admin_complete === true,
+      completed: progress?.financial_aid_completed === true,
+      verified: progress?.financial_aid_admin_confirm === true,
       show: !!yearId && hasScholarship,
     },
     {
       key: "testing",
       label: "Testing",
       href: "#section-testing",
-      complete: progress?.testing_admin_confirm === true,
+      completed: progress?.testing_completed === true,
+      verified: progress?.testing_admin_confirm === true,
       show: !!yearId,
     },
   ];
@@ -903,27 +1025,35 @@ function FamilyDetailNav({
             </span>
           </Link>
 
-          {items
+          {/* Admin section block — Scholarship + Acceptance. No
+              trailing verify check since admin actions ARE the
+              verify on these rows. */}
+          {adminItems
             .filter((i) => i.show)
             .map((item) => (
-              <a
+              <NavRow
                 key={item.key}
-                href={item.href}
-                onClick={(e) => handleNavClick(e, item.href)}
-                className="flex w-full items-center gap-3 px-3 py-3 text-left text-sm transition-colors hover:bg-muted/30"
-              >
-                <NavCircle complete={item.complete} />
-                <span
-                  className={cn(
-                    "truncate",
-                    item.complete
-                      ? "font-semibold text-foreground"
-                      : "font-medium text-muted-foreground"
-                  )}
-                >
-                  {item.label}
-                </span>
-              </a>
+                item={item}
+                onClick={handleNavClick}
+              />
+            ))}
+          {/* No explicit separator between the admin and family-
+              facing blocks — the wrapping `divide-y` already draws
+              a hairline between every adjacent row, including the
+              boundary between the two groups, so any extra
+              `border-t` here would render a doubled line that
+              reads heavier than the rest of the nav. */}
+          {/* Family-facing block — Family / Students / Financial
+              Aid / Testing. Each row carries a trailing verify
+              check (green when admin verified, gray when pending). */}
+          {familyItems
+            .filter((i) => i.show)
+            .map((item) => (
+              <NavRow
+                key={item.key}
+                item={item}
+                onClick={handleNavClick}
+              />
             ))}
         </div>
       </div>
@@ -931,19 +1061,116 @@ function FamilyDetailNav({
   );
 }
 
+interface NavItem {
+  key: string;
+  label: string;
+  href: string;
+  /** Parent-completion bool. Drives the main left-side circle —
+   *  green check when the family has marked the section complete,
+   *  amber square-pen when they're still editing. For the admin
+   *  Scholarship + Acceptance rows this maps to `isAccepted` since
+   *  those sections don't have a parent-completion signal. */
+  completed: boolean;
+  /** Admin-verification bool. Drives the small trailing checkmark
+   *  on the right side of the row — green when admin has clicked
+   *  Verify on the section, gray when still pending review. `null`
+   *  for rows without a separate verify step (Scholarship +
+   *  Acceptance); those rows skip the trailing indicator. */
+  verified: boolean | null;
+  show: boolean;
+  /** Admin-only sections (Scholarship, Acceptance) use a softer
+   *  not-yet-confirmed state — a gray checkmark — instead of the
+   *  amber square-pen the parent-facing rows use. The pen icon
+   *  implies "the family is editing this section," which doesn't
+   *  apply to admin-owned rows. Gray check reads as "pending
+   *  admin's resolution" and flips to green when `completed` is
+   *  true (i.e., the family is accepted). */
+  isAdmin?: boolean;
+}
+
 /**
- * Status circle for a sidebar nav row. Two visual modes — admin
- * surface uses verify state (not parent completion) to drive the
- * mode:
- *   - `complete`: admin has verified this section → filled green
- *     circle with a white checkmark (`bg-green-500` + `<Check>`)
- *   - not yet verified: filled amber circle with a white search
- *     icon (`bg-amber-500` + `<Search>`), conveying "this needs
- *     your review." Search reads as "look at this and verify"
- *     better than the prior pencil, which implied an open edit
- *     action — admin verifies more than they edit on these cards.
+ * One row in the side nav. Splits the left main icon (parent state)
+ * from the right trailing indicator (admin verify state) so admin
+ * can scan two independent signals at a glance — "is the family
+ * done?" on the left, "have I reviewed it?" on the right.
  */
-function NavCircle({ complete }: { complete: boolean }) {
+function NavRow({
+  item,
+  onClick,
+}: {
+  item: NavItem;
+  onClick: (
+    e: React.MouseEvent<HTMLAnchorElement>,
+    href: string
+  ) => void;
+}) {
+  return (
+    <a
+      href={item.href}
+      onClick={(e) => onClick(e, item.href)}
+      className="flex w-full items-center gap-3 px-3 py-3 text-left text-sm transition-colors hover:bg-muted/30"
+    >
+      <NavCircle complete={item.completed} isAdmin={item.isAdmin} />
+      <span
+        className={cn(
+          "flex-1 truncate",
+          item.completed
+            ? "font-semibold text-foreground"
+            : "font-medium text-muted-foreground"
+        )}
+      >
+        {item.label}
+      </span>
+      {/* Trailing admin-verify check — only rendered for rows that
+          have a separate verify step (family-facing sections).
+          Admin-only rows (Scholarship, Acceptance) pass `null`
+          and the indicator drops out so the row stays clean. */}
+      {item.verified !== null ? (
+        <CheckCircle2
+          className={cn(
+            "size-4 shrink-0",
+            item.verified
+              ? "text-emerald-600"
+              : "text-muted-foreground/30"
+          )}
+          aria-label={
+            item.verified ? "Admin verified" : "Awaiting admin verification"
+          }
+        />
+      ) : null}
+    </a>
+  );
+}
+
+/**
+ * Status circle for a sidebar nav row. Two visual families:
+ *
+ *   - Parent-facing rows (Family / Students / Financial Aid /
+ *     Testing): mirror the parent-side app nav — green check when
+ *     the family has marked the section complete, amber square-pen
+ *     when they're still editing. Same visual vocabulary admin and
+ *     parent see for "is this section done from the family's
+ *     side?"
+ *
+ *   - Admin-owned rows (Scholarship, Acceptance) via `isAdmin`: use
+ *     a softer not-yet-resolved state — a gray-on-white check. The
+ *     square-pen reads as "edit in progress," which doesn't apply
+ *     to admin-owned rows where the parent isn't editing anything.
+ *     Flips to the same green check when `complete` is true
+ *     (family is accepted) so the two row families share the
+ *     resolved state's visual.
+ *
+ * Admin's separate review state on parent-facing rows surfaces as
+ * a small trailing `CheckCircle2` at the right of the row, rendered
+ * by `NavRow`.
+ */
+function NavCircle({
+  complete,
+  isAdmin,
+}: {
+  complete: boolean;
+  isAdmin?: boolean;
+}) {
   if (complete) {
     return (
       <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-green-500 text-white">
@@ -951,9 +1178,16 @@ function NavCircle({ complete }: { complete: boolean }) {
       </div>
     );
   }
+  if (isAdmin) {
+    return (
+      <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground/60 border border-muted-foreground/20">
+        <Check className="size-4" />
+      </div>
+    );
+  }
   return (
     <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-amber-500 text-white">
-      <Search className="size-4" />
+      <SquarePen className="size-4" />
     </div>
   );
 }
@@ -1167,6 +1401,24 @@ interface SectionConfirmConfig {
   saving: boolean;
   /** Called with the next desired bool (true → confirm, false → undo). */
   onToggle: (next: boolean) => void;
+  /** Section-level gate. When set, the section has unmet prerequisites
+   *  (e.g. unconfirmed docs). The reason rides on the button's
+   *  `title` tooltip and also renders as a small caption next to
+   *  the audit slot so admin sees what's holding things up without
+   *  hovering. By default this hard-disables the Verify button.
+   *  When `bypassable` is also `true`, the button stays clickable
+   *  but a confirm modal interposes — admin can knowingly override
+   *  the gate. */
+  disabled?: boolean;
+  disabledReason?: string;
+  /** When `true` and `disabled === true`, the Verify button is
+   *  kept enabled but clicking it opens a warning AlertDialog
+   *  asking admin to confirm the override. Used by Financial Aid
+   *  where admin sometimes needs to verify before every per-doc
+   *  Confirm has been clicked (e.g. doc reviewed in person, or
+   *  legacy data). Sections that don't want this (Scholarship,
+   *  Accept) leave it unset and the gate hard-blocks. */
+  bypassable?: boolean;
 }
 
 /**
@@ -1182,17 +1434,34 @@ function SectionConfirmFooter({ confirm }: { confirm: SectionConfirmConfig }) {
     confirmedByName,
     saving,
     onToggle,
+    disabled,
+    disabledReason,
+    bypassable,
   } = confirm;
   const [undoOpen, setUndoOpen] = useState(false);
+  // Separate state for the bypass-confirm modal so it doesn't
+  // collide with the Undo modal — admin could in theory open both
+  // workflows in a session, and the two modals carry different
+  // copy + actions.
+  const [bypassOpen, setBypassOpen] = useState(false);
+  // Hard-disable applies only when the section is gated AND the
+  // caller hasn't opted into bypass. When `bypassable` is set,
+  // the click is still allowed but routes through the warning
+  // modal below instead of going straight to `onToggle(true)`.
+  const hardDisabled = !!disabled && !bypassable;
 
   return (
     <div className="border-t bg-white px-5 py-3 flex items-center justify-between gap-3">
-      {/* Audit caption slot — three states:
+      {/* Audit caption slot — four states:
           - saving: skeleton bar so the audit "by X · 2 hr ago"
             slides in smoothly instead of popping in/out as the
             PATCH round-trips
           - verified: actual caption with admin name + time
-          - unverified: empty (nothing to say yet) */}
+          - blocked (verify disabled by section-level gate, e.g.
+            Financial Aid waiting on doc confirms): the gate reason
+            renders here so admin sees what's holding them up
+            without hovering the disabled button
+          - unverified, no gate: empty (nothing to say yet) */}
       {saving ? (
         <Skeleton className="h-3 w-48" />
       ) : (
@@ -1213,6 +1482,8 @@ function SectionConfirmFooter({ confirm }: { confirm: SectionConfirmConfig }) {
                 <span> · {formatNoteTimestamp(confirmTime)}</span>
               ) : null}
             </>
+          ) : disabled && disabledReason ? (
+            <span>{disabledReason}</span>
           ) : null}
         </span>
       )}
@@ -1288,20 +1559,77 @@ function SectionConfirmFooter({ confirm }: { confirm: SectionConfirmConfig }) {
           </AlertDialog>
         </div>
       ) : (
-        <Button
-          type="button"
-          variant="default"
-          size="sm"
-          onClick={() => onToggle(true)}
-          disabled={saving}
-        >
-          {saving ? (
-            <Loader2 className="size-3.5 mr-1.5 animate-spin" />
-          ) : (
-            <CheckCircle2 className="size-3.5 mr-1.5" />
-          )}
-          Verify {sectionLabel}
-        </Button>
+        <>
+          <Button
+            type="button"
+            variant="default"
+            size="sm"
+            onClick={() => {
+              // When the section is gated AND the caller has
+              // opted into bypass, intercept the click with a
+              // confirm modal rather than firing the PATCH right
+              // away. Falls straight through to `onToggle(true)`
+              // for ungated sections (the common case).
+              if (disabled && bypassable) {
+                setBypassOpen(true);
+                return;
+              }
+              onToggle(true);
+            }}
+            disabled={saving || hardDisabled}
+            title={disabled && disabledReason ? disabledReason : undefined}
+          >
+            {saving ? (
+              <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+            ) : (
+              <CheckCircle2 className="size-3.5 mr-1.5" />
+            )}
+            Verify {sectionLabel}
+          </Button>
+          {/* Bypass-confirm dialog — only rendered when the
+              section opts in via `bypassable`. Mirrors the Undo
+              modal's structure (cancel + amber primary) so admin
+              instantly recognizes "you're about to bend a rule"
+              rather than "you're filing a routine update." */}
+          {bypassable ? (
+            <AlertDialog open={bypassOpen} onOpenChange={setBypassOpen}>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>
+                    Verify {sectionLabel} anyway?
+                  </AlertDialogTitle>
+                  <AlertDialogDescription>
+                    {disabledReason ??
+                      "Not every prerequisite for this section is complete."}{" "}
+                    Verifying now will lock in admin approval without
+                    waiting on those items. You can undo this at any
+                    time, but the audit stamp will record that you
+                    bypassed the gate.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel disabled={saving}>
+                    Cancel
+                  </AlertDialogCancel>
+                  <AlertDialogAction
+                    disabled={saving}
+                    className="bg-amber-600 hover:bg-amber-700 text-white"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      onToggle(true);
+                      setBypassOpen(false);
+                    }}
+                  >
+                    {saving ? (
+                      <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                    ) : null}
+                    Yes, verify anyway
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          ) : null}
+        </>
       )}
     </div>
   );
@@ -1944,6 +2272,104 @@ function ScholarshipBlock({
       </SectionGroup>
       ) : null}
 
+      {/* Contributing Members — one card per declared member with
+          their bio + the documentation method they chose (W-2 vs
+          pay stubs). The Documents to Review table at the bottom
+          handles the per-file verification workflow; this section
+          shows admin WHO the member is and what they declared
+          before getting into the per-file review below. Always
+          renders (regardless of path) so members entered before
+          the family switched paths still surface. */}
+      <SectionGroup title="Contributing Members">
+        {detailsLoading && !details ? (
+          <Skeleton className="h-12 w-full rounded-md" />
+        ) : members.length === 0 ? (
+          <p className="text-xs italic text-muted-foreground">
+            No contributing members declared.
+          </p>
+        ) : (
+          <div className="space-y-3">
+            {members.map((member, idx) => {
+              const fullName =
+                `${member.first_name ?? ""} ${member.last_name ?? ""}`.trim() ||
+                `Contributing member ${idx + 1}`;
+              // `isW2` + `isPayStubs` are the parent-side toggles on
+              // the contributing-member form — admin sees which
+              // method the family declared so the per-file Documents
+              // to Review table reads in context.
+              const method = member.isW2
+                ? "W-2"
+                : member.isPayStubs
+                  ? "Pay stubs"
+                  : "—";
+              return (
+                <div
+                  key={member.id}
+                  className="rounded-md border bg-muted/10 p-3 space-y-3"
+                >
+                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    {fullName}
+                  </p>
+                  <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
+                    <DisabledField
+                      label="Address"
+                      value={formatStreetAddress(member)}
+                    />
+                    <DisabledField
+                      label="City / State / Zip"
+                      value={[member.city, member.state, member.zipcode]
+                        .filter(Boolean)
+                        .join(", ")}
+                    />
+                    <DisabledField
+                      label="Estimated annual income"
+                      value={formatCurrency(
+                        member.estimated_annual_income ?? 0
+                      )}
+                    />
+                    <DisabledField
+                      label="Documentation method"
+                      value={method}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </SectionGroup>
+
+      {/* Documents to Review — W-2 / pay-stub uploads per contributing
+          member, plus government-benefit award letters when the
+          family declared them. Sits directly under Contributing
+          Members so admin reads "who's contributing" then "what
+          they uploaded" in a single visual flow before moving on
+          to assets / houses / vehicles. Verifying every row here
+          is also the gate on the Financial Aid section's Verify
+          button — admin can't sign off on the section until the
+          income docs check out. */}
+      <DocumentsToReviewBlock
+        scholarship={scholarship}
+        familyId={familyId}
+        // Pass the pre-fetched arrays from the composite endpoint
+        // so the table skips its own SWR fetches against
+        // `/api/admin/contributing-members?scholarshipId=…` and
+        // `/api/admin/scholarship-benefits?scholarshipId=…` — both
+        // of which previously fell into the same Xano filter trap
+        // and shipped unrelated families' rows through until we
+        // added defensive client-side filters. Single fetch = single
+        // source of truth, no filter drift.
+        membersOverride={members}
+        benefitsOverride={benefits}
+        // When admin verifies a doc inside the table, refetch the
+        // composite endpoint so this block re-renders with the
+        // updated audit columns (the table calls SWR's mutate on
+        // its own keys; we also need our composite cache to
+        // refresh).
+        onChildrenChanged={() => void mutateDetails()}
+        onScholarshipChanged={onScholarshipChanged}
+      />
+
       {/* Purchased Houses — empty array still renders a notice row so
           admin sees that the section was reviewed and the family
           declared no homes (rather than a missing section). One row
@@ -2081,38 +2507,6 @@ function ScholarshipBlock({
           <SignaturePreview signature={scholarship.signature} />
         </>
       ) : null}
-
-      {/* Documents to Review — W-2 / pay-stub uploads per contributing
-          member, plus government-benefit award letters when the
-          family declared them. The table renders the same Mark
-          Confirmed / Undo verify pattern that used to live inside
-          the Scholarship Determination card; moving it up here keeps
-          the Financial Aid section's data + supporting documents
-          together. The Approve gate still reads the same `*_confirm`
-          Xano columns, so flipping a row here also unlocks both the
-          per-student Confirm Scholarship Award Amount button and
-          the family-level Approve. */}
-      <DocumentsToReviewBlock
-        scholarship={scholarship}
-        familyId={familyId}
-        // Pass the pre-fetched arrays from the composite endpoint
-        // so the table skips its own SWR fetches against
-        // `/api/admin/contributing-members?scholarshipId=…` and
-        // `/api/admin/scholarship-benefits?scholarshipId=…` — both
-        // of which previously fell into the same Xano filter trap
-        // and shipped unrelated families' rows through until we
-        // added defensive client-side filters. Single fetch = single
-        // source of truth, no filter drift.
-        membersOverride={members}
-        benefitsOverride={benefits}
-        // When admin verifies a doc inside the table, refetch the
-        // composite endpoint so this block re-renders with the
-        // updated audit columns (the table calls SWR's mutate on
-        // its own keys; we also need our composite cache to
-        // refresh).
-        onChildrenChanged={() => void mutateDetails()}
-        onScholarshipChanged={onScholarshipChanged}
-      />
     </div>
   );
 }
@@ -2347,14 +2741,20 @@ function formatCurrencyZero(value: number): string {
  * Compute a single human-readable reason the Approve button should
  * stay blocked, or `null` when nothing's blocking. Drives both the
  * `disabled` state on the Approve button itself AND a visible
- * banner rendered above the action row — admin previously had to
- * hover the button's `title` tooltip to discover why it was greyed
- * out, which most users never did.
+ * banner rendered above the action row.
  *
- * Order matters: the reason returned here is the FIRST gate that's
- * failing in the order admin should fix things. Documents-to-review
- * is the earliest step in the flow, so it surfaces first; then
- * per-student scholarship confirmations; finally section verifies.
+ * The gate is "every section verified" — Family / Students /
+ * Financial Aid / Testing all need their admin-verify bool true
+ * before the family can be approved. Documents to review and the
+ * per-student Confirm Scholarship Award Amount affordances roll
+ * up under their parent section's verify (admin can't responsibly
+ * verify Financial Aid without confirming the income docs first),
+ * so the gate doesn't list them separately — one unified message
+ * keeps the footer banner short and the path forward obvious.
+ *
+ * The `allDocsConfirmed`, `allSufsConfirmed`, and `unconfirmedCount`
+ * inputs are still accepted so existing call sites don't have to
+ * change shape; they're intentionally unused.
  */
 function computeApproveBlockReason(input: {
   allDocsConfirmed: boolean;
@@ -2362,20 +2762,11 @@ function computeApproveBlockReason(input: {
   unconfirmedCount: number;
   unverifiedSections: string[];
 }): string | null {
-  if (!input.allDocsConfirmed) {
-    return "Confirm every document under Documents to review before approving.";
-  }
-  if (!input.allSufsConfirmed) {
-    return `Confirm scholarship award for ${input.unconfirmedCount} student${
-      input.unconfirmedCount === 1 ? "" : "s"
-    } before approving.`;
-  }
+  void input.allDocsConfirmed;
+  void input.allSufsConfirmed;
+  void input.unconfirmedCount;
   if (input.unverifiedSections.length > 0) {
-    return `Verify the ${input.unverifiedSections.join(
-      ", "
-    )} section${
-      input.unverifiedSections.length === 1 ? "" : "s"
-    } before approving.`;
+    return "All sections need to be verified before family can be approved.";
   }
   return null;
 }
@@ -2410,29 +2801,74 @@ function DecisionCard({
     family_admin_confirm?: boolean;
     students_admin_confirm?: boolean;
     testing_admin_confirm?: boolean;
-    /** Financial Aid verify uses the live Xano column name
-     *  (`*_admin_complete`) rather than the `_admin_confirm` suffix
-     *  the other sections use — see the matching note on
-     *  `XanoFamilyApplicationProgress`. */
-    financial_aid_admin_complete?: boolean;
+    /** Financial Aid verify uses the same `*_admin_confirm`
+     *  pattern as Family / Students / Testing — see the matching
+     *  note on `XanoFamilyApplicationProgress`. */
+    financial_aid_admin_confirm?: boolean;
+    /** Scholarship Determination verify triplet — gates Acceptance
+     *  alongside the four parent-facing section verifies. Admin can
+     *  only flip this once every per-student
+     *  `confirmed_scholarship` is true. */
+    scholarship_admin_complete?: boolean;
+    scholarship_complete_admin_time?: number | null;
+    scholarship_admin_complete_admin?: string;
   } | null;
   loading: boolean;
   onChanged: () => void;
 }) {
   const accepted = progress?.isAccepted === true;
   const familySubmitted = progress?.isSubmitted === true;
-  // Section-verify gate — Approve is blocked until each section is
-  // verified by admin. `unverifiedSections` lists the human-readable
-  // labels that haven't been verified yet so the gate-block reason
-  // can tell admin what to fix.
+  // Section-verify gate — Acceptance is blocked until each section
+  // is verified by admin. `unverifiedSections` lists the human-
+  // readable labels that haven't been verified yet so the gate-
+  // block reason can tell admin what to fix.
   const unverifiedSections: string[] = [];
   if (progress?.family_admin_confirm !== true) unverifiedSections.push("Family");
   if (progress?.students_admin_confirm !== true)
     unverifiedSections.push("Students");
-  if (progress?.financial_aid_admin_complete !== true)
+  if (progress?.financial_aid_admin_confirm !== true)
     unverifiedSections.push("Financial Aid");
+  if (progress?.scholarship_admin_complete !== true)
+    unverifiedSections.push("Scholarship");
   if (progress?.testing_admin_confirm !== true)
     unverifiedSections.push("Testing");
+
+  // Local scholarship-verify state + handler. Lives inside
+  // DecisionCard rather than being lifted to the page level
+  // because the verify button + audit caption render right at the
+  // bottom of the Scholarship Determination card — keeping the
+  // PATCH next to its surface avoids prop-drilling
+  // `toggleSectionConfirmed("scholarship", …)` through here.
+  // `onChanged` already refreshes the surrounding progress SWR so
+  // the gate state re-evaluates on completion.
+  const [savingScholarship, setSavingScholarship] = useState(false);
+  async function toggleScholarshipVerify(next: boolean) {
+    setSavingScholarship(true);
+    try {
+      const res = await fetch(`/api/admin/family-progress`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          familyId,
+          yearId,
+          scholarship_admin_complete: next,
+        }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Update failed (${res.status})`);
+      }
+      toast.success(
+        next ? "Scholarship verified." : "Verification cleared."
+      );
+      onChanged();
+    } catch (err) {
+      console.error("[DecisionCard.toggleScholarshipVerify]", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't update.");
+    } finally {
+      setSavingScholarship(false);
+    }
+  }
   const anySubmitted =
     familySubmitted ||
     apps.some((a) => (a as { isSubmitted?: boolean }).isSubmitted);
@@ -2520,10 +2956,50 @@ function DecisionCard({
   // gate, so we don't double-filter.
   const annualFeeTotal =
     (schoolYear?.annual_fees ?? 0) * activeApps.length;
+  // Family-level transport total — sum of every active student's
+  // `transportation_cost` (the per-student column admin can
+  // override on the Decision row). For each app:
+  //   - bus not elected → contributes 0 (column may be null;
+  //     treat that as no transport rather than an unset default)
+  //   - bus elected with explicit `transportation_cost` → that
+  //     dollar value
+  //   - bus elected, `transportation_cost` still null on a legacy
+  //     row → fall back to the school year's `transportation_fees`
+  //     so the column rollout doesn't drop already-elected
+  //     students from the total
+  // SNAP families collapse to `null` regardless — transportation
+  // is waived for them.
   const transportationTotal = scholarship?.isSNAPBenefits
     ? null
-    : activeApps.filter((a) => a.is_bus_transportation === true).length *
-      (schoolYear?.transportation_fees ?? 0);
+    : activeApps.reduce((acc, a) => {
+        if (a.is_bus_transportation !== true) return acc;
+        const stored =
+          typeof a.transportation_cost === "number"
+            ? a.transportation_cost
+            : null;
+        const perStudent =
+          stored != null ? stored : schoolYear?.transportation_fees ?? 0;
+        return acc + perStudent;
+      }, 0);
+  // Family-level SUFS total — sum of every active student's
+  // `sufs_award_amount` (the per-student column admin captures
+  // during Scholarship Determination). Falls back to the derived
+  // `sufsAmountFor(sufs_type, schoolYear)` amount when the explicit
+  // column is missing on a row, so legacy applications that
+  // pre-date the column still contribute to the family total. Sums
+  // to 0 → write `null` so the billing surfaces render "N/A" for
+  // a family with no SUFS scholarship instead of "$0 awarded."
+  const sufsTotal = (() => {
+    const sum = activeApps.reduce((acc, a) => {
+      const explicit =
+        typeof a.sufs_award_amount === "number" && a.sufs_award_amount > 0
+          ? a.sufs_award_amount
+          : null;
+      const derived = sufsAmountFor(a.sufs_type ?? "", schoolYear);
+      return acc + (explicit ?? derived);
+    }, 0);
+    return sum > 0 ? sum : null;
+  })();
 
   // Tri-state edit status that drives the small colored dot in the
   // header — same vocabulary as the rest of the page's section
@@ -2541,14 +3017,178 @@ function DecisionCard({
     : "not_started";
 
   return (
-    <>
+    // `space-y-6` matches the gap the page's `<main>` puts between
+    // section cards — without it the two cards inside DecisionCard
+    // (Acceptance + Scholarship Determination) sit flush against
+    // each other while every other adjacent section gets the
+    // standard 24px rhythm.
+    <div className="space-y-6">
+    {/* Acceptance card — student receipt(s) + the family-level
+        Approve / Revoke decision in the footer. Rendered FIRST in
+        the section so admin lands on "is this family accepted yet?"
+        immediately on page open; Scholarship Determination follows
+        with the supporting per-student awards + financial review. */}
+    {!loading && students.length > 0 ? (
+      <Card
+        id="section-acceptance"
+        className={cn(
+          "overflow-hidden gap-0 py-0 bg-white scroll-mt-20 transition-opacity"
+        )}
+      >
+        <CardHeader className="py-3 !pb-3 border-b">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 min-w-0">
+              <span
+                className={cn(
+                  "inline-block size-2.5 rounded-full shrink-0",
+                  STATUS_DOT_CLASS[decisionStatus]
+                )}
+                aria-label={STATUS_LABEL[decisionStatus]}
+                title={STATUS_LABEL[decisionStatus]}
+              />
+              <CardTitle className="text-base truncate">
+                Acceptance
+              </CardTitle>
+              {accepted ? (
+                <span className="ml-1 inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-800">
+                  <CheckCircle2 className="size-2.5" />
+                  Accepted
+                </span>
+              ) : null}
+            </div>
+            {/* Gate-reason caption — pinned to the right side of
+                the header. Computed from the same helper the Accept
+                Student button uses for its disabled state, so the
+                two surfaces can't drift. Stays out of the footer so
+                the action row reads as just the action row; admin
+                gets the explanation in their field of view as soon
+                as they look at the card. */}
+            {!accepted ? (
+              (() => {
+                const reason = computeApproveBlockReason({
+                  allDocsConfirmed,
+                  allSufsConfirmed,
+                  unconfirmedCount,
+                  unverifiedSections,
+                });
+                if (!reason) return null;
+                return (
+                  <span className="text-xs text-muted-foreground truncate text-right shrink-0">
+                    {reason}
+                  </span>
+                );
+              })()
+            ) : null}
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-6 py-5 bg-white">
+          {/* Per-student tuition receipt — mirrors the parent's
+              /tuition page row-by-row so admin sees the exact
+              figures the family will see immediately before
+              approving or revoking. */}
+          <TuitionBreakdownTable
+            students={students}
+            apps={apps}
+            schoolYear={schoolYear}
+            isSnapFamily={scholarship?.isSNAPBenefits === true}
+          />
+        </CardContent>
+        {/* Footer mirrors the SectionConfirmFooter pattern: divider
+            + bg-white px-5 py-3 anchor row. Two paths:
+              - Not accepted yet → Approve gate banner + Archive /
+                [Reject] / Approve grid (Reject only when submitted,
+                so the grid collapses to two columns otherwise).
+              - Accepted → single Revoke acceptance button on the
+                right, since the rest of the actions don't apply
+                post-acceptance. */}
+        <div className="border-t bg-white px-5 py-3 space-y-2">
+          {!accepted ? (
+            <>
+              <div
+                className={cn(
+                  "grid gap-2",
+                  familySubmitted ? "grid-cols-3" : "grid-cols-2"
+                )}
+              >
+                <ArchiveApplicationButton
+                  familyId={familyId}
+                  yearId={yearId}
+                  familyName={familyName}
+                  onArchived={onChanged}
+                />
+                {familySubmitted ? (
+                  <RejectApplicationButton
+                    familyId={familyId}
+                    yearId={yearId}
+                    familyName={familyName}
+                    onRejected={onChanged}
+                  />
+                ) : null}
+                <ApproveFamilyButton
+                  familyId={familyId}
+                  yearId={yearId}
+                  familyName={familyName}
+                  allSufsConfirmed={allSufsConfirmed}
+                  unconfirmedCount={unconfirmedCount}
+                  allDocsConfirmed={allDocsConfirmed}
+                  unverifiedSections={unverifiedSections}
+                  monthlyTuitionPayment={monthlyTuitionPayment}
+                  annualFeeTotal={annualFeeTotal}
+                  transportationTotal={transportationTotal}
+                  sufsTotal={sufsTotal}
+                  onApproved={onChanged}
+                />
+              </div>
+              {/* Gate-reason caption moved up into the card header
+                  (right side, next to the title) — keeps the
+                  footer focused on the action row instead of
+                  hanging a second explanation line under it. */}
+            </>
+          ) : (
+            // Post-accept footer — Revoke far left, View
+            // registration far right. The two actions split the
+            // post-acceptance surface: Revoke is the destructive
+            // escape hatch (rarely used, lives where it won't be
+            // hit by accident), View registration is the
+            // forward-motion link admin clicks to keep working on
+            // the family's enrollment paperwork. `justify-between`
+            // pushes them to opposite ends; on narrow widths the
+            // row stays single-line because both buttons truncate
+            // their labels rather than wrapping.
+            <div className="flex items-center justify-between gap-2">
+              <RevokeAcceptanceButton
+                familyId={familyId}
+                yearId={yearId}
+                familyName={familyName}
+                onRevoked={onChanged}
+              />
+              <Button
+                asChild
+                variant="outline"
+                size="lg"
+                className="bg-white"
+              >
+                <Link
+                  href={`/admin/registrations/${familyId}?yearId=${yearId}`}
+                  className="inline-flex items-center"
+                >
+                  <ExternalLink className="size-4 mr-1.5 shrink-0" />
+                  <span className="truncate">View registration</span>
+                </Link>
+              </Button>
+            </div>
+          )}
+        </div>
+      </Card>
+    ) : null}
     <Card
+      id="section-scholarship-determination"
       className={cn(
-        "overflow-hidden gap-0 py-0 bg-white transition-opacity",
+        "overflow-hidden gap-0 py-0 bg-white scroll-mt-20 transition-opacity",
         // Whole-card mute mirrors the SectionShell behavior: once
         // admin has accepted the family, the card's work is done,
         // gray it out so it stops competing with the still-live
-        // sections above. The Acceptance card below carries the
+        // sections above. The Acceptance card above carries the
         // Revoke affordance so admin can still reverse from the
         // post-acceptance surface.
         accepted && "opacity-60"
@@ -2557,37 +3197,58 @@ function DecisionCard({
       <CardHeader className="py-3 !pb-3 border-b">
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-2 min-w-0">
-            {/* Edit-status dot — same red/yellow/green vocabulary as
-                the section cards above so admin can scan the page
-                top-to-bottom and see "where am I, what still needs
-                me" at a glance. */}
+            {/* Edit-status dot — Scholarship Determination card's
+                dot tracks the SECTION VERIFY state, not the page-
+                level decision status. Green once admin has clicked
+                Verify Scholarship in the footer below, otherwise
+                the surrounding `decisionStatus` (red / yellow /
+                green based on submitted / accepted) drives it.
+                Once the section's been verified the dot stays
+                green even before acceptance lands. */}
             <span
               className={cn(
                 "inline-block size-2.5 rounded-full shrink-0",
-                STATUS_DOT_CLASS[decisionStatus]
+                progress?.scholarship_admin_complete === true
+                  ? STATUS_DOT_CLASS.complete
+                  : STATUS_DOT_CLASS[decisionStatus]
               )}
-              aria-label={STATUS_LABEL[decisionStatus]}
-              title={STATUS_LABEL[decisionStatus]}
+              aria-label={
+                progress?.scholarship_admin_complete === true
+                  ? "Verified"
+                  : STATUS_LABEL[decisionStatus]
+              }
+              title={
+                progress?.scholarship_admin_complete === true
+                  ? "Verified"
+                  : STATUS_LABEL[decisionStatus]
+              }
             />
             <CardTitle className="text-base truncate">
               Scholarship Determination
             </CardTitle>
-            {/* Status pill stays for the resolved Accepted state —
-                a single positive badge next to the title reads as
-                "this is done." Pre-acceptance states are conveyed by
-                the dot + the footer button; no badge so the header
-                stays quiet. */}
-            {accepted ? (
+            {/* Status pill next to the title — green Verified pill
+                once admin has signed off on the section. The earlier
+                redundant Accepted pill was removed: acceptance is
+                already conveyed by the dedicated Acceptance card
+                directly above and by the family-level Accepted
+                badge in the page header, so duplicating it next to
+                Scholarship Determination just added noise. Pre-
+                verify state stays quiet — the dot + the Verify
+                footer carry the state. */}
+            {progress?.scholarship_admin_complete === true ? (
               <span className="ml-1 inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-800">
                 <CheckCircle2 className="size-2.5" />
-                Accepted
+                Verified
               </span>
             ) : null}
           </div>
           {/* Notes drawer — section-scoped to "scholarship_determination"
               so the comms thread for the decision review lives next to
               the work. Mirrors the per-section Notes affordance on the
-              Family / Students / Testing cards above. */}
+              Family / Students / Testing cards above. The Export PDF
+              affordance used to live here too; moved up to the page
+              header so admin can grab the acceptance summary without
+              scrolling to this card. */}
           <div className="flex items-center gap-2 shrink-0">
             <FamilyNotesSheet
               familyId={familyId}
@@ -2636,6 +3297,16 @@ function DecisionCard({
                       accepted,
                       allDocsConfirmed,
                       isSNAPPath: scholarship?.isSNAPBenefits === true,
+                      // `scholarshipSectionVerified` locks per-
+                      // student Undo until admin unconfirms the
+                      // Scholarship section. Keeps the
+                      // confirmation hierarchy intact — admin
+                      // shouldn't be able to revoke a single
+                      // student's award while the umbrella
+                      // section verify still claims everyone is
+                      // good.
+                      scholarshipSectionVerified:
+                        progress?.scholarship_admin_complete === true,
                     }}
                   />
                 );
@@ -2676,131 +3347,46 @@ function DecisionCard({
           </>
         )}
       </CardContent>
+      {/* Scholarship verify footer — admin can't flip
+          `scholarship_admin_complete` true until every per-student
+          `confirmed_scholarship` is true, since the verify is the
+          umbrella "all student awards are locked in" signal that
+          gates Acceptance. Re-uses the same `SectionConfirmFooter`
+          chrome the SectionShells above the page use so the
+          audit caption + Undo modal pattern stays consistent.
+          Only renders once we have students on file — empty
+          families don't have a scholarship to verify. */}
+      {!loading && students.length > 0 ? (
+        <SectionConfirmFooter
+          confirm={{
+            sectionLabel: "Scholarship",
+            confirmed: progress?.scholarship_admin_complete === true,
+            parentCompleted:
+              progress?.scholarship_admin_complete === true,
+            confirmTime:
+              progress?.scholarship_complete_admin_time ?? null,
+            confirmedByName:
+              progress?.scholarship_admin_complete_admin?.trim() ||
+              null,
+            saving: savingScholarship,
+            onToggle: toggleScholarshipVerify,
+            // Gate: every per-student award has to be confirmed
+            // first. Once the section itself is verified, drop the
+            // gate so admin can still Undo.
+            disabled:
+              progress?.scholarship_admin_complete !== true &&
+              !allSufsConfirmed,
+            disabledReason:
+              unconfirmedCount > 0
+                ? `Confirm scholarship award for ${unconfirmedCount} student${
+                    unconfirmedCount === 1 ? "" : "s"
+                  } before verifying.`
+                : "Confirm every student's scholarship award before verifying.",
+          }}
+        />
+      ) : null}
     </Card>
-    {/* Acceptance card — student receipt(s) + the family-level
-        Approve / Revoke decision in the footer. Lives as a sibling
-        of the Scholarship Determination card so admin sees the
-        same numbers the family will see, then takes action right
-        below them. */}
-    {!loading && students.length > 0 ? (
-      <Card
-        id="section-acceptance"
-        className={cn(
-          "overflow-hidden gap-0 py-0 bg-white scroll-mt-20 transition-opacity"
-        )}
-      >
-        <CardHeader className="py-3 !pb-3 border-b">
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2 min-w-0">
-              <span
-                className={cn(
-                  "inline-block size-2.5 rounded-full shrink-0",
-                  STATUS_DOT_CLASS[decisionStatus]
-                )}
-                aria-label={STATUS_LABEL[decisionStatus]}
-                title={STATUS_LABEL[decisionStatus]}
-              />
-              <CardTitle className="text-base truncate">
-                Acceptance
-              </CardTitle>
-              {accepted ? (
-                <span className="ml-1 inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-800">
-                  <CheckCircle2 className="size-2.5" />
-                  Accepted
-                </span>
-              ) : null}
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-6 py-5 bg-white">
-          {/* Per-student tuition receipt — mirrors the parent's
-              /tuition page row-by-row so admin sees the exact
-              figures the family will see immediately before
-              approving or revoking. */}
-          <TuitionBreakdownTable
-            students={students}
-            apps={apps}
-            schoolYear={schoolYear}
-            isSnapFamily={scholarship?.isSNAPBenefits === true}
-          />
-        </CardContent>
-        {/* Footer mirrors the SectionConfirmFooter pattern: divider
-            + bg-white px-5 py-3 anchor row. Two paths:
-              - Not accepted yet → Approve gate banner + Archive /
-                [Reject] / Approve grid (Reject only when submitted,
-                so the grid collapses to two columns otherwise).
-              - Accepted → single Revoke acceptance button on the
-                right, since the rest of the actions don't apply
-                post-acceptance. Revoke used to live in the page
-                header; consolidated here so all family-level
-                decision actions sit on the same surface. */}
-        <div className="border-t bg-white px-5 py-3 space-y-2">
-          {!accepted ? (
-            <>
-              {(() => {
-                const reason = computeApproveBlockReason({
-                  allDocsConfirmed,
-                  allSufsConfirmed,
-                  unconfirmedCount,
-                  unverifiedSections,
-                });
-                if (!reason) return null;
-                return (
-                  <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                    <AlertCircle className="size-4 shrink-0 mt-0.5" />
-                    <span>{reason}</span>
-                  </div>
-                );
-              })()}
-              <div
-                className={cn(
-                  "grid gap-2",
-                  familySubmitted ? "grid-cols-3" : "grid-cols-2"
-                )}
-              >
-                <ArchiveApplicationButton
-                  familyId={familyId}
-                  yearId={yearId}
-                  familyName={familyName}
-                  onArchived={onChanged}
-                />
-                {familySubmitted ? (
-                  <RejectApplicationButton
-                    familyId={familyId}
-                    yearId={yearId}
-                    familyName={familyName}
-                    onRejected={onChanged}
-                  />
-                ) : null}
-                <ApproveFamilyButton
-                  familyId={familyId}
-                  yearId={yearId}
-                  familyName={familyName}
-                  allSufsConfirmed={allSufsConfirmed}
-                  unconfirmedCount={unconfirmedCount}
-                  allDocsConfirmed={allDocsConfirmed}
-                  unverifiedSections={unverifiedSections}
-                  monthlyTuitionPayment={monthlyTuitionPayment}
-                  annualFeeTotal={annualFeeTotal}
-                  transportationTotal={transportationTotal}
-                  onApproved={onChanged}
-                />
-              </div>
-            </>
-          ) : (
-            <div className="flex items-center justify-end">
-              <RevokeAcceptanceButton
-                familyId={familyId}
-                yearId={yearId}
-                familyName={familyName}
-                onRevoked={onChanged}
-              />
-            </div>
-          )}
-        </div>
-      </Card>
-    ) : null}
-    </>
+    </div>
   );
 }
 
@@ -3070,6 +3656,7 @@ function ApproveFamilyButton({
   monthlyTuitionPayment,
   annualFeeTotal,
   transportationTotal,
+  sufsTotal,
   onApproved,
 }: {
   familyId: number;
@@ -3083,10 +3670,10 @@ function ApproveFamilyButton({
    *  income docs, even if the per-student awards are confirmed. */
   allDocsConfirmed: boolean;
   /** List of section labels that haven't been verified yet (a
-   *  subset of `["Family", "Students", "Testing"]`). Empty array
-   *  means every section is verified. Drives the gate-block reason
-   *  string on the Approve button — admin can't approve until each
-   *  section has admin verification. */
+   *  subset of `["Family", "Students", "Financial Aid",
+   *  "Scholarship", "Testing"]`). Empty array means every section
+   *  is verified. Drives the gate-block reason string on the
+   *  Acceptance button. */
   unverifiedSections: string[];
   /** Monthly snapshot computed at the DecisionCard level. Sent
    *  alongside the family-progress PATCH so the
@@ -3102,6 +3689,12 @@ function ApproveFamilyButton({
    *  family-payment POST as-is so SNAP rows write `null` and
    *  downstream consumers can render N/A. */
   transportationTotal: number | null;
+  /** Total SUFS scholarship dollars awarded across every active
+   *  student in the family. Snapshotted onto
+   *  `registration_families_payment.sufs_total` at approval time so
+   *  billing surfaces don't have to re-sum per-student rows.
+   *  `null` when the family has no SUFS scholarship. */
+  sufsTotal: number | null;
   onApproved: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -3135,12 +3728,23 @@ function ApproveFamilyButton({
             familyId,
             yearId,
             monthly_tuition_payment: monthlyTuitionPayment,
-            // Line-item snapshot — admin fee always set, transport
-            // explicitly null for SNAP families (waived) or a number
-            // otherwise. The route preserves the null vs. undefined
-            // distinction so SNAP rows write null rather than 0.
+            // Line-item snapshot — admin fee always set. For
+            // transport, SNAP families pass explicit `null`
+            // (waived) and non-SNAP families OMIT the field so
+            // the route server-derives the sum from every active
+            // app's `transportation_cost`. The route is the
+            // authoritative computer; the page deliberately
+            // doesn't pass its own sum to avoid drift from stale
+            // SWR caches.
             annual_fee_total: annualFeeTotal,
-            transportation_total: transportationTotal,
+            ...(transportationTotal === null
+              ? { transportation_total: null }
+              : {}),
+            // SUFS total — sum of every active student's
+            // `sufs_award_amount`. `null` when the family has no
+            // SUFS scholarship; the route preserves null vs.
+            // undefined so legacy rows don't get clobbered with 0.
+            sufs_total: sufsTotal,
             isFamilyAccepted: true,
           }),
         });
@@ -3233,7 +3837,7 @@ function ApproveFamilyButton({
         className="bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-50"
         title={
           gateBlockReason ??
-          "Approve this family for the selected school year"
+          `Accept ${familyName || "family"} for the selected school year`
         }
       >
         {saving ? (
@@ -3241,7 +3845,7 @@ function ApproveFamilyButton({
         ) : (
           <CheckCircle2 className="size-4 mr-1.5" />
         )}
-        Approve
+        Accept {familyName || "Family"}
       </Button>
 
       <AlertDialog
@@ -4415,7 +5019,12 @@ function ScholarshipReviewBlock({
               <td
                 className={cn(
                   "px-4 py-2 text-right tabular-nums align-top",
-                  totalAssets > 0 && "text-green-600"
+                  totalAssets > 0 && "text-green-600",
+                  // Underwater total assets (debts/equity netting
+                  // out below zero) read as red, matching the
+                  // negative-balance pattern used on the Personal
+                  // debt row below.
+                  totalAssets < 0 && "text-red-600"
                 )}
               >
                 {formatCurrency(totalAssets)}
@@ -4477,12 +5086,21 @@ function ScholarshipReviewBlock({
           // lands on the totals section.
           <table className="w-full text-sm mt-2">
             <tbody className="divide-y border-t">
-              <tr className="bg-white">
-                <td className="px-4 py-2 font-medium">Family pays</td>
-                <td className="px-4 py-2 text-right tabular-nums">
-                  {tuitionPct}%
-                </td>
-              </tr>
+              {/* Family-pays percentage — hidden when the matched
+                  bracket assigns the family $0 of tuition (i.e.
+                  household income / assets fall below the matrix's
+                  minimum-payment threshold). A literal "Family
+                  pays 0%" row reads like an empty bracket; better
+                  to drop it entirely and let the Tuition row's $0
+                  carry the message. */}
+              {tuitionPct > 0 ? (
+                <tr className="bg-white">
+                  <td className="px-4 py-2 font-medium">Family pays</td>
+                  <td className="px-4 py-2 text-right tabular-nums">
+                    {tuitionPct}%
+                  </td>
+                </tr>
+              ) : null}
               <tr className="bg-white">
                 <td className="px-4 py-2 font-medium">Tuition</td>
                 <td className="px-4 py-2 text-right tabular-nums">
@@ -4903,6 +5521,13 @@ function DecisionStudentRow({
      *  to (base tuition − student's SUFS amount). Admin can still
      *  override the value manually. */
     isSNAPPath: boolean;
+    /** True when admin has verified the Scholarship section
+     *  (`scholarship_admin_complete=true`). Locks the per-student
+     *  Undo button — admin can't unwind a single student's award
+     *  while the section verify is still claiming the whole
+     *  family is good. Admin has to undo the section verify
+     *  first; once that drops to false, per-student Undo unlocks. */
+    scholarshipSectionVerified: boolean;
   };
 }) {
   const [confirming, setConfirming] = useState(false);
@@ -4947,6 +5572,17 @@ function DecisionStudentRow({
   // and PATCHes only the diff, so concurrent edits to other fields
   // don't get clobbered. Cost per student initializes to the SNAP
   // suggestion when applicable; admin can overwrite at will.
+  // Transportation cost — per-student column on the app row,
+  // editable by admin. Defaults to the school year's
+  // `transportation_fees` when the parent opted into bus
+  // transportation but admin hasn't set an override yet. `null`
+  // when bus wasn't elected, so the receipt math distinguishes
+  // "no transport" from "transport at $0". Stringified in the
+  // draft so the controlled input doesn't fight React's number
+  // → string coercion.
+  const persistedTransportCost = app?.transportation_cost;
+  const defaultTransportCost = schoolYear?.transportation_fees ?? 0;
+
   const [draft, setDraft] = useState({
     sufs_award_id: app?.sufs_award_id ? String(app.sufs_award_id) : "",
     opportunity_scholarship_award_amount: persistedAward
@@ -4954,6 +5590,12 @@ function DecisionStudentRow({
       : shouldAutoFillSnap
         ? String(snapSuggestedCost)
         : "",
+    transportation_cost:
+      persistedTransportCost != null
+        ? String(persistedTransportCost)
+        : app?.is_bus_transportation
+          ? String(defaultTransportCost)
+          : "",
   });
 
   useEffect(() => {
@@ -4964,11 +5606,24 @@ function DecisionStudentRow({
         : shouldAutoFillSnap
           ? String(snapSuggestedCost)
           : "",
+      transportation_cost:
+        persistedTransportCost != null
+          ? String(persistedTransportCost)
+          : app?.is_bus_transportation
+            ? String(defaultTransportCost)
+            : "",
     });
     // Re-derive only when the source data changes; deliberate stale
     // closure on shouldAutoFillSnap is fine since it's computed
     // from `app` + `approveCtx.isSNAPPath` which are both deps.
-  }, [app, persistedAward, shouldAutoFillSnap, snapSuggestedCost]);
+  }, [
+    app,
+    persistedAward,
+    shouldAutoFillSnap,
+    snapSuggestedCost,
+    persistedTransportCost,
+    defaultTransportCost,
+  ]);
 
   /**
    * Single-field PATCH. Compares a stringified `current` against the
@@ -5021,14 +5676,37 @@ function DecisionStudentRow({
     if (!app) return;
     setConfirming(true);
     try {
+      // On confirm (flipping `confirmed_scholarship` true), also
+      // stamp the SUFS award amount onto the row so the column
+      // captures the dollar value at the moment admin locked in
+      // the award. Without this, a tier change after confirmation
+      // could drift the stored amount away from "what admin
+      // confirmed" — the snapshot semantic is important for
+      // billing audits.
+      //
+      // On undo (flipping to false), we deliberately keep the
+      // amount column intact rather than zeroing it out. The bool
+      // is the source of truth for "is this confirmed"; the
+      // amount is just the captured number, useful even when the
+      // confirmation is cleared.
+      const next = !sufsConfirmed;
+      const body: Record<string, unknown> = {
+        confirmed_scholarship: next,
+      };
+      if (next) {
+        body.sufs_award_amount = sufsAmountFor(
+          sufsType ?? "",
+          schoolYear
+        );
+      }
       const res = await fetch(`/api/admin/applications/${app.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ confirmed_scholarship: !sufsConfirmed }),
+        body: JSON.stringify(body),
       });
       if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        throw new Error(body?.error ?? `Save failed (${res.status})`);
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Save failed (${res.status})`);
       }
       // Per-student confirm only flips this student's
       // `sufs_confirmed`. The family-payment snapshot is a
@@ -5082,11 +5760,23 @@ function DecisionStudentRow({
                 <FieldLabel className="text-xs">SUFS award tier</FieldLabel>
                 <Select
                   value={sufsType || "__none"}
-                  onValueChange={(v) =>
+                  onValueChange={(v) => {
+                    const nextType = v === "__none" ? "" : v;
+                    // Also stamp the derived dollar amount onto
+                    // `sufs_award_amount` so the column on the
+                    // application row tracks what admin picked.
+                    // The amount used to live only as derived state
+                    // (computed from `sufs_type` + the school year's
+                    // tier dollars on every render), but billing
+                    // surfaces need a stored figure that survives
+                    // future year-amount edits. Tier change writes
+                    // both columns in the same PATCH.
+                    const nextAmount = sufsAmountFor(nextType, schoolYear);
                     patchField("sufs_type", {
-                      sufs_type: v === "__none" ? "" : v,
-                    })
-                  }
+                      sufs_type: nextType,
+                      sufs_award_amount: nextAmount,
+                    });
+                  }}
                 >
                   <SelectTrigger className="w-full bg-white">
                     <SelectValue placeholder="Select tier" />
@@ -5160,15 +5850,29 @@ function DecisionStudentRow({
                 <FieldLabel className="text-xs">SUFS award ID</FieldLabel>
                 <Input
                   value={draft.sufs_award_id}
-                  type="number"
+                  type="text"
                   inputMode="numeric"
-                  placeholder="From SUFS portal"
-                  onChange={(e) =>
+                  // SUFS portal hands out a fixed 9-digit numeric
+                  // ID. Constrain the input shape so admin can't
+                  // typo extra digits or paste a longer string in
+                  // by accident — `pattern` covers form-submit
+                  // hints, `maxLength` enforces the cap on typed
+                  // characters, and the onChange filter drops any
+                  // non-digit input on the fly (paste of a
+                  // hyphenated ID like "123-456-789" gets cleaned
+                  // before it lands in state).
+                  pattern="\d{0,9}"
+                  maxLength={9}
+                  placeholder="From SUFS portal (9 digits)"
+                  onChange={(e) => {
+                    const cleaned = e.target.value
+                      .replace(/\D/g, "")
+                      .slice(0, 9);
                     setDraft((d) => ({
                       ...d,
-                      sufs_award_id: e.target.value,
-                    }))
-                  }
+                      sufs_award_id: cleaned,
+                    }));
+                  }}
                   onBlur={() => {
                     const next = Number(draft.sufs_award_id);
                     const safe = Number.isFinite(next) ? next : 0;
@@ -5188,6 +5892,69 @@ function DecisionStudentRow({
               per-student input here would let admin overwrite a
               derived value with a hand-typed one and split-brain
               the math. The matrix path keeps the manual input. */}
+          {/* ─── Transportation sub-card ─── Only renders when
+              the parent opted into bus transportation on their
+              application. Stores the per-student fee on
+              `transportation_cost` (decimal, nullable). Admin can
+              override the school-year default; clearing the input
+              writes `null` so the family-level transport total
+              treats this student as "no transport." */}
+          {app?.is_bus_transportation ? (
+            <div className="rounded-md border bg-white p-4 space-y-3">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Transportation
+              </h4>
+              <Field>
+                <FieldLabel className="text-xs">Cost per student</FieldLabel>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground pointer-events-none">
+                    $
+                  </span>
+                  <Input
+                    value={draft.transportation_cost}
+                    type="number"
+                    inputMode="decimal"
+                    placeholder={String(defaultTransportCost)}
+                    onChange={(e) =>
+                      setDraft((d) => ({
+                        ...d,
+                        transportation_cost: e.target.value,
+                      }))
+                    }
+                    onBlur={() => {
+                      const raw = draft.transportation_cost.trim();
+                      // Empty input → write null so the column
+                      // distinguishes "admin cleared it" from
+                      // "admin set it to 0." `null` propagates
+                      // through the family-payment transport
+                      // total as "no transport for this student."
+                      if (raw === "") {
+                        if (
+                          persistedTransportCost == null
+                        )
+                          return;
+                        patchField("transportation_cost", {
+                          transportation_cost: null,
+                        });
+                        return;
+                      }
+                      const next = Number(raw);
+                      if (!Number.isFinite(next)) return;
+                      if (next === persistedTransportCost) return;
+                      patchField("transportation_cost", {
+                        transportation_cost: next,
+                      });
+                    }}
+                    className="border-input pl-7 tabular-nums"
+                  />
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  Bus stop: {app?.bus_stop || "—"}
+                </p>
+              </Field>
+            </div>
+          ) : null}
+
           {!approveCtx.isSNAPPath ? (
             <div className="rounded-md border bg-white p-4 space-y-3">
               <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
@@ -5253,71 +6020,160 @@ function DecisionStudentRow({
           {/* ─── Confirm Scholarship Award Amount ─── Per-student
               terminal action — flips `confirmed_scholarship` for
               THIS student. Reject / Approve / Archive are
-              family-level decisions and live in the Scholarship
-              Determination card's footer (one set, after every
-              student row), so they're not duplicated per-row.
+              family-level decisions and live in the Acceptance
+              card's footer (one set, after every student row), so
+              they're not duplicated per-row.
 
               Three visual states:
-                - default → white outline button, clickable
+                - default → blue primary button, clickable when the
+                  Documents to Review gate is satisfied
                 - saving (mid-PATCH) → spinner + "Submitting…"
-                - confirmed → gray, disabled, "Submitted"
-                  (intentionally non-toggleable; admin commits to
-                  the per-student award once they confirm).
+                - confirmed → muted "Submitted" pill + outline
+                  "Undo" button next to it. The pill is non-
+                  interactive; the Undo button opens a confirm
+                  dialog that flips `confirmed_scholarship` back to
+                  false so admin can re-edit the award amount and
+                  re-confirm.
 
-              Once the family is accepted, this button hides — the
+              Once the family is accepted, this row hides — the
               Decision card grays out as a unit. */}
           {!approveCtx.accepted ? (
-            <Button
-              type="button"
-              variant={sufsConfirmed ? "secondary" : "default"}
-              size="lg"
-              disabled={
-                confirming ||
-                sufsConfirmed ||
-                (!sufsConfirmed && !approveCtx.allDocsConfirmed)
-              }
-              onClick={toggleConfirmed}
-              // Active state is blue — sits between the white card
-              // body and the green Approve action down at the footer,
-              // so admin's eye is pulled to the per-student confirm
-              // first, then the family-level approve once every row
-              // is locked in. Confirmed state keeps the muted look
-              // since the affordance is terminal (one-shot commit).
-              // `disabled:bg-blue-600` keeps the color through the
-              // gated state — the gating is conveyed by `cursor-not-
-              // allowed` from the `disabled` attribute + the title
-              // tooltip, not by graying the button out further.
-              className={cn(
-                "w-full",
-                sufsConfirmed
-                  ? "bg-muted text-muted-foreground cursor-default disabled:opacity-100"
-                  : "bg-blue-600 hover:bg-blue-700 text-white disabled:bg-blue-600 disabled:opacity-60"
-              )}
-              title={
-                sufsConfirmed
-                  ? "Scholarship award already submitted for this student"
-                  : !approveCtx.allDocsConfirmed
-                    ? "Mark every document under Documents to Review confirmed first"
-                    : "Confirm the scholarship award amounts above"
-              }
-            >
-              {confirming ? (
-                <span className="inline-flex items-center gap-1.5">
-                  <Loader2 className="size-4 animate-spin" />
-                  <span className="text-sm font-semibold">Submitting…</span>
+            sufsConfirmed ? (
+              // Confirmed footer mirrors the family-level
+              // `SectionConfirmFooter` chrome on the parent-facing
+              // section cards (Family / Students / Financial Aid /
+              // Testing / Scholarship): audit caption on the left,
+              // muted "Submitted" pill + "Undo" button on the
+              // right. Same visual vocabulary so admin reads
+              // per-student and per-section confirmations the
+              // same way at a glance.
+              <div className="flex items-center justify-between gap-3 pt-1">
+                {/* Audit caption — Confirmed by {admin} · {when}.
+                    Stamped server-side on the
+                    `confirmed_scholarship_time` + `_admin` columns
+                    whenever the bool flips, so the caption can't
+                    drift away from the row's actual state. Hover
+                    surfaces the full timestamp. */}
+                <span className="text-xs text-muted-foreground truncate">
+                  {(() => {
+                    const name =
+                      app?.confirmed_scholarship_admin?.trim();
+                    const at = app?.confirmed_scholarship_time;
+                    if (!name && !at) return "Confirmed";
+                    return (
+                      <span
+                        title={
+                          at
+                            ? new Date(at).toLocaleString()
+                            : undefined
+                        }
+                      >
+                        {name ? (
+                          <>
+                            Confirmed by{" "}
+                            <span className="font-medium text-foreground">
+                              {name}
+                            </span>
+                          </>
+                        ) : (
+                          "Confirmed"
+                        )}
+                        {at ? (
+                          <span> · {formatNoteTimestamp(at)}</span>
+                        ) : null}
+                      </span>
+                    );
+                  })()}
                 </span>
-              ) : sufsConfirmed ? (
-                <span className="inline-flex items-center gap-1.5 text-sm font-semibold">
-                  <CheckCircle2 className="size-4" />
-                  Submitted
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1.5">
-                  <Check className="size-4" />
-                  <span>Confirm Scholarship Award Amount</span>
-                </span>
-              )}
-            </Button>
+                {/* Submitted pill + Undo pair, right-aligned. The
+                    pill is non-interactive (a labeled disabled
+                    button keeps it pixel-aligned with the Undo
+                    next to it); Undo opens the same toggle dialog
+                    the Confirm path uses — `runToggleConfirmed`
+                    flips the bool either direction based on the
+                    current state. */}
+                <div className="flex items-center gap-2 shrink-0">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled
+                    className="bg-muted text-muted-foreground cursor-default disabled:opacity-100"
+                  >
+                    <CheckCircle2 className="size-3.5 mr-1.5" />
+                    Scholarship Submitted
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={toggleConfirmed}
+                    // Section-verify gate: per-student Undo locks
+                    // once admin has signed off on the Scholarship
+                    // section as a whole. Keeps the umbrella
+                    // verify intact — admin has to roll the
+                    // section back first, then peel off the
+                    // student. Hover-tooltip explains the gate so
+                    // the greyed-out button isn't a mystery.
+                    disabled={
+                      confirming ||
+                      approveCtx.scholarshipSectionVerified
+                    }
+                    className="bg-white"
+                    title={
+                      approveCtx.scholarshipSectionVerified
+                        ? "Undo the Scholarship section verification first"
+                        : "Undo this student's scholarship award submission"
+                    }
+                  >
+                    {confirming ? (
+                      <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                    ) : (
+                      <Undo2 className="size-3.5 mr-1.5" />
+                    )}
+                    Undo
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              // Pre-confirm action — right-justified so it hugs its
+              // text rather than stretching across the row. The
+              // confirmed state above also lives in a right-aligned
+              // cluster, so this keeps the resolved-vs-pending
+              // layouts on the same axis. Personalized label
+              // ("Confirm Maxual's Scholarship Amount") makes the
+              // student-specific intent obvious — important when
+              // the family has multiple kids and admin is working
+              // through them one at a time.
+              <div className="flex items-center justify-end">
+                <Button
+                  type="button"
+                  variant="default"
+                  size="sm"
+                  disabled={confirming}
+                  onClick={toggleConfirmed}
+                  className="bg-blue-600 hover:bg-blue-700 text-white"
+                  title={`Confirm ${student.first_name}'s scholarship award amount`}
+                >
+                  {confirming ? (
+                    <span className="inline-flex items-center gap-1.5">
+                      <Loader2 className="size-3.5 animate-spin" />
+                      <span className="text-sm font-semibold">
+                        Submitting…
+                      </span>
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5">
+                      <Check className="size-3.5" />
+                      <span>
+                        Confirm {student.first_name}{" "}
+                        {student.last_name} Scholarship Amount
+                      </span>
+                    </span>
+                  )}
+                </Button>
+              </div>
+            )
           ) : null}
         </div>
       ) : null}
@@ -5471,6 +6327,61 @@ function FamilyDecisionActions({
   void apps;
 
   return null;
+}
+
+/**
+ * Export PDF button — generates a multi-page acceptance summary PDF
+ * via `exportFamilyPDF` and triggers a real download (not a print
+ * dialog). The generator lives in `lib/family-pdf.ts` and is
+ * imported dynamically inside the click handler so the jsPDF +
+ * autotable bundles only load when admin actually clicks Export —
+ * keeps the main admin chunk lean.
+ */
+function ExportPdfButton({
+  familyId,
+  yearId,
+}: {
+  familyId: number;
+  yearId: number;
+}) {
+  const [exporting, setExporting] = useState(false);
+  async function handleExport() {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      // Dynamic import — `lib/family-pdf.ts` pulls in `jspdf` +
+      // `jspdf-autotable` (~150KB combined), so we only load it
+      // on first click. Subsequent clicks resolve from the
+      // module cache.
+      const { exportFamilyPDF } = await import("@/lib/family-pdf");
+      await exportFamilyPDF({ familyId, yearId });
+    } catch (err) {
+      console.error("[ExportPdfButton] export failed:", err);
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't generate PDF."
+      );
+    } finally {
+      setExporting(false);
+    }
+  }
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      onClick={handleExport}
+      disabled={exporting}
+      className="bg-white"
+      title="Download a multi-page PDF summary of this family's acceptance"
+    >
+      {exporting ? (
+        <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+      ) : (
+        <FileText className="size-3.5 mr-1.5" />
+      )}
+      {exporting ? "Generating…" : "Export PDF"}
+    </Button>
+  );
 }
 
 /**

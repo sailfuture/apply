@@ -7,17 +7,24 @@ import useSWR from "swr";
 import { toast } from "sonner";
 import {
   ArrowLeft,
+  Archive as ArchiveIcon,
   Check,
   CheckCircle2,
+  Circle,
   ExternalLink,
+  FileText,
   Loader2,
   Pencil,
+  Plus,
+  RotateCcw,
   SquarePen,
   Undo2,
+  XCircle,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { PhoneInput } from "@/components/ui/phone-input";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -31,15 +38,38 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { FamilyNotesSheet } from "@/components/admin/family-notes-sheet";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { cn } from "@/lib/utils";
-import { formatNoteTimestamp } from "@/lib/format-note-time";
+import {
+  formatNoteTimestamp,
+  formatRelativeShort,
+} from "@/lib/format-note-time";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import type {
   AdminFamilyRegistrationResponse,
   AdminFamilyRegistrationStudentRow,
 } from "@/app/api/admin/registrations/[id]/route";
-import type { XanoEmergencyContact } from "@/lib/xano";
+import type {
+  XanoEmergencyContact,
+  XanoFamilyPayment,
+  XanoStudentRegistrationProgress,
+} from "@/lib/xano";
 
 const xanoBase =
   process.env.NEXT_PUBLIC_XANO_BASE ?? "https://xsc3-mvx7-r86m.n7e.xano.io";
@@ -80,6 +110,22 @@ export default function FamilyRegistrationDetailPage() {
       : null;
   const { data, isLoading, error, mutate } =
     useSWR<AdminFamilyRegistrationResponse>(swrKey, adminFetcher);
+
+  // Family-payment row — the canonical source for the Tuition
+  // card values (monthly_tuition_payment, annual_fee_total,
+  // transportation_total, sufs_total, printed name, signature).
+  // Fetched separately because it lives on the apply-flow side of
+  // the data model (one row per family-year, written when admin
+  // accepts), while the registration-progress row above carries
+  // its own legacy copies that were drifting from the source. The
+  // fetch is parallel to the main detail SWR so the page doesn't
+  // wait sequentially.
+  const familyPaymentKey =
+    Number.isFinite(familyId) && yearId
+      ? `/api/admin/registration-families-payment-by-family?familyId=${familyId}&yearId=${yearId}`
+      : null;
+  const { data: familyPayment, mutate: mutateFamilyPayment } =
+    useSWR<XanoFamilyPayment | null>(familyPaymentKey, adminFetcher);
 
   // Tracks which section is mid-PATCH so the spinner inside that
   // section's verify footer is scoped — clicking Verify on Tuition
@@ -135,6 +181,11 @@ export default function FamilyRegistrationDetailPage() {
 
   const refresh = () => {
     void mutate();
+    // Pull the family-payment row alongside the main detail
+    // refetch — admin actions that touch tuition / fees re-emit
+    // both SWR caches in one shot so the Tuition card never lags
+    // the rest of the page.
+    void mutateFamilyPayment();
   };
 
   // Builder for the per-section editor route. Mirrors the
@@ -146,24 +197,54 @@ export default function FamilyRegistrationDetailPage() {
       yearId ? `?yearId=${yearId}` : ""
     }`;
 
-  // Per-section completion state — drives the green/amber dot in the
-  // side nav AND the colored status dot in each `SectionShell` header.
+  // Per-section completion state — drives the green/amber dot in
+  // the side nav AND the colored status dot in each `SectionShell`
+  // header. `completed` is the parent-side "section done" signal;
+  // `verified` is the admin-confirm rollup. The side nav renders
+  // BOTH independently — main circle for parent state, trailing
+  // checkmark for admin verify — so admin can scan two signals at
+  // a glance the same way the apply-flow page nav does.
   const sectionStatus = {
-    tuition: !!progress?.isTuition,
-    enrollment: !!progress?.isEnrollment,
-    // Registration completion is derived purely from per-student
-    // `registrationConfirmed` — there's no section-level verify
-    // button on this card. A section is complete when there's at
-    // least one student AND every active student's packet has been
-    // confirmed.
-    registration:
-      students.length > 0 &&
-      students.every((s) => !!s.packet?.registrationConfirmed),
-    // Emergency contacts has no parent-completion bool, so the
-    // side nav's "complete" green tracks the verify state — admin
-    // verification is the only signal we have.
-    emergency_contacts: progress?.emergency_contacts_admin_confirm === true,
-    volunteer: !!progress?.isVolunteerHours,
+    tuition: {
+      completed: !!progress?.isTuition,
+      verified: progress?.tuition_admin_confirm === true,
+    },
+    enrollment: {
+      completed: !!progress?.isEnrollment,
+      verified: progress?.enrollment_admin_confirm === true,
+    },
+    // Registration completion = every active student has a packet
+    // started. Admin verify = every active student's packet has
+    // `registrationConfirmed=true`. Two different signals; both
+    // drive their own indicator in the nav.
+    registration: {
+      completed:
+        students.length > 0 && students.every((s) => !!s.packet),
+      verified:
+        students.length > 0 &&
+        students.every((s) => !!s.packet?.registrationConfirmed),
+    },
+    // Emergency contacts has no parent-completion bool — it's
+    // evergreen family data. Treat "completed" as "at least one
+    // contact on file" so the parent's side has something
+    // meaningful to flip green. Admin verify is the separate
+    // signal.
+    emergency_contacts: {
+      completed: emergency_contacts.length > 0,
+      verified: progress?.emergency_contacts_admin_confirm === true,
+    },
+    volunteer: {
+      completed: !!progress?.isVolunteerHours,
+      verified: progress?.volunteer_admin_confirm === true,
+    },
+    // Family-level Confirmation card status — green once the
+    // family-level latch is flipped via the Confirm Registration
+    // button on the card. Admin-only row, so there's no separate
+    // verify trailing check (the main circle IS the verify state).
+    confirmation: {
+      completed: progress?.isRegistrationConfirmed === true,
+      verified: null as boolean | null,
+    },
   };
 
   // Per-section verify state — wraps the admin registration-progress
@@ -251,30 +332,54 @@ export default function FamilyRegistrationDetailPage() {
             ) : null}
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            {/* Page-header notes drawer is phase-scoped too — hits
-                the dedicated `..._by_registration` Xano query so
-                admin only sees registration-phase comms by default,
-                not the full apply-phase backlog. */}
+            {/* Header carries the cross-surface jump (View
+                application) + Notes. View application sits to the
+                left so admin's left-to-right reading order goes
+                "look back at the apply-flow" → "log a note." The
+                destructive Revoke admission + Archive affordances
+                live on the Confirmation card's footer below
+                rather than up here, since they're rarer and
+                belong with the rest of the family-level decision
+                actions. */}
+            <Button asChild variant="outline" size="sm" className="bg-white">
+              <Link
+                href={`/admin/families/${family?.id ?? familyId}?yearId=${yearId}`}
+              >
+                <ExternalLink className="size-3.5 mr-1.5" />
+                View application
+              </Link>
+            </Button>
+            {/* Page-header notes drawer is phase-scoped — hits the
+                dedicated `..._by_registration` Xano query so admin
+                only sees registration-phase comms by default, not
+                the full apply-phase backlog. */}
             <FamilyNotesSheet
               familyId={Number(family?.id ?? familyId)}
               defaultYearId={Number(yearId)}
               phase="registration"
             />
-            <Button asChild variant="outline" size="sm" className="bg-white">
-              <Link
-                href={`/admin/families/${family?.id ?? familyId}?yearId=${yearId}`}
-              >
-                View application
-                <ExternalLink className="size-3.5 ml-1.5" />
-              </Link>
-            </Button>
           </div>
         </div>
+
+        {/* Family Registration Confirmation — the rollup latch.
+            Sits at the TOP of the page (same pattern as Acceptance
+            on the apply-flow detail) so admin lands on the
+            family's status + the per-student roster + the family-
+            level actions (Revoke / View / Archive / Confirm)
+            before scrolling into the per-section work below. */}
+        <FamilyRegistrationConfirmationCard
+          familyId={Number(family?.id ?? familyId)}
+          yearId={Number(yearId)}
+          familyName={familyName}
+          progress={progress}
+          students={students}
+          onConfirmed={refresh}
+        />
 
         <section id="section-tuition" className="scroll-mt-20">
           <SectionShell
             title="Tuition"
-            status={sectionStatus.tuition ? "complete" : "in_progress"}
+            status={sectionStatus.tuition.completed ? "complete" : "in_progress"}
             editHref={regSectionHref("tuition")}
             notes={{
               familyId: Number(family?.id ?? familyId),
@@ -297,6 +402,7 @@ export default function FamilyRegistrationDetailPage() {
             <TuitionBlock
               progress={progress}
               schoolYear={school_year}
+              familyPayment={familyPayment ?? null}
             />
           </SectionShell>
         </section>
@@ -304,7 +410,7 @@ export default function FamilyRegistrationDetailPage() {
         <section id="section-enrollment" className="scroll-mt-20">
           <SectionShell
             title="Enrollment Agreement"
-            status={sectionStatus.enrollment ? "complete" : "in_progress"}
+            status={sectionStatus.enrollment.completed ? "complete" : "in_progress"}
             editHref={regSectionHref("enrollment")}
             notes={{
               familyId: Number(family?.id ?? familyId),
@@ -338,7 +444,7 @@ export default function FamilyRegistrationDetailPage() {
               the per-student flags below. */}
           <SectionShell
             title="Registration Packet"
-            status={sectionStatus.registration ? "complete" : "in_progress"}
+            status={sectionStatus.registration.completed ? "complete" : "in_progress"}
             editHref={regSectionHref("registration")}
             notes={{
               familyId: Number(family?.id ?? familyId),
@@ -350,6 +456,7 @@ export default function FamilyRegistrationDetailPage() {
             <RegistrationPacketBlock
               students={students}
               emergencyContacts={emergency_contacts}
+              yearId={Number(yearId)}
               onChanged={refresh}
             />
           </SectionShell>
@@ -396,14 +503,18 @@ export default function FamilyRegistrationDetailPage() {
                 ),
             }}
           >
-            <EmergencyContactsBlock contacts={emergency_contacts} />
+            <EmergencyContactsBlock
+              contacts={emergency_contacts}
+              familyId={Number(family?.id ?? familyId)}
+              onChanged={refresh}
+            />
           </SectionShell>
         </section>
 
         <section id="section-volunteer" className="scroll-mt-20">
           <SectionShell
             title="Volunteer Hours"
-            status={sectionStatus.volunteer ? "complete" : "in_progress"}
+            status={sectionStatus.volunteer.completed ? "complete" : "in_progress"}
             editHref={regSectionHref("volunteer")}
             notes={{
               familyId: Number(family?.id ?? familyId),
@@ -444,11 +555,12 @@ function RegistrationSideNav({
 }: {
   backHref: string;
   sectionStatus: {
-    tuition: boolean;
-    enrollment: boolean;
-    registration: boolean;
-    emergency_contacts: boolean;
-    volunteer: boolean;
+    tuition: { completed: boolean; verified: boolean };
+    enrollment: { completed: boolean; verified: boolean };
+    registration: { completed: boolean; verified: boolean };
+    emergency_contacts: { completed: boolean; verified: boolean };
+    volunteer: { completed: boolean; verified: boolean };
+    confirmation: { completed: boolean; verified: boolean | null };
   };
 }) {
   const items: Array<{
@@ -456,36 +568,65 @@ function RegistrationSideNav({
     label: string;
     href: string;
     complete: boolean;
+    /** Trailing admin-verify checkmark state. `null` skips the
+     *  indicator entirely (used for admin-only rows where the
+     *  main circle IS the verify state — Confirmation today). */
+    verified: boolean | null;
+    /** When true, the row uses the muted gray-check variant
+     *  regardless of `complete`. Used for admin-only rows
+     *  (Confirmation) where the parent has no editing role. */
+    isAdmin?: boolean;
   }> = [
+    {
+      // Confirmation moved to the top so admin lands on the
+      // family's rollup status first — same spirit as the apply-
+      // flow page where Acceptance leads the side nav. Marked
+      // `isAdmin` so the circle renders as the muted gray check
+      // (no amber square-pen for "parent in progress" — admin
+      // owns this section). `verified: null` drops the trailing
+      // check since the main circle already conveys this row's
+      // state on its own.
+      key: "confirmation",
+      label: "Confirmation",
+      href: "#section-confirmation",
+      complete: sectionStatus.confirmation.completed,
+      verified: null,
+      isAdmin: true,
+    },
     {
       key: "tuition",
       label: "Tuition",
       href: "#section-tuition",
-      complete: sectionStatus.tuition,
+      complete: sectionStatus.tuition.completed,
+      verified: sectionStatus.tuition.verified,
     },
     {
       key: "enrollment",
       label: "Enrollment Agreement",
       href: "#section-enrollment",
-      complete: sectionStatus.enrollment,
+      complete: sectionStatus.enrollment.completed,
+      verified: sectionStatus.enrollment.verified,
     },
     {
       key: "registration",
       label: "Registration",
       href: "#section-registration",
-      complete: sectionStatus.registration,
+      complete: sectionStatus.registration.completed,
+      verified: sectionStatus.registration.verified,
     },
     {
       key: "emergency_contacts",
       label: "Emergency Contacts",
       href: "#section-emergency-contacts",
-      complete: sectionStatus.emergency_contacts,
+      complete: sectionStatus.emergency_contacts.completed,
+      verified: sectionStatus.emergency_contacts.verified,
     },
     {
       key: "volunteer",
       label: "Volunteer Hours",
       href: "#section-volunteer",
-      complete: sectionStatus.volunteer,
+      complete: sectionStatus.volunteer.completed,
+      verified: sectionStatus.volunteer.verified,
     },
   ];
 
@@ -526,17 +667,45 @@ function RegistrationSideNav({
               onClick={(e) => handleNavClick(e, item.href)}
               className="flex w-full items-center gap-3 px-3 py-3 text-left text-sm transition-colors hover:bg-muted/30"
             >
-              <NavCircle complete={item.complete} />
+              <NavCircle complete={item.complete} isAdmin={item.isAdmin} />
               <span
                 className={cn(
-                  "truncate",
-                  item.complete
-                    ? "font-semibold text-foreground"
-                    : "font-medium text-muted-foreground"
+                  "flex-1 truncate",
+                  // Admin rows render in the muted color regardless
+                  // of completion — the gray circle + gray label
+                  // matches the "admin-owned chrome" visual the
+                  // apply-flow nav uses for Acceptance / Scholarship.
+                  item.isAdmin
+                    ? "font-medium text-muted-foreground"
+                    : item.complete
+                      ? "font-semibold text-foreground"
+                      : "font-medium text-muted-foreground"
                 )}
               >
                 {item.label}
               </span>
+              {/* Trailing admin-verify check — rendered when the
+                  row carries a `verified` bool (parent-facing
+                  sections). Admin-only rows pass `null` and the
+                  indicator drops out so the row stays clean.
+                  Pixel-aligned with the apply-flow nav so admin
+                  sees the same "is this verified" signal on both
+                  surfaces. */}
+              {item.verified !== null ? (
+                <CheckCircle2
+                  className={cn(
+                    "size-4 shrink-0",
+                    item.verified
+                      ? "text-emerald-600"
+                      : "text-muted-foreground/30"
+                  )}
+                  aria-label={
+                    item.verified
+                      ? "Admin verified"
+                      : "Awaiting admin verification"
+                  }
+                />
+              ) : null}
             </a>
           ))}
         </div>
@@ -549,8 +718,31 @@ function RegistrationSideNav({
  * Status circle for a sidebar nav row — pixel-aligned with
  * `FamilyDetailNav.NavCircle` from the apply-flow page so both
  * admin surfaces use the same visual vocabulary.
+ *
+ * `isAdmin` flips the not-yet-complete state from the amber
+ * square-pen ("parent has work to do") to a muted gray check
+ * ("admin hasn't acted yet"). Used for admin-owned rows like
+ * Confirmation where the parent isn't actively editing anything —
+ * the amber square-pen would imply edit-in-progress, which doesn't
+ * apply. The same muted gray check applies to the resolved state
+ * too: the row stays understated even after admin acts, since the
+ * Confirmation card is the page's chrome rather than its primary
+ * work surface.
  */
-function NavCircle({ complete }: { complete: boolean }) {
+function NavCircle({
+  complete,
+  isAdmin,
+}: {
+  complete: boolean;
+  isAdmin?: boolean;
+}) {
+  if (isAdmin) {
+    return (
+      <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground/60 border border-muted-foreground/20">
+        <Check className="size-4" />
+      </div>
+    );
+  }
   if (complete) {
     return (
       <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-green-500 text-white">
@@ -1010,30 +1202,79 @@ function DisabledTextarea({
 function TuitionBlock({
   progress,
   schoolYear,
+  familyPayment,
 }: {
   progress: AdminFamilyRegistrationResponse["progress"];
   schoolYear: AdminFamilyRegistrationResponse["school_year"];
+  /** Canonical family-payment row for the (family, year). All
+   *  dollar figures + the printed name + the captured signature
+   *  read from here so the Tuition card reflects what admin
+   *  approved on the apply-flow Acceptance card. `null` when no
+   *  row has been snapshotted yet (pre-acceptance families) — the
+   *  card falls back to em dashes / `$0` in that case. */
+  familyPayment: XanoFamilyPayment | null;
 }) {
-  const monthlyTuition = progress?.monthly_tuition_payment ?? 0;
-  const monthlyTransport = progress?.monthly_transportation_payment ?? 0;
-  const printedName = progress?.name ?? "";
+  // All numeric values come from the family-payment row. Legacy
+  // copies on the progress row (`monthly_tuition_payment`, etc.)
+  // were drifting from the apply-flow source, so we read the
+  // apply-flow row directly to keep both surfaces consistent.
+  const monthlyTuition = familyPayment?.monthly_tuition_payment ?? 0;
+  const annualFeeTotal = familyPayment?.annual_fee_total ?? 0;
+  const transportationTotal = familyPayment?.transportation_total ?? 0;
+  const sufsTotal = familyPayment?.sufs_total ?? 0;
+  // Printed name + signature also live on the family-payment row.
+  // Fall back to the progress row for ancient packets that signed
+  // before the migration; new packets only write to the
+  // family-payment row.
+  const printedName = familyPayment?.name ?? progress?.name ?? "";
+  const signature =
+    familyPayment?.signature_data ??
+    progress?.tuition_scholarship_signature ??
+    progress?.signature_data ??
+    null;
+
+  // Helper — render the column value as `$X,XXX.XX` so the four
+  // tuition fields all line up; falls back to `—` when there's no
+  // family-payment row (pre-acceptance state).
+  const fmt$ = (n: number) =>
+    familyPayment === null
+      ? "—"
+      : `$${n.toLocaleString(undefined, {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })}`;
 
   return (
     <div className="rounded-md border bg-muted/10 p-4 space-y-5">
-      <SectionGroup title="Monthly Snapshot">
-        <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
+      <SectionGroup title="Tuition Snapshot">
+        <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
           <DisabledField
             label="School Year"
             value={schoolYear.year_name || ""}
             placeholder="—"
           />
+          <DisabledField label="Monthly Tuition" value={fmt$(monthlyTuition)} />
+          <DisabledField label="Annual Admin Fee" value={fmt$(annualFeeTotal)} />
           <DisabledField
-            label="Monthly Tuition"
-            value={`$${monthlyTuition.toLocaleString()}`}
+            label="Transportation Total"
+            value={fmt$(transportationTotal)}
+          />
+        </div>
+        <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 mt-3">
+          <DisabledField
+            label="SUFS Scholarship Total"
+            value={fmt$(sufsTotal)}
           />
           <DisabledField
-            label="Monthly Transportation"
-            value={`$${monthlyTransport.toLocaleString()}`}
+            label="Family Accepted"
+            value={
+              familyPayment?.isFamilyAccepted === true
+                ? "Yes"
+                : familyPayment
+                  ? "No"
+                  : ""
+            }
+            placeholder="—"
           />
         </div>
       </SectionGroup>
@@ -1045,12 +1286,7 @@ function TuitionBlock({
             placeholder="—"
             required
           />
-          <SignaturePreview
-            label="Signature"
-            signature={
-              progress?.tuition_scholarship_signature ?? progress?.signature_data ?? null
-            }
-          />
+          <SignaturePreview label="Signature" signature={signature} />
         </div>
       </SectionGroup>
     </div>
@@ -1147,10 +1383,15 @@ function EnrollmentAgreementBlock({
 function RegistrationPacketBlock({
   students,
   emergencyContacts,
+  yearId,
   onChanged,
 }: {
   students: AdminFamilyRegistrationStudentRow[];
   emergencyContacts: XanoEmergencyContact[];
+  /** Active school year — required so the "Create registration
+   *  packet" button on missing-packet students can bootstrap a row
+   *  scoped to the right year. */
+  yearId: number;
   onChanged: () => void;
 }) {
   if (students.length === 0) {
@@ -1173,6 +1414,7 @@ function RegistrationPacketBlock({
         <StudentPacketBlock
           key={row.student_id}
           row={row}
+          yearId={yearId}
           onChanged={onChanged}
         />
       ))}
@@ -1185,15 +1427,56 @@ const SWIM_LEVELS = ["None", "Beginner", "Intermediate", "Advanced"];
 
 function StudentPacketBlock({
   row,
+  yearId,
   onChanged,
 }: {
   row: AdminFamilyRegistrationStudentRow;
+  /** Active school year id — needed to bootstrap a packet from
+   *  admin when the parent hasn't started the registration flow
+   *  themselves yet. */
+  yearId: number;
   onChanged: () => void;
 }) {
   const [saving, setSaving] = useState(false);
+  const [creating, setCreating] = useState(false);
   const [undoOpen, setUndoOpen] = useState(false);
   const packet = row.packet;
   const hasPacket = packet != null;
+
+  /** Bootstrap a packet row when a student is missing one. Hits
+   *  the admin POST route which delegates to
+   *  `xano.studentRegistration.resolve()` — fetch-or-create with
+   *  empty-row defaults, so re-clicking after a successful create
+   *  is a no-op rather than a duplicate insert. Refreshes the
+   *  registration detail SWR so the just-created packet's fields
+   *  render in place of the "Not started" pill. */
+  async function createPacket() {
+    if (creating || hasPacket) return;
+    setCreating(true);
+    try {
+      const res = await fetch(`/api/admin/student-registration`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studentId: row.student_id,
+          yearId,
+        }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Create failed (${res.status})`);
+      }
+      toast.success(`Registration packet created for ${row.student_full_name}.`);
+      onChanged();
+    } catch (err) {
+      console.error("[StudentPacketBlock.createPacket]", err);
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't create packet."
+      );
+    } finally {
+      setCreating(false);
+    }
+  }
   // Admin verification lives on the per-packet
   // `registration_student_registration` row — `registrationConfirmed`
   // bool plus the audit pair `registration_confirmed_admin_time` and
@@ -1281,10 +1564,29 @@ function StudentPacketBlock({
       </p>
 
       {!hasPacket ? (
-        <p className="text-sm text-muted-foreground">
-          The family hasn&rsquo;t opened this packet yet. Check back once
-          they&rsquo;ve started filling out the registration page.
-        </p>
+        <div className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            The family hasn&rsquo;t opened this packet yet. You can
+            create an empty packet now so admin work (waivers, doc
+            uploads, manual edits) can land before the parent opens
+            the registration flow.
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={creating}
+            onClick={() => void createPacket()}
+            className="bg-white"
+          >
+            {creating ? (
+              <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+            ) : (
+              <Pencil className="size-3.5 mr-1.5" />
+            )}
+            Create registration packet
+          </Button>
+        </div>
       ) : (
         <>
           {/* ── Uniform & Activities ──────────────────────────────
@@ -1314,36 +1616,16 @@ function StudentPacketBlock({
           <Separator />
 
           {/* ── Required Documents ──────────────────────────────── */}
-          {/* Each document category is an array on the student row
-              (parents can upload multiple files per category, e.g.
-              two pages of a passport). `FilePreviewGroup` renders
-              one row per uploaded file with truncated filenames +
-              Open links, matching the parent-side multi-upload
-              affordance. */}
-          <SectionGroup title="Required Documents *">
-            <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
-              <FilePreviewGroup
-                label="Birth Certificate"
-                files={row.student_documents.birth_certificate}
-                required
-              />
-              <FilePreviewGroup
-                label="School Health Form"
-                files={row.student_documents.school_health_form}
-                required
-              />
-              <FilePreviewGroup
-                label="Transcripts"
-                files={row.student_documents.transcripts}
-                required
-              />
-              <FilePreviewGroup
-                label="Immunization Forms"
-                files={row.student_documents.immunization_forms}
-                required
-              />
-            </div>
-          </SectionGroup>
+          {/* Document-verification table. Each row shows the doc's
+              uploaded files + a per-doc Mark confirmed + Undo
+              affordance that flips the admin-confirm bool on the
+              student row. The admin route auto-stamps the audit
+              pair so the "Confirmed by X · 4d" caption can render
+              without the client managing it. Pixel-aligned with
+              the apply-flow Documents-to-Review block on the
+              Financial Aid card. The block ships its own header
+              strip, so we skip the SectionGroup wrapper here. */}
+          <RequiredDocumentsTable row={row} onChanged={onChanged} />
 
           <Separator />
 
@@ -1652,12 +1934,56 @@ function StudentPacketBlock({
 
 function EmergencyContactsBlock({
   contacts,
+  familyId,
+  onChanged,
 }: {
   contacts: XanoEmergencyContact[];
+  familyId: number;
+  onChanged: () => void;
 }) {
+  // Tracks which existing contact is open for edit (null = closed,
+  // contact id = the row being edited). Lives at the block level
+  // — rather than per-contact-card state — so reopening across
+  // different contacts cleanly discards prior form values.
+  const [editTarget, setEditTarget] = useState<XanoEmergencyContact | null>(
+    null
+  );
   return (
     <div className="rounded-md border bg-muted/10 p-4 space-y-4">
-      <p className="text-sm font-semibold">Emergency Contacts</p>
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm font-semibold">Emergency Contacts</p>
+        {/* Admin-side "Add emergency contact" affordance. Opens a
+            small Dialog with the same fields the parent flow uses;
+            POSTs to the admin emergency-contacts route which
+            creates the row on behalf of `familyId`. Lives at the
+            top of the block (instead of below the list) so admin
+            doesn't have to scroll past existing contacts to add a
+            new one. */}
+        <EmergencyContactDialogButton
+          mode="add"
+          familyId={familyId}
+          onSaved={onChanged}
+        />
+      </div>
+      {/* Single page-level edit dialog. Trash-style trigger lives
+          in each contact row; clicking sets `editTarget`, which
+          opens the dialog with the row's values pre-populated.
+          Mirroring the page-level delete dialog pattern keeps a
+          single Dialog instance in the DOM rather than one per
+          contact. */}
+      {editTarget ? (
+        <EmergencyContactDialogButton
+          mode="edit"
+          familyId={familyId}
+          existing={editTarget}
+          open
+          onClose={() => setEditTarget(null)}
+          onSaved={() => {
+            setEditTarget(null);
+            onChanged();
+          }}
+        />
+      ) : null}
       {contacts.length === 0 ? (
         <p className="text-sm text-muted-foreground">
           No emergency contacts on file for this family.
@@ -1669,15 +1995,33 @@ function EmergencyContactsBlock({
               key={c.id}
               className="rounded-md border bg-white p-3 space-y-3"
             >
-              <p className="text-sm font-medium">
-                {`${c.first_name ?? ""} ${c.last_name ?? ""}`.trim() ||
-                  `Contact #${c.id}`}
-                {c.relationship ? (
-                  <span className="ml-2 text-xs font-normal text-muted-foreground">
-                    · {c.relationship}
-                  </span>
-                ) : null}
-              </p>
+              <div className="flex items-start justify-between gap-2">
+                <p className="text-sm font-medium">
+                  {`${c.first_name ?? ""} ${c.last_name ?? ""}`.trim() ||
+                    `Contact #${c.id}`}
+                  {c.relationship ? (
+                    <span className="ml-2 text-xs font-normal text-muted-foreground">
+                      · {c.relationship}
+                    </span>
+                  ) : null}
+                </p>
+                {/* Per-row edit affordance — opens the shared
+                    Dialog in edit mode with this row's values
+                    pre-populated. Pencil icon (no label) keeps the
+                    card compact; the click-target is wide enough
+                    to be easy to hit without a label. */}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setEditTarget(c)}
+                  className="bg-white shrink-0"
+                  aria-label={`Edit ${c.first_name ?? ""} ${c.last_name ?? ""}`.trim() || "Edit contact"}
+                >
+                  <Pencil className="size-3.5" />
+                  <span className="ml-1.5">Edit</span>
+                </Button>
+              </div>
               <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
                 <DisabledField label="Email" value={c.email} type="email" />
                 <DisabledField label="Phone" value={c.phone} />
@@ -1827,6 +2171,359 @@ function FilePreviewRow({
  * Filenames truncate via CSS so the full name is always available
  * via the `title` tooltip and reflows on resize.
  */
+/**
+ * Document-verification table for the four required documents on a
+ * student row. One row per document with the uploaded files +
+ * status + a per-doc Verify/Undo button. The button PATCHes the
+ * student row via `/api/admin/students/[id]` with the matching
+ * `*_admin_confirm` bool; the route auto-stamps the audit pair
+ * (`*_admin_confirm_time` / `*_admin_confirm_admin`).
+ *
+ * Mirrors the apply-flow Documents-to-Review block in shape: each
+ * doc lives in its own row with the same Verify-then-Undo
+ * affordance pattern admin already knows from financial-aid doc
+ * verification.
+ *
+ * The Verify button is disabled when no files are uploaded — admin
+ * shouldn't be able to mark a doc verified that doesn't exist on
+ * file. Undo flow is a single click (no AlertDialog) because
+ * un-verifying a single doc is low-stakes — admin can re-verify
+ * immediately if it was a mistake.
+ */
+function RequiredDocumentsTable({
+  row,
+  onChanged,
+}: {
+  row: AdminFamilyRegistrationStudentRow;
+  onChanged: () => void;
+}) {
+  // Inline state for which document is mid-PATCH so the spinner
+  // shows on just the affected row's button. Keyed by the doc
+  // bool's column name so the switch below stays mechanical.
+  const [savingDoc, setSavingDoc] = useState<
+    | "birth_certificate_admin_confirm"
+    | "school_health_form_admin_confirm"
+    | "transcripts_admin_confirm"
+    | "immunization_admin_confirm"
+    | null
+  >(null);
+
+  type DocSpec = {
+    /** Display name in the table. */
+    label: string;
+    /** Files attached on the student row. */
+    files: Record<string, unknown>[];
+    /** Current confirm state + audit. */
+    confirm: {
+      confirmed: boolean;
+      confirmed_time: number | null;
+      confirmed_admin: string;
+    };
+    /** Bool column on the student row that the Verify button flips. */
+    confirmKey:
+      | "birth_certificate_admin_confirm"
+      | "school_health_form_admin_confirm"
+      | "transcripts_admin_confirm"
+      | "immunization_admin_confirm";
+  };
+
+  const docs: DocSpec[] = [
+    {
+      label: "Birth Certificate",
+      files: row.student_documents.birth_certificate,
+      confirm: row.document_confirms.birth_certificate,
+      confirmKey: "birth_certificate_admin_confirm",
+    },
+    {
+      label: "School Health Form",
+      files: row.student_documents.school_health_form,
+      confirm: row.document_confirms.school_health_form,
+      confirmKey: "school_health_form_admin_confirm",
+    },
+    {
+      label: "Transcripts",
+      files: row.student_documents.transcripts,
+      confirm: row.document_confirms.transcripts,
+      confirmKey: "transcripts_admin_confirm",
+    },
+    {
+      label: "Immunization Forms",
+      files: row.student_documents.immunization_forms,
+      confirm: row.document_confirms.immunization_forms,
+      confirmKey: "immunization_admin_confirm",
+    },
+  ];
+
+  async function toggleDoc(doc: DocSpec, next: boolean) {
+    setSavingDoc(doc.confirmKey);
+    try {
+      const res = await fetch(`/api/admin/students/${row.student_id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ [doc.confirmKey]: next }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Update failed (${res.status})`);
+      }
+      toast.success(
+        next
+          ? `${doc.label} confirmed.`
+          : `${doc.label} confirmation cleared.`
+      );
+      onChanged();
+    } catch (err) {
+      console.error("[RequiredDocumentsTable.toggleDoc]", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't update.");
+    } finally {
+      setSavingDoc(null);
+    }
+  }
+
+  // X/Y CONFIRMED counter in the header strip — only counts docs
+  // that have files (a doc without files isn't "confirmable", so
+  // excluding them keeps the denominator honest).
+  const confirmableDocs = docs.filter((d) => d.files.length > 0);
+  const confirmedCount = confirmableDocs.filter(
+    (d) => d.confirm.confirmed
+  ).length;
+
+  return (
+    <div className="rounded-md border bg-muted/20 overflow-hidden">
+      {/* Header strip — pixel-aligned with the financial-aid
+          DocumentsToReviewBlock so admin reads both surfaces with
+          the same visual vocabulary. Counter on the right tracks
+          confirmed / total uploaded. */}
+      <div className="px-4 py-2 border-b bg-muted/40 flex items-center justify-between gap-2">
+        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Documents to Review
+        </p>
+        {confirmableDocs.length > 0 ? (
+          <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+            {confirmedCount}/{confirmableDocs.length} confirmed
+          </span>
+        ) : null}
+      </div>
+      <Table className="text-sm table-fixed">
+        <TableHeader>
+          <TableRow className="hover:bg-transparent">
+            <TableHead className="w-[28%] text-[10px] uppercase tracking-wider text-muted-foreground">
+              Document
+            </TableHead>
+            <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              File(s)
+            </TableHead>
+            <TableHead className="w-[15%] text-[10px] uppercase tracking-wider text-muted-foreground">
+              Confirmed by
+            </TableHead>
+            <TableHead className="w-[80px] text-[10px] uppercase tracking-wider text-muted-foreground">
+              Time
+            </TableHead>
+            <TableHead className="w-[170px] text-right text-[10px] uppercase tracking-wider text-muted-foreground">
+              Confirmation
+            </TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {docs.map((doc) => {
+            const hasFiles = doc.files.length > 0;
+            const confirmed = doc.confirm.confirmed;
+            const saving = savingDoc === doc.confirmKey;
+            // Confirmed-by string. Treat "0" as the unset sentinel
+            // — Xano left the original int default behind when the
+            // text column was added, so legacy rows come back as
+            // the literal string "0" rather than "".
+            const confirmedByName = (() => {
+              if (!confirmed) return null;
+              const name = doc.confirm.confirmed_admin?.trim();
+              if (!name || name === "0") return null;
+              return name;
+            })();
+            const confirmedWhen = confirmed && doc.confirm.confirmed_time
+              ? formatRelativeShort(doc.confirm.confirmed_time)
+              : null;
+            const confirmedWhenLong =
+              confirmed && doc.confirm.confirmed_time
+                ? formatNoteTimestamp(doc.confirm.confirmed_time)
+                : null;
+            return (
+              <TableRow
+                key={doc.confirmKey}
+                className={cn(
+                  confirmed ? "bg-emerald-50/40 hover:bg-emerald-50/60" : ""
+                )}
+              >
+                <TableCell className="align-middle">
+                  <p
+                    className="text-sm font-medium truncate"
+                    title={doc.label}
+                  >
+                    {doc.label}
+                  </p>
+                </TableCell>
+                <TableCell className="align-middle">
+                  {hasFiles ? (
+                    <ul className="space-y-1">
+                      {doc.files.map((f, idx) => (
+                        <RequiredDocFileLink
+                          key={`${doc.confirmKey}-${idx}`}
+                          file={f}
+                          fallbackIndex={idx}
+                        />
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-[11px] italic text-muted-foreground">
+                      No file uploaded.
+                    </p>
+                  )}
+                </TableCell>
+                <TableCell className="align-middle">
+                  {confirmedByName ? (
+                    <p
+                      className="text-sm text-muted-foreground truncate"
+                      title={confirmedByName}
+                    >
+                      {confirmedByName}
+                    </p>
+                  ) : (
+                    <span className="text-xs text-muted-foreground/70">
+                      —
+                    </span>
+                  )}
+                </TableCell>
+                <TableCell className="align-middle">
+                  {confirmedWhen ? (
+                    <p
+                      className="text-sm text-muted-foreground truncate tabular-nums"
+                      title={confirmedWhenLong ?? confirmedWhen}
+                    >
+                      {confirmedWhen}
+                    </p>
+                  ) : (
+                    <span className="text-xs text-muted-foreground/70">
+                      —
+                    </span>
+                  )}
+                </TableCell>
+                <TableCell className="text-right align-middle">
+                  {/* Mark Confirmed (primary, becomes emerald-filled
+                      once confirmed) + Undo icon button. Same pair
+                      the financial-aid table uses so admin doesn't
+                      have to learn a new affordance shape here. */}
+                  <div className="inline-flex items-center gap-1">
+                    <Button
+                      type="button"
+                      variant={confirmed ? "default" : "outline"}
+                      size="sm"
+                      disabled={saving || confirmed || !hasFiles}
+                      onClick={() => void toggleDoc(doc, true)}
+                      className={cn(
+                        "h-7 text-xs leading-none",
+                        confirmed &&
+                          "bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-100",
+                        !confirmed && "bg-white"
+                      )}
+                      title={
+                        confirmed
+                          ? "Already confirmed — use the Undo button to clear"
+                          : hasFiles
+                            ? `Mark ${doc.label} as reviewed`
+                            : "Upload the document before confirming"
+                      }
+                    >
+                      {saving && !confirmed ? (
+                        <Loader2 className="size-3 animate-spin" />
+                      ) : confirmed ? (
+                        <CheckCircle2 className="size-3" />
+                      ) : (
+                        <Circle className="size-3" />
+                      )}
+                      <span>{confirmed ? "Confirmed" : "Mark confirmed"}</span>
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      className="size-7 bg-white"
+                      disabled={saving || !confirmed}
+                      onClick={() => void toggleDoc(doc, false)}
+                      title={
+                        confirmed ? "Undo this confirmation" : "Nothing to undo"
+                      }
+                      aria-label={
+                        confirmed
+                          ? "Undo confirmation"
+                          : "Undo (disabled — nothing to undo)"
+                      }
+                    >
+                      {saving && confirmed ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : (
+                        <RotateCcw className="size-3.5" />
+                      )}
+                    </Button>
+                  </div>
+                </TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
+    </div>
+  );
+}
+
+/** Single file-link list item for the required-documents table.
+ *  Inline because this page already has `fileViewUrl` defined; we
+ *  just render the filename with an external-link icon + size
+ *  suffix so the cell matches the financial-aid Documents to
+ *  Review row exactly. */
+function RequiredDocFileLink({
+  file,
+  fallbackIndex,
+}: {
+  file: Record<string, unknown>;
+  fallbackIndex: number;
+}) {
+  const name =
+    typeof (file as { name?: unknown }).name === "string"
+      ? (file as { name: string }).name
+      : typeof (file as { path?: unknown }).path === "string"
+        ? (file as { path: string }).path
+        : `File ${fallbackIndex + 1}`;
+  const size = (file as { size?: unknown }).size;
+  const sizeKb =
+    typeof size === "number" ? `${(size / 1024).toFixed(0)} KB` : null;
+  const href = fileViewUrl(file);
+  return (
+    <li className="flex items-center gap-2 text-sm min-w-0">
+      <FileText className="size-3.5 shrink-0 text-muted-foreground" />
+      {href ? (
+        <a
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={name}
+          className="text-foreground underline-offset-2 hover:underline inline-flex items-center gap-1 min-w-0 flex-1"
+        >
+          <span className="truncate min-w-0">{name}</span>
+          <ExternalLink className="size-3 shrink-0 text-muted-foreground" />
+        </a>
+      ) : (
+        <span className="truncate min-w-0 flex-1" title={name}>
+          {name}
+        </span>
+      )}
+      {sizeKb ? (
+        <span className="text-xs text-muted-foreground shrink-0 whitespace-nowrap">
+          · {sizeKb}
+        </span>
+      ) : null}
+    </li>
+  );
+}
+
 function FilePreviewGroup({
   label,
   files,
@@ -1986,4 +2683,970 @@ function formatChoice(
   if (exact) return exact;
   const ci = options.find((o) => o.toLowerCase() === value.toLowerCase());
   return ci ?? value;
+}
+
+/* ─────────────────────── Emergency contact dialog ─────────────────────── */
+
+/**
+ * Shared Dialog for both adding and editing an emergency contact.
+ * Two modes:
+ *   - `mode="add"` — renders a trigger button ("Add contact") that
+ *     opens the dialog with empty fields. POSTs to
+ *     `/api/admin/emergency-contacts` on save.
+ *   - `mode="edit"` — controlled by the parent (no trigger button
+ *     rendered). Parent passes `existing` for the pre-populated
+ *     fields and `onClose` to dismiss. PATCHes
+ *     `/api/admin/emergency-contacts/[id]` on save.
+ *
+ * Splitting modes into a single component keeps the form layout in
+ * one place — the only difference is the initial state + the
+ * endpoint hit on submit.
+ */
+type EmergencyContactDialogProps = {
+  familyId: number;
+  onSaved: () => void;
+} & (
+  | { mode: "add"; existing?: undefined; open?: undefined; onClose?: undefined }
+  | {
+      mode: "edit";
+      existing: XanoEmergencyContact;
+      open: boolean;
+      onClose: () => void;
+    }
+);
+function EmergencyContactDialogButton(props: EmergencyContactDialogProps) {
+  const { mode, familyId, onSaved } = props;
+  // Add mode owns its own open state (the trigger button toggles
+  // it). Edit mode is controlled by the parent — when `props.open`
+  // is true the dialog is mounted, when the parent calls `onClose`
+  // it dismisses.
+  const [addOpen, setAddOpen] = useState(false);
+  const open = mode === "edit" ? props.open : addOpen;
+  const setOpen = (next: boolean) => {
+    if (mode === "edit") {
+      if (!next) props.onClose();
+    } else {
+      setAddOpen(next);
+    }
+  };
+
+  const [saving, setSaving] = useState(false);
+  const initial =
+    mode === "edit" && props.existing
+      ? {
+          firstName: props.existing.first_name ?? "",
+          lastName: props.existing.last_name ?? "",
+          relationship: props.existing.relationship ?? "",
+          email: props.existing.email ?? "",
+          phone: props.existing.phone ?? "",
+          address1: props.existing.address_line_1 ?? "",
+          city: props.existing.city ?? "",
+          state: props.existing.state ?? "",
+          zip: props.existing.zipcode ?? "",
+        }
+      : {
+          firstName: "",
+          lastName: "",
+          relationship: "",
+          email: "",
+          phone: "",
+          address1: "",
+          city: "",
+          state: "",
+          zip: "",
+        };
+  const [firstName, setFirstName] = useState(initial.firstName);
+  const [lastName, setLastName] = useState(initial.lastName);
+  const [relationship, setRelationship] = useState(initial.relationship);
+  const [email, setEmail] = useState(initial.email);
+  const [phone, setPhone] = useState(initial.phone);
+  const [address1, setAddress1] = useState(initial.address1);
+  const [city, setCity] = useState(initial.city);
+  const [state, setState] = useState(initial.state);
+  const [zip, setZip] = useState(initial.zip);
+
+  function resetForm() {
+    setFirstName("");
+    setLastName("");
+    setRelationship("");
+    setEmail("");
+    setPhone("");
+    setAddress1("");
+    setCity("");
+    setState("");
+    setZip("");
+  }
+
+  async function runSave() {
+    setSaving(true);
+    try {
+      const payload = {
+        first_name: firstName.trim(),
+        last_name: lastName.trim(),
+        relationship: relationship.trim(),
+        email: email.trim(),
+        phone: phone.trim(),
+        address_line_1: address1.trim(),
+        city: city.trim(),
+        state: state.trim(),
+        zipcode: zip.trim(),
+      };
+      const url =
+        mode === "edit"
+          ? `/api/admin/emergency-contacts/${props.existing.id}`
+          : `/api/admin/emergency-contacts`;
+      const method = mode === "edit" ? "PATCH" : "POST";
+      const body =
+        mode === "edit"
+          ? JSON.stringify(payload)
+          : JSON.stringify({ ...payload, familyId });
+      const res = await fetch(url, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body,
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(
+          errBody?.error ??
+            `${mode === "edit" ? "Couldn't save contact" : "Couldn't add contact"} (${res.status})`
+        );
+      }
+      toast.success(
+        mode === "edit"
+          ? "Emergency contact updated."
+          : "Emergency contact added."
+      );
+      if (mode === "add") {
+        setAddOpen(false);
+        resetForm();
+      }
+      onSaved();
+    } catch (err) {
+      console.error("[EmergencyContactDialogButton.runSave] failed:", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't save.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <>
+      {mode === "add" ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => setAddOpen(true)}
+          className="bg-white shrink-0"
+        >
+          <Plus className="size-3.5 mr-1.5" />
+          Add contact
+        </Button>
+      ) : null}
+      <Dialog
+        open={open}
+        onOpenChange={(next) => {
+          if (!next && !saving) {
+            setOpen(false);
+            if (mode === "add") resetForm();
+          } else if (next) {
+            setOpen(true);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {mode === "edit"
+                ? "Edit emergency contact"
+                : "Add emergency contact"}
+            </DialogTitle>
+            <DialogDescription>
+              {mode === "edit"
+                ? "Saves directly to the family."
+                : "Saves directly to the family. Fields you leave blank can be filled in later by the parent."}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
+              <Field>
+                <FieldLabel>First name</FieldLabel>
+                <Input
+                  value={firstName}
+                  onChange={(e) => setFirstName(e.target.value)}
+                  placeholder="Jane"
+                />
+              </Field>
+              <Field>
+                <FieldLabel>Last name</FieldLabel>
+                <Input
+                  value={lastName}
+                  onChange={(e) => setLastName(e.target.value)}
+                  placeholder="Doe"
+                />
+              </Field>
+            </div>
+            <Field>
+              <FieldLabel>Relationship</FieldLabel>
+              <Input
+                value={relationship}
+                onChange={(e) => setRelationship(e.target.value)}
+                placeholder="Aunt, Grandparent, Family friend…"
+              />
+            </Field>
+            <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
+              <Field>
+                <FieldLabel>Email</FieldLabel>
+                <Input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="name@example.com"
+                />
+              </Field>
+              <Field>
+                <FieldLabel>Phone</FieldLabel>
+                <PhoneInput value={phone} onChange={setPhone} />
+              </Field>
+            </div>
+            <Field>
+              <FieldLabel>Street address</FieldLabel>
+              <Input
+                value={address1}
+                onChange={(e) => setAddress1(e.target.value)}
+                placeholder="123 Main St"
+              />
+            </Field>
+            <div className="grid gap-3 grid-cols-3">
+              <Field>
+                <FieldLabel>City</FieldLabel>
+                <Input
+                  value={city}
+                  onChange={(e) => setCity(e.target.value)}
+                />
+              </Field>
+              <Field>
+                <FieldLabel>State</FieldLabel>
+                <Input
+                  value={state}
+                  onChange={(e) => setState(e.target.value)}
+                  maxLength={2}
+                />
+              </Field>
+              <Field>
+                <FieldLabel>Zip</FieldLabel>
+                <Input value={zip} onChange={(e) => setZip(e.target.value)} />
+              </Field>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={saving}
+              onClick={() => {
+                setOpen(false);
+                if (mode === "add") resetForm();
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={saving}
+              onClick={() => void runSave()}
+            >
+              {saving ? (
+                <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+              ) : mode === "edit" ? (
+                <Pencil className="size-3.5 mr-1.5" />
+              ) : (
+                <Plus className="size-3.5 mr-1.5" />
+              )}
+              {mode === "edit" ? "Save changes" : "Add contact"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+/* ─────────────────────── Revoke admission ─────────────────────── */
+
+/**
+ * Header-mounted "Revoke admission" affordance — wraps the
+ * destructive PATCH (`isAccepted = false` on the apply-flow's
+ * `family_application_progress` row) behind a warning modal so admin
+ * can't blow away an acceptance with a stray click.
+ *
+ * Lives on the registration detail page (rather than the apply-flow
+ * detail page where Acceptance lives) because admin reviewing the
+ * post-acceptance packets is the audience most likely to discover
+ * "this family should NOT be enrolled after all" — easier to action
+ * from the page they're already on than to bounce them back to the
+ * apply view to revoke.
+ *
+ * The PATCH targets `/api/admin/family-progress` which already
+ * supports `isAccepted: false` on its allowlist. Side-effects:
+ *   - The family drops out of the Accepted bucket on the
+ *     Applications list
+ *   - `isSubmitted` stays true (we don't auto-flip it back; the
+ *     application was still submitted, just not approved)
+ *   - The registration-side progress row is left alone — any
+ *     section verifies admin has already done stay intact in case
+ *     this is a temporary revoke
+ *
+ * `acceptedAtAll` decides whether to render the button: families
+ * who were never accepted (no progress row) don't need the
+ * affordance.
+ */
+function RevokeAdmissionButton({
+  familyId,
+  yearId,
+  familyName,
+  acceptedAtAll,
+  onRevoked,
+}: {
+  familyId: number;
+  yearId: number;
+  familyName: string;
+  /** Whether there's any apply-flow progress row for this (family,
+   *  year) at all. The PATCH route resolves-or-creates a row, so the
+   *  call would technically succeed for any family, but rendering
+   *  the button on a never-accepted family is just visual noise. */
+  acceptedAtAll: boolean;
+  onRevoked: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  async function runRevoke() {
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/admin/family-progress`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ familyId, yearId, isAccepted: false }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Revoke failed (${res.status})`);
+      }
+      toast.success(`Admission revoked for ${familyName || "family"}.`);
+      setOpen(false);
+      onRevoked();
+    } catch (err) {
+      console.error("[RevokeAdmissionButton.runRevoke] failed:", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't revoke.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!acceptedAtAll) return null;
+
+  return (
+    <>
+      <Button
+        type="button"
+        variant="outline"
+        size="lg"
+        disabled={saving}
+        onClick={() => setOpen(true)}
+        className="bg-white text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700 w-full"
+      >
+        {/* ArrowLeft reads as "send this family back to the
+            apply-flow" — they were accepted, this returns them to
+            the queue. Pairs visually with the Archive icon to the
+            left and the forward-motion Confirm icon to the
+            right. */}
+        <ArrowLeft className="size-4 mr-1.5" />
+        Revoke admission
+      </Button>
+
+      <AlertDialog
+        open={open}
+        onOpenChange={(next) => {
+          if (!next && !saving) setOpen(next);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Revoke admission for {familyName || "family"}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              The family drops out of the Accepted queue and loses
+              access to tuition, enrollment, and registration until
+              you approve them again. Any section verifies already
+              recorded on this registration packet stay intact in case
+              this revoke is temporary; the family&rsquo;s underlying
+              application data is preserved.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={saving}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={saving}
+              className="bg-red-600 hover:bg-red-700 text-white"
+              onClick={(e) => {
+                e.preventDefault();
+                void runRevoke();
+              }}
+            >
+              {saving ? (
+                <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+              ) : null}
+              Yes, revoke
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
+}
+
+/* ─────────────────────── Family registration confirmation ─────────────────────── */
+
+/**
+ * Family Registration Confirmation card — pinned to the TOP of the
+ * registration page. Mirrors the Acceptance card on the apply-flow
+ * family detail page in spirit: it's the final "this family is
+ * fully registered for the year" rollup, distinct from the parent-
+ * side `isSubmitted` flag (parent's own submit click) and from the
+ * per-section verifies / per-student packet confirmations below.
+ *
+ * Body is a table view of every active student in the family —
+ * admin sees the cohort + packet-confirmation state at a glance
+ * without having to scroll into the per-student packet section
+ * below. The earlier two-column "Sections Verified / Student
+ * Packets Confirmed" checklist was removed because it duplicated
+ * the per-section dot rendering downstream; the gate-reason
+ * caption in the header carries the same information for blocked
+ * states.
+ *
+ * Footer is a single inline action row: Revoke admission, View
+ * application, Archive, Confirm Family Registration. Buttons share
+ * the row so admin's family-level actions all live in one place.
+ * Truncates text when the row gets cramped. Once the family is
+ * confirmed, Confirm collapses to a Confirmed pill + Undo button.
+ *
+ * Two PATCH targets:
+ *   - `/api/admin/family-progress` — `isAccepted: false` for
+ *     Revoke (lives on the apply-flow progress row)
+ *   - `/api/admin/registration-progress` —
+ *     `isRegistrationConfirmed` / `isArchived` (registration-side
+ *     progress row)
+ */
+function FamilyRegistrationConfirmationCard({
+  familyId,
+  yearId,
+  familyName,
+  progress,
+  students,
+  onConfirmed,
+}: {
+  familyId: number;
+  yearId: number;
+  familyName: string;
+  progress: XanoStudentRegistrationProgress | null;
+  students: AdminFamilyRegistrationStudentRow[];
+  onConfirmed: () => void;
+}) {
+  const [saving, setSaving] = useState(false);
+  const [undoOpen, setUndoOpen] = useState(false);
+
+  const confirmed = progress?.isRegistrationConfirmed === true;
+  const archived = progress?.isArchived === true;
+  const confirmedTime = progress?.registration_confirmed_time ?? null;
+  const confirmedByName =
+    progress?.registration_confirmed_admin?.trim() || null;
+
+  // Section-verify checklist drives the gate-reason caption only
+  // (the visual checklist is gone — its information is duplicated
+  // by the dots on each section card below). Same shape as before
+  // so the gate reason logic doesn't have to change.
+  const sectionChecklist: Array<{ label: string; verified: boolean }> = [
+    {
+      label: "Tuition",
+      verified: progress?.tuition_admin_confirm === true,
+    },
+    {
+      label: "Enrollment Agreement",
+      verified: progress?.enrollment_admin_confirm === true,
+    },
+    {
+      label: "Volunteer Hours",
+      verified: progress?.volunteer_admin_confirm === true,
+    },
+    {
+      label: "Emergency Contacts",
+      verified: progress?.emergency_contacts_admin_confirm === true,
+    },
+  ];
+
+  // Per-student packet checklist — each active student must have a
+  // packet AND it must be `registrationConfirmed`.
+  const studentChecklist = students.map((s) => ({
+    name: s.student_full_name || `Student #${s.student_id}`,
+    confirmed: s.packet?.registrationConfirmed === true,
+  }));
+
+  const allSectionsVerified = sectionChecklist.every((s) => s.verified);
+  const allStudentsConfirmed =
+    studentChecklist.length > 0 &&
+    studentChecklist.every((s) => s.confirmed);
+  const canConfirm = allSectionsVerified && allStudentsConfirmed;
+
+  // Reason string for the gated state — admin sees what's blocking
+  // the confirm without having to hover or scroll up.
+  const gateReason = (() => {
+    if (canConfirm) return null;
+    const missingSections = sectionChecklist
+      .filter((s) => !s.verified)
+      .map((s) => s.label);
+    const missingStudents = studentChecklist
+      .filter((s) => !s.confirmed)
+      .map((s) => s.name);
+    if (studentChecklist.length === 0) {
+      return "No active students for this year.";
+    }
+    if (missingSections.length > 0 && missingStudents.length > 0) {
+      return `Verify ${missingSections.join(", ")} and confirm packets for ${missingStudents.join(", ")} first.`;
+    }
+    if (missingSections.length > 0) {
+      return `Verify ${missingSections.join(", ")} first.`;
+    }
+    if (missingStudents.length > 0) {
+      return `Confirm packets for ${missingStudents.join(", ")} first.`;
+    }
+    return null;
+  })();
+
+  async function patchConfirmed(next: boolean) {
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/admin/registration-progress`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          familyId,
+          yearId,
+          isRegistrationConfirmed: next,
+        }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Update failed (${res.status})`);
+      }
+      toast.success(
+        next
+          ? `${familyName || "Family"} registration confirmed.`
+          : "Confirmation cleared."
+      );
+      if (!next) setUndoOpen(false);
+      onConfirmed();
+    } catch (err) {
+      console.error("[FamilyRegistrationConfirmationCard.patch] failed:", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't update.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card
+      id="section-confirmation"
+      className="overflow-hidden gap-0 py-0 bg-white scroll-mt-20"
+    >
+      <CardHeader className="py-3 !pb-3 border-b">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 min-w-0">
+            <span
+              className={cn(
+                "inline-block size-2.5 rounded-full shrink-0",
+                confirmed
+                  ? "bg-green-500"
+                  : canConfirm
+                    ? "bg-amber-500"
+                    : "bg-muted-foreground/30"
+              )}
+              aria-label={
+                confirmed
+                  ? "Confirmed"
+                  : canConfirm
+                    ? "Ready to confirm"
+                    : "Awaiting prerequisites"
+              }
+              title={
+                confirmed
+                  ? "Confirmed"
+                  : canConfirm
+                    ? "Ready to confirm"
+                    : "Awaiting prerequisites"
+              }
+            />
+            <CardTitle className="text-base truncate">
+              Family Registration Confirmation
+            </CardTitle>
+            {confirmed ? (
+              <span className="ml-1 inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-800">
+                <CheckCircle2 className="size-2.5" />
+                Confirmed
+              </span>
+            ) : null}
+            {archived ? (
+              <span className="ml-1 inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-slate-600">
+                Archived
+              </span>
+            ) : null}
+          </div>
+          {/* Gate-reason caption pinned to the right of the header
+              (same pattern as the Acceptance card). Stays out of
+              the footer so the action row reads as just the
+              action row. */}
+          {!confirmed && gateReason ? (
+            <span className="text-xs text-muted-foreground truncate text-right shrink-0">
+              {gateReason}
+            </span>
+          ) : null}
+        </div>
+      </CardHeader>
+      {/* Body: table view of every active student in the family.
+          Replaces the prior two-column "Sections Verified / Student
+          Packets Confirmed" checklist — that information lives on
+          the per-section dots below, so duplicating it here was
+          just noise. The table surfaces packet-confirmation state
+          per student so admin doesn't have to scroll into the
+          Registration Packet section to scan it. */}
+      <CardContent className="py-4 bg-white">
+        {students.length === 0 ? (
+          <p className="text-sm italic text-muted-foreground">
+            No active students for this year.
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  <th className="py-2 pr-3 font-semibold">Student</th>
+                  <th className="py-2 pr-3 font-semibold">Grade</th>
+                  <th className="py-2 pr-3 font-semibold">DOB</th>
+                  <th className="py-2 pr-3 font-semibold">Packet</th>
+                  <th className="py-2 font-semibold">Verified by</th>
+                </tr>
+              </thead>
+              <tbody>
+                {students.map((s) => {
+                  const packetExists = s.packet != null;
+                  const packetVerified = s.is_verified === true;
+                  const verifiedByName =
+                    s.is_admin_verified_admin?.trim() || null;
+                  return (
+                    <tr key={s.student_id} className="border-b last:border-0">
+                      <td className="py-2 pr-3 align-middle font-medium truncate">
+                        {s.student_full_name ||
+                          `${s.student_first_name} ${s.student_last_name}`.trim() ||
+                          "—"}
+                      </td>
+                      <td className="py-2 pr-3 align-middle truncate text-muted-foreground">
+                        {s.student_grade || "—"}
+                      </td>
+                      <td className="py-2 pr-3 align-middle truncate text-muted-foreground">
+                        {s.student_date_of_birth || "—"}
+                      </td>
+                      <td className="py-2 pr-3 align-middle">
+                        {packetVerified ? (
+                          <span className="inline-flex items-center gap-1 text-green-700">
+                            <CheckCircle2 className="size-3.5" />
+                            Confirmed
+                          </span>
+                        ) : packetExists ? (
+                          <span className="inline-flex items-center gap-1 text-amber-700">
+                            <SquarePen className="size-3.5" />
+                            Pending
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-muted-foreground">
+                            <SquarePen className="size-3.5" />
+                            No packet
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-2 align-middle truncate text-muted-foreground">
+                        {verifiedByName ?? "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+      {/* Footer — three buttons share the row equally (`flex-1`
+          on each), left-to-right: Archive (the soft-delete escape
+          hatch) → Revoke admission (the destructive "send this
+          family back to the apply-flow" action, rendered with a
+          back-arrow icon to read as a directional "step
+          backward") → Confirm Family Registration (the primary
+          forward action). Equal-width buttons make the row read
+          as one decision surface — no visual hierarchy hint that
+          one action is more important than another. The audit
+          caption ("Confirmed by … · 2h") moves above the row when
+          present so the buttons keep their full width. */}
+      <div className="border-t bg-white px-5 py-3 space-y-2">
+        {confirmed ? (
+          <p className="text-xs text-muted-foreground truncate">
+            {confirmedByName ? (
+              <>
+                Confirmed by{" "}
+                <span className="font-medium text-foreground">
+                  {confirmedByName}
+                </span>
+              </>
+            ) : (
+              "Confirmed"
+            )}
+            {confirmedTime ? (
+              <span> · {formatNoteTimestamp(confirmedTime)}</span>
+            ) : null}
+          </p>
+        ) : null}
+        <div
+          className={cn(
+            "grid gap-2",
+            // Pre-confirm: Archive / Revoke / Confirm. Post-confirm
+            // the Confirm slot splits into a muted "Registration
+            // Confirmed" pill + an Undo button, so we widen the
+            // grid to 4 cells so everything keeps full-width.
+            confirmed ? "grid-cols-4" : "grid-cols-3"
+          )}
+        >
+          <ArchiveRegistrationButton
+            familyId={familyId}
+            yearId={yearId}
+            familyName={familyName}
+            archived={archived}
+            onChanged={onConfirmed}
+          />
+          <RevokeAdmissionButton
+            familyId={familyId}
+            yearId={yearId}
+            familyName={familyName}
+            acceptedAtAll={progress !== null}
+            onRevoked={onConfirmed}
+          />
+          {confirmed ? (
+            <>
+              <Button
+                type="button"
+                variant="outline"
+                size="lg"
+                disabled
+                className="bg-muted text-muted-foreground cursor-default disabled:opacity-100 w-full"
+              >
+                <CheckCircle2 className="size-4 mr-1.5 shrink-0" />
+                <span className="truncate">Registration Confirmed</span>
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="lg"
+                onClick={() => setUndoOpen(true)}
+                disabled={saving}
+                className="bg-white w-full"
+              >
+                {saving ? (
+                  <Loader2 className="size-4 mr-1.5 animate-spin shrink-0" />
+                ) : (
+                  <Undo2 className="size-4 mr-1.5 shrink-0" />
+                )}
+                <span className="truncate">Undo</span>
+              </Button>
+              <AlertDialog open={undoOpen} onOpenChange={setUndoOpen}>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>
+                      Undo {familyName || "family"} registration
+                      confirmation?
+                    </AlertDialogTitle>
+                    <AlertDialogDescription>
+                      This clears the family-level registration
+                      latch. Per-section verifies and per-student
+                      packet confirmations stay intact — only the
+                      rollup audit is cleared. You can re-confirm at
+                      any time.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel disabled={saving}>
+                      Cancel
+                    </AlertDialogCancel>
+                    <AlertDialogAction
+                      disabled={saving}
+                      className="bg-amber-600 hover:bg-amber-700 text-white"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        void patchConfirmed(false);
+                      }}
+                    >
+                      {saving ? (
+                        <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                      ) : null}
+                      Yes, undo
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </>
+          ) : (
+            <Button
+              type="button"
+              variant="default"
+              size="lg"
+              onClick={() => void patchConfirmed(true)}
+              disabled={saving || !canConfirm}
+              title={!canConfirm && gateReason ? gateReason : undefined}
+              className="bg-green-600 hover:bg-green-700 text-white w-full"
+            >
+              {saving ? (
+                <Loader2 className="size-4 mr-1.5 animate-spin shrink-0" />
+              ) : (
+                <CheckCircle2 className="size-4 mr-1.5 shrink-0" />
+              )}
+              <span className="truncate">
+                Confirm {familyName || "Family"} Registration
+              </span>
+            </Button>
+          )}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+/* ─────────────────────── Archive registration ─────────────────────── */
+
+/**
+ * Toggle the family's registration-progress `isArchived` flag.
+ * Renders as either "Archive registration" (when active) or
+ * "Unarchive" (when already archived) — same button, opposite
+ * action — so admin has a reversible affordance for both
+ * directions. Both transitions are wrapped in a warning modal
+ * because archiving silently disappears the row from the active
+ * Registrations queues and admin should mean to do it.
+ */
+function ArchiveRegistrationButton({
+  familyId,
+  yearId,
+  familyName,
+  archived,
+  onChanged,
+}: {
+  familyId: number;
+  yearId: number;
+  familyName: string;
+  archived: boolean;
+  onChanged: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  async function runArchive() {
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/admin/registration-progress`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          familyId,
+          yearId,
+          isArchived: !archived,
+        }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Update failed (${res.status})`);
+      }
+      toast.success(
+        archived
+          ? `${familyName || "Family"} unarchived.`
+          : `${familyName || "Family"} archived.`
+      );
+      setOpen(false);
+      onChanged();
+    } catch (err) {
+      console.error("[ArchiveRegistrationButton.runArchive] failed:", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't update.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <>
+      <Button
+        type="button"
+        variant="outline"
+        size="lg"
+        disabled={saving}
+        onClick={() => setOpen(true)}
+        className="bg-white w-full"
+      >
+        {saving ? (
+          <Loader2 className="size-4 mr-1.5 animate-spin shrink-0" />
+        ) : (
+          <ArchiveIcon className="size-4 mr-1.5 shrink-0" />
+        )}
+        <span className="truncate">
+          {archived ? "Unarchive" : "Archive"}
+        </span>
+      </Button>
+      <AlertDialog
+        open={open}
+        onOpenChange={(next) => {
+          if (!next && !saving) setOpen(next);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {archived
+                ? `Unarchive ${familyName || "family"}?`
+                : `Archive ${familyName || "family"} registration?`}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {archived
+                ? "The family returns to the active Registrations queues. No data changes — this just clears the archive flag."
+                : "The family drops out of the active Registrations queues. Uploaded packet data, signatures, and verifies stay intact in case the archive is temporary. You can unarchive from this same button later."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={saving}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={saving}
+              className={cn(
+                archived
+                  ? "bg-amber-600 hover:bg-amber-700"
+                  : "bg-slate-600 hover:bg-slate-700",
+                "text-white"
+              )}
+              onClick={(e) => {
+                e.preventDefault();
+                void runArchive();
+              }}
+            >
+              {saving ? (
+                <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+              ) : null}
+              {archived ? "Yes, unarchive" : "Yes, archive"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
 }

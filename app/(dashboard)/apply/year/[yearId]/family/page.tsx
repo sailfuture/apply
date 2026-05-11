@@ -6,6 +6,7 @@ import { useUser } from "@clerk/nextjs";
 import { useApplicationFlow } from "@/contexts/application-flow-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PhoneInput } from "@/components/ui/phone-input";
 import {
   Card,
   CardHeader,
@@ -611,18 +612,23 @@ export default function FamilyStepPage() {
                       <Field>
                         <FieldLabel className="text-xs">
                           Phone                        </FieldLabel>
-                        <Input
+                        <PhoneInput
                           className={!parent.phone ? "border-2 border-red-400" : ""}
-                          placeholder="(555) 555-5555"
                           value={parent.phone || ""}
                           autoComplete="tel"
-                          type="tel"
-                          onChange={(e) =>
-                            updateParentLocal(parent.id, "phone", e.target.value)
+                          onChange={(d) =>
+                            updateParentLocal(parent.id, "phone", d)
                           }
-                          onBlur={(e) =>
-                            saveParentField(parent.id, "phone", e.target.value)
-                          }
+                          onValidate={(result) => {
+                            // Only persist valid (or empty) values so we
+                            // don't write a partially-typed number back
+                            // to Xano on blur. Invalid input stays in
+                            // the local UI state with the inline error
+                            // caption rendered under the input.
+                            if (result.valid) {
+                              saveParentField(parent.id, "phone", result.digits);
+                            }
+                          }}
                         />
                       </Field>
                       <Field>

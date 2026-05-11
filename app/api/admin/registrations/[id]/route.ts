@@ -148,9 +148,12 @@ export async function GET(
     // only — Xano isn't written from here. This is a read-side
     // shim; the durable fix lives on the Approve flow's dual-write.
     if (progress && familyPayment) {
+      // `monthly_tuition_payment` on the legacy row is nullable now
+      // (pre-acceptance rows carry null). Narrow before comparing.
       if (
         (!progress.monthly_tuition_payment ||
           progress.monthly_tuition_payment === 0) &&
+        typeof familyPayment.monthly_tuition_payment === "number" &&
         familyPayment.monthly_tuition_payment > 0
       ) {
         progress.monthly_tuition_payment =
@@ -244,6 +247,41 @@ export async function GET(
             immunization_forms: normalizeFileArray(student?.immunization_forms),
             passport: normalizeFileArray(student?.passport),
             student_state_id: normalizeFileArray(student?.student_state_id),
+          },
+          // Per-document admin-confirm state. Live on the student
+          // row (added against the `2GcBXyoA` admin group). Optional
+          // on `XanoStudent` — legacy rows return `undefined` for
+          // these fields, which the UI reads as "not yet confirmed."
+          document_confirms: {
+            birth_certificate: {
+              confirmed: student?.birth_certificate_admin_confirm === true,
+              confirmed_time:
+                student?.birth_certificate_admin_confirm_time ?? null,
+              confirmed_admin:
+                student?.birth_certificate_admin_confirm_admin ?? "",
+            },
+            school_health_form: {
+              confirmed:
+                student?.school_health_form_admin_confirm === true,
+              confirmed_time:
+                student?.school_health_form_admin_confirm_time ?? null,
+              confirmed_admin:
+                student?.school_health_form_admin_confirm_admin ?? "",
+            },
+            transcripts: {
+              confirmed: student?.transcripts_admin_confirm === true,
+              confirmed_time:
+                student?.transcripts_admin_confirm_time ?? null,
+              confirmed_admin:
+                student?.transcripts_admin_confirm_admin ?? "",
+            },
+            immunization_forms: {
+              confirmed: student?.immunization_admin_confirm === true,
+              confirmed_time:
+                student?.immunization_admin_confirm_time ?? null,
+              confirmed_admin:
+                student?.immunization_admin_confirm_admin ?? "",
+            },
           },
           // Admin verification triplet — lives on the per-packet
           // `registration_student_registration` row (each year a
@@ -342,6 +380,34 @@ export interface AdminFamilyRegistrationStudentRow {
     immunization_forms: Record<string, unknown>[];
     passport: Record<string, unknown>[];
     student_state_id: Record<string, unknown>[];
+  };
+  /** Per-document admin-confirm state for the four required
+   *  documents. The bool is what the UI reads/writes; time + admin
+   *  name are auto-stamped server-side. Audit triplets live on the
+   *  student row in Xano (added against the `2GcBXyoA` admin
+   *  group). All three optional because legacy rows pre-date the
+   *  column add. */
+  document_confirms: {
+    birth_certificate: {
+      confirmed: boolean;
+      confirmed_time: number | null;
+      confirmed_admin: string;
+    };
+    school_health_form: {
+      confirmed: boolean;
+      confirmed_time: number | null;
+      confirmed_admin: string;
+    };
+    transcripts: {
+      confirmed: boolean;
+      confirmed_time: number | null;
+      confirmed_admin: string;
+    };
+    immunization_forms: {
+      confirmed: boolean;
+      confirmed_time: number | null;
+      confirmed_admin: string;
+    };
   };
   /** Admin verification triplet pulled from the student row. */
   is_verified: boolean;

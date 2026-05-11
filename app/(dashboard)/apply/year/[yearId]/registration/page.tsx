@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { PhoneInput } from "@/components/ui/phone-input";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
@@ -1714,11 +1715,10 @@ export default function RegistrationPage() {
                               </Field>
                               <Field>
                                 <FieldLabel className="text-xs">Phone</FieldLabel>
-                                <Input
+                                <PhoneInput
                                   className={!parent.phone ? "border-2 border-red-400" : ""}
-                                  placeholder="(555) 555-5555"
                                   value={parent.phone || ""}
-                                  onChange={(e) => updateParentLocal(parent.id, "phone", e.target.value)}
+                                  onChange={(d) => updateParentLocal(parent.id, "phone", d)}
                                 />
                               </Field>
                               <Field>
@@ -1923,13 +1923,11 @@ export default function RegistrationPage() {
                               </Field>
                               <Field>
                                 <FieldLabel className="text-xs">Phone</FieldLabel>
-                                <Input
+                                <PhoneInput
                                   className={!ec.phone ? "border-2 border-red-400" : ""}
-                                  placeholder="(555) 555-5555"
                                   value={ec.phone || ""}
-                                  type="tel"
                                   autoComplete="tel"
-                                  onChange={(e) => updateContactLocal(ec.id, "phone", e.target.value)}
+                                  onChange={(d) => updateContactLocal(ec.id, "phone", d)}
                                 />
                               </Field>
                             </div>

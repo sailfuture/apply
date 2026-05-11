@@ -301,13 +301,19 @@ export default function InquiriesPage() {
       ),
     },
     {
+      // Relative time for recent inquiries ("3 days ago"), falling
+      // back to an absolute date once the inquiry crosses the
+      // one-week mark. The relative form makes the freshest items
+      // pop visually so admin can triage them; older entries show
+      // the date so admin can still anchor them to a real day
+      // without doing the date math.
       key: "created_at",
       header: "Submitted",
       sortable: true,
       width: "w-[9%]",
       render: (row) => (
         <span className="block truncate">
-          {new Date(row.created_at).toLocaleDateString()}
+          {formatRelative(row.created_at)}
         </span>
       ),
     },

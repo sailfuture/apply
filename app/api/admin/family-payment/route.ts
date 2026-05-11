@@ -32,10 +32,19 @@ import { xano } from "@/lib/xano";
  *     student rows.
  *   - `transportation_total` (optional) — total transportation the
  *     family owes for the year. Pass `null` (explicit) for SNAP
- *     families to indicate transport is waived; pass a number for
- *     non-SNAP families (sum of per-student transport for students
- *     whose `is_bus_transportation=true`). Pass `0` (or omit) when
- *     no students elected bus transport but the family is not SNAP.
+ *     families to indicate transport is waived. **Omit otherwise**
+ *     — the route derives the total server-side by summing
+ *     `transportation_cost` across every active application for
+ *     the (family, year). Passing a number override is still
+ *     accepted for backwards-compat but discouraged; the
+ *     server-derived sum is authoritative because it can't drift
+ *     from a stale client cache.
+ *   - `sufs_total` (optional) — total SUFS scholarship dollars
+ *     awarded across every active student in the family for the
+ *     year. Sum of each application's `sufs_award_amount` (admin
+ *     captures these per-student during the Scholarship
+ *     Determination flow). Pass `null` when the family has no
+ *     SUFS scholarship on file; pass a number for the total.
  *   - `isFamilyAccepted` (optional, defaults to true) — usually
  *     called from the Approve flow so this is `true`; left
  *     pluggable for future surfaces that snapshot before approval.
@@ -49,6 +58,40 @@ import { xano } from "@/lib/xano";
  * tuition_reviewed, etc.) are owned by downstream surfaces and
  * stay at their defaults on first write.
  */
+/**
+ * Admin GET — read-only fetch of the family-payment snapshot for a
+ * given (family, year). Returns `null` when no row has been
+ * snapshotted yet (e.g. pre-acceptance families). Used by the
+ * print/export view to render the final receipt page without
+ * triggering the upsert side effect.
+ */
+export async function GET(req: NextRequest) {
+  try {
+    await requireAdmin();
+    const familyId = Number(req.nextUrl.searchParams.get("familyId"));
+    const yearId = Number(req.nextUrl.searchParams.get("yearId"));
+    if (!Number.isFinite(familyId) || familyId <= 0) {
+      return NextResponse.json(
+        { error: "familyId is required" },
+        { status: 400 }
+      );
+    }
+    if (!Number.isFinite(yearId) || yearId <= 0) {
+      return NextResponse.json(
+        { error: "yearId is required" },
+        { status: 400 }
+      );
+    }
+    const row = await xano.familyPayments.getByFamilyAndYear(
+      familyId,
+      yearId
+    );
+    return NextResponse.json(row);
+  } catch (err) {
+    return handleAdminError(err);
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
     await requireAdmin();
@@ -100,10 +143,22 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Transportation total resolution. Order of precedence:
+    //   1. If body explicitly passes `null` → write null (SNAP families
+    //      have transport waived; route preserves the explicit null so
+    //      downstream surfaces render "N/A" rather than "$0").
+    //   2. If body passes a number → use it (legacy client path; kept
+    //      so existing callers don't break).
+    //   3. Otherwise → server-derives the total by summing
+    //      `transportation_cost` across every active application on
+    //      this (family, year). The server is the source of truth so
+    //      admin can't snapshot a stale page-computed total — if the
+    //      Accept click happens with a stale SWR cache, the row still
+    //      lands with the current per-student amounts.
     const hasTransportTotal =
       body &&
       Object.prototype.hasOwnProperty.call(body, "transportation_total");
-    const transportationTotal: number | null | undefined = hasTransportTotal
+    let transportationTotal: number | null | undefined = hasTransportTotal
       ? body.transportation_total === null
         ? null
         : Number(body.transportation_total)
@@ -115,6 +170,52 @@ export async function POST(req: NextRequest) {
     ) {
       return NextResponse.json(
         { error: "transportation_total must be a number or null" },
+        { status: 400 }
+      );
+    }
+    if (transportationTotal === undefined) {
+      // Server-side derivation. Pull every application for this
+      // family, narrow to (yearId, isActive!==false, is_bus_transportation),
+      // then sum each app's `transportation_cost`. Apps without a
+      // `transportation_cost` value contribute 0 — the per-student
+      // edit form is what populates that column, so a missing value
+      // means admin hasn't priced the transport for that student
+      // yet and we don't want to silently assume a default.
+      const apps = await xano.applications.getByFamilyId(familyId);
+      const activeApps = apps.filter(
+        (a) =>
+          a.registration_school_years_id === yearId &&
+          (a as { isActive?: boolean }).isActive !== false
+      );
+      transportationTotal = activeApps.reduce((acc, a) => {
+        if (a.is_bus_transportation !== true) return acc;
+        const cost =
+          typeof a.transportation_cost === "number" ? a.transportation_cost : 0;
+        return acc + cost;
+      }, 0);
+    }
+
+    // `sufs_total` follows the same null-aware pattern as the other
+    // optional totals — the Approve flow snapshots the sum of every
+    // active student's `sufs_award_amount` onto this column so the
+    // billing surfaces don't have to re-sum per-student rows. Treat
+    // explicit `null` as "unknown" rather than coercing to 0; that
+    // way a SNAP family (no SUFS) reads as N/A instead of "no
+    // scholarship awarded."
+    const hasSufsTotal =
+      body && Object.prototype.hasOwnProperty.call(body, "sufs_total");
+    const sufsTotal: number | null | undefined = hasSufsTotal
+      ? body.sufs_total === null
+        ? null
+        : Number(body.sufs_total)
+      : undefined;
+    if (
+      hasSufsTotal &&
+      sufsTotal !== null &&
+      !Number.isFinite(sufsTotal as number)
+    ) {
+      return NextResponse.json(
+        { error: "sufs_total must be a number or null" },
         { status: 400 }
       );
     }
@@ -139,10 +240,21 @@ export async function POST(req: NextRequest) {
       if (transportationTotal !== undefined) {
         patch.transportation_total = transportationTotal;
       }
+      if (sufsTotal !== undefined) {
+        patch.sufs_total = sufsTotal;
+      }
       const updated = await xano.familyPayments.update(existing.id, patch);
       return NextResponse.json(updated);
     }
 
+    // Create payload only carries columns that still exist on the
+    // live Xano schema. The retired `registration_fee_waiver_id`
+    // and `tuition_reviewed` triplet (`tuition_reviewed`,
+    // `tuition_reviewed_at`, `tuition_reviewed_by`) used to be
+    // here but were dropped from the table — sending them would
+    // cause Xano to reject the whole create on unknown columns,
+    // which is why first-time approves were silently failing to
+    // land a row.
     const created = await xano.familyPayments.create({
       registration_families_id: familyId,
       registration_school_years_id: yearId,
@@ -150,15 +262,12 @@ export async function POST(req: NextRequest) {
       signature: {},
       name: "",
       signature_data: null,
-      registration_fee_waiver_id: null,
       monthly_tuition_payment: monthly,
       annual_fee_total:
         annualFeeTotal === undefined ? null : annualFeeTotal,
       transportation_total:
         transportationTotal === undefined ? null : transportationTotal,
-      tuition_reviewed: false,
-      tuition_reviewed_at: null,
-      tuition_reviewed_by: "",
+      sufs_total: sufsTotal === undefined ? null : sufsTotal,
       enrollment_agreement_pandadoc_id: "",
       enrollment_agreement_status: "",
       enrollment_agreement_sent_at: null,

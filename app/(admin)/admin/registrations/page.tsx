@@ -19,6 +19,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { adminFetcher } from "@/lib/admin-fetcher";
+import { cn } from "@/lib/utils";
 
 /**
  * Per-student row shape returned by the registrations API. Multiple
@@ -355,9 +356,16 @@ export default function RegistrationsPage() {
         <RegistrationsEmptyState />
       ) : (
         <div className="space-y-8">
+          {/* Status dots on each card header mirror the Applications
+              page palette so admin reads the two surfaces with the
+              same color language:
+                - blue   = Submitted (queued for admin work)
+                - yellow = In Progress (waiting on the family)
+                - red    = Not Started (no movement) */}
           <RegistrationsGroup
             title="Submitted"
             description="Family has submitted the post-acceptance packet."
+            dotColor="bg-blue-500"
             rows={visibleGroups.submitted}
             isLoading={
               isLoading && filter !== "in_progress" && filter !== "not_started"
@@ -373,6 +381,7 @@ export default function RegistrationsPage() {
           <RegistrationsGroup
             title="In Progress"
             description="Started the packet but not yet submitted."
+            dotColor="bg-amber-500"
             rows={visibleGroups.inProgress}
             isLoading={
               isLoading && filter !== "submitted" && filter !== "not_started"
@@ -388,6 +397,7 @@ export default function RegistrationsPage() {
           <RegistrationsGroup
             title="Not Started"
             description="Accepted but the family hasn't begun the packet."
+            dotColor="bg-red-500"
             rows={visibleGroups.notStarted}
             isLoading={
               isLoading && filter !== "submitted" && filter !== "in_progress"
@@ -439,6 +449,7 @@ function RegistrationsGroup({
   error,
   columns,
   onRowClick,
+  dotColor,
 }: {
   title: string;
   description: string;
@@ -447,12 +458,26 @@ function RegistrationsGroup({
   error: unknown;
   columns: ColumnDef<RegFamilyRow>[];
   onRowClick: (row: RegFamilyRow) => void;
+  /** Tailwind bg-... class for the status dot rendered before the
+   *  title. Blue / amber / red mirror the Applications page palette
+   *  so the two queues read with the same visual language. */
+  dotColor: string;
 }) {
   if (!isLoading && !error && rows.length === 0) return null;
   return (
     <Card className="overflow-hidden bg-white py-0 gap-0">
       <CardHeader className="py-4 border-b bg-white">
         <div className="flex items-baseline gap-3">
+          {/* `self-center` so the dot vertically aligns to the
+              uppercase title text rather than its baseline —
+              matches the Applications page's group headers. */}
+          <span
+            className={cn(
+              "size-2.5 shrink-0 self-center rounded-full",
+              dotColor
+            )}
+            aria-hidden
+          />
           <CardTitle className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
             {title}
           </CardTitle>

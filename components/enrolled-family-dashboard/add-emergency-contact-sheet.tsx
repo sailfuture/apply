@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PhoneInput } from "@/components/ui/phone-input";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { StateSelect } from "@/components/state-select";
 
@@ -122,10 +123,9 @@ export function AddEmergencyContactSheet({ open, onOpenChange }: Props) {
           </Field>
           <Field>
             <FieldLabel>Phone</FieldLabel>
-            <Input
+            <PhoneInput
               value={form.phone}
-              onChange={(e) => update("phone", e.target.value)}
-              placeholder="(555) 555-5555"
+              onChange={(d) => update("phone", d)}
             />
           </Field>
           <Field>

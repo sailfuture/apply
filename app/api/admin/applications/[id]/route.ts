@@ -40,7 +40,7 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    await requireAdmin();
+    const { admin } = await requireAdmin();
     const { id: idParam } = await params;
     const id = Number(idParam);
     if (!Number.isFinite(id)) {
@@ -106,9 +106,11 @@ export async function PATCH(
       "sufs_status",
       "sufs_award_id",
       "sufs_confirmed",
+      "sufs_award_amount",
       "confirmed_scholarship",
       "is_bus_transportation",
       "bus_stop",
+      "transportation_cost",
       "test_scores",
       "nwea_testing_complete",
       "nwea_testing_scheduled",
@@ -135,6 +137,18 @@ export async function PATCH(
     ] as const;
     for (const field of FIELD_ALLOWLIST) {
       if (field in body) patch[field] = body[field];
+    }
+
+    // Auto-stamp the per-student SUFS confirm audit pair whenever
+    // `confirmed_scholarship` is in the patch. Confirming → time =
+    // Date.now(), admin = display name; un-confirming → time = null,
+    // admin = "". Mirrors the audit pattern on the family-progress
+    // section confirms — clients can't hand-write `confirmed_scholarship_time`
+    // or `confirmed_scholarship_admin`, the route owns them.
+    if ("confirmed_scholarship" in patch) {
+      const next = patch.confirmed_scholarship === true;
+      patch.confirmed_scholarship_time = next ? Date.now() : null;
+      patch.confirmed_scholarship_admin = next ? admin?.name ?? "" : "";
     }
 
     if (Object.keys(patch).length === 0) {

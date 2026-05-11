@@ -11,6 +11,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { formatRelativeShort } from "@/lib/format-note-time";
 import type { EnrolledStudentRow } from "@/app/api/admin/enrolled/route";
@@ -97,19 +98,35 @@ export default function EnrolledStudentsPage() {
   const grouped = useMemo(() => groupByGrade(rows), [rows]);
 
   // Shared column shape across all grade groups so widths line up
-  // vertically. `student_grade` column was dropped — the grade lives
-  // in the group header now, and repeating it on every row was
-  // redundant noise.
+  // vertically. The trash-icon column moved off this table — the
+  // Remove + Unenroll affordances now live on the student detail
+  // page next to Edit, so admin commits to those actions only
+  // after reading the full student context rather than swiping at
+  // the list. Grade column added back as a sortable column so a
+  // flat "All grades" view (search filter spanning grade groups)
+  // still surfaces the grade alongside the student name.
   const columns: ColumnDef<EnrolledStudentRow>[] = [
     {
       key: "student_full_name",
       header: "Student",
       sortable: true,
       searchable: true,
-      width: "w-[28%]",
+      width: "w-[26%]",
       render: (row) => (
         <span className="block truncate font-medium">
           {row.student_full_name}
+        </span>
+      ),
+    },
+    {
+      key: "student_grade",
+      header: "Grade",
+      sortable: true,
+      searchable: true,
+      width: "w-[8%]",
+      render: (row) => (
+        <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+          {row.student_grade?.trim() || "—"}
         </span>
       ),
     },
@@ -118,7 +135,7 @@ export default function EnrolledStudentsPage() {
       header: "Family",
       sortable: true,
       searchable: true,
-      width: "w-[22%]",
+      width: "w-[20%]",
       render: (row) => (
         <span className="block truncate">{row.family_name}</span>
       ),
@@ -128,7 +145,7 @@ export default function EnrolledStudentsPage() {
       header: "Primary Contact",
       sortable: true,
       searchable: true,
-      width: "w-[24%]",
+      width: "w-[22%]",
       render: (row) => (
         <span className="block truncate">
           {row.primary_email || row.primary_name || "—"}
@@ -210,6 +227,13 @@ export default function EnrolledStudentsPage() {
         <div className="rounded-lg border bg-white px-6 py-12 text-center text-sm text-muted-foreground">
           Pick a school year above to view enrolled students.
         </div>
+      ) : isLoading && !data ? (
+        // Page-level skeleton for the first load — three card-
+        // shaped placeholders matching the EnrolledGradeGroup
+        // chrome below. Showing the grouped silhouettes immediately
+        // tells admin "the data is shaped like this" instead of
+        // leaving a blank screen while the SWR fetch resolves.
+        <EnrolledListSkeleton />
       ) : showEmptyState ? (
         <EnrolledEmptyState />
       ) : (
@@ -230,6 +254,35 @@ export default function EnrolledStudentsPage() {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * First-paint skeleton — three stacked grade-group cards with a
+ * stripey body underneath. Matches `EnrolledGradeGroup` so the
+ * load-to-data transition doesn't shift layout. Three groups is
+ * the typical cohort shape; rendering fewer feels sparse,
+ * rendering more pushes content below the fold.
+ */
+function EnrolledListSkeleton() {
+  return (
+    <div className="space-y-8">
+      {[0, 1, 2].map((i) => (
+        <Card key={i} className="overflow-hidden bg-white py-0 gap-0">
+          <CardHeader className="py-4 border-b bg-white">
+            <div className="flex items-baseline gap-3">
+              <Skeleton className="h-4 w-24" />
+              <Skeleton className="h-3 w-6" />
+            </div>
+          </CardHeader>
+          <CardContent className="p-4 bg-white space-y-2">
+            <Skeleton className="h-9 w-full" />
+            <Skeleton className="h-9 w-full" />
+            <Skeleton className="h-9 w-full" />
+          </CardContent>
+        </Card>
+      ))}
     </div>
   );
 }

@@ -11,8 +11,20 @@ import {
   ExternalLink,
   Loader2,
   Pencil,
+  Trash2,
   Undo2,
+  UserMinus,
 } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   Card,
   CardContent,
@@ -20,6 +32,14 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
@@ -182,6 +202,39 @@ export default function EnrolledStudentDetailPage() {
               </Link>
             </Button>
           ) : null}
+          {/* Remove vs Unenroll: deliberately two affordances.
+              `Remove` (trash) clears `registrationConfirmed=false`
+              — the quick "we confirmed in error" path. `Unenroll`
+              opens a richer modal that captures a reason + date
+              and sets `isArchived=true` — the deliberate "student
+              has officially left" path. Both drop the student
+              from the active enrolled list; the difference is the
+              audit trail they leave on the packet. */}
+          {packet ? (
+            <RemoveStudentButton
+              packetId={packet.id}
+              studentName={fullName}
+              onRemoved={() => {
+                // Soft-delete: registrationConfirmed=false moves
+                // the row out of the enrolled list. Push admin
+                // back to the list since this student no longer
+                // belongs on this page.
+                void mutate();
+                window.location.href = backHref;
+              }}
+            />
+          ) : null}
+          <UnenrollStudentButton
+            studentId={student.id}
+            studentName={fullName}
+            currentlyUnenrolled={student.isArchived === true}
+            existingReason={student.unenrollment_reason ?? ""}
+            existingDate={student.unenrollment_date ?? ""}
+            existingNotes={student.unenrollment_notes ?? ""}
+            onChanged={() => {
+              void mutate();
+            }}
+          />
           {family ? (
             <Button asChild variant="outline" size="sm" className="bg-white">
               <Link
@@ -832,5 +885,360 @@ function FileGroup({
         })}
       </ul>
     </li>
+  );
+}
+
+/* ─────────────────────── Remove + Unenroll affordances ─────────────────────── */
+
+/**
+ * Trash-icon button that soft-removes the student from the
+ * enrolled list. PATCHes the packet to `registrationConfirmed:
+ * false` — the same flow the list-page trash used to wrap. Keep
+ * the wording deliberate ("Remove from enrolled list") so admin
+ * understands this isn't the same thing as a formal unenrollment;
+ * the packet stays and admin can re-verify from the family
+ * registration page if it was a mistake.
+ */
+function RemoveStudentButton({
+  packetId,
+  studentName,
+  onRemoved,
+}: {
+  packetId: number;
+  studentName: string;
+  onRemoved: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  async function runRemove() {
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/admin/student-registration/${packetId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ registrationConfirmed: false }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Remove failed (${res.status})`);
+      }
+      toast.success(`${studentName} removed from enrolled list.`);
+      onRemoved();
+    } catch (err) {
+      console.error("[RemoveStudentButton.runRemove] failed:", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't remove.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={saving}
+        onClick={() => setOpen(true)}
+        className="bg-white text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700"
+      >
+        <Trash2 className="size-3.5 mr-1.5" />
+        Remove
+      </Button>
+      <AlertDialog
+        open={open}
+        onOpenChange={(next) => {
+          if (!next && !saving) setOpen(next);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Remove {studentName} from the enrolled list?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This clears the admin confirmation on this
+              student&rsquo;s packet for the year. The packet row
+              itself — uploaded documents, medical info, signatures
+              — is preserved, and admin can re-verify from the
+              family registration detail page if the remove was a
+              mistake. Use the Unenroll button instead when the
+              student is officially leaving the program.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={saving}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={saving}
+              className="bg-red-600 hover:bg-red-700 text-white"
+              onClick={(e) => {
+                e.preventDefault();
+                void runRemove();
+              }}
+            >
+              {saving ? (
+                <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+              ) : (
+                <Trash2 className="size-3.5 mr-1.5" />
+              )}
+              Yes, remove
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
+}
+
+/**
+ * Unenroll affordance — captures a reason, effective date, and
+ * optional long-form notes in a Dialog, then PATCHes the student
+ * row with `isArchived=true` + the captured fields. The Dialog
+ * (rather than a plain AlertDialog) is intentional because we
+ * need text inputs + a date picker inside the modal; AlertDialog's
+ * shadcn shape is built for short copy + cancel/confirm.
+ *
+ * The unenrollment audit lives on the student row (not the
+ * per-year packet) so re-enrollment attempts in future years
+ * still see the prior unenrollment history. PATCH target is
+ * `/api/admin/students/[id]`, which routes through the
+ * `2GcBXyoA` admin API group where the columns were added.
+ *
+ * Re-rendering an already-unenrolled student renders this as
+ * "Unenrolled — undo?" so admin has a one-click reversal path
+ * (clears `isArchived=false`, wipes reason + date + notes). Once
+ * the parent SWR cache revalidates with `isArchived=true`, the
+ * student drops off the list page; the detail page itself stays
+ * reachable by direct URL so admin can still un-unenroll if
+ * needed. Reopening to edit pre-populates the form with the
+ * existing values so admin can correct a typo without retyping
+ * the whole thing.
+ */
+function UnenrollStudentButton({
+  studentId,
+  studentName,
+  currentlyUnenrolled,
+  existingReason,
+  existingDate,
+  existingNotes,
+  onChanged,
+}: {
+  studentId: number;
+  studentName: string;
+  currentlyUnenrolled: boolean;
+  /** Existing audit values — pre-populate the modal when admin
+   *  re-opens it after an unenrollment lands. Empty strings /
+   *  null when nothing's been captured yet. */
+  existingReason: string;
+  existingDate: string;
+  existingNotes: string;
+  onChanged: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  // Default date = today in YYYY-MM-DD. Captured once on mount;
+  // resetting the modal goes back to today rather than holding a
+  // stale prior selection.
+  const today = (() => {
+    const d = new Date();
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd}`;
+  })();
+  const [reason, setReason] = useState(existingReason);
+  const [date, setDate] = useState(existingDate || today);
+  const [notes, setNotes] = useState(existingNotes);
+
+  function resetForm() {
+    setReason(existingReason);
+    setDate(existingDate || today);
+    setNotes(existingNotes);
+  }
+
+  async function runUnenroll() {
+    if (!reason.trim()) {
+      toast.error("Reason is required.");
+      return;
+    }
+    if (!date) {
+      toast.error("Effective date is required.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/admin/students/${studentId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          isArchived: true,
+          unenrollment_reason: reason.trim(),
+          unenrollment_date: date,
+          unenrollment_notes: notes.trim(),
+        }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Unenroll failed (${res.status})`);
+      }
+      toast.success(`${studentName} unenrolled.`);
+      setOpen(false);
+      onChanged();
+    } catch (err) {
+      console.error("[UnenrollStudentButton.runUnenroll] failed:", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't unenroll.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function runReverse() {
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/admin/students/${studentId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          isArchived: false,
+          unenrollment_reason: "",
+          unenrollment_date: null,
+          unenrollment_notes: "",
+        }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Reverse failed (${res.status})`);
+      }
+      toast.success(`${studentName} re-enrolled.`);
+      onChanged();
+    } catch (err) {
+      console.error("[UnenrollStudentButton.runReverse] failed:", err);
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't reverse unenrollment."
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (currentlyUnenrolled) {
+    return (
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={saving}
+        onClick={() => void runReverse()}
+        className="bg-white"
+      >
+        {saving ? (
+          <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+        ) : (
+          <Undo2 className="size-3.5 mr-1.5" />
+        )}
+        Undo unenrollment
+      </Button>
+    );
+  }
+
+  return (
+    <>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={saving}
+        onClick={() => setOpen(true)}
+        className="bg-white text-amber-700 border-amber-200 hover:bg-amber-50 hover:text-amber-800"
+      >
+        <UserMinus className="size-3.5 mr-1.5" />
+        Unenroll
+      </Button>
+      <Dialog
+        open={open}
+        onOpenChange={(next) => {
+          if (!next && !saving) {
+            setOpen(false);
+            resetForm();
+          } else if (next) {
+            setOpen(true);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Unenroll {studentName}?</DialogTitle>
+            <DialogDescription>
+              Capture why the student is leaving and when the
+              unenrollment takes effect. The packet stays in Xano
+              — uploaded documents, signatures, and audit columns
+              are preserved — but the student drops off the active
+              enrolled list. You can undo from this same button if
+              needed.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Field>
+              <FieldLabel>Reason for unenrollment</FieldLabel>
+              <Input
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                placeholder="e.g. Family relocating, transferred schools…"
+              />
+            </Field>
+            <Field>
+              <FieldLabel>Effective date</FieldLabel>
+              <Input
+                type="date"
+                value={date}
+                onChange={(e) => setDate(e.target.value)}
+              />
+            </Field>
+            <Field>
+              <FieldLabel>Notes (optional)</FieldLabel>
+              {/* Long-form context — anything the headline reason
+                  shouldn't carry (parent conversations, follow-up
+                  plans, internal flags). Multi-line input so admin
+                  can capture more than one sentence without
+                  cramping. */}
+              <textarea
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                placeholder="Additional context for the audit trail…"
+                rows={3}
+                className="flex w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+              />
+            </Field>
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={saving}
+              onClick={() => {
+                setOpen(false);
+                resetForm();
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={saving || !reason.trim() || !date}
+              onClick={() => void runUnenroll()}
+              className="bg-amber-600 hover:bg-amber-700 text-white"
+            >
+              {saving ? (
+                <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+              ) : (
+                <UserMinus className="size-3.5 mr-1.5" />
+              )}
+              Yes, unenroll
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }

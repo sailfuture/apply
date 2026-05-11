@@ -4,14 +4,63 @@ import { xano } from "@/lib/xano";
 import type { XanoStudent } from "@/lib/xano";
 
 /**
+ * Document-confirm pairs — each entry maps the confirm bool to its
+ * audit time + audit admin name columns. The bool is what the UI
+ * sends; the route stamps time + admin name automatically. Lives
+ * outside the handler so the loop reads cleanly.
+ *
+ * Mirrors the `SECTION_CONFIRM_PAIRS` pattern used by the
+ * family-progress / registration-progress routes — bool flips
+ * forward → time = now, admin = display name; bool flips back →
+ * time = null, admin = "". Clients can't hand-write the audit
+ * columns; the route owns them.
+ */
+const DOC_CONFIRM_PAIRS: Array<{
+  confirmKey: keyof XanoStudent;
+  timeKey: keyof XanoStudent;
+  adminKey: keyof XanoStudent;
+}> = [
+  {
+    confirmKey: "immunization_admin_confirm",
+    timeKey: "immunization_admin_confirm_time",
+    adminKey: "immunization_admin_confirm_admin",
+  },
+  {
+    confirmKey: "birth_certificate_admin_confirm",
+    timeKey: "birth_certificate_admin_confirm_time",
+    adminKey: "birth_certificate_admin_confirm_admin",
+  },
+  {
+    confirmKey: "school_health_form_admin_confirm",
+    timeKey: "school_health_form_admin_confirm_time",
+    adminKey: "school_health_form_admin_confirm_admin",
+  },
+  {
+    confirmKey: "transcripts_admin_confirm",
+    timeKey: "transcripts_admin_confirm_time",
+    adminKey: "transcripts_admin_confirm_admin",
+  },
+];
+
+/**
  * Admin-only PATCH for `registration_students`.
  *
- * Today this surface owns one admin-side write path:
+ * Three admin-side write paths live here:
  *
  *   - Initial-screening NWEA scores + dates — entered after the
  *     student completes testing at the academy. Live on the
  *     student row (not the per-year application) so re-enrolling
  *     students keep their score history.
+ *   - Per-document admin confirms for the four required documents
+ *     (immunization forms, birth certificate, school health form,
+ *     transcripts). Bool flips trigger an auto-stamped audit pair
+ *     so the registration packet's Documents-to-Review surface can
+ *     record who confirmed each document and when.
+ *   - Unenrollment audit — `isArchived` + `unenrollment_reason` +
+ *     `unenrollment_date` + `unenrollment_notes`. Captured by the
+ *     Unenroll modal on the enrolled student detail page. Lives on
+ *     the student row so the audit follows the student across
+ *     re-enrollment attempts in future years.
  *
  * The `is_verified` flag on the student row was briefly written by
  * this route too, but admin verification was moved back to the
@@ -23,13 +72,20 @@ import type { XanoStudent } from "@/lib/xano";
  *
  * Parents never write to these columns; their /api/students/[id]
  * route excludes the admin-only fields from its allowlist.
+ *
+ * Writes that include any of the doc-confirm bools are routed
+ * through the `2GcBXyoA` API group (via
+ * `xano.students.updateOnAdminGroup`) because those columns were
+ * added against that group's query — the default group's CRUD
+ * doesn't expose them yet. NWEA-only writes still use the default
+ * `update()` since those columns predate the group split.
  */
 export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    await requireAdmin();
+    const { admin } = await requireAdmin();
     const { id: idParam } = await params;
     const id = Number(idParam);
     if (!Number.isFinite(id) || id <= 0) {
@@ -51,10 +107,51 @@ export async function PATCH(
       "initial_screening_nwea_reading",
       "initial_screening_nwea_math_date",
       "initial_screening_nwea_reading_date",
+      "immunization_admin_confirm",
+      "birth_certificate_admin_confirm",
+      "school_health_form_admin_confirm",
+      "transcripts_admin_confirm",
+      // Unenrollment audit — flipped by the Unenroll affordance
+      // on the enrolled student detail page. Captures the
+      // archive flag, free-text reason, effective date, and any
+      // additional notes in one atomic PATCH. Lives on the
+      // student row (not the per-year packet) so the audit
+      // follows the student across re-enrollment attempts.
+      "isArchived",
+      "unenrollment_reason",
+      "unenrollment_date",
+      "unenrollment_notes",
     ];
     const patch: Record<string, unknown> = {};
     for (const key of ALLOWED) {
       if (key in body) patch[key] = body[key];
+    }
+
+    // Auto-stamp the audit pair for every doc-confirm bool in the
+    // patch. Confirm → time = now, admin = display name; un-confirm
+    // → time = null, admin = "". Matches the audit pattern on
+    // family-progress / registration-progress.
+    const now = Date.now();
+    const adminName = admin?.name ?? "";
+    let touchesAdminGroupFields = false;
+    for (const pair of DOC_CONFIRM_PAIRS) {
+      if (pair.confirmKey in patch) {
+        touchesAdminGroupFields = true;
+        const next = patch[pair.confirmKey] === true;
+        patch[pair.timeKey] = next ? now : null;
+        patch[pair.adminKey] = next ? adminName : "";
+      }
+    }
+    // Unenrollment columns also live on the `2GcBXyoA` admin
+    // query — same group as the doc-confirms — so any patch that
+    // touches them needs to route through that endpoint too.
+    if (
+      "isArchived" in patch ||
+      "unenrollment_reason" in patch ||
+      "unenrollment_date" in patch ||
+      "unenrollment_notes" in patch
+    ) {
+      touchesAdminGroupFields = true;
     }
 
     if (Object.keys(patch).length === 0) {
@@ -64,7 +161,13 @@ export async function PATCH(
       );
     }
 
-    const updated = await xano.students.update(id, patch);
+    // Route through the admin API group when any admin-only
+    // column is in the patch — those columns were added against
+    // the `2GcBXyoA` query and aren't on the default group's CRUD
+    // surface. Pure NWEA patches stay on the default group.
+    const updated = touchesAdminGroupFields
+      ? await xano.students.updateOnAdminGroup(id, patch)
+      : await xano.students.update(id, patch);
     return NextResponse.json(updated);
   } catch (err) {
     return handleAdminError(err);

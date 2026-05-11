@@ -190,6 +190,15 @@ export async function GET(req: NextRequest) {
         sections_complete: sectionsComplete,
         sections_total: 4,
         isSubmitted: !!p.isSubmitted,
+        // `isAccepted` lives on the per-year progress row; the
+        // family-detail Approve button flips it. Surfaced here so
+        // the applications list can split accepted families into
+        // their own card above Submitted. The family-progress
+        // PATCH route auto-flips `isSubmitted = true` whenever
+        // `isAccepted = true`, so an accepted family is always
+        // also "submitted" — the page filter just prefers the
+        // more-specific "accepted" bucket when both apply.
+        isAccepted: !!p.isAccepted,
         submitted_at: p.submitted_at,
         last_edited: p.last_edited,
         // Surface the archive flag + reason so the page can split
@@ -222,6 +231,12 @@ export async function GET(req: NextRequest) {
         sections_complete: sectionsComplete,
         sections_total: 4,
         isSubmitted: !!p.isSubmitted,
+        // Reapply rows don't carry an `isAccepted` column — the
+        // re-application flow doesn't go through the same Approve
+        // gate that initial applications do. Hardcode `false` so
+        // the row stays in the standard Submitted / In Progress
+        // buckets on the page.
+        isAccepted: false,
         submitted_at: null,
         last_edited: p.last_edited,
         // Reapply rows don't carry an archive column today — leave
@@ -276,6 +291,12 @@ export interface UnifiedAppRow {
   sections_complete: number;
   sections_total: number;
   isSubmitted: boolean;
+  /** True once admin has accepted this family for the year (via the
+   *  Approve button on the family detail page). Used by the page
+   *  to lift accepted rows out of the Submitted bucket and into a
+   *  dedicated Accepted card. Reapply rows always set this to
+   *  `false` — the reapply flow has no acceptance gate. */
+  isAccepted: boolean;
   submitted_at: number | null;
   last_edited: number | null;
   is_archived: boolean;

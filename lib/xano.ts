@@ -5,6 +5,17 @@ function getBaseUrl() {
   return BASE_URL;
 }
 
+/** Host root for Xano — strips the `/api:<group>` suffix from
+ *  `XANO_API_BASE_URL`. Useful when a query lives on a different API
+ *  group than the one the base is pointed at; the caller can append
+ *  `/api:<other-group>/<endpoint>` themselves. Currently used to
+ *  reach the `2GcBXyoA` group (which hosts
+ *  `registration_application_by_family`) without introducing a
+ *  second env var. */
+function getXanoHost(): string {
+  return getBaseUrl().replace(/\/api:[^/]+\/?$/, "");
+}
+
 export interface XanoParent {
   id: number;
   created_at: number;
@@ -72,10 +83,31 @@ export interface XanoStudent {
   // Parents can upload multiple files per category (e.g. two pages of a
   // passport, a stack of medical forms). Each entry is Xano's file metadata
   // shape — `{ path, url, mime, size, meta, ... }`.
+  //
+  // Four of the categories — birth certificate, school health form,
+  // transcripts, immunization forms — carry an admin-confirm triplet
+  // (bool + audit time + audit admin name) so the registration packet's
+  // Documents-to-Review surface can record per-document verification.
+  // The remaining categories (passport, state id, IEP, SSN card) are
+  // either optional or don't need a per-doc admin verify; only the
+  // four required documents have the triplet today. All optional so
+  // legacy rows pre-dating the columns keep typing.
   birth_certificate: Record<string, unknown>[];
+  birth_certificate_admin_confirm?: boolean;
+  birth_certificate_admin_confirm_time?: number | null;
+  birth_certificate_admin_confirm_admin?: string;
   school_health_form: Record<string, unknown>[];
+  school_health_form_admin_confirm?: boolean;
+  school_health_form_admin_confirm_time?: number | null;
+  school_health_form_admin_confirm_admin?: string;
   transcripts: Record<string, unknown>[];
+  transcripts_admin_confirm?: boolean;
+  transcripts_admin_confirm_time?: number | null;
+  transcripts_admin_confirm_admin?: string;
   immunization_forms: Record<string, unknown>[];
+  immunization_admin_confirm?: boolean;
+  immunization_admin_confirm_time?: number | null;
+  immunization_admin_confirm_admin?: string;
   passport: Record<string, unknown>[];
   student_state_id: Record<string, unknown>[];
   iep: Record<string, unknown>[];
@@ -107,6 +139,25 @@ export interface XanoStudent {
    *  enrolled-detail page so admin can see at a glance how recent
    *  the data is. */
   last_edited_time?: number | null;
+
+  /** Free-text reason captured when admin officially unenrolls a
+   *  student via the Unenroll affordance on the enrolled detail
+   *  page. Pairs with `unenrollment_date`, `unenrollment_notes`,
+   *  and `isArchived=true`. Lives on the student row (not the
+   *  per-year packet) so the audit follows the student across
+   *  any re-enrollment attempts in future years. All optional
+   *  because legacy rows pre-date the column add. */
+  unenrollment_reason?: string;
+  /** Effective date the unenrollment takes effect, in
+   *  `YYYY-MM-DD` form (Xano `date` column). Admin picks this
+   *  from a date input — defaults to today but can be
+   *  back- or forward-dated. */
+  unenrollment_date?: string | null;
+  /** Long-form notes captured alongside the short reason —
+   *  context the front-line admin needs to record but doesn't
+   *  belong in the headline reason string. Optional; saved
+   *  empty-string when admin leaves it blank. */
+  unenrollment_notes?: string;
 }
 
 export interface XanoApplication {
@@ -144,8 +195,29 @@ export interface XanoApplication {
    *  the type because legacy rows predate the column; the gate
    *  treats undefined as `false` (admin still needs to confirm). */
   confirmed_scholarship?: boolean;
+  /** Audit pair for `confirmed_scholarship`. Stamped by the admin
+   *  applications PATCH route whenever `confirmed_scholarship`
+   *  flips: confirming → time = now, admin = display name;
+   *  un-confirming → time = null, admin = "". Clients shouldn't
+   *  (and can't) hand-write these — the route owns them. Surfaced
+   *  on the per-student row in the Scholarship Determination card
+   *  so admin can see who confirmed each award and when. */
+  confirmed_scholarship_time?: number | null;
+  confirmed_scholarship_admin?: string;
   is_bus_transportation: boolean;
   bus_stop: string;
+  /** Per-student transportation cost (decimal). Stored on the app
+   *  row so admin can override the default per-student fee on a
+   *  case-by-case basis without changing the school-year-level
+   *  transport amount. Conventions:
+   *   - `null` when `is_bus_transportation === false` (no transport
+   *     elected — column accepts null so the receipt math distinguishes
+   *     "no transport" from "transport at $0").
+   *   - `number` when bus is elected. Defaults to the school year's
+   *     `transportation_fees`, but admin can edit on the per-student
+   *     Decision row.
+   *  Optional on the type because legacy rows predate the column. */
+  transportation_cost?: number | null;
   /** Captured snapshot of which parent address the family used to pick
    *  the bus stop — written as a single formatted string so the
    *  routing team has the literal pickup address tied to the student's
@@ -200,6 +272,15 @@ export interface XanoApplication {
    * cascade can clear it.
    */
   opportunity_scholarship_award_amount: number | null;
+  /** Per-student SUFS award amount captured at admin decision
+   *  time. Mirrors the derived `sufsAmountFor(sufs_type, schoolYear)`
+   *  computation but stored on the row directly so the audit
+   *  snapshot survives future school-year tier-amount edits.
+   *  Optional on the type because the column was added after
+   *  launch; treat undefined / null / 0 as "no amount on file."
+   *  When admin approves a family, the page sums these per-student
+   *  values into `XanoFamilyPayment.sufs_total`. */
+  sufs_award_amount?: number | null;
   // PandaDoc enrollment-agreement state. Liability-waiver fields used
   // to live here too but moved to `registration_student_registration`
   // (the per-student packet) — those fields are no longer on this
@@ -210,6 +291,38 @@ export interface XanoApplication {
   enrollment_agreement_status: string;
   enrollment_agreement_sent_at: string | null;
   enrollment_agreement_pdf_url: string;
+}
+
+/**
+ * Row shape returned by the Xano `registration_application_by_family`
+ * query (api group `2GcBXyoA`). One row per active application for
+ * the family + year, with the student, family, and school-year rows
+ * already joined in via `_registration_*` addons. Used by the
+ * acceptance-summary PDF so admin can render every label, name, and
+ * school-year amount without a second round of fetches.
+ *
+ * `isActive=false` rows are filtered out by the Xano query itself;
+ * the row type carries `isActive` for completeness in case a future
+ * query revision exposes inactive rows again.
+ */
+export interface XanoApplicationByFamily extends XanoApplication {
+  /** Embedded student row — the source the PDF reads for first +
+   *  last name. Saves a separate students fetch + lookup map. */
+  _registration_students_details?: XanoStudent | null;
+  /** Embedded family row. Saves a separate families lookup for the
+   *  `family_name` display string. */
+  _registration_families?: Pick<XanoFamily, "id" | "family_name"> | null;
+  /** Embedded school-year row. Tuition + annual fee + transportation
+   *  fee live here; the per-SUFS-tier amounts (fes_eo_9, ftc_8, etc.)
+   *  also ride along so the PDF can render the SUFS column without
+   *  a side fetch. */
+  _registration_school_years?: XanoSchoolYear | null;
+  /** Embedded opportunity-scholarship row when one exists. `null`
+   *  when the family is on a non-OS path (opted out, SNAP-only,
+   *  etc.). The PDF still pulls the full scholarship payload from
+   *  `/api/admin/scholarship-details` for contributing members /
+   *  homes / vehicles — this is the lightweight reference. */
+  _registration_opportunity_scholarship?: XanoScholarship | null;
 }
 
 export interface XanoApplicationStatus {
@@ -245,6 +358,11 @@ export interface XanoSchoolYear {
 }
 
 export interface XanoFamilyPayment {
+  /** Internal id. Xano now exposes the table PK under
+   *  `registration_families_payment_id` (the table-prefixed naming
+   *  convention some other tables also use), but `lib/xano.ts` reads
+   *  always normalize the response shape so callers can keep using
+   *  `id`. Don't write to `id` — Xano manages it. */
   id: number;
   created_at: number;
   registration_families_id: number;
@@ -253,8 +371,12 @@ export interface XanoFamilyPayment {
   signature: Record<string, unknown>;
   name: string;
   signature_data: Record<string, unknown> | null;
-  registration_fee_waiver_id: number | null;
-  monthly_tuition_payment: number;
+  /** `monthly_tuition_payment` is nullable on Xano now — pre-
+   *  acceptance rows can carry null instead of a 0 sentinel so the
+   *  receipt surfaces can tell "not yet approved" apart from
+   *  "approved for $0 / month." Writes from the admin route still
+   *  send a number on approval. */
+  monthly_tuition_payment: number | null;
   /** Total annual admin fees the family owes for the year — `$500 × N`
    *  for N active students. Snapshotted at family approval time so the
    *  billing surfaces don't have to recompute from per-student rows.
@@ -267,9 +389,14 @@ export interface XanoFamilyPayment {
    *  render N/A rather than `$0` and avoid charging in error.
    *  Optional on the type because legacy rows pre-date the column. */
   transportation_total?: number | null;
-  tuition_reviewed: boolean;
-  tuition_reviewed_at: number | null;
-  tuition_reviewed_by: string;
+  /** Total SUFS scholarship dollars awarded to the family for the
+   *  year — sum of every active student's
+   *  `sufs_award_amount` on `registration_application`. Captured
+   *  at family approval time so the billing surfaces have a single
+   *  authoritative number instead of re-summing per-student rows
+   *  later. Optional on the type because legacy rows pre-date the
+   *  column. */
+  sufs_total?: number | null;
   enrollment_agreement_pandadoc_id: string;
   enrollment_agreement_status: string;
   enrollment_agreement_sent_at: string | null;
@@ -432,24 +559,33 @@ export interface XanoScholarshipContributingMember {
   paystub_3_confirm?: boolean;
   paystub_4_confirm?: boolean;
   /** Audit trail for each per-document confirmation:
-   *   - `*_confirm_time` — millis timestamp set the moment admin marked
-   *     the slot confirmed. Cleared (set to null) on undo.
-   *   - `*_admin_confirm` — the confirming admin's teacher id
-   *     (numeric). 0 when unset. The admin documents-review surface
-   *     never writes these directly; the contributing-members PATCH
-   *     endpoint stamps them automatically when a `*_confirm` flag
-   *     is being flipped, so the audit trail can't drift away from
-   *     the boolean's actual state. */
-  w2_confirm_time?: number | null;
+   *   - `paystub_N_confirm_time` / `w2_confirmation` — millis
+   *     timestamp set the moment admin marked the slot confirmed.
+   *     Cleared (set to null) on undo. Note the column-name
+   *     inconsistency on W-2: the Xano schema named the W-2
+   *     timestamp column `w2_confirmation` rather than the
+   *     `w2_confirm_time` you'd expect from the paystub
+   *     convention. Don't "fix" this client-side or the PATCH
+   *     gets rejected on an unknown column.
+   *   - `*_admin_confirm` — the confirming admin's display name
+   *     (string). Empty string when unset. Columns were originally
+   *     typed `int` for teacher id but switched to `text` on Xano so
+   *     the UI can render "Confirmed by Hunter Thompson" directly
+   *     without a separate teacher-id → name lookup. The admin
+   *     documents-review surface never writes these directly; the
+   *     contributing-members PATCH endpoint stamps them automatically
+   *     when a `*_confirm` flag is being flipped, so the audit trail
+   *     can't drift away from the boolean's actual state. */
+  w2_confirmation?: number | null;
   paystub_1_confirm_time?: number | null;
   paystub_2_confirm_time?: number | null;
   paystub_3_confirm_time?: number | null;
   paystub_4_confirm_time?: number | null;
-  w2_admin_confirm?: number;
-  paystub_1_admin_confirm?: number;
-  paystub_2_admin_confirm?: number;
-  paystub_3_admin_confirm?: number;
-  paystub_4_admin_confirm?: number;
+  w2_admin_confirm?: string;
+  paystub_1_admin_confirm?: string;
+  paystub_2_admin_confirm?: string;
+  paystub_3_admin_confirm?: string;
+  paystub_4_admin_confirm?: string;
   /** Admin-side overall verification flag. Set true when admin has
    *  ticked every per-document confirm above and is satisfied the
    *  uploaded packet matches the declared income. Hand-edits flow
@@ -822,14 +958,27 @@ export interface XanoFamilyApplicationProgress {
   students_admin_confirm_admin?: string;
   testing_admin_confirm?: boolean;
   testing_admin_confirm_time?: number | null;
-  /** Financial Aid section-verify triplet. Naming on Xano:
-   *  `financial_aid_admin_complete` (bool),
-   *  `financial_aid_admin_time` (epoch ms),
-   *  `financial_aid_admin_confirm_admin` (string). The bool gates
-   *  the Approve flow alongside the other section verifies. */
-  financial_aid_admin_complete?: boolean;
-  financial_aid_admin_time?: number | null;
+  /** Financial Aid section-verify triplet. Uses the same
+   *  `*_admin_confirm` / `*_admin_confirm_time` /
+   *  `*_admin_confirm_admin` column naming as Family / Students /
+   *  Testing — the earlier `_admin_complete` / `_admin_time`
+   *  naming we used briefly was wrong (those columns don't exist
+   *  on Xano). The bool gates the Approve flow alongside the
+   *  other section verifies. */
+  financial_aid_admin_confirm?: boolean;
+  financial_aid_admin_confirm_time?: number | null;
   financial_aid_admin_confirm_admin?: string;
+  /** Scholarship Determination section-verify triplet. Note the
+   *  timestamp column is `scholarship_complete_admin_time` (NOT
+   *  `scholarship_admin_complete_time`) — the Xano column name
+   *  has the words in that specific order, diverging from the
+   *  bool's `scholarship_admin_complete` order. Like the W-2
+   *  audit column above, don't "normalize" the divergence away
+   *  client-side or the PATCH gets rejected on an unknown
+   *  column. */
+  scholarship_admin_complete?: boolean;
+  scholarship_complete_admin_time?: number | null;
+  scholarship_admin_complete_admin?: string;
 }
 
 /**
@@ -986,6 +1135,28 @@ export interface XanoStudentRegistrationProgress {
   emergency_contacts_admin_confirm?: boolean;
   emergency_contacts_admin_confirm_time?: number | null;
   emergency_contacts_admin_confirm_admin?: string;
+
+  /** Family-level "registration confirmed" latch — the rollup admin
+   *  flips after every per-section verify (tuition, enrollment,
+   *  volunteer, emergency contacts) AND every per-student
+   *  `registrationConfirmed` packet is set. Mirrors the apply-flow
+   *  `isAccepted` latch on `registration_family_application_progress`
+   *  in spirit: it's the final "this family is fully registered"
+   *  signal, distinct from the parent-side `isSubmitted` flag (which
+   *  marks "the parent has hit Submit"). The audit pair stamps who
+   *  flipped it and when. All three optional because legacy rows
+   *  predate the column add. */
+  isRegistrationConfirmed?: boolean;
+  registration_confirmed_time?: number | null;
+  registration_confirmed_admin?: string;
+  /** Family-level archive flag. Mirrors `is_archived` on the apply-
+   *  flow `family_application_progress` row — admin uses this to set
+   *  a family's registration aside (post-acceptance withdrawals,
+   *  duplicate rows, etc.) without destroying any uploaded packet
+   *  data. The archived row drops out of the active Registrations
+   *  queues but stays reachable for un-archive. Optional because
+   *  legacy rows predate the column add. */
+  isArchived?: boolean;
 }
 
 export interface XanoEmergencyContact {
@@ -1346,6 +1517,30 @@ function normalizeContributingMemberPK(
   return out as unknown as XanoScholarshipContributingMember;
 }
 
+/**
+ * Same PK-promotion trick as `normalizeContributingMemberPK` above
+ * but for `registration_families_payment`. Xano exposes the PK
+ * under `registration_families_payment_id` rather than the plain
+ * `id` the rest of our code reads — left unfixed, every read path
+ * sees `id: undefined`, the upsert in
+ * `/api/admin/family-payment` calls `update(undefined, ...)` (404
+ * or worse), and accepting a family appears to silently no-op.
+ * This shim keeps callers on the `id` contract while tolerating
+ * either column name on the wire.
+ */
+function normalizeFamilyPaymentPK(
+  raw: Record<string, unknown>
+): XanoFamilyPayment {
+  const out = { ...raw };
+  if (
+    (out.id === undefined || out.id === null) &&
+    typeof out.registration_families_payment_id === "number"
+  ) {
+    out.id = out.registration_families_payment_id;
+  }
+  return out as unknown as XanoFamilyPayment;
+}
+
 export const xano = {
   parents: {
     async create(data: Omit<XanoParent, "id" | "created_at">) {
@@ -1558,6 +1753,39 @@ export const xano = {
       return res.json() as Promise<XanoStudent>;
     },
 
+    /**
+     * PATCH a student via the `2GcBXyoA` admin API group rather than
+     * the default group. Used specifically for the per-document
+     * admin-confirm triplet on the four required documents
+     * (immunization, birth certificate, school health form,
+     * transcripts) — those columns were added against the admin
+     * query in that group, so writes have to go through this
+     * endpoint. The default `update()` above still works for fields
+     * exposed on the default group's CRUD endpoint.
+     *
+     * Returns the updated student row so callers can refresh local
+     * state without a second fetch.
+     */
+    async updateOnAdminGroup(
+      id: number,
+      data: Partial<Omit<XanoStudent, "id" | "created_at">>
+    ): Promise<XanoStudent> {
+      const res = await fetch(
+        `${getXanoHost()}/api:2GcBXyoA/registration_students/${id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        }
+      );
+      if (!res.ok) {
+        throw new Error(
+          `Xano error ${res.status}: ${await res.text()}`
+        );
+      }
+      return res.json() as Promise<XanoStudent>;
+    },
+
     async getByFamilyId(familyId: number): Promise<XanoStudent[]> {
       // Sorted by id ASC = creation order so a newly-added student
       // lands at the end of the list rather than floating to the
@@ -1691,6 +1919,49 @@ export const xano = {
         return all
           .filter((a) => a.registration_families_id === familyId)
           .sort((a, b) => a.id - b.id);
+      }
+    },
+
+    /**
+     * Active applications for a family + year, with the student,
+     * family, school year, and (optional) opportunity-scholarship
+     * rows already joined in via Xano addons. Hits the
+     * `registration_application_by_family` query on the `2GcBXyoA`
+     * API group — different group than the rest of the client, so
+     * we construct the host root explicitly via `getXanoHost()`.
+     *
+     * Used by the acceptance-summary PDF: a single fetch covers
+     * every per-app value plus the surrounding labels (student
+     * names, family name, school-year amounts) the report needs
+     * to render. Saves the older flow of stitching multiple
+     * separate fetches together client-side.
+     *
+     * Returns `[]` on any network or auth error rather than
+     * throwing — the PDF helper tolerates an empty list and the
+     * caller can decide how to surface the failure.
+     */
+    async getActiveByFamilyAndYearWithDetails(
+      familyId: number,
+      yearId: number
+    ): Promise<XanoApplicationByFamily[]> {
+      try {
+        const url = new URL(
+          `${getXanoHost()}/api:2GcBXyoA/registration_application_by_family`
+        );
+        url.searchParams.set(
+          "registration_families_id",
+          String(familyId)
+        );
+        url.searchParams.set(
+          "registration_school_years_id",
+          String(yearId)
+        );
+        const res = await fetch(url.toString(), { cache: "no-store" });
+        if (!res.ok) return [];
+        const body = (await res.json()) as XanoApplicationByFamily[];
+        return Array.isArray(body) ? body : [];
+      } catch {
+        return [];
       }
     },
 
@@ -2409,6 +2680,52 @@ export const xano = {
   },
 
   familyPayments: {
+    /**
+     * Family-payment row from the `2GcBXyoA` admin API group. Hits
+     * `registration_families_payment_by_family` which returns the
+     * raw row plus addons (none today, but the endpoint is on the
+     * admin group alongside other addon-bearing queries we use).
+     *
+     * Distinct from `getByFamilyAndYear` below — that one targets
+     * the default group's `registration_families_payment` CRUD
+     * endpoint. Use this admin-group variant when the consumer
+     * wants the canonical row for display surfaces (the
+     * registration detail page's Tuition card) so we don't drift
+     * if the two groups ever expose different addons.
+     */
+    async getByFamilyAndYearOnAdminGroup(
+      familyId: number,
+      yearId: number
+    ): Promise<XanoFamilyPayment | null> {
+      try {
+        const url = new URL(
+          `${getXanoHost()}/api:2GcBXyoA/registration_families_payment_by_family`
+        );
+        url.searchParams.set(
+          "registration_families_id",
+          String(familyId)
+        );
+        url.searchParams.set(
+          "registration_school_years_id",
+          String(yearId)
+        );
+        const res = await fetch(url.toString(), { cache: "no-store" });
+        if (!res.ok) return null;
+        const body = await res.json();
+        // Endpoint returns an array even when filtered to a single
+        // (family, year) — be defensive about either shape.
+        const items = Array.isArray(body) ? body : [body];
+        const match = (items as Record<string, unknown>[]).find(
+          (p) =>
+            Number(p.registration_families_id) === familyId &&
+            Number(p.registration_school_years_id) === yearId
+        );
+        return match ? normalizeFamilyPaymentPK(match) : null;
+      } catch {
+        return null;
+      }
+    },
+
     async getByFamilyAndYear(familyId: number, yearId: number): Promise<XanoFamilyPayment | null> {
       try {
         const res = await fetch(
@@ -2418,11 +2735,12 @@ export const xano = {
         if (!res.ok) return null;
         const results = await res.json();
         const items = Array.isArray(results) ? results : [results];
-        return items.find(
-          (p: XanoFamilyPayment) =>
+        const match = (items as Record<string, unknown>[]).find(
+          (p) =>
             p.registration_families_id === familyId &&
             p.registration_school_years_id === yearId
-        ) ?? null;
+        );
+        return match ? normalizeFamilyPaymentPK(match) : null;
       } catch {
         return null;
       }
@@ -2435,7 +2753,8 @@ export const xano = {
         body: JSON.stringify(data),
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
-      return res.json();
+      const raw = (await res.json()) as Record<string, unknown>;
+      return normalizeFamilyPaymentPK(raw);
     },
 
     async update(id: number, data: Partial<Omit<XanoFamilyPayment, "id" | "created_at">>): Promise<XanoFamilyPayment> {
@@ -2445,7 +2764,8 @@ export const xano = {
         body: JSON.stringify(data),
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
-      return res.json();
+      const raw = (await res.json()) as Record<string, unknown>;
+      return normalizeFamilyPaymentPK(raw);
     },
 
     /**
