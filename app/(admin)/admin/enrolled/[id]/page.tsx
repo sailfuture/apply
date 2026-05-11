@@ -8,9 +8,12 @@ import { toast } from "sonner";
 import {
   ArrowLeft,
   CheckCircle2,
+  Circle,
   ExternalLink,
+  FileText,
   Loader2,
   Pencil,
+  RotateCcw,
   Trash2,
   Undo2,
   UserMinus,
@@ -45,7 +48,18 @@ import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { cn } from "@/lib/utils";
-import { formatNoteTimestamp } from "@/lib/format-note-time";
+import {
+  formatNoteTimestamp,
+  formatRelativeShort,
+} from "@/lib/format-note-time";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import type { AdminEnrolledStudentResponse } from "@/app/api/admin/enrolled/[id]/route";
 
 /**
@@ -399,7 +413,21 @@ function PacketCard({
           <CardTitle className="text-base">
             Registration Packet{yearSuffix}
           </CardTitle>
-          <div className="flex flex-col items-end gap-0.5">
+          {/* Confirmed/Pending pill + last-edited caption sit
+              inline on the same horizontal axis as the title.
+              `items-center gap-2` keeps both elements vertically
+              centered next to each other; the caption gets a
+              `whitespace-nowrap` so it doesn't fold to a second
+              line on narrow widths. */}
+          <div className="flex items-center gap-2 shrink-0">
+            {packet.last_edited_time ? (
+              <span
+                className="text-[10px] text-muted-foreground/80 whitespace-nowrap"
+                title={new Date(packet.last_edited_time).toLocaleString()}
+              >
+                Last edited {formatNoteTimestamp(packet.last_edited_time)}
+              </span>
+            ) : null}
             {packet.registrationConfirmed ? (
               <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-800">
                 <CheckCircle2 className="size-2.5" />
@@ -410,22 +438,6 @@ function PacketCard({
                 Pending
               </span>
             )}
-            {/* Last-edited sub-text under the status pill. Surfaces
-                the packet row's `last_edited_time` so admin can see
-                at a glance when this packet was last touched —
-                useful for spotting stale data (parent uploaded
-                docs months ago but never came back) or recent
-                changes (parent updated medical fields yesterday).
-                Bumped server-side on every PATCH so it always
-                reflects the freshest write. */}
-            {packet.last_edited_time ? (
-              <span
-                className="text-[10px] text-muted-foreground/80"
-                title={new Date(packet.last_edited_time).toLocaleString()}
-              >
-                Last edited {formatNoteTimestamp(packet.last_edited_time)}
-              </span>
-            ) : null}
           </div>
         </div>
       </CardHeader>
@@ -525,15 +537,27 @@ function PacketCard({
           </div>
         </div>
 
+        {/* Required Documents — table view with per-doc admin
+            confirm. Same shape as the Documents to Review block
+            on the family registration detail page so admin reads
+            both surfaces with the same visual vocabulary. The
+            optional documents (IEP, SSN card, passport, state ID)
+            render below as a simpler file list since they don't
+            carry an admin-confirm triplet. */}
+        <EnrolledDocsToReviewTable
+          student={student}
+          onChanged={onChanged}
+        />
+
+        {/* Liability waiver + optional documents — separate from
+            the Documents to Review table because the waiver is a
+            per-packet PDF (different shape than student-row file
+            arrays) and the optional documents don't carry an
+            admin-confirm triplet. */}
         <div className="space-y-3">
           <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Documents
+            Other Documents
           </p>
-          {/* The waiver is per-packet (single PDF returned by PandaDoc).
-              Every other document category lives on the *student* row
-              as an array of file blobs — parents can upload multiple
-              pages per category — so we render a separate row per
-              file instead of a single "Open" link. */}
           <ul className="text-sm space-y-1.5">
             <FileLine
               label="Liability waiver (signed)"
@@ -554,12 +578,8 @@ function PacketCard({
                   : undefined
               }
             />
-            <FileGroup label="Birth certificate" files={student.birth_certificate} />
-            <FileGroup label="School health form" files={student.school_health_form} />
-            <FileGroup label="Transcripts" files={student.transcripts} />
             <FileGroup label="IEP" files={student.iep} />
             <FileGroup label="SSN card" files={student.ssn_card} />
-            <FileGroup label="Immunization forms" files={student.immunization_forms} />
             <FileGroup label="Passport" files={student.passport} />
             <FileGroup label="State ID" files={student.student_state_id} />
           </ul>
@@ -768,6 +788,322 @@ function FileLine({
         </span>
       )}
     </li>
+  );
+}
+
+/**
+ * Documents to Review — same shape as the family-registration
+ * detail's `RequiredDocumentsTable`, scoped to the enrolled
+ * student detail page. Renders the four required documents
+ * (immunization / birth certificate / school health / transcripts)
+ * with file links + per-doc Mark Confirmed + Undo affordances.
+ * PATCHes `/api/admin/students/[id]` which auto-stamps the
+ * matching `*_admin_confirm_time` / `*_admin_confirm_admin` audit
+ * pair on flip.
+ */
+function EnrolledDocsToReviewTable({
+  student,
+  onChanged,
+}: {
+  student: AdminEnrolledStudentResponse["student"];
+  onChanged: () => void;
+}) {
+  // Track which doc's PATCH is mid-flight so each row's spinner
+  // is scoped to itself rather than blanking all four buttons.
+  const [savingDoc, setSavingDoc] = useState<
+    | "birth_certificate_admin_confirm"
+    | "school_health_form_admin_confirm"
+    | "transcripts_admin_confirm"
+    | "immunization_admin_confirm"
+    | null
+  >(null);
+
+  type DocSpec = {
+    label: string;
+    files: Record<string, unknown>[];
+    confirm: {
+      confirmed: boolean;
+      confirmed_time: number | null;
+      confirmed_admin: string;
+    };
+    confirmKey:
+      | "birth_certificate_admin_confirm"
+      | "school_health_form_admin_confirm"
+      | "transcripts_admin_confirm"
+      | "immunization_admin_confirm";
+  };
+
+  const docs: DocSpec[] = [
+    {
+      label: "Birth Certificate",
+      files: student.birth_certificate,
+      confirm: student.document_confirms.birth_certificate,
+      confirmKey: "birth_certificate_admin_confirm",
+    },
+    {
+      label: "School Health Form",
+      files: student.school_health_form,
+      confirm: student.document_confirms.school_health_form,
+      confirmKey: "school_health_form_admin_confirm",
+    },
+    {
+      label: "Transcripts",
+      files: student.transcripts,
+      confirm: student.document_confirms.transcripts,
+      confirmKey: "transcripts_admin_confirm",
+    },
+    {
+      label: "Immunization Forms",
+      files: student.immunization_forms,
+      confirm: student.document_confirms.immunization_forms,
+      confirmKey: "immunization_admin_confirm",
+    },
+  ];
+
+  const confirmable = docs.filter((d) => d.files.length > 0);
+  const confirmedCount = confirmable.filter((d) => d.confirm.confirmed).length;
+
+  async function toggleDoc(doc: DocSpec, next: boolean) {
+    setSavingDoc(doc.confirmKey);
+    try {
+      const res = await fetch(`/api/admin/students/${student.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ [doc.confirmKey]: next }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Update failed (${res.status})`);
+      }
+      toast.success(
+        next
+          ? `${doc.label} confirmed.`
+          : `${doc.label} confirmation cleared.`
+      );
+      onChanged();
+    } catch (err) {
+      console.error("[EnrolledDocsToReviewTable.toggleDoc]", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't update.");
+    } finally {
+      setSavingDoc(null);
+    }
+  }
+
+  return (
+    <div className="rounded-md border bg-muted/20 overflow-hidden">
+      <div className="px-4 py-2 border-b bg-muted/40 flex items-center justify-between gap-2">
+        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Documents to Review
+        </p>
+        {confirmable.length > 0 ? (
+          <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+            {confirmedCount}/{confirmable.length} confirmed
+          </span>
+        ) : null}
+      </div>
+      <Table className="text-sm table-fixed">
+        <TableHeader>
+          <TableRow className="hover:bg-transparent">
+            <TableHead className="w-[28%] text-[10px] uppercase tracking-wider text-muted-foreground">
+              Document
+            </TableHead>
+            <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              File(s)
+            </TableHead>
+            <TableHead className="w-[15%] text-[10px] uppercase tracking-wider text-muted-foreground">
+              Confirmed by
+            </TableHead>
+            <TableHead className="w-[80px] text-[10px] uppercase tracking-wider text-muted-foreground">
+              Time
+            </TableHead>
+            <TableHead className="w-[170px] text-right text-[10px] uppercase tracking-wider text-muted-foreground">
+              Confirmation
+            </TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {docs.map((doc) => {
+            const hasFiles = doc.files.length > 0;
+            const confirmed = doc.confirm.confirmed;
+            const saving = savingDoc === doc.confirmKey;
+            // Treat the legacy "0" string as the unset sentinel —
+            // the `_admin_confirm_admin` column was originally an
+            // int with default 0 before being retyped to text.
+            const confirmedByName = (() => {
+              if (!confirmed) return null;
+              const name = doc.confirm.confirmed_admin?.trim();
+              if (!name || name === "0") return null;
+              return name;
+            })();
+            const confirmedWhen =
+              confirmed && doc.confirm.confirmed_time
+                ? formatRelativeShort(doc.confirm.confirmed_time)
+                : null;
+            const confirmedWhenLong =
+              confirmed && doc.confirm.confirmed_time
+                ? formatNoteTimestamp(doc.confirm.confirmed_time)
+                : null;
+            return (
+              <TableRow
+                key={doc.confirmKey}
+                className={cn(
+                  confirmed ? "bg-emerald-50/40 hover:bg-emerald-50/60" : ""
+                )}
+              >
+                <TableCell className="align-middle">
+                  <p
+                    className="text-sm font-medium truncate"
+                    title={doc.label}
+                  >
+                    {doc.label}
+                  </p>
+                </TableCell>
+                <TableCell className="align-middle">
+                  {hasFiles ? (
+                    <ul className="space-y-1">
+                      {doc.files.map((f, idx) => {
+                        const url = resolveFileUrl(f);
+                        const name =
+                          typeof (f as { name?: unknown }).name === "string"
+                            ? (f as { name: string }).name
+                            : typeof (f as { path?: unknown }).path ===
+                                "string"
+                              ? (f as { path: string }).path
+                              : `File ${idx + 1}`;
+                        const size = (f as { size?: unknown }).size;
+                        const sizeKb =
+                          typeof size === "number"
+                            ? `${(size / 1024).toFixed(0)} KB`
+                            : null;
+                        return (
+                          <li
+                            key={`${doc.confirmKey}-${idx}`}
+                            className="flex items-center gap-2 text-sm min-w-0"
+                          >
+                            <FileText className="size-3.5 shrink-0 text-muted-foreground" />
+                            {url ? (
+                              <a
+                                href={url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                title={name}
+                                className="text-foreground underline-offset-2 hover:underline inline-flex items-center gap-1 min-w-0 flex-1"
+                              >
+                                <span className="truncate min-w-0">{name}</span>
+                                <ExternalLink className="size-3 shrink-0 text-muted-foreground" />
+                              </a>
+                            ) : (
+                              <span
+                                className="truncate min-w-0 flex-1"
+                                title={name}
+                              >
+                                {name}
+                              </span>
+                            )}
+                            {sizeKb ? (
+                              <span className="text-xs text-muted-foreground shrink-0 whitespace-nowrap">
+                                · {sizeKb}
+                              </span>
+                            ) : null}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  ) : (
+                    <p className="text-[11px] italic text-muted-foreground">
+                      No file uploaded.
+                    </p>
+                  )}
+                </TableCell>
+                <TableCell className="align-middle">
+                  {confirmedByName ? (
+                    <p
+                      className="text-sm text-muted-foreground truncate"
+                      title={confirmedByName}
+                    >
+                      {confirmedByName}
+                    </p>
+                  ) : (
+                    <span className="text-xs text-muted-foreground/70">—</span>
+                  )}
+                </TableCell>
+                <TableCell className="align-middle">
+                  {confirmedWhen ? (
+                    <p
+                      className="text-sm text-muted-foreground truncate tabular-nums"
+                      title={confirmedWhenLong ?? confirmedWhen}
+                    >
+                      {confirmedWhen}
+                    </p>
+                  ) : (
+                    <span className="text-xs text-muted-foreground/70">—</span>
+                  )}
+                </TableCell>
+                <TableCell className="text-right align-middle">
+                  <div className="inline-flex items-center gap-1">
+                    <Button
+                      type="button"
+                      variant={confirmed ? "default" : "outline"}
+                      size="sm"
+                      disabled={saving || confirmed || !hasFiles}
+                      onClick={() => void toggleDoc(doc, true)}
+                      className={cn(
+                        "h-7 text-xs leading-none",
+                        confirmed &&
+                          "bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-100",
+                        !confirmed && "bg-white"
+                      )}
+                      title={
+                        confirmed
+                          ? "Already confirmed — use the Undo button to clear"
+                          : hasFiles
+                            ? `Mark ${doc.label} as reviewed`
+                            : "Upload the document before confirming"
+                      }
+                    >
+                      {saving && !confirmed ? (
+                        <Loader2 className="size-3 animate-spin" />
+                      ) : confirmed ? (
+                        <CheckCircle2 className="size-3" />
+                      ) : (
+                        <Circle className="size-3" />
+                      )}
+                      <span>
+                        {confirmed ? "Confirmed" : "Mark confirmed"}
+                      </span>
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      className="size-7 bg-white"
+                      disabled={saving || !confirmed}
+                      onClick={() => void toggleDoc(doc, false)}
+                      title={
+                        confirmed
+                          ? "Undo this confirmation"
+                          : "Nothing to undo"
+                      }
+                      aria-label={
+                        confirmed
+                          ? "Undo confirmation"
+                          : "Undo (disabled — nothing to undo)"
+                      }
+                    >
+                      {saving && confirmed ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : (
+                        <RotateCcw className="size-3.5" />
+                      )}
+                    </Button>
+                  </div>
+                </TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
+    </div>
   );
 }
 

@@ -1,10 +1,10 @@
 "use client";
 
-import { useMemo } from "react";
+import { Fragment, useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { ChevronRight, GraduationCap } from "lucide-react";
-import { DataTable, type ColumnDef } from "@/components/admin/data-table";
+import type { ColumnDef } from "@/components/admin/data-table";
 import {
   Card,
   CardContent,
@@ -12,6 +12,15 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { cn } from "@/lib/utils";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { formatRelativeShort } from "@/lib/format-note-time";
 import type { EnrolledStudentRow } from "@/app/api/admin/enrolled/route";
@@ -228,33 +237,142 @@ export default function EnrolledStudentsPage() {
           Pick a school year above to view enrolled students.
         </div>
       ) : isLoading && !data ? (
-        // Page-level skeleton for the first load — three card-
-        // shaped placeholders matching the EnrolledGradeGroup
-        // chrome below. Showing the grouped silhouettes immediately
-        // tells admin "the data is shaped like this" instead of
-        // leaving a blank screen while the SWR fetch resolves.
+        // Page-level skeleton for the first load — a single card
+        // shell with a stripe of skeleton rows, matching the
+        // unified table below. Tells admin "the data is shaped
+        // like this" while the SWR fetch resolves.
         <EnrolledListSkeleton />
       ) : showEmptyState ? (
         <EnrolledEmptyState />
       ) : (
-        <div className="space-y-8">
-          {grouped.map((group) => (
-            <EnrolledGradeGroup
-              key={group.grade}
-              grade={group.grade}
-              rows={group.rows}
-              isLoading={isLoading}
-              columns={columns}
-              onRowClick={(row) =>
-                router.push(
-                  `/admin/enrolled/${row.student_id}?yearId=${row.year_id}`
-                )
-              }
-            />
-          ))}
-        </div>
+        <EnrolledRoster
+          columns={columns}
+          grouped={grouped}
+          totalCount={rows.length}
+          onRowClick={(row) =>
+            router.push(
+              `/admin/enrolled/${row.student_id}?yearId=${row.year_id}`
+            )
+          }
+        />
       )}
     </div>
+  );
+}
+
+/**
+ * Unified roster — one card, one table, with grade-level header
+ * rows interspersed between the per-grade student rows. Total
+ * enrolled count renders as a footer row at the very bottom so
+ * admin sees the cohort size without scanning the per-group
+ * counts.
+ *
+ * Renders via shadcn `<Table>` primitives directly (rather than
+ * the DataTable component) because we need to splice non-data
+ * rows (group headers + footer total) into the body — DataTable's
+ * row loop doesn't model that.
+ */
+function EnrolledRoster({
+  columns,
+  grouped,
+  totalCount,
+  onRowClick,
+}: {
+  columns: ColumnDef<EnrolledStudentRow>[];
+  grouped: Array<{ grade: string; rows: EnrolledStudentRow[] }>;
+  totalCount: number;
+  onRowClick: (row: EnrolledStudentRow) => void;
+}) {
+  const colCount = columns.length;
+  return (
+    <Card className="overflow-hidden bg-white py-0 gap-0">
+      <CardHeader className="py-4 border-b bg-white">
+        <div className="flex items-baseline gap-3">
+          <CardTitle className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+            Enrolled Roster
+          </CardTitle>
+          <span className="text-xs tabular-nums text-muted-foreground">
+            ({totalCount})
+          </span>
+        </div>
+      </CardHeader>
+      <CardContent className="p-0 bg-white">
+        <Table>
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              {columns.map((col) => (
+                <TableHead
+                  key={col.key}
+                  className={cn(
+                    "text-[10px] uppercase tracking-wider text-muted-foreground",
+                    col.width,
+                    col.align === "right" && "text-right",
+                    col.align === "center" && "text-center"
+                  )}
+                >
+                  {col.header}
+                </TableHead>
+              ))}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {grouped.map((group) => (
+              <Fragment key={group.grade}>
+                {/* Group header row — full-width banner introducing
+                    the grade. `colSpan` covers every column so the
+                    label reads as one bar across the table. */}
+                <TableRow className="bg-muted/40 hover:bg-muted/40">
+                  <TableCell
+                    colSpan={colCount}
+                    className="py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"
+                  >
+                    Grade {group.grade}
+                    <span className="ml-2 normal-case tabular-nums text-muted-foreground/70">
+                      ({group.rows.length})
+                    </span>
+                  </TableCell>
+                </TableRow>
+                {group.rows.map((row) => (
+                  <TableRow
+                    key={row.id}
+                    onClick={() => onRowClick(row)}
+                    className="cursor-pointer"
+                  >
+                    {columns.map((col) => (
+                      <TableCell
+                        key={col.key}
+                        className={cn(
+                          "text-sm",
+                          col.align === "right" && "text-right",
+                          col.align === "center" && "text-center"
+                        )}
+                      >
+                        {col.render
+                          ? col.render(row)
+                          : (row[col.key] as React.ReactNode) ?? "—"}
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                ))}
+              </Fragment>
+            ))}
+            {/* Total row — bookends the table so the cohort size
+                is the last thing admin sees. */}
+            <TableRow className="bg-muted/30 hover:bg-muted/30 border-t-2">
+              <TableCell
+                colSpan={colCount}
+                className="py-3 text-sm font-semibold text-foreground"
+              >
+                Total enrolled
+                <span className="ml-2 tabular-nums text-muted-foreground">
+                  {totalCount}
+                </span>
+              </TableCell>
+            </TableRow>
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -310,52 +428,6 @@ function EnrolledEmptyState() {
   );
 }
 
-/**
- * One grade-level group on the Enrolled page. Same chrome as the
- * Registrations groups (uppercase tracking-wide title + count
- * badge + description) so the two pages feel like the same product.
- *
- * "Grade —" renders for students whose `current_grade` is empty;
- * shouldn't happen in the cohort but the fallback keeps the
- * surface defensive against missing data.
- */
-function EnrolledGradeGroup({
-  grade,
-  rows,
-  isLoading,
-  columns,
-  onRowClick,
-}: {
-  grade: string;
-  rows: EnrolledStudentRow[];
-  isLoading: boolean;
-  columns: ColumnDef<EnrolledStudentRow>[];
-  onRowClick: (row: EnrolledStudentRow) => void;
-}) {
-  return (
-    <Card className="overflow-hidden bg-white py-0 gap-0">
-      <CardHeader className="py-4 border-b bg-white">
-        <div className="flex items-baseline gap-3">
-          <CardTitle className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-            Grade {grade}
-          </CardTitle>
-          <span className="text-xs tabular-nums text-muted-foreground">
-            ({rows.length})
-          </span>
-        </div>
-      </CardHeader>
-      <CardContent className="p-4 bg-white">
-        <DataTable<EnrolledStudentRow>
-          columns={columns}
-          data={rows}
-          isLoading={isLoading}
-          searchPlaceholder={`Search Grade ${grade}…`}
-          onRowClick={onRowClick}
-        />
-      </CardContent>
-    </Card>
-  );
-}
 
 /**
  * Shared with the family registration detail page: turns a raw

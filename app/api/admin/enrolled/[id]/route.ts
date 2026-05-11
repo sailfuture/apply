@@ -183,6 +183,35 @@ function shapeStudent(s: XanoStudent) {
     unenrollment_reason: s.unenrollment_reason ?? "",
     unenrollment_date: s.unenrollment_date ?? null,
     unenrollment_notes: s.unenrollment_notes ?? "",
+    /** Per-document admin-confirm audit for the four required
+     *  documents (immunization / birth certificate / school
+     *  health / transcripts). Bool + audit timestamp + audit
+     *  admin name. Surfaced here so the Documents to Review
+     *  table on the enrolled detail page can render the
+     *  same audit captions ("Confirmed by Mr. Thompson · 4d")
+     *  the family registration detail page renders. */
+    document_confirms: {
+      birth_certificate: {
+        confirmed: s.birth_certificate_admin_confirm === true,
+        confirmed_time: s.birth_certificate_admin_confirm_time ?? null,
+        confirmed_admin: s.birth_certificate_admin_confirm_admin ?? "",
+      },
+      school_health_form: {
+        confirmed: s.school_health_form_admin_confirm === true,
+        confirmed_time: s.school_health_form_admin_confirm_time ?? null,
+        confirmed_admin: s.school_health_form_admin_confirm_admin ?? "",
+      },
+      transcripts: {
+        confirmed: s.transcripts_admin_confirm === true,
+        confirmed_time: s.transcripts_admin_confirm_time ?? null,
+        confirmed_admin: s.transcripts_admin_confirm_admin ?? "",
+      },
+      immunization_forms: {
+        confirmed: s.immunization_admin_confirm === true,
+        confirmed_time: s.immunization_admin_confirm_time ?? null,
+        confirmed_admin: s.immunization_admin_confirm_admin ?? "",
+      },
+    },
   };
 }
 
