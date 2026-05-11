@@ -76,6 +76,7 @@ export async function GET(
       studentsResult,
       emergencyResult,
       paymentResult,
+      scholarshipResult,
     ] = await Promise.allSettled([
       xano.applications.getAdminFamilyDetail(familyId, yearId),
       xano.studentRegistrationProgress.resolve(familyId, yearId),
@@ -91,6 +92,14 @@ export async function GET(
       // amounts on this legacy row. Reading both lets us paper over
       // that delta until the legacy table is fully retired.
       xano.familyPayments.getByFamilyAndYear(familyId, yearId),
+      // Scholarship row — needed to know whether the family is on the
+      // SNAP path (and whether the SNAP award letter has been admin-
+      // confirmed). The per-student tuition breakdown table renders
+      // the Opportunity Scholarship coverage as a computed value when
+      // SNAP-confirmed (covers tuition + transport - SUFS) instead of
+      // reading the per-app `opportunity_scholarship_award_amount`
+      // column, which is null for SNAP families on purpose.
+      xano.scholarship.getByFamilyAndYear(familyId, yearId),
     ]);
 
     if (aggResult.status === "rejected") {
@@ -138,6 +147,10 @@ export async function GET(
       emergencyResult.status === "fulfilled" ? emergencyResult.value : [];
     const familyPayment =
       paymentResult.status === "fulfilled" ? paymentResult.value : null;
+    const scholarshipRow =
+      scholarshipResult.status === "fulfilled"
+        ? scholarshipResult.value
+        : null;
 
     // Backfill the progress row's monthly columns from the legacy
     // `registration_families_payment` row when missing. Conditions:
@@ -348,6 +361,26 @@ export async function GET(
       progress: progress as XanoStudentRegistrationProgress | null,
       students: studentRows,
       emergency_contacts: emergencyContacts as XanoEmergencyContact[],
+      // Family-level scholarship summary — only the bits the
+      // registration detail page actually needs. The full
+      // scholarship row isn't surfaced (Financial Aid lives on
+      // the apply-flow detail page); registration just needs to
+      // know which path the family's on so the Tuition card's
+      // per-student breakdown table can compute the
+      // Opportunity Scholarship coverage the SNAP way (covers
+      // tuition + transport - SUFS) instead of reading the
+      // per-app `opportunity_scholarship_award_amount` column
+      // — that's null on purpose for SNAP families and the
+      // table was rendering "—" instead of the actual coverage.
+      scholarship: {
+        isOpportunityScholarship:
+          scholarshipRow?.isOpportunityScholarship === true,
+        isSNAPBenefits: scholarshipRow?.isSNAPBenefits === true,
+        isNotParticipating:
+          scholarshipRow?.isNotParticipating === true,
+        is_snap_confirmed:
+          scholarshipRow?.is_snap_confirmed === true,
+      },
     } satisfies AdminFamilyRegistrationResponse);
   } catch (err) {
     return handleAdminError(err);
@@ -387,6 +420,19 @@ export interface AdminFamilyRegistrationResponse {
   progress: XanoStudentRegistrationProgress | null;
   students: AdminFamilyRegistrationStudentRow[];
   emergency_contacts: XanoEmergencyContact[];
+  /** Family-level scholarship summary — minimal projection of the
+   *  scholarship row. Tells the Tuition card's per-student
+   *  breakdown table which path the family's on (so SNAP-confirmed
+   *  rows show the computed Opportunity Scholarship coverage
+   *  instead of a literal `—`). `is_snap_confirmed === true`
+   *  signals the SNAP path is fully verified, which is when the
+   *  computed coverage kicks in. */
+  scholarship: {
+    isOpportunityScholarship: boolean;
+    isSNAPBenefits: boolean;
+    isNotParticipating: boolean;
+    is_snap_confirmed: boolean;
+  };
 }
 
 export interface AdminFamilyRegistrationStudentRow {

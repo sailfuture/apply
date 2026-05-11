@@ -317,6 +317,22 @@ export default function FamilyDetailPage() {
     | "testing"
     | null
   >(null);
+  // Page-level acceptance latch. When a family is accepted, every
+  // section's Undo affordance freezes — admin has to revoke the
+  // acceptance from the Acceptance card below before they can step
+  // back into any section to amend it. Keeps the lifecycle linear
+  // ("accept = decision is final unless explicitly reversed") so
+  // admin can't accidentally rewind a section's verify while the
+  // Acceptance card still claims the family is fully approved.
+  const pageAccepted = progress?.isAccepted === true;
+  const unverifyLockedConfig = pageAccepted
+    ? {
+        unverifyLocked: true as const,
+        unverifyLockedReason:
+          "Revoke acceptance below before undoing.",
+      }
+    : {};
+
   async function toggleSectionConfirmed(
     section:
       | "family"
@@ -629,6 +645,7 @@ export default function FamilyDetailPage() {
               confirmedByName: progress?.family_admin_confirm_admin?.trim() || null,
               saving: savingSection === "family",
               onToggle: (next) => toggleSectionConfirmed("family", next),
+              ...unverifyLockedConfig,
             }}
           >
             {parents.length === 0 ? (
@@ -679,6 +696,7 @@ export default function FamilyDetailPage() {
                 progress?.students_admin_confirm_admin?.trim() || null,
               saving: savingSection === "students",
               onToggle: (next) => toggleSectionConfirmed("students", next),
+              ...unverifyLockedConfig,
             }}
           >
             {students.length === 0 ? (
@@ -799,6 +817,7 @@ export default function FamilyDetailPage() {
                 // bypass modal still spells out the gate when
                 // admin clicks Verify with docs outstanding.
                 bypassable: true,
+                ...unverifyLockedConfig,
               }}
             >
               {detailLoading && !detail ? (
@@ -882,6 +901,7 @@ export default function FamilyDetailPage() {
                 confirmedByName: null,
                 saving: savingSection === "testing",
                 onToggle: (next) => toggleSectionConfirmed("testing", next),
+                ...unverifyLockedConfig,
               }}
             >
               {detailLoading && !detail ? (
@@ -1500,6 +1520,16 @@ interface SectionConfirmConfig {
    *  legacy data). Sections that don't want this (Scholarship,
    *  Accept) leave it unset and the gate hard-blocks. */
   bypassable?: boolean;
+  /** When true, the Undo affordance on the verified-state footer is
+   *  disabled — admin can't unverify the section until they revoke
+   *  the family's acceptance first. Wired to the page-level
+   *  `accepted` flag on every section so the acceptance latch is
+   *  the single gate admin has to clear before they can undo any
+   *  section's verification. The reason renders as a small caption
+   *  next to the verified pill so admin sees what's blocking the
+   *  undo without hovering. */
+  unverifyLocked?: boolean;
+  unverifyLockedReason?: string;
 }
 
 /**
@@ -1518,6 +1548,8 @@ function SectionConfirmFooter({ confirm }: { confirm: SectionConfirmConfig }) {
     disabled,
     disabledReason,
     bypassable,
+    unverifyLocked,
+    unverifyLockedReason,
   } = confirm;
   const [undoOpen, setUndoOpen] = useState(false);
   // Separate state for the bypass-confirm modal so it doesn't
@@ -1562,6 +1594,16 @@ function SectionConfirmFooter({ confirm }: { confirm: SectionConfirmConfig }) {
               {confirmTime ? (
                 <span> · {formatNoteTimestamp(confirmTime)}</span>
               ) : null}
+              {/* Unverify lock caption — appended to the audit line
+                  when admin can't currently Undo (typically because
+                  the family is accepted and acceptance must be
+                  revoked first). The reason rides on the disabled
+                  Undo button's tooltip too, but the inline caption
+                  surfaces it without requiring a hover so admin
+                  immediately sees what's blocking the action. */}
+              {unverifyLocked && unverifyLockedReason ? (
+                <span> · {unverifyLockedReason}</span>
+              ) : null}
             </>
           ) : disabled && disabledReason ? (
             <span>{disabledReason}</span>
@@ -1594,7 +1636,12 @@ function SectionConfirmFooter({ confirm }: { confirm: SectionConfirmConfig }) {
             variant="outline"
             size="sm"
             onClick={() => setUndoOpen(true)}
-            disabled={saving}
+            disabled={saving || !!unverifyLocked}
+            title={
+              unverifyLocked && unverifyLockedReason
+                ? unverifyLockedReason
+                : undefined
+            }
             className="bg-white"
           >
             {saving ? (
@@ -3971,15 +4018,21 @@ function DecisionCard({
           </div>
         </div>
       </CardHeader>
-      {/* Body fades to muted when admin has accepted the family
-          so the card reads as settled, but the header (Notes pill,
-          status pill, title) and footer (Verified pill + Undo)
-          stay at full opacity — mirrors the SectionShell pattern
-          on the rest of the page. */}
+      {/* Body fades to muted when admin has VERIFIED the
+          Scholarship section (the section's own
+          `scholarship_admin_complete` flag), not the page-level
+          `accepted` latch. The two used to be entangled: the card
+          dimmed on accept, so undoing the section's verify still
+          left the body grayed out because the Acceptance card
+          hadn't been revoked. Tying opacity to the section's own
+          verify state means Undo on this footer restores the body
+          to full opacity immediately, matching how every
+          SectionShell elsewhere behaves. Header + footer stay at
+          full opacity regardless. */}
       <CardContent
         className={cn(
           "space-y-6 py-5 bg-white transition-opacity",
-          accepted && "opacity-60"
+          progress?.scholarship_admin_complete === true && "opacity-60"
         )}
       >
         {loading ? (
@@ -4100,6 +4153,15 @@ function DecisionCard({
                     unconfirmedCount === 1 ? "" : "s"
                   } before verifying.`
                 : "Confirm every student's scholarship award before verifying.",
+            // Acceptance is the final downstream signal of this
+            // section — once the family is accepted, the
+            // Scholarship Determination shouldn't be unwound
+            // without first revoking the acceptance. Mirrors the
+            // gate the page-level SectionShells use above.
+            unverifyLocked: accepted,
+            unverifyLockedReason: accepted
+              ? "Revoke acceptance above before undoing."
+              : undefined,
           }}
         />
       ) : null}

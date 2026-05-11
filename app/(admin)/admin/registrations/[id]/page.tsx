@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import useSWR from "swr";
@@ -184,8 +184,15 @@ export default function FamilyRegistrationDetailPage() {
     );
   }
 
-  const { family, primary, school_year, progress, students, emergency_contacts } =
-    data;
+  const {
+    family,
+    primary,
+    school_year,
+    progress,
+    students,
+    emergency_contacts,
+    scholarship,
+  } = data;
   const familyName =
     family?.family_name?.trim() || `Family #${family?.id ?? familyId}`;
 
@@ -197,6 +204,23 @@ export default function FamilyRegistrationDetailPage() {
     // the rest of the page.
     void mutateFamilyPayment();
   };
+
+  // Page-level registration-confirmed latch. Once admin has flipped
+  // `isRegistrationConfirmed` from the Family Registration
+  // Confirmation card, every section's Undo affordance freezes —
+  // admin has to revoke the registration confirmation first before
+  // they can step back into any section to amend its verification.
+  // Mirrors the acceptance-gate pattern on the apply-flow detail
+  // page.
+  const pageRegistrationConfirmed =
+    progress?.isRegistrationConfirmed === true;
+  const unverifyLockedConfig = pageRegistrationConfirmed
+    ? {
+        unverifyLocked: true as const,
+        unverifyLockedReason:
+          "Revoke registration confirmation above before undoing.",
+      }
+    : {};
 
   // Builder for the per-section editor route. Mirrors the
   // `sectionHref` helper on the apply-flow page so the Edit button
@@ -412,6 +436,7 @@ export default function FamilyRegistrationDetailPage() {
               saving: savingSection === "tuition",
               onToggle: (next) =>
                 verifyToggle("tuition_admin_confirm", next, "tuition"),
+              ...unverifyLockedConfig,
             }}
           >
             <TuitionBlock
@@ -426,10 +451,14 @@ export default function FamilyRegistrationDetailPage() {
             {/* Per-student breakdown table — mirrors the same view the
                 parent sees on `/dashboard/tuition`. No inputs; pure
                 read-only summary so admin can scan exactly what the
-                family signed for at the per-student level. */}
+                family signed for at the per-student level. SNAP-
+                confirmed families get a computed Opportunity
+                Scholarship coverage instead of the literal column
+                (which is null for them on purpose). */}
             <TuitionBreakdownTable
               students={students}
               schoolYear={school_year}
+              scholarship={scholarship}
             />
           </SectionShell>
         </section>
@@ -455,6 +484,7 @@ export default function FamilyRegistrationDetailPage() {
               saving: savingSection === "enrollment",
               onToggle: (next) =>
                 verifyToggle("enrollment_admin_confirm", next, "enrollment"),
+              ...unverifyLockedConfig,
             }}
           >
             <EnrollmentAgreementBlock progress={progress} />
@@ -498,6 +528,7 @@ export default function FamilyRegistrationDetailPage() {
                   next,
                   "registration"
                 ),
+              ...unverifyLockedConfig,
             }}
           >
             <RegistrationPacketBlock
@@ -548,6 +579,7 @@ export default function FamilyRegistrationDetailPage() {
                   next,
                   "emergency_contacts"
                 ),
+              ...unverifyLockedConfig,
             }}
           >
             <EmergencyContactsBlock
@@ -579,6 +611,7 @@ export default function FamilyRegistrationDetailPage() {
               saving: savingSection === "volunteer",
               onToggle: (next) =>
                 verifyToggle("volunteer_admin_confirm", next, "volunteer"),
+              ...unverifyLockedConfig,
             }}
           >
             <VolunteerHoursBlock progress={progress} />
@@ -1012,6 +1045,12 @@ interface SectionVerifyConfig {
   saving: boolean;
   /** Called with the next desired bool (true → verify, false → undo). */
   onToggle: (next: boolean) => void;
+  /** When true, the Undo affordance on the verified-state footer is
+   *  disabled — admin can't unverify the section until they revoke
+   *  the family's registration confirmation first. Mirrors the
+   *  acceptance-gate pattern on the apply-flow detail page. */
+  unverifyLocked?: boolean;
+  unverifyLockedReason?: string;
 }
 
 /**
@@ -1030,6 +1069,8 @@ function SectionVerifyFooter({ verify }: { verify: SectionVerifyConfig }) {
     verifiedByName,
     saving,
     onToggle,
+    unverifyLocked,
+    unverifyLockedReason,
   } = verify;
   const [undoOpen, setUndoOpen] = useState(false);
 
@@ -1058,6 +1099,13 @@ function SectionVerifyFooter({ verify }: { verify: SectionVerifyConfig }) {
               {verifiedTime ? (
                 <span> · {formatNoteTimestamp(verifiedTime)}</span>
               ) : null}
+              {/* Lock caption — appended to the audit line when
+                  admin can't currently Undo (typically because the
+                  family is registration-confirmed and must be
+                  revoked first). */}
+              {unverifyLocked && unverifyLockedReason ? (
+                <span> · {unverifyLockedReason}</span>
+              ) : null}
             </>
           ) : null}
         </span>
@@ -1079,7 +1127,12 @@ function SectionVerifyFooter({ verify }: { verify: SectionVerifyConfig }) {
             variant="outline"
             size="sm"
             onClick={() => setUndoOpen(true)}
-            disabled={saving}
+            disabled={saving || !!unverifyLocked}
+            title={
+              unverifyLocked && unverifyLockedReason
+                ? unverifyLockedReason
+                : undefined
+            }
             className="bg-white"
           >
             {saving ? (
@@ -1453,6 +1506,18 @@ function TuitionBlock({
     paymentToTuitionDraft(familyPayment)
   );
 
+  // Defensive lock: if the section flips to verified while admin
+  // is in edit mode (e.g. another tab verified, or the page
+  // refetches in the middle of an edit), force-exit the editor
+  // and discard the draft. Prevents the inputs from staying live
+  // when the section is supposed to be settled.
+  useEffect(() => {
+    if (tuitionVerified && editing) {
+      setEditing(false);
+      setDraft(paymentToTuitionDraft(familyPayment));
+    }
+  }, [tuitionVerified, editing, familyPayment]);
+
   // All numeric values come from the family-payment row. Legacy
   // copies on the progress row (`monthly_tuition_payment`, etc.)
   // were drifting from the apply-flow source, so we read the
@@ -1651,7 +1716,7 @@ function TuitionBlock({
                 onChange={(v) =>
                   setDraft((d) => ({ ...d, monthly_tuition_payment: v }))
                 }
-                disabled={saving}
+                disabled={saving || !!tuitionVerified}
               />
               <PacketEditInput
                 label="Annual Admin Fee"
@@ -1659,7 +1724,7 @@ function TuitionBlock({
                 onChange={(v) =>
                   setDraft((d) => ({ ...d, annual_fee_total: v }))
                 }
-                disabled={saving}
+                disabled={saving || !!tuitionVerified}
               />
               <PacketEditInput
                 label="Transportation Total"
@@ -1667,7 +1732,7 @@ function TuitionBlock({
                 onChange={(v) =>
                   setDraft((d) => ({ ...d, transportation_total: v }))
                 }
-                disabled={saving}
+                disabled={saving || !!tuitionVerified}
               />
             </>
           ) : (
@@ -1695,7 +1760,7 @@ function TuitionBlock({
               onChange={(v) =>
                 setDraft((d) => ({ ...d, sufs_total: v }))
               }
-              disabled={saving}
+              disabled={saving || !!tuitionVerified}
             />
           ) : (
             <DisabledField
@@ -1830,9 +1895,20 @@ function tuitionStatusBadge(status: string) {
 function TuitionBreakdownTable({
   students,
   schoolYear,
+  scholarship,
 }: {
   students: AdminFamilyRegistrationStudentRow[];
   schoolYear: TuitionBreakdownSchoolYear;
+  /** Family-level scholarship summary. When the family is on the
+   *  confirmed SNAP path, the per-app
+   *  `opportunity_scholarship_award_amount` is null on purpose
+   *  (admin doesn't enter a number — the Opportunity Scholarship
+   *  covers whatever's left after SUFS). This block then renders
+   *  the COMPUTED coverage (`tuition + transport - SUFS`) on the
+   *  Opportunity Scholarship Award line instead of "—", and
+   *  subtotals collapse transport into the scholarship the same
+   *  way the apply-flow Tuition Breakdown does. */
+  scholarship: AdminFamilyRegistrationResponse["scholarship"];
 }) {
   if (students.length === 0) {
     return null;
@@ -1840,20 +1916,45 @@ function TuitionBreakdownTable({
   const tuition = schoolYear.tuition ?? 0;
   const adminFees = schoolYear.annual_fees ?? 0;
   const transportFees = schoolYear.transportation_fees ?? 0;
+  // SNAP families with the SNAP award letter admin-confirmed get
+  // the auto-coverage treatment. Pre-confirm SNAP families still
+  // read the raw column so a half-set-up row doesn't get a
+  // computed coverage that admin hasn't actually approved.
+  const isSnapAutoCover =
+    scholarship.isSNAPBenefits && scholarship.is_snap_confirmed;
 
   const rows = students.map((s) => {
     const sufsField = SUFS_FIELDS[s.sufs_type];
     const stepUpAmount = sufsField
       ? (schoolYear[sufsField] as number | undefined) ?? 0
       : 0;
-    const scholarshipAmount = s.opportunity_scholarship_award_amount ?? null;
-    const remaining = Math.max(
-      0,
-      tuition - stepUpAmount - (scholarshipAmount ?? 0)
-    );
     const usesTransport = !!s.is_bus_transportation;
-    const subtotal =
-      remaining + adminFees + (usesTransport ? transportFees : 0);
+    const transportApplicable = usesTransport ? transportFees : 0;
+    // Opportunity Scholarship Award column. Two paths:
+    //   - SNAP-confirmed → compute the coverage = tuition (+
+    //     transport if applicable) - SUFS - whatever the family
+    //     pays. Mirrors the apply-flow Tuition Breakdown's SNAP
+    //     branch byte-for-byte.
+    //   - Anyone else → read the per-app number admin entered
+    //     (null reads as "no Opportunity Scholarship award on
+    //     this row," i.e. the regular Opportunity Scholarship
+    //     path didn't award this family anything yet, or they
+    //     opted out).
+    const familyPaysForTuition =
+      s.opportunity_scholarship_award_amount ?? 0;
+    const scholarshipAmount: number | null = isSnapAutoCover
+      ? Math.max(
+          0,
+          tuition + transportApplicable - stepUpAmount - familyPaysForTuition
+        )
+      : s.opportunity_scholarship_award_amount;
+    // Subtotal math also splits on SNAP. SNAP families collapse
+    // transport into the scholarship (their subtotal = admin fee
+    // only); everyone else carries transport through as a paid
+    // line.
+    const subtotal = isSnapAutoCover
+      ? familyPaysForTuition + adminFees
+      : familyPaysForTuition + adminFees + transportApplicable;
     return {
       studentName: s.student_full_name,
       tuition,
@@ -1866,6 +1967,11 @@ function TuitionBreakdownTable({
       usesTransport,
       busStop: s.bus_stop,
       subtotal,
+      // SNAP families render the transport line as auto-covered
+      // ("Included") instead of $0 / N/A — separate flag so the
+      // table copy can spell it out for admin without inferring
+      // it from a 0 amount.
+      transportAutoCovered: isSnapAutoCover && usesTransport,
     };
   });
   const grandTotal = rows.reduce((sum, r) => sum + r.subtotal, 0);
@@ -1910,7 +2016,11 @@ function TuitionBreakdownTable({
                 </td>
               </tr>
 
-              {/* Transportation Fee */}
+              {/* Transportation Fee — SNAP auto-cover families get
+                  an "Included" pill on the right since the
+                  Opportunity Scholarship absorbs transport into its
+                  coverage; non-SNAP riders show the dollar amount;
+                  non-riders show em dash. */}
               <tr className="border-t">
                 <td className="px-4 py-3 text-muted-foreground">
                   <span className="inline-flex items-center gap-1.5">
@@ -1923,7 +2033,11 @@ function TuitionBreakdownTable({
                   </span>
                 </td>
                 <td className="px-4 py-3 text-right font-medium">
-                  {row.usesTransport ? (
+                  {row.transportAutoCovered ? (
+                    <span className="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700">
+                      Included
+                    </span>
+                  ) : row.usesTransport ? (
                     `$${formatTuitionCurrency(row.transportFees)}`
                   ) : (
                     <span className="text-muted-foreground">—</span>
