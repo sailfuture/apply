@@ -2495,7 +2495,7 @@ function ScholarshipBlock({
         onChanged={onScholarshipChanged}
       />
       {scholarship.isNotParticipating ? (
-        <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+        <div className="flex items-start gap-2 rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
           <AlertCircle className="size-4 shrink-0 mt-0.5" />
           <span>
             The family opted out of the SailFuture Opportunity Scholarship
@@ -2505,7 +2505,7 @@ function ScholarshipBlock({
         </div>
       ) : null}
       {scholarship.isSNAPBenefits ? (
-        <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+        <div className="flex items-start gap-2 rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
           <AlertCircle className="size-4 shrink-0 mt-0.5" />
           <span>
             The family pre-qualifies via SNAP benefits. Confirm the SNAP
@@ -6874,26 +6874,22 @@ function ScholarshipPathSelector({
     key: "opp" | "snap" | "out";
     flag: "isOpportunityScholarship" | "isSNAPBenefits" | "isNotParticipating";
     label: string;
-    description: string;
   };
   const options: Option[] = [
     {
       key: "opp",
       flag: "isOpportunityScholarship",
       label: "Opportunity Scholarship",
-      description: "Full financial aid application",
     },
     {
       key: "snap",
       flag: "isSNAPBenefits",
       label: "SNAP benefits",
-      description: "Pre-qualified via SNAP",
     },
     {
       key: "out",
       flag: "isNotParticipating",
       label: "Opted out",
-      description: "Not applying for aid",
     },
   ];
 
@@ -6902,6 +6898,11 @@ function ScholarshipPathSelector({
       <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
         Scholarship Path
       </p>
+      {/* Three-pill picker — single-line label per option (no
+          sub-description), outline-only active state (heavier
+          border, no tinted background). Selected option swaps
+          its empty circle for a filled circle so the choice is
+          clear at a glance without painting the button green. */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
         {options.map((opt) => {
           const isActive = active === opt.key;
@@ -6916,25 +6917,23 @@ function ScholarshipPathSelector({
                 void setPath(opt.flag, opt.label);
               }}
               className={cn(
-                "flex flex-col items-start gap-0.5 rounded-md border px-3 py-2 text-left text-sm transition-colors disabled:opacity-50",
+                "flex items-center gap-2 rounded-md border bg-white px-3 py-2 text-left text-sm transition-colors disabled:opacity-50",
                 isActive
-                  ? "border-emerald-400 bg-emerald-50 ring-1 ring-emerald-300"
-                  : "border-border bg-white hover:bg-muted/40"
+                  ? "border-foreground border-2 hover:bg-white"
+                  : "border-border hover:bg-muted/40"
               )}
             >
-              <span className="flex items-center gap-1.5 font-medium text-foreground">
-                {isSaving ? (
-                  <Loader2 className="size-3.5 animate-spin shrink-0" />
-                ) : isActive ? (
-                  <CheckCircle2 className="size-3.5 text-emerald-600 shrink-0" />
-                ) : (
-                  <Circle className="size-3.5 text-muted-foreground/40 shrink-0" />
-                )}
-                {opt.label}
-              </span>
-              <span className="text-[11px] text-muted-foreground pl-5">
-                {opt.description}
-              </span>
+              {isSaving ? (
+                <Loader2 className="size-3.5 animate-spin shrink-0 text-muted-foreground" />
+              ) : isActive ? (
+                // Filled circle — Radix's Circle gets a fill to
+                // signal selection without leaning on the heavier
+                // green-bg active state.
+                <Circle className="size-3.5 shrink-0 fill-foreground text-foreground" />
+              ) : (
+                <Circle className="size-3.5 shrink-0 text-muted-foreground/40" />
+              )}
+              <span className="font-medium text-foreground">{opt.label}</span>
             </button>
           );
         })}

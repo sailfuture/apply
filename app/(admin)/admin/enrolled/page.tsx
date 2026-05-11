@@ -1,10 +1,11 @@
 "use client";
 
-import { Fragment, useMemo } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
-import { ChevronRight, GraduationCap } from "lucide-react";
+import { ChevronRight, GraduationCap, Search } from "lucide-react";
 import type { ColumnDef } from "@/components/admin/data-table";
+import { Input } from "@/components/ui/input";
 import {
   Card,
   CardContent,
@@ -284,6 +285,27 @@ function EnrolledRoster({
   onRowClick: (row: EnrolledStudentRow) => void;
 }) {
   const colCount = columns.length;
+  const [search, setSearch] = useState("");
+  // Filter each grade group's rows by the search query, then
+  // drop any groups that have zero matches so empty grade
+  // sections don't render. Matches against student name +
+  // family name + primary contact + grade — the same fields
+  // admin's eye scans when looking for a specific row.
+  const visibleGrouped = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return grouped;
+    const filterRow = (r: EnrolledStudentRow) =>
+      `${r.student_full_name} ${r.family_name} ${r.primary_email ?? ""} ${r.primary_name ?? ""} ${r.student_grade}`
+        .toLowerCase()
+        .includes(q);
+    return grouped
+      .map((g) => ({ ...g, rows: g.rows.filter(filterRow) }))
+      .filter((g) => g.rows.length > 0);
+  }, [grouped, search]);
+  const visibleCount = useMemo(
+    () => visibleGrouped.reduce((acc, g) => acc + g.rows.length, 0),
+    [visibleGrouped]
+  );
   return (
     <Card className="overflow-hidden bg-white py-0 gap-0">
       <CardHeader className="py-4 border-b bg-white">
@@ -296,7 +318,20 @@ function EnrolledRoster({
           </span>
         </div>
       </CardHeader>
-      <CardContent className="p-0 bg-white">
+      <CardContent className="p-4 bg-white space-y-3">
+        {/* Search bar mirrors the chrome on the Registrations
+            page's group cards. Filters across every grade group
+            in real time — empty groups drop out of the render
+            so admin doesn't scroll past blank sections. */}
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground/60" />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search enrolled students…"
+            className="pl-9 bg-white"
+          />
+        </div>
         <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
@@ -316,48 +351,61 @@ function EnrolledRoster({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {grouped.map((group) => (
-              <Fragment key={group.grade}>
-                {/* Group header row — full-width banner introducing
-                    the grade. `colSpan` covers every column so the
-                    label reads as one bar across the table. */}
-                <TableRow className="bg-muted/40 hover:bg-muted/40">
-                  <TableCell
-                    colSpan={colCount}
-                    className="py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"
-                  >
-                    Grade {group.grade}
-                    <span className="ml-2 normal-case tabular-nums text-muted-foreground/70">
-                      ({group.rows.length})
-                    </span>
-                  </TableCell>
-                </TableRow>
-                {group.rows.map((row) => (
-                  <TableRow
-                    key={row.id}
-                    onClick={() => onRowClick(row)}
-                    className="cursor-pointer"
-                  >
-                    {columns.map((col) => (
-                      <TableCell
-                        key={col.key}
-                        className={cn(
-                          "text-sm",
-                          col.align === "right" && "text-right",
-                          col.align === "center" && "text-center"
-                        )}
-                      >
-                        {col.render
-                          ? col.render(row)
-                          : (row[col.key] as React.ReactNode) ?? "—"}
-                      </TableCell>
-                    ))}
+            {visibleGrouped.length === 0 ? (
+              <TableRow className="hover:bg-transparent">
+                <TableCell
+                  colSpan={colCount}
+                  className="py-8 text-center text-sm italic text-muted-foreground"
+                >
+                  No students match &ldquo;{search}&rdquo;.
+                </TableCell>
+              </TableRow>
+            ) : (
+              visibleGrouped.map((group) => (
+                <Fragment key={group.grade}>
+                  {/* Group header row — full-width banner introducing
+                      the grade. `colSpan` covers every column so the
+                      label reads as one bar across the table. */}
+                  <TableRow className="bg-muted/40 hover:bg-muted/40">
+                    <TableCell
+                      colSpan={colCount}
+                      className="py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"
+                    >
+                      Grade {group.grade}
+                      <span className="ml-2 normal-case tabular-nums text-muted-foreground/70">
+                        ({group.rows.length})
+                      </span>
+                    </TableCell>
                   </TableRow>
-                ))}
-              </Fragment>
-            ))}
+                  {group.rows.map((row) => (
+                    <TableRow
+                      key={row.id}
+                      onClick={() => onRowClick(row)}
+                      className="cursor-pointer"
+                    >
+                      {columns.map((col) => (
+                        <TableCell
+                          key={col.key}
+                          className={cn(
+                            "text-sm",
+                            col.align === "right" && "text-right",
+                            col.align === "center" && "text-center"
+                          )}
+                        >
+                          {col.render
+                            ? col.render(row)
+                            : (row[col.key] as React.ReactNode) ?? "—"}
+                        </TableCell>
+                      ))}
+                    </TableRow>
+                  ))}
+                </Fragment>
+              ))
+            )}
             {/* Total row — bookends the table so the cohort size
-                is the last thing admin sees. */}
+                is the last thing admin sees. When a search is
+                active, the row shows the filtered count alongside
+                the total so admin sees both at a glance. */}
             <TableRow className="bg-muted/30 hover:bg-muted/30 border-t-2">
               <TableCell
                 colSpan={colCount}
@@ -365,7 +413,9 @@ function EnrolledRoster({
               >
                 Total enrolled
                 <span className="ml-2 tabular-nums text-muted-foreground">
-                  {totalCount}
+                  {search.trim() && visibleCount !== totalCount
+                    ? `${visibleCount} of ${totalCount}`
+                    : totalCount}
                 </span>
               </TableCell>
             </TableRow>
