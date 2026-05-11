@@ -13,12 +13,14 @@ import {
   Circle,
   ExternalLink,
   FileText,
+  FileUp,
   Loader2,
   Pencil,
   Plus,
   RotateCcw,
   SquarePen,
   Undo2,
+  X,
   XCircle,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -36,6 +38,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  FileUpload,
+  FileUploadDropzone,
+  FileUploadItem,
+  FileUploadItemDelete,
+  FileUploadItemMetadata,
+  FileUploadItemPreview,
+  FileUploadList,
+} from "@/components/ui/file-upload";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -475,10 +486,16 @@ export default function FamilyRegistrationDetailPage() {
         </section>
 
         <section id="section-enrollment" className="scroll-mt-20">
+          {/* No Edit affordance — Enrollment Agreement is owned end-
+              to-end by PandaDoc (template, signing, returned PDF).
+              Editing fields out from under the document workflow
+              would desync the PDF on file from the page state, so
+              the section stays read-only here. Admin re-sends the
+              PandaDoc envelope through its own surface if a
+              correction is needed. */}
           <SectionShell
             title="Enrollment Agreement"
             status={sectionStatus.enrollment.completed ? "complete" : "in_progress"}
-            editHref={regSectionHref("enrollment")}
             notes={{
               familyId: Number(family?.id ?? familyId),
               yearId: Number(yearId),
@@ -602,10 +619,16 @@ export default function FamilyRegistrationDetailPage() {
         </section>
 
         <section id="section-volunteer" className="scroll-mt-20">
+          {/* No Edit affordance — Volunteer Hours captures the
+              parent's acknowledgment of the volunteer policy via a
+              printed name + signature, both written by the parent
+              flow's /volunteer-hours page. Admin override would
+              defeat the audit (the signature is supposed to be
+              the parent's). Verify on the footer is the admin
+              affordance here. */}
           <SectionShell
             title="Volunteer Hours"
             status={sectionStatus.volunteer.completed ? "complete" : "in_progress"}
-            editHref={regSectionHref("volunteer")}
             notes={{
               familyId: Number(family?.id ?? familyId),
               yearId: Number(yearId),
@@ -2789,23 +2812,47 @@ function StudentPacketBlock({
           <Separator />
 
           {/* ── Optional Documents ──────────────────────────────── */}
+          {/* Each FilePreviewGroup ships an inline Upload affordance
+              so admin can attach pages on the family's behalf — useful
+              for paper records being digitized post-acceptance or for
+              additional pages the parent didn't initially submit. */}
           <SectionGroup title="Optional Documents">
             <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
               <FilePreviewGroup
                 label="IEP"
                 files={row.student_documents.iep}
+                upload={{
+                  studentId: row.student_id,
+                  fieldKey: "iep",
+                  onChanged,
+                }}
               />
               <FilePreviewGroup
                 label="SSN Card"
                 files={row.student_documents.ssn_card}
+                upload={{
+                  studentId: row.student_id,
+                  fieldKey: "ssn_card",
+                  onChanged,
+                }}
               />
               <FilePreviewGroup
                 label="Passport"
                 files={row.student_documents.passport}
+                upload={{
+                  studentId: row.student_id,
+                  fieldKey: "passport",
+                  onChanged,
+                }}
               />
               <FilePreviewGroup
                 label="Student State ID"
                 files={row.student_documents.student_state_id}
+                upload={{
+                  studentId: row.student_id,
+                  fieldKey: "student_state_id",
+                  onChanged,
+                }}
               />
             </div>
           </SectionGroup>
@@ -3511,6 +3558,214 @@ function FilePreviewRow({
  * Filenames truncate via CSS so the full name is always available
  * via the `title` tooltip and reflows on resize.
  */
+/* ─────────────────────── Admin document upload ─────────────────────── */
+
+/**
+ * Admin-side document upload — POSTs each selected file to
+ * `/api/upload` (which proxies Xano's `/upload/attachment`),
+ * then PATCHes the student row with the appended metadata array.
+ * Mirrors the enrolled-detail page's component byte-for-byte;
+ * kept inline here so the registration page stays self-contained
+ * rather than importing across admin surfaces.
+ *
+ * `fieldKey` is the Xano column on `registration_students` — the
+ * `/api/admin/students/[id]` allowlist gates which columns are
+ * writable here, so a typo defaults to a 400 rather than silently
+ * writing the wrong column.
+ *
+ * `compact` switches to a small inline button trigger suitable
+ * for the tight Documents-to-Review table cells; the default
+ * full dropzone is used for the Optional Documents grid where
+ * vertical space isn't constrained.
+ *
+ * File removal isn't exposed yet — admin asks the family to
+ * remove via the parent flow, matching the deferred approach on
+ * the enrolled detail page.
+ */
+function AdminDocumentUpload({
+  studentId,
+  fieldKey,
+  files,
+  label,
+  compact,
+  onChanged,
+}: {
+  studentId: number;
+  fieldKey:
+    | "birth_certificate"
+    | "school_health_form"
+    | "transcripts"
+    | "immunization_forms"
+    | "iep"
+    | "ssn_card"
+    | "passport"
+    | "student_state_id";
+  files: Record<string, unknown>[];
+  label: string;
+  compact?: boolean;
+  onChanged: () => void;
+}) {
+  const [pending, setPending] = useState<File[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function patchFiles(next: Record<string, unknown>[]) {
+    const res = await fetch(`/api/admin/students/${studentId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ [fieldKey]: next }),
+    });
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => null);
+      throw new Error(errBody?.error ?? `Save failed (${res.status})`);
+    }
+  }
+
+  async function handleFilesChange(newFiles: File[]) {
+    setPending(newFiles);
+    setError(null);
+    if (newFiles.length === 0) return;
+    setUploading(true);
+    try {
+      let acc = files.slice();
+      for (const f of newFiles) {
+        const formData = new FormData();
+        formData.append("file", f);
+        const res = await fetch("/api/upload", {
+          method: "POST",
+          body: formData,
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => null);
+          throw new Error(body?.error ?? `Upload failed (${res.status})`);
+        }
+        const metadata = (await res.json()) as Record<string, unknown>;
+        acc = [...acc, metadata];
+        await patchFiles(acc);
+      }
+      toast.success(
+        newFiles.length === 1
+          ? `${label} uploaded.`
+          : `${newFiles.length} files uploaded.`
+      );
+      setPending([]);
+      onChanged();
+    } catch (err) {
+      console.error("[AdminDocumentUpload.handleFilesChange]", err);
+      const message =
+        err instanceof Error ? err.message : "Upload failed.";
+      setError(message);
+      toast.error(message);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  if (compact) {
+    return (
+      <>
+        <FileUpload
+          maxFiles={5}
+          maxSize={10 * 1024 * 1024}
+          accept=".pdf,.jpg,.jpeg,.png"
+          value={pending}
+          onValueChange={handleFilesChange}
+          disabled={uploading}
+        >
+          <FileUploadDropzone className="border-0 p-0 cursor-pointer hover:bg-transparent w-fit min-h-0">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs leading-none bg-white"
+              disabled={uploading}
+              asChild
+            >
+              <span>
+                {uploading ? (
+                  <Loader2 className="size-3 animate-spin" />
+                ) : (
+                  <FileUp className="size-3" />
+                )}
+                <span className="ml-1">
+                  {uploading
+                    ? "Uploading…"
+                    : files.length === 0
+                      ? "Upload"
+                      : "Add file"}
+                </span>
+              </span>
+            </Button>
+          </FileUploadDropzone>
+          <FileUploadList>
+            {pending.map((f, i) => (
+              <FileUploadItem key={i} value={f}>
+                <FileUploadItemPreview />
+                <FileUploadItemMetadata />
+                <FileUploadItemDelete asChild>
+                  <Button variant="ghost" size="icon" className="size-7">
+                    <X className="size-4" />
+                  </Button>
+                </FileUploadItemDelete>
+              </FileUploadItem>
+            ))}
+          </FileUploadList>
+        </FileUpload>
+        {error ? (
+          <p className="text-[11px] text-red-600 mt-1">{error}</p>
+        ) : null}
+      </>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <FileUpload
+        maxFiles={5}
+        maxSize={10 * 1024 * 1024}
+        accept=".pdf,.jpg,.jpeg,.png"
+        value={pending}
+        onValueChange={handleFilesChange}
+        disabled={uploading}
+      >
+        <FileUploadDropzone className="flex-row gap-3 px-4 py-3 cursor-pointer">
+          {uploading ? (
+            <Loader2 className="size-5 text-muted-foreground animate-spin" />
+          ) : (
+            <FileUp className="size-5 text-muted-foreground" />
+          )}
+          <div className="flex-1 text-left">
+            <p className="text-sm font-medium">
+              {uploading
+                ? "Uploading…"
+                : files.length === 0
+                  ? `Upload ${label}`
+                  : `Add another ${label.toLowerCase()}`}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              PDF, JPG, or PNG (max 10MB each, up to 5)
+            </p>
+          </div>
+        </FileUploadDropzone>
+        <FileUploadList>
+          {pending.map((f, i) => (
+            <FileUploadItem key={i} value={f}>
+              <FileUploadItemPreview />
+              <FileUploadItemMetadata />
+              <FileUploadItemDelete asChild>
+                <Button variant="ghost" size="icon" className="size-7">
+                  <X className="size-4" />
+                </Button>
+              </FileUploadItemDelete>
+            </FileUploadItem>
+          ))}
+        </FileUploadList>
+      </FileUpload>
+      {error ? <p className="text-xs text-red-600">{error}</p> : null}
+    </div>
+  );
+}
+
 /**
  * Document-verification table for the four required documents on a
  * student row. One row per document with the uploaded files +
@@ -3565,6 +3820,15 @@ function RequiredDocumentsTable({
       | "school_health_form_admin_confirm"
       | "transcripts_admin_confirm"
       | "immunization_admin_confirm";
+    /** File array column on the student row — drives the per-row
+     *  Upload affordance. Separate from `confirmKey` because the
+     *  upload PATCHes a different column (the metadata array) than
+     *  the confirm toggle (the bool). */
+    fieldKey:
+      | "birth_certificate"
+      | "school_health_form"
+      | "transcripts"
+      | "immunization_forms";
   };
 
   const docs: DocSpec[] = [
@@ -3573,24 +3837,28 @@ function RequiredDocumentsTable({
       files: row.student_documents.birth_certificate,
       confirm: row.document_confirms.birth_certificate,
       confirmKey: "birth_certificate_admin_confirm",
+      fieldKey: "birth_certificate",
     },
     {
       label: "School Health Form",
       files: row.student_documents.school_health_form,
       confirm: row.document_confirms.school_health_form,
       confirmKey: "school_health_form_admin_confirm",
+      fieldKey: "school_health_form",
     },
     {
       label: "Transcripts",
       files: row.student_documents.transcripts,
       confirm: row.document_confirms.transcripts,
       confirmKey: "transcripts_admin_confirm",
+      fieldKey: "transcripts",
     },
     {
       label: "Immunization Forms",
       files: row.student_documents.immunization_forms,
       confirm: row.document_confirms.immunization_forms,
       confirmKey: "immunization_admin_confirm",
+      fieldKey: "immunization_forms",
     },
   ];
 
@@ -3702,21 +3970,37 @@ function RequiredDocumentsTable({
                   </p>
                 </TableCell>
                 <TableCell className="align-middle">
-                  {hasFiles ? (
-                    <ul className="space-y-1">
-                      {doc.files.map((f, idx) => (
-                        <RequiredDocFileLink
-                          key={`${doc.confirmKey}-${idx}`}
-                          file={f}
-                          fallbackIndex={idx}
-                        />
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="text-[11px] italic text-muted-foreground">
-                      No file uploaded.
-                    </p>
-                  )}
+                  <div className="space-y-1.5">
+                    {hasFiles ? (
+                      <ul className="space-y-1">
+                        {doc.files.map((f, idx) => (
+                          <RequiredDocFileLink
+                            key={`${doc.confirmKey}-${idx}`}
+                            file={f}
+                            fallbackIndex={idx}
+                          />
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-[11px] italic text-muted-foreground">
+                        No file uploaded.
+                      </p>
+                    )}
+                    {/* Compact upload trigger — sits below the file
+                        list so admin can attach pages on the
+                        family's behalf without leaving the table.
+                        The Verify button's `hasFiles` gate still
+                        applies, so admin can upload then confirm in
+                        the same pass. */}
+                    <AdminDocumentUpload
+                      studentId={row.student_id}
+                      fieldKey={doc.fieldKey}
+                      files={doc.files}
+                      label={doc.label}
+                      onChanged={onChanged}
+                      compact
+                    />
+                  </div>
                 </TableCell>
                 <TableCell className="align-middle">
                   {confirmedByName ? (
@@ -3868,29 +4152,57 @@ function FilePreviewGroup({
   label,
   files,
   required,
+  upload,
 }: {
   label: string;
   files: Record<string, unknown>[] | null | undefined;
   required?: boolean;
+  /** Optional upload affordance. When set, an inline Upload / Add
+   *  file button renders next to the label and writes back through
+   *  `/api/admin/students/[studentId]` with the named `fieldKey`
+   *  column. Used by the per-student packet on the registration
+   *  detail page so admin can attach optional docs (IEP, SSN,
+   *  Passport, State ID) on the family's behalf. */
+  upload?: {
+    studentId: number;
+    fieldKey:
+      | "iep"
+      | "ssn_card"
+      | "passport"
+      | "student_state_id";
+    onChanged: () => void;
+  };
 }) {
   const entries = Array.isArray(files) ? files : [];
   const hasAny = entries.length > 0;
   const isMissing = required && !hasAny;
   return (
     <div className="space-y-1">
-      <p className="text-xs">
-        {label}
-        {required ? (
-          <span className="ml-1 text-red-500" aria-label="required">
-            *
-          </span>
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs">
+          {label}
+          {required ? (
+            <span className="ml-1 text-red-500" aria-label="required">
+              *
+            </span>
+          ) : null}
+          {hasAny && entries.length > 1 ? (
+            <span className="ml-1.5 text-muted-foreground/70">
+              ({entries.length})
+            </span>
+          ) : null}
+        </p>
+        {upload ? (
+          <AdminDocumentUpload
+            studentId={upload.studentId}
+            fieldKey={upload.fieldKey}
+            files={entries}
+            label={label}
+            onChanged={upload.onChanged}
+            compact
+          />
         ) : null}
-        {hasAny && entries.length > 1 ? (
-          <span className="ml-1.5 text-muted-foreground/70">
-            ({entries.length})
-          </span>
-        ) : null}
-      </p>
+      </div>
       <div
         className={cn(
           // Empty / single-file: render as a 40px tall row so the
