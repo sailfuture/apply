@@ -808,6 +808,14 @@ export default function FamilyDetailPage() {
                   scholarship={scholarship}
                   familyId={family.id}
                   onScholarshipChanged={refreshDetail}
+                  // Lock the path selector once admin has verified
+                  // the Financial Aid section — switching paths
+                  // mid-verify would invalidate the determination
+                  // the verify is anchored on. Admin Undoes the
+                  // verification on the section footer to unlock.
+                  pathLocked={
+                    progress?.financial_aid_admin_confirm === true
+                  }
                 />
               ) : (
                 // No scholarship row yet — admin can still choose
@@ -829,6 +837,14 @@ export default function FamilyDetailPage() {
                     familyId={family.id}
                     yearId={Number(yearId)}
                     onChanged={refreshDetail}
+                    disabled={
+                      progress?.financial_aid_admin_confirm === true
+                    }
+                    disabledReason={
+                      progress?.financial_aid_admin_confirm === true
+                        ? "Undo the Financial Aid verification below to switch paths."
+                        : undefined
+                    }
                   />
                 </div>
               )}
@@ -2794,6 +2810,7 @@ function ScholarshipBlock({
   scholarship,
   familyId,
   onScholarshipChanged,
+  pathLocked,
 }: {
   scholarship: XanoScholarship;
   /** Family id is forwarded to `DocumentsToReviewBlock` so future
@@ -2805,6 +2822,10 @@ function ScholarshipBlock({
    *  verify lands, so the Approve gate (which reads the same
    *  `*_confirm` columns) updates without manual reload. */
   onScholarshipChanged?: () => void;
+  /** When true, the path selector is locked — admin has verified
+   *  the Financial Aid section, so switching paths is gated behind
+   *  Undoing the verification first. */
+  pathLocked?: boolean;
 }) {
   // Single composite fetch — Xano's `/registration_opportunity_scholarship/{id}`
   // endpoint returns the scholarship row + every child table
@@ -2857,6 +2878,12 @@ function ScholarshipBlock({
       <ScholarshipPathSelector
         scholarship={scholarship}
         onChanged={onScholarshipChanged}
+        disabled={pathLocked}
+        disabledReason={
+          pathLocked
+            ? "Undo the Financial Aid verification below to switch paths."
+            : undefined
+        }
       />
       {scholarship.isNotParticipating ? (
         <div className="flex items-start gap-2 rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
@@ -3877,16 +3904,7 @@ function DecisionCard({
     ) : null}
     <Card
       id="section-scholarship-determination"
-      className={cn(
-        "overflow-hidden gap-0 py-0 bg-white scroll-mt-20 transition-opacity",
-        // Whole-card mute mirrors the SectionShell behavior: once
-        // admin has accepted the family, the card's work is done,
-        // gray it out so it stops competing with the still-live
-        // sections above. The Acceptance card above carries the
-        // Revoke affordance so admin can still reverse from the
-        // post-acceptance surface.
-        accepted && "opacity-60"
-      )}
+      className="overflow-hidden gap-0 py-0 bg-white scroll-mt-20"
     >
       <CardHeader className="py-3 !pb-3 border-b">
         <div className="flex items-center justify-between gap-3">
@@ -3953,11 +3971,17 @@ function DecisionCard({
           </div>
         </div>
       </CardHeader>
-      {/* Body keeps a constant background — the whole-card opacity
-          handles the muted look when accepted. Stacking `bg-muted/30`
-          on top of an opacity-reduced parent doubled the dimming and
-          made the text harder to read. */}
-      <CardContent className="space-y-6 py-5 bg-white">
+      {/* Body fades to muted when admin has accepted the family
+          so the card reads as settled, but the header (Notes pill,
+          status pill, title) and footer (Verified pill + Undo)
+          stay at full opacity — mirrors the SectionShell pattern
+          on the rest of the page. */}
+      <CardContent
+        className={cn(
+          "space-y-6 py-5 bg-white transition-opacity",
+          accepted && "opacity-60"
+        )}
+      >
         {loading ? (
           <Skeleton className="h-48 w-full rounded-md" />
         ) : students.length === 0 ? (
@@ -7194,16 +7218,28 @@ function RevokeAcceptanceButton({
  *     paper applications.
  *
  * Renders as a row of three pill buttons. The active path is
- * highlighted; clicking another path triggers the inline write
- * (no confirmation modal — admin can flip back immediately if
- * they pick wrong, and the cascade means there's no data-loss
- * risk).
+ * highlighted. Switching paths on an existing scholarship row
+ * routes through a confirmation modal — flipping the path nukes
+ * down-stream data semantically (household + income +
+ * contributing members are scoped to Opportunity, SNAP gets a
+ * different cost determination, opted-out clears the application
+ * entirely), so admin shouldn't be able to lose context with a
+ * single misclick. Picking a path for a row that doesn't exist yet
+ * skips the modal (nothing to lose).
+ *
+ * Locked when `disabled` is set — typically when admin has
+ * verified the Financial Aid section: the verified state is the
+ * source of truth, and changing the path mid-verify would
+ * invalidate the determination underneath. Admin Undoes the
+ * verification first to unlock the picker.
  */
 function ScholarshipPathSelector({
   scholarship,
   familyId,
   yearId,
   onChanged,
+  disabled,
+  disabledReason,
 }: {
   scholarship: XanoScholarship | null;
   /** Required when `scholarship` is null — scopes the POST that
@@ -7212,10 +7248,27 @@ function ScholarshipPathSelector({
   familyId?: number;
   yearId?: number;
   onChanged?: () => void;
+  /** When true, every option button is non-interactive and reads
+   *  as muted. Used to lock the picker after the Financial Aid
+   *  section is verified — admin has to Undo the verify to switch
+   *  paths. */
+  disabled?: boolean;
+  /** Optional caption to render below the picker when `disabled`
+   *  — explains *why* it's locked so admin doesn't wonder. */
+  disabledReason?: string;
 }) {
   const [savingPath, setSavingPath] = useState<
     "isOpportunityScholarship" | "isSNAPBenefits" | "isNotParticipating" | null
   >(null);
+  // Pending switch sits in state so the modal can read which target
+  // path admin clicked, render its specific copy, and route the
+  // confirm action back through `setPath`. Cleared on cancel or
+  // after the PATCH lands. Stays null when there's no existing row
+  // — first-time pick skips the modal.
+  const [pendingSwitch, setPendingSwitch] = useState<{
+    flag: "isOpportunityScholarship" | "isSNAPBenefits" | "isNotParticipating";
+    label: string;
+  } | null>(null);
   const active: "opp" | "snap" | "out" | null = scholarship?.isOpportunityScholarship
     ? "opp"
     : scholarship?.isSNAPBenefits
@@ -7260,6 +7313,7 @@ function ScholarshipPathSelector({
       toast.error(err instanceof Error ? err.message : "Couldn't update.");
     } finally {
       setSavingPath(null);
+      setPendingSwitch(null);
     }
   }
 
@@ -7295,22 +7349,37 @@ function ScholarshipPathSelector({
           sub-description), outline-only active state (heavier
           border, no tinted background). Selected option swaps
           its empty circle for a filled circle so the choice is
-          clear at a glance without painting the button green. */}
+          clear at a glance without painting the button green.
+          When `disabled` is set every button reads as non-
+          interactive (muted, no hover) and clicks are swallowed. */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
         {options.map((opt) => {
           const isActive = active === opt.key;
           const isSaving = savingPath === opt.flag;
+          const buttonDisabled =
+            disabled || isSaving || savingPath !== null;
           return (
             <button
               key={opt.key}
               type="button"
-              disabled={isSaving || savingPath !== null}
+              disabled={buttonDisabled}
               onClick={() => {
                 if (isActive) return;
+                // Switching an existing path routes through the
+                // confirmation modal; first-time pick on an empty
+                // row skips it (nothing to lose, just creates the
+                // row with the chosen flag set).
+                if (scholarship && active !== null) {
+                  setPendingSwitch({ flag: opt.flag, label: opt.label });
+                  return;
+                }
                 void setPath(opt.flag, opt.label);
               }}
               className={cn(
-                "flex items-center gap-2 rounded-md border bg-white px-3 py-2 text-left text-sm transition-colors disabled:opacity-50",
+                "flex items-center gap-2 rounded-md border bg-white px-3 py-2 text-left text-sm transition-colors disabled:cursor-not-allowed",
+                disabled
+                  ? "opacity-60 hover:bg-white"
+                  : "disabled:opacity-50",
                 isActive
                   ? "border-green-600 hover:bg-white"
                   : "border-border hover:bg-muted/40"
@@ -7333,6 +7402,59 @@ function ScholarshipPathSelector({
           );
         })}
       </div>
+      {disabled && disabledReason ? (
+        <p className="text-xs text-muted-foreground">{disabledReason}</p>
+      ) : null}
+
+      {/* Confirmation modal for path switches on an existing row.
+          The path change has downstream consequences (financial
+          aid form fields visibility, SNAP-vs-Opportunity cost
+          determination semantics, etc.), so a single misclick
+          shouldn't be able to flip it. First-time picks on an
+          empty row skip the modal — nothing to invalidate. */}
+      <AlertDialog
+        open={pendingSwitch !== null}
+        onOpenChange={(o) => {
+          if (!o) setPendingSwitch(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Switch scholarship path to {pendingSwitch?.label}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              The Financial Aid section behaves differently for each
+              path — household, income, asset, and debt fields only
+              apply to the Opportunity Scholarship path; SNAP routes
+              through the SNAP cost determination; Opted Out skips
+              the financial review entirely. Existing data on file
+              stays on the row, but it stops being shown to the
+              family until the path is switched back.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={savingPath !== null}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={savingPath !== null}
+              className="bg-amber-600 hover:bg-amber-700 text-white"
+              onClick={(e) => {
+                e.preventDefault();
+                if (pendingSwitch) {
+                  void setPath(pendingSwitch.flag, pendingSwitch.label);
+                }
+              }}
+            >
+              {savingPath !== null ? (
+                <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+              ) : null}
+              Yes, switch path
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

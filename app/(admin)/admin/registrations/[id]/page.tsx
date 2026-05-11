@@ -418,6 +418,10 @@ export default function FamilyRegistrationDetailPage() {
               progress={progress}
               schoolYear={school_year}
               familyPayment={familyPayment ?? null}
+              tuitionVerified={
+                progress?.tuition_admin_confirm === true
+              }
+              onChanged={refresh}
             />
             {/* Per-student breakdown table — mirrors the same view the
                 parent sees on `/dashboard/tuition`. No inputs; pure
@@ -1387,10 +1391,42 @@ function PacketEditTextarea({
 
 /* ─────────────────────── Tuition block ─────────────────────── */
 
+/**
+ * Draft shape for the inline tuition editor — string-typed mirror
+ * of the four editable amount columns on the family-payment row.
+ * Empty string means "admin cleared the field"; we coerce back to
+ * `null` (transport, sufs) or `0` (monthly, admin fee) on save
+ * depending on the column's semantics. School Year and Family
+ * Accepted stay read-only — School Year is a derived display
+ * value, and Family Accepted has its own latch path through the
+ * Acceptance card on the apply-flow page.
+ */
+type TuitionDraft = {
+  monthly_tuition_payment: string;
+  annual_fee_total: string;
+  transportation_total: string;
+  sufs_total: string;
+};
+
+function paymentToTuitionDraft(
+  p: XanoFamilyPayment | null
+): TuitionDraft {
+  const fmt = (n: number | null | undefined): string =>
+    n === null || n === undefined ? "" : String(n);
+  return {
+    monthly_tuition_payment: fmt(p?.monthly_tuition_payment),
+    annual_fee_total: fmt(p?.annual_fee_total),
+    transportation_total: fmt(p?.transportation_total),
+    sufs_total: fmt(p?.sufs_total),
+  };
+}
+
 function TuitionBlock({
   progress,
   schoolYear,
   familyPayment,
+  tuitionVerified,
+  onChanged,
 }: {
   progress: AdminFamilyRegistrationResponse["progress"];
   schoolYear: AdminFamilyRegistrationResponse["school_year"];
@@ -1401,7 +1437,22 @@ function TuitionBlock({
    *  row has been snapshotted yet (pre-acceptance families) — the
    *  card falls back to em dashes / `$0` in that case. */
   familyPayment: XanoFamilyPayment | null;
+  /** When true, admin has verified the Tuition section. The Edit
+   *  button is disabled — same audit treatment the SectionShell
+   *  uses for the verified-state Edit affordance: admin Undoes the
+   *  verify on the footer before amending the snapshot. */
+  tuitionVerified?: boolean;
+  /** Re-fetches the surrounding registration detail so the saved
+   *  amounts and the per-student breakdown table below refresh
+   *  together. */
+  onChanged?: () => void;
 }) {
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [draft, setDraft] = useState<TuitionDraft>(() =>
+    paymentToTuitionDraft(familyPayment)
+  );
+
   // All numeric values come from the family-payment row. Legacy
   // copies on the progress row (`monthly_tuition_payment`, etc.)
   // were drifting from the apply-flow source, so we read the
@@ -1432,27 +1483,226 @@ function TuitionBlock({
           maximumFractionDigits: 2,
         })}`;
 
+  // Only families with an existing payment row can be edited — the
+  // PATCH route writes by id. Pre-acceptance families have to go
+  // through the apply-flow Acceptance card first to create the
+  // initial row (that's where the printed name + signature also
+  // land), so this guard rails admin to the right surface.
+  const editable = familyPayment !== null;
+
+  function enterEdit() {
+    setDraft(paymentToTuitionDraft(familyPayment));
+    setEditing(true);
+  }
+
+  function cancelEdit() {
+    setDraft(paymentToTuitionDraft(familyPayment));
+    setEditing(false);
+  }
+
+  /** Diff the draft against the live row, coerce string inputs
+   *  back to the column's native type (`number` or explicit `null`
+   *  to clear), and PATCH only what changed. Empty string maps to
+   *  `null` for transport / sufs (those columns are nullable and
+   *  carry semantics — null = waived / not on file) and `0` for
+   *  monthly / admin fee (which are always numbers). */
+  async function runSave() {
+    if (!familyPayment) return;
+    const patch: Record<string, number | null> = {};
+    const parse = (raw: string): number | null => {
+      const trimmed = raw.trim().replace(/,/g, "");
+      if (trimmed === "") return null;
+      const n = Number(trimmed);
+      return Number.isFinite(n) ? n : null;
+    };
+    const fields = [
+      {
+        key: "monthly_tuition_payment" as const,
+        prev: familyPayment.monthly_tuition_payment ?? null,
+        // monthly + admin fee aren't conceptually nullable —
+        // empty input clears to 0 so the receipt still reads as
+        // "approved, just $0/mo" rather than "not yet approved."
+        emptyAs: 0 as number | null,
+      },
+      {
+        key: "annual_fee_total" as const,
+        prev: familyPayment.annual_fee_total ?? null,
+        emptyAs: 0 as number | null,
+      },
+      {
+        key: "transportation_total" as const,
+        prev: familyPayment.transportation_total ?? null,
+        // transport stays nullable — clearing it means
+        // "transport waived" (SNAP families), distinct from $0.
+        emptyAs: null as number | null,
+      },
+      {
+        key: "sufs_total" as const,
+        prev: familyPayment.sufs_total ?? null,
+        // SUFS stays nullable — null means "no SUFS on file";
+        // $0 would imply "applied but awarded nothing."
+        emptyAs: null as number | null,
+      },
+    ];
+    for (const f of fields) {
+      const parsed = parse(draft[f.key]);
+      const next = parsed === null ? f.emptyAs : parsed;
+      if (next !== f.prev) {
+        patch[f.key] = next;
+      }
+    }
+    if (Object.keys(patch).length === 0) {
+      setEditing(false);
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/admin/family-payment/${familyPayment.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Save failed (${res.status})`);
+      }
+      toast.success("Tuition snapshot saved.");
+      setEditing(false);
+      onChanged?.();
+    } catch (err) {
+      console.error("[TuitionBlock.runSave]", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't save.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <div className="rounded-md border bg-muted/10 p-4 space-y-5">
-      <SectionGroup title="Tuition Snapshot">
+      {/* Sub-header — title + Edit/Save/Cancel cluster docked
+          right. Mirrors the per-student packet card affordance
+          pair so the two inline-edit surfaces feel of-a-piece. */}
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Tuition Snapshot
+        </p>
+        {editable ? (
+          <div className="flex items-center gap-2">
+            {editing ? (
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={cancelEdit}
+                  disabled={saving}
+                  className="bg-white"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => void runSave()}
+                  disabled={saving}
+                  className="bg-blue-600 hover:bg-blue-700 text-white"
+                >
+                  {saving ? (
+                    <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                  ) : (
+                    <Check className="size-3.5 mr-1.5" />
+                  )}
+                  Save
+                </Button>
+              </>
+            ) : (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={enterEdit}
+                disabled={!!tuitionVerified}
+                title={
+                  tuitionVerified
+                    ? "Undo the Tuition verification below to edit."
+                    : "Edit the tuition snapshot"
+                }
+                className="bg-white"
+              >
+                <Pencil className="size-3.5 mr-1.5" />
+                Edit
+              </Button>
+            )}
+          </div>
+        ) : null}
+      </div>
+      <div>
         <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
           <DisabledField
             label="School Year"
             value={schoolYear.year_name || ""}
             placeholder="—"
           />
-          <DisabledField label="Monthly Tuition" value={fmt$(monthlyTuition)} />
-          <DisabledField label="Annual Admin Fee" value={fmt$(annualFeeTotal)} />
-          <DisabledField
-            label="Transportation Total"
-            value={fmt$(transportationTotal)}
-          />
+          {editing ? (
+            <>
+              <PacketEditInput
+                label="Monthly Tuition"
+                value={draft.monthly_tuition_payment}
+                onChange={(v) =>
+                  setDraft((d) => ({ ...d, monthly_tuition_payment: v }))
+                }
+                disabled={saving}
+              />
+              <PacketEditInput
+                label="Annual Admin Fee"
+                value={draft.annual_fee_total}
+                onChange={(v) =>
+                  setDraft((d) => ({ ...d, annual_fee_total: v }))
+                }
+                disabled={saving}
+              />
+              <PacketEditInput
+                label="Transportation Total"
+                value={draft.transportation_total}
+                onChange={(v) =>
+                  setDraft((d) => ({ ...d, transportation_total: v }))
+                }
+                disabled={saving}
+              />
+            </>
+          ) : (
+            <>
+              <DisabledField
+                label="Monthly Tuition"
+                value={fmt$(monthlyTuition)}
+              />
+              <DisabledField
+                label="Annual Admin Fee"
+                value={fmt$(annualFeeTotal)}
+              />
+              <DisabledField
+                label="Transportation Total"
+                value={fmt$(transportationTotal)}
+              />
+            </>
+          )}
         </div>
         <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 mt-3">
-          <DisabledField
-            label="SUFS Scholarship Total"
-            value={fmt$(sufsTotal)}
-          />
+          {editing ? (
+            <PacketEditInput
+              label="SUFS Scholarship Total"
+              value={draft.sufs_total}
+              onChange={(v) =>
+                setDraft((d) => ({ ...d, sufs_total: v }))
+              }
+              disabled={saving}
+            />
+          ) : (
+            <DisabledField
+              label="SUFS Scholarship Total"
+              value={fmt$(sufsTotal)}
+            />
+          )}
           <DisabledField
             label="Family Accepted"
             value={
@@ -1465,7 +1715,14 @@ function TuitionBlock({
             placeholder="—"
           />
         </div>
-      </SectionGroup>
+        {editing ? (
+          <p className="mt-3 text-xs text-muted-foreground">
+            Leave Transportation or SUFS blank to clear (transport
+            blank = waived for SNAP families; SUFS blank = no SUFS on
+            file). Monthly and Admin Fee blank reads as $0.
+          </p>
+        ) : null}
+      </div>
       <SectionGroup title="Acknowledgement">
         <div className="grid gap-4 grid-cols-1">
           <DisabledField
