@@ -215,8 +215,59 @@ export async function PATCH(req: NextRequest) {
       row.id,
       patch
     );
+
+    // Cascade: when admin confirms the family's registration
+    // (`isRegistrationConfirmed` flips true), flip
+    // `student.isEnrolled = true` on every active student in the
+    // family. That's what gates the Enrolled Students list — a
+    // student isn't "enrolled" until admin has confirmed the
+    // whole family's registration. Asymmetric on unconfirm: we
+    // DO NOT clear `isEnrolled` when admin undoes the family
+    // confirmation, because "I need to re-review" isn't the same
+    // as "this student is no longer enrolled." Use the Unenroll
+    // modal on the detail page for the explicit unenroll path
+    // (sets `isEnrolled=false` + `isArchived=true` + reason).
+    //
+    // Best-effort: failures here are logged but don't fail the
+    // primary PATCH. The route already returned success on the
+    // progress row above; the cascade is housekeeping.
+    if (patch.isRegistrationConfirmed === true) {
+      try {
+        await cascadeIsEnrolledTrue(familyId);
+      } catch (cascadeErr) {
+        console.error(
+          "[/api/admin/registration-progress] isEnrolled cascade failed:",
+          cascadeErr
+        );
+      }
+    }
+
     return NextResponse.json(updated);
   } catch (err) {
     return handleAdminError(err);
   }
+}
+
+/**
+ * Flip `isEnrolled=true` on every non-archived student in the
+ * family. Skipped per-student when the flag is already true so we
+ * don't re-PATCH no-op rows. Archived students (admin-unenrolled)
+ * are deliberately left alone — re-enrolling a previously
+ * unenrolled student is a separate flow (the Undo path on the
+ * detail page).
+ *
+ * Writes go through `updateOnAdminGroup` because `isEnrolled`
+ * lives on the `2GcBXyoA` admin query alongside the other
+ * admin-only student columns (doc confirms, unenrollment audit).
+ */
+async function cascadeIsEnrolledTrue(familyId: number): Promise<void> {
+  const all = await xano.students.getByFamilyId(familyId);
+  const targets = all.filter(
+    (s) => s.isArchived !== true && s.isEnrolled !== true
+  );
+  await Promise.all(
+    targets.map((s) =>
+      xano.students.updateOnAdminGroup(s.id, { isEnrolled: true })
+    )
+  );
 }

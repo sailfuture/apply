@@ -121,6 +121,13 @@ export async function PATCH(
       "unenrollment_reason",
       "unenrollment_date",
       "unenrollment_notes",
+      // Enrollment gate for the Enrolled Students list. Cascaded
+      // true from the registration-progress route when admin
+      // confirms the family's registration; cleared back to false
+      // by the Unenroll modal alongside `isArchived=true`. Admin
+      // can also flip this directly from this route for one-off
+      // corrections.
+      "isEnrolled",
     ];
     const patch: Record<string, unknown> = {};
     for (const key of ALLOWED) {
@@ -142,14 +149,16 @@ export async function PATCH(
         patch[pair.adminKey] = next ? adminName : "";
       }
     }
-    // Unenrollment columns also live on the `2GcBXyoA` admin
-    // query — same group as the doc-confirms — so any patch that
-    // touches them needs to route through that endpoint too.
+    // Unenrollment + enrollment-gate columns also live on the
+    // `2GcBXyoA` admin query — same group as the doc-confirms —
+    // so any patch that touches them needs to route through that
+    // endpoint too.
     if (
       "isArchived" in patch ||
       "unenrollment_reason" in patch ||
       "unenrollment_date" in patch ||
-      "unenrollment_notes" in patch
+      "unenrollment_notes" in patch ||
+      "isEnrolled" in patch
     ) {
       touchesAdminGroupFields = true;
     }

@@ -1068,10 +1068,16 @@ function UnenrollStudentButton({
     }
     setSaving(true);
     try {
+      // Unenroll atomically: clear the enrolled gate
+      // (`isEnrolled=false`) AND set the archive flag
+      // (`isArchived=true`) together with the audit fields.
+      // Both columns flip in the same PATCH so the student
+      // can't be left in an inconsistent state between writes.
       const res = await fetch(`/api/admin/students/${studentId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          isEnrolled: false,
           isArchived: true,
           unenrollment_reason: reason.trim(),
           unenrollment_date: date,
@@ -1096,10 +1102,15 @@ function UnenrollStudentButton({
   async function runReverse() {
     setSaving(true);
     try {
+      // Re-enroll atomically: flip the enrolled gate back on,
+      // clear the archive flag, and blank the audit columns
+      // together. Mirror of `runUnenroll` so the row leaves the
+      // unenrolled state in one clean step.
       const res = await fetch(`/api/admin/students/${studentId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          isEnrolled: true,
           isArchived: false,
           unenrollment_reason: "",
           unenrollment_date: null,

@@ -4,21 +4,25 @@ import { xano } from "@/lib/xano";
 
 /**
  * Admin Enrolled Students list — one row per student whose
- * `registration_students.isAccepted` is true for the requested
+ * `registration_students.isEnrolled` is true for the requested
  * academic year.
  *
- * "Enrolled" === the student row carries `isAccepted=true` (set by
- * the parent-dashboard cascade once admin Approves the family) AND
- * the student isn't `isArchived` (the unenrollment flag captured by
- * the Unenroll modal on the detail page). The per-year scope is
- * enforced via `registration_application` — the student must have
- * an active app for the selected year. The student's registration
- * packet (`registration_student_registration`) is joined as a side
- * lookup for liability-waiver state, but no longer gates the list:
- * a student is enrolled when admin has accepted them, full stop.
+ * "Enrolled" === the student row carries `isEnrolled=true` AND
+ * `isArchived !== true`. The registration-progress route cascades
+ * `isEnrolled=true` onto every family student when admin clicks
+ * Confirm Family Registration (so the family's registration is
+ * formally confirmed first). The Unenroll modal on the detail page
+ * clears `isEnrolled=false` + sets `isArchived=true` together.
+ *
+ * Per-year scope is enforced via `registration_application` — the
+ * student must have an active app for the selected year. The
+ * student's registration packet
+ * (`registration_student_registration`) is joined as a side lookup
+ * for liability-waiver state + "verified at" timestamp, but
+ * doesn't gate the list.
  *
  * Joins:
- *   - `xano.students.getAll()` → primary pivot, gated by isAccepted
+ *   - `xano.students.getAll()` → primary pivot, gated by isEnrolled
  *   - `xano.applications.getAll()` → year scope + `current_grade`
  *   - `xano.studentRegistration.getByYear(year)` → waiver state +
  *     "verified at" timestamp (side join, not the gate)
@@ -124,23 +128,17 @@ export async function GET(req: NextRequest) {
       primaryByFamily.set(f.id, matched[0] ?? null);
     }
 
-    // Pivot off the student row's `isAccepted` flag. That's set by
-    // the parent dashboard cascade — once admin Approves a family
-    // (`family_application_progress.isAccepted = true`), the
-    // /apply/year/[yearId] page PATCHes `isAccepted: true` onto
-    // every student in the family. So `student.isAccepted === true`
-    // means "this student belongs in the enrolled cohort for the
-    // family's accepted year." The unenrollment filter
-    // (`isArchived !== true`) drops students whose admin has
-    // explicitly unenrolled via the detail-page Unenroll modal.
-    //
-    // The per-year packet is joined below as a side lookup for
-    // waiver state + "verified at" timestamp; it no longer gates
-    // the list. A student who's been accepted but whose packet
-    // admin hasn't verified yet still appears here — that's the
-    // point of the switch.
-    const acceptedStudents = students.filter(
-      (s) => s.isAccepted === true && s.isArchived !== true
+    // Pivot off the student row's `isEnrolled` flag. The
+    // registration-progress route cascades this true onto every
+    // family student the moment admin clicks Confirm Family
+    // Registration on the registration page; the Unenroll modal
+    // on the detail page clears it back to false alongside
+    // `isArchived=true` + reason/date/notes. So
+    // `student.isEnrolled === true && student.isArchived !== true`
+    // exactly maps to "this student is officially enrolled" — no
+    // packet join needed for the gate.
+    const enrolledStudents = students.filter(
+      (s) => s.isEnrolled === true && s.isArchived !== true
     );
 
     // Side join: packet lookup by student id so each row can
@@ -154,7 +152,7 @@ export async function GET(req: NextRequest) {
       packetByStudent.set(Number(p.registration_students_id), p);
     }
 
-    const rows: EnrolledStudentRow[] = acceptedStudents.flatMap((student) => {
+    const rows: EnrolledStudentRow[] = enrolledStudents.flatMap((student) => {
       const studentId = student.id;
       // Year scope: the student must have an active application
       // for the requested year. Drops students who were accepted

@@ -75,6 +75,15 @@ export interface XanoStudent {
   registration_school_years_id: number[];
   isArchived: boolean;
   isAccepted: boolean;
+  /** "Officially enrolled" gate on the Enrolled Students list. The
+   *  registration-progress PATCH route cascades this true onto every
+   *  family student the moment admin clicks Confirm Family
+   *  Registration (i.e. `isRegistrationConfirmed` flips true on the
+   *  family's `registration_student_registration_progress` row).
+   *  The Unenroll modal clears it back to false (paired with
+   *  `isArchived=true` + reason/date/notes). Optional because
+   *  legacy rows pre-date the column add. */
+  isEnrolled?: boolean;
   /** IDs of every `registration_student_registration` (packet) row this
    *  student has. One per year — Xano side adds a new row on re-enrollment,
    *  so this list grows over multi-year enrollment. */
