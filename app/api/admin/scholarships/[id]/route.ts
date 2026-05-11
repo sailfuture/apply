@@ -55,6 +55,15 @@ export async function PATCH(
     const allowed: Array<keyof XanoScholarship> = [
       "is_snap_confirmed",
       "is_unemployment_confirm",
+      // Scholarship path flags — admin can flip the family between
+      // the three lifecycle states (full Opportunity Scholarship
+      // application, SNAP pre-qualification, opted out) on behalf
+      // of the parent. The three flags are mutually exclusive in
+      // practice; the path-selector cascade below normalizes that
+      // when admin sets any of them.
+      "isOpportunityScholarship",
+      "isSNAPBenefits",
+      "isNotParticipating",
     ];
     const patch: Record<string, unknown> = {};
     for (const key of allowed) {
@@ -65,6 +74,27 @@ export async function PATCH(
         { error: "No allowed fields in body" },
         { status: 400 }
       );
+    }
+
+    // Path-flag mutual-exclusion cascade. When admin flips one of
+    // the three path flags to `true`, clear the other two in the
+    // same patch so the row can never carry conflicting signals
+    // (e.g. both `isSNAPBenefits` and `isOpportunityScholarship`
+    // true at once). Flipping a flag back to `false` doesn't
+    // cascade — leaves the other two as-is so admin can
+    // explicitly clear the path.
+    const PATH_KEYS = [
+      "isOpportunityScholarship",
+      "isSNAPBenefits",
+      "isNotParticipating",
+    ] as const;
+    for (const key of PATH_KEYS) {
+      if (patch[key] === true) {
+        for (const other of PATH_KEYS) {
+          if (other !== key) patch[other] = false;
+        }
+        break;
+      }
     }
 
     const adminTeacherId = adminTeacherIdAsNumber(admin.teacherId);

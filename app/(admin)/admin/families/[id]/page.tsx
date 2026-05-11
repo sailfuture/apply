@@ -19,6 +19,7 @@ import {
   SquarePen,
   Trash2,
   Undo2,
+  Users,
   XCircle,
 } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -243,10 +244,11 @@ export default function FamilyDetailPage() {
   // because it expands those relations to full objects (parent contact
   // info, student names + DOB). The new admin_family_application
   // endpoint returns family parents/students as IDs only.
-  const { data: family, isLoading } = useSWR<FamilyResponse>(
-    familyId ? `/api/admin/families/${familyId}` : null,
-    fetcher
-  );
+  const { data: family, isLoading, mutate: refreshFamily } =
+    useSWR<FamilyResponse>(
+      familyId ? `/api/admin/families/${familyId}` : null,
+      fetcher
+    );
 
   // Per-year applications + scholarship — single fetch via the new
   // `admin_family_application` Xano query. Only fires when we have both
@@ -531,6 +533,19 @@ export default function FamilyDetailPage() {
               as the most-clicked utility. All four only render
               when a year is selected — they're year-scoped. */}
           <div className="flex items-center gap-2 shrink-0">
+            {/* Family overview link — cross-year read-only view of
+                everything about this family. Sits on the far left
+                because it's the "zoom out" affordance: admin
+                clicks here when they want the bigger picture
+                (other students, prior years, contacts, etc.)
+                without leaving for a different page. Available
+                whether or not a year is selected. */}
+            <Button asChild variant="outline" size="sm" className="bg-white">
+              <Link href={`/admin/families/${familyId}/overview`}>
+                <Users className="size-3.5 mr-1.5" />
+                Family overview
+              </Link>
+            </Button>
             {yearId ? (
               <DeleteApplicationButton
                 familyId={Number(familyId)}
@@ -674,7 +689,14 @@ export default function FamilyDetailPage() {
             ) : !yearId ? (
               <div className="space-y-4">
                 {students.map((s) => (
-                  <StudentBio key={s.id} student={s} />
+                  <StudentBio
+                    key={s.id}
+                    student={s}
+                    onChanged={() => {
+                      refreshFamily();
+                      refreshDetail();
+                    }}
+                  />
                 ))}
                 <p className="text-xs italic text-muted-foreground">
                   Pick a school year above to load each student&rsquo;s
@@ -697,6 +719,10 @@ export default function FamilyDetailPage() {
                       key={student.id}
                       student={student}
                       app={app}
+                      onChanged={() => {
+                        refreshFamily();
+                        refreshDetail();
+                      }}
                     />
                   );
                 })}
@@ -1711,7 +1737,83 @@ function ParentBlock({ parent }: { parent: Parent }) {
 
 /* ─────────────────────── Student blocks ─────────────────────── */
 
-function StudentBio({ student }: { student: Student }) {
+/**
+ * Editable date-of-birth input. Read-only in shape (no pencil
+ * toggle) — admin can click directly into the `<input type="date">`
+ * and the PATCH fires on blur when the value actually changed.
+ * Keeps the affordance lightweight: no edit/save buttons, no
+ * dirty state, no validation popovers. Same pattern the rest of
+ * the inline-saving inputs on the family detail page use.
+ */
+function EditableStudentDob({
+  studentId,
+  value,
+  onChanged,
+}: {
+  studentId: number;
+  /** YYYY-MM-DD format from Xano. Empty when unset. */
+  value: string;
+  onChanged: () => void;
+}) {
+  const [draft, setDraft] = useState(value ?? "");
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    setDraft(value ?? "");
+  }, [value]);
+
+  async function handleBlur() {
+    const next = draft.trim();
+    if (next === (value ?? "")) return;
+    // Empty is allowed — admin may want to clear a wrong DOB while
+    // they look up the right one. Persist whatever's in the input.
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/admin/students/${studentId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ date_of_birth: next }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Save failed (${res.status})`);
+      }
+      toast.success("Date of birth saved.");
+      onChanged();
+    } catch (err) {
+      console.error("[EditableStudentDob.handleBlur]", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't save.");
+      // Revert local draft to the last-known persisted value so the
+      // input doesn't show stale unsaved typing.
+      setDraft(value ?? "");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Field>
+      <FieldLabel>
+        Date of birth <span className="text-red-500">*</span>
+      </FieldLabel>
+      <Input
+        type="date"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={handleBlur}
+        disabled={saving}
+        className={cn(!draft && "border-red-500")}
+      />
+    </Field>
+  );
+}
+
+function StudentBio({
+  student,
+  onChanged,
+}: {
+  student: Student;
+  onChanged: () => void;
+}) {
   return (
     <div className="rounded-md border bg-muted/10 p-4 space-y-4">
       <div className="flex items-center justify-between gap-3">
@@ -1721,15 +1823,10 @@ function StudentBio({ student }: { student: Student }) {
         {student.isAccepted ? <StatusBadge status="accepted" /> : null}
       </div>
       <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
-        <DisabledField
-          label="Date of birth"
-          value={
-            student.date_of_birth
-              ? new Date(`${student.date_of_birth}T00:00:00`)
-                  .toLocaleDateString()
-              : ""
-          }
-          required
+        <EditableStudentDob
+          studentId={student.id}
+          value={student.date_of_birth ?? ""}
+          onChanged={onChanged}
         />
         <DisabledField label="Gender" value={student.gender} required />
         <DisabledField label="Ethnicity" value={student.ethnicity} required />
@@ -1741,9 +1838,11 @@ function StudentBio({ student }: { student: Student }) {
 function StudentApplicationBlock({
   student,
   app,
+  onChanged,
 }: {
   student: Student;
   app: XanoApplication | undefined;
+  onChanged: () => void;
 }) {
   return (
     <div className="rounded-md border bg-muted/10 p-4 space-y-5">
@@ -1768,19 +1867,17 @@ function StudentApplicationBlock({
 
       {/* Demographics — sourced from the student record itself, not
           the per-year app. Always shown so the picture of who's
-          applying stays at the top of the card. Required fields
-          flagged red when missing per the parent flow's validation. */}
+          applying stays at the top of the card. DOB is editable
+          inline (admin can fix paper-app transcription errors or
+          mid-cycle corrections); gender + ethnicity stay read-only
+          since they're identity fields that should change rarely
+          and need a more deliberate edit path. */}
       <SectionGroup title="Student">
         <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
-          <DisabledField
-            label="Date of birth"
-            value={
-              student.date_of_birth
-                ? new Date(`${student.date_of_birth}T00:00:00`)
-                    .toLocaleDateString()
-                : ""
-            }
-            required
+          <EditableStudentDob
+            studentId={student.id}
+            value={student.date_of_birth ?? ""}
+            onChanged={onChanged}
           />
           <DisabledField label="Gender" value={student.gender} required />
           <DisabledField label="Ethnicity" value={student.ethnicity} required />
@@ -2160,6 +2257,16 @@ function ScholarshipBlock({
 
   return (
     <div className="space-y-6">
+      {/* Path Selector — admin can flip the family between the three
+          scholarship lifecycle states on behalf of the parent. Mainly
+          for paper applications transcribed by staff, or mid-cycle
+          corrections when a family changes their qualification. The
+          scholarships PATCH route cascades the mutually-exclusive
+          flags (flipping one to true clears the other two). */}
+      <ScholarshipPathSelector
+        scholarship={scholarship}
+        onChanged={onScholarshipChanged}
+      />
       {scholarship.isNotParticipating ? (
         <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
           <AlertCircle className="size-4 shrink-0 mt-0.5" />
@@ -2178,14 +2285,6 @@ function ScholarshipBlock({
             award letter in the Documents to Review table below.
           </span>
         </div>
-      ) : null}
-      {!onFullForm ? (
-        <DisabledField
-          label="Opportunity Scholarship status"
-          value={
-            scholarship.isNotParticipating ? "Opted out" : "SNAP benefits"
-          }
-        />
       ) : null}
       {onFullForm ? (
         <SectionGroup title="Household">
@@ -6478,5 +6577,137 @@ function RevokeAcceptanceButton({
         </AlertDialogContent>
       </AlertDialog>
     </>
+  );
+}
+
+/* ─────────────────────── Scholarship path selector ─────────────────────── */
+
+/**
+ * Admin-side picker for the family's scholarship lifecycle path —
+ * Opportunity Scholarship (the full application), SNAP benefits
+ * (pre-qualification), or Opted out. Mostly used when admin is
+ * transcribing a paper application or correcting a path mid-cycle.
+ * The PATCH route cascades the mutually-exclusive flags so the
+ * scholarship row can't carry conflicting signals.
+ *
+ * Renders as a row of three pill buttons. The active path is
+ * highlighted; clicking another path triggers an inline PATCH
+ * (no confirmation modal — admin can flip back immediately if
+ * they pick wrong, and the cascade means there's no data-loss
+ * risk).
+ */
+function ScholarshipPathSelector({
+  scholarship,
+  onChanged,
+}: {
+  scholarship: XanoScholarship;
+  onChanged?: () => void;
+}) {
+  const [savingPath, setSavingPath] = useState<
+    "isOpportunityScholarship" | "isSNAPBenefits" | "isNotParticipating" | null
+  >(null);
+  const active: "opp" | "snap" | "out" | null = scholarship.isOpportunityScholarship
+    ? "opp"
+    : scholarship.isSNAPBenefits
+      ? "snap"
+      : scholarship.isNotParticipating
+        ? "out"
+        : null;
+
+  async function setPath(
+    flag: "isOpportunityScholarship" | "isSNAPBenefits" | "isNotParticipating",
+    label: string
+  ) {
+    setSavingPath(flag);
+    try {
+      const res = await fetch(`/api/admin/scholarships/${scholarship.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ [flag]: true }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Save failed (${res.status})`);
+      }
+      toast.success(`Path set to ${label}.`);
+      onChanged?.();
+    } catch (err) {
+      console.error("[ScholarshipPathSelector.setPath]", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't update.");
+    } finally {
+      setSavingPath(null);
+    }
+  }
+
+  type Option = {
+    key: "opp" | "snap" | "out";
+    flag: "isOpportunityScholarship" | "isSNAPBenefits" | "isNotParticipating";
+    label: string;
+    description: string;
+  };
+  const options: Option[] = [
+    {
+      key: "opp",
+      flag: "isOpportunityScholarship",
+      label: "Opportunity Scholarship",
+      description: "Full financial aid application",
+    },
+    {
+      key: "snap",
+      flag: "isSNAPBenefits",
+      label: "SNAP benefits",
+      description: "Pre-qualified via SNAP",
+    },
+    {
+      key: "out",
+      flag: "isNotParticipating",
+      label: "Opted out",
+      description: "Not applying for aid",
+    },
+  ];
+
+  return (
+    <div className="space-y-2">
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        Scholarship Path
+      </p>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+        {options.map((opt) => {
+          const isActive = active === opt.key;
+          const isSaving = savingPath === opt.flag;
+          return (
+            <button
+              key={opt.key}
+              type="button"
+              disabled={isSaving || savingPath !== null}
+              onClick={() => {
+                if (isActive) return;
+                void setPath(opt.flag, opt.label);
+              }}
+              className={cn(
+                "flex flex-col items-start gap-0.5 rounded-md border px-3 py-2 text-left text-sm transition-colors disabled:opacity-50",
+                isActive
+                  ? "border-emerald-400 bg-emerald-50 ring-1 ring-emerald-300"
+                  : "border-border bg-white hover:bg-muted/40"
+              )}
+            >
+              <span className="flex items-center gap-1.5 font-medium text-foreground">
+                {isSaving ? (
+                  <Loader2 className="size-3.5 animate-spin shrink-0" />
+                ) : isActive ? (
+                  <CheckCircle2 className="size-3.5 text-emerald-600 shrink-0" />
+                ) : (
+                  <Circle className="size-3.5 text-muted-foreground/40 shrink-0" />
+                )}
+                {opt.label}
+              </span>
+              <span className="text-[11px] text-muted-foreground pl-5">
+                {opt.description}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }

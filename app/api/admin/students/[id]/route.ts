@@ -103,6 +103,17 @@ export async function PATCH(
     // through admin is a separate workflow and would need its own
     // route.
     const ALLOWED: Array<keyof XanoStudent> = [
+      // Bio fields — admin can correct a typo or a misentered DOB
+      // directly from the student affordances on the family
+      // detail / enrolled detail surfaces. Parents can also write
+      // these via /api/students/[id], but admin needs the same
+      // power to fix records on their behalf (paper apps
+      // transcribed by staff, mid-cycle corrections, etc.).
+      "first_name",
+      "last_name",
+      "date_of_birth",
+      "gender",
+      "ethnicity",
       "initial_screening_nwea_math",
       "initial_screening_nwea_reading",
       "initial_screening_nwea_math_date",
