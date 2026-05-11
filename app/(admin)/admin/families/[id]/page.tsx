@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { PhoneInput } from "@/components/ui/phone-input";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -364,8 +365,10 @@ export default function FamilyDetailPage() {
     ? `/admin/applications?yearId=${yearId}`
     : "/admin/applications";
 
-  const sectionHref = (slug: string) =>
-    `/admin/families/${familyId}/${slug}${yearId ? `?yearId=${yearId}` : ""}`;
+  // (The per-section editor route `/admin/families/[id]/[section]`
+  // is no longer used — admin edits live inline on each SectionShell
+  // body. The route still exists for legacy bookmarks but no nav
+  // affordance points there.)
 
   // Scroll to the section named in the URL hash once content has
   // mounted. Triggered by deep links from the Applications list view
@@ -609,7 +612,6 @@ export default function FamilyDetailPage() {
         <section id="section-family" className="scroll-mt-20">
           <SectionShell
             title="Parents / Guardians"
-            editHref={sectionHref("family")}
             notes={{
               familyId: family.id,
               section: "section-family",
@@ -636,7 +638,14 @@ export default function FamilyDetailPage() {
             ) : (
               <div className="space-y-4">
                 {parents.map((parent) => (
-                  <ParentBlock key={parent.id} parent={parent} />
+                  <ParentBlock
+                    key={parent.id}
+                    parent={parent}
+                    onChanged={() => {
+                      refreshFamily();
+                      refreshDetail();
+                    }}
+                  />
                 ))}
               </div>
             )}
@@ -740,7 +749,6 @@ export default function FamilyDetailPage() {
                       ? " · Opted out"
                       : ""
               }`}
-              editHref={sectionHref("financial-aid")}
               notes={{
                 familyId: family.id,
                 section: "section-financial-aid",
@@ -802,10 +810,27 @@ export default function FamilyDetailPage() {
                   onScholarshipChanged={refreshDetail}
                 />
               ) : (
-                <p className="text-sm text-muted-foreground">
-                  No scholarship row for this family / year. The parent
-                  hasn&rsquo;t opened the Financial Aid section yet.
-                </p>
+                // No scholarship row yet — admin can still choose
+                // the family's path on their behalf (paper
+                // applications, mid-cycle corrections, etc.).
+                // Clicking a path POSTs a fresh row scoped to
+                // this (family, year). After creation the section
+                // re-renders with the full Financial Aid form
+                // below, ready for admin to fill in financial
+                // detail.
+                <div className="space-y-3">
+                  <p className="text-sm text-muted-foreground">
+                    The parent hasn&rsquo;t opened the Financial Aid
+                    section yet. Pick the family&rsquo;s path below
+                    to start the application on their behalf.
+                  </p>
+                  <ScholarshipPathSelector
+                    scholarship={null}
+                    familyId={family.id}
+                    yearId={Number(yearId)}
+                    onChanged={refreshDetail}
+                  />
+                </div>
               )}
             </SectionShell>
           </section>
@@ -816,7 +841,6 @@ export default function FamilyDetailPage() {
           <section id="section-testing" className="scroll-mt-20">
             <SectionShell
               title="Initial Testing (NWEA)"
-              editHref={sectionHref("testing")}
               notes={{
                 familyId: family.id,
                 section: "section-testing",
@@ -1683,55 +1707,309 @@ function SectionGroup({
 
 /* ─────────────────────── Parent block ─────────────────────── */
 
-function ParentBlock({ parent }: { parent: Parent }) {
+function ParentBlock({
+  parent,
+  onChanged,
+}: {
+  parent: Parent;
+  /** Called after a successful save so the parent page can
+   *  refetch the family payload and re-render the now-persisted
+   *  values into the read mode. */
+  onChanged: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [draft, setDraft] = useState({
+    first_name: parent.first_name ?? "",
+    last_name: parent.last_name ?? "",
+    email: parent.email ?? "",
+    phone: parent.phone ?? "",
+    relationship: parent.relationship ?? "",
+    address_line_1: parent.address_line_1 ?? "",
+    address_line_2: parent.address_line_2 ?? "",
+    city: parent.city ?? "",
+    state: parent.state ?? "",
+    zipcode: parent.zipcode ?? "",
+  });
+
+  function enterEdit() {
+    setDraft({
+      first_name: parent.first_name ?? "",
+      last_name: parent.last_name ?? "",
+      email: parent.email ?? "",
+      phone: parent.phone ?? "",
+      relationship: parent.relationship ?? "",
+      address_line_1: parent.address_line_1 ?? "",
+      address_line_2: parent.address_line_2 ?? "",
+      city: parent.city ?? "",
+      state: parent.state ?? "",
+      zipcode: parent.zipcode ?? "",
+    });
+    setEditing(true);
+  }
+
+  async function runSave() {
+    // Diff against the persisted values so we only send fields
+    // admin actually changed. Trim text fields to match the
+    // parent-side form's behavior.
+    const patch: Record<string, string> = {};
+    for (const k of [
+      "first_name",
+      "last_name",
+      "email",
+      "phone",
+      "relationship",
+      "address_line_1",
+      "address_line_2",
+      "city",
+      "state",
+      "zipcode",
+    ] as const) {
+      const next = draft[k]?.trim() ?? "";
+      const prev = parent[k] ?? "";
+      if (next !== prev) patch[k] = next;
+    }
+    if (Object.keys(patch).length === 0) {
+      setEditing(false);
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/admin/parents/${parent.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Save failed (${res.status})`);
+      }
+      toast.success("Parent saved.");
+      setEditing(false);
+      onChanged();
+    } catch (err) {
+      console.error("[ParentBlock.runSave]", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't save.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const displayName =
+    parent.first_name || parent.last_name
+      ? `${parent.first_name} ${parent.last_name}`.trim()
+      : `Parent #${parent.id}`;
+
   return (
     <div className="rounded-md border bg-muted/10 p-4 space-y-5">
+      {/* Sub-header — parent name on the left, Edit/Save/Cancel on
+          the right. Matches the StudentApplicationBlock pattern
+          so admin uses the same affordance shape across the page. */}
       <div className="flex items-center justify-between gap-3">
-        <p className="text-sm font-semibold">
-          {parent.first_name || parent.last_name
-            ? `${parent.first_name} ${parent.last_name}`.trim()
-            : `Parent #${parent.id}`}
-        </p>
+        <p className="text-sm font-semibold truncate">{displayName}</p>
+        <div className="flex items-center gap-2 shrink-0">
+          {editing ? (
+            <>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setEditing(false)}
+                disabled={saving}
+                className="bg-white"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => void runSave()}
+                disabled={saving}
+                className="bg-blue-600 hover:bg-blue-700 text-white"
+              >
+                {saving ? (
+                  <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                ) : (
+                  <Check className="size-3.5 mr-1.5" />
+                )}
+                Save
+              </Button>
+            </>
+          ) : (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={enterEdit}
+              className="bg-white"
+            >
+              <Pencil className="size-3.5 mr-1.5" />
+              Edit
+            </Button>
+          )}
+        </div>
       </div>
       {/* `required` flag mirrors what the parent-side family form
           validates as required — name, all contact fields, and a
           street + city + state + zip. Apt/Suite is optional. */}
       <SectionGroup title="Name">
         <div className="grid gap-4 grid-cols-2">
-          <DisabledField label="First name" value={parent.first_name} required />
-          <DisabledField label="Last name" value={parent.last_name} required />
+          {editing ? (
+            <>
+              <Field>
+                <FieldLabel className="text-xs">First name</FieldLabel>
+                <Input
+                  value={draft.first_name}
+                  onChange={(e) =>
+                    setDraft((d) => ({ ...d, first_name: e.target.value }))
+                  }
+                  disabled={saving}
+                />
+              </Field>
+              <Field>
+                <FieldLabel className="text-xs">Last name</FieldLabel>
+                <Input
+                  value={draft.last_name}
+                  onChange={(e) =>
+                    setDraft((d) => ({ ...d, last_name: e.target.value }))
+                  }
+                  disabled={saving}
+                />
+              </Field>
+            </>
+          ) : (
+            <>
+              <DisabledField label="First name" value={parent.first_name} required />
+              <DisabledField label="Last name" value={parent.last_name} required />
+            </>
+          )}
         </div>
       </SectionGroup>
       <SectionGroup title="Contact">
         <div className="grid gap-4 grid-cols-1 sm:grid-cols-[2fr_1fr_1fr]">
-          <DisabledField
-            label="Email"
-            value={parent.email}
-            type="email"
-            required
-          />
-          <DisabledField label="Phone" value={parent.phone} required />
-          <DisabledField
-            label="Relationship"
-            value={parent.relationship}
-            placeholder="—"
-            required
-          />
+          {editing ? (
+            <>
+              <Field>
+                <FieldLabel className="text-xs">Email</FieldLabel>
+                <Input
+                  type="email"
+                  value={draft.email}
+                  onChange={(e) =>
+                    setDraft((d) => ({ ...d, email: e.target.value }))
+                  }
+                  disabled={saving}
+                />
+              </Field>
+              <Field>
+                <FieldLabel className="text-xs">Phone</FieldLabel>
+                <PhoneInput
+                  value={draft.phone}
+                  onChange={(d) => setDraft((dd) => ({ ...dd, phone: d }))}
+                />
+              </Field>
+              <Field>
+                <FieldLabel className="text-xs">Relationship</FieldLabel>
+                <Input
+                  value={draft.relationship}
+                  onChange={(e) =>
+                    setDraft((d) => ({ ...d, relationship: e.target.value }))
+                  }
+                  disabled={saving}
+                />
+              </Field>
+            </>
+          ) : (
+            <>
+              <DisabledField
+                label="Email"
+                value={parent.email}
+                type="email"
+                required
+              />
+              <DisabledField label="Phone" value={parent.phone} required />
+              <DisabledField
+                label="Relationship"
+                value={parent.relationship}
+                placeholder="—"
+                required
+              />
+            </>
+          )}
         </div>
       </SectionGroup>
       <SectionGroup title="Address">
         <div className="grid gap-4 grid-cols-1">
-          <DisabledField
-            label="Street address"
-            value={parent.address_line_1}
-            required
-          />
-          <DisabledField label="Apt / suite" value={parent.address_line_2} />
-          <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
-            <DisabledField label="City" value={parent.city} required />
-            <DisabledField label="State" value={parent.state} required />
-            <DisabledField label="Zip" value={parent.zipcode} required />
-          </div>
+          {editing ? (
+            <>
+              <Field>
+                <FieldLabel className="text-xs">Street address</FieldLabel>
+                <Input
+                  value={draft.address_line_1}
+                  onChange={(e) =>
+                    setDraft((d) => ({ ...d, address_line_1: e.target.value }))
+                  }
+                  disabled={saving}
+                />
+              </Field>
+              <Field>
+                <FieldLabel className="text-xs">Apt / suite</FieldLabel>
+                <Input
+                  value={draft.address_line_2}
+                  onChange={(e) =>
+                    setDraft((d) => ({ ...d, address_line_2: e.target.value }))
+                  }
+                  disabled={saving}
+                />
+              </Field>
+              <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
+                <Field>
+                  <FieldLabel className="text-xs">City</FieldLabel>
+                  <Input
+                    value={draft.city}
+                    onChange={(e) =>
+                      setDraft((d) => ({ ...d, city: e.target.value }))
+                    }
+                    disabled={saving}
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel className="text-xs">State</FieldLabel>
+                  <Input
+                    value={draft.state}
+                    onChange={(e) =>
+                      setDraft((d) => ({ ...d, state: e.target.value }))
+                    }
+                    disabled={saving}
+                    maxLength={2}
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel className="text-xs">Zip</FieldLabel>
+                  <Input
+                    value={draft.zipcode}
+                    onChange={(e) =>
+                      setDraft((d) => ({ ...d, zipcode: e.target.value }))
+                    }
+                    disabled={saving}
+                  />
+                </Field>
+              </div>
+            </>
+          ) : (
+            <>
+              <DisabledField
+                label="Street address"
+                value={parent.address_line_1}
+                required
+              />
+              <DisabledField label="Apt / suite" value={parent.address_line_2} />
+              <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
+                <DisabledField label="City" value={parent.city} required />
+                <DisabledField label="State" value={parent.state} required />
+                <DisabledField label="Zip" value={parent.zipcode} required />
+              </div>
+            </>
+          )}
         </div>
       </SectionGroup>
     </div>
@@ -2277,6 +2555,39 @@ function TestingBlock({
     }
   }
 
+  /**
+   * Patches a field on the per-year application row. Used for the
+   * NWEA scheduling flags (`nwea_testing_scheduled` /
+   * `nwea_testing_complete`) which live on the app row rather than
+   * the student row — those are year-scoped (a student can have
+   * tested for one year but not another). Mirrors `patchField`
+   * above structurally; separate route + table, same UX.
+   */
+  async function patchAppField(
+    field: "nwea_testing_scheduled" | "nwea_testing_complete",
+    value: boolean,
+    appId: number
+  ) {
+    setSavingField(field);
+    try {
+      const res = await fetch(`/api/admin/applications/${appId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ [field]: value }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Save failed (${res.status})`);
+      }
+      onSaved?.();
+    } catch (err) {
+      console.error(`[TestingBlock.patchAppField.${field}]`, err);
+      toast.error(err instanceof Error ? err.message : "Couldn't save.");
+    } finally {
+      setSavingField(null);
+    }
+  }
+
   return (
     <div className="rounded-md border bg-muted/10 p-4 space-y-4">
       <p className="text-sm font-semibold">
@@ -2284,17 +2595,49 @@ function TestingBlock({
       </p>
       {app ? (
         <>
-          {/* Parent-set scheduling state — read-only on this surface
-              since it's flipped by the parent flow's NWEA page. */}
+          {/* Scheduling state — admin can flip these on behalf of
+              the family. Parent flow also writes these on its
+              NWEA page, but admin needs the override here since
+              the testing is sometimes scheduled / completed by
+              school staff before the parent sees the page. Saves
+              on Select change with no extra button. */}
           <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
-            <DisabledField
-              label="NWEA scheduled"
-              value={app.nwea_testing_scheduled ? "Yes" : "No"}
-            />
-            <DisabledField
-              label="NWEA complete"
-              value={app.nwea_testing_complete ? "Yes" : "No"}
-            />
+            <Field>
+              <FieldLabel className="text-xs">NWEA scheduled</FieldLabel>
+              <Select
+                value={app.nwea_testing_scheduled ? "Yes" : "No"}
+                onValueChange={(v) =>
+                  patchAppField("nwea_testing_scheduled", v === "Yes", app.id)
+                }
+                disabled={savingField === "nwea_testing_scheduled"}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Yes">Yes</SelectItem>
+                  <SelectItem value="No">No</SelectItem>
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field>
+              <FieldLabel className="text-xs">NWEA complete</FieldLabel>
+              <Select
+                value={app.nwea_testing_complete ? "Yes" : "No"}
+                onValueChange={(v) =>
+                  patchAppField("nwea_testing_complete", v === "Yes", app.id)
+                }
+                disabled={savingField === "nwea_testing_complete"}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Yes">Yes</SelectItem>
+                  <SelectItem value="No">No</SelectItem>
+                </SelectContent>
+              </Select>
+            </Field>
           </div>
 
           {/* Admin-only initial-screening RIT scores + dates. Recorded
@@ -6818,30 +7161,45 @@ function RevokeAcceptanceButton({
  * Opportunity Scholarship (the full application), SNAP benefits
  * (pre-qualification), or Opted out. Mostly used when admin is
  * transcribing a paper application or correcting a path mid-cycle.
- * The PATCH route cascades the mutually-exclusive flags so the
- * scholarship row can't carry conflicting signals.
+ *
+ * Two modes:
+ *   - **Existing scholarship row** (scholarship !== null): clicks
+ *     PATCH `/api/admin/scholarships/[id]`. The route's mutual-
+ *     exclusion cascade ensures only one path flag is true.
+ *   - **No scholarship row yet** (scholarship === null): clicks
+ *     POST `/api/admin/scholarships` to bootstrap a fresh row with
+ *     the chosen path set. Admin doesn't need the parent to open
+ *     the Financial Aid section first — useful when transcribing
+ *     paper applications.
  *
  * Renders as a row of three pill buttons. The active path is
- * highlighted; clicking another path triggers an inline PATCH
+ * highlighted; clicking another path triggers the inline write
  * (no confirmation modal — admin can flip back immediately if
  * they pick wrong, and the cascade means there's no data-loss
  * risk).
  */
 function ScholarshipPathSelector({
   scholarship,
+  familyId,
+  yearId,
   onChanged,
 }: {
-  scholarship: XanoScholarship;
+  scholarship: XanoScholarship | null;
+  /** Required when `scholarship` is null — scopes the POST that
+   *  creates the new row. Ignored when an existing row is being
+   *  PATCHed (the row's id carries the family + year). */
+  familyId?: number;
+  yearId?: number;
   onChanged?: () => void;
 }) {
   const [savingPath, setSavingPath] = useState<
     "isOpportunityScholarship" | "isSNAPBenefits" | "isNotParticipating" | null
   >(null);
-  const active: "opp" | "snap" | "out" | null = scholarship.isOpportunityScholarship
+  const active: "opp" | "snap" | "out" | null = scholarship?.isOpportunityScholarship
     ? "opp"
-    : scholarship.isSNAPBenefits
+    : scholarship?.isSNAPBenefits
       ? "snap"
-      : scholarship.isNotParticipating
+      : scholarship?.isNotParticipating
         ? "out"
         : null;
 
@@ -6851,11 +7209,25 @@ function ScholarshipPathSelector({
   ) {
     setSavingPath(flag);
     try {
-      const res = await fetch(`/api/admin/scholarships/${scholarship.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ [flag]: true }),
-      });
+      // Existing row → PATCH the path flag (mutual-exclusion
+      // cascade in the route handles clearing the other two).
+      // No row → POST a new scholarship scoped to (family, year)
+      // with the chosen path set at creation time.
+      const res = scholarship
+        ? await fetch(`/api/admin/scholarships/${scholarship.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ [flag]: true }),
+          })
+        : await fetch(`/api/admin/scholarships`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              familyId,
+              yearId,
+              path: flag,
+            }),
+          });
       if (!res.ok) {
         const errBody = await res.json().catch(() => null);
         throw new Error(errBody?.error ?? `Save failed (${res.status})`);
