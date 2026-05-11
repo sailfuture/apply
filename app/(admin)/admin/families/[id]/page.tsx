@@ -7291,19 +7291,21 @@ function ScholarshipPathSelector({
               className={cn(
                 "flex items-center gap-2 rounded-md border bg-white px-3 py-2 text-left text-sm transition-colors disabled:opacity-50",
                 isActive
-                  ? "border-foreground border-2 hover:bg-white"
+                  ? "border-green-600 hover:bg-white"
                   : "border-border hover:bg-muted/40"
               )}
             >
               {isSaving ? (
-                <Loader2 className="size-3.5 animate-spin shrink-0 text-muted-foreground" />
+                <Loader2 className="size-3 animate-spin shrink-0 text-muted-foreground" />
               ) : isActive ? (
-                // Filled circle — Radix's Circle gets a fill to
-                // signal selection without leaning on the heavier
-                // green-bg active state.
-                <Circle className="size-3.5 shrink-0 fill-foreground text-foreground" />
+                // Small filled green circle signals selection
+                // without flooding the button with color — the
+                // 1px green border + filled circle is enough
+                // visual differentiation against the unselected
+                // neutral outline.
+                <Circle className="size-2.5 shrink-0 fill-green-600 text-green-600" />
               ) : (
-                <Circle className="size-3.5 shrink-0 text-muted-foreground/40" />
+                <Circle className="size-2.5 shrink-0 text-muted-foreground/40" />
               )}
               <span className="font-medium text-foreground">{opt.label}</span>
             </button>
