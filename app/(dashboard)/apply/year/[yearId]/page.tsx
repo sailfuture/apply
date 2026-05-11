@@ -623,7 +623,15 @@ export default function YearOverviewPage() {
     ((stage === "accepted" && onApplyPath) ||
       (stage !== "accepted" && onRegistrationPath));
 
-  if (loading || willRedirect) {
+  // Also hold the skeleton for accepted families until `regProgress`
+  // resolves, so the post-submit / pending / enrolled substages render
+  // directly from the first paint. Without this we'd flash the
+  // AcceptedView step table (and fire confetti) before flipping to the
+  // right substage.
+  const acceptedAwaitingRegProgress =
+    stage === "accepted" && regProgress === null;
+
+  if (loading || willRedirect || acceptedAwaitingRegProgress) {
     return (
       <div className="flex min-h-[calc(100vh-7.5rem)] items-center justify-center px-4 bg-gray-50 dark:bg-background">
         <div className="w-full max-w-2xl py-8">
@@ -775,26 +783,9 @@ export default function YearOverviewPage() {
   }
 
   /* ────────── Accepted-stage substages ──────────
-     Wait for the registration progress row to load before deciding which
-     accepted-stage view to render. Without this gate the page briefly
-     paints the AcceptedView step table (and fires the celebration
-     confetti) before flipping to the pending / enrolled view once
-     `regProgress` resolves. Showing the loading skeleton instead keeps
-     the transition clean and prevents the "did I already submit?" flash. */
-  if (stage === "accepted" && regProgress === null) {
-    return (
-      <div className="flex min-h-[calc(100vh-7.5rem)] items-center justify-center px-4 bg-gray-50 dark:bg-background">
-        <div className="w-full max-w-2xl py-8">
-          <div className="text-center mb-8">
-            <Skeleton className="size-16 rounded-full mx-auto mb-4" />
-            <Skeleton className="h-7 w-3/4 mx-auto" />
-            <Skeleton className="h-4 w-2/3 mx-auto mt-3" />
-          </div>
-          <Skeleton className="h-48 w-full rounded-xl" />
-        </div>
-      </div>
-    );
-  }
+     The initial-loading gate above already waits for `regProgress` when
+     `stage === "accepted"`, so by the time we get here the substage
+     selectors (enrolled / submitted / accepted) can read live data. */
 
   /* Stage 5: Enrolled — registration submitted AND every student's packet
      has been admin-confirmed. The enrolled-family dashboard takes over. */

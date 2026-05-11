@@ -23,16 +23,22 @@ export default function DashboardLayout({
     /^\/registration\/year\/\d+/.test(pathname) ||
     /^\/reapply\/year\/\d+/.test(pathname);
 
+  // Application-flow pages own their loading state with page-level
+  // skeletons. Render them through immediately — gating here on Clerk
+  // hydration would stack a layout "Loading..." on top of the page
+  // skeleton on every sign-in.
+  if (isApplicationFlow) {
+    return <>{children}</>;
+  }
+
+  // Sidebar-shell routes still wait on Clerk so AppSidebar can read
+  // user state safely.
   if (!isLoaded) {
     return (
       <div className="flex min-h-[40vh] items-center justify-center">
         <p className="text-muted-foreground text-sm">Loading...</p>
       </div>
     );
-  }
-
-  if (isApplicationFlow) {
-    return <>{children}</>;
   }
 
   return (
