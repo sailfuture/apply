@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import useSWR from "swr";
@@ -28,6 +28,14 @@ import { PhoneInput } from "@/components/ui/phone-input";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -68,6 +76,7 @@ import type {
 import type {
   XanoEmergencyContact,
   XanoFamilyPayment,
+  XanoStudentRegistration,
   XanoStudentRegistrationProgress,
 } from "@/lib/xano";
 
@@ -133,6 +142,7 @@ export default function FamilyRegistrationDetailPage() {
   const [savingSection, setSavingSection] = useState<
     | "tuition"
     | "enrollment"
+    | "registration"
     | "volunteer"
     | "emergency_contacts"
     | null
@@ -214,15 +224,18 @@ export default function FamilyRegistrationDetailPage() {
       verified: progress?.enrollment_admin_confirm === true,
     },
     // Registration completion = every active student has a packet
-    // started. Admin verify = every active student's packet has
-    // `registrationConfirmed=true`. Two different signals; both
-    // drive their own indicator in the nav.
+    // started. Admin verify = the family-level
+    // `is_registration_admin_confirm` flag is set — distinct from
+    // the per-student `registrationConfirmed` flags below, which
+    // each track their own verify state on the per-student card.
+    // The family-level verify is admin's "I've reviewed the whole
+    // section" pin; the per-student verifies are the deeper "this
+    // student's packet specifically is good" stamps. Both signals
+    // surface independently in the nav.
     registration: {
       completed:
         students.length > 0 && students.every((s) => !!s.packet),
-      verified:
-        students.length > 0 &&
-        students.every((s) => !!s.packet?.registrationConfirmed),
+      verified: progress?.is_registration_admin_confirm === true,
     },
     // Emergency contacts has no parent-completion bool — it's
     // evergreen family data. Treat "completed" as "at least one
@@ -257,12 +270,14 @@ export default function FamilyRegistrationDetailPage() {
     field:
       | "tuition_admin_confirm"
       | "enrollment_admin_confirm"
+      | "is_registration_admin_confirm"
       | "volunteer_admin_confirm"
       | "emergency_contacts_admin_confirm",
     next: boolean,
     section:
       | "tuition"
       | "enrollment"
+      | "registration"
       | "volunteer"
       | "emergency_contacts"
   ) => {
@@ -404,6 +419,14 @@ export default function FamilyRegistrationDetailPage() {
               schoolYear={school_year}
               familyPayment={familyPayment ?? null}
             />
+            {/* Per-student breakdown table — mirrors the same view the
+                parent sees on `/dashboard/tuition`. No inputs; pure
+                read-only summary so admin can scan exactly what the
+                family signed for at the per-student level. */}
+            <TuitionBreakdownTable
+              students={students}
+              schoolYear={school_year}
+            />
           </SectionShell>
         </section>
 
@@ -435,22 +458,42 @@ export default function FamilyRegistrationDetailPage() {
         </section>
 
         <section id="section-registration" className="scroll-mt-20">
-          {/* No section-level Mark Confirmed button on this card —
-              registration packet review is per-student (each row in
-              `RegistrationPacketBlock` owns its own Mark Confirmed
-              toggle that flips `registrationConfirmed` on the
-              packet). The family-level `isRegistration` flag isn't
-              flipped from this UI; section completion derives from
-              the per-student flags below. */}
+          {/* Two-tier verify on this card:
+              - Per-student footer toggle on each `StudentPacketBlock`
+                flips `registrationConfirmed` on the packet row
+              - Family-level footer toggle here flips
+                `is_registration_admin_confirm` — admin's "I've
+                reviewed the whole packet section" pin. The
+                family-level cascade flips `isRegistration=true` on
+                verify so the parent's sidenav reflects the section
+                as done. */}
           <SectionShell
             title="Registration Packet"
             status={sectionStatus.registration.completed ? "complete" : "in_progress"}
-            editHref={regSectionHref("registration")}
             notes={{
               familyId: Number(family?.id ?? familyId),
               yearId: Number(yearId),
               section: "section-registration",
               title: "Notes — Registration Packet",
+            }}
+            verify={{
+              sectionLabel: "Registration Packet",
+              verified:
+                progress?.is_registration_admin_confirm === true,
+              parentCompleted:
+                sectionStatus.registration.completed,
+              verifiedTime:
+                progress?.is_registration_admin_confirm_time ?? null,
+              verifiedByName:
+                progress?.is_registration_admin_confirm_admin?.trim() ||
+                null,
+              saving: savingSection === "registration",
+              onToggle: (next) =>
+                verifyToggle(
+                  "is_registration_admin_confirm",
+                  next,
+                  "registration"
+                ),
             }}
           >
             <RegistrationPacketBlock
@@ -830,11 +873,16 @@ function SectionShell({
 }) {
   const verified = !!verify?.verified;
   const parentCompleted = !!verify?.parentCompleted;
-  // Whole-card mute kicks in only when admin has *verified* the
-  // section. The parent flipping their completion bool isn't
-  // enough — that's still pending review on our side, and a
-  // premature gray-out reads as "this is settled" before admin
-  // has actually looked. Mirrors the apply-flow SectionShell.
+  // Mute kicks in only when admin has *verified* the section. The
+  // parent flipping their completion bool isn't enough — that's
+  // still pending review on our side, and a premature gray-out
+  // reads as "this is settled" before admin has actually looked.
+  //
+  // Opacity is scoped to the *body* only — the header (Notes /
+  // Edit / status pill) and footer (Verified pill + Undo button)
+  // stay at full opacity so the verified-state controls remain
+  // clearly readable and clickable. Mirrors the apply-flow
+  // SectionShell.
   const fullyDone = verified;
   // Parent-completion is still surfaced via the status dot so
   // admin can see in-progress vs done at a glance; reference it
@@ -842,12 +890,7 @@ function SectionShell({
   // mute on it.
   void parentCompleted;
   return (
-    <Card
-      className={cn(
-        "overflow-hidden gap-0 py-0 bg-white transition-opacity",
-        fullyDone && "opacity-60"
-      )}
-    >
+    <Card className="overflow-hidden gap-0 py-0 bg-white">
       <CardHeader className="py-3 !pb-3 border-b">
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-2 min-w-0">
@@ -883,7 +926,9 @@ function SectionShell({
               affordance pair the apply-flow SectionShell exposes.
               Notes opens a section-filtered drawer; Edit jumps to
               a per-section editor route under
-              `/admin/registrations/[id]/[section]`. */}
+              `/admin/registrations/[id]/[section]`. Once the
+              section is verified, both are disabled — same audit
+              treatment as the apply-flow SectionShell. */}
           <div className="flex items-center gap-2 shrink-0">
             {notes ? (
               <FamilyNotesSheet
@@ -892,29 +937,48 @@ function SectionShell({
                 title={notes.title}
                 phase="registration"
                 defaultYearId={notes.yearId}
+                disabled={fullyDone}
               />
             ) : null}
             {editHref ? (
-              <Button
-                asChild
-                variant="outline"
-                size="sm"
-                className="bg-white"
-              >
-                <Link href={editHref}>
+              fullyDone ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="bg-white"
+                  disabled
+                >
                   <Pencil className="size-4 mr-1" />
                   Edit
-                </Link>
-              </Button>
+                </Button>
+              ) : (
+                <Button
+                  asChild
+                  variant="outline"
+                  size="sm"
+                  className="bg-white"
+                >
+                  <Link href={editHref}>
+                    <Pencil className="size-4 mr-1" />
+                    Edit
+                  </Link>
+                </Button>
+              )
             ) : null}
           </div>
         </div>
       </CardHeader>
-      {/* Body keeps a constant background — the whole-card opacity
-          handles the muted look when `fullyDone`. Stacking
-          `bg-muted/30` on top of an opacity-reduced parent doubled
-          the dimming and made the text harder to read. */}
-      <CardContent className="space-y-6 py-5 bg-white">
+      {/* Body fades to muted when verified so the field grid reads
+          as settled, while the header (badge + buttons) and footer
+          (Verified pill + Undo) stay at full opacity for visibility
+          and click affordance. */}
+      <CardContent
+        className={cn(
+          "space-y-6 py-5 bg-white transition-opacity",
+          fullyDone && "opacity-60"
+        )}
+      >
         {children}
       </CardContent>
       {verify ? <SectionVerifyFooter verify={verify} /> : null}
@@ -1197,6 +1261,130 @@ function DisabledTextarea({
   );
 }
 
+/* ─────────────────────── Inline-edit primitives ─────────────────────── */
+
+/**
+ * Editable counterparts to `DisabledField` / `DisabledTextarea`.
+ * Used inside the per-student packet edit mode so the layout grid
+ * doesn't shift when admin toggles between read and edit — same
+ * label rhythm, same input height, just swapping in real input /
+ * textarea / select controls.
+ *
+ * Kept small and local to this page (rather than promoting to
+ * `components/ui/`) because they share the field-label conventions
+ * specific to this admin surface. If a third surface picks up the
+ * same pattern, hoist them then.
+ */
+function PacketEditInput({
+  label,
+  value,
+  onChange,
+  type = "text",
+  disabled,
+  required,
+}: {
+  label: string;
+  value: string;
+  onChange: (next: string) => void;
+  type?: string;
+  disabled?: boolean;
+  required?: boolean;
+}) {
+  return (
+    <Field>
+      <FieldLabel className="text-xs">
+        {label}
+        {required ? (
+          <span className="ml-1 text-red-500" aria-label="required">
+            *
+          </span>
+        ) : null}
+      </FieldLabel>
+      <Input
+        type={type}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+        className="h-10"
+      />
+    </Field>
+  );
+}
+
+function PacketEditSelect({
+  label,
+  value,
+  onChange,
+  options,
+  disabled,
+  required,
+}: {
+  label: string;
+  value: string;
+  onChange: (next: string) => void;
+  options: readonly string[];
+  disabled?: boolean;
+  required?: boolean;
+}) {
+  return (
+    <Field>
+      <FieldLabel className="text-xs">
+        {label}
+        {required ? (
+          <span className="ml-1 text-red-500" aria-label="required">
+            *
+          </span>
+        ) : null}
+      </FieldLabel>
+      <Select value={value} onValueChange={onChange} disabled={disabled}>
+        <SelectTrigger className="w-full h-10">
+          <SelectValue placeholder="Select…" />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((opt) => (
+            <SelectItem key={opt} value={opt}>
+              {opt}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </Field>
+  );
+}
+
+function PacketEditTextarea({
+  label,
+  value,
+  onChange,
+  disabled,
+  required,
+}: {
+  label: string;
+  value: string;
+  onChange: (next: string) => void;
+  disabled?: boolean;
+  required?: boolean;
+}) {
+  return (
+    <Field>
+      <FieldLabel className="text-xs">
+        {label}
+        {required ? (
+          <span className="ml-1 text-red-500" aria-label="required">
+            *
+          </span>
+        ) : null}
+      </FieldLabel>
+      <Textarea
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+        className="min-h-[80px]"
+      />
+    </Field>
+  );
+}
+
 /* ─────────────────────── Tuition block ─────────────────────── */
 
 function TuitionBlock({
@@ -1289,6 +1477,297 @@ function TuitionBlock({
           <SignaturePreview label="Signature" signature={signature} />
         </div>
       </SectionGroup>
+    </div>
+  );
+}
+
+/* ─────────────────────── Tuition breakdown table ─────────────────────── */
+
+/**
+ * SUFS award-tier identifier → school-year column the per-student
+ * scholarship amount lives on. Keep this map in sync with the
+ * parent-facing `/dashboard/tuition` and `/apply/year/.../tuition`
+ * pages so admin and parent computations stay byte-for-byte identical.
+ */
+const SUFS_FIELDS: Record<string, keyof TuitionBreakdownSchoolYear> = {
+  fes_eo_8: "fes_eo_8",
+  fes_eo_9: "fes_eo_9",
+  ftc_8: "ftc_8",
+  ftc_9: "ftc_9",
+  fes_ua_8_ese_1_3: "fes_ua_8_ese_1_3",
+  fes_ua_9_ese_1_3: "fes_ua_9_ese_1_3",
+  fes_ua_ese_4: "fes_ua_ese_4",
+  fes_ua_ese_5: "fes_ua_ese_5",
+};
+
+/** Human label for each SUFS tier — same set the parent dashboard uses. */
+const SUFS_LABELS: Record<string, string> = {
+  fes_eo_8: "FES-EO (Grade 8)",
+  fes_eo_9: "FES-EO (Grade 9)",
+  ftc_8: "FTC (Grade 8)",
+  ftc_9: "FTC (Grade 9)",
+  fes_ua_8_ese_1_3: "FES-UA ESE 1-3 (Grade 8)",
+  fes_ua_9_ese_1_3: "FES-UA ESE 1-3 (Grade 9)",
+  fes_ua_ese_4: "FES-UA ESE 4",
+  fes_ua_ese_5: "FES-UA ESE 5",
+};
+
+type TuitionBreakdownSchoolYear =
+  AdminFamilyRegistrationResponse["school_year"];
+
+function formatTuitionCurrency(value: number): string {
+  return value.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+/** Render a colored status pill for the Step Up status column.
+ *  Mirrors the same color mapping the parent-facing tuition table
+ *  uses (Approved/Verified → green, Pending → amber, Denied → red,
+ *  other → neutral). */
+function tuitionStatusBadge(status: string) {
+  if (!status) return null;
+  const lower = status.toLowerCase();
+  if (lower === "verified" || lower === "approved") {
+    return (
+      <span className="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700">
+        {status}
+      </span>
+    );
+  }
+  if (lower === "pending") {
+    return (
+      <span className="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-700">
+        {status}
+      </span>
+    );
+  }
+  if (lower === "denied" || lower === "rejected") {
+    return (
+      <span className="inline-flex items-center rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-700">
+        {status}
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-700">
+      {status}
+    </span>
+  );
+}
+
+/**
+ * Read-only per-student tuition breakdown — same table the parent
+ * sees on `/dashboard/tuition`, dropped under the Tuition card on
+ * the registration detail page so admin can scan exactly what the
+ * family signed for. Pure presentational: no inputs, no editor
+ * jump-offs. The Tuition card already has its own admin Edit /
+ * Verify affordances above; this block is just the receipt.
+ *
+ * Math mirrors `/dashboard/tuition` line-for-line — admin's view
+ * has to agree with the parent's view to the penny, so we
+ * deliberately re-implement the same formula here rather than
+ * importing partial fragments and risking drift.
+ */
+function TuitionBreakdownTable({
+  students,
+  schoolYear,
+}: {
+  students: AdminFamilyRegistrationStudentRow[];
+  schoolYear: TuitionBreakdownSchoolYear;
+}) {
+  if (students.length === 0) {
+    return null;
+  }
+  const tuition = schoolYear.tuition ?? 0;
+  const adminFees = schoolYear.annual_fees ?? 0;
+  const transportFees = schoolYear.transportation_fees ?? 0;
+
+  const rows = students.map((s) => {
+    const sufsField = SUFS_FIELDS[s.sufs_type];
+    const stepUpAmount = sufsField
+      ? (schoolYear[sufsField] as number | undefined) ?? 0
+      : 0;
+    const scholarshipAmount = s.opportunity_scholarship_award_amount ?? null;
+    const remaining = Math.max(
+      0,
+      tuition - stepUpAmount - (scholarshipAmount ?? 0)
+    );
+    const usesTransport = !!s.is_bus_transportation;
+    const subtotal =
+      remaining + adminFees + (usesTransport ? transportFees : 0);
+    return {
+      studentName: s.student_full_name,
+      tuition,
+      stepUpStatus: s.sufs_status,
+      stepUpType: s.sufs_type,
+      stepUpAmount,
+      scholarshipAmount,
+      adminFees,
+      transportFees,
+      usesTransport,
+      busStop: s.bus_stop,
+      subtotal,
+    };
+  });
+  const grandTotal = rows.reduce((sum, r) => sum + r.subtotal, 0);
+  const yearName = schoolYear.year_name ?? "";
+
+  return (
+    <div className="rounded-md border bg-white overflow-hidden">
+      <table className="w-full text-sm">
+        <tbody>
+          {rows.map((row, idx) => (
+            <Fragment key={idx}>
+              {/* Student group header */}
+              <tr className="bg-muted/40 border-t first:border-t-0">
+                <td colSpan={2} className="px-4 py-3">
+                  <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    Student
+                  </span>
+                  <span className="mx-2 text-muted-foreground">—</span>
+                  <span className="font-semibold text-foreground">
+                    {row.studentName}
+                  </span>
+                </td>
+              </tr>
+
+              {/* Annual Tuition */}
+              <tr className="border-t">
+                <td className="px-4 py-3 text-muted-foreground">
+                  Annual Tuition
+                </td>
+                <td className="px-4 py-3 text-right font-medium">
+                  ${formatTuitionCurrency(row.tuition)}
+                </td>
+              </tr>
+
+              {/* Annual Admin Fee */}
+              <tr className="border-t">
+                <td className="px-4 py-3 text-muted-foreground">
+                  Annual Admin Fee
+                </td>
+                <td className="px-4 py-3 text-right font-medium">
+                  ${formatTuitionCurrency(row.adminFees)}
+                </td>
+              </tr>
+
+              {/* Transportation Fee */}
+              <tr className="border-t">
+                <td className="px-4 py-3 text-muted-foreground">
+                  <span className="inline-flex items-center gap-1.5">
+                    Transportation Fee
+                    {!row.usesTransport ? (
+                      <span className="text-xs text-muted-foreground/60">
+                        (N/A)
+                      </span>
+                    ) : null}
+                  </span>
+                </td>
+                <td className="px-4 py-3 text-right font-medium">
+                  {row.usesTransport ? (
+                    `$${formatTuitionCurrency(row.transportFees)}`
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
+                </td>
+              </tr>
+
+              {/* Step Up Status */}
+              <tr className="border-t">
+                <td className="px-4 py-3 text-muted-foreground">
+                  Step Up for Students Award Status
+                </td>
+                <td className="px-4 py-3 text-right">
+                  {row.stepUpStatus ? (
+                    tuitionStatusBadge(row.stepUpStatus)
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
+                </td>
+              </tr>
+
+              {/* Step Up Type */}
+              <tr className="border-t">
+                <td className="px-4 py-3 text-muted-foreground">
+                  Step Up for Students Award Type
+                </td>
+                <td className="px-4 py-3 text-right font-medium">
+                  {row.stepUpType && SUFS_LABELS[row.stepUpType] ? (
+                    SUFS_LABELS[row.stepUpType]
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
+                </td>
+              </tr>
+
+              {/* Step Up Amount */}
+              <tr className="border-t">
+                <td className="px-4 py-3 text-muted-foreground">
+                  Step Up for Students Award Amount
+                </td>
+                <td className="px-4 py-3 text-right font-medium text-green-600">
+                  {row.stepUpAmount > 0
+                    ? `-$${formatTuitionCurrency(row.stepUpAmount)}`
+                    : "$0.00"}
+                </td>
+              </tr>
+
+              {/* Opportunity Scholarship */}
+              <tr className="border-t">
+                <td className="px-4 py-3 text-muted-foreground">
+                  Opportunity Scholarship Award
+                </td>
+                <td className="px-4 py-3 text-right font-medium text-green-600">
+                  {row.scholarshipAmount != null &&
+                  row.scholarshipAmount > 0 ? (
+                    `-$${formatTuitionCurrency(row.scholarshipAmount)}`
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
+                </td>
+              </tr>
+
+              {/* Student subtotal */}
+              <tr className="border-t bg-muted/20">
+                <td className="px-4 py-3 font-medium">
+                  Subtotal — {row.studentName}
+                </td>
+                <td className="px-4 py-3 text-right font-semibold">
+                  ${formatTuitionCurrency(row.subtotal)}
+                </td>
+              </tr>
+            </Fragment>
+          ))}
+
+          {/* Grand total — title carries the school year in parens
+              so admin always knows which year's receipt they're
+              looking at without scrolling back to the page header.
+              Same pattern as the parent dashboard's tuition table. */}
+          <tr className="border-t-2 bg-white">
+            <td className="px-4 py-3 font-bold">
+              Total Annual Due
+              {yearName ? (
+                <span className="ml-1.5 font-normal text-muted-foreground">
+                  — School Year ({yearName})
+                </span>
+              ) : null}
+            </td>
+            <td className="px-4 py-3 text-right font-bold">
+              ${formatTuitionCurrency(grandTotal)}
+            </td>
+          </tr>
+          <tr className="border-t bg-white">
+            <td className="px-4 py-3 font-bold">
+              Monthly Payment (Aug – Jul, 12 months)
+            </td>
+            <td className="px-4 py-3 text-right font-bold">
+              ${formatTuitionCurrency(grandTotal / 12)}/mo
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -1424,6 +1903,88 @@ function RegistrationPacketBlock({
 
 const SHIRT_SIZES = ["XS", "S", "M", "L", "XL", "XXL"];
 const SWIM_LEVELS = ["None", "Beginner", "Intermediate", "Advanced"];
+const YES_NO = ["Yes", "No"] as const;
+
+/**
+ * Draft shape for the packet inline editor — string-typed mirror of
+ * the editable fields on `XanoStudentRegistration`. Booleans render
+ * as "Yes" / "No" / "" selects (empty = unset); numbers and text
+ * all flow through as plain strings until save, where we coerce
+ * back to the column's native type for the PATCH body.
+ *
+ * Read-only columns (file uploads, liability-waiver metadata,
+ * registrationConfirmed + audit pair) deliberately aren't on the
+ * draft — those flow through their own surfaces (per-doc verify,
+ * PandaDoc webhook, verify footer below).
+ */
+type PacketDraft = {
+  shirt_size: string;
+  pant_size: string;
+  swim_level: string;
+  // Health & Medical — booleans + scalars
+  is_student_on_medicaid: "" | "Yes" | "No";
+  medicaid_number: string;
+  medicaid_provider: string;
+  carry_epi_pen: "" | "Yes" | "No";
+  // Health & Medical — narrative text
+  allergies: string;
+  dietary_restrictions: string;
+  prescription_medications: string;
+  health_conditions: string;
+  vision_impairments: string;
+  hearing_impairments: string;
+  epipen_explainer: string;
+  permission_for_acetaminophen: string;
+  additional_health_information: string;
+  interested_in_counseling_services: string;
+  iep_description: string;
+  // Pickup permissions
+  other_adults_approved_for_pickup: string;
+  prohibited_adults: string;
+};
+
+/** Project a packet row to the editor draft shape. Used to (re)seed
+ *  the draft when admin enters edit mode so canceling discards
+ *  pending changes cleanly. */
+function packetToDraft(p: XanoStudentRegistration | null | undefined): PacketDraft {
+  return {
+    shirt_size: p?.shirt_size ?? "",
+    pant_size: p?.pant_size ?? "",
+    swim_level: p?.swim_level ?? "",
+    is_student_on_medicaid:
+      p?.is_student_on_medicaid === true
+        ? "Yes"
+        : p?.is_student_on_medicaid === false
+          ? "No"
+          : "",
+    medicaid_number:
+      p?.medicaid_number === undefined || p?.medicaid_number === null
+        ? ""
+        : String(p.medicaid_number),
+    medicaid_provider: p?.medicaid_provider ?? "",
+    carry_epi_pen:
+      p?.carry_epi_pen === true
+        ? "Yes"
+        : p?.carry_epi_pen === false
+          ? "No"
+          : "",
+    allergies: p?.allergies ?? "",
+    dietary_restrictions: p?.dietary_restrictions ?? "",
+    prescription_medications: p?.prescription_medications ?? "",
+    health_conditions: p?.health_conditions ?? "",
+    vision_impairments: p?.vision_impairments ?? "",
+    hearing_impairments: p?.hearing_impairments ?? "",
+    epipen_explainer: p?.epipen_explainer ?? "",
+    permission_for_acetaminophen: p?.permission_for_acetaminophen ?? "",
+    additional_health_information: p?.additional_health_information ?? "",
+    interested_in_counseling_services:
+      p?.interested_in_counseling_services ?? "",
+    iep_description: p?.iep_description ?? "",
+    other_adults_approved_for_pickup:
+      p?.other_adults_approved_for_pickup ?? "",
+    prohibited_adults: p?.prohibited_adults ?? "",
+  };
+}
 
 function StudentPacketBlock({
   row,
@@ -1440,6 +2001,13 @@ function StudentPacketBlock({
   const [saving, setSaving] = useState(false);
   const [creating, setCreating] = useState(false);
   const [undoOpen, setUndoOpen] = useState(false);
+  // Inline edit state for the packet. Lives at the block level so
+  // every editable sub-section (Uniform & Activities, Health &
+  // Medical, Pickup Permissions) swaps into edit mode together —
+  // admin's flow is "open this student's packet, edit, save" not
+  // "edit each sub-section individually."
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<PacketDraft>(() => packetToDraft(row.packet));
   const packet = row.packet;
   const hasPacket = packet != null;
 
@@ -1516,52 +2084,225 @@ function StudentPacketBlock({
     }
   }
 
+  function enterEdit() {
+    // Reseed the draft from the latest row data each time we open
+    // the editor so the form doesn't carry stale values from a prior
+    // canceled edit.
+    setDraft(packetToDraft(packet));
+    setEditing(true);
+  }
+
+  function cancelEdit() {
+    setDraft(packetToDraft(packet));
+    setEditing(false);
+  }
+
+  /** Diff the draft against the current packet, coerce types back to
+   *  the column's native shape, and PATCH only what changed. Keeps the
+   *  request body minimal so concurrent admin edits don't trample
+   *  each other on untouched columns. */
+  async function runSave() {
+    if (!packet) return;
+    const patch: Partial<XanoStudentRegistration> = {};
+    // Strings — trim before compare so trailing whitespace doesn't
+    // count as a change.
+    const trimEq = (a: string, b: string) => a.trim() === (b ?? "").trim();
+    if (!trimEq(draft.shirt_size, packet.shirt_size ?? ""))
+      patch.shirt_size = draft.shirt_size.trim();
+    if (!trimEq(draft.pant_size, packet.pant_size ?? ""))
+      patch.pant_size = draft.pant_size.trim();
+    if (!trimEq(draft.swim_level, packet.swim_level ?? ""))
+      patch.swim_level = draft.swim_level.trim();
+    if (!trimEq(draft.medicaid_provider, packet.medicaid_provider ?? ""))
+      patch.medicaid_provider = draft.medicaid_provider.trim();
+    // Narrative fields — same trimmed-compare treatment.
+    const narrative = [
+      "allergies",
+      "dietary_restrictions",
+      "prescription_medications",
+      "health_conditions",
+      "vision_impairments",
+      "hearing_impairments",
+      "epipen_explainer",
+      "permission_for_acetaminophen",
+      "additional_health_information",
+      "interested_in_counseling_services",
+      "iep_description",
+      "other_adults_approved_for_pickup",
+      "prohibited_adults",
+    ] as const;
+    for (const key of narrative) {
+      const next = draft[key].trim();
+      const prev = (packet[key] ?? "").trim();
+      if (next !== prev) {
+        (patch as Record<string, unknown>)[key] = next;
+      }
+    }
+    // Booleans — "" maps back to false (Xano column is non-null
+    // boolean). Empty string in the draft means "admin didn't pick"
+    // — we don't change the value in that case.
+    if (
+      draft.is_student_on_medicaid !== "" &&
+      (draft.is_student_on_medicaid === "Yes") !==
+        (packet.is_student_on_medicaid === true)
+    ) {
+      patch.is_student_on_medicaid = draft.is_student_on_medicaid === "Yes";
+    }
+    if (
+      draft.carry_epi_pen !== "" &&
+      (draft.carry_epi_pen === "Yes") !== (packet.carry_epi_pen === true)
+    ) {
+      patch.carry_epi_pen = draft.carry_epi_pen === "Yes";
+    }
+    // Medicaid number — Xano column is numeric. Empty input means
+    // "clear it" → 0 (matches the parent-side flow's behavior).
+    const draftMedNum = draft.medicaid_number.trim();
+    const nextMedNum = draftMedNum === "" ? 0 : Number(draftMedNum);
+    if (
+      Number.isFinite(nextMedNum) &&
+      nextMedNum !== (packet.medicaid_number ?? 0)
+    ) {
+      patch.medicaid_number = nextMedNum;
+    }
+    if (Object.keys(patch).length === 0) {
+      setEditing(false);
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/admin/student-registration/${packet.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Save failed (${res.status})`);
+      }
+      toast.success(`${row.student_full_name}'s packet saved.`);
+      setEditing(false);
+      onChanged();
+    } catch (err) {
+      console.error("[StudentPacketBlock.runSave]", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't save.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
-    <div
-      className={cn(
-        "rounded-md border bg-muted/10 overflow-hidden transition-opacity",
-        // Whole-card mute when admin has verified AND the packet
-        // exists. Drops opacity on the entire student block — header
-        // + body + footer — so the verified state reads as one
-        // settled unit. Footer Undo button stays clickable; opacity
-        // dims it visually but doesn't disable.
-        verified && hasPacket && "opacity-60"
-      )}
-    >
-      <div className="p-4 space-y-5">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 flex items-center gap-2 flex-wrap">
-          <p className="text-sm font-semibold truncate">
-            {row.student_full_name}
+    // Outer wrapper stays at full opacity — the verified-state body
+    // fade is applied to the inner body container below so the
+    // header buttons and verify footer remain clearly legible. Edit
+    // mode short-circuits the body fade so admin isn't editing
+    // through a half-opacity grid.
+    <div className="rounded-md border bg-muted/10 overflow-hidden">
+      {/* Header strip — name + status pill on the left, Edit / Save
+          / Cancel on the right. Always at full opacity so the
+          verified-state controls (and the Edit affordance once
+          unverified) stay clearly readable even when the body
+          fades. Same affordance pair the apply-flow
+          `StudentApplicationBlock` exposes — admin's eye lands on
+          the same control in the same spot on every per-student
+          card across the two admin surfaces. */}
+      <div className="p-4 pb-0 flex items-start justify-between gap-3">
+        <div className="min-w-0 space-y-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <p className="text-sm font-semibold truncate">
+              {row.student_full_name}
+            </p>
+            {verified ? (
+              <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-800">
+                <CheckCircle2 className="size-2.5" />
+                Verified
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-amber-800">
+                Needs Verification
+              </span>
+            )}
+            {!hasPacket ? (
+              <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                Not started
+              </span>
+            ) : null}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {row.student_grade ? `Grade ${row.student_grade}` : "—"}
+            {row.student_date_of_birth
+              ? ` · DOB ${row.student_date_of_birth}`
+              : ""}
           </p>
-          {/* Three-state title badge mirroring the section cards
-              elsewhere — green Verified pill when verified, amber
-              Needs Verification pill otherwise. Gives admin a
-              skim-the-page sense of which students are still
-              pending. */}
-          {verified ? (
-            <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-800">
-              <CheckCircle2 className="size-2.5" />
-              Verified
-            </span>
-          ) : (
-            <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-amber-800">
-              Needs Verification
-            </span>
-          )}
         </div>
-        {!hasPacket ? (
-          <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground shrink-0">
-            Not started
-          </span>
+        {/* Edit / Save / Cancel cluster — only renders when a packet
+            exists (no point editing a row that hasn't been created
+            yet; admin uses Create Packet below in that case).
+            Disabled while verified so the per-student verify state
+            stays the single source of truth — admin can Undo the
+            verification first if they need to amend the packet. */}
+        {hasPacket ? (
+          <div className="flex items-center gap-2 shrink-0">
+            {editing ? (
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={cancelEdit}
+                  disabled={saving}
+                  className="bg-white"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => void runSave()}
+                  disabled={saving}
+                  className="bg-blue-600 hover:bg-blue-700 text-white"
+                >
+                  {saving ? (
+                    <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                  ) : (
+                    <Check className="size-3.5 mr-1.5" />
+                  )}
+                  Save
+                </Button>
+              </>
+            ) : (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={enterEdit}
+                disabled={verified}
+                title={
+                  verified
+                    ? "Undo verification below to amend this packet."
+                    : `Edit ${row.student_full_name}'s packet`
+                }
+                className="bg-white"
+              >
+                <Pencil className="size-3.5 mr-1.5" />
+                Edit
+              </Button>
+            )}
+          </div>
         ) : null}
       </div>
-      <p className="text-xs text-muted-foreground">
-        {row.student_grade ? `Grade ${row.student_grade}` : "—"}
-        {row.student_date_of_birth
-          ? ` · DOB ${row.student_date_of_birth}`
-          : ""}
-      </p>
+
+      {/* Body — opacity fades when verified so the form reads as
+          settled, but the header above and footer below stay at
+          full opacity. Edit mode forces full opacity regardless of
+          verify state (the verify Edit button is already disabled
+          when verified, so this only matters during an in-flight
+          PATCH from a stale render). */}
+      <div
+        className={cn(
+          "p-4 space-y-5 transition-opacity",
+          verified && hasPacket && !editing && "opacity-60"
+        )}
+      >
 
       {!hasPacket ? (
         <div className="space-y-3">
@@ -1595,21 +2336,57 @@ function StudentPacketBlock({
               as the same form the parent filled out. */}
           <SectionGroup title="Uniform & Activities">
             <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
-              <DisabledField
-                label="Shirt Size"
-                value={packet ? formatChoice(packet.shirt_size, SHIRT_SIZES) : ""}
-                required
-              />
-              <DisabledField
-                label="Pant Size"
-                value={packet?.pant_size ?? ""}
-                required
-              />
-              <DisabledField
-                label="Swim Level"
-                value={packet ? formatChoice(packet.swim_level, SWIM_LEVELS) : ""}
-                required
-              />
+              {editing ? (
+                <>
+                  <PacketEditSelect
+                    label="Shirt Size"
+                    value={draft.shirt_size}
+                    onChange={(v) =>
+                      setDraft((d) => ({ ...d, shirt_size: v }))
+                    }
+                    options={SHIRT_SIZES}
+                    disabled={saving}
+                    required
+                  />
+                  <PacketEditInput
+                    label="Pant Size"
+                    value={draft.pant_size}
+                    onChange={(v) =>
+                      setDraft((d) => ({ ...d, pant_size: v }))
+                    }
+                    disabled={saving}
+                    required
+                  />
+                  <PacketEditSelect
+                    label="Swim Level"
+                    value={draft.swim_level}
+                    onChange={(v) =>
+                      setDraft((d) => ({ ...d, swim_level: v }))
+                    }
+                    options={SWIM_LEVELS}
+                    disabled={saving}
+                    required
+                  />
+                </>
+              ) : (
+                <>
+                  <DisabledField
+                    label="Shirt Size"
+                    value={packet ? formatChoice(packet.shirt_size, SHIRT_SIZES) : ""}
+                    required
+                  />
+                  <DisabledField
+                    label="Pant Size"
+                    value={packet?.pant_size ?? ""}
+                    required
+                  />
+                  <DisabledField
+                    label="Swim Level"
+                    value={packet ? formatChoice(packet.swim_level, SWIM_LEVELS) : ""}
+                    required
+                  />
+                </>
+              )}
             </div>
           </SectionGroup>
 
@@ -1656,76 +2433,231 @@ function StudentPacketBlock({
           {/* ── Health & Medical ────────────────────────────────── */}
           <SectionGroup title="Health & Medical">
             <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
-              <DisabledField
-                label="On Medicaid"
-                value={
-                  packet?.is_student_on_medicaid === true ? "Yes" : "No"
-                }
-              />
-              <DisabledField
-                label="Medicaid Provider"
-                value={packet?.medicaid_provider ?? ""}
-              />
-              <DisabledField
-                label="Medicaid #"
-                value={
-                  packet?.medicaid_number ? String(packet.medicaid_number) : ""
-                }
-              />
-              <DisabledField
-                label="Carries EpiPen"
-                value={packet?.carry_epi_pen === true ? "Yes" : "No"}
-              />
+              {editing ? (
+                <>
+                  <PacketEditSelect
+                    label="On Medicaid"
+                    value={draft.is_student_on_medicaid}
+                    onChange={(v) =>
+                      setDraft((d) => ({
+                        ...d,
+                        is_student_on_medicaid: v as "" | "Yes" | "No",
+                      }))
+                    }
+                    options={YES_NO}
+                    disabled={saving}
+                  />
+                  <PacketEditInput
+                    label="Medicaid Provider"
+                    value={draft.medicaid_provider}
+                    onChange={(v) =>
+                      setDraft((d) => ({ ...d, medicaid_provider: v }))
+                    }
+                    disabled={saving}
+                  />
+                  <PacketEditInput
+                    label="Medicaid #"
+                    value={draft.medicaid_number}
+                    onChange={(v) =>
+                      setDraft((d) => ({ ...d, medicaid_number: v }))
+                    }
+                    disabled={saving}
+                    type="text"
+                  />
+                  <PacketEditSelect
+                    label="Carries EpiPen"
+                    value={draft.carry_epi_pen}
+                    onChange={(v) =>
+                      setDraft((d) => ({
+                        ...d,
+                        carry_epi_pen: v as "" | "Yes" | "No",
+                      }))
+                    }
+                    options={YES_NO}
+                    disabled={saving}
+                  />
+                </>
+              ) : (
+                <>
+                  <DisabledField
+                    label="On Medicaid"
+                    value={
+                      packet?.is_student_on_medicaid === true ? "Yes" : "No"
+                    }
+                  />
+                  <DisabledField
+                    label="Medicaid Provider"
+                    value={packet?.medicaid_provider ?? ""}
+                  />
+                  <DisabledField
+                    label="Medicaid #"
+                    value={
+                      packet?.medicaid_number ? String(packet.medicaid_number) : ""
+                    }
+                  />
+                  <DisabledField
+                    label="Carries EpiPen"
+                    value={packet?.carry_epi_pen === true ? "Yes" : "No"}
+                  />
+                </>
+              )}
             </div>
             {/* Medical narrative fields — 2-col on sm+ so the
                 textareas don't stack into a single tall column.
                 Most fields read as "none" / short notes in
                 practice, so two-up scans cleanly. */}
             <div className="mt-3 grid gap-4 grid-cols-1 sm:grid-cols-2">
-              <DisabledTextarea
-                label="Allergies"
-                value={packet?.allergies ?? ""}
-              />
-              <DisabledTextarea
-                label="Dietary restrictions"
-                value={packet?.dietary_restrictions ?? ""}
-              />
-              <DisabledTextarea
-                label="Prescription medications"
-                value={packet?.prescription_medications ?? ""}
-              />
-              <DisabledTextarea
-                label="Health conditions"
-                value={packet?.health_conditions ?? ""}
-              />
-              <DisabledTextarea
-                label="Vision impairments"
-                value={packet?.vision_impairments ?? ""}
-              />
-              <DisabledTextarea
-                label="Hearing impairments"
-                value={packet?.hearing_impairments ?? ""}
-              />
-              <DisabledTextarea
-                label="EpiPen explainer"
-                value={packet?.epipen_explainer ?? ""}
-              />
-              <DisabledTextarea
-                label="Permission for acetaminophen"
-                value={packet?.permission_for_acetaminophen ?? ""}
-              />
-              <DisabledTextarea
-                label="Additional health information"
-                value={packet?.additional_health_information ?? ""}
-              />
-              <DisabledTextarea
-                label="Interested in counseling services"
-                value={packet?.interested_in_counseling_services ?? ""}
-              />
-              <DisabledTextarea
-                label="IEP description"
-                value={packet?.iep_description ?? ""}
-              />
+              {editing ? (
+                <>
+                  <PacketEditTextarea
+                    label="Allergies"
+                    value={draft.allergies}
+                    onChange={(v) =>
+                      setDraft((d) => ({ ...d, allergies: v }))
+                    }
+                    disabled={saving}
+                  />
+                  <PacketEditTextarea
+                    label="Dietary restrictions"
+                    value={draft.dietary_restrictions}
+                    onChange={(v) =>
+                      setDraft((d) => ({ ...d, dietary_restrictions: v }))
+                    }
+                    disabled={saving}
+                  />
+                  <PacketEditTextarea
+                    label="Prescription medications"
+                    value={draft.prescription_medications}
+                    onChange={(v) =>
+                      setDraft((d) => ({
+                        ...d,
+                        prescription_medications: v,
+                      }))
+                    }
+                    disabled={saving}
+                  />
+                  <PacketEditTextarea
+                    label="Health conditions"
+                    value={draft.health_conditions}
+                    onChange={(v) =>
+                      setDraft((d) => ({ ...d, health_conditions: v }))
+                    }
+                    disabled={saving}
+                  />
+                  <PacketEditTextarea
+                    label="Vision impairments"
+                    value={draft.vision_impairments}
+                    onChange={(v) =>
+                      setDraft((d) => ({ ...d, vision_impairments: v }))
+                    }
+                    disabled={saving}
+                  />
+                  <PacketEditTextarea
+                    label="Hearing impairments"
+                    value={draft.hearing_impairments}
+                    onChange={(v) =>
+                      setDraft((d) => ({ ...d, hearing_impairments: v }))
+                    }
+                    disabled={saving}
+                  />
+                  <PacketEditTextarea
+                    label="EpiPen explainer"
+                    value={draft.epipen_explainer}
+                    onChange={(v) =>
+                      setDraft((d) => ({ ...d, epipen_explainer: v }))
+                    }
+                    disabled={saving}
+                  />
+                  <PacketEditTextarea
+                    label="Permission for acetaminophen"
+                    value={draft.permission_for_acetaminophen}
+                    onChange={(v) =>
+                      setDraft((d) => ({
+                        ...d,
+                        permission_for_acetaminophen: v,
+                      }))
+                    }
+                    disabled={saving}
+                  />
+                  <PacketEditTextarea
+                    label="Additional health information"
+                    value={draft.additional_health_information}
+                    onChange={(v) =>
+                      setDraft((d) => ({
+                        ...d,
+                        additional_health_information: v,
+                      }))
+                    }
+                    disabled={saving}
+                  />
+                  <PacketEditTextarea
+                    label="Interested in counseling services"
+                    value={draft.interested_in_counseling_services}
+                    onChange={(v) =>
+                      setDraft((d) => ({
+                        ...d,
+                        interested_in_counseling_services: v,
+                      }))
+                    }
+                    disabled={saving}
+                  />
+                  <PacketEditTextarea
+                    label="IEP description"
+                    value={draft.iep_description}
+                    onChange={(v) =>
+                      setDraft((d) => ({ ...d, iep_description: v }))
+                    }
+                    disabled={saving}
+                  />
+                </>
+              ) : (
+                <>
+                  <DisabledTextarea
+                    label="Allergies"
+                    value={packet?.allergies ?? ""}
+                  />
+                  <DisabledTextarea
+                    label="Dietary restrictions"
+                    value={packet?.dietary_restrictions ?? ""}
+                  />
+                  <DisabledTextarea
+                    label="Prescription medications"
+                    value={packet?.prescription_medications ?? ""}
+                  />
+                  <DisabledTextarea
+                    label="Health conditions"
+                    value={packet?.health_conditions ?? ""}
+                  />
+                  <DisabledTextarea
+                    label="Vision impairments"
+                    value={packet?.vision_impairments ?? ""}
+                  />
+                  <DisabledTextarea
+                    label="Hearing impairments"
+                    value={packet?.hearing_impairments ?? ""}
+                  />
+                  <DisabledTextarea
+                    label="EpiPen explainer"
+                    value={packet?.epipen_explainer ?? ""}
+                  />
+                  <DisabledTextarea
+                    label="Permission for acetaminophen"
+                    value={packet?.permission_for_acetaminophen ?? ""}
+                  />
+                  <DisabledTextarea
+                    label="Additional health information"
+                    value={packet?.additional_health_information ?? ""}
+                  />
+                  <DisabledTextarea
+                    label="Interested in counseling services"
+                    value={packet?.interested_in_counseling_services ?? ""}
+                  />
+                  <DisabledTextarea
+                    label="IEP description"
+                    value={packet?.iep_description ?? ""}
+                  />
+                </>
+              )}
             </div>
           </SectionGroup>
 
@@ -1734,14 +2666,40 @@ function StudentPacketBlock({
           {/* ── Pickup Permissions ──────────────────────────────── */}
           <SectionGroup title="Pickup Permissions">
             <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
-              <DisabledTextarea
-                label="Other adults approved for pickup"
-                value={packet?.other_adults_approved_for_pickup ?? ""}
-              />
-              <DisabledTextarea
-                label="Prohibited adults"
-                value={packet?.prohibited_adults ?? ""}
-              />
+              {editing ? (
+                <>
+                  <PacketEditTextarea
+                    label="Other adults approved for pickup"
+                    value={draft.other_adults_approved_for_pickup}
+                    onChange={(v) =>
+                      setDraft((d) => ({
+                        ...d,
+                        other_adults_approved_for_pickup: v,
+                      }))
+                    }
+                    disabled={saving}
+                  />
+                  <PacketEditTextarea
+                    label="Prohibited adults"
+                    value={draft.prohibited_adults}
+                    onChange={(v) =>
+                      setDraft((d) => ({ ...d, prohibited_adults: v }))
+                    }
+                    disabled={saving}
+                  />
+                </>
+              ) : (
+                <>
+                  <DisabledTextarea
+                    label="Other adults approved for pickup"
+                    value={packet?.other_adults_approved_for_pickup ?? ""}
+                  />
+                  <DisabledTextarea
+                    label="Prohibited adults"
+                    value={packet?.prohibited_adults ?? ""}
+                  />
+                </>
+              )}
             </div>
           </SectionGroup>
 

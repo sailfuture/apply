@@ -131,6 +131,16 @@ interface Props {
    * passed along when present for consistency.
    */
   phase?: "registration" | "application";
+  /**
+   * When true, the trigger button is disabled — the drawer can't
+   * be opened. Used by `SectionShell` on the family detail pages
+   * to lock down the Notes affordance once a section has been
+   * verified by admin: a verified section is the "settled" state,
+   * so we don't want stray notes (or accidental clicks on the
+   * trigger) muddying the audit trail. Admin can still unverify
+   * the section to re-enable the trigger.
+   */
+  disabled?: boolean;
 }
 
 /**
@@ -154,6 +164,7 @@ export function FamilyNotesSheet({
   title,
   triggerLabel,
   phase,
+  disabled,
 }: Props) {
   const [open, setOpen] = useState(false);
   // SWR key carries phase + section filters so each scope maps to
@@ -374,7 +385,8 @@ export function FamilyNotesSheet({
         <button
           type="button"
           onClick={() => setOpen(true)}
-          className="fixed bottom-6 right-6 z-40 inline-flex items-center gap-2 rounded-full border bg-foreground px-4 py-2.5 text-sm font-medium text-background shadow-lg transition-colors hover:bg-foreground/90"
+          disabled={disabled}
+          className="fixed bottom-6 right-6 z-40 inline-flex items-center gap-2 rounded-full border bg-foreground px-4 py-2.5 text-sm font-medium text-background shadow-lg transition-colors hover:bg-foreground/90 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-foreground"
           aria-label="Open notes & communication log"
         >
           <MessageSquare className="size-4" />
@@ -391,6 +403,7 @@ export function FamilyNotesSheet({
           variant="outline"
           size="sm"
           onClick={() => setOpen(true)}
+          disabled={disabled}
           className="bg-white"
           aria-label="Open notes & communication log"
         >

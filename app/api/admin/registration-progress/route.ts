@@ -36,11 +36,13 @@ import type { XanoStudentRegistrationProgress } from "@/lib/xano";
  * signal — if admin says it's good, the parent stops being asked
  * to finish it.
  *
- * Three sections track admin verification on this row: Tuition,
- * Enrollment, Volunteer Hours. The Registration Packet's
- * confirmation is per-student (lives on
- * `registration_student_registration.registrationConfirmed`), so
- * there's no entry for it here.
+ * Five sections track admin verification on this row: Tuition,
+ * Enrollment, Registration Packet (family-level rollup), Volunteer
+ * Hours, and Emergency Contacts. The Registration Packet section
+ * ALSO has per-student `registrationConfirmed` flags on each
+ * `registration_student_registration` row — the family-level
+ * verify here is a separate "I've reviewed the whole packet
+ * section" pin, not a substitute for the per-student work.
  *
  * Mirrors the same pattern used by the apply-flow family-progress
  * route's section-confirm pairs.
@@ -83,6 +85,19 @@ const SECTION_VERIFY_PAIRS: Array<{
     timeKey: "emergency_contacts_admin_confirm_time",
     adminKey: "emergency_contacts_admin_confirm_admin",
     completedKey: null,
+  },
+  {
+    // Registration Packet — family-level verify. Cascades to
+    // `isRegistration=true` so the parent's sidenav reflects
+    // "Registration Packet section done" without the parent
+    // having to remember to click Complete. Per-student
+    // `registrationConfirmed` flags on each packet row are
+    // independent — admin still verifies each student
+    // separately on the per-student card footer.
+    confirmKey: "is_registration_admin_confirm",
+    timeKey: "is_registration_admin_confirm_time",
+    adminKey: "is_registration_admin_confirm_admin",
+    completedKey: "isRegistration",
   },
 ];
 
@@ -142,6 +157,10 @@ export async function PATCH(req: NextRequest) {
       "enrollment_admin_confirm",
       "volunteer_admin_confirm",
       "emergency_contacts_admin_confirm",
+      // Registration Packet — family-level section verify. Audit
+      // pair (`is_registration_admin_confirm_time` / `_admin`) is
+      // auto-stamped by the SECTION_VERIFY_PAIRS loop below.
+      "is_registration_admin_confirm",
       // Family-level registration-confirmed latch. The Family
       // Registration Confirmation card on the registration detail
       // page flips this; audit pair below (`registration_confirmed_time`

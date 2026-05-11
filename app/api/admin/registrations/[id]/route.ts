@@ -294,6 +294,17 @@ export async function GET(
             packet?.registration_confirmed_admin_time ?? null,
           is_admin_verified_admin:
             packet?.regisration_admin_confirmed_admin ?? "",
+          // Per-application fields driving the Tuition card's
+          // per-student breakdown table. Same data the parent's
+          // `/dashboard/tuition` reads — the family-side and admin-
+          // side surfaces compute the same numbers from the same
+          // source so admin sees exactly what the parent signed.
+          sufs_status: app.sufs_status ?? "",
+          sufs_type: app.sufs_type ?? "",
+          opportunity_scholarship_award_amount:
+            app.opportunity_scholarship_award_amount ?? null,
+          is_bus_transportation: !!app.is_bus_transportation,
+          bus_stop: app.bus_stop ?? "",
         };
       }
     );
@@ -320,6 +331,19 @@ export async function GET(
         tuition: schoolYear.tuition ?? 0,
         annual_fees: schoolYear.annual_fees ?? 0,
         transportation_fees: schoolYear.transportation_fees ?? 0,
+        // Per-SUFS-tier award amounts. The Tuition card's per-student
+        // breakdown reads these to compute the green "Step Up Award
+        // Amount" line — same math the parent dashboard's
+        // /dashboard/tuition page runs. Falls back to 0 for any tier
+        // not configured on this year.
+        fes_eo_8: schoolYear.fes_eo_8 ?? 0,
+        fes_eo_9: schoolYear.fes_eo_9 ?? 0,
+        ftc_8: schoolYear.ftc_8 ?? 0,
+        ftc_9: schoolYear.ftc_9 ?? 0,
+        fes_ua_8_ese_1_3: schoolYear.fes_ua_8_ese_1_3 ?? 0,
+        fes_ua_9_ese_1_3: schoolYear.fes_ua_9_ese_1_3 ?? 0,
+        fes_ua_ese_4: schoolYear.fes_ua_ese_4 ?? 0,
+        fes_ua_ese_5: schoolYear.fes_ua_ese_5 ?? 0,
       },
       progress: progress as XanoStudentRegistrationProgress | null,
       students: studentRows,
@@ -351,6 +375,14 @@ export interface AdminFamilyRegistrationResponse {
     tuition: number;
     annual_fees: number;
     transportation_fees: number;
+    fes_eo_8: number;
+    fes_eo_9: number;
+    ftc_8: number;
+    ftc_9: number;
+    fes_ua_8_ese_1_3: number;
+    fes_ua_9_ese_1_3: number;
+    fes_ua_ese_4: number;
+    fes_ua_ese_5: number;
   };
   progress: XanoStudentRegistrationProgress | null;
   students: AdminFamilyRegistrationStudentRow[];
@@ -413,6 +445,17 @@ export interface AdminFamilyRegistrationStudentRow {
   is_verified: boolean;
   is_admin_verified_time: number | null;
   is_admin_verified_admin: string;
+  /** Per-application Step Up status / type / scholarship amount and
+   *  transportation election. Same fields the parent-facing tuition
+   *  table reads from the application row — surfaced here so the
+   *  Tuition card on the registration detail page can render the
+   *  identical breakdown without admin needing to cross-reference
+   *  the apply-flow view. */
+  sufs_status: string;
+  sufs_type: string;
+  opportunity_scholarship_award_amount: number | null;
+  is_bus_transportation: boolean;
+  bus_stop: string;
 }
 
 /**

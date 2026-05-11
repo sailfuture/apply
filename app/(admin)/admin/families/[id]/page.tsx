@@ -1316,28 +1316,27 @@ function SectionShell({
 }) {
   const confirmed = !!confirm?.confirmed;
   const parentCompleted = !!confirm?.parentCompleted;
-  // Whole-card mute kicks in only when admin has *verified* the
-  // section. The parent marking it complete (`*_completed`) on its
-  // own isn't enough — that's still pending review on our side, and
-  // a premature gray-out reads as "this is settled" before admin has
-  // actually looked. Drops opacity on the entire `<Card>` so the
-  // title, status badge, and Edit button read as one settled unit.
-  // Footer buttons stay clickable — opacity dims their look but
-  // doesn't disable them. `parentCompleted` is still surfaced via
-  // the status dot (yellow → in progress, green → done) so admin
-  // can scan progress without relying on the mute alone.
+  // Mute kicks in only when admin has *verified* the section. The
+  // parent marking it complete (`*_completed`) on its own isn't
+  // enough — that's still pending review on our side, and a
+  // premature gray-out reads as "this is settled" before admin has
+  // actually looked.
+  //
+  // Opacity is scoped to the *body* (the view-only field grid), not
+  // the whole `<Card>`. The header (Notes / Edit / status pill) and
+  // footer (Verified pill + Undo button) stay at full opacity so the
+  // verified-state controls are still clearly readable and clickable
+  // — fading the entire card made the Undo button look half-disabled
+  // and the verified pill hard to find. `parentCompleted` is still
+  // surfaced via the status dot (yellow → in progress, green → done)
+  // so admin can scan progress without relying on the mute alone.
   const fullyDone = confirmed;
   // Silence the unused-var warning — `parentCompleted` used to
   // drive `fullyDone` and is kept on the props for future surfaces
   // that may want to reintroduce the parent-completion mute.
   void parentCompleted;
   return (
-    <Card
-      className={cn(
-        "overflow-hidden gap-0 py-0 bg-white transition-opacity",
-        fullyDone && "opacity-60"
-      )}
-    >
+    <Card className="overflow-hidden gap-0 py-0 bg-white">
       <CardHeader className="py-3 !pb-3 border-b">
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-2 min-w-0">
@@ -1374,10 +1373,13 @@ function SectionShell({
             ) : null}
           </div>
           {/* Notes + Edit pair, docked at the right of the section
-              header. Notes opens a section-filtered drawer (its own
-              SWR cache key, its own POST scope) scoped to the
-              application phase so registration-phase comms don't
-              leak in; Edit jumps to the per-section editor route. */}
+              header. Once the section is verified, both are
+              disabled — admin can't add notes or jump into an editor
+              on a settled section without first hitting Undo on the
+              footer to re-open it. This keeps the audit trail honest
+              ("the verified state is the source of truth, edits flow
+              through the unverify path") and prevents accidental
+              clicks from muddying a confirmed surface. */}
           <div className="flex items-center gap-2 shrink-0">
             {notes ? (
               <FamilyNotesSheet
@@ -1385,29 +1387,48 @@ function SectionShell({
                 section={notes.section}
                 title={notes.title}
                 phase="application"
+                disabled={fullyDone}
               />
             ) : null}
             {editHref ? (
-              <Button
-                asChild
-                variant="outline"
-                size="sm"
-                className="bg-white"
-              >
-                <Link href={editHref}>
+              fullyDone ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="bg-white"
+                  disabled
+                >
                   <Pencil className="size-4 mr-1" />
                   Edit
-                </Link>
-              </Button>
+                </Button>
+              ) : (
+                <Button
+                  asChild
+                  variant="outline"
+                  size="sm"
+                  className="bg-white"
+                >
+                  <Link href={editHref}>
+                    <Pencil className="size-4 mr-1" />
+                    Edit
+                  </Link>
+                </Button>
+              )
             ) : null}
           </div>
         </div>
       </CardHeader>
-      {/* Body keeps a constant background — the whole-card opacity
-          handles the muted look when `fullyDone`. Stacking
-          `bg-muted/30` on top of an opacity-reduced parent doubled
-          the dimming and made the text harder to read. */}
-      <CardContent className="space-y-6 py-5 bg-white">
+      {/* Body fades to muted when verified so the field grid reads
+          as settled, while the header (badge + buttons) and footer
+          (Verified pill + Undo) stay at full opacity for visibility
+          and click affordance. */}
+      <CardContent
+        className={cn(
+          "space-y-6 py-5 bg-white transition-opacity",
+          fullyDone && "opacity-60"
+        )}
+      >
         {children}
       </CardContent>
       {/* Section-confirm footer — divider + caption on left, action

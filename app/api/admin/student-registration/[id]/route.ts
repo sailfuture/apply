@@ -39,11 +39,22 @@ export async function PATCH(
 
     const body = await req.json();
 
-    // Tight allowlist — admin can flip the confirm flag (auto-stamps
-    // audit pair below) and patch the liability-waiver state, nothing
-    // else. Editing the rest of the packet (medical info, file
-    // uploads, etc.) belongs on the parent-side flow — those are
-    // facts the family records, not admin overrides.
+    // Allowlist — admin can:
+    //   - Flip the confirm flag (auto-stamps audit pair below)
+    //   - Mirror PandaDoc state onto the liability-waiver columns
+    //     when the webhook goes sideways
+    //   - Edit the packet content on behalf of the family from the
+    //     registration detail page's inline editor (sizes, medical
+    //     narrative, pickup permissions). Admin needs full control
+    //     here so the "no more redirecting back to the application
+    //     form" rule extends to registration-phase data too.
+    //
+    // File-upload columns (birth_certificate, transcripts, etc.) are
+    // deliberately NOT on the allowlist — those go through their
+    // own upload-to-Xano flow on the parent side and aren't
+    // editable as inline text. Same for `last_updated` /
+    // `last_edited_time`, which `xano.studentRegistration.update`
+    // auto-stamps for every writer.
     //
     // The audit columns `registration_confirmed_admin_time` and
     // `regisration_admin_confirmed_admin` (the typo on the column
@@ -57,6 +68,30 @@ export async function PATCH(
       "liability_waiver_status",
       "liability_waiver_sent_at",
       "liability_waiver_pdf_url",
+      // Uniform & Activities
+      "shirt_size",
+      "pant_size",
+      "swim_level",
+      // Health & Medical — booleans + scalars
+      "is_student_on_medicaid",
+      "medicaid_number",
+      "medicaid_provider",
+      "carry_epi_pen",
+      // Health & Medical — narrative text
+      "allergies",
+      "dietary_restrictions",
+      "prescription_medications",
+      "health_conditions",
+      "vision_impairments",
+      "hearing_impairments",
+      "epipen_explainer",
+      "permission_for_acetaminophen",
+      "additional_health_information",
+      "interested_in_counseling_services",
+      "iep_description",
+      // Pickup permissions
+      "other_adults_approved_for_pickup",
+      "prohibited_adults",
     ];
     const patch: Record<string, unknown> = {};
     for (const key of ALLOWED) {

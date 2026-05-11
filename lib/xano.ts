@@ -1122,11 +1122,7 @@ export interface XanoStudentRegistrationProgress {
   //
   // Mirrors the audit pattern on
   // `registration_family_application_progress` for the apply-flow
-  // section confirms. Three sections track admin verification on
-  // this row: Tuition, Enrollment, Volunteer Hours. The Registration
-  // Packet section's confirmation is per-student (lives on
-  // `registration_student_registration.registrationConfirmed`), so
-  // there's no `registration_admin_confirm*` triplet here.
+  // section confirms.
   tuition_admin_confirm?: boolean;
   tuition_admin_confirm_time?: number | null;
   tuition_admin_confirm_admin?: string;
@@ -1144,6 +1140,19 @@ export interface XanoStudentRegistrationProgress {
   emergency_contacts_admin_confirm?: boolean;
   emergency_contacts_admin_confirm_time?: number | null;
   emergency_contacts_admin_confirm_admin?: string;
+  /** Registration Packet section family-level verify triplet. The
+   *  section's per-student data still lives on each
+   *  `registration_student_registration.registrationConfirmed` row,
+   *  but admin also wants a single family-level "I've reviewed the
+   *  whole packet section" pin — same pattern as Tuition/Enrollment/
+   *  Volunteer. Note the column name uses `is_registration_*` rather
+   *  than `registration_*` to keep it distinguishable from the
+   *  `registration_confirmed_*` family-level rollup latch (different
+   *  semantic: this one is the per-section verify, that one is the
+   *  whole-family final confirmation). */
+  is_registration_admin_confirm?: boolean;
+  is_registration_admin_confirm_time?: number | null;
+  is_registration_admin_confirm_admin?: string;
 
   /** Family-level "registration confirmed" latch — the rollup admin
    *  flips after every per-section verify (tuition, enrollment,
