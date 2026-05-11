@@ -138,6 +138,11 @@ export async function PATCH(req: NextRequest) {
       "isEnrollment",
       "isRegistration",
       "isVolunteerHours",
+      // Parent-side "I clicked Submit" flag + timestamp. Admin can
+      // override (force-submit on behalf of a family) but the
+      // registration-confirmed cascade below also flips these so
+      // any path through the confirmation flow lands a coherent
+      // submission record.
       "isSubmitted",
       "submitted_date",
       "monthly_tuition_payment",
@@ -212,10 +217,23 @@ export async function PATCH(req: NextRequest) {
     // Confirmation card flips. Confirm → time = now, admin = display
     // name; unconfirm → time = null, admin = "". Clients can't hand-
     // write these — the route owns them.
+    //
+    // Confirmation implies submission: admin can't approve a packet
+    // the family hasn't notionally "submitted" yet, so we force
+    // `isSubmitted = true` + stamp `submitted_date` on the same row
+    // when confirming. This catches the case where admin confirms on
+    // behalf of a family that never clicked the parent-side Submit
+    // button themselves (paper packets, post-hoc data entry). The
+    // submitted_date stamp is only written when the row doesn't
+    // already carry one — a real parent-side submission time is
+    // preferred over the admin-confirmation time.
     if ("isRegistrationConfirmed" in patch) {
       const next = patch.isRegistrationConfirmed === true;
       patch.registration_confirmed_time = next ? now : null;
       patch.registration_confirmed_admin = next ? adminName : "";
+      if (next) {
+        if (!("isSubmitted" in patch)) patch.isSubmitted = true;
+      }
     }
 
     if (Object.keys(patch).length <= 1) {
@@ -230,6 +248,17 @@ export async function PATCH(req: NextRequest) {
       familyId,
       yearId
     );
+
+    // `submitted_date` is stamped here (post-resolve) so we can
+    // inspect the pre-patch row and preserve any existing parent-
+    // side submission timestamp. Only fires when admin is forcing
+    // `isSubmitted=true` via the registration-confirmed cascade
+    // above; explicit body submissions get their own handling on
+    // the client.
+    if (patch.isRegistrationConfirmed === true && !row.submitted_date) {
+      patch.submitted_date = now;
+    }
+
     const updated = await xano.studentRegistrationProgress.update(
       row.id,
       patch

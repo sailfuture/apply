@@ -258,6 +258,71 @@ export async function PATCH(req: NextRequest) {
     }
 
     const updated = await xano.familyApplicationProgress.update(row.id, patch);
+
+    // Cascade to the registration progress row when admin flips
+    // acceptance. Two directions:
+    //
+    //   - `isAccepted = true` → resolve-or-create the
+    //     `registration_student_registration_progress` row for
+    //     this (family, year) and force `isSubmitted = true` so
+    //     the family lands in the post-acceptance registration
+    //     queue without waiting on the parent to click Submit
+    //     again on the registration side. Stamps `submitted_date`
+    //     only when the row doesn't already carry one — a real
+    //     parent-side submission time wins.
+    //
+    //   - `isAccepted = false` (revoke) → clear
+    //     `isRegistrationConfirmed` + the matching audit pair on
+    //     the same row. Revoking an acceptance leaves a
+    //     "confirmed registration for a no-longer-accepted family"
+    //     state otherwise, which is incoherent and traps admin
+    //     behind the unverify-locked gate (sections can't be
+    //     undone while registration is confirmed). Unlocking the
+    //     downstream rollup is the whole point of revoking.
+    //
+    // Best-effort: cascade failures don't fail the primary PATCH,
+    // since the apply-flow row write already landed. Cascade
+    // errors log + toast-fail the registration-side state but the
+    // acceptance/revoke itself sticks.
+    if ("isAccepted" in patch) {
+      const accepting = patch.isAccepted === true;
+      try {
+        const regRow =
+          await xano.studentRegistrationProgress.resolve(familyId, yearId);
+        const regPatch: Record<string, unknown> = {
+          last_edited: Date.now(),
+        };
+        if (accepting) {
+          if (regRow.isSubmitted !== true) regPatch.isSubmitted = true;
+          if (!regRow.submitted_date) regPatch.submitted_date = Date.now();
+        } else {
+          // Revoke path. Clear the family-level rollup latch + its
+          // audit pair so admin can step into the registration
+          // sections to amend them without the unverify-locked gate
+          // blocking everything. Per-section verifies and per-
+          // student packet `registrationConfirmed` flags stay
+          // intact — those are admin's prior work, and re-accepting
+          // shouldn't force admin to re-stamp every verify.
+          if (regRow.isRegistrationConfirmed === true) {
+            regPatch.isRegistrationConfirmed = false;
+            regPatch.registration_confirmed_time = null;
+            regPatch.registration_confirmed_admin = "";
+          }
+        }
+        // Only write if the cascade actually wants to change something
+        // (more than the auto-stamped `last_edited`). Idempotent —
+        // re-accepting an already-submitted registration is a no-op.
+        if (Object.keys(regPatch).length > 1) {
+          await xano.studentRegistrationProgress.update(regRow.id, regPatch);
+        }
+      } catch (cascadeErr) {
+        console.error(
+          "[/api/admin/family-progress] registration-progress cascade failed:",
+          cascadeErr
+        );
+      }
+    }
+
     return NextResponse.json(updated);
   } catch (err) {
     return handleAdminError(err);
