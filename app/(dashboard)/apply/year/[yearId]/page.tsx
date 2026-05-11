@@ -480,7 +480,8 @@ export default function YearOverviewPage() {
   // `registrationConfirmed: true` on that student's packet row. Once every
   // student's packet is confirmed, the enrolled-family dashboard takes
   // over the page.
-  const { progress: regProgress } = useStudentRegistrationProgress(yearId);
+  const { progress: regProgress, loading: regProgressLoading } =
+    useStudentRegistrationProgress(yearId);
   const isRegistrationSubmitted = !!regProgress?.isSubmitted;
 
   const { data: yearPackets } = useSWR<
@@ -526,9 +527,15 @@ export default function YearOverviewPage() {
     // fully known. Eliminates the apply → registration → dashboard
     // double-hop for already-enrolled families.
     if (stage === "accepted") {
-      const enrollmentReady =
-        regProgress !== null && yearPackets !== undefined;
-      if (!enrollmentReady) return;
+      // Always wait for regProgress before deciding.
+      if (regProgress === null) return;
+
+      // Only wait for `yearPackets` when registration was actually
+      // submitted. Otherwise the SWR key in `useSWR(...)` above is
+      // `null`, the fetch never fires, and `yearPackets` is `undefined`
+      // forever — which would block this effect from ever redirecting
+      // an accepted-but-not-submitted family off of `/apply`.
+      if (isRegistrationSubmitted && yearPackets === undefined) return;
 
       if (isEnrolled) {
         router.replace("/dashboard");
@@ -543,7 +550,17 @@ export default function YearOverviewPage() {
     if (onRegistration) {
       router.replace(`/apply/year/${yearId}`);
     }
-  }, [loading, stage, pathname, yearId, router, regProgress, yearPackets, isEnrolled]);
+  }, [
+    loading,
+    stage,
+    pathname,
+    yearId,
+    router,
+    regProgress,
+    yearPackets,
+    isEnrolled,
+    isRegistrationSubmitted,
+  ]);
 
   const submitSections: SectionStatus[] = useMemo(
     () => [
@@ -627,9 +644,12 @@ export default function YearOverviewPage() {
   // resolves, so the post-submit / pending / enrolled substages render
   // directly from the first paint. Without this we'd flash the
   // AcceptedView step table (and fire confetti) before flipping to the
-  // right substage.
+  // right substage. Gated on the hook's loading flag rather than
+  // `regProgress === null` so a 4xx/5xx from the progress endpoint
+  // doesn't perma-stick the skeleton (the hook returns
+  // `progress: null` on error).
   const acceptedAwaitingRegProgress =
-    stage === "accepted" && regProgress === null;
+    stage === "accepted" && regProgressLoading;
 
   if (loading || willRedirect || acceptedAwaitingRegProgress) {
     return (
