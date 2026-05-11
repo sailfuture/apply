@@ -3586,6 +3586,24 @@ function DecisionCard({
 }) {
   const accepted = progress?.isAccepted === true;
   const familySubmitted = progress?.isSubmitted === true;
+  // Registration-confirmed lookup — lives on a separate Xano table
+  // (`registration_student_registration_progress`) so we have to
+  // fetch it independently. The Acceptance card's Revoke
+  // affordance is gated on this: once admin has confirmed the
+  // family's registration downstream, revoking the upstream
+  // acceptance would orphan a confirmed registration on a
+  // no-longer-accepted family. Admin has to undo the registration
+  // confirmation first.
+  const { data: regProgress } = useSWR<{
+    isRegistrationConfirmed?: boolean;
+  } | null>(
+    familyId && yearId
+      ? `/api/admin/registration-progress?familyId=${familyId}&yearId=${yearId}`
+      : null,
+    adminFetcher
+  );
+  const registrationConfirmed =
+    regProgress?.isRegistrationConfirmed === true;
   // Section-verify gate — Acceptance is blocked until each section
   // is verified by admin. `unverifiedSections` lists the human-
   // readable labels that haven't been verified yet so the gate-
@@ -3928,6 +3946,12 @@ function DecisionCard({
                 familyId={familyId}
                 yearId={yearId}
                 familyName={familyName}
+                disabled={registrationConfirmed}
+                disabledReason={
+                  registrationConfirmed
+                    ? "Undo registration confirmation on the registration page before revoking."
+                    : undefined
+                }
                 onRevoked={onChanged}
               />
               <Button
@@ -7175,11 +7199,20 @@ function RevokeAcceptanceButton({
   familyId,
   yearId,
   familyName,
+  disabled,
+  disabledReason,
   onRevoked,
 }: {
   familyId: number;
   yearId: number;
   familyName: string;
+  /** When true, the button is non-interactive — typically because
+   *  the family's registration has been confirmed and admin can't
+   *  revoke acceptance without first undoing the registration
+   *  confirmation. Reason rides on the button's `title` tooltip so
+   *  admin sees why it's locked without leaving the page. */
+  disabled?: boolean;
+  disabledReason?: string;
   onRevoked: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -7214,7 +7247,8 @@ function RevokeAcceptanceButton({
         type="button"
         variant="outline"
         size="lg"
-        disabled={saving}
+        disabled={saving || !!disabled}
+        title={disabled && disabledReason ? disabledReason : undefined}
         onClick={() => setOpen(true)}
         className="bg-white"
       >

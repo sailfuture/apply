@@ -506,27 +506,41 @@ export default function YearOverviewPage() {
   // URL routing effect — see comment near the top of the component for
   // the lifecycle → URL mapping. Lives down here so it can read the
   // already-declared `regProgress`, `yearPackets`, and `isEnrolled`.
+  //
+  // Single-decision semantics: when the family is on the `accepted`
+  // path we wait for BOTH `regProgress` and `yearPackets` to resolve
+  // before picking a destination. The earlier code redirected
+  // `/apply` → `/registration` as soon as `stage` flipped to
+  // "accepted" — fine in isolation, but then `/registration` would
+  // re-evaluate, find `isEnrolled === true`, and bounce again to
+  // `/dashboard`. That's two visible flickers per accepted-family
+  // landing (apply skeleton → registration skeleton → dashboard
+  // skeleton). Waiting for the full data before any redirect lets us
+  // go straight `/apply` → `/dashboard` in one hop.
   useEffect(() => {
     if (loading) return;
     const onApply = pathname.startsWith(`/apply/year/${yearId}`);
     const onRegistration = pathname.startsWith(`/registration/year/${yearId}`);
 
-    // Already-enrolled families belong on /dashboard. Wait for both the
-    // progress row and the per-year packets to load before deciding,
-    // otherwise we'd redirect on partial data.
-    if (
-      stage === "accepted" &&
-      regProgress !== null &&
-      yearPackets !== undefined &&
-      isEnrolled
-    ) {
-      router.replace("/dashboard");
+    // Hold redirects on the accepted path until enrollment status is
+    // fully known. Eliminates the apply → registration → dashboard
+    // double-hop for already-enrolled families.
+    if (stage === "accepted") {
+      const enrollmentReady =
+        regProgress !== null && yearPackets !== undefined;
+      if (!enrollmentReady) return;
+
+      if (isEnrolled) {
+        router.replace("/dashboard");
+        return;
+      }
+      if (onApply) {
+        router.replace(`/registration/year/${yearId}`);
+      }
       return;
     }
 
-    if (stage === "accepted" && onApply) {
-      router.replace(`/registration/year/${yearId}`);
-    } else if (stage !== "accepted" && onRegistration) {
+    if (onRegistration) {
       router.replace(`/apply/year/${yearId}`);
     }
   }, [loading, stage, pathname, yearId, router, regProgress, yearPackets, isEnrolled]);
@@ -585,7 +599,31 @@ export default function YearOverviewPage() {
     }
   }, [stage, regProgress, registrationCompletedCount, isRegistrationSubmitted]);
 
-  if (loading) {
+  // Keep the skeleton up while we know a redirect is imminent so the
+  // parent doesn't see the apply / accepted view flash briefly
+  // before the URL changes. Two transitional cases:
+  //
+  //   1. Family is accepted but we're on `/apply` — the URL effect
+  //      above will redirect to `/registration` (or `/dashboard` if
+  //      already enrolled) once data lands. Show skeleton through
+  //      that window rather than the apply form.
+  //   2. Family is NOT accepted but we're on `/registration` —
+  //      symmetric case, will redirect back to `/apply`.
+  //
+  // The "stage=accepted + already enrolled" case is handled by
+  // `isEnrolled` short-circuiting the whole page directly to the
+  // dashboard further down; this guard only covers the URL-mismatch
+  // case where we haven't decided yet but know we're going to move.
+  const onApplyPath = pathname.startsWith(`/apply/year/${yearId}`);
+  const onRegistrationPath = pathname.startsWith(
+    `/registration/year/${yearId}`
+  );
+  const willRedirect =
+    !loading &&
+    ((stage === "accepted" && onApplyPath) ||
+      (stage !== "accepted" && onRegistrationPath));
+
+  if (loading || willRedirect) {
     return (
       <div className="flex min-h-[calc(100vh-7.5rem)] items-center justify-center px-4 bg-gray-50 dark:bg-background">
         <div className="w-full max-w-2xl py-8">

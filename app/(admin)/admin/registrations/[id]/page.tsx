@@ -386,7 +386,7 @@ export default function FamilyRegistrationDetailPage() {
                 application) + Notes. View application sits to the
                 left so admin's left-to-right reading order goes
                 "look back at the apply-flow" → "log a note." The
-                destructive Revoke admission + Archive affordances
+                destructive Revoke acceptance + Archive affordances
                 live on the Confirmation card's footer below
                 rather than up here, since they're rarer and
                 belong with the rest of the family-level decision
@@ -4313,10 +4313,10 @@ function EmergencyContactDialogButton(props: EmergencyContactDialogProps) {
   );
 }
 
-/* ─────────────────────── Revoke admission ─────────────────────── */
+/* ─────────────────────── Revoke acceptance ─────────────────────── */
 
 /**
- * Header-mounted "Revoke admission" affordance — wraps the
+ * Header-mounted "Revoke acceptance" affordance — wraps the
  * destructive PATCH (`isAccepted = false` on the apply-flow's
  * `family_application_progress` row) behind a warning modal so admin
  * can't blow away an acceptance with a stray click.
@@ -4326,7 +4326,8 @@ function EmergencyContactDialogButton(props: EmergencyContactDialogProps) {
  * post-acceptance packets is the audience most likely to discover
  * "this family should NOT be enrolled after all" — easier to action
  * from the page they're already on than to bounce them back to the
- * apply view to revoke.
+ * apply view to revoke. The apply-flow Acceptance card also ships
+ * the same affordance; both call the same underlying PATCH.
  *
  * The PATCH targets `/api/admin/family-progress` which already
  * supports `isAccepted: false` on its allowlist. Side-effects:
@@ -4334,19 +4335,26 @@ function EmergencyContactDialogButton(props: EmergencyContactDialogProps) {
  *     Applications list
  *   - `isSubmitted` stays true (we don't auto-flip it back; the
  *     application was still submitted, just not approved)
- *   - The registration-side progress row is left alone — any
- *     section verifies admin has already done stay intact in case
- *     this is a temporary revoke
+ *   - The registration-side `isRegistrationConfirmed` is cleared
+ *     by the family-progress route's cascade (so admin can step
+ *     back through downstream sections)
+ *
+ * Gated when registration is already confirmed (`registrationConfirmed`
+ * prop) — admin has to undo that downstream rollup first before
+ * unwinding the upstream acceptance. Keeps the lifecycle linear:
+ * you can't strip away the foundation while the roof is still
+ * locked in place.
  *
  * `acceptedAtAll` decides whether to render the button: families
  * who were never accepted (no progress row) don't need the
  * affordance.
  */
-function RevokeAdmissionButton({
+function RevokeAcceptanceButton({
   familyId,
   yearId,
   familyName,
   acceptedAtAll,
+  registrationConfirmed,
   onRevoked,
 }: {
   familyId: number;
@@ -4357,6 +4365,11 @@ function RevokeAdmissionButton({
    *  call would technically succeed for any family, but rendering
    *  the button on a never-accepted family is just visual noise. */
   acceptedAtAll: boolean;
+  /** When true, admin can't revoke acceptance — the registration's
+   *  downstream confirmation has to be undone first. Reason rides
+   *  on the button's title tooltip so admin sees why it's locked
+   *  without leaving the page. */
+  registrationConfirmed: boolean;
   onRevoked: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -4374,11 +4387,11 @@ function RevokeAdmissionButton({
         const errBody = await res.json().catch(() => null);
         throw new Error(errBody?.error ?? `Revoke failed (${res.status})`);
       }
-      toast.success(`Admission revoked for ${familyName || "family"}.`);
+      toast.success(`Acceptance revoked for ${familyName || "family"}.`);
       setOpen(false);
       onRevoked();
     } catch (err) {
-      console.error("[RevokeAdmissionButton.runRevoke] failed:", err);
+      console.error("[RevokeAcceptanceButton.runRevoke] failed:", err);
       toast.error(err instanceof Error ? err.message : "Couldn't revoke.");
     } finally {
       setSaving(false);
@@ -4393,7 +4406,12 @@ function RevokeAdmissionButton({
         type="button"
         variant="outline"
         size="lg"
-        disabled={saving}
+        disabled={saving || registrationConfirmed}
+        title={
+          registrationConfirmed
+            ? "Undo registration confirmation above before revoking acceptance."
+            : undefined
+        }
         onClick={() => setOpen(true)}
         className="bg-white w-full"
       >
@@ -4404,7 +4422,7 @@ function RevokeAdmissionButton({
             "step backward" affordances share the same visual
             weight. */}
         <ArrowLeft className="size-4 mr-1.5" />
-        Revoke admission
+        Revoke acceptance
       </Button>
 
       <AlertDialog
@@ -4416,7 +4434,7 @@ function RevokeAdmissionButton({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              Revoke admission for {familyName || "family"}?
+              Revoke acceptance for {familyName || "family"}?
             </AlertDialogTitle>
             <AlertDialogDescription>
               The family drops out of the Accepted queue and loses
@@ -4468,7 +4486,7 @@ function RevokeAdmissionButton({
  * caption in the header carries the same information for blocked
  * states.
  *
- * Footer is a single inline action row: Revoke admission, View
+ * Footer is a single inline action row: Revoke acceptance, View
  * application, Archive, Confirm Family Registration. Buttons share
  * the row so admin's family-level actions all live in one place.
  * Truncates text when the row gets cramped. Once the family is
@@ -4730,7 +4748,7 @@ function FamilyRegistrationConfirmationCard({
       </CardContent>
       {/* Footer — three buttons share the row equally (`flex-1`
           on each), left-to-right: Archive (the soft-delete escape
-          hatch) → Revoke admission (the destructive "send this
+          hatch) → Revoke acceptance (the destructive "send this
           family back to the apply-flow" action, rendered with a
           back-arrow icon to read as a directional "step
           backward") → Confirm Family Registration (the primary
@@ -4760,17 +4778,18 @@ function FamilyRegistrationConfirmationCard({
             archived={archived}
             onChanged={onConfirmed}
           />
-          <RevokeAdmissionButton
+          <RevokeAcceptanceButton
             familyId={familyId}
             yearId={yearId}
             familyName={familyName}
             acceptedAtAll={progress !== null}
+            registrationConfirmed={confirmed}
             onRevoked={onConfirmed}
           />
           {confirmed ? (
             <>
               {/* Order in the grid (left→right) when confirmed:
-                  Archive · Revoke admission · Undo · Registration
+                  Archive · Revoke acceptance · Undo · Registration
                   Confirmed. The Confirmed pill sits at the far
                   right so it's the last thing admin's eye lands
                   on — the headline state, not a button to

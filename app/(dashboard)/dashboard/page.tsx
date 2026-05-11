@@ -131,13 +131,19 @@ export default function EnrolledHomePage() {
 
   // Bounce families with no enrolled year back to the application/registration
   // flow. The root year-overview page will route them to the right view.
+  // Tracked so the loading skeleton stays up through the redirect window —
+  // we don't want the brief "no enrolled year for you" empty render
+  // showing before the URL change settles.
+  const noEnrolledYear =
+    !!appsData &&
+    !!yearsData &&
+    !enrolledLoading &&
+    targetYearId === null;
   useEffect(() => {
-    if (!appsData || !yearsData) return;
-    if (enrolledLoading) return;
-    if (targetYearId === null) {
+    if (noEnrolledYear) {
       router.replace("/");
     }
-  }, [appsData, yearsData, enrolledLoading, targetYearId, router]);
+  }, [noEnrolledYear, router]);
 
   // Once we know which year is being shown, write it to the URL as
   // `?yearId=X`. The dashboard cards (Tuition, Volunteer Hours) read

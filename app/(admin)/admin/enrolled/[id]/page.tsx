@@ -14,6 +14,7 @@ import {
   FileUp,
   Loader2,
   Pencil,
+  Plus,
   RotateCcw,
   Trash2,
   Undo2,
@@ -814,11 +815,24 @@ function FamilyInformationCard({
       <CardContent className="space-y-6 py-5 bg-white">
         {/* Parents — one sub-section per parent. Same grid + field
             shape as the Student Information body so labels and
-            inputs line up vertically across both cards. */}
+            inputs line up vertically across both cards. The Add
+            parent affordance lives at the section header so admin
+            can extend the family roster without leaving the card;
+            new parents receive a Clerk sign-in invitation by email
+            and gain the same dashboard access existing parents
+            have. */}
         <div className="space-y-5">
-          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Parents
-          </p>
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Parents
+            </p>
+            {family ? (
+              <AddParentDialog
+                familyId={family.id}
+                onAdded={onChanged}
+              />
+            ) : null}
+          </div>
           {parents.length === 0 ? (
             <p className="text-sm italic text-muted-foreground">
               No parents on file for this family.
@@ -839,11 +853,22 @@ function FamilyInformationCard({
 
         {/* Emergency contacts — same shape as parents above. The
             section header reads the same so admin's eye treats
-            both blocks as parallel rosters. */}
+            both blocks as parallel rosters. Add contact button
+            mirrors the Parents one so the two sections share the
+            same affordance pattern; emergency contacts are
+            contact-only records (no sign-in, no notifications). */}
         <div className="space-y-5">
-          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Emergency Contacts
-          </p>
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Emergency Contacts
+            </p>
+            {family ? (
+              <AddEmergencyContactDialog
+                familyId={family.id}
+                onAdded={onChanged}
+              />
+            ) : null}
+          </div>
           {emergencyContacts.length === 0 ? (
             <p className="text-sm italic text-muted-foreground">
               No emergency contacts on file for this family.
@@ -865,6 +890,380 @@ function FamilyInformationCard({
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * Add-parent dialog. Mirrors the parent-side `/api/invites` add
+ * flow: collects name + email + phone + relationship, POSTs to
+ * `/api/admin/parents` which creates the Xano row, links it into
+ * the family's `registration_parents_id` array, AND sends a Clerk
+ * invitation email so the new parent can sign in.
+ *
+ * The new parent lands in Xano with `invite_status: "pending"`
+ * until they accept the Clerk invitation; the Clerk webhook
+ * flips it to "accepted" on first sign-in. Once they sign in
+ * they'll see the same dashboard the existing parent sees and
+ * get whatever per-family email notifications the app sends to
+ * any parent on a family (the app routes notifications by the
+ * family's parent roster — adding a parent expands the audience
+ * automatically).
+ */
+function AddParentDialog({
+  familyId,
+  onAdded,
+}: {
+  familyId: number;
+  onAdded: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [relationship, setRelationship] = useState("");
+
+  function reset() {
+    setFirstName("");
+    setLastName("");
+    setEmail("");
+    setPhone("");
+    setRelationship("");
+  }
+
+  async function runSave() {
+    if (!email.trim()) {
+      toast.error("Email is required to send the sign-in invitation.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/admin/parents`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          familyId,
+          first_name: firstName.trim(),
+          last_name: lastName.trim(),
+          email: email.trim(),
+          phone: phone.trim(),
+          relationship: relationship.trim(),
+        }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Couldn't add parent (${res.status})`);
+      }
+      toast.success(
+        "Parent added — sign-in invitation sent to their email."
+      );
+      reset();
+      setOpen(false);
+      onAdded();
+    } catch (err) {
+      console.error("[AddParentDialog.runSave]", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't add.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={() => setOpen(true)}
+        className="bg-white"
+      >
+        <Plus className="size-3.5 mr-1.5" />
+        Add parent
+      </Button>
+      <Dialog
+        open={open}
+        onOpenChange={(next) => {
+          if (!next && !saving) {
+            setOpen(false);
+            reset();
+          } else if (next) {
+            setOpen(true);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Add a parent to this family</DialogTitle>
+            <DialogDescription>
+              Sends the parent a sign-in invitation to the email
+              you enter. They&rsquo;ll see the same dashboard the
+              existing parent sees and receive the same per-family
+              email notifications.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
+              <Field>
+                <FieldLabel>First name</FieldLabel>
+                <Input
+                  value={firstName}
+                  onChange={(e) => setFirstName(e.target.value)}
+                  disabled={saving}
+                  placeholder="Jane"
+                />
+              </Field>
+              <Field>
+                <FieldLabel>Last name</FieldLabel>
+                <Input
+                  value={lastName}
+                  onChange={(e) => setLastName(e.target.value)}
+                  disabled={saving}
+                  placeholder="Doe"
+                />
+              </Field>
+            </div>
+            <Field>
+              <FieldLabel>
+                Email
+                <span className="ml-1 text-red-500" aria-label="required">
+                  *
+                </span>
+              </FieldLabel>
+              <Input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                disabled={saving}
+                placeholder="parent@example.com"
+              />
+              <p className="text-[11px] text-muted-foreground mt-1">
+                Required — the Clerk sign-in invitation goes here.
+              </p>
+            </Field>
+            <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
+              <Field>
+                <FieldLabel>Phone</FieldLabel>
+                <Input
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  disabled={saving}
+                  placeholder="(555) 555-5555"
+                />
+              </Field>
+              <Field>
+                <FieldLabel>Relationship</FieldLabel>
+                <Input
+                  value={relationship}
+                  onChange={(e) => setRelationship(e.target.value)}
+                  disabled={saving}
+                  placeholder="Mother"
+                />
+              </Field>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setOpen(false);
+                reset();
+              }}
+              disabled={saving}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={() => void runSave()}
+              disabled={saving}
+            >
+              {saving ? (
+                <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+              ) : null}
+              Add &amp; send invitation
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+/**
+ * Add-emergency-contact dialog. Emergency contacts are contact-only
+ * records (no Clerk login, no email notifications) — admin just
+ * records them so the school has a backup person to call. Posts to
+ * the existing `/api/admin/emergency-contacts` admin route which
+ * attaches the new row to the family by id.
+ */
+function AddEmergencyContactDialog({
+  familyId,
+  onAdded,
+}: {
+  familyId: number;
+  onAdded: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [relationship, setRelationship] = useState("");
+
+  function reset() {
+    setFirstName("");
+    setLastName("");
+    setEmail("");
+    setPhone("");
+    setRelationship("");
+  }
+
+  async function runSave() {
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/admin/emergency-contacts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          familyId,
+          first_name: firstName.trim(),
+          last_name: lastName.trim(),
+          email: email.trim(),
+          phone: phone.trim(),
+          relationship: relationship.trim(),
+        }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(
+          errBody?.error ?? `Couldn't add contact (${res.status})`
+        );
+      }
+      toast.success("Emergency contact added.");
+      reset();
+      setOpen(false);
+      onAdded();
+    } catch (err) {
+      console.error("[AddEmergencyContactDialog.runSave]", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't add.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={() => setOpen(true)}
+        className="bg-white"
+      >
+        <Plus className="size-3.5 mr-1.5" />
+        Add contact
+      </Button>
+      <Dialog
+        open={open}
+        onOpenChange={(next) => {
+          if (!next && !saving) {
+            setOpen(false);
+            reset();
+          } else if (next) {
+            setOpen(true);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Add an emergency contact</DialogTitle>
+            <DialogDescription>
+              Contact-only record — no sign-in invitation is sent.
+              The school keeps this on file as a backup person to
+              reach if the parents can&rsquo;t be contacted.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
+              <Field>
+                <FieldLabel>First name</FieldLabel>
+                <Input
+                  value={firstName}
+                  onChange={(e) => setFirstName(e.target.value)}
+                  disabled={saving}
+                  placeholder="Jane"
+                />
+              </Field>
+              <Field>
+                <FieldLabel>Last name</FieldLabel>
+                <Input
+                  value={lastName}
+                  onChange={(e) => setLastName(e.target.value)}
+                  disabled={saving}
+                  placeholder="Doe"
+                />
+              </Field>
+            </div>
+            <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
+              <Field>
+                <FieldLabel>Email</FieldLabel>
+                <Input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  disabled={saving}
+                  placeholder="(optional)"
+                />
+              </Field>
+              <Field>
+                <FieldLabel>Phone</FieldLabel>
+                <Input
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  disabled={saving}
+                  placeholder="(555) 555-5555"
+                />
+              </Field>
+            </div>
+            <Field>
+              <FieldLabel>Relationship</FieldLabel>
+              <Input
+                value={relationship}
+                onChange={(e) => setRelationship(e.target.value)}
+                disabled={saving}
+                placeholder="Grandparent, aunt, neighbor, etc."
+              />
+            </Field>
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setOpen(false);
+                reset();
+              }}
+              disabled={saving}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={() => void runSave()}
+              disabled={saving}
+            >
+              {saving ? (
+                <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+              ) : null}
+              Add contact
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 

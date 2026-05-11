@@ -101,6 +101,44 @@ const SECTION_VERIFY_PAIRS: Array<{
   },
 ];
 
+/**
+ * Admin GET — resolves the per-year registration progress row for
+ * a family. Same `resolve`-or-create semantics as the apply-flow
+ * progress GET so the caller always gets a row back, even on
+ * families that haven't touched registration yet. The apply-flow
+ * Acceptance card uses this to read `isRegistrationConfirmed` and
+ * disable Revoke acceptance once the downstream confirmation has
+ * landed.
+ */
+export async function GET(req: NextRequest) {
+  try {
+    await requireAdmin();
+    const familyIdParam = req.nextUrl.searchParams.get("familyId");
+    const yearIdParam = req.nextUrl.searchParams.get("yearId");
+    const familyId = Number(familyIdParam);
+    const yearId = Number(yearIdParam);
+    if (!Number.isFinite(familyId) || familyId <= 0) {
+      return NextResponse.json(
+        { error: "familyId is required" },
+        { status: 400 }
+      );
+    }
+    if (!Number.isFinite(yearId) || yearId <= 0) {
+      return NextResponse.json(
+        { error: "yearId is required" },
+        { status: 400 }
+      );
+    }
+    const row = await xano.studentRegistrationProgress.resolve(
+      familyId,
+      yearId
+    );
+    return NextResponse.json(row);
+  } catch (err) {
+    return handleAdminError(err);
+  }
+}
+
 export async function PATCH(req: NextRequest) {
   try {
     const { admin } = await requireAdmin();
