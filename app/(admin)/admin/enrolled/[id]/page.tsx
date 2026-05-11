@@ -47,6 +47,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -274,6 +275,7 @@ export default function EnrolledStudentDetailPage() {
         family={family}
         parents={parents}
         emergencyContacts={emergency_contacts}
+        onChanged={() => void mutate()}
       />
 
       <PacketCard
@@ -283,7 +285,11 @@ export default function EnrolledStudentDetailPage() {
         onChanged={() => void mutate()}
       />
 
-      <TestingCard app={app} />
+      <TestingCard
+        student={student}
+        app={app}
+        onChanged={() => void mutate()}
+      />
     </div>
   );
 }
@@ -732,26 +738,55 @@ function EditSelectField({
   );
 }
 
+/** Editable textarea — multi-line counterpart to `EditField`. Used
+ *  inside packet/medical edit modes where the value is a narrative
+ *  (allergies, prescription notes, additional health info, etc.). */
+function EditTextarea({
+  label,
+  value,
+  onChange,
+  disabled,
+}: {
+  label: string;
+  value: string;
+  onChange: (next: string) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <Field>
+      <FieldLabel className="text-xs">{label}</FieldLabel>
+      <Textarea
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+        className="min-h-[80px]"
+      />
+    </Field>
+  );
+}
+
 /**
  * Family Information card — parents + emergency contacts rendered
  * with the same disabled-input rhythm as the Student Information
- * card above. Each contact gets its own labeled sub-section so
- * the field-level alignment lines up consistently across the page
- * (admin's eye moves down the page reading the same row of
- * disabled inputs at each card).
- *
- * The data lives on the student-detail composite response; this
- * component is purely presentational. For mutations, admin uses
- * the family registration detail page.
+ * card above. Each parent / contact gets its own labeled sub-
+ * section with a per-row Edit / Save / Cancel cluster, so admin
+ * can amend a single contact without entering a card-wide edit
+ * mode. The single-row scope keeps the PATCH targeted at one
+ * Xano row and avoids racing against concurrent edits to a
+ * different parent.
  */
 function FamilyInformationCard({
   family,
   parents,
   emergencyContacts,
+  onChanged,
 }: {
   family: AdminEnrolledStudentResponse["family"];
   parents: AdminEnrolledStudentResponse["parents"];
   emergencyContacts: AdminEnrolledStudentResponse["emergency_contacts"];
+  /** Re-fetch the surrounding student-detail payload after a row
+   *  save so the read mode reflects the persisted values. */
+  onChanged: () => void;
 }) {
   return (
     <Card className="overflow-hidden gap-0 py-0 bg-white">
@@ -778,37 +813,16 @@ function FamilyInformationCard({
               No parents on file for this family.
             </p>
           ) : (
-            parents.map((p, idx) => {
-              const name =
-                `${p.first_name ?? ""} ${p.last_name ?? ""}`.trim() ||
-                `Parent #${p.id}`;
-              return (
-                <div key={p.id} className="space-y-3">
-                  {/* Per-parent label row — small bold sub-header
-                      to break the section into parent-by-parent
-                      groups. Drops out when there's only one
-                      parent on file to avoid an awkward solo
-                      label. */}
-                  {parents.length > 1 ? (
-                    <p className="text-xs font-medium text-muted-foreground">
-                      Parent {idx + 1}
-                    </p>
-                  ) : null}
-                  <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
-                    <ReadField label="Name" value={name} />
-                    <ReadField
-                      label="Relationship"
-                      value={p.relationship}
-                    />
-                    <ReadField label="Email" value={p.email} />
-                    <ReadField
-                      label="Phone"
-                      value={p.phone ? formatUSPhone(p.phone) : ""}
-                    />
-                  </div>
-                </div>
-              );
-            })
+            parents.map((p, idx) => (
+              <ParentRowEditable
+                key={p.id}
+                parent={p}
+                indexLabel={
+                  parents.length > 1 ? `Parent ${idx + 1}` : null
+                }
+                onChanged={onChanged}
+              />
+            ))
           )}
         </div>
 
@@ -824,32 +838,18 @@ function FamilyInformationCard({
               No emergency contacts on file for this family.
             </p>
           ) : (
-            emergencyContacts.map((c, idx) => {
-              const name =
-                `${c.first_name ?? ""} ${c.last_name ?? ""}`.trim() ||
-                `Contact #${c.id}`;
-              return (
-                <div key={c.id} className="space-y-3">
-                  {emergencyContacts.length > 1 ? (
-                    <p className="text-xs font-medium text-muted-foreground">
-                      Contact {idx + 1}
-                    </p>
-                  ) : null}
-                  <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
-                    <ReadField label="Name" value={name} />
-                    <ReadField
-                      label="Relationship"
-                      value={c.relationship}
-                    />
-                    <ReadField label="Email" value={c.email} />
-                    <ReadField
-                      label="Phone"
-                      value={c.phone ? formatUSPhone(c.phone) : ""}
-                    />
-                  </div>
-                </div>
-              );
-            })
+            emergencyContacts.map((c, idx) => (
+              <EmergencyContactRowEditable
+                key={c.id}
+                contact={c}
+                indexLabel={
+                  emergencyContacts.length > 1
+                    ? `Contact ${idx + 1}`
+                    : null
+                }
+                onChanged={onChanged}
+              />
+            ))
           )}
         </div>
       </CardContent>
@@ -858,11 +858,382 @@ function FamilyInformationCard({
 }
 
 /**
+ * Per-parent row with inline edit. Header strip carries the
+ * "Parent N" label (when there are multiple) on the left and the
+ * Edit / Save / Cancel cluster on the right. The body grid
+ * matches the read-mode `ReadField` layout exactly so toggling
+ * edit doesn't shift rows around.
+ */
+function ParentRowEditable({
+  parent,
+  indexLabel,
+  onChanged,
+}: {
+  parent: AdminEnrolledStudentResponse["parents"][number];
+  indexLabel: string | null;
+  onChanged: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [draft, setDraft] = useState({
+    first_name: parent.first_name ?? "",
+    last_name: parent.last_name ?? "",
+    relationship: parent.relationship ?? "",
+    email: parent.email ?? "",
+    phone: parent.phone ?? "",
+  });
+
+  function enterEdit() {
+    setDraft({
+      first_name: parent.first_name ?? "",
+      last_name: parent.last_name ?? "",
+      relationship: parent.relationship ?? "",
+      email: parent.email ?? "",
+      phone: parent.phone ?? "",
+    });
+    setEditing(true);
+  }
+
+  async function runSave() {
+    // Diff-only patch — keeps the request body lean and avoids
+    // overwriting columns the form didn't touch (which would race
+    // against concurrent edits on another open admin tab).
+    const patch: Record<string, string> = {};
+    if (draft.first_name.trim() !== (parent.first_name ?? "").trim())
+      patch.first_name = draft.first_name.trim();
+    if (draft.last_name.trim() !== (parent.last_name ?? "").trim())
+      patch.last_name = draft.last_name.trim();
+    if (draft.relationship.trim() !== (parent.relationship ?? "").trim())
+      patch.relationship = draft.relationship.trim();
+    if (draft.email.trim() !== (parent.email ?? "").trim())
+      patch.email = draft.email.trim();
+    if (draft.phone.trim() !== (parent.phone ?? "").trim())
+      patch.phone = draft.phone.trim();
+    if (Object.keys(patch).length === 0) {
+      setEditing(false);
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/admin/parents/${parent.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Save failed (${res.status})`);
+      }
+      toast.success("Parent saved.");
+      setEditing(false);
+      onChanged();
+    } catch (err) {
+      console.error("[ParentRowEditable.runSave]", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't save.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const displayName =
+    `${parent.first_name ?? ""} ${parent.last_name ?? ""}`.trim() ||
+    `Parent #${parent.id}`;
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-3">
+        {indexLabel ? (
+          <p className="text-xs font-medium text-muted-foreground">
+            {indexLabel}
+            <span className="ml-1.5 text-foreground/70">· {displayName}</span>
+          </p>
+        ) : (
+          <p className="text-xs font-medium text-muted-foreground">
+            {displayName}
+          </p>
+        )}
+        <CardEditToggle
+          editing={editing}
+          saving={saving}
+          onEdit={enterEdit}
+          onCancel={() => setEditing(false)}
+          onSave={() => void runSave()}
+        />
+      </div>
+      <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
+        {editing ? (
+          <>
+            <EditField
+              label="First name"
+              value={draft.first_name}
+              onChange={(v) =>
+                setDraft((d) => ({ ...d, first_name: v }))
+              }
+              disabled={saving}
+            />
+            <EditField
+              label="Last name"
+              value={draft.last_name}
+              onChange={(v) =>
+                setDraft((d) => ({ ...d, last_name: v }))
+              }
+              disabled={saving}
+            />
+            <EditField
+              label="Relationship"
+              value={draft.relationship}
+              onChange={(v) =>
+                setDraft((d) => ({ ...d, relationship: v }))
+              }
+              disabled={saving}
+            />
+            <EditField
+              label="Email"
+              type="email"
+              value={draft.email}
+              onChange={(v) => setDraft((d) => ({ ...d, email: v }))}
+              disabled={saving}
+            />
+            <EditField
+              label="Phone"
+              value={draft.phone}
+              onChange={(v) => setDraft((d) => ({ ...d, phone: v }))}
+              disabled={saving}
+            />
+          </>
+        ) : (
+          <>
+            <ReadField label="Name" value={displayName} />
+            <ReadField
+              label="Relationship"
+              value={parent.relationship}
+            />
+            <ReadField label="Email" value={parent.email} />
+            <ReadField
+              label="Phone"
+              value={parent.phone ? formatUSPhone(parent.phone) : ""}
+            />
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Per-emergency-contact row with inline edit. Same shape as
+ * `ParentRowEditable`; separate component because the API
+ * endpoints + persisted fields differ enough that sharing was
+ * more abstraction than it was worth.
+ */
+function EmergencyContactRowEditable({
+  contact,
+  indexLabel,
+  onChanged,
+}: {
+  contact: AdminEnrolledStudentResponse["emergency_contacts"][number];
+  indexLabel: string | null;
+  onChanged: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [draft, setDraft] = useState({
+    first_name: contact.first_name ?? "",
+    last_name: contact.last_name ?? "",
+    relationship: contact.relationship ?? "",
+    email: contact.email ?? "",
+    phone: contact.phone ?? "",
+  });
+
+  function enterEdit() {
+    setDraft({
+      first_name: contact.first_name ?? "",
+      last_name: contact.last_name ?? "",
+      relationship: contact.relationship ?? "",
+      email: contact.email ?? "",
+      phone: contact.phone ?? "",
+    });
+    setEditing(true);
+  }
+
+  async function runSave() {
+    const patch: Record<string, string> = {};
+    if (draft.first_name.trim() !== (contact.first_name ?? "").trim())
+      patch.first_name = draft.first_name.trim();
+    if (draft.last_name.trim() !== (contact.last_name ?? "").trim())
+      patch.last_name = draft.last_name.trim();
+    if (draft.relationship.trim() !== (contact.relationship ?? "").trim())
+      patch.relationship = draft.relationship.trim();
+    if (draft.email.trim() !== (contact.email ?? "").trim())
+      patch.email = draft.email.trim();
+    if (draft.phone.trim() !== (contact.phone ?? "").trim())
+      patch.phone = draft.phone.trim();
+    if (Object.keys(patch).length === 0) {
+      setEditing(false);
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await fetch(
+        `/api/admin/emergency-contacts/${contact.id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch),
+        }
+      );
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Save failed (${res.status})`);
+      }
+      toast.success("Emergency contact saved.");
+      setEditing(false);
+      onChanged();
+    } catch (err) {
+      console.error("[EmergencyContactRowEditable.runSave]", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't save.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const displayName =
+    `${contact.first_name ?? ""} ${contact.last_name ?? ""}`.trim() ||
+    `Contact #${contact.id}`;
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-3">
+        {indexLabel ? (
+          <p className="text-xs font-medium text-muted-foreground">
+            {indexLabel}
+            <span className="ml-1.5 text-foreground/70">· {displayName}</span>
+          </p>
+        ) : (
+          <p className="text-xs font-medium text-muted-foreground">
+            {displayName}
+          </p>
+        )}
+        <CardEditToggle
+          editing={editing}
+          saving={saving}
+          onEdit={enterEdit}
+          onCancel={() => setEditing(false)}
+          onSave={() => void runSave()}
+        />
+      </div>
+      <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
+        {editing ? (
+          <>
+            <EditField
+              label="First name"
+              value={draft.first_name}
+              onChange={(v) =>
+                setDraft((d) => ({ ...d, first_name: v }))
+              }
+              disabled={saving}
+            />
+            <EditField
+              label="Last name"
+              value={draft.last_name}
+              onChange={(v) =>
+                setDraft((d) => ({ ...d, last_name: v }))
+              }
+              disabled={saving}
+            />
+            <EditField
+              label="Relationship"
+              value={draft.relationship}
+              onChange={(v) =>
+                setDraft((d) => ({ ...d, relationship: v }))
+              }
+              disabled={saving}
+            />
+            <EditField
+              label="Email"
+              type="email"
+              value={draft.email}
+              onChange={(v) => setDraft((d) => ({ ...d, email: v }))}
+              disabled={saving}
+            />
+            <EditField
+              label="Phone"
+              value={draft.phone}
+              onChange={(v) => setDraft((d) => ({ ...d, phone: v }))}
+              disabled={saving}
+            />
+          </>
+        ) : (
+          <>
+            <ReadField label="Name" value={displayName} />
+            <ReadField
+              label="Relationship"
+              value={contact.relationship}
+            />
+            <ReadField label="Email" value={contact.email} />
+            <ReadField
+              label="Phone"
+              value={contact.phone ? formatUSPhone(contact.phone) : ""}
+            />
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const PACKET_SHIRT_SIZES = ["XS", "S", "M", "L", "XL", "XXL"] as const;
+const PACKET_SWIM_LEVELS = [
+  "None",
+  "Beginner",
+  "Intermediate",
+  "Advanced",
+] as const;
+const PACKET_YES_NO = ["Yes", "No"] as const;
+
+/**
+ * Project the packet response to the editor's draft shape. Strings
+ * stay strings (including the medicaid number — coerced back to
+ * number on save); booleans render as "Yes" / "No" select strings.
+ */
+function packetToDraft(
+  p: NonNullable<AdminEnrolledStudentResponse["packet"]>
+) {
+  return {
+    shirt_size: p.shirt_size ?? "",
+    pant_size: p.pant_size ?? "",
+    swim_level: p.swim_level ?? "",
+    is_student_on_medicaid: p.is_student_on_medicaid ? "Yes" : "No",
+    medicaid_number: p.medicaid_number ? String(p.medicaid_number) : "",
+    medicaid_provider: p.medicaid_provider ?? "",
+    carry_epi_pen: p.carry_epi_pen ? "Yes" : "No",
+    allergies: p.allergies ?? "",
+    dietary_restrictions: p.dietary_restrictions ?? "",
+    prescription_medications: p.prescription_medications ?? "",
+    health_conditions: p.health_conditions ?? "",
+    vision_impairments: p.vision_impairments ?? "",
+    hearing_impairments: p.hearing_impairments ?? "",
+    iep_description: p.iep_description ?? "",
+    epipen_explainer: p.epipen_explainer ?? "",
+    additional_health_information: p.additional_health_information ?? "",
+    other_adults_approved_for_pickup:
+      p.other_adults_approved_for_pickup ?? "",
+    prohibited_adults: p.prohibited_adults ?? "",
+    permission_for_acetaminophen: p.permission_for_acetaminophen ?? "",
+    interested_in_counseling_services:
+      p.interested_in_counseling_services ?? "",
+  };
+}
+
+/**
  * Registration packet card — surfaces the medical / health / pickup
  * info the parent submitted, plus the file uploads on the packet.
- * The single mutation here is the `registrationConfirmed` toggle in
- * the footer, mirroring the per-student row on the family registration
- * detail page so admin can flip it from either surface.
+ * Inline edit covers sizes / medical scalars + narrative / pickup
+ * permissions; the registrationConfirmed toggle in the footer
+ * mirrors the per-student row on the family registration detail
+ * page so admin can flip it from either surface. Required documents
+ * (file uploads) keep their own per-doc Mark-Confirmed flow and
+ * aren't part of this card's edit mode.
  */
 function PacketCard({
   packet,
@@ -876,6 +1247,10 @@ function PacketCard({
   onChanged: () => void;
 }) {
   const [saving, setSaving] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(() =>
+    packet ? packetToDraft(packet) : null
+  );
   // Year suffix appended to the card title at the same font size
   // as the title itself. Bullet-separated so the year reads as a
   // peer label, not a subtitle.
@@ -931,6 +1306,105 @@ function PacketCard({
     }
   }
 
+  function enterEdit() {
+    if (!packet) return;
+    setDraft(packetToDraft(packet));
+    setEditing(true);
+  }
+
+  function cancelEdit() {
+    setDraft(packet ? packetToDraft(packet) : null);
+    setEditing(false);
+  }
+
+  async function runSave() {
+    if (!packet || !draft) return;
+    const patch: Record<string, string | number | boolean> = {};
+    // Strings — diff against the current persisted value; trim
+    // before compare so trailing whitespace doesn't count as a
+    // change. The narrative + scalar fields all flow through this.
+    const stringDiff = (key: keyof typeof draft, prev: string) => {
+      const next = draft[key].trim();
+      if (next !== (prev ?? "").trim()) patch[key] = next;
+    };
+    stringDiff("shirt_size", packet.shirt_size);
+    stringDiff("pant_size", packet.pant_size);
+    stringDiff("swim_level", packet.swim_level);
+    stringDiff("medicaid_provider", packet.medicaid_provider);
+    stringDiff("allergies", packet.allergies);
+    stringDiff("dietary_restrictions", packet.dietary_restrictions);
+    stringDiff(
+      "prescription_medications",
+      packet.prescription_medications
+    );
+    stringDiff("health_conditions", packet.health_conditions);
+    stringDiff("vision_impairments", packet.vision_impairments);
+    stringDiff("hearing_impairments", packet.hearing_impairments);
+    stringDiff("iep_description", packet.iep_description);
+    stringDiff("epipen_explainer", packet.epipen_explainer);
+    stringDiff(
+      "additional_health_information",
+      packet.additional_health_information
+    );
+    stringDiff(
+      "other_adults_approved_for_pickup",
+      packet.other_adults_approved_for_pickup
+    );
+    stringDiff("prohibited_adults", packet.prohibited_adults);
+    stringDiff(
+      "permission_for_acetaminophen",
+      packet.permission_for_acetaminophen
+    );
+    stringDiff(
+      "interested_in_counseling_services",
+      packet.interested_in_counseling_services
+    );
+    // Booleans — "Yes" / "No" select strings map back to bools.
+    const draftMedicaid = draft.is_student_on_medicaid === "Yes";
+    if (draftMedicaid !== packet.is_student_on_medicaid) {
+      patch.is_student_on_medicaid = draftMedicaid;
+    }
+    const draftEpipen = draft.carry_epi_pen === "Yes";
+    if (draftEpipen !== packet.carry_epi_pen) {
+      patch.carry_epi_pen = draftEpipen;
+    }
+    // Medicaid number — Xano column is numeric. Empty input maps
+    // to 0 (matches the parent-side flow), invalid input is
+    // ignored (we don't trample with NaN).
+    const draftMedNum = draft.medicaid_number.trim();
+    const nextMedNum = draftMedNum === "" ? 0 : Number(draftMedNum);
+    if (
+      Number.isFinite(nextMedNum) &&
+      nextMedNum !== (packet.medicaid_number ?? 0)
+    ) {
+      patch.medicaid_number = nextMedNum;
+    }
+    if (Object.keys(patch).length === 0) {
+      setEditing(false);
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/admin/student-registration/${packet.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Save failed (${res.status})`);
+      }
+      toast.success("Packet saved.");
+      setEditing(false);
+      onChanged();
+    } catch (err) {
+      console.error("[PacketCard.runSave]", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't save.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <Card className="overflow-hidden gap-0 py-0 bg-white">
       <CardHeader className="py-3 !pb-3 border-b">
@@ -939,11 +1413,11 @@ function PacketCard({
             Registration Packet{yearSuffix}
           </CardTitle>
           {/* Confirmed/Pending pill + last-edited caption sit
-              inline on the same horizontal axis as the title.
-              `items-center gap-2` keeps both elements vertically
-              centered next to each other; the caption gets a
-              `whitespace-nowrap` so it doesn't fold to a second
-              line on narrow widths. */}
+              inline on the same horizontal axis as the title plus
+              the Edit / Save / Cancel cluster. `items-center gap-2`
+              keeps every element vertically centered; the caption
+              gets a `whitespace-nowrap` so it doesn't fold to a
+              second line on narrow widths. */}
           <div className="flex items-center gap-2 shrink-0">
             {packet.last_edited_time ? (
               <span
@@ -963,13 +1437,20 @@ function PacketCard({
                 Pending
               </span>
             )}
+            <CardEditToggle
+              editing={editing}
+              saving={saving}
+              onEdit={enterEdit}
+              onCancel={cancelEdit}
+              onSave={() => void runSave()}
+            />
           </div>
         </div>
       </CardHeader>
       <CardContent
         className={cn(
           "space-y-6 py-5 bg-white transition-colors",
-          packet.registrationConfirmed && "bg-muted/30"
+          packet.registrationConfirmed && !editing && "bg-muted/30"
         )}
       >
         <div className="space-y-3">
@@ -977,9 +1458,42 @@ function PacketCard({
             Sizing
           </p>
           <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
-            <ReadField label="Shirt size" value={packet.shirt_size} />
-            <ReadField label="Pant size" value={packet.pant_size} />
-            <ReadField label="Swim level" value={packet.swim_level} />
+            {editing && draft ? (
+              <>
+                <EditSelectField
+                  label="Shirt size"
+                  value={draft.shirt_size}
+                  onChange={(v) =>
+                    setDraft((d) => (d ? { ...d, shirt_size: v } : d))
+                  }
+                  options={PACKET_SHIRT_SIZES}
+                  disabled={saving}
+                />
+                <EditField
+                  label="Pant size"
+                  value={draft.pant_size}
+                  onChange={(v) =>
+                    setDraft((d) => (d ? { ...d, pant_size: v } : d))
+                  }
+                  disabled={saving}
+                />
+                <EditSelectField
+                  label="Swim level"
+                  value={draft.swim_level}
+                  onChange={(v) =>
+                    setDraft((d) => (d ? { ...d, swim_level: v } : d))
+                  }
+                  options={PACKET_SWIM_LEVELS}
+                  disabled={saving}
+                />
+              </>
+            ) : (
+              <>
+                <ReadField label="Shirt size" value={packet.shirt_size} />
+                <ReadField label="Pant size" value={packet.pant_size} />
+                <ReadField label="Swim level" value={packet.swim_level} />
+              </>
+            )}
           </div>
         </div>
 
@@ -988,49 +1502,190 @@ function PacketCard({
             Medical
           </p>
           <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
-            <ReadField label="Allergies" value={packet.allergies} />
-            <ReadField
-              label="Dietary restrictions"
-              value={packet.dietary_restrictions}
-            />
-            <ReadField
-              label="Prescription medications"
-              value={packet.prescription_medications}
-            />
-            <ReadField
-              label="Health conditions"
-              value={packet.health_conditions}
-            />
-            <ReadField
-              label="Vision impairments"
-              value={packet.vision_impairments}
-            />
-            <ReadField
-              label="Hearing impairments"
-              value={packet.hearing_impairments}
-            />
-            <ReadField
-              label="On Medicaid"
-              value={packet.is_student_on_medicaid ? "Yes" : "No"}
-            />
-            <ReadField
-              label="Carries EpiPen"
-              value={packet.carry_epi_pen ? "Yes" : "No"}
-            />
+            {editing && draft ? (
+              <>
+                <EditSelectField
+                  label="On Medicaid"
+                  value={draft.is_student_on_medicaid}
+                  onChange={(v) =>
+                    setDraft((d) =>
+                      d ? { ...d, is_student_on_medicaid: v as "Yes" | "No" } : d
+                    )
+                  }
+                  options={PACKET_YES_NO}
+                  disabled={saving}
+                />
+                <EditField
+                  label="Medicaid provider"
+                  value={draft.medicaid_provider}
+                  onChange={(v) =>
+                    setDraft((d) =>
+                      d ? { ...d, medicaid_provider: v } : d
+                    )
+                  }
+                  disabled={saving}
+                />
+                <EditField
+                  label="Medicaid #"
+                  value={draft.medicaid_number}
+                  onChange={(v) =>
+                    setDraft((d) =>
+                      d ? { ...d, medicaid_number: v } : d
+                    )
+                  }
+                  disabled={saving}
+                />
+                <EditSelectField
+                  label="Carries EpiPen"
+                  value={draft.carry_epi_pen}
+                  onChange={(v) =>
+                    setDraft((d) =>
+                      d ? { ...d, carry_epi_pen: v as "Yes" | "No" } : d
+                    )
+                  }
+                  options={PACKET_YES_NO}
+                  disabled={saving}
+                />
+                <EditTextarea
+                  label="Allergies"
+                  value={draft.allergies}
+                  onChange={(v) =>
+                    setDraft((d) => (d ? { ...d, allergies: v } : d))
+                  }
+                  disabled={saving}
+                />
+                <EditTextarea
+                  label="Dietary restrictions"
+                  value={draft.dietary_restrictions}
+                  onChange={(v) =>
+                    setDraft((d) =>
+                      d ? { ...d, dietary_restrictions: v } : d
+                    )
+                  }
+                  disabled={saving}
+                />
+                <EditTextarea
+                  label="Prescription medications"
+                  value={draft.prescription_medications}
+                  onChange={(v) =>
+                    setDraft((d) =>
+                      d ? { ...d, prescription_medications: v } : d
+                    )
+                  }
+                  disabled={saving}
+                />
+                <EditTextarea
+                  label="Health conditions"
+                  value={draft.health_conditions}
+                  onChange={(v) =>
+                    setDraft((d) =>
+                      d ? { ...d, health_conditions: v } : d
+                    )
+                  }
+                  disabled={saving}
+                />
+                <EditTextarea
+                  label="Vision impairments"
+                  value={draft.vision_impairments}
+                  onChange={(v) =>
+                    setDraft((d) =>
+                      d ? { ...d, vision_impairments: v } : d
+                    )
+                  }
+                  disabled={saving}
+                />
+                <EditTextarea
+                  label="Hearing impairments"
+                  value={draft.hearing_impairments}
+                  onChange={(v) =>
+                    setDraft((d) =>
+                      d ? { ...d, hearing_impairments: v } : d
+                    )
+                  }
+                  disabled={saving}
+                />
+                <EditTextarea
+                  label="IEP description"
+                  value={draft.iep_description}
+                  onChange={(v) =>
+                    setDraft((d) =>
+                      d ? { ...d, iep_description: v } : d
+                    )
+                  }
+                  disabled={saving}
+                />
+                <EditTextarea
+                  label="EpiPen details"
+                  value={draft.epipen_explainer}
+                  onChange={(v) =>
+                    setDraft((d) =>
+                      d ? { ...d, epipen_explainer: v } : d
+                    )
+                  }
+                  disabled={saving}
+                />
+                <EditTextarea
+                  label="Additional health information"
+                  value={draft.additional_health_information}
+                  onChange={(v) =>
+                    setDraft((d) =>
+                      d ? { ...d, additional_health_information: v } : d
+                    )
+                  }
+                  disabled={saving}
+                />
+              </>
+            ) : (
+              <>
+                <ReadField label="Allergies" value={packet.allergies} />
+                <ReadField
+                  label="Dietary restrictions"
+                  value={packet.dietary_restrictions}
+                />
+                <ReadField
+                  label="Prescription medications"
+                  value={packet.prescription_medications}
+                />
+                <ReadField
+                  label="Health conditions"
+                  value={packet.health_conditions}
+                />
+                <ReadField
+                  label="Vision impairments"
+                  value={packet.vision_impairments}
+                />
+                <ReadField
+                  label="Hearing impairments"
+                  value={packet.hearing_impairments}
+                />
+                <ReadField
+                  label="On Medicaid"
+                  value={packet.is_student_on_medicaid ? "Yes" : "No"}
+                />
+                <ReadField
+                  label="Carries EpiPen"
+                  value={packet.carry_epi_pen ? "Yes" : "No"}
+                />
+              </>
+            )}
           </div>
-          {packet.iep_description ? (
+          {/* Below-grid narrative fields are only shown in read mode
+              if the parent actually filled them in — empty fields
+              would just clutter the card. Edit mode renders them
+              all above so admin can fill them in if missing. */}
+          {!editing && packet.iep_description ? (
             <ReadField
               label="IEP description"
               value={packet.iep_description}
             />
           ) : null}
-          {packet.epipen_explainer ? (
+          {!editing && packet.epipen_explainer ? (
             <ReadField
               label="EpiPen details"
               value={packet.epipen_explainer}
             />
           ) : null}
-          {packet.additional_health_information ? (
+          {!editing && packet.additional_health_information ? (
             <ReadField
               label="Additional health information"
               value={packet.additional_health_information}
@@ -1043,22 +1698,73 @@ function PacketCard({
             Pickup &amp; counseling
           </p>
           <div className="grid gap-4 grid-cols-1">
-            <ReadField
-              label="Other adults approved for pickup"
-              value={packet.other_adults_approved_for_pickup}
-            />
-            <ReadField
-              label="Prohibited adults"
-              value={packet.prohibited_adults}
-            />
-            <ReadField
-              label="Acetaminophen permission"
-              value={packet.permission_for_acetaminophen}
-            />
-            <ReadField
-              label="Counseling services interest"
-              value={packet.interested_in_counseling_services}
-            />
+            {editing && draft ? (
+              <>
+                <EditTextarea
+                  label="Other adults approved for pickup"
+                  value={draft.other_adults_approved_for_pickup}
+                  onChange={(v) =>
+                    setDraft((d) =>
+                      d
+                        ? { ...d, other_adults_approved_for_pickup: v }
+                        : d
+                    )
+                  }
+                  disabled={saving}
+                />
+                <EditTextarea
+                  label="Prohibited adults"
+                  value={draft.prohibited_adults}
+                  onChange={(v) =>
+                    setDraft((d) =>
+                      d ? { ...d, prohibited_adults: v } : d
+                    )
+                  }
+                  disabled={saving}
+                />
+                <EditTextarea
+                  label="Acetaminophen permission"
+                  value={draft.permission_for_acetaminophen}
+                  onChange={(v) =>
+                    setDraft((d) =>
+                      d ? { ...d, permission_for_acetaminophen: v } : d
+                    )
+                  }
+                  disabled={saving}
+                />
+                <EditTextarea
+                  label="Counseling services interest"
+                  value={draft.interested_in_counseling_services}
+                  onChange={(v) =>
+                    setDraft((d) =>
+                      d
+                        ? { ...d, interested_in_counseling_services: v }
+                        : d
+                    )
+                  }
+                  disabled={saving}
+                />
+              </>
+            ) : (
+              <>
+                <ReadField
+                  label="Other adults approved for pickup"
+                  value={packet.other_adults_approved_for_pickup}
+                />
+                <ReadField
+                  label="Prohibited adults"
+                  value={packet.prohibited_adults}
+                />
+                <ReadField
+                  label="Acetaminophen permission"
+                  value={packet.permission_for_acetaminophen}
+                />
+                <ReadField
+                  label="Counseling services interest"
+                  value={packet.interested_in_counseling_services}
+                />
+              </>
+            )}
           </div>
         </div>
 
@@ -1178,58 +1884,252 @@ function PacketCard({
  * single self-contained page.
  */
 function TestingCard({
+  student,
   app,
+  onChanged,
 }: {
+  student: AdminEnrolledStudentResponse["student"];
   app: AdminEnrolledStudentResponse["app"];
+  onChanged: () => void;
 }) {
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  // Canonical NWEA values — math/reading scores + dates live on the
+  // student row (so they follow the student across re-enrollment);
+  // scheduled/complete bools live on the per-year application row.
+  // Edit-mode save fans out to both routes accordingly.
+  const studentMath = student.initial_screening_nwea_math;
+  const studentReading = student.initial_screening_nwea_reading;
+  const studentMathDate = student.initial_screening_nwea_math_date ?? "";
+  const studentReadingDate =
+    student.initial_screening_nwea_reading_date ?? "";
+  const [draft, setDraft] = useState({
+    scheduled: app?.nwea_testing_scheduled === true,
+    complete: app?.nwea_testing_complete === true,
+    math:
+      studentMath != null && studentMath !== 0 ? String(studentMath) : "",
+    reading:
+      studentReading != null && studentReading !== 0
+        ? String(studentReading)
+        : "",
+    mathDate: studentMathDate,
+    readingDate: studentReadingDate,
+  });
+
   if (!app) return null;
+
+  function enterEdit() {
+    setDraft({
+      scheduled: app?.nwea_testing_scheduled === true,
+      complete: app?.nwea_testing_complete === true,
+      math:
+        studentMath != null && studentMath !== 0 ? String(studentMath) : "",
+      reading:
+        studentReading != null && studentReading !== 0
+          ? String(studentReading)
+          : "",
+      mathDate: studentMathDate,
+      readingDate: studentReadingDate,
+    });
+    setEditing(true);
+  }
+
+  async function runSave() {
+    if (!app) return;
+    // Split the diff into two routes: bools land on the per-year app
+    // row; scores + dates land on the student row (canonical, follows
+    // re-enrollment). Skip the field entirely when unchanged so we
+    // don't trample concurrent edits to sibling columns.
+    const appPatch: Record<string, boolean> = {};
+    if (draft.scheduled !== (app.nwea_testing_scheduled === true)) {
+      appPatch.nwea_testing_scheduled = draft.scheduled;
+    }
+    if (draft.complete !== (app.nwea_testing_complete === true)) {
+      appPatch.nwea_testing_complete = draft.complete;
+    }
+    const studentPatch: Record<string, number | string | null> = {};
+    // Score parsing — empty string clears to null (matches the apply-
+    // flow TestingBlock's blur-save semantics).
+    const parseScore = (raw: string): number | null => {
+      const trimmed = raw.trim();
+      if (trimmed === "") return null;
+      const n = Number(trimmed);
+      return Number.isFinite(n) ? n : null;
+    };
+    const nextMath = parseScore(draft.math);
+    const prevMath =
+      studentMath == null || studentMath === 0 ? null : studentMath;
+    if (nextMath !== prevMath) {
+      studentPatch.initial_screening_nwea_math = nextMath;
+    }
+    const nextReading = parseScore(draft.reading);
+    const prevReading =
+      studentReading == null || studentReading === 0
+        ? null
+        : studentReading;
+    if (nextReading !== prevReading) {
+      studentPatch.initial_screening_nwea_reading = nextReading;
+    }
+    const nextMathDate = draft.mathDate.trim() || null;
+    if (nextMathDate !== (studentMathDate || null)) {
+      studentPatch.initial_screening_nwea_math_date = nextMathDate;
+    }
+    const nextReadingDate = draft.readingDate.trim() || null;
+    if (nextReadingDate !== (studentReadingDate || null)) {
+      studentPatch.initial_screening_nwea_reading_date = nextReadingDate;
+    }
+    if (
+      Object.keys(appPatch).length === 0 &&
+      Object.keys(studentPatch).length === 0
+    ) {
+      setEditing(false);
+      return;
+    }
+    setSaving(true);
+    try {
+      const promises: Array<Promise<Response>> = [];
+      if (Object.keys(appPatch).length > 0) {
+        promises.push(
+          fetch(`/api/admin/applications/${app.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(appPatch),
+          })
+        );
+      }
+      if (Object.keys(studentPatch).length > 0) {
+        promises.push(
+          fetch(`/api/admin/students/${student.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(studentPatch),
+          })
+        );
+      }
+      const results = await Promise.all(promises);
+      const failed = results.find((r) => !r.ok);
+      if (failed) {
+        const errBody = await failed.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Save failed (${failed.status})`);
+      }
+      toast.success("Testing details saved.");
+      setEditing(false);
+      onChanged();
+    } catch (err) {
+      console.error("[TestingCard.runSave]", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't save.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <Card className="overflow-hidden gap-0 py-0 bg-white">
       <CardHeader className="py-3 !pb-3 border-b">
-        <CardTitle className="text-base">Initial Testing (NWEA)</CardTitle>
+        <div className="flex items-center justify-between gap-3">
+          <CardTitle className="text-base">Initial Testing (NWEA)</CardTitle>
+          <CardEditToggle
+            editing={editing}
+            saving={saving}
+            onEdit={enterEdit}
+            onCancel={() => setEditing(false)}
+            onSave={() => void runSave()}
+          />
+        </div>
       </CardHeader>
       <CardContent className="space-y-6 py-5 bg-white">
         <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
-          <ReadField
-            label="Scheduled"
-            value={app.nwea_testing_scheduled ? "Yes" : "No"}
-          />
-          <ReadField
-            label="Complete"
-            value={app.nwea_testing_complete ? "Yes" : "No"}
-          />
-          <ReadField
-            label="Math RIT score"
-            value={
-              // Treat stored 0 the same as null — the Xano column
-              // defaults to 0, NWEA RIT scores are realistically
-              // 100–300, so a 0 is invariably the unset state and
-              // should render as the em-dash placeholder rather than
-              // a literal "0". Mirrors the same coercion in the
-              // family-detail TestingBlock.
-              app.initial_screening_nwea_math != null &&
-              app.initial_screening_nwea_math !== 0
-                ? String(app.initial_screening_nwea_math)
-                : ""
-            }
-          />
-          <ReadField
-            label="Math test date"
-            value={app.initial_screening_nwea_math_date ?? ""}
-          />
-          <ReadField
-            label="Reading RIT score"
-            value={
-              app.initial_screening_nwea_reading != null &&
-              app.initial_screening_nwea_reading !== 0
-                ? String(app.initial_screening_nwea_reading)
-                : ""
-            }
-          />
-          <ReadField
-            label="Reading test date"
-            value={app.initial_screening_nwea_reading_date ?? ""}
-          />
+          {editing ? (
+            <>
+              <EditSelectField
+                label="Scheduled"
+                value={draft.scheduled ? "Yes" : "No"}
+                onChange={(v) =>
+                  setDraft((d) => ({ ...d, scheduled: v === "Yes" }))
+                }
+                options={["Yes", "No"]}
+                disabled={saving}
+              />
+              <EditSelectField
+                label="Complete"
+                value={draft.complete ? "Yes" : "No"}
+                onChange={(v) =>
+                  setDraft((d) => ({ ...d, complete: v === "Yes" }))
+                }
+                options={["Yes", "No"]}
+                disabled={saving}
+              />
+              <EditField
+                label="Math RIT score"
+                value={draft.math}
+                onChange={(v) => setDraft((d) => ({ ...d, math: v }))}
+                disabled={saving}
+              />
+              <EditField
+                label="Math test date"
+                type="date"
+                value={draft.mathDate}
+                onChange={(v) => setDraft((d) => ({ ...d, mathDate: v }))}
+                disabled={saving}
+              />
+              <EditField
+                label="Reading RIT score"
+                value={draft.reading}
+                onChange={(v) => setDraft((d) => ({ ...d, reading: v }))}
+                disabled={saving}
+              />
+              <EditField
+                label="Reading test date"
+                type="date"
+                value={draft.readingDate}
+                onChange={(v) =>
+                  setDraft((d) => ({ ...d, readingDate: v }))
+                }
+                disabled={saving}
+              />
+            </>
+          ) : (
+            <>
+              <ReadField
+                label="Scheduled"
+                value={app.nwea_testing_scheduled ? "Yes" : "No"}
+              />
+              <ReadField
+                label="Complete"
+                value={app.nwea_testing_complete ? "Yes" : "No"}
+              />
+              <ReadField
+                label="Math RIT score"
+                value={
+                  // Treat stored 0 the same as null — the Xano column
+                  // defaults to 0, NWEA RIT scores are realistically
+                  // 100–300, so a 0 is invariably the unset state and
+                  // should render as the em-dash placeholder rather
+                  // than a literal "0". Mirrors the same coercion in
+                  // the family-detail TestingBlock.
+                  studentMath != null && studentMath !== 0
+                    ? String(studentMath)
+                    : ""
+                }
+              />
+              <ReadField
+                label="Math test date"
+                value={studentMathDate}
+              />
+              <ReadField
+                label="Reading RIT score"
+                value={
+                  studentReading != null && studentReading !== 0
+                    ? String(studentReading)
+                    : ""
+                }
+              />
+              <ReadField
+                label="Reading test date"
+                value={studentReadingDate}
+              />
+            </>
+          )}
         </div>
       </CardContent>
     </Card>

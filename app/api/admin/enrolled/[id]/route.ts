@@ -201,6 +201,20 @@ function shapeStudent(s: XanoStudent) {
     unenrollment_reason: s.unenrollment_reason ?? "",
     unenrollment_date: s.unenrollment_date ?? null,
     unenrollment_notes: s.unenrollment_notes ?? "",
+    /** Admin-only initial-screening NWEA scores + dates. Canonical
+     *  copy lives on the student row (not the per-year application)
+     *  since RIT scores follow the student across re-enrollment.
+     *  Surfaced here so the enrolled detail page's Testing card
+     *  reads the same source the apply-flow `TestingBlock` writes.
+     *  Application row also carries these columns but they're being
+     *  phased out — student row is the source of truth. */
+    initial_screening_nwea_math: s.initial_screening_nwea_math ?? null,
+    initial_screening_nwea_reading:
+      s.initial_screening_nwea_reading ?? null,
+    initial_screening_nwea_math_date:
+      s.initial_screening_nwea_math_date ?? null,
+    initial_screening_nwea_reading_date:
+      s.initial_screening_nwea_reading_date ?? null,
     /** Per-document admin-confirm audit for the four required
      *  documents (immunization / birth certificate / school
      *  health / transcripts). Bool + audit timestamp + audit
