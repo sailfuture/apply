@@ -76,6 +76,34 @@ type Application = {
   current_grade: string;
 };
 
+/** One admin-logged volunteer-hour entry. Mirrors `XanoVolunteerHours`
+ *  on lib/xano.ts — kept local so the component doesn't pull a
+ *  server-only module into the client bundle. */
+type VolunteerHoursEntry = {
+  id: number;
+  registration_families_id: number;
+  registration_school_years_id: number;
+  entry_date: string;
+  hours: number;
+  activity_description: string;
+  activity_category: string;
+  is_approved: boolean;
+};
+
+/** Annual goal — 40 hours per family per academic year. Surfaced as a
+ *  constant so the summary card and detail page stay in sync if the
+ *  policy changes. */
+const VOLUNTEER_HOURS_GOAL = 40;
+
+/** Format a fractional hour value for display — trims trailing zeros so
+ *  whole numbers render as "12" instead of "12.00", and partial hours
+ *  show as "12.5". Mirrors the same helper on the detail page. */
+function formatHours(value: number): string {
+  if (!Number.isFinite(value)) return "0";
+  if (Number.isInteger(value)) return String(value);
+  return value.toFixed(2).replace(/\.?0+$/, "");
+}
+
 const fetcher = async (url: string) => {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Fetch failed (${res.status})`);
@@ -112,6 +140,26 @@ export function EnrolledFamilyDashboard({
     fetcher,
     { revalidateOnFocus: false, dedupingInterval: 10000 }
   );
+  // Volunteer hours — admin-logged entries across every year the family
+  // has on file. Filtered to the dashboard's current `yearId` below so
+  // the summary card always reflects the year the parent is viewing.
+  const { data: volunteerHoursData } = useSWR<VolunteerHoursEntry[]>(
+    "/api/volunteer-hours",
+    fetcher,
+    { revalidateOnFocus: false, dedupingInterval: 10000 }
+  );
+  const volunteerHoursSummary = useMemo(() => {
+    if (!volunteerHoursData) return { approved: 0, pending: 0 };
+    let approved = 0;
+    let pending = 0;
+    for (const entry of volunteerHoursData) {
+      if (entry.registration_school_years_id !== yearId) continue;
+      const hours = Number(entry.hours) || 0;
+      if (entry.is_approved) approved += hours;
+      else pending += hours;
+    }
+    return { approved, pending };
+  }, [volunteerHoursData, yearId]);
 
   // Re-application affordance: if the school has a `nextYear` row, surface
   // a card on the dashboard pointing at that year's reapply flow. Returning
@@ -431,15 +479,49 @@ export function EnrolledFamilyDashboard({
           }
           className="flex items-center justify-between gap-3 rounded-xl border bg-white px-5 py-4 text-left shadow-sm hover:bg-muted/30 transition-colors cursor-pointer"
         >
-          <div className="flex items-center gap-3 min-w-0">
+          <div className="flex items-center gap-3 min-w-0 flex-1">
             <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-muted/50">
               <HandHeart className="size-5 text-muted-foreground" />
             </div>
-            <div className="min-w-0">
-              <p className="text-sm font-medium">Volunteer Hours</p>
-              <p className="text-xs text-muted-foreground truncate">
-                40 per year &middot; 8 per term
-              </p>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-baseline justify-between gap-2">
+                <p className="text-sm font-medium">Volunteer Hours</p>
+                {volunteerHoursData ? (
+                  <p className="text-xs font-medium text-muted-foreground shrink-0">
+                    <span className="text-foreground">
+                      {formatHours(volunteerHoursSummary.approved)}
+                    </span>
+                    {" / "}
+                    {VOLUNTEER_HOURS_GOAL}
+                  </p>
+                ) : null}
+              </div>
+              {volunteerHoursData ? (
+                <>
+                  <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                    <div
+                      className="h-full rounded-full bg-emerald-500 transition-all"
+                      style={{
+                        width: `${Math.min(
+                          100,
+                          (volunteerHoursSummary.approved /
+                            VOLUNTEER_HOURS_GOAL) *
+                            100
+                        )}%`,
+                      }}
+                    />
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1 truncate">
+                    {volunteerHoursSummary.pending > 0
+                      ? `${formatHours(volunteerHoursSummary.pending)} pending review`
+                      : "40 per year · 8 per term"}
+                  </p>
+                </>
+              ) : (
+                <p className="text-xs text-muted-foreground truncate">
+                  40 per year &middot; 8 per term
+                </p>
+              )}
             </div>
           </div>
           <ChevronRight className="size-4 text-muted-foreground shrink-0" />

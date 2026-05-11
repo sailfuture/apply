@@ -413,6 +413,30 @@ export interface XanoFamilyPayment {
   is_enrollment_agreement_signed: boolean;
 }
 
+/** Single volunteer-hour entry for a family. Rows are created by admin
+ *  on the staff side as families log time at Academy events; the parent
+ *  dashboard reads them via `volunteer_hours_by_family` (admin group).
+ *
+ *  `is_approved` flips true once admin has reviewed + verified the entry;
+ *  the dashboard counts only approved hours toward the per-year / per-term
+ *  totals so pending entries don't inflate progress. */
+export interface XanoVolunteerHours {
+  id: number;
+  created_at: number;
+  registration_families_id: number;
+  registration_school_years_id: number;
+  /** ISO date string (YYYY-MM-DD) for the day the family volunteered. */
+  entry_date: string;
+  hours: number;
+  activity_description: string;
+  activity_category: string;
+  is_approved: boolean;
+  approved_time: number | null;
+  /** Name of the admin who approved the entry. */
+  is_approved_admin: string;
+  edited_at: number;
+}
+
 export interface XanoScholarship {
   id: number;
   created_at: number;
@@ -2840,6 +2864,37 @@ export const xano = {
         method: "DELETE",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+    },
+  },
+
+  volunteerHours: {
+    /**
+     * Every volunteer-hour entry on file for a family across every
+     * school year. Hits the admin-group
+     * `registration_families_volunteer_hours_by_family` endpoint so
+     * the parent dashboard can render a single fetch and bucket the
+     * rows by year client-side.
+     *
+     * Returns `[]` on any network or auth error rather than throwing
+     * — the dashboard tolerates missing data and falls back to a
+     * "no hours logged yet" empty state.
+     */
+    async getByFamily(familyId: number): Promise<XanoVolunteerHours[]> {
+      try {
+        const url = new URL(
+          `${getXanoHost()}/api:2GcBXyoA/registration_families_volunteer_hours_by_family`
+        );
+        url.searchParams.set(
+          "registration_families_id",
+          String(familyId)
+        );
+        const res = await fetch(url.toString(), { cache: "no-store" });
+        if (!res.ok) return [];
+        const body = await res.json();
+        return Array.isArray(body) ? (body as XanoVolunteerHours[]) : [];
+      } catch {
+        return [];
+      }
     },
   },
 
