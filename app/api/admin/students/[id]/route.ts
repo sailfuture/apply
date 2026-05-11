@@ -122,6 +122,24 @@ export async function PATCH(
       "birth_certificate_admin_confirm",
       "school_health_form_admin_confirm",
       "transcripts_admin_confirm",
+      // Evergreen document arrays — live on the student row (not
+      // the per-year packet) so they follow the student across
+      // re-enrollment. Admin uploads files on the enrolled student
+      // detail page; each value is a Xano file metadata array
+      // (`[{ path, url, mime, size, name, ... }, ...]`). The route
+      // doesn't validate the inner shape — Xano's `/upload/attachment`
+      // returns the canonical blob and we just pass it through. An
+      // explicit upload step still owns the actual bytes; this
+      // allowlist just lets admin persist the metadata array back
+      // onto the row after an upload (or after removing a file).
+      "birth_certificate",
+      "school_health_form",
+      "transcripts",
+      "immunization_forms",
+      "iep",
+      "ssn_card",
+      "passport",
+      "student_state_id",
       // Unenrollment audit — flipped by the Unenroll affordance
       // on the enrolled student detail page. Captures the
       // archive flag, free-text reason, effective date, and any

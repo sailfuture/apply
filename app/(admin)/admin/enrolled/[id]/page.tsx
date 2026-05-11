@@ -11,6 +11,7 @@ import {
   Circle,
   ExternalLink,
   FileText,
+  FileUp,
   Loader2,
   Pencil,
   RotateCcw,
@@ -18,6 +19,7 @@ import {
   Undo2,
   UserMinus,
   Users,
+  X,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -55,6 +57,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  FileUpload,
+  FileUploadDropzone,
+  FileUploadItem,
+  FileUploadItemDelete,
+  FileUploadItemMetadata,
+  FileUploadItemPreview,
+  FileUploadList,
+} from "@/components/ui/file-upload";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { cn } from "@/lib/utils";
 import {
@@ -1784,7 +1795,11 @@ function PacketCard({
             the Documents to Review table because the waiver is a
             per-packet PDF (different shape than student-row file
             arrays) and the optional documents don't carry an
-            admin-confirm triplet. */}
+            admin-confirm triplet. The four optional categories
+            (IEP, SSN, Passport, State ID) ship a per-category
+            upload affordance so admin can attach files on the
+            family's behalf — useful for paper records being
+            digitized post-acceptance. */}
         <div className="space-y-3">
           <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
             Other Documents
@@ -1809,10 +1824,34 @@ function PacketCard({
                   : undefined
               }
             />
-            <FileGroup label="IEP" files={student.iep} />
-            <FileGroup label="SSN card" files={student.ssn_card} />
-            <FileGroup label="Passport" files={student.passport} />
-            <FileGroup label="State ID" files={student.student_state_id} />
+            <OptionalDocRow
+              label="IEP"
+              files={student.iep}
+              studentId={student.id}
+              fieldKey="iep"
+              onChanged={onChanged}
+            />
+            <OptionalDocRow
+              label="SSN card"
+              files={student.ssn_card}
+              studentId={student.id}
+              fieldKey="ssn_card"
+              onChanged={onChanged}
+            />
+            <OptionalDocRow
+              label="Passport"
+              files={student.passport}
+              studentId={student.id}
+              fieldKey="passport"
+              onChanged={onChanged}
+            />
+            <OptionalDocRow
+              label="State ID"
+              files={student.student_state_id}
+              studentId={student.id}
+              fieldKey="student_state_id"
+              onChanged={onChanged}
+            />
           </ul>
         </div>
       </CardContent>
@@ -2258,6 +2297,14 @@ function EnrolledDocsToReviewTable({
       | "school_health_form_admin_confirm"
       | "transcripts_admin_confirm"
       | "immunization_admin_confirm";
+    /** Column on `registration_students` that holds the file
+     *  metadata array. Used by `AdminDocumentUpload` to know which
+     *  field to PATCH after a successful upload. */
+    fieldKey:
+      | "birth_certificate"
+      | "school_health_form"
+      | "transcripts"
+      | "immunization_forms";
   };
 
   const docs: DocSpec[] = [
@@ -2266,24 +2313,28 @@ function EnrolledDocsToReviewTable({
       files: student.birth_certificate,
       confirm: student.document_confirms.birth_certificate,
       confirmKey: "birth_certificate_admin_confirm",
+      fieldKey: "birth_certificate",
     },
     {
       label: "School Health Form",
       files: student.school_health_form,
       confirm: student.document_confirms.school_health_form,
       confirmKey: "school_health_form_admin_confirm",
+      fieldKey: "school_health_form",
     },
     {
       label: "Transcripts",
       files: student.transcripts,
       confirm: student.document_confirms.transcripts,
       confirmKey: "transcripts_admin_confirm",
+      fieldKey: "transcripts",
     },
     {
       label: "Immunization Forms",
       files: student.immunization_forms,
       confirm: student.document_confirms.immunization_forms,
       confirmKey: "immunization_admin_confirm",
+      fieldKey: "immunization_forms",
     },
   ];
 
@@ -2386,61 +2437,80 @@ function EnrolledDocsToReviewTable({
                   </p>
                 </TableCell>
                 <TableCell className="align-middle">
-                  {hasFiles ? (
-                    <ul className="space-y-1">
-                      {doc.files.map((f, idx) => {
-                        const url = resolveFileUrl(f);
-                        const name =
-                          typeof (f as { name?: unknown }).name === "string"
-                            ? (f as { name: string }).name
-                            : typeof (f as { path?: unknown }).path ===
-                                "string"
-                              ? (f as { path: string }).path
-                              : `File ${idx + 1}`;
-                        const size = (f as { size?: unknown }).size;
-                        const sizeKb =
-                          typeof size === "number"
-                            ? `${(size / 1024).toFixed(0)} KB`
-                            : null;
-                        return (
-                          <li
-                            key={`${doc.confirmKey}-${idx}`}
-                            className="flex items-center gap-2 text-sm min-w-0"
-                          >
-                            <FileText className="size-3.5 shrink-0 text-muted-foreground" />
-                            {url ? (
-                              <a
-                                href={url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                title={name}
-                                className="text-foreground underline-offset-2 hover:underline inline-flex items-center gap-1 min-w-0 flex-1"
-                              >
-                                <span className="truncate min-w-0">{name}</span>
-                                <ExternalLink className="size-3 shrink-0 text-muted-foreground" />
-                              </a>
-                            ) : (
-                              <span
-                                className="truncate min-w-0 flex-1"
-                                title={name}
-                              >
-                                {name}
-                              </span>
-                            )}
-                            {sizeKb ? (
-                              <span className="text-xs text-muted-foreground shrink-0 whitespace-nowrap">
-                                · {sizeKb}
-                              </span>
-                            ) : null}
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  ) : (
-                    <p className="text-[11px] italic text-muted-foreground">
-                      No file uploaded.
-                    </p>
-                  )}
+                  <div className="space-y-1.5">
+                    {hasFiles ? (
+                      <ul className="space-y-1">
+                        {doc.files.map((f, idx) => {
+                          const url = resolveFileUrl(f);
+                          const name =
+                            typeof (f as { name?: unknown }).name === "string"
+                              ? (f as { name: string }).name
+                              : typeof (f as { path?: unknown }).path ===
+                                  "string"
+                                ? (f as { path: string }).path
+                                : `File ${idx + 1}`;
+                          const size = (f as { size?: unknown }).size;
+                          const sizeKb =
+                            typeof size === "number"
+                              ? `${(size / 1024).toFixed(0)} KB`
+                              : null;
+                          return (
+                            <li
+                              key={`${doc.confirmKey}-${idx}`}
+                              className="flex items-center gap-2 text-sm min-w-0"
+                            >
+                              <FileText className="size-3.5 shrink-0 text-muted-foreground" />
+                              {url ? (
+                                <a
+                                  href={url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  title={name}
+                                  className="text-foreground underline-offset-2 hover:underline inline-flex items-center gap-1 min-w-0 flex-1"
+                                >
+                                  <span className="truncate min-w-0">
+                                    {name}
+                                  </span>
+                                  <ExternalLink className="size-3 shrink-0 text-muted-foreground" />
+                                </a>
+                              ) : (
+                                <span
+                                  className="truncate min-w-0 flex-1"
+                                  title={name}
+                                >
+                                  {name}
+                                </span>
+                              )}
+                              {sizeKb ? (
+                                <span className="text-xs text-muted-foreground shrink-0 whitespace-nowrap">
+                                  · {sizeKb}
+                                </span>
+                              ) : null}
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    ) : (
+                      <p className="text-[11px] italic text-muted-foreground">
+                        No file uploaded.
+                      </p>
+                    )}
+                    {/* Compact upload trigger — sits below the file
+                        list so admin can attach additional pages
+                        (immunization records, multi-page transcripts)
+                        on the family's behalf. Disables the Confirm
+                        button gating still kicks in via `hasFiles`
+                        below, so admin can upload then confirm in
+                        one pass. */}
+                    <AdminDocumentUpload
+                      studentId={student.id}
+                      fieldKey={doc.fieldKey}
+                      files={doc.files}
+                      label={doc.label}
+                      onChanged={onChanged}
+                      compact
+                    />
+                  </div>
                 </TableCell>
                 <TableCell className="align-middle">
                   {confirmedByName ? (
@@ -2554,120 +2624,392 @@ function resolveFileUrl(file: Record<string, unknown> | null | undefined): strin
   return null;
 }
 
+/* ─────────────────────── Optional document row ─────────────────────── */
+
 /**
- * Renders a labeled group of files for one document category — used
- * for the document arrays that live on the student row (birth
- * certificate, transcripts, IEP, etc.). Parents can upload multiple
- * pages per category, so a single row would lose detail.
+ * Composite list row used by the Optional Documents section of
+ * `PacketCard`. Existing files render through the prior
+ * `FileGroup` list-item shape so the layout matches the Liability
+ * waiver line above; an `AdminDocumentUpload` trigger hangs off
+ * the right-hand side so admin can attach additional pages on the
+ * family's behalf without leaving the page.
  *
- * Layout:
- *   - Empty array → single "Not uploaded" row, mirroring the old
- *     `FileLine` look so the section reads consistently.
- *   - One file → single row with truncated filename + Open link.
- *   - Multiple files → header row with the category label + count,
- *     then one indented row per file.
- *
- * Filename truncation lives in CSS (`truncate` + `max-w-*`) rather
- * than JS so the text reflows on resize and the full filename is
- * always available via the `title` attribute on hover.
+ * Two visual states:
+ *   - Empty array → "Not uploaded" caption (matching `FileGroup`'s
+ *     empty look) + a small Upload button on the right.
+ *   - One or more files → `FileGroup` renders the file list as
+ *     usual; the Add-file button sits beneath the row so admin's
+ *     eye lands on existing files first, action second.
  */
-function FileGroup({
+function OptionalDocRow({
   label,
   files,
+  studentId,
+  fieldKey,
+  onChanged,
 }: {
   label: string;
   files: Record<string, unknown>[] | null | undefined;
+  studentId: number;
+  fieldKey:
+    | "iep"
+    | "ssn_card"
+    | "passport"
+    | "student_state_id";
+  onChanged: () => void;
 }) {
   const entries = Array.isArray(files) ? files : [];
   if (entries.length === 0) {
+    // Empty-state row — single inline layout so the label, the
+    // "Not uploaded" caption, and the Upload trigger all share
+    // the line. Matches `FileGroup`'s empty look on the left and
+    // gains the trigger on the right.
     return (
       <li className="flex items-center justify-between gap-3 border-t first:border-t-0 py-1.5">
         <span className="text-sm text-muted-foreground">{label}</span>
-        <span className="text-xs italic text-muted-foreground/70">
-          Not uploaded
-        </span>
-      </li>
-    );
-  }
-  if (entries.length === 1) {
-    const f = entries[0];
-    const url = resolveFileUrl(f);
-    const name =
-      typeof (f as { name?: unknown }).name === "string"
-        ? ((f as { name: string }).name)
-        : "";
-    return (
-      <li className="flex items-center justify-between gap-3 border-t first:border-t-0 py-1.5">
-        <span className="text-sm text-muted-foreground shrink-0">{label}</span>
-        {url ? (
-          <a
-            href={url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline min-w-0"
-            title={name || undefined}
-          >
-            <span className="truncate max-w-[18rem]">
-              {name || "Open"}
-            </span>
-            <ExternalLink className="size-3 shrink-0" />
-          </a>
-        ) : (
+        <div className="flex items-center gap-2">
           <span className="text-xs italic text-muted-foreground/70">
-            Unavailable
+            Not uploaded
           </span>
-        )}
+          <AdminDocumentUpload
+            studentId={studentId}
+            fieldKey={fieldKey}
+            files={entries}
+            label={label}
+            onChanged={onChanged}
+            compact
+          />
+        </div>
       </li>
     );
   }
   return (
-    <li className="border-t first:border-t-0 py-1.5">
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-sm text-muted-foreground">{label}</span>
-        <span className="text-xs text-muted-foreground/70">
-          {entries.length} files
-        </span>
-      </div>
-      <ul className="mt-1.5 space-y-1 pl-3">
-        {entries.map((f, idx) => {
-          const url = resolveFileUrl(f);
-          const name =
-            typeof (f as { name?: unknown }).name === "string"
-              ? ((f as { name: string }).name)
-              : `File ${idx + 1}`;
-          // `path` is unique per file in Xano's vault, so it's a
-          // stable key across re-renders even when `name` collides
-          // (parents sometimes upload `image.png` twice).
-          const path =
-            typeof (f as { path?: unknown }).path === "string"
-              ? ((f as { path: string }).path)
-              : `idx-${idx}`;
-          return (
-            <li
-              key={path}
-              className="flex items-center justify-between gap-3"
-            >
-              {url ? (
-                <a
-                  href={url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline min-w-0"
-                  title={name}
-                >
-                  <span className="truncate max-w-[18rem]">{name}</span>
-                  <ExternalLink className="size-3 shrink-0" />
-                </a>
-              ) : (
-                <span className="text-xs italic text-muted-foreground/70">
-                  {name} · unavailable
+    <li className="border-t first:border-t-0 py-1.5 space-y-1.5">
+      {/* Existing files — reuse the same shape `FileGroup` uses
+          so the optional documents block stays visually consistent
+          even though we render the rows inline here. */}
+      <ul className="space-y-1">
+        {entries.length === 1 ? (
+          (() => {
+            const f = entries[0];
+            const url = resolveFileUrl(f);
+            const name =
+              typeof (f as { name?: unknown }).name === "string"
+                ? (f as { name: string }).name
+                : "";
+            return (
+              <li className="flex items-center justify-between gap-3">
+                <span className="text-sm text-muted-foreground shrink-0">
+                  {label}
                 </span>
-              )}
+                {url ? (
+                  <a
+                    href={url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline min-w-0"
+                    title={name || undefined}
+                  >
+                    <span className="truncate max-w-[18rem]">
+                      {name || "Open"}
+                    </span>
+                    <ExternalLink className="size-3 shrink-0" />
+                  </a>
+                ) : (
+                  <span className="text-xs italic text-muted-foreground/70">
+                    Unavailable
+                  </span>
+                )}
+              </li>
+            );
+          })()
+        ) : (
+          <>
+            <li className="flex items-center justify-between gap-3">
+              <span className="text-sm text-muted-foreground">{label}</span>
+              <span className="text-xs text-muted-foreground/70">
+                {entries.length} files
+              </span>
             </li>
-          );
-        })}
+            <li>
+              <ul className="mt-1.5 space-y-1 pl-3">
+                {entries.map((f, idx) => {
+                  const url = resolveFileUrl(f);
+                  const name =
+                    typeof (f as { name?: unknown }).name === "string"
+                      ? (f as { name: string }).name
+                      : `File ${idx + 1}`;
+                  const path =
+                    typeof (f as { path?: unknown }).path === "string"
+                      ? (f as { path: string }).path
+                      : `idx-${idx}`;
+                  return (
+                    <li
+                      key={path}
+                      className="flex items-center justify-between gap-3"
+                    >
+                      {url ? (
+                        <a
+                          href={url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline min-w-0"
+                          title={name}
+                        >
+                          <span className="truncate max-w-[18rem]">
+                            {name}
+                          </span>
+                          <ExternalLink className="size-3 shrink-0" />
+                        </a>
+                      ) : (
+                        <span className="text-xs italic text-muted-foreground/70">
+                          {name} · unavailable
+                        </span>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </li>
+          </>
+        )}
       </ul>
+      {/* Add-file trigger — sits below the file list so the
+          existing files (the data) is the visual primary and the
+          action is a secondary affordance. */}
+      <div className="flex justify-end">
+        <AdminDocumentUpload
+          studentId={studentId}
+          fieldKey={fieldKey}
+          files={entries}
+          label={label}
+          onChanged={onChanged}
+          compact
+        />
+      </div>
     </li>
+  );
+}
+
+/* ─────────────────────── Admin document upload ─────────────────────── */
+
+/**
+ * Admin-side document upload — mirrors the parent flow's
+ * `DocumentUpload` but compact enough to drop into the
+ * Documents-to-Review table row + the Optional Documents list
+ * without overwhelming either layout.
+ *
+ *   - Selecting files → POSTs each one to `/api/upload`
+ *     (which proxies Xano's `upload/attachment`), then PATCHes
+ *     the student row with the appended metadata array. PATCHes
+ *     in series after each upload so a mid-batch network blip
+ *     leaves the earlier successes persisted instead of dropping
+ *     the whole queue.
+ *
+ * `fieldKey` is the Xano column on `registration_students` — the
+ * `/api/admin/students/[id]` allowlist gates which columns are
+ * writable here, so a typo defaults to a 400 rather than silently
+ * writing the wrong column.
+ *
+ * `compact` switches to a small inline trigger (icon + label)
+ * suitable for the cramped table cells in
+ * `EnrolledDocsToReviewTable`. The default layout uses the full
+ * dropzone for the Optional Documents block where vertical space
+ * isn't constrained.
+ *
+ * File removal isn't exposed yet — admin asks the family to
+ * remove via the parent flow, or we add an admin-side remove
+ * affordance in a follow-up if it turns out to be needed.
+ */
+function AdminDocumentUpload({
+  studentId,
+  fieldKey,
+  files,
+  label,
+  compact,
+  onChanged,
+}: {
+  studentId: number;
+  fieldKey:
+    | "birth_certificate"
+    | "school_health_form"
+    | "transcripts"
+    | "immunization_forms"
+    | "iep"
+    | "ssn_card"
+    | "passport"
+    | "student_state_id";
+  files: Record<string, unknown>[];
+  /** Used in the dropzone copy ("Upload birth certificate", etc.) */
+  label: string;
+  /** Compact mode renders a small inline button trigger — used
+   *  inside the Documents-to-Review table cells where vertical
+   *  space is tight. */
+  compact?: boolean;
+  onChanged: () => void;
+}) {
+  const [pending, setPending] = useState<File[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function patchFiles(next: Record<string, unknown>[]) {
+    const res = await fetch(`/api/admin/students/${studentId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ [fieldKey]: next }),
+    });
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => null);
+      throw new Error(errBody?.error ?? `Save failed (${res.status})`);
+    }
+  }
+
+  async function handleFilesChange(newFiles: File[]) {
+    setPending(newFiles);
+    setError(null);
+    if (newFiles.length === 0) return;
+    setUploading(true);
+    try {
+      // Upload each file in series so a mid-batch failure leaves
+      // the earlier successes persisted. The PATCH after each
+      // upload keeps the metadata array on Xano in sync — admin
+      // can refresh and see exactly what's been recorded so far.
+      let acc = files.slice();
+      for (const f of newFiles) {
+        const formData = new FormData();
+        formData.append("file", f);
+        const res = await fetch("/api/upload", {
+          method: "POST",
+          body: formData,
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => null);
+          throw new Error(body?.error ?? `Upload failed (${res.status})`);
+        }
+        const metadata = (await res.json()) as Record<string, unknown>;
+        acc = [...acc, metadata];
+        await patchFiles(acc);
+      }
+      toast.success(
+        newFiles.length === 1
+          ? `${label} uploaded.`
+          : `${newFiles.length} files uploaded.`
+      );
+      setPending([]);
+      onChanged();
+    } catch (err) {
+      console.error("[AdminDocumentUpload.handleFilesChange]", err);
+      const message =
+        err instanceof Error ? err.message : "Upload failed.";
+      setError(message);
+      toast.error(message);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  if (compact) {
+    return (
+      <>
+        <FileUpload
+          maxFiles={5}
+          maxSize={10 * 1024 * 1024}
+          accept=".pdf,.jpg,.jpeg,.png"
+          value={pending}
+          onValueChange={handleFilesChange}
+          disabled={uploading}
+        >
+          <FileUploadDropzone className="border-0 p-0 cursor-pointer hover:bg-transparent w-fit min-h-0">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs leading-none bg-white"
+              disabled={uploading}
+              asChild
+            >
+              <span>
+                {uploading ? (
+                  <Loader2 className="size-3 animate-spin" />
+                ) : (
+                  <FileUp className="size-3" />
+                )}
+                <span className="ml-1">
+                  {uploading
+                    ? "Uploading…"
+                    : files.length === 0
+                      ? "Upload"
+                      : "Add file"}
+                </span>
+              </span>
+            </Button>
+          </FileUploadDropzone>
+          <FileUploadList>
+            {pending.map((f, i) => (
+              <FileUploadItem key={i} value={f}>
+                <FileUploadItemPreview />
+                <FileUploadItemMetadata />
+                <FileUploadItemDelete asChild>
+                  <Button variant="ghost" size="icon" className="size-7">
+                    <X className="size-4" />
+                  </Button>
+                </FileUploadItemDelete>
+              </FileUploadItem>
+            ))}
+          </FileUploadList>
+        </FileUpload>
+        {error ? (
+          <p className="text-[11px] text-red-600 mt-1">{error}</p>
+        ) : null}
+      </>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <FileUpload
+        maxFiles={5}
+        maxSize={10 * 1024 * 1024}
+        accept=".pdf,.jpg,.jpeg,.png"
+        value={pending}
+        onValueChange={handleFilesChange}
+        disabled={uploading}
+      >
+        <FileUploadDropzone className="flex-row gap-3 px-4 py-3 cursor-pointer">
+          {uploading ? (
+            <Loader2 className="size-5 text-muted-foreground animate-spin" />
+          ) : (
+            <FileUp className="size-5 text-muted-foreground" />
+          )}
+          <div className="flex-1 text-left">
+            <p className="text-sm font-medium">
+              {uploading
+                ? "Uploading…"
+                : files.length === 0
+                  ? `Upload ${label}`
+                  : `Add another ${label.toLowerCase()}`}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              PDF, JPG, or PNG (max 10MB each, up to 5)
+            </p>
+          </div>
+        </FileUploadDropzone>
+        <FileUploadList>
+          {pending.map((f, i) => (
+            <FileUploadItem key={i} value={f}>
+              <FileUploadItemPreview />
+              <FileUploadItemMetadata />
+              <FileUploadItemDelete asChild>
+                <Button variant="ghost" size="icon" className="size-7">
+                  <X className="size-4" />
+                </Button>
+              </FileUploadItemDelete>
+            </FileUploadItem>
+          ))}
+        </FileUploadList>
+      </FileUpload>
+      {error ? <p className="text-xs text-red-600">{error}</p> : null}
+    </div>
   );
 }
 
