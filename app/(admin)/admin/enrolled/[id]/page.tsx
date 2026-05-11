@@ -12,7 +12,9 @@ import {
   ExternalLink,
   FileText,
   Loader2,
+  Mail,
   Pencil,
+  Phone,
   RotateCcw,
   Trash2,
   Undo2,
@@ -52,6 +54,7 @@ import {
   formatNoteTimestamp,
   formatRelativeShort,
 } from "@/lib/format-note-time";
+import { formatUSPhone } from "@/lib/phone";
 import {
   Table,
   TableBody,
@@ -135,7 +138,16 @@ export default function EnrolledStudentDetailPage() {
     );
   }
 
-  const { student, app, packet, family, primary, school_year } = data;
+  const {
+    student,
+    app,
+    packet,
+    family,
+    primary,
+    parents,
+    emergency_contacts,
+    school_year,
+  } = data;
   const fullName =
     `${student.first_name ?? ""} ${student.last_name ?? ""}`.trim() ||
     `Student #${studentId}`;
@@ -248,6 +260,19 @@ export default function EnrolledStudentDetailPage() {
 
       <StudentBioCard student={student} app={app} />
 
+      {/* Family Information — parents + emergency contacts in
+          two stacked tables. Same rendering shape as the family
+          overview page so the two surfaces feel consistent. Lives
+          between the student bio and the packet so admin's
+          natural reading order is "who's the student / who's
+          the family / what's their registration packet / what's
+          their testing status." */}
+      <FamilyInformationCard
+        family={family}
+        parents={parents}
+        emergencyContacts={emergency_contacts}
+      />
+
       <PacketCard
         packet={packet}
         student={student}
@@ -327,6 +352,191 @@ function StudentBioCard({
             />
           </div>
         ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Family Information card — parents + emergency contacts in two
+ * stacked tables. Surfaces the broader family context on the
+ * single-student detail page so admin doesn't have to bounce to
+ * the family overview page for routine reference (calling a
+ * parent, checking an emergency contact's address, etc.).
+ *
+ * The data lives on the student-detail composite response; this
+ * component is purely presentational. For mutations, admin uses
+ * the family registration detail page.
+ */
+function FamilyInformationCard({
+  family,
+  parents,
+  emergencyContacts,
+}: {
+  family: AdminEnrolledStudentResponse["family"];
+  parents: AdminEnrolledStudentResponse["parents"];
+  emergencyContacts: AdminEnrolledStudentResponse["emergency_contacts"];
+}) {
+  return (
+    <Card className="overflow-hidden gap-0 py-0 bg-white">
+      <CardHeader className="py-3 !pb-3 border-b">
+        <CardTitle className="text-base">
+          Family Information
+          {family?.family_name ? (
+            <span className="ml-2 text-sm font-normal text-muted-foreground">
+              · {family.family_name}
+            </span>
+          ) : null}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="py-0 px-0 bg-white space-y-0">
+        {/* Parents — full contact roster (not just primary). Same
+            shape as the parents table on the family overview page
+            so admin reads both surfaces the same way. */}
+        <div className="px-5 py-3 border-b">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Parents
+          </p>
+        </div>
+        {parents.length === 0 ? (
+          <p className="text-sm italic text-muted-foreground px-5 py-4">
+            No parents on file for this family.
+          </p>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Name
+                </TableHead>
+                <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Email
+                </TableHead>
+                <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Phone
+                </TableHead>
+                <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Relationship
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {parents.map((p) => {
+                const name =
+                  `${p.first_name ?? ""} ${p.last_name ?? ""}`.trim() ||
+                  `Parent #${p.id}`;
+                return (
+                  <TableRow key={p.id}>
+                    <TableCell className="font-medium">{name}</TableCell>
+                    <TableCell>
+                      {p.email ? (
+                        <a
+                          href={`mailto:${p.email}`}
+                          className="inline-flex items-center gap-1 hover:underline"
+                        >
+                          <Mail className="size-3 shrink-0" />
+                          <span className="truncate">{p.email}</span>
+                        </a>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {p.phone ? (
+                        <a
+                          href={`tel:${String(p.phone).replace(/\D/g, "")}`}
+                          className="inline-flex items-center gap-1 hover:underline tabular-nums"
+                        >
+                          <Phone className="size-3 shrink-0" />
+                          {formatUSPhone(p.phone)}
+                        </a>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {p.relationship || "—"}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        )}
+
+        {/* Emergency contacts — separated by a divider header row
+            from parents above. Same five-column shape as the
+            parents table for visual consistency. */}
+        <div className="px-5 py-3 border-b border-t">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Emergency Contacts
+          </p>
+        </div>
+        {emergencyContacts.length === 0 ? (
+          <p className="text-sm italic text-muted-foreground px-5 py-4">
+            No emergency contacts on file for this family.
+          </p>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Name
+                </TableHead>
+                <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Email
+                </TableHead>
+                <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Phone
+                </TableHead>
+                <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Relationship
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {emergencyContacts.map((c) => {
+                const name =
+                  `${c.first_name ?? ""} ${c.last_name ?? ""}`.trim() ||
+                  `Contact #${c.id}`;
+                return (
+                  <TableRow key={c.id}>
+                    <TableCell className="font-medium">{name}</TableCell>
+                    <TableCell>
+                      {c.email ? (
+                        <a
+                          href={`mailto:${c.email}`}
+                          className="inline-flex items-center gap-1 hover:underline"
+                        >
+                          <Mail className="size-3 shrink-0" />
+                          <span className="truncate">{c.email}</span>
+                        </a>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {c.phone ? (
+                        <a
+                          href={`tel:${String(c.phone).replace(/\D/g, "")}`}
+                          className="inline-flex items-center gap-1 hover:underline tabular-nums"
+                        >
+                          <Phone className="size-3 shrink-0" />
+                          {formatUSPhone(c.phone)}
+                        </a>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {c.relationship || "—"}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        )}
       </CardContent>
     </Card>
   );

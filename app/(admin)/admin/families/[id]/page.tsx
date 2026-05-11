@@ -794,8 +794,12 @@ export default function FamilyDetailPage() {
                 disabled:
                   progress?.financial_aid_admin_confirm !== true &&
                   !allDocsConfirmed,
-                disabledReason:
-                  "Some documents under Documents to Review aren't confirmed yet.",
+                // disabledReason intentionally omitted — admin
+                // sees the Documents to Review counter ("0/2
+                // confirmed") right above the footer, so the
+                // additional caption was redundant noise. The
+                // bypass modal still spells out the gate when
+                // admin clicks Verify with docs outstanding.
                 bypassable: true,
               }}
             >
@@ -1663,16 +1667,25 @@ function SectionConfirmFooter({ confirm }: { confirm: SectionConfirmConfig }) {
 
 function SectionGroup({
   title,
+  trailing,
   children,
 }: {
   title: string;
+  /** Optional right-aligned slot rendered inline with the section
+   *  title — used today by `EditableStudentDemographics` to anchor
+   *  its Edit / Save / Cancel buttons next to the section header
+   *  rather than below the body grid. */
+  trailing?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <section>
-      <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
-        {title}
-      </h3>
+      <div className="flex items-center justify-between gap-3 mb-3">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          {title}
+        </h3>
+        {trailing ? <div className="shrink-0">{trailing}</div> : null}
+      </div>
       {children}
     </section>
   );
@@ -1807,6 +1820,259 @@ function EditableStudentDob({
   );
 }
 
+/**
+ * Edit-mode toggle for the Student demographics section on the
+ * StudentApplicationBlock (year-scoped student card). Read mode
+ * renders the five fields (first name, last name, DOB, gender,
+ * ethnicity) as DisabledField inputs with an Edit button on the
+ * right of the section header. Click Edit → inputs become
+ * editable + a blue Save button appears; click Save to PATCH the
+ * student row in one atomic write. Cancel reverts the local draft.
+ *
+ * Distinct from `EditableStudentDob` above which is always-on
+ * inline editing for just DOB. This component is a deliberate
+ * "edit-the-whole-card" affordance — admin opts in by clicking
+ * Edit, which prevents accidental edits and gives one explicit
+ * Save action.
+ */
+const GENDER_OPTIONS = [
+  "Male",
+  "Female",
+  "Non-binary",
+  "Prefer not to say",
+] as const;
+
+const ETHNICITY_OPTIONS = [
+  "American Indian or Alaska Native",
+  "Asian",
+  "Black or African American",
+  "Hispanic or Latino",
+  "Native Hawaiian or Pacific Islander",
+  "White",
+  "Two or More Races",
+  "Prefer not to say",
+] as const;
+
+function EditableStudentDemographics({
+  student,
+  onChanged,
+}: {
+  student: Student;
+  onChanged: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  // Draft state mirrors the row fields — initialized from the
+  // student on every edit-mode entry so reopening always reflects
+  // the latest persisted values.
+  const [draft, setDraft] = useState({
+    first_name: student.first_name ?? "",
+    last_name: student.last_name ?? "",
+    date_of_birth: student.date_of_birth ?? "",
+    gender: student.gender ?? "",
+    ethnicity: student.ethnicity ?? "",
+  });
+
+  function enterEdit() {
+    setDraft({
+      first_name: student.first_name ?? "",
+      last_name: student.last_name ?? "",
+      date_of_birth: student.date_of_birth ?? "",
+      gender: student.gender ?? "",
+      ethnicity: student.ethnicity ?? "",
+    });
+    setEditing(true);
+  }
+
+  function cancelEdit() {
+    setEditing(false);
+  }
+
+  async function runSave() {
+    // Build a patch of just the changed fields — keeps the
+    // network round-trip lean and avoids overwriting columns the
+    // edit form didn't touch.
+    const patch: Record<string, string> = {};
+    if (draft.first_name !== (student.first_name ?? ""))
+      patch.first_name = draft.first_name.trim();
+    if (draft.last_name !== (student.last_name ?? ""))
+      patch.last_name = draft.last_name.trim();
+    if (draft.date_of_birth !== (student.date_of_birth ?? ""))
+      patch.date_of_birth = draft.date_of_birth.trim();
+    if (draft.gender !== (student.gender ?? ""))
+      patch.gender = draft.gender;
+    if (draft.ethnicity !== (student.ethnicity ?? ""))
+      patch.ethnicity = draft.ethnicity;
+    if (Object.keys(patch).length === 0) {
+      setEditing(false);
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/admin/students/${student.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Save failed (${res.status})`);
+      }
+      toast.success("Student details saved.");
+      setEditing(false);
+      onChanged();
+    } catch (err) {
+      console.error("[EditableStudentDemographics.runSave]", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't save.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <SectionGroup
+      title="Student"
+      trailing={
+        editing ? (
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={cancelEdit}
+              disabled={saving}
+              className="bg-white h-7"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => void runSave()}
+              disabled={saving}
+              className="bg-blue-600 hover:bg-blue-700 text-white h-7"
+            >
+              {saving ? (
+                <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+              ) : (
+                <Check className="size-3.5 mr-1.5" />
+              )}
+              Save
+            </Button>
+          </div>
+        ) : (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={enterEdit}
+            className="bg-white h-7"
+          >
+            <Pencil className="size-3.5 mr-1.5" />
+            Edit
+          </Button>
+        )
+      }
+    >
+      {editing ? (
+        <div className="space-y-4">
+          <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
+            <Field>
+              <FieldLabel>First name</FieldLabel>
+              <Input
+                value={draft.first_name}
+                onChange={(e) =>
+                  setDraft((d) => ({ ...d, first_name: e.target.value }))
+                }
+                disabled={saving}
+              />
+            </Field>
+            <Field>
+              <FieldLabel>Last name</FieldLabel>
+              <Input
+                value={draft.last_name}
+                onChange={(e) =>
+                  setDraft((d) => ({ ...d, last_name: e.target.value }))
+                }
+                disabled={saving}
+              />
+            </Field>
+          </div>
+          <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
+            <Field>
+              <FieldLabel>Date of birth</FieldLabel>
+              <Input
+                type="date"
+                value={draft.date_of_birth}
+                onChange={(e) =>
+                  setDraft((d) => ({ ...d, date_of_birth: e.target.value }))
+                }
+                disabled={saving}
+              />
+            </Field>
+            <Field>
+              <FieldLabel>Gender</FieldLabel>
+              <Select
+                value={draft.gender}
+                onValueChange={(v) =>
+                  setDraft((d) => ({ ...d, gender: v }))
+                }
+                disabled={saving}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="Select gender" />
+                </SelectTrigger>
+                <SelectContent>
+                  {GENDER_OPTIONS.map((opt) => (
+                    <SelectItem key={opt} value={opt}>
+                      {opt}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field>
+              <FieldLabel>Ethnicity</FieldLabel>
+              <Select
+                value={draft.ethnicity}
+                onValueChange={(v) =>
+                  setDraft((d) => ({ ...d, ethnicity: v }))
+                }
+                disabled={saving}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="Select ethnicity" />
+                </SelectTrigger>
+                <SelectContent>
+                  {ETHNICITY_OPTIONS.map((opt) => (
+                    <SelectItem key={opt} value={opt}>
+                      {opt}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+          </div>
+        </div>
+      ) : (
+        <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
+          <DisabledField
+            label="Date of birth"
+            value={
+              student.date_of_birth
+                ? new Date(`${student.date_of_birth}T00:00:00`).toLocaleDateString()
+                : ""
+            }
+            required
+          />
+          <DisabledField label="Gender" value={student.gender} required />
+          <DisabledField label="Ethnicity" value={student.ethnicity} required />
+        </div>
+      )}
+    </SectionGroup>
+  );
+}
+
 function StudentBio({
   student,
   onChanged,
@@ -1866,23 +2132,15 @@ function StudentApplicationBlock({
       </div>
 
       {/* Demographics — sourced from the student record itself, not
-          the per-year app. Always shown so the picture of who's
-          applying stays at the top of the card. DOB is editable
-          inline (admin can fix paper-app transcription errors or
-          mid-cycle corrections); gender + ethnicity stay read-only
-          since they're identity fields that should change rarely
-          and need a more deliberate edit path. */}
-      <SectionGroup title="Student">
-        <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
-          <EditableStudentDob
-            studentId={student.id}
-            value={student.date_of_birth ?? ""}
-            onChanged={onChanged}
-          />
-          <DisabledField label="Gender" value={student.gender} required />
-          <DisabledField label="Ethnicity" value={student.ethnicity} required />
-        </div>
-      </SectionGroup>
+          the per-year app. Edit-mode toggle covers all five bio
+          fields (first name, last name, DOB, gender, ethnicity).
+          Click Edit → inputs become editable + a blue Save button
+          appears; click Save to PATCH the student row in one
+          atomic write. Cancel reverts the local draft. */}
+      <EditableStudentDemographics
+        student={student}
+        onChanged={onChanged}
+      />
 
       {app ? (
         <>

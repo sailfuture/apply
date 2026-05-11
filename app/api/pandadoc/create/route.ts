@@ -6,6 +6,7 @@ import {
   sendDocument,
   createSigningSession,
   getTemplateId,
+  getTemplateRole,
   waitForDocumentStatus,
 } from "@/lib/pandadoc";
 
@@ -142,6 +143,12 @@ export async function POST(req: NextRequest) {
       recipientEmail,
       recipientFirstName,
       recipientLastName,
+      // Per-template role name resolved from the env so admin can
+      // adjust the role per template without code changes. Default
+      // is "Parent" — override with PANDADOC_LIABILITY_ROLE or
+      // PANDADOC_ENROLLMENT_ROLE if the template uses a different
+      // role name (e.g. "Recipient", "Signer").
+      role: getTemplateRole(type),
       tokens: {
         "family.name": family.family_name,
         "student.first_name": student.first_name,

@@ -19,6 +19,15 @@ interface CreateDocumentParams {
   recipientEmail: string;
   recipientFirstName: string;
   recipientLastName: string;
+  /** Name of the role on the PandaDoc template that the recipient
+   *  fills. PandaDoc rejects the document create with
+   *  `non_field_errors: Role 'X' does not exist` when the role
+   *  name doesn't match exactly. Default of `"Parent"` works when
+   *  the template was authored with that role; configure
+   *  `PANDADOC_LIABILITY_ROLE` / `PANDADOC_ENROLLMENT_ROLE` via
+   *  the env to override per template, and pass `getTemplateRole(type)`
+   *  in here from the caller. */
+  role?: string;
   tokens?: Record<string, string>;
 }
 
@@ -46,7 +55,7 @@ export async function createDocumentFromTemplate(
         email: params.recipientEmail,
         first_name: params.recipientFirstName,
         last_name: params.recipientLastName,
-        role: "Parent",
+        role: params.role ?? "Parent",
       },
     ],
     tokens: params.tokens
@@ -164,4 +173,28 @@ export function getTemplateId(
     );
   }
   return id;
+}
+
+/**
+ * Resolve the recipient role name configured on a PandaDoc template.
+ * Each template has its own role name (PandaDoc rejects the create
+ * with `Role 'X' does not exist` when the name doesn't match
+ * exactly), so we expose a per-type env var:
+ *   - `PANDADOC_LIABILITY_ROLE` — defaults to "Parent"
+ *   - `PANDADOC_ENROLLMENT_ROLE` — defaults to "Parent"
+ *
+ * Override either env var when the template was authored with a
+ * different role name (common: "Recipient", "Signer", "Client").
+ * The default keeps existing behavior for templates that DO use
+ * "Parent" so we don't break already-working deployments.
+ */
+export function getTemplateRole(
+  type: "liability_waiver" | "enrollment_agreement"
+): string {
+  const envVar =
+    type === "liability_waiver"
+      ? "PANDADOC_LIABILITY_ROLE"
+      : "PANDADOC_ENROLLMENT_ROLE";
+  const role = process.env[envVar]?.trim();
+  return role && role.length > 0 ? role : "Parent";
 }

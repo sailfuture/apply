@@ -71,6 +71,8 @@ export async function GET(
       xano.parents.getAll(),
       xano.schoolYears.getById(yearId),
     ]);
+    // Emergency contacts come from a per-family endpoint; fetched
+    // after we know `familyId` below.
 
     if (studentResult.status === "rejected") {
       console.error(
@@ -103,21 +105,35 @@ export async function GET(
         Number(a.registration_school_years_id) === yearId
     );
 
-    // Family + primary parent — same lowest-id-wins rule the other
-    // admin endpoints use so the displayed contact is consistent
-    // across surfaces.
+    // Family + every parent on the family (sorted lowest-id-first
+    // so the "primary" parent — typically the row created first —
+    // lands at index 0). The page renders all parents in a family-
+    // info card, not just the primary, so admin sees the whole
+    // contact roster at a glance.
     const familyId = app ? Number(app.registration_families_id) : null;
     const family =
       familyId != null
         ? families.find((f) => f.id === familyId) ?? null
         : null;
     const parentIds = family ? xano.families.getParentIds(family) : [];
-    const primary =
+    const familyParents =
       parentIds.length > 0
         ? parents
             .filter((p) => parentIds.includes(p.id))
-            .sort((a, b) => a.id - b.id)[0] ?? null
-        : null;
+            .sort((a, b) => a.id - b.id)
+        : [];
+    const primary = familyParents[0] ?? null;
+
+    // Emergency contacts — fetched here (not in the parallel block
+    // above) because the lookup is family-scoped and we don't know
+    // the familyId until the app/family join lands. Best-effort:
+    // an empty list on error so the page renders without the
+    // emergency-contacts card.
+    const emergencyContacts = familyId
+      ? await xano.emergencyContacts
+          .getByFamilyId(familyId)
+          .catch(() => [])
+      : [];
 
     return NextResponse.json({
       student: shapeStudent(student),
@@ -130,6 +146,8 @@ export async function GET(
           }
         : null,
       primary: primary ? shapeParent(primary) : null,
+      parents: familyParents.map(shapeParent),
+      emergency_contacts: emergencyContacts,
       school_year: schoolYear
         ? {
             id: schoolYear.id,
@@ -333,6 +351,16 @@ export interface AdminEnrolledStudentResponse {
   app: ReturnType<typeof shapeApp> | null;
   packet: ReturnType<typeof shapePacket> | null;
   family: { id: number; family_name: string } | null;
+  /** Lowest-id parent — kept on the response for the page header
+   *  subtitle that's been there since the page was first built. */
   primary: ReturnType<typeof shapeParent> | null;
+  /** Every parent on the family, lowest-id first. Surfaced so the
+   *  Family Information card on the detail page can render the
+   *  full contact roster rather than just the primary. */
+  parents: Array<ReturnType<typeof shapeParent>>;
+  /** Family-evergreen emergency contacts. Not student- or year-
+   *  scoped — every family has a single set that any of their
+   *  students' detail pages can render. */
+  emergency_contacts: import("@/lib/xano").XanoEmergencyContact[];
   school_year: { id: number; year_name: string } | null;
 }
