@@ -2885,6 +2885,19 @@ function EnrolledDocsToReviewTable({
                                   · {sizeKb}
                                 </span>
                               ) : null}
+                              <AdminFileRemoveButton
+                                studentId={student.id}
+                                fieldKey={doc.fieldKey}
+                                files={doc.files}
+                                index={idx}
+                                fileName={
+                                  typeof (f as { name?: unknown }).name ===
+                                  "string"
+                                    ? (f as { name: string }).name
+                                    : null
+                                }
+                                onChanged={onChanged}
+                              />
                             </li>
                           );
                         })}
@@ -3101,24 +3114,34 @@ function OptionalDocRow({
                 <span className="text-sm text-muted-foreground shrink-0">
                   {label}
                 </span>
-                {url ? (
-                  <a
-                    href={url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline min-w-0"
-                    title={name || undefined}
-                  >
-                    <span className="truncate max-w-[18rem]">
-                      {name || "Open"}
+                <div className="flex items-center gap-1 min-w-0">
+                  {url ? (
+                    <a
+                      href={url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline min-w-0"
+                      title={name || undefined}
+                    >
+                      <span className="truncate max-w-[18rem]">
+                        {name || "Open"}
+                      </span>
+                      <ExternalLink className="size-3 shrink-0" />
+                    </a>
+                  ) : (
+                    <span className="text-xs italic text-muted-foreground/70">
+                      Unavailable
                     </span>
-                    <ExternalLink className="size-3 shrink-0" />
-                  </a>
-                ) : (
-                  <span className="text-xs italic text-muted-foreground/70">
-                    Unavailable
-                  </span>
-                )}
+                  )}
+                  <AdminFileRemoveButton
+                    studentId={studentId}
+                    fieldKey={fieldKey}
+                    files={entries}
+                    index={0}
+                    fileName={name || null}
+                    onChanged={onChanged}
+                  />
+                </div>
               </li>
             );
           })()
@@ -3134,10 +3157,11 @@ function OptionalDocRow({
               <ul className="mt-1.5 space-y-1 pl-3">
                 {entries.map((f, idx) => {
                   const url = resolveFileUrl(f);
-                  const name =
+                  const rawName =
                     typeof (f as { name?: unknown }).name === "string"
                       ? (f as { name: string }).name
-                      : `File ${idx + 1}`;
+                      : null;
+                  const name = rawName ?? `File ${idx + 1}`;
                   const path =
                     typeof (f as { path?: unknown }).path === "string"
                       ? (f as { path: string }).path
@@ -3165,6 +3189,14 @@ function OptionalDocRow({
                           {name} · unavailable
                         </span>
                       )}
+                      <AdminFileRemoveButton
+                        studentId={studentId}
+                        fieldKey={fieldKey}
+                        files={entries}
+                        index={idx}
+                        fileName={rawName}
+                        onChanged={onChanged}
+                      />
                     </li>
                   );
                 })}
@@ -3187,6 +3219,136 @@ function OptionalDocRow({
         />
       </div>
     </li>
+  );
+}
+
+/* ─────────────────────── Admin file remove ─────────────────────── */
+
+/**
+ * Icon-only X button that drops a single file from one of the
+ * student-row file arrays. Sits next to each rendered file in the
+ * required-docs table and the Optional Documents block; click
+ * opens an AlertDialog ("Remove uploaded file?") and confirming
+ * PATCHes `/api/admin/students/[id]` with the array minus the
+ * removed index.
+ *
+ * Required-doc note: if admin removes the last file from a doc
+ * whose `*_admin_confirm` flag is true, the confirmation row will
+ * read "Confirmed" with nothing underneath until admin clicks the
+ * Undo affordance. We don't auto-clear the confirm here because
+ * removal and confirmation are user-driven flips on the same row
+ * and bundling them would hide the second write from the admin —
+ * the Undo icon button in the same row is the prescribed
+ * single-click reversal.
+ */
+function AdminFileRemoveButton({
+  studentId,
+  fieldKey,
+  files,
+  index,
+  fileName,
+  onChanged,
+}: {
+  studentId: number;
+  fieldKey:
+    | "birth_certificate"
+    | "school_health_form"
+    | "transcripts"
+    | "immunization_forms"
+    | "iep"
+    | "ssn_card"
+    | "passport"
+    | "student_state_id";
+  files: Record<string, unknown>[];
+  index: number;
+  /** File name shown in the confirm dialog. Falls back to a
+   *  generic phrase when the metadata didn't include one. */
+  fileName: string | null;
+  onChanged: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  async function runRemove() {
+    setSaving(true);
+    try {
+      const next = files.filter((_, i) => i !== index);
+      const res = await fetch(`/api/admin/students/${studentId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ [fieldKey]: next }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Remove failed (${res.status})`);
+      }
+      toast.success("File removed.");
+      setOpen(false);
+      onChanged();
+    } catch (err) {
+      console.error("[AdminFileRemoveButton.runRemove]", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't remove file.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        className="size-6 shrink-0 text-muted-foreground hover:text-red-600 hover:bg-red-50"
+        onClick={() => setOpen(true)}
+        disabled={saving}
+        title="Remove this file"
+        aria-label="Remove this file"
+      >
+        {saving ? (
+          <Loader2 className="size-3.5 animate-spin" />
+        ) : (
+          <X className="size-3.5" />
+        )}
+      </Button>
+      <AlertDialog
+        open={open}
+        onOpenChange={(next) => {
+          if (!next && !saving) setOpen(next);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove uploaded file?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {fileName
+                ? `This removes "${fileName}" from this student's record. `
+                : "This removes the file from this student's record. "}
+              The file metadata is dropped from the array — you can
+              re-upload from the same row if it was a mistake.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={saving}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={saving}
+              className="bg-red-600 hover:bg-red-700 text-white"
+              onClick={(e) => {
+                e.preventDefault();
+                void runRemove();
+              }}
+            >
+              {saving ? (
+                <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+              ) : (
+                <Trash2 className="size-3.5 mr-1.5" />
+              )}
+              Yes, remove
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }
 
@@ -3216,9 +3378,9 @@ function OptionalDocRow({
  * dropzone for the Optional Documents block where vertical space
  * isn't constrained.
  *
- * File removal isn't exposed yet — admin asks the family to
- * remove via the parent flow, or we add an admin-side remove
- * affordance in a follow-up if it turns out to be needed.
+ * Removal lives in `AdminFileRemoveButton` — admin clicks the X
+ * next to each rendered file rather than going through the
+ * dropzone.
  */
 function AdminDocumentUpload({
   studentId,
