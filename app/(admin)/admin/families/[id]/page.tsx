@@ -2917,13 +2917,17 @@ function DisabledField({
       <Input
         type={type}
         value={display}
-        disabled
+        // `readOnly` (not `disabled`) so admin can select + copy
+        // text out of the field. Disabled HTML inputs reject every
+        // selection event, which makes "look at this email so I
+        // can paste it elsewhere" impossible — readOnly keeps the
+        // input non-editable while preserving the native text-
+        // selection behavior.
         readOnly
         placeholder={placeholder}
-        onChange={() => {}}
         aria-invalid={isMissing || undefined}
         className={cn(
-          "disabled:opacity-100 disabled:bg-white disabled:cursor-default",
+          "bg-white",
           isMissing
             ? "border-red-500 ring-1 ring-red-500/20"
             : "border-input"

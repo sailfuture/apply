@@ -47,6 +47,13 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { cn } from "@/lib/utils";
 import {
@@ -151,15 +158,6 @@ export default function EnrolledStudentDetailPage() {
     `${student.first_name ?? ""} ${student.last_name ?? ""}`.trim() ||
     `Student #${studentId}`;
 
-  // Edit destination — for now we route to the family's registration
-  // detail with a hash anchor that scrolls right to this student's
-  // packet card, so admin lands on a writable surface without a
-  // dedicated student-editor page. Easy to swap to a per-student
-  // editor route later.
-  const editHref = family
-    ? `/admin/registrations/${family.id}?yearId=${yearId}#section-registration`
-    : null;
-
   return (
     <div className="p-6 space-y-6">
       {/* Header: H1 + family/primary sub-text + last-edited captions.
@@ -204,10 +202,12 @@ export default function EnrolledStudentDetailPage() {
       {/* Action row sits right above the Student Information card.
           Order left→right: Back to list (returns to the enrolled
           roster) · Delete (soft-remove from enrolled) · Unenroll
-          (formal "student has left") · View family registration
-          (cross-surface jump) · Edit (far right, primary forward
-          action). All five share the outline+white button family
-          so they read as one consistent group. */}
+          (formal "student has left") · Family overview (cross-year
+          summary) · View family registration (cross-surface jump
+          to the per-year detail). The page-level Edit button was
+          removed — each card now ships its own Edit affordance
+          anchored to its header so admin edits in place rather
+          than jumping to another surface. */}
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <BackLink href={backHref} />
         <div className="flex items-center gap-2 shrink-0 flex-wrap">
@@ -254,18 +254,14 @@ export default function EnrolledStudentDetailPage() {
               </Link>
             </Button>
           ) : null}
-          {editHref ? (
-            <Button asChild variant="outline" size="sm" className="bg-white">
-              <Link href={editHref}>
-                <Pencil className="size-3.5 mr-1.5" />
-                Edit
-              </Link>
-            </Button>
-          ) : null}
         </div>
       </div>
 
-      <StudentBioCard student={student} app={app} />
+      <StudentBioCard
+        student={student}
+        app={app}
+        onChanged={() => void mutate()}
+      />
 
       {/* Family Information — parents + emergency contacts in
           two stacked tables. Same rendering shape as the family
@@ -319,48 +315,420 @@ function BackLink({ href }: { href: string }) {
 function StudentBioCard({
   student,
   app,
+  onChanged,
 }: {
   student: AdminEnrolledStudentResponse["student"];
   app: AdminEnrolledStudentResponse["app"];
+  /** Called after a successful edit-mode save so the parent can
+   *  refetch the detail payload — keeps the read mode in sync
+   *  with the now-persisted values. */
+  onChanged: () => void;
 }) {
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [draft, setDraft] = useState({
+    first_name: student.first_name ?? "",
+    last_name: student.last_name ?? "",
+    date_of_birth: student.date_of_birth ?? "",
+    gender: student.gender ?? "",
+    ethnicity: student.ethnicity ?? "",
+    current_grade: app?.current_grade ?? "",
+    last_grade_completed: app?.last_grade_completed ?? "",
+    current_previous_school: app?.current_previous_school ?? "",
+    is_bus_transportation: app?.is_bus_transportation === true,
+    bus_stop: app?.bus_stop ?? "",
+  });
+
+  function enterEdit() {
+    setDraft({
+      first_name: student.first_name ?? "",
+      last_name: student.last_name ?? "",
+      date_of_birth: student.date_of_birth ?? "",
+      gender: student.gender ?? "",
+      ethnicity: student.ethnicity ?? "",
+      current_grade: app?.current_grade ?? "",
+      last_grade_completed: app?.last_grade_completed ?? "",
+      current_previous_school: app?.current_previous_school ?? "",
+      is_bus_transportation: app?.is_bus_transportation === true,
+      bus_stop: app?.bus_stop ?? "",
+    });
+    setEditing(true);
+  }
+
+  async function runSave() {
+    // Split the patch into two routes: bio fields go to the
+    // student row, app fields (grade/school/transport) go to the
+    // application row. Both fire in parallel; both refresh the
+    // page on success.
+    const studentPatch: Record<string, string> = {};
+    if (draft.first_name !== (student.first_name ?? ""))
+      studentPatch.first_name = draft.first_name.trim();
+    if (draft.last_name !== (student.last_name ?? ""))
+      studentPatch.last_name = draft.last_name.trim();
+    if (draft.date_of_birth !== (student.date_of_birth ?? ""))
+      studentPatch.date_of_birth = draft.date_of_birth.trim();
+    if (draft.gender !== (student.gender ?? ""))
+      studentPatch.gender = draft.gender;
+    if (draft.ethnicity !== (student.ethnicity ?? ""))
+      studentPatch.ethnicity = draft.ethnicity;
+    const appPatch: Record<string, string | boolean> = {};
+    if (app) {
+      if (draft.current_grade !== (app.current_grade ?? ""))
+        appPatch.current_grade = draft.current_grade.trim();
+      if (draft.last_grade_completed !== (app.last_grade_completed ?? ""))
+        appPatch.last_grade_completed = draft.last_grade_completed.trim();
+      if (
+        draft.current_previous_school !== (app.current_previous_school ?? "")
+      )
+        appPatch.current_previous_school = draft.current_previous_school.trim();
+      if (draft.is_bus_transportation !== (app.is_bus_transportation === true))
+        appPatch.is_bus_transportation = draft.is_bus_transportation;
+      if (draft.bus_stop !== (app.bus_stop ?? ""))
+        appPatch.bus_stop = draft.bus_stop.trim();
+    }
+    if (
+      Object.keys(studentPatch).length === 0 &&
+      Object.keys(appPatch).length === 0
+    ) {
+      setEditing(false);
+      return;
+    }
+    setSaving(true);
+    try {
+      const promises: Array<Promise<Response>> = [];
+      if (Object.keys(studentPatch).length > 0) {
+        promises.push(
+          fetch(`/api/admin/students/${student.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(studentPatch),
+          })
+        );
+      }
+      if (app && Object.keys(appPatch).length > 0) {
+        promises.push(
+          fetch(`/api/admin/applications/${app.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(appPatch),
+          })
+        );
+      }
+      const results = await Promise.all(promises);
+      const failed = results.find((r) => !r.ok);
+      if (failed) {
+        const errBody = await failed.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Save failed (${failed.status})`);
+      }
+      toast.success("Student details saved.");
+      setEditing(false);
+      onChanged();
+    } catch (err) {
+      console.error("[StudentBioCard.runSave]", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't save.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <Card className="overflow-hidden gap-0 py-0 bg-white">
       <CardHeader className="py-3 !pb-3 border-b">
-        <CardTitle className="text-base">Student Information</CardTitle>
+        <div className="flex items-center justify-between gap-3">
+          <CardTitle className="text-base">Student Information</CardTitle>
+          <CardEditToggle
+            editing={editing}
+            saving={saving}
+            onEdit={enterEdit}
+            onCancel={() => setEditing(false)}
+            onSave={() => void runSave()}
+          />
+        </div>
       </CardHeader>
       <CardContent className="space-y-6 py-5 bg-white">
         <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
-          <ReadField label="First name" value={student.first_name} />
-          <ReadField label="Last name" value={student.last_name} />
-          <ReadField label="Date of birth" value={student.date_of_birth} />
-          <ReadField label="Gender" value={student.gender} />
-          <ReadField label="Ethnicity" value={student.ethnicity} />
-          <ReadField label="Incoming grade" value={app?.current_grade ?? ""} />
+          {editing ? (
+            <>
+              <EditField
+                label="First name"
+                value={draft.first_name}
+                onChange={(v) =>
+                  setDraft((d) => ({ ...d, first_name: v }))
+                }
+                disabled={saving}
+              />
+              <EditField
+                label="Last name"
+                value={draft.last_name}
+                onChange={(v) =>
+                  setDraft((d) => ({ ...d, last_name: v }))
+                }
+                disabled={saving}
+              />
+              <EditField
+                label="Date of birth"
+                type="date"
+                value={draft.date_of_birth}
+                onChange={(v) =>
+                  setDraft((d) => ({ ...d, date_of_birth: v }))
+                }
+                disabled={saving}
+              />
+              <EditSelectField
+                label="Gender"
+                value={draft.gender}
+                onChange={(v) => setDraft((d) => ({ ...d, gender: v }))}
+                options={GENDER_OPTIONS}
+                disabled={saving}
+              />
+              <EditSelectField
+                label="Ethnicity"
+                value={draft.ethnicity}
+                onChange={(v) =>
+                  setDraft((d) => ({ ...d, ethnicity: v }))
+                }
+                options={ETHNICITY_OPTIONS}
+                disabled={saving}
+              />
+              {app ? (
+                <EditField
+                  label="Incoming grade"
+                  value={draft.current_grade}
+                  onChange={(v) =>
+                    setDraft((d) => ({ ...d, current_grade: v }))
+                  }
+                  disabled={saving}
+                />
+              ) : null}
+            </>
+          ) : (
+            <>
+              <ReadField label="First name" value={student.first_name} />
+              <ReadField label="Last name" value={student.last_name} />
+              <ReadField label="Date of birth" value={student.date_of_birth} />
+              <ReadField label="Gender" value={student.gender} />
+              <ReadField label="Ethnicity" value={student.ethnicity} />
+              <ReadField
+                label="Incoming grade"
+                value={app?.current_grade ?? ""}
+              />
+            </>
+          )}
         </div>
         {app ? (
           <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
-            <ReadField
-              label="Current grade"
-              value={app.last_grade_completed}
-            />
-            <ReadField
-              label="Previous school"
-              value={app.current_previous_school}
-            />
-            <ReadField
-              label="Bus transportation"
-              value={app.is_bus_transportation ? "Yes" : "No"}
-            />
-            <ReadField
-              label="Bus stop"
-              value={
-                app.is_bus_transportation && app.bus_stop ? app.bus_stop : "—"
-              }
-            />
+            {editing ? (
+              <>
+                <EditField
+                  label="Current grade"
+                  value={draft.last_grade_completed}
+                  onChange={(v) =>
+                    setDraft((d) => ({ ...d, last_grade_completed: v }))
+                  }
+                  disabled={saving}
+                />
+                <EditField
+                  label="Previous school"
+                  value={draft.current_previous_school}
+                  onChange={(v) =>
+                    setDraft((d) => ({ ...d, current_previous_school: v }))
+                  }
+                  disabled={saving}
+                />
+                <EditSelectField
+                  label="Bus transportation"
+                  value={draft.is_bus_transportation ? "Yes" : "No"}
+                  onChange={(v) =>
+                    setDraft((d) => ({
+                      ...d,
+                      is_bus_transportation: v === "Yes",
+                    }))
+                  }
+                  options={["Yes", "No"]}
+                  disabled={saving}
+                />
+                <EditField
+                  label="Bus stop"
+                  value={draft.bus_stop}
+                  onChange={(v) => setDraft((d) => ({ ...d, bus_stop: v }))}
+                  disabled={saving || !draft.is_bus_transportation}
+                />
+              </>
+            ) : (
+              <>
+                <ReadField
+                  label="Current grade"
+                  value={app.last_grade_completed}
+                />
+                <ReadField
+                  label="Previous school"
+                  value={app.current_previous_school}
+                />
+                <ReadField
+                  label="Bus transportation"
+                  value={app.is_bus_transportation ? "Yes" : "No"}
+                />
+                <ReadField
+                  label="Bus stop"
+                  value={
+                    app.is_bus_transportation && app.bus_stop
+                      ? app.bus_stop
+                      : "—"
+                  }
+                />
+              </>
+            )}
           </div>
         ) : null}
       </CardContent>
     </Card>
+  );
+}
+
+/** Gender options for the inline-edit Select. Mirrors the parent
+ *  students form so admin can't pick a value the parent never sees. */
+const GENDER_OPTIONS = [
+  "Male",
+  "Female",
+  "Non-binary",
+  "Prefer not to say",
+] as const;
+
+/** Ethnicity options for the inline-edit Select. NCES-aligned. */
+const ETHNICITY_OPTIONS = [
+  "American Indian or Alaska Native",
+  "Asian",
+  "Black or African American",
+  "Hispanic or Latino",
+  "Native Hawaiian or Pacific Islander",
+  "White",
+  "Two or More Races",
+  "Prefer not to say",
+] as const;
+
+/**
+ * Shared Edit / Save / Cancel toggle for card headers. Every
+ * editable card on this page renders this in its CardHeader's
+ * right-aligned slot. Edit mode shows blue Save + outline Cancel;
+ * read mode shows the white-outline Edit button.
+ */
+function CardEditToggle({
+  editing,
+  saving,
+  onEdit,
+  onCancel,
+  onSave,
+}: {
+  editing: boolean;
+  saving: boolean;
+  onEdit: () => void;
+  onCancel: () => void;
+  onSave: () => void;
+}) {
+  if (!editing) {
+    return (
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={onEdit}
+        className="bg-white"
+      >
+        <Pencil className="size-3.5 mr-1.5" />
+        Edit
+      </Button>
+    );
+  }
+  return (
+    <div className="flex items-center gap-2">
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={onCancel}
+        disabled={saving}
+        className="bg-white"
+      >
+        Cancel
+      </Button>
+      <Button
+        type="button"
+        size="sm"
+        onClick={onSave}
+        disabled={saving}
+        className="bg-blue-600 hover:bg-blue-700 text-white"
+      >
+        {saving ? (
+          <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+        ) : (
+          <CheckCircle2 className="size-3.5 mr-1.5" />
+        )}
+        Save
+      </Button>
+    </div>
+  );
+}
+
+/** Single editable text-style field with the same label rhythm
+ *  as `ReadField`. Used inside card edit modes so the layout
+ *  doesn't shift between read and edit states. */
+function EditField({
+  label,
+  value,
+  onChange,
+  type = "text",
+  disabled,
+}: {
+  label: string;
+  value: string;
+  onChange: (next: string) => void;
+  type?: string;
+  disabled?: boolean;
+}) {
+  return (
+    <Field>
+      <FieldLabel className="text-xs">{label}</FieldLabel>
+      <Input
+        type={type}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+      />
+    </Field>
+  );
+}
+
+/** Editable Select field — paired with `EditField` for forms
+ *  inside card edit modes. */
+function EditSelectField({
+  label,
+  value,
+  onChange,
+  options,
+  disabled,
+}: {
+  label: string;
+  value: string;
+  onChange: (next: string) => void;
+  options: readonly string[];
+  disabled?: boolean;
+}) {
+  return (
+    <Field>
+      <FieldLabel className="text-xs">{label}</FieldLabel>
+      <Select value={value} onValueChange={onChange} disabled={disabled}>
+        <SelectTrigger className="w-full">
+          <SelectValue placeholder="Select…" />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((opt) => (
+            <SelectItem key={opt} value={opt}>
+              {opt}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </Field>
   );
 }
 
@@ -869,10 +1237,12 @@ function TestingCard({
 }
 
 /**
- * Read-only field — labeled disabled input. Standalone here rather
- * than imported because the family detail page's `DisabledField` is
- * not exported, and the rule for both surfaces is identical:
- * `text-xs` label, `disabled` input, em-dash for empty.
+ * Read-only labeled field. Renders as a `readOnly` input rather
+ * than `disabled` so admin can select + copy the value out of the
+ * page — useful for emails, phone numbers, and student IDs that
+ * admin frequently needs to paste elsewhere. Disabled HTML inputs
+ * reject every selection event; readOnly keeps the field
+ * non-editable while preserving native selection.
  */
 function ReadField({
   label,
@@ -890,8 +1260,8 @@ function ReadField({
       <FieldLabel className="text-xs">{label}</FieldLabel>
       <Input
         value={display}
-        disabled
-        className="border-input bg-white text-foreground disabled:opacity-100 disabled:cursor-default"
+        readOnly
+        className="border-input bg-white text-foreground"
       />
     </Field>
   );

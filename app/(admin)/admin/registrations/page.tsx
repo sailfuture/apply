@@ -50,6 +50,9 @@ interface RegStudentRow {
   sections_total: number;
   registration_submitted: boolean;
   registration_submitted_date: number | null;
+  /** True when admin has confirmed the family's registration on
+   *  the detail page. Drives the Completed bucket. */
+  is_registration_confirmed: boolean;
   last_edited: number | null;
   enrollment_agreement_status: string;
   is_enrollment_agreement_signed: boolean;
@@ -86,6 +89,9 @@ interface RegFamilyRow {
   sections_total: number;
   registration_submitted: boolean;
   registration_submitted_date: number | null;
+  /** True when admin has confirmed the family's registration on
+   *  the detail page. Drives the Completed bucket. */
+  is_registration_confirmed: boolean;
   last_edited: number | null;
   enrollment_agreement_status: string;
   is_enrollment_agreement_signed: boolean;
@@ -95,16 +101,26 @@ interface RegFamilyRow {
   [key: string]: unknown;
 }
 
-type ProgressFilter = "all" | "submitted" | "in_progress" | "not_started";
+type ProgressFilter =
+  | "all"
+  | "completed"
+  | "submitted"
+  | "in_progress"
+  | "not_started";
 
 const FILTER_LABEL: Record<ProgressFilter, string> = {
   all: "All families",
+  completed: "Completed",
   submitted: "Submitted",
   in_progress: "In progress",
   not_started: "Not started",
 };
 
 function deriveFilter(row: RegFamilyRow): ProgressFilter {
+  // Completed takes precedence — once admin has confirmed the
+  // family's registration, the row drops out of the active queues
+  // and lands in the Completed bucket regardless of section state.
+  if (row.is_registration_confirmed) return "completed";
   if (row.registration_submitted) return "submitted";
   if (row.sections_complete > 0) return "in_progress";
   return "not_started";
@@ -151,6 +167,7 @@ function aggregateByFamily(rows: RegStudentRow[]): RegFamilyRow[] {
       sections_total: r.sections_total,
       registration_submitted: r.registration_submitted,
       registration_submitted_date: r.registration_submitted_date,
+      is_registration_confirmed: r.is_registration_confirmed,
       last_edited: r.last_edited,
       enrollment_agreement_status: r.enrollment_agreement_status,
       is_enrollment_agreement_signed: r.is_enrollment_agreement_signed,
@@ -188,21 +205,24 @@ export default function RegistrationsPage() {
   );
 
   const groups = useMemo(() => {
+    const completed: RegFamilyRow[] = [];
     const submitted: RegFamilyRow[] = [];
     const inProgress: RegFamilyRow[] = [];
     const notStarted: RegFamilyRow[] = [];
     for (const r of all) {
       const f = deriveFilter(r);
-      if (f === "submitted") submitted.push(r);
+      if (f === "completed") completed.push(r);
+      else if (f === "submitted") submitted.push(r);
       else if (f === "in_progress") inProgress.push(r);
       else notStarted.push(r);
     }
-    return { submitted, inProgress, notStarted };
+    return { completed, submitted, inProgress, notStarted };
   }, [all]);
 
   const visibleGroups = useMemo(() => {
     if (filter === "all") return groups;
     return {
+      completed: filter === "completed" ? groups.completed : [],
       submitted: filter === "submitted" ? groups.submitted : [],
       inProgress: filter === "in_progress" ? groups.inProgress : [],
       notStarted: filter === "not_started" ? groups.notStarted : [],
@@ -212,6 +232,7 @@ export default function RegistrationsPage() {
   const counts = useMemo(() => {
     return {
       all: all.length,
+      completed: groups.completed.length,
       submitted: groups.submitted.length,
       in_progress: groups.inProgress.length,
       not_started: groups.notStarted.length,
@@ -331,7 +352,13 @@ export default function RegistrationsPage() {
           </SelectTrigger>
           <SelectContent>
             {(
-              ["all", "submitted", "in_progress", "not_started"] as const
+              [
+                "all",
+                "completed",
+                "submitted",
+                "in_progress",
+                "not_started",
+              ] as const
             ).map((f) => (
               <SelectItem key={f} value={f}>
                 {FILTER_LABEL[f]} ({counts[f]})
@@ -359,16 +386,39 @@ export default function RegistrationsPage() {
           {/* Status dots on each card header mirror the Applications
               page palette so admin reads the two surfaces with the
               same color language:
+                - green  = Completed (registration confirmed)
                 - blue   = Submitted (queued for admin work)
                 - yellow = In Progress (waiting on the family)
                 - red    = Not Started (no movement) */}
+          <RegistrationsGroup
+            title="Completed"
+            description="Family registration is confirmed. Students are enrolled."
+            dotColor="bg-green-500"
+            rows={visibleGroups.completed}
+            isLoading={
+              isLoading &&
+              filter !== "submitted" &&
+              filter !== "in_progress" &&
+              filter !== "not_started"
+            }
+            error={error}
+            columns={columns}
+            onRowClick={(row) =>
+              router.push(
+                `/admin/registrations/${row.family_id}?yearId=${row.year_id}`
+              )
+            }
+          />
           <RegistrationsGroup
             title="Submitted"
             description="Family has submitted the post-acceptance packet."
             dotColor="bg-blue-500"
             rows={visibleGroups.submitted}
             isLoading={
-              isLoading && filter !== "in_progress" && filter !== "not_started"
+              isLoading &&
+              filter !== "completed" &&
+              filter !== "in_progress" &&
+              filter !== "not_started"
             }
             error={error}
             columns={columns}
@@ -384,7 +434,10 @@ export default function RegistrationsPage() {
             dotColor="bg-amber-500"
             rows={visibleGroups.inProgress}
             isLoading={
-              isLoading && filter !== "submitted" && filter !== "not_started"
+              isLoading &&
+              filter !== "completed" &&
+              filter !== "submitted" &&
+              filter !== "not_started"
             }
             error={error}
             columns={columns}
@@ -400,7 +453,10 @@ export default function RegistrationsPage() {
             dotColor="bg-red-500"
             rows={visibleGroups.notStarted}
             isLoading={
-              isLoading && filter !== "submitted" && filter !== "in_progress"
+              isLoading &&
+              filter !== "completed" &&
+              filter !== "submitted" &&
+              filter !== "in_progress"
             }
             error={error}
             columns={columns}

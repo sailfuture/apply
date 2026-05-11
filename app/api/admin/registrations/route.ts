@@ -219,6 +219,13 @@ export async function GET(req: NextRequest) {
         sections_total: 4,
         registration_submitted: !!progress?.isSubmitted,
         registration_submitted_date: progress?.submitted_date ?? null,
+        // Family-level registration-confirmation latch. Drives the
+        // "Completed" bucket on the Registrations list — once admin
+        // clicks Confirm Family Registration, the row lifts out of
+        // the Submitted / In Progress / Not Started queues and
+        // lands in Completed.
+        is_registration_confirmed:
+          progress?.isRegistrationConfirmed === true,
         last_edited: progress?.last_edited ?? null,
         enrollment_agreement_status:
           progress?.enrollment_agreement_status ?? "",
@@ -271,6 +278,10 @@ export interface RegistrationStudentRow {
   sections_total: number;
   registration_submitted: boolean;
   registration_submitted_date: number | null;
+  /** Family-level registration-confirmation latch. True once admin
+   *  has clicked Confirm Family Registration on the registration
+   *  detail page. Drives the Completed bucket on the list. */
+  is_registration_confirmed: boolean;
   last_edited: number | null;
   enrollment_agreement_status: string;
   is_enrollment_agreement_signed: boolean;
