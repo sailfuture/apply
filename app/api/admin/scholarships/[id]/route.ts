@@ -30,11 +30,26 @@ const CONFIRM_PAIRS = [
     confirmKey: "is_snap_confirmed",
     timeKey: "snap_confirm_time",
     adminKey: "snap_confirm_admin",
+    // Legacy column — `*_admin` typed as int (teacher id). Newer
+    // confirm triples (see `tax_document_confirm` below) use a text
+    // column carrying the admin's display name.
+    adminType: "id" as const,
   },
   {
     confirmKey: "is_unemployment_confirm",
     timeKey: "unemployment_confirm_time",
     adminKey: "unemployment_confirm_admin",
+    adminType: "id" as const,
+  },
+  {
+    confirmKey: "tax_document_confirm",
+    timeKey: "tax_document_confirm_time",
+    adminKey: "tax_document_confirm_admin",
+    // Newer convention — stamps the admin's display name as text so
+    // the family-page Documents table can render "Confirmed by Hunter"
+    // without a teacher-id → name lookup. Matches the contributing-
+    // members + benefits routes.
+    adminType: "name" as const,
   },
 ] as const;
 
@@ -55,6 +70,12 @@ export async function PATCH(
     const allowed: Array<keyof XanoScholarship> = [
       "is_snap_confirmed",
       "is_unemployment_confirm",
+      // Tax-return confirm flag — same shape as the SNAP / unemployment
+      // flags above; required on the Opportunity Scholarship path so
+      // admin can verify the prior-year 1040 + schedules. The audit
+      // pair (`tax_document_confirm_time` + `tax_document_confirm_admin`)
+      // is auto-stamped below alongside the boolean flip.
+      "tax_document_confirm",
       // Scholarship path flags — admin can flip the family between
       // the three lifecycle states (full Opportunity Scholarship
       // application, SNAP pre-qualification, opted out) on behalf
@@ -66,11 +87,13 @@ export async function PATCH(
       "isNotParticipating",
       // Document slots — admin can upload paperwork on behalf of the
       // family (SNAP award letter, unemployment / termination
-      // letter). The columns hold Xano file metadata arrays; the
-      // upload route returns the file metadata which the client
-      // splices into the existing array before PATCHing.
+      // letter, prior-year tax return). The columns hold Xano file
+      // metadata arrays; the upload route returns the file metadata
+      // which the client splices into the existing array before
+      // PATCHing.
       "snap_benefits",
       "unemployment_letter",
+      "tax_return",
     ];
     const patch: Record<string, unknown> = {};
     for (const key of allowed) {
@@ -105,12 +128,21 @@ export async function PATCH(
     }
 
     const adminTeacherId = adminTeacherIdAsNumber(admin.teacherId);
+    const adminDisplayName = admin.name?.trim() || admin.email || "an admin";
     const now = Date.now();
     for (const pair of CONFIRM_PAIRS) {
       if (pair.confirmKey in patch) {
         const next = patch[pair.confirmKey] === true;
         patch[pair.timeKey] = next ? now : null;
-        patch[pair.adminKey] = next ? adminTeacherId : 0;
+        // Legacy int columns stamp the teacher id; newer text columns
+        // (tax_document_confirm_admin) stamp the admin's display name
+        // so the family-page Documents table can render
+        // "Confirmed by Hunter" without a teacher-id → name lookup.
+        if (pair.adminType === "name") {
+          patch[pair.adminKey] = next ? adminDisplayName : "";
+        } else {
+          patch[pair.adminKey] = next ? adminTeacherId : 0;
+        }
       }
     }
 

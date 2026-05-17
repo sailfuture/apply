@@ -540,6 +540,24 @@ export interface XanoScholarship {
   is_unemployment_confirm?: boolean;
   unemployment_confirm_time?: number | null;
   unemployment_confirm_admin?: number;
+
+  /** Prior-year federal tax return — required on the Opportunity
+   *  Scholarship path. Multi-file array (1040 + supporting schedules
+   *  can land on the same row). Admin can upload on behalf of the
+   *  family from the Documents to Review block on the family detail
+   *  page. Optional on the type because legacy rows pre-date the
+   *  column; treat missing as `[]` / not uploaded. */
+  tax_return?: Record<string, unknown>[];
+  /** Admin verification trail for the tax return. Mirrors the SNAP /
+   *  unemployment confirm triplet but uses the newer column naming
+   *  convention — `*_admin` is text (admin display name) instead of
+   *  int (teacher id), matching the contributing-members + benefits
+   *  audit pattern. The scholarships PATCH route auto-stamps both
+   *  audit columns when admin flips `tax_document_confirm`. */
+  tax_document_confirm?: boolean;
+  tax_document_confirm_time?: number | null;
+  tax_document_confirm_admin?: string;
+
   last_edited: number | null;
 
   /* ─────── Admin-only relation expansions ───────

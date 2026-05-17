@@ -140,6 +140,10 @@ interface Scholarship {
    *  `no_contributing_member` is true. Replaces the older single-file
    *  `termination_letter` column. */
   unemployment_letter: Record<string, unknown>[];
+  /** Multi-file array for the prior-year federal tax return — required
+   *  on the Opportunity Scholarship path (1040 + supporting schedules).
+   *  Optional on the type because legacy rows pre-date the column. */
+  tax_return?: Record<string, unknown>[];
   last_edited: number | null;
   isNotParticipating: boolean;
   isSNAPBenefits: boolean;
@@ -398,6 +402,13 @@ export default function ScholarshipPage() {
   const [snapBenefitsFiles, setSnapBenefitsFiles] = useState<Record<string, unknown>[]>([]);
   const [otherBenefitsFiles, setOtherBenefitsFiles] = useState<Record<string, unknown>[]>([]);
   const [unemploymentLetter, setUnemploymentLetter] = useState<Record<string, unknown>[]>([]);
+  // Prior-year federal tax return — required on the Opportunity
+  // Scholarship path. Multi-file because the 1040 + supporting
+  // schedules typically split across several PDFs. Hydrated from
+  // `scholarship.tax_return` and saved back on every autosave; admin
+  // can also upload on behalf of the family from the Documents to
+  // Review block on the admin family detail page.
+  const [taxReturnFiles, setTaxReturnFiles] = useState<Record<string, unknown>[]>([]);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
   const [, setTick] = useState(0);
   const savedSnapshotRef = useRef<string>("");
@@ -527,7 +538,7 @@ export default function ScholarshipPage() {
       assetsRetirement, assetsStocks, assetsTrusts, assetsBusiness,
       debtsCreditCards, debtsStudentLoans, debtsPersonalLoans,
       govBenefits, familyContribution, advocacyLetter,
-      signatureMeta, unemploymentLetter,
+      signatureMeta, unemploymentLetter, taxReturnFiles,
       members, homes, vehicles, benefits,
     });
   }
@@ -540,7 +551,7 @@ export default function ScholarshipPage() {
     assetsRetirement, assetsStocks, assetsTrusts, assetsBusiness,
     debtsCreditCards, debtsStudentLoans, debtsPersonalLoans,
     govBenefits, familyContribution, advocacyLetter,
-    signatureMeta, unemploymentLetter,
+    signatureMeta, unemploymentLetter, taxReturnFiles,
     members, homes, vehicles, benefits,
   ]);
 
@@ -736,6 +747,9 @@ export default function ScholarshipPage() {
     if (Array.isArray(s.unemployment_letter)) {
       setUnemploymentLetter(s.unemployment_letter as Record<string, unknown>[]);
     }
+    if (Array.isArray(s.tax_return)) {
+      setTaxReturnFiles(s.tax_return as Record<string, unknown>[]);
+    }
   }
 
   useEffect(() => {
@@ -869,6 +883,11 @@ export default function ScholarshipPage() {
           other_benefits: otherBenefitsFiles,
           signature: signatureMeta,
           unemployment_letter: unemploymentLetter,
+          // Prior-year tax return — required on the Opportunity
+          // Scholarship path. Multi-file (1040 + schedules + W-2s
+          // etc.). The Opportunity Scholarship "ready to submit"
+          // gate enforces at least one file uploaded.
+          tax_return: taxReturnFiles,
           last_edited: Date.now(),
         }),
       });
@@ -1304,7 +1323,17 @@ export default function ScholarshipPage() {
   }
 
   const isChoiceLocked = scholarshipChoice === "none" || scholarshipChoice === "snap" || scholarshipChoice === "full";
-  const isScholarshipFormComplete = incomeComplete && membersComplete && assetsComplete && contributionComplete && !!signatureMeta;
+  // Tax return is required on the Opportunity Scholarship path —
+  // at least one file must be uploaded for the form to count as
+  // complete. Empty array = not uploaded yet.
+  const taxReturnComplete = taxReturnFiles.length > 0;
+  const isScholarshipFormComplete =
+    incomeComplete &&
+    taxReturnComplete &&
+    membersComplete &&
+    assetsComplete &&
+    contributionComplete &&
+    !!signatureMeta;
 
   // Per-student SUFS block. Rendered on both the chooser screen (!showForm)
   // and the full Opportunity Scholarship form (showForm) so it's always visible.
@@ -2269,6 +2298,71 @@ export default function ScholarshipPage() {
               )}
               </AnimatePresence>
             </section>
+          </CardContent>
+        </Card>
+
+        {/* Prior-year Tax Return — required on the Opportunity
+            Scholarship path. Sits between Household Information and
+            Contributing Members so the parent uploads the
+            household-level document before drilling into per-member
+            pay stubs / W-2s. Status pill matches the other section
+            cards (green checkmark when at least one file is on
+            file, amber pencil otherwise). */}
+        <Card className="overflow-hidden gap-0 py-0 ring-0 border">
+          <CardHeader className="border-b py-3 !pb-3">
+            <div className="flex items-center justify-between gap-4">
+              <div className="min-w-0">
+                <CardTitle className="text-lg">
+                  Prior-Year Tax Return
+                </CardTitle>
+                <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
+                  Upload your most recent federal tax return (1040 +
+                  any supporting schedules). Multiple files OK — drag
+                  them in or click to browse.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                {taxReturnFiles.length > 0 ? (
+                  <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-green-500 text-white">
+                    <svg
+                      className="size-4"
+                      viewBox="0 0 20 20"
+                      fill="currentColor"
+                    >
+                      <path
+                        fillRule="evenodd"
+                        d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z"
+                        clipRule="evenodd"
+                      />
+                    </svg>
+                  </div>
+                ) : (
+                  <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-amber-500 text-white">
+                    <svg
+                      className="size-4"
+                      viewBox="0 0 20 20"
+                      fill="currentColor"
+                    >
+                      <path d="M5.433 13.917l1.262-3.155A4 4 0 017.58 9.42l6.92-6.918a2.121 2.121 0 013 3l-6.92 6.918c-.383.383-.84.685-1.343.886l-3.154 1.262a.5.5 0 01-.65-.65z" />
+                      <path d="M3.5 5.75c0-.69.56-1.25 1.25-1.25H10A.75.75 0 0010 3H4.75A2.75 2.75 0 002 5.75v9.5A2.75 2.75 0 004.75 18h9.5A2.75 2.75 0 0017 15.25V10a.75.75 0 00-1.5 0v5.25c0 .69-.56 1.25-1.25 1.25h-9.5c-.69 0-1.25-.56-1.25-1.25v-9.5z" />
+                    </svg>
+                  </div>
+                )}
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="py-5 bg-white dark:bg-background">
+            <p className="text-xs font-medium mb-2">
+              Federal Tax Return <span className="text-red-400">*</span>
+            </p>
+            <IncomeFileUpload
+              label="Drop your tax return PDFs here or click to upload"
+              multiple
+              disabled={isReadonly}
+              error={taxReturnFiles.length === 0}
+              existingFiles={taxReturnFiles as XanoFileMetadata[]}
+              onFilesChanged={(files) => setTaxReturnFiles(files)}
+            />
           </CardContent>
         </Card>
 

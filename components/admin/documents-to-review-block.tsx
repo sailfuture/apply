@@ -521,6 +521,119 @@ function buildRows({
     return rows;
   }
 
+  // Tax Return — required on the Opportunity Scholarship path
+  // (the family-financial-form route). Lives at the scholarship
+  // level (one row per family per year, not per contributing
+  // member) because it covers the household's whole return.
+  // Renders first in the doc list so admin reviews the umbrella
+  // document before drilling into per-member income proof. Excluded
+  // on the SNAP path (handled by the early return above) and the
+  // Opted-out path (the function never reaches here on that path
+  // since the docs block doesn't render).
+  if (!scholarship.isNotParticipating) {
+    const slotKey = "tax_return";
+    const confirmed = scholarship.tax_document_confirm === true;
+    const confirmedAt = scholarship.tax_document_confirm_time ?? null;
+    // Newer column convention — `*_admin` is text (admin display
+    // name) rather than int (teacher id), so the row reads the
+    // string directly via `confirmedByName` and skips the teacher
+    // lookup map.
+    const confirmedByName = (scholarship.tax_document_confirm_admin ?? "").trim();
+    const patchTaxConfirm = async (next: boolean) => {
+      setSavingSlot(slotKey);
+      try {
+        const res = await fetch(
+          `/api/admin/scholarships/${scholarship.id}`,
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ tax_document_confirm: next }),
+          }
+        );
+        if (!res.ok) {
+          const errBody = await res.json().catch(() => null);
+          throw new Error(errBody?.error ?? `Save failed (${res.status})`);
+        }
+        onScholarshipChanged?.();
+      } catch (err) {
+        console.error("Failed to update tax-return confirm:", err);
+        toast.error(
+          err instanceof Error ? err.message : "Couldn't update."
+        );
+      } finally {
+        setSavingSlot(null);
+      }
+    };
+    const uploadTaxReturn = async (newFiles: File[]) => {
+      if (newFiles.length === 0) return;
+      setSavingSlot(slotKey);
+      try {
+        let acc = toFileArray(scholarship.tax_return);
+        for (const f of newFiles) {
+          const formData = new FormData();
+          formData.append("file", f);
+          const uploadRes = await fetch("/api/upload", {
+            method: "POST",
+            body: formData,
+          });
+          if (!uploadRes.ok) {
+            const body = await uploadRes.json().catch(() => null);
+            throw new Error(
+              body?.error ?? `Upload failed (${uploadRes.status})`
+            );
+          }
+          const metadata = (await uploadRes.json()) as Record<string, unknown>;
+          acc = [...acc, metadata];
+        }
+        const patchRes = await fetch(
+          `/api/admin/scholarships/${scholarship.id}`,
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ tax_return: acc }),
+          }
+        );
+        if (!patchRes.ok) {
+          const body = await patchRes.json().catch(() => null);
+          throw new Error(body?.error ?? `Save failed (${patchRes.status})`);
+        }
+        toast.success(
+          newFiles.length === 1
+            ? "Tax return uploaded."
+            : `${newFiles.length} files uploaded.`
+        );
+        onScholarshipChanged?.();
+      } catch (err) {
+        console.error("Failed to upload tax return:", err);
+        toast.error(
+          err instanceof Error ? err.message : "Couldn't upload file."
+        );
+      } finally {
+        setSavingSlot(null);
+      }
+    };
+    rows.push({
+      key: slotKey,
+      label: "Prior-year tax return",
+      sublabel: "Most recent federal 1040 + supporting schedules",
+      files: toFileArray(scholarship.tax_return),
+      emptyHint: "No tax return uploaded yet.",
+      upload: {
+        onUpload: uploadTaxReturn,
+        accept: ".pdf,.jpg,.jpeg,.png",
+        maxFiles: 10,
+      },
+      confirmation: {
+        confirmed,
+        saving: savingSlot === slotKey,
+        onConfirm: () => patchTaxConfirm(true),
+        onUndo: () => patchTaxConfirm(false),
+        confirmedAt: confirmed ? confirmedAt : null,
+        confirmedByName: confirmed ? confirmedByName : undefined,
+      },
+    });
+  }
+
   // Unemployment — only when the family declared no contributing
   // member. Now confirmable via `is_unemployment_confirm`
   // (with `unemployment_confirm_time` / `unemployment_confirm_admin`

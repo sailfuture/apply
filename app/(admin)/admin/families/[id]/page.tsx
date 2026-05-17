@@ -233,6 +233,25 @@ function computeAllDocsConfirmed(
     }
   }
 
+  // Tax return — required on the Opportunity Scholarship path
+  // (every path except SNAP-only and Opted-out renders this doc
+  // slot). Gate only when a return has been uploaded — same
+  // "don't gate on empty docs" treatment so admin isn't blocked
+  // from verifying when the parent simply hasn't uploaded yet.
+  // Opted-out families don't go through the Financial Aid verify
+  // flow at all, so we skip the gate there.
+  if (!scholarship.isSNAPBenefits && !scholarship.isNotParticipating) {
+    const taxReturnFiles = Array.isArray(scholarship.tax_return)
+      ? scholarship.tax_return.length
+      : 0;
+    if (
+      taxReturnFiles > 0 &&
+      scholarship.tax_document_confirm !== true
+    ) {
+      return false;
+    }
+  }
+
   return true;
 }
 
