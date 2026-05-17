@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import { useParams } from "next/navigation";
 import { useApplicationFlow } from "@/contexts/application-flow-context";
 import { useApplications, useStudents, mutateApplications, mutateStudents } from "@/hooks/use-api";
@@ -2763,31 +2764,36 @@ export default function RegistrationPage() {
             2. signingSession is set but the embed hasn't fired
                `document.loaded` yet → iframe is mounting / fetching
           Once `docLoaded` flips true, the dialog content takes over
-          and this overlay disappears. The overlay's z-index sits
-          ABOVE the dialog's backdrop (z-50 is the shadcn default)
-          so the parent can't click the dialog close button mid-prep
-          either. */}
-      {(signingLoading !== null || (signingSession !== null && !docLoaded)) && (
-        <div
-          className="fixed inset-0 z-[100] flex items-center justify-center bg-background/95 backdrop-blur-sm"
-          role="status"
-          aria-live="polite"
-          aria-label="Preparing liability waiver"
-        >
-          <div className="flex flex-col items-center gap-4 px-6 text-center">
-            <Loader2 className="size-10 animate-spin text-primary" />
-            <div className="space-y-1">
-              <p className="text-base font-medium">
-                Preparing your liability waiver…
-              </p>
-              <p className="text-sm text-muted-foreground max-w-sm">
-                This usually takes a few seconds. Please don&apos;t close
-                this tab.
-              </p>
+          and this overlay disappears.
+          Portaled to document.body so it shares the same stacking
+          level as the shadcn Dialog's own portal — without the
+          portal, the overlay would render inside the page's
+          stacking context and the Dialog (which portals to body)
+          would paint above it, regardless of z-index. */}
+      {(signingLoading !== null || (signingSession !== null && !docLoaded)) &&
+        typeof window !== "undefined" &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[100] flex items-center justify-center bg-background/95 backdrop-blur-sm"
+            role="status"
+            aria-live="polite"
+            aria-label="Preparing liability waiver"
+          >
+            <div className="flex flex-col items-center gap-4 px-6 text-center">
+              <Loader2 className="size-10 animate-spin text-primary" />
+              <div className="space-y-1">
+                <p className="text-base font-medium">
+                  Preparing your liability waiver…
+                </p>
+                <p className="text-sm text-muted-foreground max-w-sm">
+                  This usually takes a few seconds. Please don&apos;t close
+                  this tab.
+                </p>
+              </div>
             </div>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body
+        )}
     </>
   );
 }

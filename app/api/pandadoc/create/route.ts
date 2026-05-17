@@ -5,6 +5,7 @@ import {
   createDocumentFromTemplate,
   sendDocument,
   createSigningSession,
+  getDocumentStatus,
   getTemplateId,
   getTemplateRole,
   waitForDocumentStatus,
@@ -117,48 +118,82 @@ export async function POST(req: NextRequest) {
   const docParentLastName = recipientLastName;
   const docParentEmail = recipientEmail;
 
+  // Helper — wipes the stale Xano metadata so the fresh-create path
+  // below writes onto a clean row. Used whenever the existing
+  // PandaDoc envelope is unusable (deleted in admin dashboard,
+  // voided, etc.). Best-effort: the fresh-create write below
+  // overwrites the id + status either way.
+  const wipeStaleMetadata = async () => {
+    if (type === "enrollment_agreement" && progressRow) {
+      await xano.studentRegistrationProgress
+        .update(progressRow.id, {
+          enrollment_agreement_pandadoc_id: "",
+          enrollment_agreement_status: "",
+          enrollment_agreement_sent: null,
+          enrollment_agreement_pdf_url: "",
+          is_enrollment_agreement_signed: false,
+          isEnrollment: false,
+        })
+        .catch(() => {});
+    } else if (type === "liability_waiver" && packetRow) {
+      await xano.studentRegistration
+        .update(packetRow.id, {
+          liability_waiver_pandadoc_id: "",
+          liability_waiver_status: "",
+          liability_waiver_sent_at: null,
+          liability_waiver_pdf_url: "",
+        })
+        .catch(() => {});
+    }
+  };
+
   if (existingDocId) {
+    // Check the doc's actual status on PandaDoc BEFORE attempting to
+    // resume — `createSigningSession` doesn't reliably throw for
+    // every unusable state. PandaDoc returns a valid session for
+    // some statuses (e.g. trashed-but-not-purged documents,
+    // documents marked for deletion but still queryable) which then
+    // hands the parent a broken signing UI. Driving the decision off
+    // `document.status` lets us recover cleanly:
+    //   - draft / sent / viewed → resumable, hand the parent a
+    //     session for the in-flight envelope
+    //   - anything else (completed, declined, voided, expired,
+    //     etc.) OR a thrown error (deleted / not found) → wipe local
+    //     metadata, fall through to creating a fresh envelope
+    const RESUMABLE_STATUSES = new Set([
+      "document.draft",
+      "document.sent",
+      "document.viewed",
+      "document.waiting_approval",
+    ]);
+    let canResume = false;
     try {
-      const sessionId = await createSigningSession(existingDocId, recipientEmail);
-      return NextResponse.json({
-        documentId: existingDocId,
-        sessionId,
-        resumed: true,
-      });
+      const existing = await getDocumentStatus(existingDocId);
+      canResume = RESUMABLE_STATUSES.has(existing.status);
     } catch {
-      // PandaDoc no longer has this envelope (admin deleted it, it
-      // expired, etc.). Wipe the stale metadata on our side so the
-      // fresh-create path below writes onto a clean row instead of
-      // leaving behind a half-completed mix (e.g. `*_pdf_url` still
-      // pointing at the now-deleted PDF or `*_signed` still true).
-      // Same field set the /api/pandadoc/reset endpoint clears.
-      if (type === "enrollment_agreement" && progressRow) {
-        await xano.studentRegistrationProgress
-          .update(progressRow.id, {
-            enrollment_agreement_pandadoc_id: "",
-            enrollment_agreement_status: "",
-            enrollment_agreement_sent: null,
-            enrollment_agreement_pdf_url: "",
-            is_enrollment_agreement_signed: false,
-            isEnrollment: false,
-          })
-          .catch(() => {
-            // best-effort — fall through to create even if the
-            // metadata reset failed, since the create write will
-            // overwrite the id + status anyway.
-          });
-      } else if (type === "liability_waiver" && packetRow) {
-        await xano.studentRegistration
-          .update(packetRow.id, {
-            liability_waiver_pandadoc_id: "",
-            liability_waiver_status: "",
-            liability_waiver_sent_at: null,
-            liability_waiver_pdf_url: "",
-          })
-          .catch(() => {
-            // best-effort, same rationale as above.
-          });
+      // 404 / network / etc. — doc is gone. Fall through to wipe +
+      // create.
+      canResume = false;
+    }
+
+    if (canResume) {
+      try {
+        const sessionId = await createSigningSession(existingDocId, recipientEmail);
+        return NextResponse.json({
+          documentId: existingDocId,
+          sessionId,
+          resumed: true,
+        });
+      } catch {
+        // Resume failed even though the status check said resumable.
+        // Treat as a deletion — wipe + create fresh below.
+        await wipeStaleMetadata();
       }
+    } else {
+      // Status was non-resumable (or doc gone). Clear the stale
+      // metadata before falling through so the fresh-create write
+      // lands on a clean row.
+      await wipeStaleMetadata();
     }
   }
 
