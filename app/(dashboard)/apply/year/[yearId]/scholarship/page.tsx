@@ -1677,7 +1677,10 @@ export default function ScholarshipPage() {
                       </div>
                     </td>
                     <td className="px-2 py-4">
-                      <p className="font-medium">I receive SNAP benefits</p>
+                      <p className="font-medium">
+                        I receive SNAP benefits or have a Free/Reduced Meal
+                        Status verification letter
+                      </p>
                     </td>
                     <td className="px-4 py-4 w-10 text-muted-foreground">
                       <div className="flex size-7 items-center justify-center rounded-md border border-border">
@@ -1784,20 +1787,34 @@ export default function ScholarshipPage() {
           </AlertDialogContent>
         </AlertDialog>
 
-        {/* SNAP Benefits Modal */}
+        {/* SNAP / Free-or-Reduced Meal Status Pre-Qualification Modal.
+            Accepts EITHER a Florida SNAP award letter OR a school
+            district Free/Reduced Meal Status verification letter as
+            proof of pre-qualification for the Opportunity Scholarship.
+            The Xano column is still named `snap_benefits` for back-
+            compat; the field stores the uploaded document(s) regardless
+            of which document type the family chose to upload. */}
         <AlertDialog open={snapModalOpen} onOpenChange={setSnapModalOpen}>
           <AlertDialogContent className="max-w-2xl max-h-[90vh] flex flex-col overflow-hidden">
             <AlertDialogHeader>
-              <AlertDialogTitle>SNAP Benefits Pre-Qualification</AlertDialogTitle>
+              <AlertDialogTitle>
+                SNAP or Free/Reduced Meal Status Pre-Qualification
+              </AlertDialogTitle>
               <AlertDialogDescription>
-                If you receive SNAP benefits, you pre-qualify for the SailFuture Academy Scholarship. Upload your Florida SNAP benefits award letter below.
+                If your family receives SNAP benefits or your student has an
+                approved Free/Reduced Meal Status verification letter, you may
+                pre-qualify for the SailFuture Academy Scholarship. Upload one
+                of the accepted documents below.
               </AlertDialogDescription>
             </AlertDialogHeader>
 
             <div className="flex-1 overflow-y-auto space-y-4 pr-1">
               <div>
+                <p className="text-sm font-medium mb-2">
+                  Upload Verification Document
+                </p>
                 <IncomeFileUpload
-                  label="Drop SNAP award letter here or click to upload"
+                  label="Drop SNAP or Free/Reduced Meal Status letter here or click to upload"
                   multiple
                   existingFiles={snapBenefitsFiles as XanoFileMetadata[]}
                   onFilesChanged={async (files) => {
@@ -1816,34 +1833,97 @@ export default function ScholarshipPage() {
                 />
               </div>
 
-              {/* What is a SNAP Award Letter */}
-              <div className="rounded-lg border bg-muted/30 p-4 space-y-3">
-                <h4 className="text-sm font-semibold">What is a SNAP Award Letter?</h4>
-                <p className="text-sm text-muted-foreground">
-                  The SNAP (Supplemental Nutrition Assistance Program) award letter is a &quot;Notice of Case Action&quot; issued by the Florida Department of Children and Families (DCF). It confirms your household&apos;s eligibility for Food Assistance benefits and lists each eligible household member along with your benefit amount.
-                </p>
-                <p className="text-sm text-muted-foreground">
-                  You can access your award letter by logging into your{" "}
-                  <a
-                    href="https://www.myflorida.com/accessflorida/"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-primary underline underline-offset-2 hover:text-primary/80"
-                  >
-                    MyACCESS Florida account
-                  </a>
-                  , or by contacting your local DCF office. If you received a physical copy in the mail, you can scan or photograph it for upload.
-                </p>
-                <div className="rounded-md border overflow-hidden bg-white">
-                  <Image
-                    src="/1.webp"
-                    alt="Example Florida SNAP Benefits Award Letter - Notice of Case Action"
-                    width={600}
-                    height={776}
-                    className="w-full h-auto"
-                  />
-                  <p className="text-xs text-muted-foreground text-center py-2 bg-muted/20">
-                    Example: Florida DCF &quot;Notice of Case Action&quot; letter
+              {/* What Documents Can I Upload? */}
+              <div className="rounded-lg border bg-muted/30 p-4 space-y-4">
+                <div className="space-y-1">
+                  <h4 className="text-sm font-semibold">
+                    What Documents Can I Upload?
+                  </h4>
+                  <p className="text-sm text-muted-foreground">
+                    You may upload one of the following:
+                  </p>
+                </div>
+
+                {/* Florida SNAP Benefits Award Letter */}
+                <div className="space-y-3">
+                  <h5 className="text-sm font-semibold">
+                    Florida SNAP Benefits Award Letter
+                  </h5>
+                  <p className="text-sm text-muted-foreground">
+                    The Florida SNAP benefits award letter is usually called a{" "}
+                    &quot;Notice of Case Action&quot; issued by the Florida
+                    Department of Children and Families (DCF). It confirms your
+                    household&apos;s eligibility for Food Assistance benefits
+                    and may list eligible household members, benefit amount,
+                    and eligibility dates.
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    You can access this document by logging into your{" "}
+                    <a
+                      href="https://www.myflorida.com/accessflorida/"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary underline underline-offset-2 hover:text-primary/80"
+                    >
+                      MyACCESS Florida account
+                    </a>
+                    {" "}or by contacting DCF. If you received a physical copy in
+                    the mail, you can scan or photograph it for upload.
+                  </p>
+                  <div className="rounded-md border overflow-hidden bg-white">
+                    <Image
+                      src="/1.webp"
+                      alt="Example Florida SNAP Benefits Award Letter - Notice of Case Action"
+                      width={600}
+                      height={776}
+                      className="w-full h-auto"
+                    />
+                    <p className="text-xs text-muted-foreground text-center py-2 bg-muted/20">
+                      Example: Florida DCF &quot;Notice of Case Action&quot;
+                      letter
+                    </p>
+                  </div>
+                </div>
+
+                {/* Free/Reduced Meal Status Verification Letter */}
+                <div className="space-y-3 border-t pt-4">
+                  <h5 className="text-sm font-semibold">
+                    Free/Reduced Meal Status Verification Letter
+                  </h5>
+                  <p className="text-sm text-muted-foreground">
+                    A Free/Reduced Meal Status verification letter is a
+                    document from your student&apos;s school district showing
+                    that your student has been approved for free or
+                    reduced-price meal benefits for the current school year.
+                  </p>
+                  <div className="space-y-1.5">
+                    <p className="text-sm text-muted-foreground">
+                      For Pinellas County Schools, request:
+                    </p>
+                    <p className="text-sm italic text-muted-foreground pl-4 border-l-2 border-muted-foreground/30">
+                      &quot;A current-year Free/Reduced Meal Status
+                      verification letter for my student.&quot;
+                    </p>
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    Families may be able to access this through the school
+                    district&apos;s meal application system, such as
+                    MySchoolApps, or by contacting the school district&apos;s
+                    Food and Nutrition Services office.
+                  </p>
+                </div>
+
+                {/* Important Note — CEP schools may not have an
+                    individual letter; explain the fallback. */}
+                <div className="space-y-2 border-t pt-4">
+                  <h5 className="text-sm font-semibold">Important Note</h5>
+                  <p className="text-sm text-muted-foreground">
+                    If your student attends a school where all students
+                    receive free meals through the Community Eligibility
+                    Provision (CEP), your family may not have an individual
+                    Free/Reduced Meal Status verification letter. If you do
+                    not have this letter, please upload SNAP documentation or
+                    another approved financial eligibility document instead.
                   </p>
                 </div>
               </div>
@@ -1858,7 +1938,7 @@ export default function ScholarshipPage() {
                   await saveScholarshipChoice("snap");
                 }}
               >
-                I Receive SNAP Benefits
+                I qualify with this document
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>

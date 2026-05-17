@@ -14,6 +14,7 @@ import {
   Circle,
   ExternalLink,
   FileText,
+  HelpCircle,
   Loader2,
   Pencil,
   SquarePen,
@@ -22,6 +23,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Input } from "@/components/ui/input";
 import { PhoneInput } from "@/components/ui/phone-input";
 import { Field, FieldLabel } from "@/components/ui/field";
@@ -3879,6 +3881,7 @@ function DecisionCard({
             isOpportunityScholarshipFamily={
               scholarship?.isOpportunityScholarship === true
             }
+            isSnapFamily={scholarship?.isSNAPBenefits === true}
           />
         </CardContent>
         {/* Footer mirrors the SectionConfirmFooter pattern: divider
@@ -4218,6 +4221,9 @@ function DecisionCard({
  * family is paying for tuition under the OS determination — same
  * value that's baked into subtotal, broken out as its own row so
  * admin sees the per-student tuition cost before the totals.
+ * `isSnapFamily` also renders that line (with a SNAP-specific
+ * tooltip and a $0 value) so SNAP-qualified families see they
+ * don't owe tuition under the Opportunity Scholarship.
  *
  * Active-only: students whose application row has `isActive=false`
  * (soft-deleted from the year) are filtered out so the receipt
@@ -4228,11 +4234,13 @@ function TuitionBreakdownTable({
   apps,
   schoolYear,
   isOpportunityScholarshipFamily,
+  isSnapFamily,
 }: {
   students: Student[];
   apps: XanoApplication[];
   schoolYear: XanoSchoolYear | null;
   isOpportunityScholarshipFamily: boolean;
+  isSnapFamily: boolean;
 }) {
   if (!schoolYear) return null;
   const tuition = schoolYear.tuition ?? 0;
@@ -4370,13 +4378,42 @@ function TuitionBreakdownTable({
                   Scholarship determination — surfaces the same value
                   that's baked into the subtotal below, broken out as
                   its own row so admin sees what the family pays for
-                  tuition before any fees. Gated on the family being on
-                  the OS path; SNAP / opted-out paths don't carry a
-                  per-student cost in this sense. */}
-              {isOpportunityScholarshipFamily ? (
+                  tuition before any fees. Renders for OS families and
+                  for SNAP families (the SNAP path zeroes out the
+                  per-student cost; the tooltip explains why). */}
+              {isOpportunityScholarshipFamily || isSnapFamily ? (
                 <tr className="border-t">
                   <td className="px-4 py-3 text-muted-foreground">
-                    Opportunity Scholarship (Cost Per Student)
+                    <span className="inline-flex items-center gap-1.5">
+                      Opportunity Scholarship (Cost Per Student)
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button
+                            type="button"
+                            className="inline-flex text-muted-foreground/50 hover:text-muted-foreground transition-colors"
+                          >
+                            <HelpCircle className="size-3.5" />
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent
+                          side="top"
+                          className="max-w-xs text-xs"
+                        >
+                          {isSnapFamily ? (
+                            <p>
+                              SNAP-qualified families do not have to pay
+                              tuition — the Opportunity Scholarship covers
+                              the full per-student tuition cost.
+                            </p>
+                          ) : (
+                            <p>
+                              The per-student tuition portion the family pays
+                              under the Opportunity Scholarship determination.
+                            </p>
+                          )}
+                        </TooltipContent>
+                      </Tooltip>
+                    </span>
                   </td>
                   <td className="px-4 py-3 text-right font-medium tabular-nums">
                     ${formatCurrency2(row.familyPaysForTuition)}

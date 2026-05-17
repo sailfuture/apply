@@ -148,6 +148,9 @@ export default function DashboardTuitionPage() {
   const isOpportunityScholarshipFamily =
     (scholarshipData as { isOpportunityScholarship?: boolean } | null)
       ?.isOpportunityScholarship === true;
+  const isSnapFamily =
+    (scholarshipData as { isSNAPBenefits?: boolean } | null)
+      ?.isSNAPBenefits === true;
 
   const schoolYear = useMemo(() => {
     if (!yearsData || !yearId) return null;
@@ -418,9 +421,10 @@ export default function DashboardTuitionPage() {
                         per-student tuition portion the family pays under
                         the OS determination. Same value baked into the
                         subtotal below, broken out as its own row so the
-                        parent sees the tuition cost before fees. Gated
-                        on the family being on the OS path. */}
-                    {isOpportunityScholarshipFamily ? (
+                        parent sees the tuition cost before fees. Renders
+                        for OS families and for SNAP families (the SNAP
+                        path zeroes out the cost; tooltip explains why). */}
+                    {isOpportunityScholarshipFamily || isSnapFamily ? (
                       <tr className="border-t">
                         <td className="px-4 py-3 text-muted-foreground">
                           <span className="inline-flex items-center gap-1.5">
@@ -438,10 +442,19 @@ export default function DashboardTuitionPage() {
                                 side="top"
                                 className="max-w-xs text-xs"
                               >
-                                <p>
-                                  The per-student tuition portion you pay under
-                                  the Opportunity Scholarship determination.
-                                </p>
+                                {isSnapFamily ? (
+                                  <p>
+                                    SNAP-qualified families do not have to pay
+                                    tuition — the Opportunity Scholarship
+                                    covers the full per-student tuition cost.
+                                  </p>
+                                ) : (
+                                  <p>
+                                    The per-student tuition portion you pay
+                                    under the Opportunity Scholarship
+                                    determination.
+                                  </p>
+                                )}
                               </TooltipContent>
                             </Tooltip>
                           </span>

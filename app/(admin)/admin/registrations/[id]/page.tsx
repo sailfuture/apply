@@ -14,6 +14,7 @@ import {
   ExternalLink,
   FileText,
   FileUp,
+  HelpCircle,
   Loader2,
   Pencil,
   Plus,
@@ -24,6 +25,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { PhoneInput } from "@/components/ui/phone-input";
@@ -2095,11 +2097,43 @@ function TuitionBreakdownTable({
               {/* Per-student tuition cost under the Opportunity
                   Scholarship determination — surfaces the same value
                   baked into the subtotal below, broken out as its own
-                  row. Gated on the family being on the OS path. */}
-              {isOpportunityScholarshipFamily ? (
+                  row. Renders for OS families and for SNAP families
+                  (the SNAP path zeroes out the per-student cost;
+                  tooltip explains why). */}
+              {isOpportunityScholarshipFamily ||
+              scholarship.isSNAPBenefits ? (
                 <tr className="border-t">
                   <td className="px-4 py-3 text-muted-foreground">
-                    Opportunity Scholarship (Cost Per Student)
+                    <span className="inline-flex items-center gap-1.5">
+                      Opportunity Scholarship (Cost Per Student)
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button
+                            type="button"
+                            className="inline-flex text-muted-foreground/50 hover:text-muted-foreground transition-colors"
+                          >
+                            <HelpCircle className="size-3.5" />
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent
+                          side="top"
+                          className="max-w-xs text-xs"
+                        >
+                          {scholarship.isSNAPBenefits ? (
+                            <p>
+                              SNAP-qualified families do not have to pay
+                              tuition — the Opportunity Scholarship covers
+                              the full per-student tuition cost.
+                            </p>
+                          ) : (
+                            <p>
+                              The per-student tuition portion the family pays
+                              under the Opportunity Scholarship determination.
+                            </p>
+                          )}
+                        </TooltipContent>
+                      </Tooltip>
+                    </span>
                   </td>
                   <td className="px-4 py-3 text-right font-medium">
                     ${formatTuitionCurrency(row.familyPaysForTuition)}
