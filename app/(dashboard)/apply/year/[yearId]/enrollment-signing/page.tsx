@@ -34,7 +34,6 @@ export default function EnrollmentSigningPage() {
   // section-complete latch all live here.
   const {
     progress: regProgress,
-    setSection: setRegSection,
     patchProgress: patchRegProgress,
   } = useStudentRegistrationProgress(yearId);
   const { data: familyData } = useFamily();
@@ -359,38 +358,23 @@ export default function EnrollmentSigningPage() {
         </div>
       )}
 
-      {/* Post-signing actions — replaces the layout's "Section Completed"
-          button with two explicit options: view the signed PDF or restart
-          the signing flow. Layout is 50/50 on mobile, inline on sm+. */}
-      {isCompleted && (
-        <div className="grid grid-cols-2 gap-2 border-t pt-6 pb-6">
-          {pdfUrl ? (
-            <Button
-              variant="outline"
-              className="w-full bg-white"
-              onClick={() => window.open(pdfUrl, "_blank")}
-            >
-              View Document
-            </Button>
-          ) : (
-            <div />
-          )}
+      {/* Post-signing action — replaces the layout's "Section Completed"
+          button with a View Document link to the signed PDF. The
+          "Re-Sign Document" affordance used to live here too, but it
+          409'd on the PandaDoc create endpoint (which rejects re-creating
+          an already-signed doc) and there's no sane re-sign flow — once
+          PandaDoc has the signed envelope, the parent can't legally
+          replace it with a fresh signing session anyway. Admin can void
+          the agreement from the PandaDoc dashboard if a re-sign is
+          actually needed. */}
+      {isCompleted && pdfUrl && (
+        <div className="border-t pt-6 pb-6">
           <Button
             variant="outline"
             className="w-full bg-white"
-            onClick={async () => {
-              // Re-sign = un-latch the bool so the page swaps back to the
-              // signing embed, then start a fresh PandaDoc session.
-              autoInitRef.current = false;
-              try {
-                await setRegSection("isEnrollment", false);
-                await handleSign();
-              } catch (err) {
-                console.error("Failed to start re-sign:", err);
-              }
-            }}
+            onClick={() => window.open(pdfUrl, "_blank")}
           >
-            Re-Sign Document
+            View Document
           </Button>
         </div>
       )}
