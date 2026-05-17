@@ -68,6 +68,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { FamilyNotesSheet } from "@/components/admin/family-notes-sheet";
+import { BillingCard } from "@/components/admin/billing-card";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { cn } from "@/lib/utils";
 import {
@@ -524,6 +525,33 @@ export default function FamilyRegistrationDetailPage() {
             }}
           >
             <EnrollmentAgreementBlock progress={progress} />
+          </SectionShell>
+        </section>
+
+        {/* Billing — Stripe subscription state, invoice history, and
+            admin actions (pause / resume / cancel at period end /
+            update amount / refund last payment). Lives directly after
+            Enrollment because billing follows the signed agreement.
+            All data reads live from the Stripe API on page load — no
+            Xano mirror to keep in sync. Empty state when the parent
+            hasn't completed Payment Setup yet. */}
+        <section id="section-billing" className="scroll-mt-20">
+          <SectionShell
+            title="Billing"
+            status={familyPayment?.isStripeSetup === true ? "complete" : "in_progress"}
+            notes={{
+              familyId: Number(family?.id ?? familyId),
+              yearId: Number(yearId),
+              section: "section-billing",
+              title: "Notes — Billing",
+            }}
+          >
+            <BillingCard
+              familyId={Number(family?.id ?? familyId)}
+              yearId={Number(yearId)}
+              currentMonthlyTuition={familyPayment?.monthly_tuition_payment ?? null}
+              isSetup={familyPayment?.isStripeSetup === true}
+            />
           </SectionShell>
         </section>
 

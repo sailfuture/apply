@@ -23,6 +23,9 @@ const STRING_FIELDS: (keyof XanoSchoolYear)[] = [
   "end_date",
   "application_deadline",
   "opportunity_scholarship_deadline",
+  // `billing_start_date` is an ISO `YYYY-MM-DD` string — Stripe's
+  // billing anchor for every Subscription tied to this year.
+  "billing_start_date",
 ];
 
 const BOOL_FIELDS: (keyof XanoSchoolYear)[] = [

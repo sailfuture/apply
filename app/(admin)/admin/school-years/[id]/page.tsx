@@ -198,6 +198,10 @@ interface YearForm {
   end_date: string;
   application_deadline: string;
   opportunity_scholarship_deadline: string;
+  /** Annual billing-cycle anchor (ISO `YYYY-MM-DD`). Drives Stripe
+   *  Subscriptions' `trial_end` so the first monthly charge defers
+   *  to this date for families who finish enrollment earlier. */
+  billing_start_date: string;
   status: YearStatus;
   tuition: number;
   annual_fees: number;
@@ -221,6 +225,7 @@ function fromXano(y: XanoSchoolYear): YearForm {
     application_deadline: y.application_deadline ?? "",
     opportunity_scholarship_deadline:
       y.opportunity_scholarship_deadline ?? "",
+    billing_start_date: y.billing_start_date ?? "",
     status: deriveStatus(y),
     tuition: y.tuition ?? 0,
     annual_fees: y.annual_fees ?? 0,
@@ -276,6 +281,7 @@ function YearMetadataCard({
           application_deadline: form.application_deadline || null,
           opportunity_scholarship_deadline:
             form.opportunity_scholarship_deadline || null,
+          billing_start_date: form.billing_start_date || null,
           tuition: form.tuition,
           annual_fees: form.annual_fees,
           transportation_fees: form.transportation_fees,
@@ -439,6 +445,24 @@ function YearMetadataCard({
                 }
                 className="border-input disabled:opacity-100 disabled:bg-white disabled:cursor-default"
               />
+            </Field>
+            <Field>
+              <FieldLabel className="text-xs">Billing start date</FieldLabel>
+              <Input
+                type="date"
+                value={form.billing_start_date}
+                disabled={!editing}
+                onChange={(e) =>
+                  patch("billing_start_date", e.target.value)
+                }
+                className="border-input disabled:opacity-100 disabled:bg-white disabled:cursor-default"
+              />
+              <FieldDescription>
+                Annual anchor for Stripe Subscriptions. Families who
+                finish enrollment before this date are billed starting
+                on this day (no upfront charge). After this date,
+                families are billed immediately on enrollment.
+              </FieldDescription>
             </Field>
           </div>
         </Section>

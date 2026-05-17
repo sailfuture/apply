@@ -41,6 +41,14 @@ export interface XanoFamily {
   registration_students_id: (number | Record<string, unknown> | unknown[])[];
   registration_parents_id: (number | Record<string, unknown> | unknown[])[];
   registration_fee_waiver_id: number | null;
+  /** Stripe Customer id (e.g. `cus_NeHy7gPCu53J9p`). Long-lived,
+   *  shared across academic years — one Customer per family. Null
+   *  until the family completes their first payment-setup flow.
+   *  Subscriptions for individual years carry their own
+   *  `stripe_subscription_id` on `registration_families_payment`,
+   *  but they all attach to this single Customer. Optional on the
+   *  type because legacy rows pre-date the column. */
+  stripe_customer_id?: string | null;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -375,6 +383,18 @@ export interface XanoSchoolYear {
    *  applications list. Optional on the type because legacy rows
    *  pre-date the column; treat missing as `null` / closed. */
   reapplications_opened_at?: number | null;
+  /** Date the annual billing cycle starts (e.g. `"2025-08-01"`).
+   *  Passed to Stripe as the Subscription's `trial_end` so the first
+   *  charge defers until this date — families enrolling earlier in
+   *  the year don't get billed upfront. Subscriptions created on or
+   *  after this date charge immediately (no trial).
+   *
+   *  Format: ISO date string `YYYY-MM-DD`. Parsed as midnight UTC so
+   *  the anchor is deterministic across the admin's local timezone
+   *  and Stripe's server clock. Optional on the type because legacy
+   *  rows pre-date the column; the Stripe Checkout flow refuses to
+   *  start when this is null for a year with re-applications open. */
+  billing_start_date?: string | null;
 }
 
 export interface XanoFamilyPayment {
@@ -422,6 +442,29 @@ export interface XanoFamilyPayment {
   enrollment_agreement_sent_at: string | null;
   enrollment_agreement_pdf_url: string;
   is_enrollment_agreement_signed: boolean;
+  /** Stripe Subscription id (`sub_...`). One per family per year —
+   *  this row is per-(family, year), so the id is naturally scoped.
+   *  Stamped by the Stripe webhook handler when Checkout completes:
+   *  `checkout.session.completed` carries the subscription id, we
+   *  PATCH it back here. Null until then.
+   *
+   *  The subscription itself uses inline `price_data` carrying the
+   *  family's scholarship-adjusted monthly amount, so no pre-created
+   *  Stripe Price object exists per family — the amount lives only
+   *  on the SubscriptionItem. Admin reads live from Stripe API
+   *  (`stripe.subscriptions.retrieve`) for status displays.
+   *
+   *  Optional on the type because legacy rows pre-date the column. */
+  stripe_subscription_id?: string | null;
+  /** Latches `true` when payment setup has completed (the
+   *  `checkout.session.completed` webhook event fires and we
+   *  successfully store the subscription id). Parallels the existing
+   *  `is_enrollment_agreement_signed` flag — same pattern, same row,
+   *  different third-party service. The registration step-nav reads
+   *  this to gate the Payment Setup step.
+   *
+   *  Optional on the type because legacy rows pre-date the column. */
+  isStripeSetup?: boolean;
 }
 
 /** Single volunteer-hour entry for a family. Rows are created by admin
