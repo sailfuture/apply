@@ -87,19 +87,20 @@ export default function FamilyOverviewPage() {
   const familyName =
     family.family_name?.trim() || `Family #${family.id}`;
 
-  // Group applications by school year id so each year reads as one
-  // row in the Applications card. Year names need a lookup since
-  // the application row only carries the id; the per-year detail
-  // page handles that, but here we just show the id as a fallback
-  // when name resolution isn't available.
-  const appsByYear = new Map<number, typeof applications>();
+  // Per-student "latest year with an active app" lookup — drives the
+  // Students table's clickable links. Clicking a student row jumps to
+  // the per-student enrolled detail page, scoped to their most recent
+  // school year. We pick the highest year id from the family's
+  // applications because that's the most recently submitted cycle
+  // (school years are seeded chronologically). Students with no
+  // applications fall through to a non-clickable row.
+  const latestYearByStudent = new Map<number, number>();
   for (const a of applications) {
+    const sid = Number(a.registration_students_id);
     const yid = Number(a.registration_school_years_id);
-    const arr = appsByYear.get(yid) ?? [];
-    arr.push(a);
-    appsByYear.set(yid, arr);
+    const prev = latestYearByStudent.get(sid) ?? 0;
+    if (yid > prev) latestYearByStudent.set(sid, yid);
   }
-  const yearIdsDesc = Array.from(appsByYear.keys()).sort((a, b) => b - a);
 
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-6">
@@ -210,7 +211,11 @@ export default function FamilyOverviewPage() {
       {/* Students — every student associated with the family
           regardless of year. Archive / enrollment state surface
           as pills so admin can see at a glance which students are
-          active, accepted, enrolled, or unenrolled. */}
+          active, accepted, enrolled, or unenrolled. Each row is
+          clickable and routes into the per-student enrolled detail
+          page scoped to that student's most recent school year —
+          replaces the standalone Applications table below that
+          previously surfaced cross-year app status. */}
       <Card className="overflow-hidden gap-0 py-0 bg-white">
         <CardHeader className="py-3 !pb-3 border-b">
           <CardTitle className="text-base">Students</CardTitle>
@@ -239,6 +244,7 @@ export default function FamilyOverviewPage() {
                   <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
                     Status
                   </TableHead>
+                  <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground text-right w-10" />
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -249,12 +255,30 @@ export default function FamilyOverviewPage() {
                   const dob = s.date_of_birth
                     ? new Date(`${s.date_of_birth}T00:00:00`).toLocaleDateString()
                     : "—";
+                  const latestYear = latestYearByStudent.get(s.id);
+                  const href = latestYear
+                    ? `/admin/enrolled/${s.id}?yearId=${latestYear}`
+                    : null;
                   return (
                     <TableRow
                       key={s.id}
-                      className={cn(s.isArchived && "bg-muted/30")}
+                      className={cn(
+                        s.isArchived && "bg-muted/30",
+                        href && "cursor-pointer hover:bg-muted/30"
+                      )}
                     >
-                      <TableCell className="font-medium">{name}</TableCell>
+                      <TableCell className="font-medium p-0">
+                        {href ? (
+                          <Link
+                            href={href}
+                            className="block px-4 py-3 hover:underline"
+                          >
+                            {name}
+                          </Link>
+                        ) : (
+                          <span className="block px-4 py-3">{name}</span>
+                        )}
+                      </TableCell>
                       <TableCell className="text-muted-foreground">
                         {dob}
                       </TableCell>
@@ -266,6 +290,17 @@ export default function FamilyOverviewPage() {
                       </TableCell>
                       <TableCell>
                         <StudentStatusPills student={s} />
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {href ? (
+                          <Link
+                            href={href}
+                            className="inline-flex text-muted-foreground hover:text-foreground"
+                            aria-label={`Open ${name} detail`}
+                          >
+                            <ExternalLink className="size-3.5" />
+                          </Link>
+                        ) : null}
                       </TableCell>
                     </TableRow>
                   );
@@ -364,112 +399,12 @@ export default function FamilyOverviewPage() {
         </CardContent>
       </Card>
 
-      {/* Applications — every per-year app the family has
-          submitted. Click any row to jump to the year-scoped
-          family detail page. Grouped by year (descending) so
-          the most recent cycle is at the top. */}
-      <Card className="overflow-hidden gap-0 py-0 bg-white">
-        <CardHeader className="py-3 !pb-3 border-b">
-          <div className="flex items-center justify-between gap-3">
-            <CardTitle className="text-base">Applications</CardTitle>
-            <span className="text-xs tabular-nums text-muted-foreground">
-              ({applications.length})
-            </span>
-          </div>
-        </CardHeader>
-        <CardContent className="py-0 px-0 bg-white">
-          {applications.length === 0 ? (
-            <p className="text-sm italic text-muted-foreground px-5 py-4">
-              No applications on file for this family.
-            </p>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow className="hover:bg-transparent">
-                  <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                    School year
-                  </TableHead>
-                  <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                    Student
-                  </TableHead>
-                  <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                    Grade
-                  </TableHead>
-                  <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                    Status
-                  </TableHead>
-                  <TableHead className="text-right text-[10px] uppercase tracking-wider text-muted-foreground">
-                    Open
-                  </TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {yearIdsDesc.map((yearId) => {
-                  const yearApps = appsByYear.get(yearId) ?? [];
-                  return yearApps.map((app, idx) => {
-                    const student = students.find(
-                      (s) => s.id === Number(app.registration_students_id)
-                    );
-                    const studentName = student
-                      ? `${student.first_name ?? ""} ${student.last_name ?? ""}`.trim() ||
-                        `Student #${student.id}`
-                      : `Student #${app.registration_students_id}`;
-                    const status = app.isAccepted
-                      ? "Accepted"
-                      : app.isDenied
-                        ? "Denied"
-                        : app.isOffered
-                          ? "Offered"
-                          : app.isSubmitted
-                            ? "Submitted"
-                            : "Draft";
-                    return (
-                      <TableRow key={app.id}>
-                        {/* First app in the year carries the year
-                            label; subsequent apps for the same year
-                            leave the cell blank so the year reads as
-                            a group header. */}
-                        <TableCell
-                          className={cn(
-                            "font-medium tabular-nums",
-                            idx > 0 && "text-muted-foreground/50"
-                          )}
-                        >
-                          {idx === 0 ? `Year ${yearId}` : ""}
-                        </TableCell>
-                        <TableCell>{studentName}</TableCell>
-                        <TableCell className="text-muted-foreground">
-                          {app.current_grade || "—"}
-                        </TableCell>
-                        <TableCell>
-                          <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                            {status}
-                          </span>
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <Button
-                            asChild
-                            variant="outline"
-                            size="sm"
-                            className="bg-white"
-                          >
-                            <Link
-                              href={`/admin/families/${family.id}?yearId=${yearId}`}
-                            >
-                              Open year
-                              <ExternalLink className="size-3.5 ml-1.5" />
-                            </Link>
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  });
-                })}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
+      {/* Applications table retired — clicking a student row in the
+          card above takes admin into the per-student enrolled detail
+          page, where per-year status + drill-down lives. Cross-year
+          family workspace still reachable via the "Open year"
+          buttons elsewhere; this overview surface stays focused on
+          the family-level summary. */}
     </div>
   );
 }
