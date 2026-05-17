@@ -271,18 +271,23 @@ export default function FamilyRegistrationDetailPage() {
       completed: !!progress?.isEnrollment,
       verified: progress?.enrollment_admin_confirm === true,
     },
-    // Registration completion = every active student has a packet
-    // started. Admin verify = the family-level
-    // `is_registration_admin_confirm` flag is set — distinct from
-    // the per-student `registrationConfirmed` flags below, which
+    // Registration completion mirrors the parent-side
+    // `isRegistration` flag on `registration_student_registration_progress`.
+    // The old check ("every active student has a packet started")
+    // lit green the moment a packet ROW existed for each student —
+    // but packet rows are resolved-or-created on first access, so
+    // they exist long before the parent has finished filling
+    // anything in. That made the admin nav read as "Registration:
+    // Complete" while the parent was still working through the
+    // form. Aligning the admin signal with the parent's own
+    // completion bool keeps the two views honest.
+    //
+    // Admin verify still goes on the family-level
+    // `is_registration_admin_confirm` pin — distinct from the
+    // per-student `registrationConfirmed` flags on each packet, which
     // each track their own verify state on the per-student card.
-    // The family-level verify is admin's "I've reviewed the whole
-    // section" pin; the per-student verifies are the deeper "this
-    // student's packet specifically is good" stamps. Both signals
-    // surface independently in the nav.
     registration: {
-      completed:
-        students.length > 0 && students.every((s) => !!s.packet),
+      completed: progress?.isRegistration === true,
       verified: progress?.is_registration_admin_confirm === true,
     },
     // Emergency contacts has no parent-completion bool — it's
@@ -2201,7 +2206,6 @@ function EnrollmentAgreementBlock({
   const pdId = progress?.enrollment_agreement_pandadoc_id ?? "";
   const pdStatus = progress?.enrollment_agreement_status ?? "";
   const pdSent = progress?.enrollment_agreement_sent;
-  const pdfUrl = progress?.enrollment_agreement_pdf_url ?? "";
   const isSigned = !!progress?.is_enrollment_agreement_signed;
   // Printed name on the enrollment agreement reuses the family-level
   // `name` field on the progress row; the parent flow writes both
@@ -2239,10 +2243,33 @@ function EnrollmentAgreementBlock({
             placeholder="—"
             required={isSigned}
           />
-          <SignaturePreview
-            label="Signature"
-            signature={progress?.signature_data ?? null}
-          />
+          {/* Signature evidence: the enrollment agreement is signed
+              via PandaDoc, so `progress.signature_data` (the legacy
+              "draw or type" field from the retired families_payment
+              table) never gets written for this flow. Showing a
+              "Not signed" placeholder under a Signed envelope was
+              misleading. Once the envelope is completed, the
+              signature lives inside the PandaDoc PDF — surface a
+              clear "captured via PandaDoc" line and rely on the
+              Download PDF button below to expose the actual mark.
+              On not-yet-signed envelopes the legacy preview still
+              renders so any stale signature_data (from older flows)
+              isn't lost. */}
+          {isSigned ? (
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">
+                Signature
+              </p>
+              <p className="text-sm text-muted-foreground">
+                Captured via PandaDoc — see the signed PDF below.
+              </p>
+            </div>
+          ) : (
+            <SignaturePreview
+              label="Signature"
+              signature={progress?.signature_data ?? null}
+            />
+          )}
         </div>
       </SectionGroup>
       {/* Signed PDF download. Previously rendered an inline
