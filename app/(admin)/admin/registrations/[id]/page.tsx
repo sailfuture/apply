@@ -1925,6 +1925,11 @@ function tuitionStatusBadge(status: string) {
  * has to agree with the parent's view to the penny, so we
  * deliberately re-implement the same formula here rather than
  * importing partial fragments and risking drift.
+ *
+ * Transportation is no longer a separate line item — it's been
+ * rolled into the annual tuition figure. SNAP families still get
+ * full OS coverage; their `opportunity_scholarship_award_amount`
+ * is just 0, so the subtotal naturally collapses to the admin fee.
  */
 function TuitionBreakdownTable({
   students,
@@ -1938,10 +1943,10 @@ function TuitionBreakdownTable({
    *  `opportunity_scholarship_award_amount` is null on purpose
    *  (admin doesn't enter a number — the Opportunity Scholarship
    *  covers whatever's left after SUFS). This block then renders
-   *  the COMPUTED coverage (`tuition + transport - SUFS`) on the
-   *  Opportunity Scholarship Award line instead of "—", and
-   *  subtotals collapse transport into the scholarship the same
-   *  way the apply-flow Tuition Breakdown does. */
+   *  the COMPUTED coverage (`tuition - SUFS`) on the
+   *  Opportunity Scholarship Award line instead of "—". The
+   *  per-student Cost Per Student line is gated on the family
+   *  being on the OS path (`isOpportunityScholarship`). */
   scholarship: AdminFamilyRegistrationResponse["scholarship"];
 }) {
   if (students.length === 0) {
@@ -1949,26 +1954,24 @@ function TuitionBreakdownTable({
   }
   const tuition = schoolYear.tuition ?? 0;
   const adminFees = schoolYear.annual_fees ?? 0;
-  const transportFees = schoolYear.transportation_fees ?? 0;
   // SNAP families with the SNAP award letter admin-confirmed get
   // the auto-coverage treatment. Pre-confirm SNAP families still
   // read the raw column so a half-set-up row doesn't get a
   // computed coverage that admin hasn't actually approved.
   const isSnapAutoCover =
     scholarship.isSNAPBenefits && scholarship.is_snap_confirmed;
+  const isOpportunityScholarshipFamily =
+    scholarship.isOpportunityScholarship === true;
 
   const rows = students.map((s) => {
     const sufsField = SUFS_FIELDS[s.sufs_type];
     const stepUpAmount = sufsField
       ? (schoolYear[sufsField] as number | undefined) ?? 0
       : 0;
-    const usesTransport = !!s.is_bus_transportation;
-    const transportApplicable = usesTransport ? transportFees : 0;
     // Opportunity Scholarship Award column. Two paths:
-    //   - SNAP-confirmed → compute the coverage = tuition (+
-    //     transport if applicable) - SUFS - whatever the family
-    //     pays. Mirrors the apply-flow Tuition Breakdown's SNAP
-    //     branch byte-for-byte.
+    //   - SNAP-confirmed → compute the coverage = tuition - SUFS
+    //     - whatever the family pays. Mirrors the apply-flow
+    //     Tuition Breakdown's SNAP branch byte-for-byte.
     //   - Anyone else → read the per-app number admin entered
     //     (null reads as "no Opportunity Scholarship award on
     //     this row," i.e. the regular Opportunity Scholarship
@@ -1977,18 +1980,9 @@ function TuitionBreakdownTable({
     const familyPaysForTuition =
       s.opportunity_scholarship_award_amount ?? 0;
     const scholarshipAmount: number | null = isSnapAutoCover
-      ? Math.max(
-          0,
-          tuition + transportApplicable - stepUpAmount - familyPaysForTuition
-        )
+      ? Math.max(0, tuition - stepUpAmount - familyPaysForTuition)
       : s.opportunity_scholarship_award_amount;
-    // Subtotal math also splits on SNAP. SNAP families collapse
-    // transport into the scholarship (their subtotal = admin fee
-    // only); everyone else carries transport through as a paid
-    // line.
-    const subtotal = isSnapAutoCover
-      ? familyPaysForTuition + adminFees
-      : familyPaysForTuition + adminFees + transportApplicable;
+    const subtotal = familyPaysForTuition + adminFees;
     return {
       studentName: s.student_full_name,
       tuition,
@@ -1997,15 +1991,8 @@ function TuitionBreakdownTable({
       stepUpAmount,
       scholarshipAmount,
       adminFees,
-      transportFees,
-      usesTransport,
-      busStop: s.bus_stop,
+      familyPaysForTuition,
       subtotal,
-      // SNAP families render the transport line as auto-covered
-      // ("Included") instead of $0 / N/A — separate flag so the
-      // table copy can spell it out for admin without inferring
-      // it from a 0 amount.
-      transportAutoCovered: isSnapAutoCover && usesTransport,
     };
   });
   const grandTotal = rows.reduce((sum, r) => sum + r.subtotal, 0);
@@ -2047,35 +2034,6 @@ function TuitionBreakdownTable({
                 </td>
                 <td className="px-4 py-3 text-right font-medium">
                   ${formatTuitionCurrency(row.adminFees)}
-                </td>
-              </tr>
-
-              {/* Transportation Fee — SNAP auto-cover families get
-                  an "Included" pill on the right since the
-                  Opportunity Scholarship absorbs transport into its
-                  coverage; non-SNAP riders show the dollar amount;
-                  non-riders show em dash. */}
-              <tr className="border-t">
-                <td className="px-4 py-3 text-muted-foreground">
-                  <span className="inline-flex items-center gap-1.5">
-                    Transportation Fee
-                    {!row.usesTransport ? (
-                      <span className="text-xs text-muted-foreground/60">
-                        (N/A)
-                      </span>
-                    ) : null}
-                  </span>
-                </td>
-                <td className="px-4 py-3 text-right font-medium">
-                  {row.transportAutoCovered ? (
-                    <span className="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700">
-                      Included
-                    </span>
-                  ) : row.usesTransport ? (
-                    `$${formatTuitionCurrency(row.transportFees)}`
-                  ) : (
-                    <span className="text-muted-foreground">—</span>
-                  )}
                 </td>
               </tr>
 
@@ -2133,6 +2091,21 @@ function TuitionBreakdownTable({
                   )}
                 </td>
               </tr>
+
+              {/* Per-student tuition cost under the Opportunity
+                  Scholarship determination — surfaces the same value
+                  baked into the subtotal below, broken out as its own
+                  row. Gated on the family being on the OS path. */}
+              {isOpportunityScholarshipFamily ? (
+                <tr className="border-t">
+                  <td className="px-4 py-3 text-muted-foreground">
+                    Opportunity Scholarship (Cost Per Student)
+                  </td>
+                  <td className="px-4 py-3 text-right font-medium">
+                    ${formatTuitionCurrency(row.familyPaysForTuition)}
+                  </td>
+                </tr>
+              ) : null}
 
               {/* Student subtotal */}
               <tr className="border-t bg-muted/20">

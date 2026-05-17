@@ -212,6 +212,19 @@ export async function PATCH(req: NextRequest) {
       }
     }
 
+    // Revoke preserves submission. When admin revokes acceptance
+    // (`isAccepted = false`), force `isSubmitted = true` so the
+    // family lands back in the "Application Submitted / Under
+    // Review" view rather than the editable apply step table.
+    // Symmetric with the accept path above — accept implies
+    // submitted, so revoking the accept shouldn't also undo the
+    // submission. Admin who actually wants the family back in the
+    // editable flow uses the separate "Return Application"
+    // affordance, which patches `isSubmitted = false` explicitly.
+    if (patch.isAccepted === false) {
+      if (patch.isSubmitted === undefined) patch.isSubmitted = true;
+    }
+
     // Auto-stamp the audit pair + cascade to parent-completion for
     // every section-confirm bool that appears in the patch.
     //

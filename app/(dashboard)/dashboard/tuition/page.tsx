@@ -2,7 +2,13 @@
 
 import { Fragment, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
-import { useStudents, useApplications, useSchoolYears } from "@/hooks/use-api";
+import {
+  useStudents,
+  useApplications,
+  useSchoolYears,
+  useFamily,
+  useScholarship,
+} from "@/hooks/use-api";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { HelpCircle } from "lucide-react";
@@ -38,12 +44,16 @@ interface StudentRow {
   stepUpStatus: string;
   stepUpType: string;
   stepUpAmount: number;
+  /** OS coverage (what the scholarship pays). Displayed as a negative
+   *  discount on the breakdown. */
   scholarshipAmount: number | null;
   remaining: number;
   adminFees: number;
-  transportFees: number;
-  usesTransport: boolean;
-  busStop: string;
+  /** Per-student tuition portion the family pays under the
+   *  Opportunity Scholarship determination — surfaced as its own
+   *  line when the family is on the OS path. Same value baked into
+   *  `subtotal`. */
+  familyPaysForTuition: number;
   subtotal: number;
 }
 
@@ -101,6 +111,7 @@ export default function DashboardTuitionPage() {
   const { data: students } = useStudents();
   const { data: applications } = useApplications();
   const { data: yearsData } = useSchoolYears();
+  const { data: familyData } = useFamily();
 
   // Defensive fallback: if no `?yearId` was passed (e.g. parent landed
   // here from a stale link), pick the most recent year that this family
@@ -123,6 +134,21 @@ export default function DashboardTuitionPage() {
   const yearId = resolvedYearId;
   const dashboardHref = yearId ? `/dashboard?yearId=${yearId}` : "/dashboard";
 
+  // Scholarship row drives the Opportunity Scholarship breakout —
+  // when the family is on the OS path we render a dedicated
+  // "Opportunity Scholarship (Cost Per Student)" line right above
+  // the subtotal so the parent sees what they're paying for tuition
+  // under the determination, separately from the OS coverage line.
+  const familyIdForScholarship =
+    (familyData as { id?: number } | undefined)?.id ?? null;
+  const { data: scholarshipData } = useScholarship(
+    familyIdForScholarship,
+    yearId
+  );
+  const isOpportunityScholarshipFamily =
+    (scholarshipData as { isOpportunityScholarship?: boolean } | null)
+      ?.isOpportunityScholarship === true;
+
   const schoolYear = useMemo(() => {
     if (!yearsData || !yearId) return null;
     return (
@@ -142,8 +168,6 @@ export default function DashboardTuitionPage() {
       applications as {
         registration_school_years_id: number;
         registration_students_id: number;
-        is_bus_transportation?: boolean;
-        bus_stop?: string;
         sufs_status?: string;
         sufs_type?: string;
         opportunity_scholarship_award_amount?: number;
@@ -161,22 +185,27 @@ export default function DashboardTuitionPage() {
 
       const tuition = (sy.tuition as number) ?? 0;
       const adminFees = (sy.annual_fees as number) ?? 0;
-      const transportFees = (sy.transportation_fees as number) ?? 0;
 
       const sufsType = app.sufs_type ?? "";
       const sufsField = SUFS_FIELDS[sufsType];
       const stepUpAmount =
         sufsField && sy[sufsField] ? (sy[sufsField] as number) : 0;
       const stepUpStatus = app.sufs_status ?? "";
-      const scholarshipAmount = app.opportunity_scholarship_award_amount ?? null;
 
-      const remaining = Math.max(
+      // Match the registration tuition page + admin breakdown
+      // semantics: `opportunity_scholarship_award_amount` is the
+      // per-student tuition portion the *family* pays under the OS
+      // determination — NOT a discount. OS coverage is what remains
+      // of tuition after SUFS and the family's portion. Transport is
+      // no longer a separate line; it's been rolled into the tuition
+      // figure itself.
+      const familyPaysForTuition =
+        app.opportunity_scholarship_award_amount ?? 0;
+      const scholarshipCoverage = Math.max(
         0,
-        tuition - stepUpAmount - (scholarshipAmount ?? 0)
+        tuition - stepUpAmount - familyPaysForTuition
       );
-      const usesTransport = !!app.is_bus_transportation;
-      const subtotal =
-        remaining + adminFees + (usesTransport ? transportFees : 0);
+      const subtotal = familyPaysForTuition + adminFees;
 
       rows.push({
         studentName: `${student.first_name} ${student.last_name}`,
@@ -184,12 +213,10 @@ export default function DashboardTuitionPage() {
         stepUpStatus,
         stepUpType: sufsType,
         stepUpAmount,
-        scholarshipAmount,
-        remaining,
+        scholarshipAmount: scholarshipCoverage,
+        remaining: scholarshipCoverage,
         adminFees,
-        transportFees,
-        usesTransport,
-        busStop: app.bus_stop ?? "",
+        familyPaysForTuition,
         subtotal,
       });
     }
@@ -387,55 +414,43 @@ export default function DashboardTuitionPage() {
                       </td>
                     </tr>
 
-                    {/* Transport Fee */}
-                    <tr className="border-t">
-                      <td className="px-4 py-3 text-muted-foreground">
-                        <span className="inline-flex items-center gap-1.5">
-                          Transportation Fee
-                          {!row.usesTransport && (
-                            <span className="text-xs text-muted-foreground/60">
-                              (N/A)
-                            </span>
-                          )}
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <button
-                                type="button"
-                                className="inline-flex text-muted-foreground/50 hover:text-muted-foreground transition-colors"
+                    {/* Opportunity Scholarship cost per student — the
+                        per-student tuition portion the family pays under
+                        the OS determination. Same value baked into the
+                        subtotal below, broken out as its own row so the
+                        parent sees the tuition cost before fees. Gated
+                        on the family being on the OS path. */}
+                    {isOpportunityScholarshipFamily ? (
+                      <tr className="border-t">
+                        <td className="px-4 py-3 text-muted-foreground">
+                          <span className="inline-flex items-center gap-1.5">
+                            Opportunity Scholarship (Cost Per Student)
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <button
+                                  type="button"
+                                  className="inline-flex text-muted-foreground/50 hover:text-muted-foreground transition-colors"
+                                >
+                                  <HelpCircle className="size-3.5" />
+                                </button>
+                              </TooltipTrigger>
+                              <TooltipContent
+                                side="top"
+                                className="max-w-xs text-xs"
                               >
-                                <HelpCircle className="size-3.5" />
-                              </button>
-                            </TooltipTrigger>
-                            <TooltipContent
-                              side="top"
-                              className="max-w-xs text-xs"
-                            >
-                              {row.usesTransport ? (
                                 <p>
-                                  Bus transportation has been selected for this
-                                  student.
-                                  {row.busStop
-                                    ? ` Assigned bus stop: ${row.busStop}.`
-                                    : ""}
+                                  The per-student tuition portion you pay under
+                                  the Opportunity Scholarship determination.
                                 </p>
-                              ) : (
-                                <p>
-                                  Bus transportation was not selected for this
-                                  student. This fee does not apply.
-                                </p>
-                              )}
-                            </TooltipContent>
-                          </Tooltip>
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-right font-medium">
-                        {row.usesTransport ? (
-                          `$${formatCurrency(row.transportFees)}`
-                        ) : (
-                          <span className="text-muted-foreground">—</span>
-                        )}
-                      </td>
-                    </tr>
+                              </TooltipContent>
+                            </Tooltip>
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-right font-medium">
+                          ${formatCurrency(row.familyPaysForTuition)}
+                        </td>
+                      </tr>
+                    ) : null}
 
                     {/* Student subtotal */}
                     <tr className="border-t bg-muted/20">

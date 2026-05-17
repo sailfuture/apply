@@ -3876,7 +3876,9 @@ function DecisionCard({
             students={students}
             apps={apps}
             schoolYear={schoolYear}
-            isSnapFamily={scholarship?.isSNAPBenefits === true}
+            isOpportunityScholarshipFamily={
+              scholarship?.isOpportunityScholarship === true
+            }
           />
         </CardContent>
         {/* Footer mirrors the SectionConfirmFooter pattern: divider
@@ -4201,14 +4203,21 @@ function DecisionCard({
  * family will see — the two surfaces share the same math:
  *
  *   familyPaysForTuition = opportunity_scholarship_award_amount ?? 0
- *   scholarshipCoverage  = (SNAP ? tuition + transport : tuition)
- *                          − SUFS − familyPaysForTuition
+ *   scholarshipCoverage  = tuition − SUFS − familyPaysForTuition
  *   subtotal             = familyPaysForTuition + adminFee
- *                          + (SNAP ? 0 : transport)
  *
- * SNAP path bumps the OS coverage to absorb transport so the
- * subtotal collapses to the annual admin fee — same behavior the
- * family-payment row writes (`transportation_total = null`).
+ * Transportation is no longer a separate line item — it's been
+ * rolled into the annual tuition figure, so the SNAP-vs-non-SNAP
+ * branching that used to handle the extra transport line is gone
+ * too. SNAP families still get full OS coverage; their
+ * `opportunity_scholarship_award_amount` is just 0, so the
+ * subtotal collapses to the annual admin fee on its own.
+ *
+ * `isOpportunityScholarshipFamily` gates a dedicated "Opportunity
+ * Scholarship (Cost Per Student)" line that surfaces what the
+ * family is paying for tuition under the OS determination — same
+ * value that's baked into subtotal, broken out as its own row so
+ * admin sees the per-student tuition cost before the totals.
  *
  * Active-only: students whose application row has `isActive=false`
  * (soft-deleted from the year) are filtered out so the receipt
@@ -4218,17 +4227,16 @@ function TuitionBreakdownTable({
   students,
   apps,
   schoolYear,
-  isSnapFamily,
+  isOpportunityScholarshipFamily,
 }: {
   students: Student[];
   apps: XanoApplication[];
   schoolYear: XanoSchoolYear | null;
-  isSnapFamily: boolean;
+  isOpportunityScholarshipFamily: boolean;
 }) {
   if (!schoolYear) return null;
   const tuition = schoolYear.tuition ?? 0;
   const adminFee = schoolYear.annual_fees ?? 0;
-  const transportFee = schoolYear.transportation_fees ?? 0;
 
   // Build one row group per active student; skip students whose app
   // is soft-deleted so the totals match the family-payment snapshot
@@ -4253,23 +4261,16 @@ function TuitionBreakdownTable({
     const stepUpStatus = app.sufs_status ?? "";
     const stepUpType = app.sufs_type ?? "";
     const familyPaysForTuition = app.opportunity_scholarship_award_amount ?? 0;
-    const usesTransport = !!app.is_bus_transportation;
-    const transportApplicable = usesTransport ? transportFee : 0;
-    const scholarshipCoverage = isSnapFamily
-      ? Math.max(
-          0,
-          tuition + transportApplicable - stepUpAmount - familyPaysForTuition
-        )
-      : Math.max(0, tuition - stepUpAmount - familyPaysForTuition);
-    const subtotal = isSnapFamily
-      ? familyPaysForTuition + adminFee
-      : familyPaysForTuition + adminFee + transportApplicable;
+    const scholarshipCoverage = Math.max(
+      0,
+      tuition - stepUpAmount - familyPaysForTuition
+    );
+    const subtotal = familyPaysForTuition + adminFee;
     return {
       studentName: `${student.first_name} ${student.last_name}`.trim(),
       tuition,
       adminFee,
-      transportFee,
-      usesTransport,
+      familyPaysForTuition,
       stepUpAmount,
       stepUpStatus,
       stepUpType,
@@ -4313,24 +4314,6 @@ function TuitionBreakdownTable({
                 </td>
                 <td className="px-4 py-3 text-right font-medium tabular-nums">
                   ${formatCurrency2(row.adminFee)}
-                </td>
-              </tr>
-
-              <tr className="border-t">
-                <td className="px-4 py-3 text-muted-foreground">
-                  Transportation Fee
-                  {!row.usesTransport ? (
-                    <span className="ml-1.5 text-xs text-muted-foreground/60">
-                      (N/A)
-                    </span>
-                  ) : null}
-                </td>
-                <td className="px-4 py-3 text-right font-medium tabular-nums">
-                  {row.usesTransport ? (
-                    `$${formatCurrency2(row.transportFee)}`
-                  ) : (
-                    <span className="text-muted-foreground">—</span>
-                  )}
                 </td>
               </tr>
 
@@ -4382,6 +4365,24 @@ function TuitionBreakdownTable({
                     : <span className="text-muted-foreground">—</span>}
                 </td>
               </tr>
+
+              {/* Per-student tuition cost under the Opportunity
+                  Scholarship determination — surfaces the same value
+                  that's baked into the subtotal below, broken out as
+                  its own row so admin sees what the family pays for
+                  tuition before any fees. Gated on the family being on
+                  the OS path; SNAP / opted-out paths don't carry a
+                  per-student cost in this sense. */}
+              {isOpportunityScholarshipFamily ? (
+                <tr className="border-t">
+                  <td className="px-4 py-3 text-muted-foreground">
+                    Opportunity Scholarship (Cost Per Student)
+                  </td>
+                  <td className="px-4 py-3 text-right font-medium tabular-nums">
+                    ${formatCurrency2(row.familyPaysForTuition)}
+                  </td>
+                </tr>
+              ) : null}
 
               <tr className="border-t bg-muted/20">
                 <td className="px-4 py-3 font-medium">
