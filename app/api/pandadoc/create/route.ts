@@ -101,32 +101,21 @@ export async function POST(req: NextRequest) {
   // deleted/expired doc throws, which falls through to clearing the
   // stale metadata + creating a fresh envelope.
 
-  // The signing identity (who PandaDoc actually addresses the signing
-  // session to) is whichever parent is logged into Clerk right now.
-  // Either parent on the family can sign.
+  // The signing identity AND the `parent.*` tokens/fields all come
+  // from whichever parent is currently logged into Clerk. The
+  // document represents the act of THIS parent signing — using a
+  // different name on the doc body than on the signature recipient
+  // would create a legal/auditing mismatch (and was confusing in
+  // practice when the lowest-id parent on file diverged from the
+  // person actually clicking Sign). Either parent on the family can
+  // sign; whoever does signs as themselves.
   const family = await xano.families.getById(familyId);
   const recipientEmail = user.emailAddresses[0]?.emailAddress ?? "";
   const recipientFirstName = user.firstName ?? "";
   const recipientLastName = user.lastName ?? "";
-
-  // The `parent.*` tokens stamped INTO the document body are different
-  // from the signing identity. The enrollment agreement (and the
-  // liability waiver, by the same logic) is a family-level legal
-  // document addressed to the primary parent/guardian of record — not
-  // necessarily whoever happens to click "Sign". Convention across
-  // the codebase: primary parent = the lowest-id parent on the
-  // family (matches the families list, admin applications/
-  // registrations/enrolled routes). Fall back to the Clerk user's
-  // name when the family has no parents on file yet (degenerate
-  // state — shouldn't happen for an accepted family, but defensive
-  // so the doc still generates).
-  const parentIds = xano.families.getParentIds(family).sort((a, b) => a - b);
-  const primaryParent = parentIds.length
-    ? await xano.parents.getById(parentIds[0]).catch(() => null)
-    : null;
-  const docParentFirstName = primaryParent?.first_name || recipientFirstName;
-  const docParentLastName = primaryParent?.last_name || recipientLastName;
-  const docParentEmail = primaryParent?.email || recipientEmail;
+  const docParentFirstName = recipientFirstName;
+  const docParentLastName = recipientLastName;
+  const docParentEmail = recipientEmail;
 
   if (existingDocId) {
     try {
@@ -202,10 +191,11 @@ export async function POST(req: NextRequest) {
         "student.first_name": student.first_name,
         "student.last_name": student.last_name,
         "student.full_name": `${student.first_name} ${student.last_name}`,
-        // `parent.*` tokens reference the family's PRIMARY parent
-        // (lowest-id row on the family), not the signing recipient.
-        // The doc body should read as "from the parent of record"
-        // even if a secondary parent is the one signing.
+        // `parent.*` tokens match the signing identity (the Clerk
+        // user). The document represents the act of THIS parent
+        // signing — keep the doc body's name in sync with the
+        // signature recipient so the legal/audit trail stays
+        // coherent.
         "parent.first_name": docParentFirstName,
         "parent.last_name": docParentLastName,
         "parent.email": docParentEmail,
@@ -220,8 +210,8 @@ export async function POST(req: NextRequest) {
       // Fields whose names don't match anything in the template are
       // silently ignored by PandaDoc, so this is safe to over-send.
       fields: {
-        // Parent identity — primary parent on file, NOT the Clerk
-        // signer. Mirrors the token semantics above.
+        // Parent identity — pulled from the Clerk-logged-in user
+        // (the actual signer). Mirrors the token semantics above.
         parent_first_name: docParentFirstName,
         parent_last_name: docParentLastName,
         parent_full_name: `${docParentFirstName} ${docParentLastName}`.trim(),
