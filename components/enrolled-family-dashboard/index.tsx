@@ -23,6 +23,9 @@ import {
   ChevronRight,
   Plus,
   Trash2,
+  CheckCircle2,
+  Circle,
+  Clock,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -110,15 +113,30 @@ const fetcher = async (url: string) => {
   return res.json();
 };
 
+/** Year picker option. `mode` drives which cards render for the year:
+ *  `"enrolled"` → standard dashboard (tuition, volunteer hours, family
+ *  info); `"applying"` → re-application progress card for the year the
+ *  family is in the process of re-enrolling for. */
+type PickerYear = {
+  id: number;
+  year_name: string;
+  mode: "enrolled" | "applying";
+};
+
 interface Props {
   yearId: number;
   yearName: string;
   submittedDate: number | null;
-  /** Pre-resolved list of enrolled years for the picker. Passed in from
-   *  the page so we don't refetch /api/student-registration?yearId=X for
-   *  every candidate year a second time — the page already did that work
-   *  to figure out which year to render. Sorted most-recent-first. */
-  availableYears?: { id: number; year_name: string }[];
+  /** Pre-resolved list of years for the picker (enrolled + re-applying).
+   *  Passed in from the page so we don't refetch per-year endpoints
+   *  twice — the page already did that work to figure out which year
+   *  to render. Sorted most-recent-first. The optional shape supports
+   *  legacy callers that don't pass `mode`; those are treated as
+   *  enrolled. */
+  availableYears?: (
+    | PickerYear
+    | { id: number; year_name: string }
+  )[];
 }
 
 export function EnrolledFamilyDashboard({
@@ -161,12 +179,24 @@ export function EnrolledFamilyDashboard({
     return { approved, pending };
   }, [volunteerHoursData, yearId]);
 
-  // Re-application affordance: if the school has a `nextYear` row, surface
-  // a card on the dashboard pointing at that year's apply flow. Returning
-  // families use it to bootstrap (or resume) the new academic year. We
-  // intentionally show this even when the dashboard's current `yearId`
-  // matches `nextYear.id` — the parent might switch year pickers and we
-  // don't want the card flickering out of existence based on that.
+  // Re-application affordance: surface a banner card on the dashboard
+  // pointing at the next academic year's apply flow once admin has
+  // explicitly *opened* re-applications for that year. Returning
+  // families use it to bootstrap (or resume) the new academic year.
+  // We intentionally show the banner even when the dashboard's current
+  // `yearId` matches `nextYear.id` — the parent might switch year
+  // pickers and we don't want the card flickering out of existence
+  // based on that.
+  //
+  // Two gates layered together:
+  //   1. The year must be flagged `isNextYear` on Xano (typical
+  //      lifecycle: admin promotes a Future year to NextYear once they
+  //      know it's the upcoming term).
+  //   2. Admin must have stamped `reapplications_opened_at` from the
+  //      year detail page. This is the explicit "publish to enrolled
+  //      families" gate — opening re-applications is a workflow event,
+  //      not a side-effect of being the next year. Treat undefined /
+  //      missing as closed (legacy rows pre-date the column).
   //
   // Re-enrollment merged into the unified apply pipeline — returning families
   // share the `/apply/year/:id/*` URL space with new applicants. The progress
@@ -175,8 +205,19 @@ export function EnrolledFamilyDashboard({
   // checks here read from `/api/family-progress` like any other apply row.
   const nextYear = useMemo(() => {
     if (!yearsData) return null;
-    const ys = yearsData as { id: number; year_name: string; isNextYear?: boolean }[];
-    return ys.find((y) => y.isNextYear === true) ?? null;
+    const ys = yearsData as {
+      id: number;
+      year_name: string;
+      isNextYear?: boolean;
+      reapplications_opened_at?: number | null;
+    }[];
+    return (
+      ys.find(
+        (y) =>
+          y.isNextYear === true &&
+          y.reapplications_opened_at != null
+      ) ?? null
+    );
   }, [yearsData]);
 
   const { data: nextYearReapply } = useSWR<{ id: number; isSubmitted?: boolean } | null>(
@@ -234,17 +275,22 @@ export function EnrolledFamilyDashboard({
       .filter((x): x is { student: Student; app: Application } => x !== null);
   }, [studentsData, applicationsData, yearId]);
 
-  // Year picker — only show years where the family is fully enrolled.
+  // Year picker — shows enrolled + re-applying years for the family.
   // The parent page already resolved this list (it had to, in order to
   // pick which year to render) and passes it in as `availableYearsProp`.
   // We fall back to deriving from `yearsData` when it's not provided so
-  // the component stays usable in isolation, but the dashboard page
-  // always passes the prop to avoid a duplicate per-year packet fetch.
-  const availableYears = useMemo(() => {
-    if (availableYearsProp) return availableYearsProp;
-    // Fallback: no enrollment-status info available, just show every
-    // year the family has applications for. Year picker still works for
-    // navigation; the parent page guards the actual route access.
+  // the component stays usable in isolation; standalone-fallback rows
+  // default to `mode: "enrolled"` (the original behavior before
+  // re-applying years joined the picker).
+  const availableYears = useMemo<PickerYear[]>(() => {
+    if (availableYearsProp) {
+      // Normalize legacy callers that didn't pass `mode`.
+      return availableYearsProp.map((y) => ({
+        id: y.id,
+        year_name: y.year_name,
+        mode: "mode" in y ? y.mode : "enrolled",
+      }));
+    }
     if (!yearsData || !applicationsData) return [];
     const candidateYearIds = new Set(
       (applicationsData as Application[]).map(
@@ -253,8 +299,38 @@ export function EnrolledFamilyDashboard({
     );
     return (yearsData as { id: number; year_name: string }[])
       .filter((y) => candidateYearIds.has(y.id))
+      .map((y) => ({ id: y.id, year_name: y.year_name, mode: "enrolled" as const }))
       .sort((a, b) => b.id - a.id);
   }, [availableYearsProp, yearsData, applicationsData]);
+
+  // Which mode is the currently-displayed year in? Drives the
+  // header copy (Enrolled / Re-applying) and which set of cards
+  // renders below.
+  const currentYearMode: "enrolled" | "applying" = useMemo(() => {
+    const found = availableYears.find((y) => y.id === yearId);
+    return found?.mode ?? "enrolled";
+  }, [availableYears, yearId]);
+
+  // SWR-fetched apply-flow progress for the currently-displayed year.
+  // Only meaningful in `currentYearMode === "applying"` — drives the
+  // Re-application Progress card's section bools + completion math.
+  // Returns null while loading or if no progress row exists.
+  const { data: currentYearApplyProgress } = useSWR<{
+    family_completed?: boolean;
+    students_completed?: boolean;
+    financial_aid_completed?: boolean;
+    testing_completed?: boolean;
+    isSubmitted?: boolean;
+    isAccepted?: boolean;
+    submitted_at?: number | null;
+    last_edited?: number | null;
+  } | null>(
+    currentYearMode === "applying"
+      ? `/api/family-progress?yearId=${yearId}`
+      : null,
+    fetcher,
+    { revalidateOnFocus: false, dedupingInterval: 10000 }
+  );
 
   const { mutate: swrMutate } = useSWRConfig();
   const [editing, setEditing] = useState<
@@ -331,23 +407,33 @@ export function EnrolledFamilyDashboard({
 
   return (
     <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
-      {/* Header — label, heading, year picker */}
+      {/* Header — label, heading, year picker. The label + subheading
+          copy pivots on `currentYearMode` so the same screen reads
+          naturally for an enrolled-year view ("enrolled, confirmed on
+          ...") and for a re-applying year ("re-application in
+          progress for ..."). */}
       <div className="flex items-start justify-between gap-4 border-b pb-4">
         <div>
           <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Enrolled
+            {currentYearMode === "applying" ? "Re-applying" : "Enrolled"}
           </p>
           <h1 className="text-2xl font-semibold mt-1">
             {firstName ? `Welcome back, ${firstName}.` : "Welcome back."}
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Your family is enrolled for the {yearName} school year
-            {submittedDate
-              ? `, confirmed on ${new Date(submittedDate).toLocaleDateString(
-                  "en-US",
-                  { month: "long", day: "numeric", year: "numeric" }
-                )}.`
-              : "."}
+            {currentYearMode === "applying" ? (
+              <>Your re-application for the {yearName} school year is in progress.</>
+            ) : (
+              <>
+                Your family is enrolled for the {yearName} school year
+                {submittedDate
+                  ? `, confirmed on ${new Date(submittedDate).toLocaleDateString(
+                      "en-US",
+                      { month: "long", day: "numeric", year: "numeric" }
+                    )}.`
+                  : "."}
+              </>
+            )}
           </p>
         </div>
         {availableYears.length > 1 ? (
@@ -369,18 +455,21 @@ export function EnrolledFamilyDashboard({
         ) : null}
       </div>
 
-      {/* Re-application card — always rendered when there's a `nextYear`
-          school year, so returning families see a clear path to next
-          year's enrollment regardless of where they are in the process.
-          Three states:
+      {/* Re-application card — rendered when there's a `nextYear`
+          school year with re-applications opened by admin and the
+          parent is viewing an enrolled year. Three states:
             - Not bootstrapped yet (no app rows for nextYear): "Begin"
             - Bootstrapped, in progress (`isSubmitted: false`): "Resume"
             - Submitted (`isSubmitted: true`): awaiting-review status
-          The bootstrap state is derived from applicationsData rather than
-          the progress row because the progress GET endpoint resolve-creates
-          a row on first read; presence of an application row is a stronger
-          signal that the family actually clicked Begin. */}
-      {nextYear ? (() => {
+          We hide this when `currentYearMode === "applying"` because the
+          parent is already viewing the re-applying year and the
+          dedicated Re-application Progress card below replaces it.
+          The bootstrap state is derived from applicationsData rather
+          than the progress row because the progress GET endpoint
+          resolve-creates a row on first read; presence of an
+          application row is a stronger signal that the family
+          actually clicked Begin. */}
+      {nextYear && currentYearMode === "enrolled" ? (() => {
         const hasNextYearApp = (applicationsData as Application[] | undefined)?.some(
           (a) => a.registration_school_years_id === nextYear.id
         );
@@ -457,6 +546,27 @@ export function EnrolledFamilyDashboard({
         );
       })() : null}
 
+      {/* Re-application Progress card — replaces the standard enrolled
+          cards when the parent is viewing a year they're re-applying
+          for. Section-by-section status drives the four bools from the
+          unified family_application_progress row; submission +
+          acceptance latches change the rendered state. */}
+      {currentYearMode === "applying" ? (
+        <ReApplicationProgressCard
+          yearName={yearName}
+          progress={currentYearApplyProgress ?? null}
+          onResume={() => router.push(`/apply/year/${yearId}`)}
+        />
+      ) : null}
+
+      {/* Enrolled-year content — tuition, volunteer hours, family info,
+          contacts. Hidden when the picker is on a re-applying year;
+          those cards are year-specific or only meaningful post-
+          enrollment. Family-level data (parents, students, emergency
+          contacts) still lives on the enrolled-year view and can be
+          edited there. */}
+      {currentYearMode === "enrolled" ? (
+      <>
       {/* Tuition & Fees + Volunteer Hours — buttons that route to the
           dedicated detail pages where the schedules + history live. */}
       <div className="grid gap-3 sm:grid-cols-2">
@@ -717,6 +827,8 @@ export function EnrolledFamilyDashboard({
           </div>
         </div>
       </div>
+      </>
+      ) : null}
 
       {/* Contact footer */}
       <p className="text-xs text-muted-foreground text-center pt-4 border-t">
@@ -792,6 +904,185 @@ export function EnrolledFamilyDashboard({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+    </div>
+  );
+}
+
+/** Re-application Progress card — rendered on the dashboard when the
+ *  parent is viewing a year they're re-applying for (not yet enrolled).
+ *  Shows a section-by-section status grid for the unified apply-flow
+ *  progress row + a Resume button that drops them back into the apply
+ *  pages. Once submitted the card flips into a status-only state
+ *  (no action button) since the family can't edit a submitted row;
+ *  the apply pages themselves handle review-mode access. */
+function ReApplicationProgressCard({
+  yearName,
+  progress,
+  onResume,
+}: {
+  yearName: string;
+  progress: {
+    family_completed?: boolean;
+    students_completed?: boolean;
+    financial_aid_completed?: boolean;
+    testing_completed?: boolean;
+    isSubmitted?: boolean;
+    isAccepted?: boolean;
+    submitted_at?: number | null;
+    last_edited?: number | null;
+  } | null;
+  onResume: () => void;
+}) {
+  // The fourth section pivots between Testing (new applicants) and
+  // Transportation (re-enrollers). Re-applying mode here is by
+  // definition the Re-Enrollment path, so we render Transportation.
+  // The boolean stays on `testing_completed` because the column is
+  // shared across both flows — for re-enrollers it gets auto-stamped
+  // `true` at bootstrap (NWEA skipped), then carries Transportation
+  // completion state from the Students page going forward.
+  const sections = [
+    {
+      label: "Family Information",
+      done: !!progress?.family_completed,
+      sub: "Confirm parent + contact info for the new year",
+    },
+    {
+      label: "Student Information",
+      done: !!progress?.students_completed,
+      sub: "Confirm each student + transportation preference",
+    },
+    {
+      label: "Financial Aid",
+      done: !!progress?.financial_aid_completed,
+      sub: "Re-submit the Opportunity Scholarship application",
+    },
+    {
+      label: "Transportation",
+      done: !!progress?.testing_completed,
+      sub: "Bus / shuttle preference for the new year",
+    },
+  ];
+  const sectionsComplete = sections.filter((s) => s.done).length;
+  const sectionsTotal = sections.length;
+  const isSubmitted = progress?.isSubmitted === true;
+  const isAccepted = progress?.isAccepted === true;
+  const submittedAt = progress?.submitted_at;
+
+  // Tint + status copy depend on lifecycle stage.
+  //   accepted  → success banner, no action (already done)
+  //   submitted → awaiting-review, no action
+  //   in-prog   → standard card with Resume button
+  const stateTone: "accepted" | "submitted" | "in_progress" = isAccepted
+    ? "accepted"
+    : isSubmitted
+    ? "submitted"
+    : "in_progress";
+
+  return (
+    <div className="rounded-xl border bg-white shadow-sm overflow-hidden">
+      {/* Header — title + status pill + completion summary */}
+      <div className="border-b px-5 py-4 flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold">
+            Re-application for {yearName}
+          </p>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {stateTone === "accepted"
+              ? `Accepted${submittedAt ? ` · submitted ${new Date(submittedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}` : ""}`
+              : stateTone === "submitted"
+              ? `Submitted${submittedAt ? ` on ${new Date(submittedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })} · awaiting admin review` : " · awaiting admin review"}`
+              : `${sectionsComplete} of ${sectionsTotal} sections complete`}
+          </p>
+        </div>
+        <span
+          className={
+            stateTone === "accepted"
+              ? "inline-flex items-center gap-1.5 rounded-full bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200 px-2.5 py-0.5 text-xs font-medium"
+              : stateTone === "submitted"
+              ? "inline-flex items-center gap-1.5 rounded-full bg-blue-50 text-blue-700 ring-1 ring-blue-200 px-2.5 py-0.5 text-xs font-medium"
+              : "inline-flex items-center gap-1.5 rounded-full bg-amber-50 text-amber-800 ring-1 ring-amber-200 px-2.5 py-0.5 text-xs font-medium"
+          }
+        >
+          {stateTone === "accepted" ? (
+            <>
+              <CheckCircle2 className="size-3.5" aria-hidden="true" />
+              Accepted
+            </>
+          ) : stateTone === "submitted" ? (
+            <>
+              <Clock className="size-3.5" aria-hidden="true" />
+              Submitted
+            </>
+          ) : (
+            <>
+              <Circle className="size-3.5" aria-hidden="true" />
+              In Progress
+            </>
+          )}
+        </span>
+      </div>
+
+      {/* Section table — one row per section bool. */}
+      <div className="divide-y">
+        {sections.map((s) => (
+          <div
+            key={s.label}
+            className="flex items-center justify-between gap-3 px-5 py-3"
+          >
+            <div className="flex items-center gap-3 min-w-0">
+              {s.done ? (
+                <CheckCircle2
+                  className="size-5 text-emerald-600 shrink-0"
+                  aria-hidden="true"
+                />
+              ) : (
+                <Circle
+                  className="size-5 text-muted-foreground/50 shrink-0"
+                  aria-hidden="true"
+                />
+              )}
+              <div className="min-w-0">
+                <p className="text-sm font-medium">{s.label}</p>
+                <p className="text-xs text-muted-foreground truncate">
+                  {s.sub}
+                </p>
+              </div>
+            </div>
+            <span
+              className={
+                s.done
+                  ? "text-xs font-medium text-emerald-700"
+                  : "text-xs font-medium text-muted-foreground"
+              }
+            >
+              {s.done ? "Complete" : "Incomplete"}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {/* Footer — Resume button when there's still work to do, status
+          copy otherwise. */}
+      {stateTone === "in_progress" ? (
+        <div className="border-t bg-muted/20 px-5 py-3 flex items-center justify-end">
+          <button
+            type="button"
+            onClick={onResume}
+            className="inline-flex items-center gap-1 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+          >
+            Resume re-application
+            <ChevronRight className="size-4" aria-hidden="true" />
+          </button>
+        </div>
+      ) : (
+        <div className="border-t bg-muted/20 px-5 py-3">
+          <p className="text-xs text-muted-foreground">
+            {stateTone === "accepted"
+              ? `You're confirmed for the ${yearName} school year. Registration paperwork will appear on this dashboard once it's ready.`
+              : `Admissions is reviewing your re-application. We'll be in touch as we confirm your spot for the ${yearName} school year.`}
+          </p>
+        </div>
+      )}
     </div>
   );
 }

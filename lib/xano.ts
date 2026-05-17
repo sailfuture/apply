@@ -364,6 +364,17 @@ export interface XanoSchoolYear {
   isFuture: boolean;
   application_deadline: string | null;
   opportunity_scholarship_deadline: string | null;
+  /** Epoch ms when admin "opened" re-applications for this year. Null
+   *  while closed. Gates the re-application banner on the parent
+   *  enrolled-family dashboard — returning families don't see a
+   *  Re-apply card until admin flips this on from the year detail
+   *  page, even if the year itself is already flagged `isNextYear`.
+   *  Closing re-applications later (setting back to null) hides the
+   *  banner for families who haven't started yet but leaves any
+   *  in-flight progress rows alone — admin still sees them in the
+   *  applications list. Optional on the type because legacy rows
+   *  pre-date the column; treat missing as `null` / closed. */
+  reapplications_opened_at?: number | null;
 }
 
 export interface XanoFamilyPayment {

@@ -32,6 +32,14 @@ const BOOL_FIELDS: (keyof XanoSchoolYear)[] = [
   "isFuture",
 ];
 
+// Nullable-number fields — distinct from `NUMERIC_FIELDS` above because
+// these accept `null` (the "closed" state) instead of coercing to 0.
+// `reapplications_opened_at` is the timestamp admin stamps when opening
+// re-applications for a year; setting back to null closes them.
+const NULLABLE_NUMBER_FIELDS: (keyof XanoSchoolYear)[] = [
+  "reapplications_opened_at",
+];
+
 export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -77,6 +85,17 @@ export async function PATCH(
     }
     for (const f of BOOL_FIELDS) {
       if (f in body) patch[f] = body[f] === true;
+    }
+    for (const f of NULLABLE_NUMBER_FIELDS) {
+      if (f in body) {
+        const v = body[f];
+        if (v == null) {
+          patch[f] = null;
+        } else {
+          const n = Number(v);
+          patch[f] = Number.isFinite(n) ? n : null;
+        }
+      }
     }
     if (Object.keys(patch).length === 0) {
       return NextResponse.json(

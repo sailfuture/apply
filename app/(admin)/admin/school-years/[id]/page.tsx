@@ -136,6 +136,18 @@ export default function SchoolYearDetailPage() {
         onDeleted={() => router.push("/admin/school-years")}
       />
 
+      {/* Re-applications gate. Discrete action card — not part of the
+          year-metadata form because opening / closing re-applications
+          is a workflow event (publish to enrolled families) rather
+          than a form edit. PATCHes `reapplications_opened_at` directly
+          and revalidates so the timestamp + state reflect immediately. */}
+      <ReapplicationsCard
+        year={year}
+        onChanged={async () => {
+          await refreshYear();
+        }}
+      />
+
       {/* Family Payment Matrix — single percentage cell drives both
           tuition and transportation. e.g. 8% means the family pays
           8% of base tuition + 8% of base transportation fees. The
@@ -530,6 +542,133 @@ function YearMetadataCard({
             description="Used when a per-student award hasn't been entered manually on the application."
           />
         </Section>
+      </CardContent>
+    </Card>
+  );
+}
+
+/* ─────────────────────── Re-applications gate card ─────────────────────── */
+
+function formatOpenedAt(epochMs: number): string {
+  return new Date(epochMs).toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+/**
+ * Discrete Open/Close toggle for re-applications. Lives in its own
+ * card (not in the year-metadata form) because it's a workflow event,
+ * not a metadata edit — flipping it publishes the Re-apply banner to
+ * every enrolled family for this year. The PATCH fires immediately;
+ * no Save button to forget.
+ *
+ * Closing later doesn't archive in-flight progress rows — it just
+ * hides the banner for families who haven't started. Admin still sees
+ * everything in /admin/applications.
+ */
+function ReapplicationsCard({
+  year,
+  onChanged,
+}: {
+  year: XanoSchoolYear;
+  onChanged: () => void | Promise<void>;
+}) {
+  const [pending, setPending] = useState(false);
+  const openedAt = year.reapplications_opened_at ?? null;
+  const isOpen = openedAt != null;
+
+  async function toggle(open: boolean) {
+    setPending(true);
+    try {
+      const res = await fetch(`/api/admin/school-years/${year.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reapplications_opened_at: open ? Date.now() : null,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error ?? `Update failed (${res.status})`);
+      }
+      toast.success(
+        open ? "Re-applications opened." : "Re-applications closed."
+      );
+      await onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Update failed.");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <Card className="overflow-hidden gap-0 py-0 bg-white">
+      <CardHeader className="py-3 !pb-3 border-b">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-base">Re-applications</CardTitle>
+          <div className="flex items-center gap-2">
+            <span
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium",
+                isOpen
+                  ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200"
+                  : "bg-muted text-muted-foreground ring-1 ring-border"
+              )}
+            >
+              <span
+                className={cn(
+                  "size-1.5 rounded-full",
+                  isOpen ? "bg-emerald-500" : "bg-muted-foreground/50"
+                )}
+                aria-hidden="true"
+              />
+              {isOpen ? "Open" : "Closed"}
+            </span>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="py-5 bg-white">
+        <div className="flex items-start justify-between gap-6">
+          <div className="space-y-1.5 max-w-2xl">
+            <p className="text-sm text-foreground">
+              {isOpen
+                ? "Enrolled families see a Re-apply card on their dashboard inviting them to renew enrollment for this year."
+                : "The Re-apply card is hidden from enrolled families. Open re-applications when you're ready for returning families to start their renewal."}
+            </p>
+            {isOpen && openedAt ? (
+              <p className="text-xs text-muted-foreground">
+                Opened {formatOpenedAt(openedAt)}
+              </p>
+            ) : null}
+            <p className="text-xs text-muted-foreground">
+              Closing later won&rsquo;t archive in-flight re-applications —
+              it just hides the invite for families who haven&rsquo;t
+              started.
+            </p>
+          </div>
+          <Button
+            variant={isOpen ? "outline" : "default"}
+            disabled={pending}
+            onClick={() => toggle(!isOpen)}
+            className="shrink-0"
+          >
+            {pending ? (
+              <>
+                <Loader2 className="size-4 mr-1.5 animate-spin" />
+                {isOpen ? "Closing" : "Opening"}
+              </>
+            ) : isOpen ? (
+              "Close re-applications"
+            ) : (
+              "Open re-applications"
+            )}
+          </Button>
+        </div>
       </CardContent>
     </Card>
   );
