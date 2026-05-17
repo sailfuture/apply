@@ -194,21 +194,32 @@ export default function EnrolledStudentDetailPage() {
             can land on either: bio + docs land on the student row,
             medical / sizing / waiver land on the packet. Showing
             both helps admin spot mismatches ("bio updated yesterday
-            but packet hasn't been touched since June"). */}
-        {student.last_edited_time ? (
+            but packet hasn't been touched since June"). Rendered on a
+            single line bullet-separated so the header stays compact;
+            either piece is omitted when its timestamp is null. */}
+        {student.last_edited_time || packet?.last_edited_time ? (
           <p className="text-xs text-muted-foreground/80">
-            Student edited{" "}
-            <span title={new Date(student.last_edited_time).toLocaleString()}>
-              {formatNoteTimestamp(student.last_edited_time)}
-            </span>
-          </p>
-        ) : null}
-        {packet?.last_edited_time ? (
-          <p className="text-xs text-muted-foreground/80">
-            Packet edited{" "}
-            <span title={new Date(packet.last_edited_time).toLocaleString()}>
-              {formatNoteTimestamp(packet.last_edited_time)}
-            </span>
+            {student.last_edited_time ? (
+              <>
+                Student edited{" "}
+                <span title={new Date(student.last_edited_time).toLocaleString()}>
+                  {formatNoteTimestamp(student.last_edited_time)}
+                </span>
+              </>
+            ) : null}
+            {student.last_edited_time && packet?.last_edited_time ? (
+              <span className="mx-1.5" aria-hidden="true">
+                &bull;
+              </span>
+            ) : null}
+            {packet?.last_edited_time ? (
+              <>
+                Packet edited{" "}
+                <span title={new Date(packet.last_edited_time).toLocaleString()}>
+                  {formatNoteTimestamp(packet.last_edited_time)}
+                </span>
+              </>
+            ) : null}
           </p>
         ) : null}
       </div>

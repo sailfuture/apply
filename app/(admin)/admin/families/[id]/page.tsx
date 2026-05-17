@@ -738,6 +738,7 @@ export default function FamilyDetailPage() {
                       key={student.id}
                       student={student}
                       app={app}
+                      yearId={yearId ? Number(yearId) : undefined}
                       onChanged={() => {
                         refreshFamily();
                         refreshDetail();
@@ -2229,10 +2230,18 @@ function StudentBio({
 function StudentApplicationBlock({
   student,
   app,
+  yearId,
   onChanged,
 }: {
   student: Student;
   app: XanoApplication | undefined;
+  /** Current per-year scope. Drives the "Open enrolled view" deep-link
+   *  in the sub-header so admin can pivot from family-level review
+   *  to the per-student enrolled detail page without losing the
+   *  year context. Optional because the family page renders this
+   *  block in family-overview mode (no year selected), where the
+   *  enrolled link doesn't make sense and gets omitted. */
+  yearId?: number;
   onChanged: () => void;
 }) {
   // Edit state lives on the block itself so the sub-header (name)
@@ -2378,16 +2387,37 @@ function StudentApplicationBlock({
                 </Button>
               </>
             ) : (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={enterEdit}
-                className="bg-white"
-              >
-                <Pencil className="size-3.5 mr-1.5" />
-                Edit
-              </Button>
+              <>
+                {/* Deep-link to the per-student enrolled detail page
+                    for this year. Lets admin pivot from family-level
+                    review into the focused student view without
+                    losing the year context. Only renders when a
+                    year is selected — without one the link is
+                    meaningless. */}
+                {yearId ? (
+                  <Button
+                    asChild
+                    variant="outline"
+                    size="sm"
+                    className="bg-white"
+                  >
+                    <Link href={`/admin/enrolled/${student.id}?yearId=${yearId}`}>
+                      <ExternalLink className="size-3.5 mr-1.5" />
+                      Open
+                    </Link>
+                  </Button>
+                ) : null}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={enterEdit}
+                  className="bg-white"
+                >
+                  <Pencil className="size-3.5 mr-1.5" />
+                  Edit
+                </Button>
+              </>
             )}
           </div>
         </div>

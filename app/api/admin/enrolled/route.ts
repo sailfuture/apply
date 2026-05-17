@@ -3,9 +3,12 @@ import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
 
 /**
- * Admin Enrolled Students list — one row per student whose
- * `registration_students.isEnrolled` is true for the requested
- * academic year.
+ * Admin Enrolled Students list — one row per student who has an
+ * active application for the requested academic year. Each row
+ * carries an `is_enrolled` flag so the page can split the list into
+ * two groups: officially enrolled vs not-yet-enrolled (or
+ * unenrolled). Admin sees the full population of students tied to
+ * the year, with the workflow status surfaced as the group divide.
  *
  * "Enrolled" === the student row carries `isEnrolled=true` AND
  * `isArchived !== true`. The registration-progress route cascades
@@ -128,17 +131,15 @@ export async function GET(req: NextRequest) {
       primaryByFamily.set(f.id, matched[0] ?? null);
     }
 
-    // Pivot off the student row's `isEnrolled` flag. The
-    // registration-progress route cascades this true onto every
-    // family student the moment admin clicks Confirm Family
-    // Registration on the registration page; the Unenroll modal
-    // on the detail page clears it back to false alongside
-    // `isArchived=true` + reason/date/notes. So
-    // `student.isEnrolled === true && student.isArchived !== true`
-    // exactly maps to "this student is officially enrolled" — no
-    // packet join needed for the gate.
-    const enrolledStudents = students.filter(
-      (s) => s.isEnrolled === true && s.isArchived !== true
+    // List ALL students with an active application for the year —
+    // both currently enrolled and not-yet-enrolled / unenrolled.
+    // The `is_enrolled` flag on each row tells the page which group
+    // to render it under; the gate that used to filter to
+    // enrolled-only was `student.isEnrolled === true &&
+    // student.isArchived !== true`. We compute the same predicate
+    // per-row below.
+    const studentsForYear = students.filter((s) =>
+      appByStudent.has(s.id)
     );
 
     // Side join: packet lookup by student id so each row can
@@ -152,13 +153,12 @@ export async function GET(req: NextRequest) {
       packetByStudent.set(Number(p.registration_students_id), p);
     }
 
-    const rows: EnrolledStudentRow[] = enrolledStudents.flatMap((student) => {
+    const rows: EnrolledStudentRow[] = studentsForYear.flatMap((student) => {
       const studentId = student.id;
-      // Year scope: the student must have an active application
-      // for the requested year. Drops students who were accepted
-      // in a prior year but aren't re-enrolled this cycle, plus
-      // accepted students whose app for the year was soft-deleted.
       const app = appByStudent.get(studentId);
+      // Defensive guard — `studentsForYear` was built off the same
+      // map, so this is effectively always defined; the guard keeps
+      // TypeScript happy without an `!` assertion.
       if (!app) return [];
       const familyId = Number(app.registration_families_id);
       const family = familyById.get(familyId) ?? null;
@@ -178,6 +178,8 @@ export async function GET(req: NextRequest) {
         packet?.created_at ??
         student.created_at ??
         0;
+      const isEnrolled =
+        student.isEnrolled === true && student.isArchived !== true;
       return [
         {
           id: studentId,
@@ -201,6 +203,8 @@ export async function GET(req: NextRequest) {
           confirmed_at: enrolledAt,
           liability_waiver_status: packet?.liability_waiver_status ?? "",
           liability_waiver_pdf_url: packet?.liability_waiver_pdf_url ?? "",
+          is_enrolled: isEnrolled,
+          is_archived: student.isArchived === true,
         },
       ];
     });
@@ -251,6 +255,15 @@ export interface EnrolledStudentRow {
   confirmed_at: number;
   liability_waiver_status: string;
   liability_waiver_pdf_url: string;
+  /** True when the student is officially enrolled for the year:
+   *  `student.isEnrolled === true && student.isArchived !== true`.
+   *  Drives the Enrolled vs Not Enrolled grouping on the page. */
+  is_enrolled: boolean;
+  /** True when the student has been formally unenrolled via the
+   *  Unenroll modal (sets `isArchived=true` alongside
+   *  `isEnrolled=false` + reason/date/notes). Distinguishes
+   *  "never enrolled yet" from "was enrolled and later removed". */
+  is_archived: boolean;
   /** Index signature so the row matches `DataTable`'s
    *  `<T extends Record<string, unknown>>` constraint without a
    *  client-side cast. Mirrors the same pattern on

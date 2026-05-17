@@ -414,8 +414,14 @@ export function EnrolledFamilyDashboard({
           progress for ..."). */}
       <div className="flex items-start justify-between gap-4 border-b pb-4">
         <div>
+          {/* Top eyebrow label — shows the school year the dashboard
+              is currently scoped to. Replaces a generic
+              "Enrolled" / "Re-applying" label so the family always
+              sees *which year* they're looking at at a glance. The
+              mode (enrolled vs re-applying) gets communicated in the
+              subhead copy below + the year picker on the right. */}
           <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            {currentYearMode === "applying" ? "Re-applying" : "Enrolled"}
+            {yearName}
           </p>
           <h1 className="text-2xl font-semibold mt-1">
             {firstName ? `Welcome back, ${firstName}.` : "Welcome back."}

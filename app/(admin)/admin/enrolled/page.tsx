@@ -104,8 +104,41 @@ export default function EnrolledStudentsPage() {
     adminFetcher
   );
 
+  // School-year row for the title — gives us `year_name` so the page
+  // header reads "Enrolled Students · 2025-2026". Fetched separately
+  // from the roster so a slow-loading roster doesn't keep the title
+  // generic.
+  const { data: schoolYear } = useSWR<{
+    id: number;
+    year_name: string;
+  } | null>(
+    yearId ? `/api/admin/school-years/${yearId}` : null,
+    adminFetcher
+  );
+
   const rows = useMemo(() => (Array.isArray(data) ? data : []), [data]);
-  const grouped = useMemo(() => groupByGrade(rows), [rows]);
+
+  // Split into enrolled vs not-enrolled before grouping by grade.
+  // Two top-level groups so admin can see the full population of
+  // students tied to the year, with the workflow status as the
+  // group divide. Within each group we still grade-group so cohort
+  // sizes read at a glance.
+  const enrolledRows = useMemo(
+    () => rows.filter((r) => r.is_enrolled === true),
+    [rows]
+  );
+  const notEnrolledRows = useMemo(
+    () => rows.filter((r) => r.is_enrolled !== true),
+    [rows]
+  );
+  const groupedEnrolled = useMemo(
+    () => groupByGrade(enrolledRows),
+    [enrolledRows]
+  );
+  const groupedNotEnrolled = useMemo(
+    () => groupByGrade(notEnrolledRows),
+    [notEnrolledRows]
+  );
 
   // Shared column shape across all grade groups so widths line up
   // vertically. The trash-icon column moved off this table — the
@@ -218,10 +251,20 @@ export default function EnrolledStudentsPage() {
   return (
     <div className="p-6 space-y-6">
       <div>
-        <h1 className="text-2xl font-bold">Enrolled Students</h1>
+        <h1 className="text-2xl font-bold">
+          Enrolled Students
+          {schoolYear?.year_name ? (
+            <span className="ml-2 text-base font-normal text-muted-foreground">
+              &middot; {schoolYear.year_name}
+            </span>
+          ) : null}
+        </h1>
         <p className="text-sm text-muted-foreground">
-          Students whose registration packet has been admin-confirmed
-          for the selected year, grouped by incoming grade. Click a
+          Every student with an active application for the selected
+          year. The Enrolled group covers students whose registration
+          packet has been admin-confirmed; the Not Enrolled group
+          covers students who are accepted but not yet through
+          registration, plus formally unenrolled students. Click any
           row to see only that student&rsquo;s details.
         </p>
       </div>
@@ -246,16 +289,44 @@ export default function EnrolledStudentsPage() {
       ) : showEmptyState ? (
         <EnrolledEmptyState />
       ) : (
-        <EnrolledRoster
-          columns={columns}
-          grouped={grouped}
-          totalCount={rows.length}
-          onRowClick={(row) =>
-            router.push(
-              `/admin/enrolled/${row.student_id}?yearId=${row.year_id}`
-            )
-          }
-        />
+        <div className="space-y-6">
+          {/* Enrolled group — students with `is_enrolled === true`,
+              the standard "officially enrolled" cohort. Always
+              renders even when empty so admin sees the header. */}
+          <EnrolledRoster
+            title="Enrolled"
+            description="Students with registration packets confirmed by admin."
+            columns={columns}
+            grouped={groupedEnrolled}
+            totalCount={enrolledRows.length}
+            emptyLabel="No students officially enrolled for this year yet."
+            onRowClick={(row) =>
+              router.push(
+                `/admin/enrolled/${row.student_id}?yearId=${row.year_id}`
+              )
+            }
+          />
+          {/* Not Enrolled group — students with applications for the
+              year but `is_enrolled !== true`. Renders only when
+              there are rows in this bucket; an empty bucket is the
+              healthy steady state once a cohort is fully through
+              registration. */}
+          {notEnrolledRows.length > 0 ? (
+            <EnrolledRoster
+              title="Not Enrolled"
+              description="Students accepted but not yet through registration, plus formally unenrolled / archived students."
+              columns={columns}
+              grouped={groupedNotEnrolled}
+              totalCount={notEnrolledRows.length}
+              emptyLabel="No students in this bucket."
+              onRowClick={(row) =>
+                router.push(
+                  `/admin/enrolled/${row.student_id}?yearId=${row.year_id}`
+                )
+              }
+            />
+          ) : null}
+        </div>
       )}
     </div>
   );
@@ -274,14 +345,27 @@ export default function EnrolledStudentsPage() {
  * row loop doesn't model that.
  */
 function EnrolledRoster({
+  title,
+  description,
   columns,
   grouped,
   totalCount,
+  emptyLabel,
   onRowClick,
 }: {
+  /** Card header label — "Enrolled" or "Not Enrolled" so the page
+   *  can render two stacked rosters with the same chrome. */
+  title: string;
+  /** One-liner explaining what's in this bucket. Sits under the
+   *  card header and helps admin orient when there are zero
+   *  matches in the search filter. */
+  description: string;
   columns: ColumnDef<EnrolledStudentRow>[];
   grouped: Array<{ grade: string; rows: EnrolledStudentRow[] }>;
   totalCount: number;
+  /** Copy for the zero-rows state inside this card (distinct from
+   *  the page-level "no enrolled students yet" empty state). */
+  emptyLabel: string;
   onRowClick: (row: EnrolledStudentRow) => void;
 }) {
   const colCount = columns.length;
@@ -308,15 +392,16 @@ function EnrolledRoster({
   );
   return (
     <Card className="overflow-hidden bg-white py-0 gap-0">
-      <CardHeader className="py-4 border-b bg-white">
+      <CardHeader className="py-4 border-b bg-white space-y-1">
         <div className="flex items-baseline gap-3">
           <CardTitle className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-            Enrolled Roster
+            {title}
           </CardTitle>
           <span className="text-xs tabular-nums text-muted-foreground">
             ({totalCount})
           </span>
         </div>
+        <p className="text-xs text-muted-foreground">{description}</p>
       </CardHeader>
       <CardContent className="p-4 bg-white space-y-3">
         {/* Search bar mirrors the chrome on the Registrations
@@ -357,7 +442,9 @@ function EnrolledRoster({
                   colSpan={colCount}
                   className="py-8 text-center text-sm italic text-muted-foreground"
                 >
-                  No students match &ldquo;{search}&rdquo;.
+                  {search.trim()
+                    ? `No students match "${search}".`
+                    : emptyLabel}
                 </TableCell>
               </TableRow>
             ) : (
@@ -402,16 +489,19 @@ function EnrolledRoster({
                 </Fragment>
               ))
             )}
-            {/* Total row — bookends the table so the cohort size
+            {/* Total row — bookends the table so the bucket size
                 is the last thing admin sees. When a search is
                 active, the row shows the filtered count alongside
-                the total so admin sees both at a glance. */}
+                the total so admin sees both at a glance. Label is
+                "Total" rather than "Total enrolled" because the
+                page now stacks two rosters and "enrolled" doesn't
+                apply to the Not Enrolled bucket. */}
             <TableRow className="bg-muted/30 hover:bg-muted/30 border-t-2">
               <TableCell
                 colSpan={colCount}
                 className="py-3 text-sm font-semibold text-foreground"
               >
-                Total enrolled
+                Total
                 <span className="ml-2 tabular-nums text-muted-foreground">
                   {search.trim() && visibleCount !== totalCount
                     ? `${visibleCount} of ${totalCount}`

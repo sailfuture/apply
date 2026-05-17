@@ -2776,6 +2776,37 @@ export const xano = {
       }
     },
 
+    /**
+     * Every `family_payment` row for a given school year. Backs the
+     * admin Billing list — we filter client-side to rows with a
+     * `stripe_subscription_id` set so the list only shows families
+     * who've finished payment setup. Returns `[]` on transport
+     * failures so the page degrades to an empty state rather than
+     * exploding.
+     */
+    async getAllByYear(yearId: number): Promise<XanoFamilyPayment[]> {
+      try {
+        const res = await fetch(
+          `${getBaseUrl()}/registration_families_payment?registration_school_years_id=${yearId}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) return [];
+        const results = await res.json();
+        if (!Array.isArray(results)) return [];
+        return (results as Record<string, unknown>[])
+          .filter(
+            (p) => Number(p.registration_school_years_id) === yearId
+          )
+          .map((p) => normalizeFamilyPaymentPK(p));
+      } catch (err) {
+        console.error(
+          `[xano.familyPayments.getAllByYear] threw for yearId=${yearId}:`,
+          err
+        );
+        return [];
+      }
+    },
+
     async getByFamilyAndYear(familyId: number, yearId: number): Promise<XanoFamilyPayment | null> {
       try {
         const res = await fetch(

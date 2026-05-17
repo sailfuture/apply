@@ -35,6 +35,11 @@ const NAV_ITEMS: NavItem[] = [
   { title: "Applications", href: "/admin/applications" },
   { title: "Registrations", href: "/admin/registrations" },
   { title: "Enrolled", href: "/admin/enrolled" },
+  // Billing — shows every family with a Stripe subscription on file
+  // for the selected year, with quick filters for past-due families.
+  // Each row drills into the family registration detail page's
+  // Billing card for actions (pause / cancel / refund / update amount).
+  { title: "Billing", href: "/admin/billing" },
   { title: "School Years", href: "/admin/school-years" },
 ];
 
