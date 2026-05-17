@@ -4269,10 +4269,19 @@ function TuitionBreakdownTable({
     const stepUpStatus = app.sufs_status ?? "";
     const stepUpType = app.sufs_type ?? "";
     const familyPaysForTuition = app.opportunity_scholarship_award_amount ?? 0;
-    const scholarshipCoverage = Math.max(
-      0,
-      tuition - stepUpAmount - familyPaysForTuition
-    );
+    // A row has an OS determination when the family is on a
+    // scholarship path OR admin has entered a per-student amount.
+    // The third clause covers the case where admin enters the
+    // per-student award amount before formally flipping the
+    // family-level scholarship path flag — the breakout row + the
+    // OS Award coverage should still render.
+    const hasOSDetermination =
+      isOpportunityScholarshipFamily ||
+      isSnapFamily ||
+      app.opportunity_scholarship_award_amount != null;
+    const scholarshipCoverage = hasOSDetermination
+      ? Math.max(0, tuition - stepUpAmount - familyPaysForTuition)
+      : 0;
     const subtotal = familyPaysForTuition + adminFee;
     return {
       studentName: `${student.first_name} ${student.last_name}`.trim(),
@@ -4283,6 +4292,7 @@ function TuitionBreakdownTable({
       stepUpStatus,
       stepUpType,
       scholarshipCoverage,
+      hasOSDetermination,
       subtotal,
     };
   });
@@ -4376,12 +4386,15 @@ function TuitionBreakdownTable({
 
               {/* Per-student tuition cost under the Opportunity
                   Scholarship determination — surfaces the same value
-                  that's baked into the subtotal below, broken out as
-                  its own row so admin sees what the family pays for
-                  tuition before any fees. Renders for OS families and
-                  for SNAP families (the SNAP path zeroes out the
-                  per-student cost; the tooltip explains why). */}
-              {isOpportunityScholarshipFamily || isSnapFamily ? (
+                  baked into the subtotal below, broken out as its own
+                  row so admin sees what the family pays for tuition
+                  before any fees. Renders whenever the row has a
+                  determination (admin entered a per-student amount,
+                  OR family is flagged on OS, OR family is on SNAP) —
+                  covers the common case where admin enters the
+                  amount before formally setting the scholarship path
+                  flag. */}
+              {row.hasOSDetermination ? (
                 <tr className="border-t">
                   <td className="px-4 py-3 text-muted-foreground">
                     <span className="inline-flex items-center gap-1.5">

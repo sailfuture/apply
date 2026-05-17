@@ -54,6 +54,11 @@ interface StudentRow {
    *  line when the family is on the OS path. Same value baked into
    *  `subtotal`. */
   familyPaysForTuition: number;
+  /** True when this row has an OS determination — either the
+   *  family is flagged on OS / SNAP or admin has entered a
+   *  per-student award amount. Gates both the OS Award coverage
+   *  line and the OS Cost Per Student breakout. */
+  hasOSDetermination: boolean;
   subtotal: number;
 }
 
@@ -202,12 +207,22 @@ export default function DashboardTuitionPage() {
       // of tuition after SUFS and the family's portion. Transport is
       // no longer a separate line; it's been rolled into the tuition
       // figure itself.
+      //
+      // `hasOSDetermination` gates both the OS Award coverage line
+      // and the OS Cost Per Student breakout. True when the family is
+      // flagged on OS or SNAP, OR admin has entered a per-student
+      // award amount (covers the case where admin enters the
+      // per-student value before the family-level scholarship path
+      // flag is set).
       const familyPaysForTuition =
         app.opportunity_scholarship_award_amount ?? 0;
-      const scholarshipCoverage = Math.max(
-        0,
-        tuition - stepUpAmount - familyPaysForTuition
-      );
+      const hasOSDetermination =
+        isOpportunityScholarshipFamily ||
+        isSnapFamily ||
+        app.opportunity_scholarship_award_amount != null;
+      const scholarshipCoverage = hasOSDetermination
+        ? Math.max(0, tuition - stepUpAmount - familyPaysForTuition)
+        : 0;
       const subtotal = familyPaysForTuition + adminFees;
 
       rows.push({
@@ -220,11 +235,12 @@ export default function DashboardTuitionPage() {
         remaining: scholarshipCoverage,
         adminFees,
         familyPaysForTuition,
+        hasOSDetermination,
         subtotal,
       });
     }
     return rows;
-  }, [students, applications, schoolYear, yearId]);
+  }, [students, applications, schoolYear, yearId, isOpportunityScholarshipFamily, isSnapFamily]);
 
   const grandTotal = studentRows.reduce((sum, r) => sum + r.subtotal, 0);
 
@@ -420,11 +436,11 @@ export default function DashboardTuitionPage() {
                     {/* Opportunity Scholarship cost per student — the
                         per-student tuition portion the family pays under
                         the OS determination. Same value baked into the
-                        subtotal below, broken out as its own row so the
-                        parent sees the tuition cost before fees. Renders
-                        for OS families and for SNAP families (the SNAP
-                        path zeroes out the cost; tooltip explains why). */}
-                    {isOpportunityScholarshipFamily || isSnapFamily ? (
+                        subtotal below, broken out as its own row. Renders
+                        whenever this row has an OS determination (admin
+                        entered a per-student amount, OR family is flagged
+                        on OS, OR family is on SNAP). */}
+                    {row.hasOSDetermination ? (
                       <tr className="border-t">
                         <td className="px-4 py-3 text-muted-foreground">
                           <span className="inline-flex items-center gap-1.5">

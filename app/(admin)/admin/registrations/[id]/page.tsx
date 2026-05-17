@@ -1962,28 +1962,31 @@ function TuitionBreakdownTable({
   // computed coverage that admin hasn't actually approved.
   const isSnapAutoCover =
     scholarship.isSNAPBenefits && scholarship.is_snap_confirmed;
-  const isOpportunityScholarshipFamily =
-    scholarship.isOpportunityScholarship === true;
 
   const rows = students.map((s) => {
     const sufsField = SUFS_FIELDS[s.sufs_type];
     const stepUpAmount = sufsField
       ? (schoolYear[sufsField] as number | undefined) ?? 0
       : 0;
-    // Opportunity Scholarship Award column. Two paths:
-    //   - SNAP-confirmed → compute the coverage = tuition - SUFS
-    //     - whatever the family pays. Mirrors the apply-flow
-    //     Tuition Breakdown's SNAP branch byte-for-byte.
-    //   - Anyone else → read the per-app number admin entered
-    //     (null reads as "no Opportunity Scholarship award on
-    //     this row," i.e. the regular Opportunity Scholarship
-    //     path didn't award this family anything yet, or they
-    //     opted out).
+    // Opportunity Scholarship Award = the coverage the scholarship
+    // pays. Always computed as `tuition - SUFS - familyPays` (not
+    // read straight off `opportunity_scholarship_award_amount` —
+    // that field stores what the FAMILY pays, not what the
+    // scholarship covers). Mirrors the apply-flow Tuition Breakdown
+    // exactly. SNAP families have `familyPays === 0`, so the
+    // coverage collapses to `tuition - SUFS` automatically. The
+    // separate `null` sentinel below distinguishes "no scholarship
+    // determination at all" from "$0 award" so the rendered row
+    // can show `—` instead of $0 for opted-out families.
     const familyPaysForTuition =
       s.opportunity_scholarship_award_amount ?? 0;
-    const scholarshipAmount: number | null = isSnapAutoCover
+    const hasOSDetermination =
+      isSnapAutoCover ||
+      scholarship.isOpportunityScholarship === true ||
+      s.opportunity_scholarship_award_amount != null;
+    const scholarshipAmount: number | null = hasOSDetermination
       ? Math.max(0, tuition - stepUpAmount - familyPaysForTuition)
-      : s.opportunity_scholarship_award_amount;
+      : null;
     const subtotal = familyPaysForTuition + adminFees;
     return {
       studentName: s.student_full_name,
@@ -1994,6 +1997,7 @@ function TuitionBreakdownTable({
       scholarshipAmount,
       adminFees,
       familyPaysForTuition,
+      hasOSDetermination,
       subtotal,
     };
   });
@@ -2097,11 +2101,12 @@ function TuitionBreakdownTable({
               {/* Per-student tuition cost under the Opportunity
                   Scholarship determination — surfaces the same value
                   baked into the subtotal below, broken out as its own
-                  row. Renders for OS families and for SNAP families
-                  (the SNAP path zeroes out the per-student cost;
-                  tooltip explains why). */}
-              {isOpportunityScholarshipFamily ||
-              scholarship.isSNAPBenefits ? (
+                  row. Renders whenever the row has a determination
+                  (admin entered a per-student amount, OR family is
+                  flagged on OS, OR family is on SNAP) — covers the
+                  common case where admin has entered the amount but
+                  hasn't yet explicitly set the scholarship path flag. */}
+              {row.hasOSDetermination ? (
                 <tr className="border-t">
                   <td className="px-4 py-3 text-muted-foreground">
                     <span className="inline-flex items-center gap-1.5">
