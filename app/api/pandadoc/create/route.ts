@@ -119,6 +119,30 @@ export async function POST(req: NextRequest) {
   const docParentLastName = recipientLastName;
   const docParentEmail = recipientEmail;
 
+  // Resolve the student record + canonical doc name early so the
+  // resume validation below can compare the existing envelope's
+  // stored name against what we'd generate now. Catches the case
+  // where the envelope was created against a different student on
+  // the family OR with the old (pre-family-name) naming scheme —
+  // both should force a fresh-create rather than resuming a doc
+  // with the wrong title.
+  //
+  // Naming convention:
+  //   - liability_waiver → per-student doc, named after the student
+  //   - enrollment_agreement → family-level doc, named after the
+  //     family (NOT a specific student — the agreement covers the
+  //     whole household, and naming it after one student was
+  //     misleading on multi-student families AND broke when the
+  //     application's `registration_students_id` pointed at a
+  //     different student than admin intended)
+  const student = await xano.students.getById(
+    application.registration_students_id
+  );
+  const expectedDocName =
+    type === "liability_waiver"
+      ? `Liability Waiver – ${student.first_name} ${student.last_name}`
+      : `Enrollment Agreement – ${family.family_name}`;
+
   // Helper — wipes the stale Xano metadata so the fresh-create path
   // below writes onto a clean row. Used whenever the existing
   // PandaDoc envelope is unusable (deleted in admin dashboard,
@@ -171,43 +195,56 @@ export async function POST(req: NextRequest) {
     try {
       const existing = await getDocumentStatus(existingDocId);
       if (RESUMABLE_STATUSES.has(existing.status)) {
-        // Status alone isn't enough — also verify the envelope's
-        // stored recipient matches the Clerk user currently signing.
-        // The Thompson family scenario: an old envelope was created
-        // with the family's primary parent ("Michael Long") baked
-        // into the recipient when a previous version of this route
-        // used the lowest-id parent on file. A different parent
-        // (Hunter Thompson, in that case) signs in via Clerk now;
-        // their email is on the recipient list but the first/last
-        // name still reads as Michael. Resuming would hand them a
-        // doc with the wrong name stamped in. Fetching
-        // `/documents/{id}/details` exposes the recipient roster so
-        // we can detect that mismatch and force a fresh-create.
-        try {
-          const details = await getDocumentDetails(existingDocId);
-          const recipient = details.recipients?.[0];
-          const normalize = (s: string | undefined) =>
-            (s ?? "").trim().toLowerCase();
-          const recipientFirst = normalize(recipient?.first_name);
-          const recipientLast = normalize(recipient?.last_name);
-          const recipientEmailNormalized = normalize(recipient?.email);
-          const signerFirst = normalize(recipientFirstName);
-          const signerLast = normalize(recipientLastName);
-          const signerEmailNormalized = normalize(recipientEmail);
-          const nameMatches =
-            recipientFirst === signerFirst &&
-            recipientLast === signerLast;
-          const emailMatches =
-            !signerEmailNormalized ||
-            !recipientEmailNormalized ||
-            recipientEmailNormalized === signerEmailNormalized;
-          canResume = nameMatches && emailMatches;
-        } catch {
-          // If we can't fetch details (transient), prefer fresh-
-          // create over resuming a doc we can't verify. Safer to
-          // err on the side of a clean envelope than to hand the
-          // parent a stale doc.
+        // Status alone isn't enough — also verify (a) the envelope's
+        // stored TITLE matches what we'd generate now, and (b) the
+        // recipient matches the Clerk user currently signing.
+        //
+        // Title-mismatch case: envelope created when this route
+        // named enrollment agreements after the first student on
+        // the family (e.g. "Enrollment Agreement – Michael Long")
+        // before we switched to naming them after the family. The
+        // recipient may now be correct, but the title still reads
+        // as the wrong student.
+        //
+        // Recipient-mismatch case: envelope created when this route
+        // used the family's primary parent on file for the
+        // recipient name. A different parent (the Clerk-signer)
+        // now picks up the session — email may be on the recipient
+        // list but the first/last name is wrong.
+        //
+        // Either condition forces a fresh-create instead of handing
+        // the parent a stale doc.
+        const normalize = (s: string | undefined) =>
+          (s ?? "").trim().toLowerCase();
+        const titleMatches =
+          normalize(existing.name) === normalize(expectedDocName);
+        if (!titleMatches) {
           canResume = false;
+        } else {
+          try {
+            const details = await getDocumentDetails(existingDocId);
+            const recipient = details.recipients?.[0];
+            const recipientFirst = normalize(recipient?.first_name);
+            const recipientLast = normalize(recipient?.last_name);
+            const recipientEmailNormalized = normalize(recipient?.email);
+            const signerFirst = normalize(recipientFirstName);
+            const signerLast = normalize(recipientLastName);
+            const signerEmailNormalized = normalize(recipientEmail);
+            const nameMatches =
+              recipientFirst === signerFirst &&
+              recipientLast === signerLast;
+            const emailMatches =
+              !signerEmailNormalized ||
+              !recipientEmailNormalized ||
+              recipientEmailNormalized === signerEmailNormalized;
+            canResume = nameMatches && emailMatches;
+          } catch {
+            // If we can't fetch details (transient), prefer fresh-
+            // create over resuming a doc we can't verify. Safer to
+            // err on the side of a clean envelope than to hand the
+            // parent a stale doc.
+            canResume = false;
+          }
         }
       }
     } catch {
@@ -238,20 +275,15 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const student = await xano.students.getById(
-      application.registration_students_id
-    );
-
+    // `student` + `expectedDocName` were resolved earlier (before
+    // the resume validation) so we could compare an existing
+    // envelope's title against what we'd generate now. Reuse them
+    // here instead of re-fetching.
     const templateId = getTemplateId(type);
-
-    const docName =
-      type === "liability_waiver"
-        ? `Liability Waiver – ${student.first_name} ${student.last_name}`
-        : `Enrollment Agreement – ${student.first_name} ${student.last_name}`;
 
     const doc = await createDocumentFromTemplate({
       templateId,
-      name: docName,
+      name: expectedDocName,
       recipientEmail,
       recipientFirstName,
       recipientLastName,
