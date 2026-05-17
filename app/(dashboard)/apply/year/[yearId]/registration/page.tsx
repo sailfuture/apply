@@ -785,6 +785,12 @@ export default function RegistrationPage() {
   const [signingStudentId, setSigningStudentId] = useState<number | null>(null);
   const [signingLoading, setSigningLoading] = useState<number | null>(null);
   const [signingSession, setSigningSession] = useState<{ sessionId: string; documentId: string; studentId: number; applicationId: number } | null>(null);
+  // `docLoaded` gates the full-screen "Preparing your waiver..."
+  // overlay — flips true when PandaDoc's embed fires `document.loaded`.
+  // Without this, signingSession is set the moment the API returns
+  // (before the iframe has any content), and the parent would see a
+  // blank dialog interior under the doc-load delay.
+  const [docLoaded, setDocLoaded] = useState(false);
   const signingInstanceRef = useRef<{ destroy: () => void } | null>(null);
   const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -955,7 +961,17 @@ export default function RegistrationPage() {
       }
 
       const signing = new Signing("pandadoc-reg-signing-embed", { debugMode: true });
+      // Reset the loaded flag every time the embed re-initializes so
+      // the overlay re-engages until PandaDoc fires `document.loaded`
+      // (or `document.exception`, the failure short-circuit).
+      setDocLoaded(false);
       signing
+        .on("document.loaded", () => {
+          setDocLoaded(true);
+        })
+        .on("document.exception", () => {
+          setDocLoaded(true);
+        })
         .on("document.completed", async () => {
           // Update student registration status
           const currentSession = signingSession;
@@ -2739,6 +2755,39 @@ export default function RegistrationPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Full-screen blocking overlay during waiver prep. Covers two
+          phases the parent shouldn't be able to click out of:
+            1. signingLoading is set → API is creating + sending the
+               PandaDoc envelope (can take 5-30s on a fresh doc)
+            2. signingSession is set but the embed hasn't fired
+               `document.loaded` yet → iframe is mounting / fetching
+          Once `docLoaded` flips true, the dialog content takes over
+          and this overlay disappears. The overlay's z-index sits
+          ABOVE the dialog's backdrop (z-50 is the shadcn default)
+          so the parent can't click the dialog close button mid-prep
+          either. */}
+      {(signingLoading !== null || (signingSession !== null && !docLoaded)) && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-background/95 backdrop-blur-sm"
+          role="status"
+          aria-live="polite"
+          aria-label="Preparing liability waiver"
+        >
+          <div className="flex flex-col items-center gap-4 px-6 text-center">
+            <Loader2 className="size-10 animate-spin text-primary" />
+            <div className="space-y-1">
+              <p className="text-base font-medium">
+                Preparing your liability waiver…
+              </p>
+              <p className="text-sm text-muted-foreground max-w-sm">
+                This usually takes a few seconds. Please don&apos;t close
+                this tab.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

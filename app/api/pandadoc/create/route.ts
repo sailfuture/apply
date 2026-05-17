@@ -210,6 +210,48 @@ export async function POST(req: NextRequest) {
         "parent.last_name": docParentLastName,
         "parent.email": docParentEmail,
       },
+      // Pre-fill the interactive form fields on the template so the
+      // signer doesn't have to retype their own name / email / their
+      // student's name. PandaDoc fields are keyed by the template
+      // field's `name` attribute — we send a comprehensive set of
+      // common naming conventions (snake_case + dotted variants +
+      // capitalized "Participant Name") so the same code works
+      // regardless of how the template author named their fields.
+      // Fields whose names don't match anything in the template are
+      // silently ignored by PandaDoc, so this is safe to over-send.
+      fields: {
+        // Parent identity — primary parent on file, NOT the Clerk
+        // signer. Mirrors the token semantics above.
+        parent_first_name: docParentFirstName,
+        parent_last_name: docParentLastName,
+        parent_full_name: `${docParentFirstName} ${docParentLastName}`.trim(),
+        parent_name: `${docParentFirstName} ${docParentLastName}`.trim(),
+        parent_email: docParentEmail,
+        "parent.first_name": docParentFirstName,
+        "parent.last_name": docParentLastName,
+        "parent.full_name": `${docParentFirstName} ${docParentLastName}`.trim(),
+        "parent.email": docParentEmail,
+        // Student identity — for liability waivers especially, the
+        // template's "Participant Name" field should match this
+        // student. The waiver is per-student per-year; the create
+        // route resolves `student` from `application.registration_students_id`
+        // up above, so this is always the right student.
+        student_first_name: student.first_name,
+        student_last_name: student.last_name,
+        student_full_name: `${student.first_name} ${student.last_name}`,
+        student_name: `${student.first_name} ${student.last_name}`,
+        "student.first_name": student.first_name,
+        "student.last_name": student.last_name,
+        "student.full_name": `${student.first_name} ${student.last_name}`,
+        participant_name: `${student.first_name} ${student.last_name}`,
+        participant_first_name: student.first_name,
+        participant_last_name: student.last_name,
+        "Participant Name": `${student.first_name} ${student.last_name}`,
+        // Family-level name (e.g. "Thompson Family") for any field
+        // that surfaces the household identity.
+        family_name: family.family_name,
+        "family.name": family.family_name,
+      },
     });
 
     await waitForDocumentStatus(doc.id, "document.draft");

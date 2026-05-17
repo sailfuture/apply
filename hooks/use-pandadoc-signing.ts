@@ -54,6 +54,13 @@ export function usePandaDocSigning(
   const [signingSession, setSigningSession] = useState<SigningSession | null>(
     null
   );
+  // `docLoaded` flips true when PandaDoc's embed fires `document.loaded`
+  // for the current session. Used by callers to render a full-screen
+  // blocking overlay during the prep + iframe-init window — the
+  // signingSession existing isn't enough on its own (it's set the
+  // moment the API returns the sessionId, before the iframe has
+  // rendered anything).
+  const [docLoaded, setDocLoaded] = useState(false);
   const [resetConfirm, setResetConfirm] = useState<
     "liability_waiver" | "enrollment_agreement" | null
   >(null);
@@ -64,6 +71,17 @@ export function usePandaDocSigning(
   } | null>(null);
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
   const signingInstanceRef = useRef<{ destroy: () => void } | null>(null);
+
+  // Reset `docLoaded` every time a new signing session starts so the
+  // overlay re-engages for the next sign attempt (the iframe needs
+  // time to re-render even when a session is replayed).
+  useEffect(() => {
+    if (!signingSession) {
+      setDocLoaded(false);
+    } else {
+      setDocLoaded(false);
+    }
+  }, [signingSession]);
 
   // Cleanup polling on unmount
   useEffect(() => {
@@ -104,12 +122,17 @@ export function usePandaDocSigning(
 
       signing
         .on("document.loaded", () => {
-          console.log("PandaDoc: document loaded");
+          // Flip the overlay off — the iframe has the doc rendered
+          // and is ready for the signer to interact with it.
+          setDocLoaded(true);
         })
         .on("document.completed", () => {
           onRefresh();
         })
         .on("document.exception", (payload: unknown) => {
+          // Drop the overlay anyway on exception so the user isn't
+          // staring at a perpetual loader if the embed errors out.
+          setDocLoaded(true);
           console.error("PandaDoc signing exception:", payload);
         });
 
@@ -310,6 +333,7 @@ export function usePandaDocSigning(
   return {
     signingLoading,
     signingSession,
+    docLoaded,
     resetConfirm,
     resetting,
     pdfViewerDoc,

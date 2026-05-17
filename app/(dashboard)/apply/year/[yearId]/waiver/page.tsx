@@ -268,6 +268,38 @@ export default function WaiverPage() {
         </DialogContent>
       </Dialog>
 
+      {/* Full-screen blocking overlay during waiver prep. Covers two
+          phases the parent shouldn't be able to click out of:
+            1. signingLoading is "liability_waiver" → API creating
+               + sending the PandaDoc envelope (can take 5-30s)
+            2. signingSession exists but the embed hasn't fired
+               `document.loaded` yet → iframe mounting / fetching
+          z-100 sits above the dialog's default z-50 backdrop so the
+          parent can't click the dialog close button mid-prep. */}
+      {(signing.signingLoading === "liability_waiver" ||
+        (signing.signingSession?.type === "liability_waiver" &&
+          !signing.docLoaded)) && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-background/95 backdrop-blur-sm"
+          role="status"
+          aria-live="polite"
+          aria-label="Preparing liability waiver"
+        >
+          <div className="flex flex-col items-center gap-4 px-6 text-center">
+            <Loader2 className="size-10 animate-spin text-primary" />
+            <div className="space-y-1">
+              <p className="text-base font-medium">
+                Preparing your liability waiver…
+              </p>
+              <p className="text-sm text-muted-foreground max-w-sm">
+                This usually takes a few seconds. Please don&apos;t close
+                this tab.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Reset Confirmation Dialog */}
       <Dialog
         open={signing.resetConfirm === "liability_waiver"}

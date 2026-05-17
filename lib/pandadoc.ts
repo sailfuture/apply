@@ -29,7 +29,17 @@ interface CreateDocumentParams {
    *  the env to override per template, and pass `getTemplateRole(type)`
    *  in here from the caller. */
   role?: string;
+  /** Plain-text tokens (mail-merge style) — replace `{{token.name}}`
+   *  placeholders in the document content. Use for prose references
+   *  the signer doesn't interact with. */
   tokens?: Record<string, string>;
+  /** Form-field prefills — populate interactive fields the signer
+   *  would otherwise type into (e.g. "Participant Name", "Parent
+   *  Email"). Keyed by the field's `name` attribute in the PandaDoc
+   *  template; values are stringified. Distinct from tokens — a
+   *  field's pre-filled value is editable by the signer in the
+   *  signing UI, whereas tokens are baked into the doc text. */
+  fields?: Record<string, string>;
 }
 
 interface PandaDocDocument {
@@ -48,7 +58,7 @@ interface PandaDocSession {
 export async function createDocumentFromTemplate(
   params: CreateDocumentParams
 ): Promise<PandaDocDocument> {
-  const body = {
+  const body: Record<string, unknown> = {
     name: params.name,
     template_uuid: params.templateId,
     recipients: [
@@ -66,6 +76,20 @@ export async function createDocumentFromTemplate(
         }))
       : [],
   };
+
+  // PandaDoc expects fields as an object keyed by the template
+  // field's name, with each value an object containing `value` (and
+  // optionally `role`, but role-binding the recipient already
+  // covers that). Only emit the `fields` key when there's at least
+  // one prefill to send — PandaDoc rejects empty `fields: {}`.
+  if (params.fields && Object.keys(params.fields).length > 0) {
+    body.fields = Object.fromEntries(
+      Object.entries(params.fields).map(([name, value]) => [
+        name,
+        { value },
+      ])
+    );
+  }
 
   const res = await fetch(`${PANDADOC_API_BASE}/documents`, {
     method: "POST",
