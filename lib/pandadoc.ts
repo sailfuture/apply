@@ -22,8 +22,9 @@ interface CreateDocumentParams {
   /** Name of the role on the PandaDoc template that the recipient
    *  fills. PandaDoc rejects the document create with
    *  `non_field_errors: Role 'X' does not exist` when the role
-   *  name doesn't match exactly. Default of `"Parent"` works when
-   *  the template was authored with that role; configure
+   *  name doesn't match exactly. Default of `"Client"` matches
+   *  the current SailFuture templates (renamed from "Parent" to
+   *  "Client" in May 2026); configure
    *  `PANDADOC_LIABILITY_ROLE` / `PANDADOC_ENROLLMENT_ROLE` via
    *  the env to override per template, and pass `getTemplateRole(type)`
    *  in here from the caller. */
@@ -55,7 +56,7 @@ export async function createDocumentFromTemplate(
         email: params.recipientEmail,
         first_name: params.recipientFirstName,
         last_name: params.recipientLastName,
-        role: params.role ?? "Parent",
+        role: params.role ?? "Client",
       },
     ],
     tokens: params.tokens
@@ -180,13 +181,15 @@ export function getTemplateId(
  * Each template has its own role name (PandaDoc rejects the create
  * with `Role 'X' does not exist` when the name doesn't match
  * exactly), so we expose a per-type env var:
- *   - `PANDADOC_LIABILITY_ROLE` — defaults to "Parent"
- *   - `PANDADOC_ENROLLMENT_ROLE` — defaults to "Parent"
+ *   - `PANDADOC_LIABILITY_ROLE` — defaults to "Client"
+ *   - `PANDADOC_ENROLLMENT_ROLE` — defaults to "Client"
  *
  * Override either env var when the template was authored with a
- * different role name (common: "Recipient", "Signer", "Client").
- * The default keeps existing behavior for templates that DO use
- * "Parent" so we don't break already-working deployments.
+ * different role name (common: "Recipient", "Signer", "Parent").
+ * Default is "Client" because the SailFuture templates were renamed
+ * from "Parent" to "Client" in May 2026 — keeping the default in
+ * sync with the live templates means the code Just Works even if
+ * the env var hasn't propagated through Vercel after a deploy.
  */
 export function getTemplateRole(
   type: "liability_waiver" | "enrollment_agreement"
@@ -196,5 +199,5 @@ export function getTemplateRole(
       ? "PANDADOC_LIABILITY_ROLE"
       : "PANDADOC_ENROLLMENT_ROLE";
   const role = process.env[envVar]?.trim();
-  return role && role.length > 0 ? role : "Parent";
+  return role && role.length > 0 ? role : "Client";
 }
