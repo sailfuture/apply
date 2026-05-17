@@ -76,9 +76,17 @@ export async function GET(req: NextRequest) {
       registrationsResult.status === "fulfilled"
         ? (registrationsResult.value as { is_submitted: boolean }[])
         : [];
+    // Students for enrollment / withdrawal counts. We need the full
+    // row shape (isEnrolled / isArchived) so the dashboard tiles can
+    // count both groups; cast to the relevant subset rather than a
+    // narrow `unknown[]` so the filters below typecheck.
     const students =
       studentsResult.status === "fulfilled"
-        ? (studentsResult.value as unknown[])
+        ? (studentsResult.value as Array<{
+            id: number;
+            isEnrolled?: boolean;
+            isArchived?: boolean;
+          }>)
         : [];
 
     // Hide soft-deleted (`isActive=false`) applications from every
@@ -106,6 +114,26 @@ export async function GET(req: NextRequest) {
     ).length;
     const totalStudents = students.length;
 
+    // Enrollment / withdrawal counts — gated to the selected year via
+    // the per-student application join. A student "belongs to" the
+    // selected year when they have an active application for it; their
+    // `isEnrolled` / `isArchived` flags are then evaluated. Both flags
+    // are per-student (not per-year), so without the year filter we
+    // can't distinguish "withdrawn this year" from "withdrawn ever".
+    // With no year selected, count across all students.
+    const yearStudentIds = yearId
+      ? new Set(applications.map((a) => Number(a.registration_students_id)))
+      : null;
+    const enrollmentScope = yearStudentIds
+      ? students.filter((s) => yearStudentIds.has(s.id))
+      : students;
+    const enrolledCount = enrollmentScope.filter(
+      (s) => s.isEnrolled === true && s.isArchived !== true
+    ).length;
+    const withdrawnCount = enrollmentScope.filter(
+      (s) => s.isArchived === true
+    ).length;
+
     const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
     const recentInquiries = inquiries.filter(
       (i) => i.created_at > thirtyDaysAgo
@@ -127,6 +155,14 @@ export async function GET(req: NextRequest) {
         inProgress: totalRegistrations - completedRegistrations,
       },
       students: { total: totalStudents },
+      // Per-year enrollment lifecycle counts. Drives the dashboard's
+      // "Enrolled" + "Withdrawn" stat tiles. `enrolled` and `withdrawn`
+      // are both scoped to the selected year via the application
+      // join above.
+      enrollment: {
+        enrolled: enrolledCount,
+        withdrawn: withdrawnCount,
+      },
     });
   } catch (err) {
     return handleAdminError(err);
