@@ -221,12 +221,13 @@ export default function FamilyRegistrationDetailPage() {
     family?.family_name?.trim() || `Family #${family?.id ?? familyId}`;
 
   const refresh = () => {
-    void mutate();
-    // Pull the family-payment row alongside the main detail
-    // refetch — admin actions that touch tuition / fees re-emit
-    // both SWR caches in one shot so the Tuition card never lags
-    // the rest of the page.
-    void mutateFamilyPayment();
+    // Return the combined SWR-mutate promise so callers that need
+    // to await the refresh (e.g. AdminDocumentUpload waits for
+    // `files` to catch up before clearing its pending list) can do
+    // so. Fire both fetches in parallel; the resolved value
+    // (Promise<[...]>) is fine to discard at the void-typed call
+    // sites that don't care.
+    return Promise.all([mutate(), mutateFamilyPayment()]);
   };
 
   // Page-level registration-confirmed latch. Once admin has flipped
@@ -3634,7 +3635,12 @@ function AdminDocumentUpload({
   files: Record<string, unknown>[];
   label: string;
   compact?: boolean;
-  onChanged: () => void;
+  /** Parent's data-refresh callback. May return a Promise (SWR
+   *  mutate). Awaiting it before clearing local pending state
+   *  prevents the file row from flickering through an empty "Not
+   *  uploaded" state after the upload lands but before the parent's
+   *  `files` prop catches up. */
+  onChanged: () => void | Promise<unknown>;
 }) {
   const [pending, setPending] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -3679,8 +3685,13 @@ function AdminDocumentUpload({
           ? `${label} uploaded.`
           : `${newFiles.length} files uploaded.`
       );
+      // Await the parent's SWR refresh BEFORE clearing pending. The
+      // pending list keeps the just-uploaded file chip visible until
+      // the parent's `files` prop catches up, so the row doesn't
+      // flicker through the "Not uploaded" empty state between
+      // PATCH-landed and SWR-refreshed.
+      await Promise.resolve(onChanged());
       setPending([]);
-      onChanged();
     } catch (err) {
       console.error("[AdminDocumentUpload.handleFilesChange]", err);
       const message =

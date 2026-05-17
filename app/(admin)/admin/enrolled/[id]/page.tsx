@@ -273,7 +273,7 @@ export default function EnrolledStudentDetailPage() {
       <StudentBioCard
         student={student}
         app={app}
-        onChanged={() => void mutate()}
+        onChanged={() => mutate()}
       />
 
       {/* Family Information — parents + emergency contacts in
@@ -287,20 +287,20 @@ export default function EnrolledStudentDetailPage() {
         family={family}
         parents={parents}
         emergencyContacts={emergency_contacts}
-        onChanged={() => void mutate()}
+        onChanged={() => mutate()}
       />
 
       <PacketCard
         packet={packet}
         student={student}
         schoolYear={school_year}
-        onChanged={() => void mutate()}
+        onChanged={() => mutate()}
       />
 
       <TestingCard
         student={student}
         app={app}
-        onChanged={() => void mutate()}
+        onChanged={() => mutate()}
       />
     </div>
   );
@@ -3420,7 +3420,13 @@ function AdminDocumentUpload({
    *  inside the Documents-to-Review table cells where vertical
    *  space is tight. */
   compact?: boolean;
-  onChanged: () => void;
+  /** Parent's data-refresh callback. May return a Promise (the
+   *  SWR mutate). When it does, we await the refresh before
+   *  clearing local pending state — bridges the gap between the
+   *  PATCH landing and the parent's `files` prop catching up, so
+   *  the file row doesn't flicker through an empty "Not uploaded"
+   *  state mid-upload. */
+  onChanged: () => void | Promise<unknown>;
 }) {
   const [pending, setPending] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -3469,8 +3475,16 @@ function AdminDocumentUpload({
           ? `${label} uploaded.`
           : `${newFiles.length} files uploaded.`
       );
+      // Await the parent's data-refresh (SWR mutate) BEFORE clearing
+      // `pending` so the FileUpload list keeps showing the just-
+      // uploaded file until the parent's `files` prop catches up.
+      // Without this `setPending([])` ran first, the parent's prop
+      // was still stale (empty), and the row briefly rendered the
+      // "Not uploaded" empty state until SWR's revalidation landed.
+      // `Promise.resolve(...)` covers callers that return either
+      // `void` or a Promise.
+      await Promise.resolve(onChanged());
       setPending([]);
-      onChanged();
     } catch (err) {
       console.error("[AdminDocumentUpload.handleFilesChange]", err);
       const message =
