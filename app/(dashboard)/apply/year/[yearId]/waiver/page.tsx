@@ -188,11 +188,13 @@ export default function WaiverPage() {
             <div className="flex gap-2 shrink-0">
               {pdfUrl && (
                 <Button
+                  asChild
                   variant="outline"
                   size="sm"
-                  onClick={() => window.open(pdfUrl, "_blank")}
                 >
-                  View Document
+                  <a href={pdfUrl} download="liability-waiver.pdf">
+                    Download Document
+                  </a>
                 </Button>
               )}
               <Button

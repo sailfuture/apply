@@ -372,22 +372,32 @@ export default function EnrollmentSigningPage() {
       )}
 
       {/* Post-signing action — replaces the layout's "Section Completed"
-          button with a View Document link to the signed PDF. The
-          "Re-Sign Document" affordance used to live here too, but it
-          409'd on the PandaDoc create endpoint (which rejects re-creating
-          an already-signed doc) and there's no sane re-sign flow — once
-          PandaDoc has the signed envelope, the parent can't legally
-          replace it with a fresh signing session anyway. Admin can void
-          the agreement from the PandaDoc dashboard if a re-sign is
-          actually needed. */}
+          button with a Download link to the signed PDF. The iframe
+          preview above already shows the doc inline, so a "View"
+          action would just re-render the same thing — Download is
+          the only meaningful follow-up. Rendered as a native
+          `<a download>` so the browser fires a save-as instead of
+          opening a new tab on top of the in-page preview.
+          The "Re-Sign Document" affordance used to live here too,
+          but it 409'd on the PandaDoc create endpoint (which
+          rejects re-creating an already-signed doc) and there's no
+          sane re-sign flow — once PandaDoc has the signed envelope,
+          the parent can't legally replace it with a fresh signing
+          session anyway. Admin can void the agreement from the
+          PandaDoc dashboard if a re-sign is actually needed. */}
       {isCompleted && pdfUrl && (
         <div className="border-t pt-6 pb-6">
           <Button
+            asChild
             variant="outline"
             className="w-full bg-white"
-            onClick={() => window.open(pdfUrl, "_blank")}
           >
-            View Document
+            <a
+              href={pdfUrl}
+              download="enrollment-agreement.pdf"
+            >
+              Download Document
+            </a>
           </Button>
         </div>
       )}
