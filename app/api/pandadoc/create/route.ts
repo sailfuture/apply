@@ -86,23 +86,20 @@ export async function POST(req: NextRequest) {
   const pandadocIdField = type === "liability_waiver"
     ? "liability_waiver_pandadoc_id"
     : "enrollment_agreement_pandadoc_id";
-  const statusField = type === "liability_waiver"
-    ? "liability_waiver_status"
-    : "enrollment_agreement_status";
 
   const sourceRecord = (packetRow ?? progressRow ?? application) as unknown as Record<
     string,
     unknown
   >;
   const existingDocId = sourceRecord[pandadocIdField] as string | null;
-  const existingStatus = sourceRecord[statusField] as string | null;
-
-  if (existingStatus === "completed") {
-    return NextResponse.json(
-      { error: "Document already signed" },
-      { status: 409 }
-    );
-  }
+  // `existingStatus` used to early-return 409 here for completed docs,
+  // but that's wrong when admin has deleted the PandaDoc envelope —
+  // the local row still says "completed" while PandaDoc no longer has
+  // anything. The resume-or-recreate path below handles both cases:
+  // a still-valid completed doc lets the user resume the signing
+  // session (PandaDoc returns a no-op for completed envelopes); a
+  // deleted/expired doc throws, which falls through to clearing the
+  // stale metadata + creating a fresh envelope.
 
   // The signing identity (who PandaDoc actually addresses the signing
   // session to) is whichever parent is logged into Clerk right now.
@@ -140,7 +137,39 @@ export async function POST(req: NextRequest) {
         resumed: true,
       });
     } catch {
-      // Document may have expired or been deleted; create a new one below
+      // PandaDoc no longer has this envelope (admin deleted it, it
+      // expired, etc.). Wipe the stale metadata on our side so the
+      // fresh-create path below writes onto a clean row instead of
+      // leaving behind a half-completed mix (e.g. `*_pdf_url` still
+      // pointing at the now-deleted PDF or `*_signed` still true).
+      // Same field set the /api/pandadoc/reset endpoint clears.
+      if (type === "enrollment_agreement" && progressRow) {
+        await xano.studentRegistrationProgress
+          .update(progressRow.id, {
+            enrollment_agreement_pandadoc_id: "",
+            enrollment_agreement_status: "",
+            enrollment_agreement_sent: null,
+            enrollment_agreement_pdf_url: "",
+            is_enrollment_agreement_signed: false,
+            isEnrollment: false,
+          })
+          .catch(() => {
+            // best-effort — fall through to create even if the
+            // metadata reset failed, since the create write will
+            // overwrite the id + status anyway.
+          });
+      } else if (type === "liability_waiver" && packetRow) {
+        await xano.studentRegistration
+          .update(packetRow.id, {
+            liability_waiver_pandadoc_id: "",
+            liability_waiver_status: "",
+            liability_waiver_sent_at: null,
+            liability_waiver_pdf_url: "",
+          })
+          .catch(() => {
+            // best-effort, same rationale as above.
+          });
+      }
     }
   }
 
