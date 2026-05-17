@@ -7558,8 +7558,14 @@ function ScholarshipPathSelector({
                 disabled
                   ? "opacity-60 hover:bg-white"
                   : "disabled:opacity-50",
+                // Active-state border + filled circle use `green-500`
+                // so the indicator matches the SectionShell card-
+                // header status dot (also `bg-green-500`) — the two
+                // greens used to drift, with the picker on `green-600`
+                // and the dot on `green-500`. Same color now keeps the
+                // surface visually coherent.
                 isActive
-                  ? "border-green-600 hover:bg-white"
+                  ? "border-green-500 hover:bg-white"
                   : "border-border hover:bg-muted/40"
               )}
             >
@@ -7571,7 +7577,7 @@ function ScholarshipPathSelector({
                 // 1px green border + filled circle is enough
                 // visual differentiation against the unselected
                 // neutral outline.
-                <Circle className="size-2.5 shrink-0 fill-green-600 text-green-600" />
+                <Circle className="size-2.5 shrink-0 fill-green-500 text-green-500" />
               ) : (
                 <Circle className="size-2.5 shrink-0 text-muted-foreground/40" />
               )}

@@ -64,6 +64,13 @@ export async function PATCH(
       "isOpportunityScholarship",
       "isSNAPBenefits",
       "isNotParticipating",
+      // Document slots — admin can upload paperwork on behalf of the
+      // family (SNAP award letter, unemployment / termination
+      // letter). The columns hold Xano file metadata arrays; the
+      // upload route returns the file metadata which the client
+      // splices into the existing array before PATCHing.
+      "snap_benefits",
+      "unemployment_letter",
     ];
     const patch: Record<string, unknown> = {};
     for (const key of allowed) {

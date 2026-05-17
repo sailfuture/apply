@@ -8,11 +8,22 @@ import {
   Circle,
   ExternalLink,
   FileText,
+  FileUp,
   Loader2,
   RotateCcw,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  FileUpload,
+  FileUploadDropzone,
+  FileUploadItem,
+  FileUploadItemDelete,
+  FileUploadItemMetadata,
+  FileUploadItemPreview,
+  FileUploadList,
+} from "@/components/ui/file-upload";
 import {
   Table,
   TableBody,
@@ -329,6 +340,25 @@ interface DocRowData {
    *  not uploaded" so admin sees what's missing from this family's
    *  declared path. */
   emptyHint?: string;
+  /** Optional upload-on-behalf-of-family affordance. When provided
+   *  the row renders an "Upload" / "Add file" button next to the
+   *  file list; admin selects local file(s), they POST to /api/upload
+   *  to land in the Xano vault, and the callback PATCHes the new
+   *  metadata array onto the appropriate Xano column. Returning a
+   *  Promise lets the parent revalidate its SWR cache before the
+   *  button leaves the spinner state. */
+  upload?: {
+    /** Called with the user-selected `File[]` after the local
+     *  picker resolves. Implementation handles the actual upload +
+     *  PATCH; this block only renders the button + tracks the
+     *  uploading state via the shared `savingSlot`. */
+    onUpload: (newFiles: File[]) => Promise<void>;
+    /** MIME / extension list passed to `<FileUpload accept>`. Defaults
+     *  match the parent-side upload widgets when omitted. */
+    accept?: string;
+    /** Max number of files allowed in the picker. Defaults to 5. */
+    maxFiles?: number;
+  };
   /** When set, the row renders the Mark Confirmed + Undo button
    *  pair. Mark Confirmed flips the slot's `*_confirm` to true,
    *  Undo flips it back to false. Splitting the actions (rather
@@ -416,11 +446,69 @@ function buildRows({
         setSavingSlot(null);
       }
     };
+    // Admin upload-on-behalf-of-family. Posts each file to
+    // /api/upload (Xano vault), accumulates the returned metadata
+    // onto the existing `snap_benefits` array, then PATCHes the
+    // scholarship row. `onScholarshipChanged` revalidates upstream
+    // SWR so the table reflects the new file without a refresh.
+    const uploadSnap = async (newFiles: File[]) => {
+      if (newFiles.length === 0) return;
+      setSavingSlot(slotKey);
+      try {
+        let acc = toFileArray(scholarship.snap_benefits);
+        for (const f of newFiles) {
+          const formData = new FormData();
+          formData.append("file", f);
+          const uploadRes = await fetch("/api/upload", {
+            method: "POST",
+            body: formData,
+          });
+          if (!uploadRes.ok) {
+            const body = await uploadRes.json().catch(() => null);
+            throw new Error(
+              body?.error ?? `Upload failed (${uploadRes.status})`
+            );
+          }
+          const metadata = (await uploadRes.json()) as Record<string, unknown>;
+          acc = [...acc, metadata];
+        }
+        const patchRes = await fetch(
+          `/api/admin/scholarships/${scholarship.id}`,
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ snap_benefits: acc }),
+          }
+        );
+        if (!patchRes.ok) {
+          const body = await patchRes.json().catch(() => null);
+          throw new Error(body?.error ?? `Save failed (${patchRes.status})`);
+        }
+        toast.success(
+          newFiles.length === 1
+            ? "SNAP award letter uploaded."
+            : `${newFiles.length} files uploaded.`
+        );
+        onScholarshipChanged?.();
+      } catch (err) {
+        console.error("Failed to upload SNAP letter:", err);
+        toast.error(
+          err instanceof Error ? err.message : "Couldn't upload file."
+        );
+      } finally {
+        setSavingSlot(null);
+      }
+    };
     rows.push({
       key: slotKey,
       label: "SNAP benefits award letter",
       files: toFileArray(scholarship.snap_benefits),
       emptyHint: "No award letter uploaded yet.",
+      upload: {
+        onUpload: uploadSnap,
+        accept: ".pdf,.jpg,.jpeg,.png",
+        maxFiles: 5,
+      },
       confirmation: {
         confirmed,
         saving: savingSlot === slotKey,
@@ -700,6 +788,28 @@ function DocRow({
   row: DocRowData;
   adminNameByTeacherId: Map<number, string>;
 }) {
+  // Local pending state for the upload widget — keeps the just-
+  // picked files visible as chips inside the file cell until the
+  // POST + PATCH cycle lands and the parent's SWR refresh flips
+  // `row.files` to include them. Mirrors the AdminDocumentUpload
+  // pattern used on the registration packet page.
+  const [pending, setPending] = useState<File[]>([]);
+  const [uploading, setUploading] = useState(false);
+  async function handleFilesChange(newFiles: File[]) {
+    setPending(newFiles);
+    if (!row.upload || newFiles.length === 0) return;
+    setUploading(true);
+    try {
+      await row.upload.onUpload(newFiles);
+      setPending([]);
+    } catch {
+      // The onUpload implementation toasts its own errors; we just
+      // leave `pending` populated so admin can retry without
+      // re-picking the files.
+    } finally {
+      setUploading(false);
+    }
+  }
   // Audit columns — only populated when the row is currently
   // confirmed AND has a timestamp. Confirmed By prefers the
   // string `confirmedByName` (admin display name written directly
@@ -760,21 +870,80 @@ function DocRow({
         ) : null}
       </TableCell>
       <TableCell className="align-middle">
-        {row.files.length === 0 ? (
-          <p className="text-[11px] italic text-muted-foreground">
-            {row.emptyHint ?? "No file uploaded."}
-          </p>
-        ) : (
-          <ul className="space-y-1">
-            {row.files.map((f, i) => (
-              <FileLink
-                key={`${row.key}-${f.name ?? f.path ?? i}-${i}`}
-                file={f}
-                fallbackIndex={i}
-              />
-            ))}
-          </ul>
-        )}
+        <div className="space-y-1.5">
+          {row.files.length === 0 ? (
+            <p className="text-[11px] italic text-muted-foreground">
+              {row.emptyHint ?? "No file uploaded."}
+            </p>
+          ) : (
+            <ul className="space-y-1">
+              {row.files.map((f, i) => (
+                <FileLink
+                  key={`${row.key}-${f.name ?? f.path ?? i}-${i}`}
+                  file={f}
+                  fallbackIndex={i}
+                />
+              ))}
+            </ul>
+          )}
+          {/* Upload-on-behalf-of-family affordance — only renders
+              when the row was built with an `upload` config (today:
+              the SNAP path's award-letter row). Admin picks file(s)
+              from their local disk; the row's `onUpload` POSTs them
+              to /api/upload + PATCHes the appropriate Xano column.
+              Pending chips stay visible until the parent's SWR
+              refresh flips `row.files` so the row doesn't flicker
+              through an empty state mid-upload. */}
+          {row.upload ? (
+            <FileUpload
+              maxFiles={row.upload.maxFiles ?? 5}
+              maxSize={10 * 1024 * 1024}
+              accept={row.upload.accept ?? ".pdf,.jpg,.jpeg,.png"}
+              value={pending}
+              onValueChange={handleFilesChange}
+              disabled={uploading}
+            >
+              <FileUploadDropzone className="border-0 p-0 cursor-pointer hover:bg-transparent w-fit min-h-0">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs leading-none bg-white"
+                  disabled={uploading}
+                  asChild
+                >
+                  <span>
+                    {uploading ? (
+                      <Loader2 className="size-3 animate-spin" />
+                    ) : (
+                      <FileUp className="size-3" />
+                    )}
+                    <span className="ml-1">
+                      {uploading
+                        ? "Uploading…"
+                        : row.files.length === 0
+                          ? "Upload"
+                          : "Add file"}
+                    </span>
+                  </span>
+                </Button>
+              </FileUploadDropzone>
+              <FileUploadList>
+                {pending.map((f, i) => (
+                  <FileUploadItem key={i} value={f}>
+                    <FileUploadItemPreview />
+                    <FileUploadItemMetadata />
+                    <FileUploadItemDelete asChild>
+                      <Button variant="ghost" size="icon" className="size-7">
+                        <X className="size-4" />
+                      </Button>
+                    </FileUploadItemDelete>
+                  </FileUploadItem>
+                ))}
+              </FileUploadList>
+            </FileUpload>
+          ) : null}
+        </div>
       </TableCell>
       {/* Confirmed By + Time — own columns (rather than stacked
           under the buttons) so the audit trail reads as a proper
