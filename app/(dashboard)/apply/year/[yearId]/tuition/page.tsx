@@ -104,12 +104,12 @@ export default function TuitionPage() {
   const { data: students } = useStudents();
   const { data: applications } = useApplications();
   const { data: yearsData } = useSchoolYears();
-  // Scholarship row drives the Opportunity Scholarship breakout —
+  // Scholarship row drives the Remaining Tuition Amount breakout —
   // when the family is on the OS path we render a dedicated
-  // "Opportunity Scholarship (Cost Per Student)" line right above
-  // the subtotal so the parent sees what they're paying for tuition
-  // under the determination, separately from the OS coverage line
-  // (which shows as a discount on the row above).
+  // "Remaining Tuition Amount" line right above the subtotal so the
+  // parent sees what they still owe for tuition after scholarships,
+  // separately from the OS coverage line (which shows as a
+  // discount on the row above).
   const { data: familyData } = useFamily();
   const familyIdForScholarship =
     (familyData as { id?: number } | undefined)?.id ?? null;
@@ -546,18 +546,19 @@ export default function TuitionPage() {
                       </td>
                     </tr>
 
-                    {/* Opportunity Scholarship cost per student — the
-                        per-student tuition portion the family pays under
-                        the OS determination. Same value baked into the
-                        subtotal below, broken out as its own row. Renders
-                        whenever this row has an OS determination (admin
-                        entered a per-student amount, OR family is flagged
-                        on OS, OR family is on SNAP). */}
+                    {/* Remaining Tuition Amount — the per-student
+                        tuition you still owe after the Opportunity
+                        Scholarship has been applied. Same value baked
+                        into the subtotal below, broken out as its own
+                        row. Renders whenever this row has an OS
+                        determination (admin entered a per-student
+                        amount, OR family is flagged on OS, OR family
+                        is on SNAP). */}
                     {row.hasOSDetermination ? (
                       <tr className="border-t">
                         <td className="px-4 py-3 text-muted-foreground">
                           <span className="inline-flex items-center gap-1.5">
-                            Opportunity Scholarship (Cost Per Student)
+                            Remaining Tuition Amount
                             <Tooltip>
                               <TooltipTrigger asChild>
                                 <button type="button" className="inline-flex text-muted-foreground/50 hover:text-muted-foreground transition-colors">
@@ -566,9 +567,9 @@ export default function TuitionPage() {
                               </TooltipTrigger>
                               <TooltipContent side="top" className="max-w-xs text-xs">
                                 {isSnapFamily ? (
-                                  <p>SNAP-qualified families do not have to pay tuition — the Opportunity Scholarship covers the full per-student tuition cost.</p>
+                                  <p>SNAP-qualified families have no remaining tuition — the Opportunity Scholarship covers the full per-student amount.</p>
                                 ) : (
-                                  <p>The per-student tuition portion you pay under the Opportunity Scholarship determination.</p>
+                                  <p>The per-student tuition you still owe after the Opportunity Scholarship has been applied.</p>
                                 )}
                               </TooltipContent>
                             </Tooltip>

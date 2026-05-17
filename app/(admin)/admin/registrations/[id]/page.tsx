@@ -2098,10 +2098,11 @@ function TuitionBreakdownTable({
                 </td>
               </tr>
 
-              {/* Per-student tuition cost under the Opportunity
-                  Scholarship determination — surfaces the same value
-                  baked into the subtotal below, broken out as its own
-                  row. Renders whenever the row has a determination
+              {/* Remaining Tuition Amount — the per-student tuition
+                  the family still owes after the Opportunity
+                  Scholarship has been applied. Same value baked into
+                  the subtotal below, broken out as its own row.
+                  Renders whenever the row has a determination
                   (admin entered a per-student amount, OR family is
                   flagged on OS, OR family is on SNAP) — covers the
                   common case where admin has entered the amount but
@@ -2110,7 +2111,7 @@ function TuitionBreakdownTable({
                 <tr className="border-t">
                   <td className="px-4 py-3 text-muted-foreground">
                     <span className="inline-flex items-center gap-1.5">
-                      Opportunity Scholarship (Cost Per Student)
+                      Remaining Tuition Amount
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <button
@@ -2126,14 +2127,15 @@ function TuitionBreakdownTable({
                         >
                           {scholarship.isSNAPBenefits ? (
                             <p>
-                              SNAP-qualified families do not have to pay
+                              SNAP-qualified families have no remaining
                               tuition — the Opportunity Scholarship covers
-                              the full per-student tuition cost.
+                              the full per-student amount.
                             </p>
                           ) : (
                             <p>
-                              The per-student tuition portion the family pays
-                              under the Opportunity Scholarship determination.
+                              The per-student tuition the family still owes
+                              after the Opportunity Scholarship has been
+                              applied.
                             </p>
                           )}
                         </TooltipContent>
