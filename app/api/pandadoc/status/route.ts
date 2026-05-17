@@ -35,9 +35,34 @@ export async function GET(req: NextRequest) {
     );
   }
 
+  let doc;
   try {
-    const doc = await getDocumentStatus(documentId);
+    doc = await getDocumentStatus(documentId);
+  } catch (err) {
+    // PandaDoc-side errors come through as `PandaDoc status failed
+    // (<code>): <body>`. The 404 case is structurally different from
+    // every other failure: it means the envelope was deleted in the
+    // PandaDoc dashboard, the doc id is permanently gone, and the
+    // polling client should stop retrying. Surfacing it as 200 with
+    // a `status: "missing"` sentinel lets the client distinguish
+    // "doc is gone — stop polling" from "transient server error —
+    // back off and retry," which the legacy 500 didn't allow. Any
+    // other error still falls through to the 500 path below.
+    if (err instanceof Error && /\(404\)/.test(err.message)) {
+      return NextResponse.json({
+        documentId,
+        status: "missing",
+        name: null,
+      });
+    }
+    console.error("PandaDoc status error:", err);
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Failed to get status" },
+      { status: 500 }
+    );
+  }
 
+  try {
     const pandaStatus = doc.status;
     const normalizedStatus =
       pandaStatus === "document.completed"

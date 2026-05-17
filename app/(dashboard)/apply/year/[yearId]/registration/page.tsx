@@ -909,6 +909,19 @@ export default function RegistrationPage() {
           return;
         }
         const data = await res.json();
+        // PandaDoc envelope was deleted (admin trashed it). Stop the
+        // polling loop and drop the signing session so the iframe
+        // goes away. The next sign attempt will self-heal via the
+        // create route.
+        if (data.status === "missing") {
+          pollingRef.current = null;
+          setSigningSession(null);
+          setSigningStudentId(null);
+          toast.error(
+            "This document is no longer available. Please try again to start fresh."
+          );
+          return;
+        }
         if (data.status === "completed") {
           // Update student registration record
           if (regId) {

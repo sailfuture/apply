@@ -310,6 +310,24 @@ export function usePandaDocSigning(
         }
         const data = await res.json();
 
+        // `status: "missing"` = PandaDoc no longer has the envelope
+        // (admin deleted it). Stop polling permanently, drop the
+        // signing session so the modal closes, refresh the parent's
+        // metadata via `/api/pandadoc/reset` (so the next sign attempt
+        // creates a fresh envelope), and surface a toast. Without
+        // this branch, the polling loop hammered /api/pandadoc/status
+        // forever after a deleted doc.
+        if (data.status === "missing") {
+          pollingRef.current = null;
+          setSigningSession(null);
+          await onRefresh();
+          await mutateApplications();
+          toast.error(
+            "This document is no longer available. Please try again to start fresh."
+          );
+          return;
+        }
+
         if (data.status === "completed" || data.status === "viewed") {
           await onRefresh();
           await mutateApplications();

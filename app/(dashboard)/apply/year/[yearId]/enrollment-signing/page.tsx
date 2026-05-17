@@ -158,6 +158,19 @@ export default function EnrollmentSigningPage() {
           return;
         }
         const data = await res.json();
+        // PandaDoc envelope was deleted (admin trashed it). Stop the
+        // polling loop, drop the signing session so the iframe goes
+        // away, and surface a toast. The next time the parent clicks
+        // Sign, the create route's self-heal will wipe the stale
+        // Xano metadata and generate a fresh envelope.
+        if (data.status === "missing") {
+          pollingRef.current = null;
+          setSigningSession(null);
+          toast.error(
+            "This document is no longer available. Please refresh and try again."
+          );
+          return;
+        }
         if (data.status === "completed") {
           await patchRegProgress({
             enrollment_agreement_status: "completed",
