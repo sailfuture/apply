@@ -2206,15 +2206,28 @@ function PacketCard({
           <ul className="text-sm space-y-1.5">
             <FileLine
               label="Liability waiver (signed)"
-              url={packet.liability_waiver_pdf_url}
+              /* Use the admin PandaDoc download proxy instead of the
+                 raw `liability_waiver_pdf_url` stored on the packet —
+                 that URL points at api.pandadoc.com and needs the
+                 API key in the request header, which the admin
+                 browser doesn't have. The proxy fetches server-side
+                 with our key and streams the PDF bytes back. Gate
+                 on `liability_waiver_pandadoc_id` (the source of
+                 truth) AND `status === "completed"` so we don't
+                 render "Open" for half-signed waivers. */
+              url={
+                packet.liability_waiver_pandadoc_id &&
+                packet.liability_waiver_status === "completed"
+                  ? `/api/admin/pandadoc/download?documentId=${packet.liability_waiver_pandadoc_id}`
+                  : undefined
+              }
               /* Status caption — only render on packets where the
                  waiver has been kicked off but isn't fully signed
                  yet, so admin can spot "sent 6 weeks ago, never
-                 returned" rows at a glance. PandaDoc completed
-                 packets carry a PDF URL and the FileLine renders
+                 returned" rows at a glance. Completed packets show
                  "Open" — no caption needed in that case. */
               caption={
-                !packet.liability_waiver_pdf_url &&
+                packet.liability_waiver_status !== "completed" &&
                 packet.liability_waiver_status &&
                 packet.liability_waiver_sent_at
                   ? `${packet.liability_waiver_status} · sent ${formatNoteTimestamp(

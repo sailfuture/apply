@@ -2245,30 +2245,30 @@ function EnrollmentAgreementBlock({
           />
         </div>
       </SectionGroup>
-      {/* Inline PDF preview when signed — admin can scan the
-          completed agreement without leaving the page. We embed
-          via `<iframe>` (rather than `<object>` / `<embed>`) so the
-          browser's built-in PDF viewer renders consistently across
-          Chromium and Safari. Falls back to a simple link when the
-          URL isn't yet populated. */}
-      {pdfUrl ? (
+      {/* Signed PDF download. Previously rendered an inline
+          `<iframe src={pdfUrl}>` preview, but the stored
+          `enrollment_agreement_pdf_url` points at
+          `api.pandadoc.com/public/v1/documents/{id}/download` —
+          which requires the PandaDoc API key in the request header.
+          The admin's browser doesn't have that, so the iframe
+          rendered an `authentication_error` JSON payload instead of
+          the PDF. The proxy at `/api/admin/pandadoc/download` fetches
+          server-side with our API key and streams the bytes back, so
+          a plain download link points there instead. */}
+      {isSigned && pdId ? (
         <SectionGroup title="Signed PDF">
-          <div className="space-y-2">
-            <div className="rounded-md border bg-white overflow-hidden">
-              <iframe
-                src={pdfUrl}
-                className="w-full h-[640px]"
-                title="Enrollment agreement"
-              />
-            </div>
-            <div className="flex justify-end">
-              <Button asChild variant="outline" size="sm" className="bg-white">
-                <a href={pdfUrl} target="_blank" rel="noreferrer">
-                  Open in new tab
-                  <ExternalLink className="size-3.5 ml-1.5" />
-                </a>
-              </Button>
-            </div>
+          <div className="flex justify-end">
+            <Button asChild variant="outline" size="sm" className="bg-white">
+              <a
+                href={`/api/admin/pandadoc/download?documentId=${pdId}`}
+                target="_blank"
+                rel="noreferrer"
+                download={`enrollment-agreement-${pdId}.pdf`}
+              >
+                <FileText className="size-3.5 mr-1.5" />
+                Download PDF
+              </a>
+            </Button>
           </div>
         </SectionGroup>
       ) : null}
@@ -3173,35 +3173,25 @@ function StudentPacketBlock({
                 placeholder="—"
               />
             </div>
-            {packet?.liability_waiver_pdf_url ? (
-              <div className="mt-3 space-y-2">
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                  Signed PDF
-                </p>
-                <div className="rounded-md border bg-white overflow-hidden">
-                  <iframe
-                    src={packet.liability_waiver_pdf_url}
-                    className="w-full h-[480px]"
-                    title={`Liability waiver — ${row.student_full_name}`}
-                  />
-                </div>
-                <div className="flex justify-end">
-                  <Button
-                    asChild
-                    variant="outline"
-                    size="sm"
-                    className="bg-white"
+            {packet?.liability_waiver_status === "completed" &&
+            packet?.liability_waiver_pandadoc_id ? (
+              <div className="mt-3 flex justify-end">
+                <Button
+                  asChild
+                  variant="outline"
+                  size="sm"
+                  className="bg-white"
+                >
+                  <a
+                    href={`/api/admin/pandadoc/download?documentId=${packet.liability_waiver_pandadoc_id}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    download={`liability-waiver-${row.student_full_name.replace(/\s+/g, "-")}.pdf`}
                   >
-                    <a
-                      href={packet.liability_waiver_pdf_url}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      Open in new tab
-                      <ExternalLink className="size-3.5 ml-1.5" />
-                    </a>
-                  </Button>
-                </div>
+                    <FileText className="size-3.5 mr-1.5" />
+                    Download PDF
+                  </a>
+                </Button>
               </div>
             ) : null}
           </SectionGroup>
