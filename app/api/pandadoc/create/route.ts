@@ -6,6 +6,7 @@ import {
   sendDocument,
   createSigningSession,
   getDocumentStatus,
+  getDocumentDetails,
   getTemplateId,
   getTemplateRole,
   waitForDocumentStatus,
@@ -169,7 +170,46 @@ export async function POST(req: NextRequest) {
     let canResume = false;
     try {
       const existing = await getDocumentStatus(existingDocId);
-      canResume = RESUMABLE_STATUSES.has(existing.status);
+      if (RESUMABLE_STATUSES.has(existing.status)) {
+        // Status alone isn't enough — also verify the envelope's
+        // stored recipient matches the Clerk user currently signing.
+        // The Thompson family scenario: an old envelope was created
+        // with the family's primary parent ("Michael Long") baked
+        // into the recipient when a previous version of this route
+        // used the lowest-id parent on file. A different parent
+        // (Hunter Thompson, in that case) signs in via Clerk now;
+        // their email is on the recipient list but the first/last
+        // name still reads as Michael. Resuming would hand them a
+        // doc with the wrong name stamped in. Fetching
+        // `/documents/{id}/details` exposes the recipient roster so
+        // we can detect that mismatch and force a fresh-create.
+        try {
+          const details = await getDocumentDetails(existingDocId);
+          const recipient = details.recipients?.[0];
+          const normalize = (s: string | undefined) =>
+            (s ?? "").trim().toLowerCase();
+          const recipientFirst = normalize(recipient?.first_name);
+          const recipientLast = normalize(recipient?.last_name);
+          const recipientEmailNormalized = normalize(recipient?.email);
+          const signerFirst = normalize(recipientFirstName);
+          const signerLast = normalize(recipientLastName);
+          const signerEmailNormalized = normalize(recipientEmail);
+          const nameMatches =
+            recipientFirst === signerFirst &&
+            recipientLast === signerLast;
+          const emailMatches =
+            !signerEmailNormalized ||
+            !recipientEmailNormalized ||
+            recipientEmailNormalized === signerEmailNormalized;
+          canResume = nameMatches && emailMatches;
+        } catch {
+          // If we can't fetch details (transient), prefer fresh-
+          // create over resuming a doc we can't verify. Safer to
+          // err on the side of a clean envelope than to hand the
+          // parent a stale doc.
+          canResume = false;
+        }
+      }
     } catch {
       // 404 / network / etc. — doc is gone. Fall through to wipe +
       // create.

@@ -157,6 +157,49 @@ export async function getDocumentStatus(
   return res.json();
 }
 
+interface PandaDocRecipient {
+  id?: string;
+  email?: string;
+  first_name?: string;
+  last_name?: string;
+  role?: string;
+  has_completed?: boolean;
+}
+
+interface PandaDocDocumentDetails extends PandaDocDocument {
+  recipients?: PandaDocRecipient[];
+}
+
+/**
+ * Full document details — includes the recipient roster, which the
+ * basic `getDocumentStatus` (which hits `/documents/{id}`) omits.
+ * Lets the create route detect a name/email mismatch between the
+ * envelope's stored recipient and the Clerk user currently logged
+ * in (e.g. envelope was created with a primary parent's name baked
+ * in, but a different parent is now trying to sign), so we can
+ * force a fresh-create instead of resuming a doc with the wrong
+ * person stamped on it.
+ */
+export async function getDocumentDetails(
+  documentId: string
+): Promise<PandaDocDocumentDetails> {
+  const res = await fetch(
+    `${PANDADOC_API_BASE}/documents/${documentId}/details`,
+    {
+      method: "GET",
+      headers: headers(),
+      cache: "no-store",
+    }
+  );
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`PandaDoc details failed (${res.status}): ${text}`);
+  }
+
+  return res.json();
+}
+
 export async function createSigningSession(
   documentId: string,
   recipientEmail: string
