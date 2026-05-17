@@ -42,3 +42,11 @@ next-env.d.ts
 
 # clerk configuration (can include secrets)
 /.clerk/
+
+# Claude Code — local-only working state. The `worktrees/` directory
+# holds checked-out git worktrees that Claude spawns for isolated
+# branches (and any in-flight worktree); `settings.local.json`
+# carries per-user settings + allowed-tool permissions. Skills +
+# `launch.json` (preview-server config) stay tracked.
+.claude/worktrees/
+.claude/settings.local.json
