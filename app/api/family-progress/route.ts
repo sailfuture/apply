@@ -105,11 +105,19 @@ export async function PATCH(req: NextRequest) {
   //
   // Cleared atomically alongside the parent's PATCH so a partial
   // update can't leave a section confirmed against changed data.
-  // FinAid is intentionally absent since there's no
-  // `financial_aid_admin_confirm` column — the Scholarship
-  // Determination card has its own per-student confirmation flow.
-  // Testing has no `testing_admin_confirm_admin` column on Xano
-  // either; its `adminKey` is null and gets skipped below.
+  // Testing has no `testing_admin_confirm_admin` column on Xano;
+  // its `adminKey` is null and gets skipped below.
+  //
+  // The Financial Aid + Scholarship Determination cascade also
+  // clears `scholarship_admin_complete` (the admin-only
+  // Scholarship Determination verify) because the determination is
+  // derived from the household's financial-aid inputs — if the
+  // parent re-opens FinAid, the scholarship admin has worked off
+  // stale numbers and needs to redo the determination too. Note
+  // the audit timestamp column is `scholarship_complete_admin_time`
+  // (not `scholarship_admin_complete_time`) — the Xano schema's
+  // word order diverges from the bool's order. See the matching
+  // note on `XanoFamilyApplicationProgress`.
   const SECTION_CASCADE: Array<{
     completedKey: string;
     confirmKey: string;
@@ -134,6 +142,12 @@ export async function PATCH(req: NextRequest) {
       timeKey: "testing_admin_confirm_time",
       adminKey: null,
     },
+    {
+      completedKey: "financial_aid_completed",
+      confirmKey: "financial_aid_admin_confirm",
+      timeKey: "financial_aid_admin_confirm_time",
+      adminKey: "financial_aid_admin_confirm_admin",
+    },
   ];
   for (const pair of SECTION_CASCADE) {
     if (pair.completedKey in patch) {
@@ -143,6 +157,20 @@ export async function PATCH(req: NextRequest) {
         patch[pair.adminKey] = "";
       }
     }
+  }
+
+  // Re-opening Financial Aid also invalidates the Scholarship
+  // Determination — the determination is computed from the
+  // household income / contributing members / SNAP signals the
+  // parent just unlocked, so the admin's prior verify is stale.
+  // Handled separately from `SECTION_CASCADE` above because the
+  // scholarship row uses a divergent column name
+  // (`scholarship_complete_admin_time`, not
+  // `scholarship_admin_complete_time`).
+  if ("financial_aid_completed" in patch) {
+    patch.scholarship_admin_complete = false;
+    patch.scholarship_complete_admin_time = null;
+    patch.scholarship_admin_complete_admin = "";
   }
 
   const row = await resolveProgress(familyId, yearId);

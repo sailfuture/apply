@@ -110,9 +110,13 @@ export async function PATCH(req: NextRequest) {
   // just unlocked + edited the section, the prior admin review is
   // stale and shouldn't survive.
   //
-  // Registration packet has no family-level admin verify here (it's
-  // per-student via `registrationConfirmed`), so there's no
-  // `isRegistration` cascade entry.
+  // Registration packet has both a per-student rollup
+  // (`registrationConfirmed`) and a family-level "I've reviewed
+  // the whole packet section" pin (`is_registration_admin_confirm`).
+  // The cascade clears the family-level pin so re-opening the
+  // packet section invalidates the admin's section-level verify;
+  // per-student `registrationConfirmed` flags stay as-is (those
+  // are tracked separately on each student's packet row).
   const VERIFY_CASCADE: Array<{
     completedKey: string;
     confirmKey: string;
@@ -136,6 +140,12 @@ export async function PATCH(req: NextRequest) {
       confirmKey: "volunteer_admin_confirm",
       timeKey: "volunteer_admin_confirm_time",
       adminKey: "volunteer_admin_confirm_admin",
+    },
+    {
+      completedKey: "isRegistration",
+      confirmKey: "is_registration_admin_confirm",
+      timeKey: "is_registration_admin_confirm_time",
+      adminKey: "is_registration_admin_confirm_admin",
     },
   ];
   for (const pair of VERIFY_CASCADE) {
