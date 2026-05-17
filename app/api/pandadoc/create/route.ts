@@ -104,13 +104,32 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // The signing identity is whichever parent is logged into Clerk right now.
-  // Either parent on the family can sign — the document is tokenized to
-  // their name and the signing session is addressed to their email.
+  // The signing identity (who PandaDoc actually addresses the signing
+  // session to) is whichever parent is logged into Clerk right now.
+  // Either parent on the family can sign.
   const family = await xano.families.getById(familyId);
   const recipientEmail = user.emailAddresses[0]?.emailAddress ?? "";
   const recipientFirstName = user.firstName ?? "";
   const recipientLastName = user.lastName ?? "";
+
+  // The `parent.*` tokens stamped INTO the document body are different
+  // from the signing identity. The enrollment agreement (and the
+  // liability waiver, by the same logic) is a family-level legal
+  // document addressed to the primary parent/guardian of record — not
+  // necessarily whoever happens to click "Sign". Convention across
+  // the codebase: primary parent = the lowest-id parent on the
+  // family (matches the families list, admin applications/
+  // registrations/enrolled routes). Fall back to the Clerk user's
+  // name when the family has no parents on file yet (degenerate
+  // state — shouldn't happen for an accepted family, but defensive
+  // so the doc still generates).
+  const parentIds = xano.families.getParentIds(family).sort((a, b) => a - b);
+  const primaryParent = parentIds.length
+    ? await xano.parents.getById(parentIds[0]).catch(() => null)
+    : null;
+  const docParentFirstName = primaryParent?.first_name || recipientFirstName;
+  const docParentLastName = primaryParent?.last_name || recipientLastName;
+  const docParentEmail = primaryParent?.email || recipientEmail;
 
   if (existingDocId) {
     try {
@@ -154,9 +173,13 @@ export async function POST(req: NextRequest) {
         "student.first_name": student.first_name,
         "student.last_name": student.last_name,
         "student.full_name": `${student.first_name} ${student.last_name}`,
-        "parent.first_name": recipientFirstName,
-        "parent.last_name": recipientLastName,
-        "parent.email": recipientEmail,
+        // `parent.*` tokens reference the family's PRIMARY parent
+        // (lowest-id row on the family), not the signing recipient.
+        // The doc body should read as "from the parent of record"
+        // even if a secondary parent is the one signing.
+        "parent.first_name": docParentFirstName,
+        "parent.last_name": docParentLastName,
+        "parent.email": docParentEmail,
       },
     });
 
