@@ -277,12 +277,17 @@ export async function PATCH(req: NextRequest) {
     //
     //   - `isAccepted = true` → resolve-or-create the
     //     `registration_student_registration_progress` row for
-    //     this (family, year) and force `isSubmitted = true` so
-    //     the family lands in the post-acceptance registration
-    //     queue without waiting on the parent to click Submit
-    //     again on the registration side. Stamps `submitted_date`
-    //     only when the row doesn't already carry one — a real
-    //     parent-side submission time wins.
+    //     this (family, year). We DELIBERATELY do not flip
+    //     `isSubmitted` here — the parent still has to walk
+    //     through the four registration steps (tuition signature,
+    //     enrollment agreement, registration packet, volunteer
+    //     hours) and submit themselves. Auto-flipping `isSubmitted`
+    //     on accept used to drop accepted families straight into
+    //     the "registration is in review" pending banner without
+    //     ever showing them the registration step table, which is
+    //     the bug. Resolving the row still happens so the parent's
+    //     subsequent PATCHes (e.g. flipping `isTuition` after
+    //     they sign the tuition page) have a row to write to.
     //
     //   - `isAccepted = false` (revoke) → clear
     //     `isRegistrationConfirmed` + the matching audit pair on
@@ -305,10 +310,7 @@ export async function PATCH(req: NextRequest) {
         const regPatch: Record<string, unknown> = {
           last_edited: Date.now(),
         };
-        if (accepting) {
-          if (regRow.isSubmitted !== true) regPatch.isSubmitted = true;
-          if (!regRow.submitted_date) regPatch.submitted_date = Date.now();
-        } else {
+        if (!accepting) {
           // Revoke path. Clear the family-level rollup latch + its
           // audit pair so admin can step into the registration
           // sections to amend them without the unverify-locked gate
@@ -324,7 +326,8 @@ export async function PATCH(req: NextRequest) {
         }
         // Only write if the cascade actually wants to change something
         // (more than the auto-stamped `last_edited`). Idempotent —
-        // re-accepting an already-submitted registration is a no-op.
+        // re-accepting on a row with no registration changes is a
+        // no-op (resolve already ensured the row exists).
         if (Object.keys(regPatch).length > 1) {
           await xano.studentRegistrationProgress.update(regRow.id, regPatch);
         }
