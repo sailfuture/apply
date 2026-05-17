@@ -92,10 +92,19 @@ export default function TuitionPage() {
   const yearId = Number(params.yearId);
   const { user } = useUser();
   const { setPageTitle, registerSaveHandler, unregisterSaveHandler, updateSaveOptions } = useApplicationFlow();
-  // Registration-progress bridge row — single source of truth. `isTuition`
-  // gates section completion; `tuition_scholarship_signature` stores the
-  // family-level signature JSON. Nothing else on this page writes completion
-  // state.
+  // Registration-progress bridge row — single source of truth.
+  //   - `isTuition`            → section-complete bool
+  //   - `signature_data`       → the tuition signature image / file
+  //                              metadata (canonical home — matches
+  //                              the admin's tuition signature
+  //                              reader and the volunteer page's
+  //                              `signature_data_volunteer` shape)
+  //   - `name`                 → the parent's typed full name
+  // Nothing else on this page writes completion state. Older rows
+  // may carry the signature on the deprecated
+  // `tuition_scholarship_signature` field; the load below falls
+  // back to that for backwards-compat reads but every WRITE now
+  // lands on `signature_data`.
   const {
     progress: regProgress,
     setSection: setRegSection,
@@ -145,11 +154,14 @@ export default function TuitionPage() {
 
   // Load the persisted signature from the progress row and draw it onto the
   // canvas on first render. Keyed on the row itself so the load retries if
-  // the row arrives late.
+  // the row arrives late. Reads `signature_data` first (canonical) and
+  // falls back to `tuition_scholarship_signature` for rows written by the
+  // previous version of this page before the field was unified.
   const signatureLoadedRef = useRef(false);
   useEffect(() => {
     if (signatureLoadedRef.current) return;
-    const persisted = regProgress?.tuition_scholarship_signature as
+    const persisted = (regProgress?.signature_data ??
+      regProgress?.tuition_scholarship_signature) as
       | { path?: string; url?: string }
       | null
       | undefined;
@@ -381,9 +393,14 @@ export default function TuitionPage() {
       // same row in the same request. The server stamps `last_edited`
       // automatically and latches `submitted_date` if this is the last
       // section needed.
+      //
+      // Signature lands on `signature_data` (canonical). The retired
+      // `tuition_scholarship_signature` column is intentionally not
+      // touched on writes; loads fall back to it for backwards-compat
+      // reads of rows written by the older code path.
       await patchRegProgress({
         isTuition: true,
-        tuition_scholarship_signature: signatureMeta,
+        signature_data: signatureMeta,
         name: printedName.trim(),
       });
       toast.success("Tuition review submitted successfully.");
