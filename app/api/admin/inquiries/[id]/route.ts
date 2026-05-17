@@ -39,3 +39,28 @@ export async function PATCH(
     return handleAdminError(err);
   }
 }
+
+/**
+ * Hard-delete an inquiry row. Used by the inquiry list page's row-
+ * level Delete affordance — admin spots a junk / test / duplicate
+ * inquiry and removes it after confirming through the modal. Hard
+ * delete (not soft) because inquiries are pre-application and don't
+ * have downstream relations admin needs to preserve for audit.
+ */
+export async function DELETE(
+  _req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    await requireAdmin();
+    const { id: idParam } = await params;
+    const id = Number(idParam);
+    if (!Number.isFinite(id) || id <= 0) {
+      return NextResponse.json({ error: "Invalid id" }, { status: 400 });
+    }
+    await xano.inquiries.delete(id);
+    return NextResponse.json({ ok: true });
+  } catch (err) {
+    return handleAdminError(err);
+  }
+}

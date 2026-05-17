@@ -2,7 +2,8 @@
 
 import { useMemo, useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
-import { ChevronRight, Mail, Phone } from "lucide-react";
+import { toast } from "sonner";
+import { ChevronRight, Loader2, Mail, Phone, Trash2 } from "lucide-react";
 import {
   DataTable,
   type ColumnDef,
@@ -27,6 +28,17 @@ import {
   SheetTitle,
   SheetDescription,
 } from "@/components/ui/sheet";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import {
   InquiryNoteComposer,
@@ -141,6 +153,11 @@ export default function InquiriesPage() {
   // PATCH is in flight. We optimistically mutate the SWR cache, then
   // revert if the server says no.
   const [savingId, setSavingId] = useState<number | null>(null);
+  // Row queued for deletion — drives the AlertDialog. `null` means the
+  // dialog is closed. We carry the whole row so the modal can render
+  // the parent / student name in its confirmation copy.
+  const [pendingDelete, setPendingDelete] = useState<Inquiry | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const rows: Inquiry[] = useMemo(
     () =>
@@ -184,6 +201,46 @@ export default function InquiriesPage() {
       }) satisfies Record<InquiryFilter, number>,
     [rows, groups]
   );
+
+  // Hard-delete the inquiry row. Optimistically removes it from the
+  // SWR cache so the table updates immediately; reverts via re-fetch
+  // if the DELETE fails. Closes the modal + clears pending state in
+  // both branches so admin isn't stuck on a hanging confirmation.
+  async function confirmDelete() {
+    if (!pendingDelete || deleting) return;
+    const targetId = pendingDelete.id;
+    const targetName =
+      pendingDelete.parent_name || pendingDelete.student_name || `#${targetId}`;
+    setDeleting(true);
+    mutate(
+      (curr) => (curr ?? []).filter((r) => r.id !== targetId),
+      { revalidate: false }
+    );
+    try {
+      const res = await fetch(`/api/admin/inquiries/${targetId}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error ?? `Delete failed (${res.status})`);
+      }
+      toast.success(`Inquiry from ${targetName} removed.`);
+      // If admin had the detail sheet open on this row, close it.
+      if (active?.id === targetId) setActive(null);
+      // Revalidate so any server-side audit trail / counts re-sync.
+      globalMutate("/api/admin/inquiries");
+    } catch (err) {
+      console.error("Failed to delete inquiry:", err);
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't delete inquiry."
+      );
+      // Revert the optimistic remove by re-fetching the canonical list.
+      mutate();
+    } finally {
+      setDeleting(false);
+      setPendingDelete(null);
+    }
+  }
 
   // Toggle the follow-up flag with an optimistic SWR mutate so the row
   // jumps between sections immediately. Reverts on failure.
@@ -358,6 +415,38 @@ export default function InquiriesPage() {
             onCheckedChange={(v) => toggleFollowedUp(row, v)}
             aria-label={`Mark ${row.parent_name} followed up`}
           />
+        </div>
+      ),
+    },
+    {
+      // Delete column — small trash icon button with a stopPropagation
+      // wrapper so clicking it doesn't also open the detail Sheet.
+      // Routes through `pendingDelete` so the confirmation modal
+      // catches the click before anything destructive lands.
+      key: "delete",
+      header: "",
+      width: "w-[40px]",
+      align: "right",
+      render: (row) => (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="inline-flex items-center justify-center"
+        >
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-7 text-muted-foreground hover:text-red-600 hover:bg-red-50"
+            disabled={deleting && pendingDelete?.id === row.id}
+            onClick={() => setPendingDelete(row)}
+            aria-label={`Delete inquiry from ${row.parent_name || row.student_name || "this family"}`}
+          >
+            {deleting && pendingDelete?.id === row.id ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <Trash2 className="size-3.5" />
+            )}
+          </Button>
         </div>
       ),
     },
@@ -564,6 +653,63 @@ export default function InquiriesPage() {
           ) : null}
         </SheetContent>
       </Sheet>
+
+      {/* Delete confirmation. Hard delete — there's no soft-delete
+          flag on `registration_inquiry`, and pre-application inquiries
+          don't carry downstream relations admin needs to preserve. The
+          modal stays mounted at the page level so any row's Delete
+          button can trigger it without worrying about portal context. */}
+      <AlertDialog
+        open={!!pendingDelete}
+        onOpenChange={(open) => {
+          if (!open && !deleting) setPendingDelete(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this inquiry?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingDelete ? (
+                <>
+                  This will permanently remove the inquiry from{" "}
+                  <span className="font-medium">
+                    {pendingDelete.parent_name ||
+                      pendingDelete.student_name ||
+                      "this family"}
+                  </span>
+                  {pendingDelete.primary_email
+                    ? ` (${pendingDelete.primary_email})`
+                    : ""}
+                  . Any notes logged on this inquiry will be deleted too.
+                  This can&rsquo;t be undone.
+                </>
+              ) : (
+                ""
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 text-white hover:bg-red-700"
+              disabled={deleting}
+              onClick={(e) => {
+                e.preventDefault();
+                void confirmDelete();
+              }}
+            >
+              {deleting ? (
+                <>
+                  <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                  Deleting…
+                </>
+              ) : (
+                "Delete inquiry"
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
