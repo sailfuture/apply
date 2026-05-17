@@ -1,5 +1,13 @@
 import useSWR, { mutate as globalMutate } from "swr";
-import { useAuth } from "@clerk/nextjs";
+
+// All routes that call these hooks are gated by `clerkMiddleware` in
+// `proxy.ts` — the request can't reach the page without a valid session.
+// We used to wrap each SWR key in a `useAuthedKey` that also waited for
+// the client-side Clerk SDK to hydrate (`isLoaded && isSignedIn`) before
+// firing, but that delayed every fetch by ~1-2s on cold loads while the
+// SDK downloaded from the Clerk CDN. The session cookie is already in
+// the browser by the time these hooks mount, so we fire fetches
+// immediately and let the API endpoints enforce auth.
 
 const fetcher = async (url: string) => {
   const res = await fetch(url);
@@ -7,35 +15,29 @@ const fetcher = async (url: string) => {
   return res.json();
 };
 
-function useAuthedKey(key: string | null): string | null {
-  const { isLoaded, isSignedIn } = useAuth();
-  if (!isLoaded || !isSignedIn) return null;
-  return key;
-}
-
 export function useFamily() {
-  return useSWR(useAuthedKey("/api/families"), fetcher, {
+  return useSWR("/api/families", fetcher, {
     revalidateOnFocus: false,
     dedupingInterval: 10000,
   });
 }
 
 export function useSchoolYears() {
-  return useSWR(useAuthedKey("/api/school-years"), fetcher, {
+  return useSWR("/api/school-years", fetcher, {
     revalidateOnFocus: false,
     dedupingInterval: 30000,
   });
 }
 
 export function useStudents() {
-  return useSWR(useAuthedKey("/api/students"), fetcher, {
+  return useSWR("/api/students", fetcher, {
     revalidateOnFocus: false,
     dedupingInterval: 10000,
   });
 }
 
 export function useApplications() {
-  return useSWR(useAuthedKey("/api/applications"), fetcher, {
+  return useSWR("/api/applications", fetcher, {
     revalidateOnFocus: false,
     dedupingInterval: 10000,
   });
@@ -46,14 +48,14 @@ export function useScholarship(familyId: number | null, yearId: number | null) {
     familyId && yearId
       ? `/api/scholarship?familyId=${familyId}&yearId=${yearId}`
       : null;
-  return useSWR(useAuthedKey(key), fetcher, {
+  return useSWR(key, fetcher, {
     revalidateOnFocus: false,
     dedupingInterval: 10000,
   });
 }
 
 export function useBusStops() {
-  return useSWR(useAuthedKey("/api/bus-stops"), fetcher, {
+  return useSWR("/api/bus-stops", fetcher, {
     revalidateOnFocus: false,
     dedupingInterval: 60000,
   });
