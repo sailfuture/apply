@@ -3,21 +3,20 @@ import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
 
 /**
- * Admin Applications list — unified view of initial applications AND
- * re-applications for the selected school year. One row per family per
- * year per flow; rows carry a `flow_type` discriminator ("apply" |
- * "reapply") so the table can render flow-appropriate section labels +
- * route to the correct per-section editor.
+ * Admin Applications list — every family applying or re-applying for
+ * the selected school year, in one place. One row per family per year.
  *
- * Why merge: admin wants one place to see "everyone applying for next
- * year" without bouncing between two surfaces. Both flows have the
- * same shape (family / students / financial aid / fourth) — the fourth
- * column is "Testing" for new applications and "Transportation" for
- * re-applications, plus the slugs differ.
+ * Re-applications live on the same `registration_family_application_progress`
+ * row as initial applications now — distinguished by a `type` string
+ * (`"New Application"` vs `"Re-Enrollment"`). The fourth section label
+ * still pivots between "Testing" (new applicants) and "Transportation"
+ * (re-enrollers), but both signals come from the same progress row.
+ * `flow_type` survives on the response shape for backwards-compat with
+ * page-side consumers; it's now derived from `type` rather than from
+ * a separate reapply table.
  *
  * Joins:
- *   - `xano.familyApplicationProgress.getByYear()` → initial-app rows
- *   - `xano.reapplyFamilyProgress.getByYear()` → reapply rows
+ *   - `xano.familyApplicationProgress.getByYear()` → all progress rows
  *   - `xano.families.getAll()` + `xano.parents.getAll()` → display labels
  *   - `xano.applications.getAll()` filtered to (year) → student counts
  *
@@ -45,14 +44,12 @@ export async function GET(req: NextRequest) {
 
     const [
       applyResult,
-      reapplyResult,
       familiesResult,
       parentsResult,
       appsResult,
       studentsResult,
     ] = await Promise.allSettled([
       xano.familyApplicationProgress.getByYear(yearId),
-      xano.reapplyFamilyProgress.getByYear(yearId),
       xano.families.getAll(),
       xano.parents.getAll(),
       xano.applications.getAll(),
@@ -67,12 +64,6 @@ export async function GET(req: NextRequest) {
       console.error(
         "[/api/admin/applications] failed to load apply progress:",
         applyResult.reason
-      );
-    }
-    if (reapplyResult.status === "rejected") {
-      console.error(
-        "[/api/admin/applications] failed to load reapply progress:",
-        reapplyResult.reason
       );
     }
     if (familiesResult.status === "rejected") {
@@ -102,8 +93,6 @@ export async function GET(req: NextRequest) {
 
     const applyRows =
       applyResult.status === "fulfilled" ? applyResult.value : [];
-    const reapplyRows =
-      reapplyResult.status === "fulfilled" ? reapplyResult.value : [];
     const families =
       familiesResult.status === "fulfilled" ? familiesResult.value : [];
     const parents =
@@ -168,8 +157,15 @@ export async function GET(req: NextRequest) {
       };
     }
 
-    const initialRows: UnifiedAppRow[] = applyRows.map((p) => {
+    const rows: UnifiedAppRow[] = applyRows.map((p) => {
       const labels = lookupLabel(p.registration_families_id);
+      // `type` discriminates new applicants from re-enrollers on the
+      // unified progress row. Re-enrollers skip NWEA — their
+      // `testing_completed` gets auto-stamped `true` at bootstrap, so
+      // the section-complete math + fourth_done still resolves
+      // coherently. The label pivots so the page UI reads naturally
+      // (Testing for new applicants, Transportation for re-enrollers).
+      const isReEnrollment = p.type === "Re-Enrollment";
       const sectionsComplete = [
         p.family_completed,
         p.students_completed,
@@ -180,13 +176,13 @@ export async function GET(req: NextRequest) {
         id: p.id,
         family_id: p.registration_families_id,
         year_id: p.registration_school_years_id,
-        flow_type: "apply",
+        flow_type: isReEnrollment ? "reapply" : "apply",
         ...labels,
         family_done: !!p.family_completed,
         students_done: !!p.students_completed,
         financial_aid_done: !!p.financial_aid_completed,
         fourth_done: !!p.testing_completed,
-        fourth_label: "Testing",
+        fourth_label: isReEnrollment ? "Transportation" : "Testing",
         sections_complete: sectionsComplete,
         sections_total: 4,
         isSubmitted: !!p.isSubmitted,
@@ -208,47 +204,6 @@ export async function GET(req: NextRequest) {
         reason_for_archive: p.reason_for_archive ?? null,
       };
     });
-
-    const reapplyOut: UnifiedAppRow[] = reapplyRows.map((p) => {
-      const labels = lookupLabel(p.registration_families_id);
-      const sectionsComplete = [
-        p.isFamilyDetails,
-        p.isStudentDetails,
-        p.isScholarship,
-        p.isTransportation,
-      ].filter(Boolean).length;
-      return {
-        id: p.id,
-        family_id: p.registration_families_id,
-        year_id: p.registration_school_years_id,
-        flow_type: "reapply",
-        ...labels,
-        family_done: !!p.isFamilyDetails,
-        students_done: !!p.isStudentDetails,
-        financial_aid_done: !!p.isScholarship,
-        fourth_done: !!p.isTransportation,
-        fourth_label: "Transportation",
-        sections_complete: sectionsComplete,
-        sections_total: 4,
-        isSubmitted: !!p.isSubmitted,
-        // Reapply rows don't carry an `isAccepted` column — the
-        // re-application flow doesn't go through the same Approve
-        // gate that initial applications do. Hardcode `false` so
-        // the row stays in the standard Submitted / In Progress
-        // buckets on the page.
-        isAccepted: false,
-        submitted_at: null,
-        last_edited: p.last_edited,
-        // Reapply rows don't carry an archive column today — leave
-        // the field on the row so the type stays uniform across
-        // both flows; admin's Archive button only writes to the
-        // initial apply progress row.
-        is_archived: false,
-        reason_for_archive: null,
-      };
-    });
-
-    const rows = [...initialRows, ...reapplyOut];
 
     rows.sort((a, b) => {
       if (a.isSubmitted !== b.isSubmitted) return a.isSubmitted ? -1 : 1;

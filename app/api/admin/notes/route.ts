@@ -48,8 +48,11 @@ export async function GET(req: NextRequest) {
     // Xano query that returns only notes tagged for the registration
     // phase of this (family, year). Used by the family registration
     // detail page so admin doesn't see apply-phase comms mixed in.
-    // Other phases (apply / reapply) still go through the catch-all
-    // `getByFamilyId` and rely on client-side filter pills.
+    // The apply phase still goes through the catch-all `getByFamilyId`
+    // and relies on client-side filter pills. Re-enrollment notes now
+    // land on the same `registration_family_application_progress_id`
+    // FK as new-applicant notes since the apply flow is unified across
+    // both, so there's no separate reapply phase here.
     const phaseParam = req.nextUrl.searchParams.get("phase");
     const yearIdParam = req.nextUrl.searchParams.get("yearId");
 
@@ -99,11 +102,11 @@ export async function GET(req: NextRequest) {
     // strip out any note that's tagged for the registration phase
     // (`registration_student_registration_progress_id` set), so the
     // family detail (apply-flow) drawers don't leak registration
-    // comms into the application timeline. Apply-phase notes plus
-    // general communication notes pass through. Reapply-phase notes
-    // also pass through since this filter is binary (registration
-    // vs everything else); the client-side phase pills can narrow
-    // further.
+    // comms into the application timeline. Apply-phase notes (both
+    // new applicants and re-enrollers — same FK now) plus general
+    // communication notes pass through. Legacy notes stamped against
+    // the deprecated `reapply_family_progress_id` column also pass
+    // through; the client-side filter rolls them into the Apply pill.
     if (phaseParam === "application") {
       notes = notes.filter((n) => {
         const id = n.registration_student_registration_progress_id;
@@ -163,14 +166,20 @@ export async function POST(req: NextRequest) {
     // `registration_admin_notes`:
     //
     //   - application  → `registration_family_application_progress_id`
-    //                    (resolves the per-year apply-flow progress row)
+    //                    (resolves the per-year apply-flow progress row;
+    //                     both new applicants and re-enrollers share
+    //                     this FK now that the flows are unified — the
+    //                     `type` field on the progress row distinguishes
+    //                     them when admin needs to)
     //   - registration → `registration_student_registration_progress_id`
     //                    (resolves the per-year registration packet
     //                     progress row)
-    //   - reapply      → `reapply_family_progress_id` (not currently
-    //                    plumbed through any UI but the column exists
-    //                    on Xano; we'd add a branch here when a reapply
-    //                    drawer ships)
+    //
+    // The legacy `reapply_family_progress_id` column on
+    // `registration_admin_notes` is no longer written to — any note we
+    // create for a re-enroller flows through the application branch
+    // above. Legacy rows with that FK set still display via the
+    // client-side phase pill.
     //
     // Each `resolve()` is race-safe (in-process mutex + post-create
     // dedupe). If the resolve fails we log and fall through with a

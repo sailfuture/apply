@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { useParams, usePathname, useRouter } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useSWRConfig } from "swr";
 import Image from "next/image";
 import { useUser } from "@clerk/nextjs";
@@ -44,7 +44,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { GlobalSaveStatusPill } from "@/components/save-status-pill";
 import { useFamilyProgress } from "@/hooks/use-family-progress";
-import { useReapplyFamilyProgress } from "@/hooks/use-reapply-family-progress";
 import { toast } from "sonner";
 import {
   Empty,
@@ -1006,29 +1005,24 @@ export default function ScholarshipPage() {
     return () => unregisterSaveHandler();
   }, [setPageTitle, unregisterSaveHandler]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Flow-aware progress: same component renders under both /apply and
-  // /reapply. On /apply we track the apply progress row's
-  // `financial_aid_completed` bool; on /reapply we track the reapply
-  // progress row's `isScholarship` bool. Both hooks always mount (rules of
-  // hooks), but we pass `null` to the inactive one so only the active
-  // flow's progress endpoint is hit per page mount.
-  const pathnameForFlow = usePathname();
-  const isReapplyFlow = pathnameForFlow.startsWith("/reapply");
-  const applyProgress = useFamilyProgress(isReapplyFlow ? null : yearId);
-  const reapplyProgress = useReapplyFamilyProgress(isReapplyFlow ? yearId : null);
-  const scholarshipLocked = isReapplyFlow
-    ? !!reapplyProgress.progress?.isScholarship
-    : !!applyProgress.progress?.financial_aid_completed;
-  // Stabilize the setter via a ref — the progress hooks return fresh
-  // object literals each render, so listing them in useCallback deps
-  // would cause the consumer useEffect to re-fire indefinitely.
-  const flowRef = useRef({ isReapplyFlow, applyProgress, reapplyProgress });
-  flowRef.current = { isReapplyFlow, applyProgress, reapplyProgress };
+  // Single progress source: apply + reapply share the same
+  // `registration_family_application_progress` row, distinguished by
+  // its `type` field. The reapply-side branching (a parallel
+  // `useReapplyFamilyProgress` hook + `isScholarship` bool) is gone —
+  // re-enrollment families write to `financial_aid_completed` like
+  // everyone else.
+  const applyProgress = useFamilyProgress(yearId);
+  const scholarshipLocked = !!applyProgress.progress?.financial_aid_completed;
+  // Stabilize the setter via a ref — the progress hook returns a
+  // fresh object literal each render, so listing it in useCallback
+  // deps would cause the consumer useEffect to re-fire indefinitely.
+  const flowRef = useRef({ applyProgress });
+  flowRef.current = { applyProgress };
   const setScholarshipLocked = useCallback((value: boolean) => {
-    const f = flowRef.current;
-    return f.isReapplyFlow
-      ? f.reapplyProgress.setSection("isScholarship", value)
-      : f.applyProgress.setSection("financial_aid_completed", value);
+    return flowRef.current.applyProgress.setSection(
+      "financial_aid_completed",
+      value
+    );
   }, []);
 
   const handleCompleteScholarshipRef = useRef<() => Promise<void>>(() => Promise.resolve());

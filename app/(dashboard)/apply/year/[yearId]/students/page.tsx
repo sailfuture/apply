@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
-import { useParams, usePathname, useRouter } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Image from "next/image";
 import { useApplicationFlow } from "@/contexts/application-flow-context";
 import { Button } from "@/components/ui/button";
@@ -54,7 +54,6 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Trash2, FileUp, X, Loader2, CheckCircle2, Plus, ExternalLink, HelpCircle, Pencil } from "lucide-react";
 import { GlobalSaveStatusPill } from "@/components/save-status-pill";
 import { useFamilyProgress } from "@/hooks/use-family-progress";
-import { useReapplyFamilyProgress } from "@/hooks/use-reapply-family-progress";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useSWRConfig } from "swr";
 import {
@@ -389,9 +388,7 @@ export default function StudentsStepPage() {
         // means the unlock is part of the same network round trip the
         // user just initiated. Family is intentionally NOT touched —
         // adding a student doesn't change the parents.
-        const ap = isReapplyFlow
-          ? null
-          : flowRef.current.applyProgress.progress;
+        const ap = flowRef.current.applyProgress.progress;
         if (ap) {
           const patch: Record<string, boolean> = {};
           if (ap.students_completed) patch.students_completed = false;
@@ -579,29 +576,21 @@ export default function StudentsStepPage() {
   const handleSaveAllAppsRef = useRef(handleSaveAllApps);
   handleSaveAllAppsRef.current = handleSaveAllApps;
 
-  // Flow-aware progress: same component renders under both /apply (where
-  // we track the apply progress row's `students_completed` bool) and
-  // /reapply (where we track the reapply progress row's `isStudentDetails`
-  // bool). Both hooks always mount (rules of hooks), but we pass `null` to
-  // the inactive one so only the active flow's progress endpoint is hit —
-  // otherwise every render fires both fetches.
-  const pathnameForFlow = usePathname();
-  const isReapplyFlow = pathnameForFlow.startsWith("/reapply");
-  const applyProgress = useFamilyProgress(isReapplyFlow ? null : yearId);
-  const reapplyProgress = useReapplyFamilyProgress(isReapplyFlow ? yearId : null);
-  const studentsLocked = isReapplyFlow
-    ? !!reapplyProgress.progress?.isStudentDetails
-    : !!applyProgress.progress?.students_completed;
-  // Stabilize the setter via a ref — the progress hooks return fresh
-  // object literals each render, so listing them in useCallback deps
-  // would cause the consumer useEffect to re-fire indefinitely.
-  const flowRef = useRef({ isReapplyFlow, applyProgress, reapplyProgress });
-  flowRef.current = { isReapplyFlow, applyProgress, reapplyProgress };
+  // Single progress source: apply + reapply share the same
+  // `registration_family_application_progress` row, distinguished by
+  // its `type` field. The reapply-side branching (a parallel
+  // `useReapplyFamilyProgress` hook + `isStudentDetails` bool) is
+  // gone — re-enrollment families write to `students_completed`
+  // like everyone else.
+  const applyProgress = useFamilyProgress(yearId);
+  const studentsLocked = !!applyProgress.progress?.students_completed;
+  // Stabilize the setter via a ref — the progress hook returns a
+  // fresh object literal each render, so listing it in useCallback
+  // deps would cause the consumer useEffect to re-fire indefinitely.
+  const flowRef = useRef({ applyProgress });
+  flowRef.current = { applyProgress };
   const setStudentsLocked = useCallback((value: boolean) => {
-    const f = flowRef.current;
-    return f.isReapplyFlow
-      ? f.reapplyProgress.setSection("isStudentDetails", value)
-      : f.applyProgress.setSection("students_completed", value);
+    return flowRef.current.applyProgress.setSection("students_completed", value);
   }, []);
 
   const handleCompleteStudentsRef = useRef<() => Promise<void>>(() => Promise.resolve());

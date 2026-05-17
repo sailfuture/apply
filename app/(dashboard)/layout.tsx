@@ -16,12 +16,14 @@ export default function DashboardLayout({
   // and the root home all render on a clean shell — no app sidebar, no
   // application-step nav. The dashboard pages have their own self-contained
   // layout (header + cards) and shouldn't inherit the application chrome.
+  // Re-applications share the `/apply/year/:id` URL space with new applicants
+  // (the `type` field on the progress row drives flow-specific behavior),
+  // so there's no separate `/reapply` matcher here anymore.
   const isApplicationFlow =
     pathname === "/" ||
     pathname.startsWith("/dashboard") ||
     /^\/apply\/year\/\d+/.test(pathname) ||
-    /^\/registration\/year\/\d+/.test(pathname) ||
-    /^\/reapply\/year\/\d+/.test(pathname);
+    /^\/registration\/year\/\d+/.test(pathname);
 
   // Application-flow pages own their loading state with page-level
   // skeletons. Render them through immediately — gating here on Clerk

@@ -111,6 +111,12 @@ export function useApplicationSteps(yearId: number) {
      *  year rather than once-and-forever per family. */
     isSubmitted?: boolean;
     isAccepted?: boolean;
+    /** Application type — `"New Application"` for new applicants,
+     *  `"Re-Enrollment"` for returning families re-applying.
+     *  Re-enrollers skip the Initial Testing (NWEA) step in the
+     *  step-list + sidenav below; their scores carry forward from
+     *  prior applications. */
+    type?: "New Application" | "Re-Enrollment" | string;
   } | null>(
     yearId ? `/api/family-progress?yearId=${yearId}` : null,
     fetcher,
@@ -416,63 +422,86 @@ export function useApplicationSteps(yearId: number) {
   const studentsDone = !!progressData?.students_completed;
   const financialAidDone = !!progressData?.financial_aid_completed;
   const nweaDone = !!progressData?.testing_completed;
+  // Re-enrollment families skip Initial Testing — their NWEA scores
+  // carry forward from prior applications, so there's nothing for
+  // them to do on that step. `begin-reapplication` stamps
+  // `testing_completed: true` on the row so the section bool stays
+  // coherent; the sidenav + step-list also drop the NWEA item
+  // entirely for these families so they don't see a finished step
+  // they never visited.
+  const isReEnrollment = progressData?.type === "Re-Enrollment";
 
   const steps: StepDef[] = useMemo(
-    () => [
-      {
-        number: 1,
-        title: "Your Family Information",
-        description: "",
-        status: getStatus(familyDone, familyStarted),
-        detail: familyDone
-          ? "Complete"
-          : familyStarted
-            ? "In progress"
-            : "Not started",
-        href: `${base}/family`,
-      },
-      {
-        number: 2,
-        title: "Student Details",
-        description: "",
-        // Transportation lives inside this step now — per-student
-        // bus toggles + stop pickers are rendered alongside the
-        // strengths/growth fields on the students page.
-        status: getStatus(studentsDone, studentsStarted),
-        detail: studentsDone ? "Complete" : studentsStarted ? "In progress" : "Not started",
-        href: `${base}/students`,
-      },
-      {
-        number: 3,
-        title: "Financial Aid",
-        description: "",
-        status: getStatus(financialAidDone, financialAidStarted),
-        detail: financialAidDone
-          ? "Complete"
-          : financialAidStarted
-            ? "In progress"
-            : "Not started",
-        href: `${base}/scholarship`,
-      },
-      {
-        number: 4,
-        title: "Initial Testing",
-        description: "",
-        status: getStatus(nweaDone, nweaStarted),
-        detail: nweaDone ? "Complete" : nweaStarted ? "In progress" : "Not started",
-        href: `${base}/nwea`,
-      },
-      {
-        number: 5,
+    () => {
+      const allSteps: StepDef[] = [
+        {
+          number: 1,
+          title: "Your Family Information",
+          description: "",
+          status: getStatus(familyDone, familyStarted),
+          detail: familyDone
+            ? "Complete"
+            : familyStarted
+              ? "In progress"
+              : "Not started",
+          href: `${base}/family`,
+        },
+        {
+          number: 2,
+          title: "Student Details",
+          description: "",
+          // Transportation lives inside this step now — per-student
+          // bus toggles + stop pickers are rendered alongside the
+          // strengths/growth fields on the students page.
+          status: getStatus(studentsDone, studentsStarted),
+          detail: studentsDone ? "Complete" : studentsStarted ? "In progress" : "Not started",
+          href: `${base}/students`,
+        },
+        {
+          number: 3,
+          title: "Financial Aid",
+          description: "",
+          status: getStatus(financialAidDone, financialAidStarted),
+          detail: financialAidDone
+            ? "Complete"
+            : financialAidStarted
+              ? "In progress"
+              : "Not started",
+          href: `${base}/scholarship`,
+        },
+      ];
+      if (!isReEnrollment) {
+        allSteps.push({
+          number: 4,
+          title: "Initial Testing",
+          description: "",
+          status: getStatus(nweaDone, nweaStarted),
+          detail: nweaDone ? "Complete" : nweaStarted ? "In progress" : "Not started",
+          href: `${base}/nwea`,
+        });
+      }
+      allSteps.push({
+        // Renumber the submit step based on whether NWEA is present —
+        // re-enrollment families see Submit as step 4 (since they
+        // don't have step 4 = NWEA); new applicants see it as step 5.
+        number: isReEnrollment ? 4 : 5,
         title: "Submit Application",
         description: "",
         // NWEA does NOT gate Submit — testing typically happens after
-        // the application is submitted.
-        status: (familyDone && studentsDone && financialAidDone) ? "in_progress" as StepStatus : "not_started" as StepStatus,
-        detail: (familyDone && studentsDone && financialAidDone) ? "Ready to submit" : "Locked",
+        // the application is submitted. For re-enrollment families the
+        // gate is the same three sections (NWEA isn't on the list).
+        status:
+          familyDone && studentsDone && financialAidDone
+            ? ("in_progress" as StepStatus)
+            : ("not_started" as StepStatus),
+        detail:
+          familyDone && studentsDone && financialAidDone
+            ? "Ready to submit"
+            : "Locked",
         href: `#`,
-      },
-    ],
+      });
+      return allSteps;
+    },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       base,
@@ -484,6 +513,7 @@ export function useApplicationSteps(yearId: number) {
       financialAidStarted,
       nweaDone,
       nweaStarted,
+      isReEnrollment,
     ]
   );
 

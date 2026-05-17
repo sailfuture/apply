@@ -10,13 +10,21 @@ import { xano } from "@/lib/xano";
  *   1. A `registration_application` row for each accepted student in the
  *      family for the new year (carries forward grade + transport prefs as
  *      defaults; admin can override during review).
- *   2. The `reapply_family_progress` row for { family, newYear } so the
- *      re-application step UI has somewhere to PATCH against.
+ *   2. The unified `registration_family_application_progress` row for
+ *      { family, newYear } with `type = "Re-Enrollment"` so the apply
+ *      flow knows to skip Initial Testing (NWEA scores carry forward
+ *      from prior apps — auto-completed below) and surface re-enrollment
+ *      copy/prefill where relevant. Re-applicants share the same
+ *      `/apply/year/[yearId]/*` URL space as new applicants now;
+ *      the `type` discriminator drives any flow-specific behavior.
+ *   3. A fresh `registration_student_registration` packet per student
+ *      for the new year (medical / emergency / pickup carry over,
+ *      waiver pandadoc IDs reset).
  *
  * Idempotent — safe to call more than once. Doesn't duplicate application
- * rows that already exist for the new year; doesn't recreate the progress
- * row if one already exists. Returns the (created or existing) progress
- * row + a target redirect path the client can navigate to.
+ * rows that already exist for the new year; resolves-or-creates the
+ * progress row instead of recreating it. Returns the (created or existing)
+ * progress row + a target redirect path the client can navigate to.
  */
 export async function POST(req: NextRequest) {
   const { userId } = await auth();
@@ -214,32 +222,40 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // 5. Resolve (or create) the re-application progress row.
-  const progress = await xano.reapplyFamilyProgress.resolve(familyId, yearId);
-
-  // 6. Append every new app id to the family-progress row's
+  // 5. Resolve-or-create the unified family-application-progress row
+  //    and stamp it as a re-enrollment. Setting `testing_completed: true`
+  //    here is what lets re-applicants skip the Initial Testing (NWEA)
+  //    step in the apply flow — the section bool is the same one
+  //    `useApplicationSteps` reads to render the sidenav. Auto-completing
+  //    it on bootstrap means re-enrollment families never see an
+  //    NWEA gate they can't satisfy (their scores are already on
+  //    file via the cloned `test_scores` field on each app row above).
+  //    Also append the new application IDs to the row's
   //    `registration_application_id` array so the per-family app set
-  //    stays addressable straight off that row. Best-effort — a
-  //    failure here logs but doesn't fail the bootstrap.
-  if (created.length > 0) {
+  //    is addressable straight off the progress row.
+  const famProgress = await xano.familyApplicationProgress.resolve(
+    familyId,
+    yearId
+  );
+  const existingIds = Array.isArray(famProgress.registration_application_id)
+    ? famProgress.registration_application_id
+    : [];
+  const merged = Array.from(new Set([...existingIds, ...created]));
+  const needsUpdate =
+    famProgress.type !== "Re-Enrollment" ||
+    famProgress.testing_completed !== true ||
+    merged.length !== existingIds.length;
+  if (needsUpdate) {
     try {
-      const famProgress = await xano.familyApplicationProgress.resolve(
-        familyId,
-        yearId
-      );
-      const existingIds = Array.isArray(famProgress.registration_application_id)
-        ? famProgress.registration_application_id
-        : [];
-      const merged = Array.from(new Set([...existingIds, ...created]));
-      if (merged.length !== existingIds.length) {
-        await xano.familyApplicationProgress.update(famProgress.id, {
-          registration_application_id: merged,
-          last_edited: Date.now(),
-        });
-      }
+      await xano.familyApplicationProgress.update(famProgress.id, {
+        type: "Re-Enrollment",
+        testing_completed: true,
+        registration_application_id: merged,
+        last_edited: Date.now(),
+      });
     } catch (err) {
       console.error(
-        "Failed to append re-application ids to family progress:",
+        "Failed to stamp re-enrollment on family progress:",
         err
       );
     }
@@ -247,9 +263,13 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json(
     {
-      progressId: progress.id,
+      progressId: famProgress.id,
       createdApplicationIds: created,
-      redirectTo: `/reapply/year/${yearId}`,
+      // Re-applicants land on the same /apply/year/[yearId] URL space
+      // as new applicants. The progress row's `type === "Re-Enrollment"`
+      // discriminator drives flow-specific UI (NWEA skip, prefilled
+      // student review, re-enrollment copy in headers, etc.).
+      redirectTo: `/apply/year/${yearId}`,
     },
     { status: 200 }
   );

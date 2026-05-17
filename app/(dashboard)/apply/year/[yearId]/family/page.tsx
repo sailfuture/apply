@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { useParams, usePathname } from "next/navigation";
+import { useParams } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
 import { useApplicationFlow } from "@/contexts/application-flow-context";
 import { Button } from "@/components/ui/button";
@@ -44,7 +44,6 @@ import { toast } from "sonner";
 import { useSWRConfig } from "swr";
 import { GlobalSaveStatusPill } from "@/components/save-status-pill";
 import { useFamilyProgress } from "@/hooks/use-family-progress";
-import { useReapplyFamilyProgress } from "@/hooks/use-reapply-family-progress";
 import { US_STATES } from "@/lib/us-states";
 
 interface Parent {
@@ -261,33 +260,24 @@ export default function FamilyStepPage() {
   const handleSaveAllRef = useRef(handleSaveAll);
   handleSaveAllRef.current = handleSaveAll;
 
-  // Flow-aware progress: this same page renders under both /apply (where
-  // we track the apply progress row's `family_completed` bool) and /reapply
-  // (where we track the reapply progress row's `isFamilyDetails` bool).
-  // Both hooks always mount so the rules of hooks stay happy, but we pass
-  // `null` to the inactive one so only the active flow's progress endpoint
-  // is hit per page mount (otherwise every render fires both fetches).
-  const pathnameForFlow = usePathname();
-  const isReapplyFlow = pathnameForFlow.startsWith("/reapply");
+  // Single progress source: apply + reapply share the same
+  // `registration_family_application_progress` row, distinguished by
+  // its `type` field. The reapply-side branching (a parallel
+  // `useReapplyFamilyProgress` hook + `isFamilyDetails` bool) is
+  // gone — re-enrollment families write to `family_completed` like
+  // everyone else.
   const yearIdNum = Number(yearId);
-  const applyProgress = useFamilyProgress(isReapplyFlow ? null : yearIdNum);
-  const reapplyProgress = useReapplyFamilyProgress(isReapplyFlow ? yearIdNum : null);
-  const familyLocked = isReapplyFlow
-    ? !!reapplyProgress.progress?.isFamilyDetails
-    : !!applyProgress.progress?.family_completed;
-  // Stabilize the lock setter via a ref. The progress hooks return fresh
-  // object literals each render, so naming them in a useCallback dep list
-  // gives every render a new function identity — which feeds into the
-  // `updateSaveOptions` useEffect below and creates an infinite loop.
-  // Pulling the latest hook returns through a ref keeps the callback
-  // identity stable while still calling whichever flow is active.
-  const flowRef = useRef({ isReapplyFlow, applyProgress, reapplyProgress });
-  flowRef.current = { isReapplyFlow, applyProgress, reapplyProgress };
+  const applyProgress = useFamilyProgress(yearIdNum);
+  const familyLocked = !!applyProgress.progress?.family_completed;
+  // Stabilize the lock setter via a ref. The progress hook returns
+  // a fresh object literal each render, so naming it in a useCallback
+  // dep list gives every render a new function identity — which
+  // feeds into the `updateSaveOptions` useEffect below and creates
+  // an infinite loop. The ref keeps callback identity stable.
+  const flowRef = useRef({ applyProgress });
+  flowRef.current = { applyProgress };
   const setProgressSectionLocked = useCallback((value: boolean) => {
-    const f = flowRef.current;
-    return f.isReapplyFlow
-      ? f.reapplyProgress.setSection("isFamilyDetails", value)
-      : f.applyProgress.setSection("family_completed", value);
+    return flowRef.current.applyProgress.setSection("family_completed", value);
   }, []);
 
   const handleCompleteRef = useRef<() => Promise<void>>(() => Promise.resolve());

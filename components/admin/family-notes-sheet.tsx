@@ -120,10 +120,10 @@ interface Props {
    *     applies the client-side phase pill filter; writes don't
    *     stamp a phase FK
    *
-   * Reapply phase doesn't have a dedicated server endpoint yet so
-   * it still falls through to the client-side filter — this prop
-   * only kicks in when the registration vs application split is
-   * needed.
+   * Re-enrollment notes write the same `application` FK as new-applicant
+   * notes (the unified apply pipeline doesn't distinguish), so they
+   * fall out of this filter naturally — `phase=application` catches
+   * both.
    *
    * Requires `defaultYearId` to be set when phase=registration —
    * the server endpoint takes both family and year as inputs.
@@ -428,10 +428,11 @@ export function FamilyNotesSheet({
 
           {/* Phase filter — only on the family-wide drawer. Lets
               admin narrow the timeline to a specific lifecycle phase
-              (apply / reapply / registration) or the general comms
-              log without leaving the sheet. Pills mirror the
-              composer's category-pill treatment so the two filter
-              rows feel of-a-piece. */}
+              (apply / registration) or the general comms log without
+              leaving the sheet. Pills mirror the composer's
+              category-pill treatment so the two filter rows feel
+              of-a-piece. Re-enrollment notes roll into the Apply pill
+              now that the apply flow is unified across both. */}
           {!section && !phase ? (
             <div className="border-b bg-muted/10 px-4 py-2.5">
               <div
@@ -882,15 +883,24 @@ function formatCategory(c: string): string {
  * specific surface:
  *
  *   - `apply`        → `registration_family_application_progress_id`
- *   - `reapply`      → `reapply_family_progress_id`
+ *                     (covers both new applicants and re-enrollers
+ *                      since the apply flow is unified — the progress
+ *                      row's `type` field distinguishes them at write
+ *                      time but they share this FK)
  *   - `registration` → `registration_student_registration_progress_id`
  *   - `comms`        → none of the above (general communication log
  *                      or legacy notes that pre-date the FK columns)
  *
+ * Note: the deprecated `reapply_family_progress_id` column on Xano
+ * still exists for backwards compat with legacy rows. We surface
+ * those legacy notes under the Apply pill (since re-enrollers are
+ * apply-flow now) rather than gating a separate Reapply pill that
+ * would only ever show stale data.
+ *
  * The filter pills above the timeline let admin narrow the view to
  * one phase without leaving the drawer.
  */
-type NotePhase = "comms" | "apply" | "reapply" | "registration";
+type NotePhase = "comms" | "apply" | "registration";
 
 const PHASE_FILTER_OPTIONS: {
   value: NotePhase | "all";
@@ -899,18 +909,18 @@ const PHASE_FILTER_OPTIONS: {
   { value: "all", label: "All" },
   { value: "comms", label: "Communication" },
   { value: "apply", label: "Apply" },
-  { value: "reapply", label: "Reapply" },
   { value: "registration", label: "Registration" },
 ];
 
 /**
- * Map a note to its lifecycle phase. Checks the three progress-row
- * foreign keys in priority order; falls through to `comms` for
- * notes that aren't tied to any phase row (general comms log) or
- * for legacy notes that pre-date these columns. The FK columns are
- * mutually exclusive at write time so the order doesn't matter for
- * correctness — picking apply first only matters if a row was
- * mis-stamped, in which case "apply" is the most likely intent.
+ * Map a note to its lifecycle phase. Checks the progress-row foreign
+ * keys in priority order; falls through to `comms` for notes that
+ * aren't tied to any phase row (general comms log) or for legacy
+ * notes that pre-date these columns. The legacy
+ * `reapply_family_progress_id` column rolls into `apply` here — the
+ * unified flow doesn't surface a separate Reapply pill anymore, and
+ * historical reapply notes belong on the same timeline as the
+ * applications they relate to.
  */
 function derivePhase(note: XanoAdminNote): NotePhase {
   if (
@@ -923,7 +933,7 @@ function derivePhase(note: XanoAdminNote): NotePhase {
     note.reapply_family_progress_id != null &&
     note.reapply_family_progress_id !== 0
   ) {
-    return "reapply";
+    return "apply";
   }
   if (
     note.registration_student_registration_progress_id != null &&

@@ -941,6 +941,17 @@ export interface XanoFamilyApplicationProgress {
    *  global header's chrome (apply vs. registration). */
   isAccepted: boolean;
   registration_type_id: number;
+  /** Application type discriminator. `"New Application"` for new
+   *  applicants going through the apply flow for the first time;
+   *  `"Re-Enrollment"` for returning families re-applying for a new
+   *  year. Mirrors the same field on `registration_application` rows.
+   *  Drives the Initial Testing (NWEA) gate: re-enrollers skip the
+   *  testing step because they already have valid scores on prior
+   *  apps, and the `useApplicationSteps` hook filters that step out
+   *  of the side-nav + completion-count math for them.
+   *  Optional on the type because legacy rows predate the column add;
+   *  treat as `"New Application"` when absent. */
+  type?: "New Application" | "Re-Enrollment" | string;
   /** IDs of every `registration_application` row attached to this
    *  family + year. Maintained by the application-create flow so admins
    *  can pull the per-family application set straight off the progress
@@ -1012,63 +1023,6 @@ export interface XanoFamilyApplicationProgress {
   scholarship_admin_complete?: boolean;
   scholarship_complete_admin_time?: number | null;
   scholarship_admin_complete_admin?: string;
-}
-
-/**
- * Shape returned by `/reapply_family_progress_by_year` — same fields as
- * `XanoReapplyFamilyProgress` plus the inline-expanded family record
- * under `_registration_families`. Used by the admin Reapply list so
- * we don't need a separate families join.
- */
-export interface ReapplyProgressRow {
-  id: number;
-  created_at: number;
-  registration_school_years_id: number;
-  registration_families_id: number;
-  last_edited: number | null;
-  isScholarship: boolean;
-  isTransportation: boolean;
-  isFamilyDetails: boolean;
-  isStudentDetails: boolean;
-  isSubmitted: boolean;
-  _registration_families: {
-    id: number;
-    created_at: number;
-    family_name: string;
-    registration_students_id: number[];
-    registration_parents_id: number[];
-    registration_emergency_contacts_id: number[];
-  } | null;
-}
-
-/** Bridge row: one per family per school year, covering the RE-APPLICATION
- *  flow for returning families. Tracks the four section bools the parent
- *  needs to refresh when applying for a new academic year — most notably
- *  the per-year Opportunity Scholarship application. Family + student
- *  records carry over; only these four sections need parent confirmation
- *  for a re-applying family.
- *
- *  Distinct from `registration_family_application_progress` because the
- *  section list differs (no Initial Testing, adds Transportation) and the
- *  admin can independently track which families are re-applying vs.
- *  applying for the first time. */
-export interface XanoReapplyFamilyProgress {
-  id: number;
-  created_at: number;
-  registration_families_id: number;
-  registration_school_years_id: number;
-  /** Parent acknowledged the existing family info for the new year. */
-  isFamilyDetails: boolean;
-  /** Parent acknowledged the existing student info for the new year. */
-  isStudentDetails: boolean;
-  /** Parent submitted the per-year Opportunity Scholarship application. */
-  isScholarship: boolean;
-  /** Parent confirmed bus / transportation preferences for the new year. */
-  isTransportation: boolean;
-  /** Hard submission latch — flips true when the parent clicks Submit on
-   *  the re-application review modal. */
-  isSubmitted: boolean;
-  last_edited: number | null;
 }
 
 /** Bridge row: one per family per school year, covering the POST-acceptance
@@ -3514,113 +3468,12 @@ export const xano = {
     },
   },
 
-  reapplyFamilyProgress: {
-    /** All reapply progress rows for a school year — backs the admin
-     *  Reapply list. Calls the dedicated Xano query
-     *  `reapply_family_progress_by_year` which expands each row's
-     *  family record inline (under `_registration_families`). Errors
-     *  are logged so server logs reveal whether the issue is
-     *  input-shape, Xano-side, or transport. */
-    async getByYear(
-      yearId: number
-    ): Promise<ReapplyProgressRow[]> {
-      try {
-        const url = new URL(
-          `${getBaseUrl()}/reapply_family_progress_by_year`
-        );
-        url.searchParams.set("registration_school_years_id", String(yearId));
-        const res = await fetch(url.toString(), { cache: "no-store" });
-        if (!res.ok) {
-          const body = await res.text().catch(() => "");
-          console.error(
-            `[xano.reapplyFamilyProgress.getByYear] ${res.status} for yearId=${yearId}: ${body}`
-          );
-          return [];
-        }
-        const items = await res.json();
-        return Array.isArray(items) ? items : [];
-      } catch (err) {
-        console.error(
-          `[xano.reapplyFamilyProgress.getByYear] threw for yearId=${yearId}:`,
-          err
-        );
-        return [];
-      }
-    },
-
-    /** Fetch-or-create the row for this family + year. Mirrors the same
-     *  pattern as the other progress helpers so server-side callers can
-     *  always PATCH against an existing row. */
-    async resolve(
-      familyId: number,
-      yearId: number
-    ): Promise<XanoReapplyFamilyProgress> {
-      const existing = await this.getByFamilyAndYear(familyId, yearId);
-      if (existing) return existing;
-      return this.create({
-        registration_families_id: familyId,
-        registration_school_years_id: yearId,
-        isFamilyDetails: false,
-        isStudentDetails: false,
-        isScholarship: false,
-        isTransportation: false,
-        isSubmitted: false,
-        last_edited: Date.now(),
-      });
-    },
-
-    async getByFamilyAndYear(
-      familyId: number,
-      yearId: number
-    ): Promise<XanoReapplyFamilyProgress | null> {
-      try {
-        const res = await fetch(
-          `${getBaseUrl()}/reapply_family_progress?registration_families_id=${familyId}&registration_school_years_id=${yearId}`,
-          { cache: "no-store" }
-        );
-        if (!res.ok) return null;
-        const results = await res.json();
-        const items = Array.isArray(results) ? results : [];
-        return (
-          items.find(
-            (r: XanoReapplyFamilyProgress) =>
-              r.registration_families_id === familyId &&
-              r.registration_school_years_id === yearId
-          ) ?? null
-        );
-      } catch {
-        return null;
-      }
-    },
-
-    async create(
-      data: Omit<XanoReapplyFamilyProgress, "id" | "created_at">
-    ): Promise<XanoReapplyFamilyProgress> {
-      const res = await fetch(`${getBaseUrl()}/reapply_family_progress`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
-      });
-      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
-      return res.json();
-    },
-
-    async update(
-      id: number,
-      data: Partial<Omit<XanoReapplyFamilyProgress, "id" | "created_at">>
-    ): Promise<XanoReapplyFamilyProgress> {
-      const res = await fetch(
-        `${getBaseUrl()}/reapply_family_progress/${id}`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(data),
-        }
-      );
-      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
-      return res.json();
-    },
-  },
+  // `reapplyFamilyProgress` retired — the re-application flow now writes
+  // to `familyApplicationProgress` (above) with `type: "Re-Enrollment"`
+  // and `testing_completed: true` stamped at bootstrap. The legacy
+  // `reapply_family_progress` Xano table is no longer read or written
+  // by the app; the column survives on Xano for any historical record
+  // but admin tooling treats both flows as a single apply pipeline.
 
   studentRegistrationProgress: {
     /**

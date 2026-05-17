@@ -19,9 +19,11 @@ export function GlobalHeader() {
   // registration chrome should appear there. Strip the "Student Application
   // / Student Registration" suffix and just show the school name.
   const isDashboard = pathname.startsWith("/dashboard");
-  const isReapply = pathname.startsWith("/reapply");
   // The /welcome page is pre-application onboarding — no need for the
-  // "Student Application" suffix yet, just show the school name.
+  // "Student Application" suffix yet, just show the school name. Re-enrolling
+  // families share the `/apply/year/:id` URL space with new applicants now,
+  // so we don't gate on a `/reapply/*` matcher anymore — both render as
+  // "Student Application" since the flow is unified.
   const isWelcome = pathname.startsWith("/welcome");
 
   // Detect URL-driven registration vs application chrome. With the
@@ -46,13 +48,11 @@ export function GlobalHeader() {
 
   const title = isDashboard
     ? "SailFuture Academy Parent Dashboard"
-    : isReapply
-      ? "SailFuture Academy Re-Application"
-      : isRegistrationFlow
-        ? "SailFuture Academy Student Registration"
-        : isWelcome
-          ? "SailFuture Academy"
-          : "SailFuture Academy Student Application";
+    : isRegistrationFlow
+      ? "SailFuture Academy Student Registration"
+      : isWelcome
+        ? "SailFuture Academy"
+        : "SailFuture Academy Student Application";
 
   // Logo click routes by lifecycle stage. Each branch returns a
   // destination that's already correct for the user — no chained
@@ -67,11 +67,6 @@ export function GlobalHeader() {
       const yearParam = searchParams.get("yearId");
       return yearParam ? `/dashboard?yearId=${yearParam}` : "/dashboard";
     }
-    // Re-application is for already-enrolled families — sending them
-    // back to the dashboard is the right "home" gesture, even though
-    // they're applying for next year.
-    if (isReapply) return "/dashboard";
-
     const years =
       (yearsData as
         | { id: number; isNextYear?: boolean; isActive?: boolean }[]

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useApplicationFlow } from "@/contexts/application-flow-context";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -58,11 +58,25 @@ const NWEA_BOOKING_URL = "https://calendar.app.google/FsBaobZrsRToxuGq9";
 
 export default function InitialTestingStepPage() {
   const params = useParams();
+  const router = useRouter();
   const yearId = Number(params.yearId);
 
   const { setPageTitle, updateSaveOptions, trackAutosave, registerSaveHandler, unregisterSaveHandler } = useApplicationFlow();
   const { progress, setSection: setProgressSection } = useFamilyProgress(yearId);
   const testingLocked = !!progress?.testing_completed;
+
+  // Re-enrollment families skip Initial Testing — their NWEA scores
+  // carry forward from prior applications and `testing_completed` is
+  // auto-stamped by `/api/begin-reapplication` on bootstrap. The
+  // sidenav already omits this step for them, but if a re-enroller
+  // navigates here directly (deep link, browser back, etc.) bounce
+  // them to the year overview so they don't see a step they
+  // shouldn't be on.
+  useEffect(() => {
+    if (progress?.type === "Re-Enrollment") {
+      router.replace(`/apply/year/${yearId}`);
+    }
+  }, [progress?.type, router, yearId]);
 
   const [students, setStudents] = useState<Student[]>([]);
   const [applications, setApplications] = useState<Application[]>([]);

@@ -162,11 +162,17 @@ export function EnrolledFamilyDashboard({
   }, [volunteerHoursData, yearId]);
 
   // Re-application affordance: if the school has a `nextYear` row, surface
-  // a card on the dashboard pointing at that year's reapply flow. Returning
+  // a card on the dashboard pointing at that year's apply flow. Returning
   // families use it to bootstrap (or resume) the new academic year. We
   // intentionally show this even when the dashboard's current `yearId`
   // matches `nextYear.id` — the parent might switch year pickers and we
   // don't want the card flickering out of existence based on that.
+  //
+  // Re-enrollment merged into the unified apply pipeline — returning families
+  // share the `/apply/year/:id/*` URL space with new applicants. The progress
+  // row's `type` field (`"Re-Enrollment"` for returning families) flips the
+  // flow-specific bits (NWEA skipped, prefilled student review). All status
+  // checks here read from `/api/family-progress` like any other apply row.
   const nextYear = useMemo(() => {
     if (!yearsData) return null;
     const ys = yearsData as { id: number; year_name: string; isNextYear?: boolean }[];
@@ -174,7 +180,7 @@ export function EnrolledFamilyDashboard({
   }, [yearsData]);
 
   const { data: nextYearReapply } = useSWR<{ id: number; isSubmitted?: boolean } | null>(
-    nextYear ? `/api/reapply-family-progress?yearId=${nextYear.id}` : null,
+    nextYear ? `/api/family-progress?yearId=${nextYear.id}` : null,
     fetcher,
     { revalidateOnFocus: false, dedupingInterval: 10000 }
   );
@@ -194,7 +200,7 @@ export function EnrolledFamilyDashboard({
         throw new Error(body?.error ?? `Failed (${res.status})`);
       }
       const { redirectTo } = await res.json();
-      router.push(redirectTo ?? `/reapply/year/${nextYear.id}`);
+      router.push(redirectTo ?? `/apply/year/${nextYear.id}`);
     } catch (err) {
       console.error("Failed to begin re-application:", err);
       toast.error(
@@ -396,7 +402,7 @@ export function EnrolledFamilyDashboard({
               <Button
                 variant="outline"
                 className="bg-white shrink-0"
-                onClick={() => router.push(`/reapply/year/${nextYear.id}`)}
+                onClick={() => router.push(`/apply/year/${nextYear.id}`)}
               >
                 Review re-application
               </Button>
@@ -418,7 +424,7 @@ export function EnrolledFamilyDashboard({
               </div>
               <Button
                 className="shrink-0"
-                onClick={() => router.push(`/reapply/year/${nextYear.id}`)}
+                onClick={() => router.push(`/apply/year/${nextYear.id}`)}
               >
                 Resume re-application
               </Button>
