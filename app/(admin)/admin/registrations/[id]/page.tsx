@@ -466,6 +466,7 @@ export default function FamilyRegistrationDetailPage() {
               familyId={Number(family?.id ?? familyId)}
               yearId={Number(yearId)}
               currentMonthlyTuition={familyPayment?.monthly_tuition_payment ?? null}
+              billingStartDate={school_year?.billing_start_date ?? null}
             />
           </SectionShell>
         </section>

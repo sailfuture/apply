@@ -118,8 +118,15 @@ interface Props {
   familyId: number;
   yearId: number;
   /** Current monthly tuition from Xano — pre-fills the Update Amount
-   *  dialog so admin sees the existing value before changing. */
+   *  dialog so admin sees the existing value before changing. Also
+   *  surfaced inside the Start Monthly Billing button so admin sees
+   *  what they're about to commit to without leaving the card. */
   currentMonthlyTuition: number | null;
+  /** Year's `billing_start_date` (YYYY-MM-DD) — shown in the empty
+   *  state so admin knows when the first invoice will fire if they
+   *  start billing now (or when the cascade fires after Confirm
+   *  Registration). */
+  billingStartDate: string | null;
 }
 
 type BillingAction =
@@ -133,6 +140,7 @@ export function BillingCard({
   familyId,
   yearId,
   currentMonthlyTuition,
+  billingStartDate,
 }: Props) {
   const endpoint = `/api/admin/families/${familyId}/billing?yearId=${yearId}`;
   const { data, error, isLoading, mutate } = useSWR<BillingSnapshot>(
@@ -217,26 +225,56 @@ export function BillingCard({
   //     tuition amount, missing parent email). Admin can fix the
   //     precondition + click Start here to retry.
   if (!data.subscription) {
+    const monthlyLabel =
+      currentMonthlyTuition != null && currentMonthlyTuition > 0
+        ? `$${currentMonthlyTuition.toLocaleString("en-US", {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          })}/mo`
+        : null;
+    const billingStartLabel = billingStartDate
+      ? formatStartDate(billingStartDate)
+      : null;
+    const startDisabled =
+      pending !== null ||
+      currentMonthlyTuition == null ||
+      currentMonthlyTuition <= 0;
     return (
       <div className="rounded-md border bg-muted/10 p-6 space-y-4">
+        {/* Full-width text block — no max-w-lg cap. Header + body
+            stack vertically so the copy can use the full card width
+            without competing with the icon column for space. */}
         <div className="flex items-start gap-3">
           <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-muted/50">
             <CreditCard className="size-5 text-muted-foreground" aria-hidden="true" />
           </div>
-          <div className="space-y-1 min-w-0 flex-1">
+          <div className="space-y-2 min-w-0 flex-1">
             <p className="text-sm font-medium">Monthly billing not started</p>
-            <p className="text-xs text-muted-foreground max-w-lg">
-              Confirming this family&rsquo;s registration automatically
-              starts monthly invoicing. If that didn&rsquo;t happen (or
-              you need to retry after fixing the tuition amount), use
-              the button below to start it manually.
+            <p className="text-xs text-muted-foreground">
+              Confirm this family&rsquo;s registration in the
+              Confirmation card below — that automatically starts
+              monthly invoicing. Or click the button below to start
+              it manually.
             </p>
+            {billingStartLabel ? (
+              <p className="text-xs text-muted-foreground">
+                Invoicing starts:{" "}
+                <span className="font-medium text-foreground">
+                  {billingStartLabel}
+                </span>
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Invoicing start date isn&rsquo;t set on the school
+                year yet — add it before billing can begin.
+              </p>
+            )}
           </div>
         </div>
         <div>
           <Button
             size="sm"
-            disabled={pending !== null || currentMonthlyTuition == null || currentMonthlyTuition <= 0}
+            disabled={startDisabled}
             onClick={() => runAction("start")}
           >
             {pending === "start" ? (
@@ -245,10 +283,15 @@ export function BillingCard({
               <Play className="size-3.5 mr-1.5" aria-hidden="true" />
             )}
             Start Monthly Billing
+            {monthlyLabel ? (
+              <span className="ml-1.5 opacity-90">— {monthlyLabel}</span>
+            ) : null}
           </Button>
           {currentMonthlyTuition == null || currentMonthlyTuition <= 0 ? (
             <p className="text-xs text-muted-foreground mt-2">
-              Set a monthly tuition amount on the Tuition card first.
+              Monthly tuition amount isn&rsquo;t set on the family
+              payment row yet — admin must complete the Approve flow
+              first.
             </p>
           ) : null}
         </div>
@@ -582,6 +625,21 @@ function StatusPill({ label }: { label: BillingSnapshot["statusLabel"] }) {
       {label}
     </span>
   );
+}
+
+/** Format an ISO date (YYYY-MM-DD) as a long date for the empty
+ *  state. Treats the input as UTC midnight to match the
+ *  createInvoiceSubscription / Stripe trial_end convention so we
+ *  don't drift by a day in the admin's local timezone. */
+function formatStartDate(iso: string): string {
+  const ms = Date.parse(`${iso}T00:00:00Z`);
+  if (!Number.isFinite(ms)) return iso;
+  return new Date(ms).toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  });
 }
 
 function actionSuccessMessage(action: BillingAction): string {

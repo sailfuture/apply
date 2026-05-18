@@ -344,6 +344,11 @@ export async function GET(
         tuition: schoolYear.tuition ?? 0,
         annual_fees: schoolYear.annual_fees ?? 0,
         transportation_fees: schoolYear.transportation_fees ?? 0,
+        // First-invoice anchor. Surfaced on the admin Billing card
+        // empty state so admin sees when invoicing will begin
+        // before clicking Start Monthly Billing. Null when admin
+        // hasn't set the date on the school year yet.
+        billing_start_date: schoolYear.billing_start_date ?? null,
         // Per-SUFS-tier award amounts. The Tuition card's per-student
         // breakdown reads these to compute the green "Step Up Award
         // Amount" line — same math the parent dashboard's
@@ -408,6 +413,10 @@ export interface AdminFamilyRegistrationResponse {
     tuition: number;
     annual_fees: number;
     transportation_fees: number;
+    /** YYYY-MM-DD or null. Drives the Billing card's "Invoicing
+     *  starts on …" microcopy + the trial_end anchor when admin
+     *  starts a Stripe subscription for the family. */
+    billing_start_date: string | null;
     fes_eo_8: number;
     fes_eo_9: number;
     ftc_8: number;

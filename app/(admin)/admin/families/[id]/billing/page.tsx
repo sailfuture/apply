@@ -74,7 +74,7 @@ export default function FamilyBillingPage() {
 
   if (!yearId) {
     return (
-      <div className="p-6 max-w-5xl mx-auto space-y-4">
+      <div className="p-6 space-y-4">
         <BackLink href={backHref} />
         <div className="rounded-lg border bg-white px-6 py-12 text-center text-sm text-muted-foreground">
           Missing <code>yearId</code> in the URL.
@@ -85,7 +85,7 @@ export default function FamilyBillingPage() {
 
   if (isLoading && !data) {
     return (
-      <div className="p-6 max-w-5xl mx-auto space-y-4">
+      <div className="p-6 space-y-4">
         <BackLink href={backHref} />
         <Skeleton className="h-8 w-64" />
         <Skeleton className="h-24 w-full" />
@@ -96,7 +96,7 @@ export default function FamilyBillingPage() {
 
   if (error || !data) {
     return (
-      <div className="p-6 max-w-5xl mx-auto space-y-4">
+      <div className="p-6 space-y-4">
         <BackLink href={backHref} />
         <div className="rounded-lg border bg-white px-6 py-12 text-center text-sm text-muted-foreground">
           {error instanceof Error
@@ -108,7 +108,7 @@ export default function FamilyBillingPage() {
   }
 
   return (
-    <div className="p-6 max-w-5xl mx-auto space-y-6">
+    <div className="p-6 space-y-6">
       <BackLink href={backHref} />
 
       <div className="space-y-1">
@@ -228,22 +228,25 @@ function ScheduleCard({
         <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[20%]">
+              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[14%]">
                 Month
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[20%]">
-                Due
+              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[16%]">
+                Invoice sent
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[15%] text-right">
+              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[16%]">
+                Due by
+              </TableHead>
+              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[12%] text-right">
                 Amount
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[15%] text-right">
+              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[12%] text-right">
                 Paid
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[15%]">
+              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[14%]">
                 Status
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[15%] text-right">
+              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[16%] text-right">
                 Invoice
               </TableHead>
             </TableRow>
@@ -261,16 +264,23 @@ function ScheduleCard({
 
 function ScheduleRow({ slot }: { slot: ScheduleSlot }) {
   const inv = slot.invoice;
-  const dueLabel = inv?.dueDate
-    ? formatDate(inv.dueDate)
-    : slot.status === "not_started"
-      ? "—"
-      : "—";
+  // "Invoice sent" = the day Stripe finalized + emailed the invoice
+  // (`finalized_at` from the mirror, set on invoice.finalized
+  // webhook). "Due by" = Stripe's `due_date`, calculated server-side
+  // as sent + 15 days because the subscription was created with
+  // `days_until_due: 15`. We render Stripe's calculated date rather
+  // than recomputing client-side so we stay aligned with whatever
+  // Stripe actually told the family on the hosted invoice.
+  const sentLabel = inv?.finalizedAt ? formatDate(inv.finalizedAt) : "—";
+  const dueLabel = inv?.dueDate ? formatDate(inv.dueDate) : "—";
   const amountDue = inv ? inv.amountDueCents / 100 : null;
   const amountPaid = inv ? inv.amountPaidCents / 100 : null;
   return (
     <TableRow className={cn(slot.status === "not_started" && "opacity-70")}>
       <TableCell className="font-medium">{slot.monthLabel}</TableCell>
+      <TableCell className="text-muted-foreground tabular-nums">
+        {sentLabel}
+      </TableCell>
       <TableCell className="text-muted-foreground tabular-nums">
         {dueLabel}
       </TableCell>

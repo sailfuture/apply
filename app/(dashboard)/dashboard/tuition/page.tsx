@@ -1,7 +1,9 @@
 "use client";
 
-import { Fragment, useMemo } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import useSWR from "swr";
+import { toast } from "sonner";
 import {
   useStudents,
   useApplications,
@@ -9,10 +11,39 @@ import {
   useFamily,
   useScholarship,
 } from "@/hooks/use-api";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { HelpCircle } from "lucide-react";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+  CheckCircle2,
+  Circle,
+  CreditCard,
+  ExternalLink,
+  FileText,
+  HelpCircle,
+  Loader2,
+  XCircle,
+} from "lucide-react";
 import { DashboardPageHeader } from "@/components/dashboard-page-header";
+import { cn } from "@/lib/utils";
+import type {
+  ParentScheduleResponse,
+  ParentScheduleSlot,
+} from "@/app/api/billing/schedule/route";
 
 /** Maps sufs_type to the corresponding SchoolYear field. Same mapping used
  *  in the registration tuition page. */
@@ -516,10 +547,16 @@ export default function DashboardTuitionPage() {
         </div>
       )}
 
+      {/* 12-month invoice schedule — mirrors the admin Billing
+          schedule view so parent + admin see the same shape. Reads
+          from /api/billing/schedule (gated to the authenticated
+          parent's own family). The "Manage billing" button opens
+          the Stripe Customer Portal where the parent can save a
+          payment method, opt into autopay, and download invoices. */}
+      {yearId ? <BillingScheduleSection yearId={yearId} /> : null}
+
       <p className="text-xs text-muted-foreground text-center pt-4 border-t">
-        Payment history and balance details will appear here once Stripe
-        billing syncs are live. For questions about your account in the
-        meantime, please{" "}
+        For questions about your account, please{" "}
         <a
           href="mailto:tward@sailfuture.org?subject=Tuition%20question"
           className="text-primary underline underline-offset-2"
@@ -530,5 +567,344 @@ export default function DashboardTuitionPage() {
       </p>
     </div>
   );
+}
+
+/* ─────────────────────── Billing schedule ─────────────────────── */
+
+const scheduleFetcher = async (url: string): Promise<ParentScheduleResponse> => {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to load billing schedule (${res.status})`);
+  return res.json();
+};
+
+function BillingScheduleSection({ yearId }: { yearId: number }) {
+  const { data, error, isLoading } = useSWR<ParentScheduleResponse>(
+    `/api/billing/schedule?yearId=${yearId}`,
+    scheduleFetcher,
+    { revalidateOnFocus: false, dedupingInterval: 10000 }
+  );
+
+  if (isLoading && !data) {
+    return <Skeleton className="h-48 w-full rounded-xl" />;
+  }
+
+  if (error || !data) {
+    return (
+      <div className="rounded-xl border bg-white px-6 py-8 text-center text-sm text-muted-foreground">
+        {error instanceof Error
+          ? error.message
+          : "Couldn’t load your billing schedule."}
+      </div>
+    );
+  }
+
+  // No subscription yet → don't render the section at all. The
+  // existing per-student breakdown above already covers what the
+  // family owes; pre-billing parents don't need a 12-row table of
+  // empty months on top of that.
+  if (!data.hasBilling) {
+    return null;
+  }
+
+  return (
+    <div className="space-y-6">
+      <BillingSummaryCard data={data} yearId={yearId} />
+      <BillingScheduleCard slots={data.slots} />
+    </div>
+  );
+}
+
+function BillingSummaryCard({
+  data,
+  yearId,
+}: {
+  data: ParentScheduleResponse;
+  yearId: number;
+}) {
+  void yearId;
+  const monthlyDollars =
+    data.monthlyAmountCents != null ? data.monthlyAmountCents / 100 : null;
+  const yearTotalDollars =
+    data.yearTotalCents != null ? data.yearTotalCents / 100 : null;
+  const paidDollars = data.paidCents / 100;
+  const outstandingDollars = data.outstandingCents / 100;
+  const billingStartLabel = data.billingStartDate
+    ? formatBillingDate(data.billingStartDate)
+    : "Not set";
+
+  const [opening, setOpening] = useState(false);
+
+  /** Open the Stripe Customer Portal so the parent can save a
+   *  payment method, opt into autopay, and download past invoices.
+   *  Hard navigation — Stripe-hosted page is a different origin. */
+  async function openPortal() {
+    if (opening) return;
+    setOpening(true);
+    try {
+      const res = await fetch(
+        `/api/billing/portal?yearId=${encodeURIComponent(String(yearId))}`,
+        { method: "POST" }
+      );
+      const body = await res.json().catch(() => null);
+      if (!res.ok || !body?.url) {
+        throw new Error(body?.error ?? `Portal open failed (${res.status})`);
+      }
+      window.location.href = body.url;
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't open the billing portal."
+      );
+      setOpening(false);
+    }
+  }
+
+  return (
+    <Card className="overflow-hidden gap-0 py-0 bg-white">
+      <CardHeader className="py-3 !pb-3 border-b">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <CardTitle className="text-base">Billing</CardTitle>
+          <Button
+            size="sm"
+            variant="outline"
+            className="bg-white"
+            disabled={opening}
+            onClick={openPortal}
+          >
+            {opening ? (
+              <Loader2 className="size-3.5 mr-1.5 animate-spin" aria-hidden="true" />
+            ) : (
+              <CreditCard className="size-3.5 mr-1.5" aria-hidden="true" />
+            )}
+            Manage billing & autopay
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="px-4 py-4 bg-white">
+        <dl className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
+          <SummaryStat
+            label="Monthly amount"
+            value={monthlyDollars != null ? formatUsd(monthlyDollars) : "—"}
+          />
+          <SummaryStat
+            label="Year total"
+            value={yearTotalDollars != null ? formatUsd(yearTotalDollars) : "—"}
+          />
+          <SummaryStat
+            label="Paid YTD"
+            value={formatUsd(paidDollars)}
+            tone="positive"
+          />
+          <SummaryStat
+            label="Outstanding"
+            value={formatUsd(outstandingDollars)}
+            tone={outstandingDollars > 0 ? "negative" : "muted"}
+          />
+        </dl>
+        <p className="text-xs text-muted-foreground mt-4">
+          First invoice:{" "}
+          <span className="font-medium text-foreground">{billingStartLabel}</span>
+          {" · "}
+          You&rsquo;ll receive each invoice by email from Stripe; click
+          <strong> Manage billing &amp; autopay</strong> to save a card and
+          turn on automatic payment.
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+function SummaryStat({
+  label,
+  value,
+  tone = "muted",
+}: {
+  label: string;
+  value: string;
+  tone?: "muted" | "positive" | "negative";
+}) {
+  return (
+    <div>
+      <dt className="text-xs uppercase tracking-wider text-muted-foreground font-medium">
+        {label}
+      </dt>
+      <dd
+        className={cn(
+          "text-lg font-semibold tabular-nums mt-1",
+          tone === "positive" && "text-emerald-700",
+          tone === "negative" && "text-red-700"
+        )}
+      >
+        {value}
+      </dd>
+    </div>
+  );
+}
+
+function BillingScheduleCard({ slots }: { slots: ParentScheduleSlot[] }) {
+  return (
+    <Card className="overflow-hidden gap-0 py-0 bg-white">
+      <CardHeader className="py-3 !pb-3 border-b">
+        <CardTitle className="text-base">Monthly invoices</CardTitle>
+      </CardHeader>
+      <CardContent className="px-3 pb-3 bg-white">
+        <Table>
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[16%]">
+                Month
+              </TableHead>
+              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[18%]">
+                Invoice sent
+              </TableHead>
+              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[18%]">
+                Due by
+              </TableHead>
+              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[14%] text-right">
+                Amount
+              </TableHead>
+              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[16%]">
+                Status
+              </TableHead>
+              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[18%] text-right">
+                Invoice
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {slots.map((slot) => (
+              <BillingScheduleRow key={slot.slotIndex} slot={slot} />
+            ))}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  );
+}
+
+function BillingScheduleRow({ slot }: { slot: ParentScheduleSlot }) {
+  const inv = slot.invoice;
+  const sentLabel = inv?.finalizedAt ? formatBillingDate2(inv.finalizedAt) : "—";
+  const dueLabel = inv?.dueDate ? formatBillingDate2(inv.dueDate) : "—";
+  const amountDue = inv ? inv.amountDueCents / 100 : null;
+  return (
+    <TableRow className={cn(slot.status === "not_started" && "opacity-70")}>
+      <TableCell className="font-medium">{slot.monthLabel}</TableCell>
+      <TableCell className="text-muted-foreground tabular-nums">
+        {sentLabel}
+      </TableCell>
+      <TableCell className="text-muted-foreground tabular-nums">
+        {dueLabel}
+      </TableCell>
+      <TableCell className="text-right tabular-nums">
+        {amountDue != null ? formatUsd(amountDue) : "—"}
+      </TableCell>
+      <TableCell>
+        <ScheduleStatusPill status={slot.status} />
+      </TableCell>
+      <TableCell className="text-right">
+        {inv?.hostedInvoiceUrl ? (
+          <a
+            href={inv.hostedInvoiceUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+          >
+            <ExternalLink className="size-3" aria-hidden="true" />
+            View / pay
+          </a>
+        ) : inv?.invoicePdfUrl ? (
+          <a
+            href={inv.invoicePdfUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+          >
+            <FileText className="size-3" aria-hidden="true" />
+            PDF
+          </a>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        )}
+      </TableCell>
+    </TableRow>
+  );
+}
+
+function ScheduleStatusPill({ status }: { status: ParentScheduleSlot["status"] }) {
+  const config = (() => {
+    switch (status) {
+      case "paid":
+        return {
+          label: "Paid",
+          tone: "bg-emerald-50 text-emerald-700 ring-emerald-200",
+          Icon: CheckCircle2,
+        };
+      case "open":
+        return {
+          label: "Pending",
+          tone: "bg-amber-50 text-amber-700 ring-amber-200",
+          Icon: Circle,
+        };
+      case "failed":
+        return {
+          label: "Failed",
+          tone: "bg-red-50 text-red-700 ring-red-200",
+          Icon: XCircle,
+        };
+      case "void":
+        return {
+          label: "Void",
+          tone: "bg-muted text-muted-foreground ring-border",
+          Icon: XCircle,
+        };
+      case "not_started":
+      default:
+        return {
+          label: "Not started",
+          tone: "bg-muted text-muted-foreground ring-border",
+          Icon: Circle,
+        };
+    }
+  })();
+  const { label, tone, Icon } = config;
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ring-1",
+        tone
+      )}
+    >
+      <Icon className="size-2.5" aria-hidden="true" />
+      {label}
+    </span>
+  );
+}
+
+function formatUsd(dollars: number): string {
+  return `$${dollars.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+/** Format a YYYY-MM-DD billing date as a long string (UTC). */
+function formatBillingDate(iso: string): string {
+  const ms = Date.parse(`${iso}T00:00:00Z`);
+  if (!Number.isFinite(ms)) return iso;
+  return new Date(ms).toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+}
+
+/** Format a unix-ms timestamp as a short date for the table cells. */
+function formatBillingDate2(ms: number): string {
+  return new Date(ms).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
 }
 
