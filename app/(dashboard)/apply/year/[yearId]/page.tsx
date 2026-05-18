@@ -445,6 +445,7 @@ export default function YearOverviewPage() {
   const { steps, registrationSteps, registrationCompletedCount, allRegistrationSectionsComplete, allComplete, loading, stage, schoolYear } =
     useApplicationSteps(yearId);
   const { data: students } = useStudents();
+  const studentsLoading = students === undefined;
   const yearName = schoolYear?.year_name ?? "next year";
 
   // URL policy by lifecycle phase:
@@ -462,6 +463,7 @@ export default function YearOverviewPage() {
   // any section that isn't yet marked complete.
   const {
     progress,
+    loading: familyProgressLoading,
     submit: submitFamilyApplication,
     unsubmit: unsubmitFamilyApplication,
   } = useFamilyProgress(yearId);
@@ -632,13 +634,13 @@ export default function YearOverviewPage() {
     }
   }, [stage, regProgress, registrationCompletedCount, isRegistrationSubmitted]);
 
-  // Keep the skeleton up while we know a redirect is imminent so the
+  // Keep the spinner up while we know a redirect is imminent so the
   // parent doesn't see the apply / accepted view flash briefly
   // before the URL changes. Two transitional cases:
   //
   //   1. Family is accepted but we're on `/apply` — the URL effect
   //      above will redirect to `/registration` (or `/dashboard` if
-  //      already enrolled) once data lands. Show skeleton through
+  //      already enrolled) once data lands. Show spinner through
   //      that window rather than the apply form.
   //   2. Family is NOT accepted but we're on `/registration` —
   //      symmetric case, will redirect back to `/apply`.
@@ -651,23 +653,55 @@ export default function YearOverviewPage() {
   const onRegistrationPath = pathname.startsWith(
     `/registration/year/${yearId}`
   );
+
+  // Comprehensive initial-load gate. `loading` (from useApplicationSteps)
+  // only covers family + years + apps. The stage/view decision also
+  // reads useFamilyProgress (familyAccepted / familySubmitted),
+  // useStudentRegistrationProgress (isRegistrationConfirmed /
+  // isRegistrationSubmitted), useStudents (RegistrationPendingView's
+  // roster), and the per-year packets SWR (allStudentsConfirmed →
+  // enrolled). If any of those is undefined on first paint, the page
+  // renders with default-false data and lands on the WRONG view (e.g.
+  // briefly AcceptedView with stale per-app `isAccepted=true` before
+  // useFamilyProgress arrives and flips stage to "review"). Holding
+  // the spinner until ALL data sources have settled at least once
+  // eliminates that interim render.
+  //
+  // `yearPacketsPending` only fires when registration was submitted —
+  // the SWR key is `null` otherwise, so `yearPackets === undefined`
+  // means "not fetching" not "still loading."
+  const yearPacketsPending =
+    isRegistrationSubmitted && yearPackets === undefined;
+  const initialDataLoading =
+    loading ||
+    familyProgressLoading ||
+    regProgressLoading ||
+    studentsLoading ||
+    yearPacketsPending;
+
+  // Stage-transition guard. SWR's polling fires each hook independently
+  // and resolves them at slightly different times; between hook A
+  // committing new data and hook B committing new data, the page can
+  // briefly render with mixed-stage data (e.g. useApplications updated
+  // but useFamilyProgress hasn't). That intermediate render is the
+  // "flashed wrong page" the parent saw after admin revoked
+  // acceptance. We track the previously-committed stage; when it
+  // diverges from the freshly-computed stage we hold the spinner for
+  // one render cycle so the URL effect (below) has a chance to fire
+  // before any view tries to render the new stage on the wrong path.
+  const prevStageRef = useRef(stage);
+  const stageJustChanged =
+    !initialDataLoading && prevStageRef.current !== stage;
+  useEffect(() => {
+    prevStageRef.current = stage;
+  }, [stage]);
+
   const willRedirect =
-    !loading &&
+    !initialDataLoading &&
     ((stage === "accepted" && onApplyPath) ||
       (stage !== "accepted" && onRegistrationPath));
 
-  // Also hold the skeleton for accepted families until `regProgress`
-  // resolves, so the post-submit / pending / enrolled substages render
-  // directly from the first paint. Without this we'd flash the
-  // AcceptedView step table (and fire confetti) before flipping to the
-  // right substage. Gated on the hook's loading flag rather than
-  // `regProgress === null` so a 4xx/5xx from the progress endpoint
-  // doesn't perma-stick the skeleton (the hook returns
-  // `progress: null` on error).
-  const acceptedAwaitingRegProgress =
-    stage === "accepted" && regProgressLoading;
-
-  if (loading || willRedirect || acceptedAwaitingRegProgress) {
+  if (initialDataLoading || willRedirect || stageJustChanged) {
     return (
       <div className="flex min-h-[calc(100vh-7.5rem)] items-center justify-center px-4 bg-gray-50 dark:bg-background">
         <Spinner className="size-8 text-muted-foreground" />
