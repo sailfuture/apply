@@ -499,10 +499,21 @@ export default function YearOverviewPage() {
     yearPackets.length > 0 &&
     yearPackets.every((p) => p.registrationConfirmed === true);
 
-  // "Enrolled" = submitted AND every student has been admin-confirmed. Until
-  // both are true, the registration-pending view is shown instead of the
-  // enrolled-family dashboard.
-  const isEnrolled = isRegistrationSubmitted && allStudentsConfirmed;
+  // "Enrolled" = family-level admin latch flipped + parent has
+  // submitted + every student's packet has been admin-confirmed.
+  // ALL THREE matter — `isRegistrationConfirmed` is the family-level
+  // "officially enrolled" gate admin flips via the Family Registration
+  // Confirmation card. Without checking it here, an admin unconfirm
+  // doesn't bounce the parent out of the enrolled view, and the
+  // redirect logic gets stuck in a loop between the root `/`,
+  // `/registration`, and `/dashboard` (each disagrees on whether the
+  // family is enrolled).
+  const isRegistrationConfirmed =
+    !!regProgress?.isRegistrationConfirmed;
+  const isEnrolled =
+    isRegistrationConfirmed &&
+    isRegistrationSubmitted &&
+    allStudentsConfirmed;
 
   // URL routing effect — see comment near the top of the component for
   // the lifecycle → URL mapping. Lives down here so it can read the
