@@ -326,6 +326,34 @@ export async function PATCH(req: NextRequest) {
           cascadeErr
         );
       }
+      // Auto-start monthly billing on the same confirmation event.
+      // `startMonthlyBilling` is idempotent — if a subscription
+      // already exists on the family-payment row (admin reconfirm
+      // after unconfirm, or admin already clicked the manual Start
+      // Billing button), it returns the existing one without
+      // creating a duplicate. Best-effort: precondition failures
+      // (no tuition amount, no primary parent email) log and let
+      // admin retry via the manual button.
+      try {
+        const { startMonthlyBilling, BillingPreconditionError } =
+          await import("@/lib/billing");
+        try {
+          await startMonthlyBilling({ familyId, yearId });
+        } catch (billingErr) {
+          if (billingErr instanceof BillingPreconditionError) {
+            console.warn(
+              `[/api/admin/registration-progress] billing cascade skipped for (family=${familyId}, year=${yearId}): ${billingErr.message}`
+            );
+          } else {
+            throw billingErr;
+          }
+        }
+      } catch (cascadeErr) {
+        console.error(
+          "[/api/admin/registration-progress] billing cascade failed:",
+          cascadeErr
+        );
+      }
     }
 
     return NextResponse.json(updated);

@@ -356,7 +356,7 @@ export default function AdminDashboardPage() {
                 </span>
               </div>
             </CardHeader>
-            <CardContent className="p-0 bg-white">
+            <CardContent className="px-3 pb-3 bg-white">
               <ActionAppTable
                 rows={actionApps.slice(0, ACTION_LIMIT)}
                 totalRows={actionApps.length}
@@ -403,7 +403,7 @@ export default function AdminDashboardPage() {
                 ) : null}
               </div>
             </CardHeader>
-            <CardContent className="p-0 bg-white">
+            <CardContent className="px-3 pb-3 bg-white">
               <EnrolledTable
                 rows={enrolledRows.slice(0, ENROLLED_LIMIT)}
                 onRowClick={(row) =>

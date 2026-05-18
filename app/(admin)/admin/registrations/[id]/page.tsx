@@ -538,7 +538,11 @@ export default function FamilyRegistrationDetailPage() {
         <section id="section-billing" className="scroll-mt-20">
           <SectionShell
             title="Billing"
-            status={familyPayment?.isStripeSetup === true ? "complete" : "in_progress"}
+            status={
+              familyPayment?.stripe_subscription_id
+                ? "complete"
+                : "in_progress"
+            }
             notes={{
               familyId: Number(family?.id ?? familyId),
               yearId: Number(yearId),
@@ -550,7 +554,6 @@ export default function FamilyRegistrationDetailPage() {
               familyId={Number(family?.id ?? familyId)}
               yearId={Number(yearId)}
               currentMonthlyTuition={familyPayment?.monthly_tuition_payment ?? null}
-              isSetup={familyPayment?.isStripeSetup === true}
             />
           </SectionShell>
         </section>

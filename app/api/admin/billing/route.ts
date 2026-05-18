@@ -8,17 +8,18 @@ import { xano } from "@/lib/xano";
  * table.
  *
  * Pivot: `registration_families_payment` rows for the year where
- * `stripe_subscription_id` is set. We DON'T hit Stripe API per-row
- * here — that would be N+1 Stripe calls on every page load. Instead
- * we surface the Xano-side state (monthly amount, `isStripeSetup`
- * flag, the existence of the subscription id) and link each row to
- * the family registration detail page, where the Billing card hits
- * Stripe live for the per-family deep dive.
+ * `stripe_subscription_id` is set. We join the
+ * `registration_payment_transactions` mirror to compute
+ * paid/outstanding totals per family — single Xano fetch for the
+ * mirror, then in-memory reduce by family. No Stripe API calls per
+ * row (which would N+1 on every page load).
  *
  * Joins:
  *   - `xano.familyPayments.getAllByYear(yearId)` → primary pivot
  *   - `xano.families.getAll()` → display label for the family
  *   - `xano.parents.getAll()` → primary parent name + email
+ *   - `xano.paymentTransactions.getAllByYear(yearId)` → mirror
+ *     for paid/outstanding aggregation
  *
  * Each lookup is wrapped in `Promise.allSettled` so a single Xano
  * hiccup degrades gracefully (empty list rather than 500 on the
@@ -42,12 +43,17 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const [paymentsResult, familiesResult, parentsResult] =
-      await Promise.allSettled([
-        xano.familyPayments.getAllByYear(yearId),
-        xano.families.getAll(),
-        xano.parents.getAll(),
-      ]);
+    const [
+      paymentsResult,
+      familiesResult,
+      parentsResult,
+      transactionsResult,
+    ] = await Promise.allSettled([
+      xano.familyPayments.getAllByYear(yearId),
+      xano.families.getAll(),
+      xano.parents.getAll(),
+      xano.paymentTransactions.getAllByYear(yearId),
+    ]);
 
     if (paymentsResult.status === "rejected") {
       console.error(
@@ -67,6 +73,12 @@ export async function GET(req: NextRequest) {
         parentsResult.reason
       );
     }
+    if (transactionsResult.status === "rejected") {
+      console.error(
+        "[/api/admin/billing] failed to load payment transactions:",
+        transactionsResult.reason
+      );
+    }
 
     const payments =
       paymentsResult.status === "fulfilled" ? paymentsResult.value : [];
@@ -74,6 +86,40 @@ export async function GET(req: NextRequest) {
       familiesResult.status === "fulfilled" ? familiesResult.value : [];
     const parents =
       parentsResult.status === "fulfilled" ? parentsResult.value : [];
+    const transactions =
+      transactionsResult.status === "fulfilled"
+        ? transactionsResult.value
+        : [];
+
+    // Aggregate transactions by family id once so the per-row
+    // reduce below is O(1) per family. `paid` = sum of amount_paid
+    // across all transactions (covers both paid invoices and
+    // partial payments on void/uncollectible if Stripe ever
+    // surfaces those). `outstanding` = sum of (due - paid) on
+    // open/uncollectible only — past-due and future-generated
+    // invoices count, but voided invoices don't because Stripe
+    // never collects on them.
+    const aggByFamily = new Map<
+      number,
+      { paidCents: number; outstandingCents: number; invoicesIssued: number }
+    >();
+    for (const t of transactions) {
+      const fid = Number(t.registration_families_id);
+      const bucket = aggByFamily.get(fid) ?? {
+        paidCents: 0,
+        outstandingCents: 0,
+        invoicesIssued: 0,
+      };
+      bucket.paidCents += t.amount_paid_cents ?? 0;
+      if (t.status === "open" || t.status === "uncollectible") {
+        bucket.outstandingCents += Math.max(
+          (t.amount_due_cents ?? 0) - (t.amount_paid_cents ?? 0),
+          0
+        );
+      }
+      bucket.invoicesIssued += 1;
+      aggByFamily.set(fid, bucket);
+    }
 
     const familyById = new Map(families.map((f) => [f.id, f]));
     // Primary parent per family — lowest id wins, matching the
@@ -93,6 +139,13 @@ export async function GET(req: NextRequest) {
         const familyId = Number(p.registration_families_id);
         const family = familyById.get(familyId) ?? null;
         const primary = primaryByFamily.get(familyId) ?? null;
+        const monthly = p.monthly_tuition_payment ?? null;
+        const yearTotal = monthly != null ? monthly * 12 : null;
+        const agg = aggByFamily.get(familyId) ?? {
+          paidCents: 0,
+          outstandingCents: 0,
+          invoicesIssued: 0,
+        };
         return {
           id: p.id,
           family_id: familyId,
@@ -103,9 +156,12 @@ export async function GET(req: NextRequest) {
             ? `${primary.first_name ?? ""} ${primary.last_name ?? ""}`.trim()
             : "",
           primary_email: primary?.email ?? "",
-          monthly_tuition: p.monthly_tuition_payment ?? null,
+          monthly_tuition: monthly,
+          year_total: yearTotal,
+          paid_cents: agg.paidCents,
+          outstanding_cents: agg.outstandingCents,
+          invoices_issued: agg.invoicesIssued,
           stripe_subscription_id: p.stripe_subscription_id ?? null,
-          is_stripe_setup: p.isStripeSetup === true,
         };
       });
 
@@ -124,6 +180,18 @@ export interface BillingRow {
   primary_name: string;
   primary_email: string;
   monthly_tuition: number | null;
+  /** monthly_tuition × 12, or null when monthly isn't set yet. */
+  year_total: number | null;
+  /** Sum of `amount_paid_cents` across every invoice this family
+   *  has for the year. Updates each time the webhook upserts a
+   *  paid invoice. */
+  paid_cents: number;
+  /** Sum of remaining due on open/uncollectible invoices. Doesn't
+   *  include future invoices that haven't been generated yet. */
+  outstanding_cents: number;
+  /** How many invoices Stripe has issued for the family so far this
+   *  year. Drives the "X of 12 invoices issued" microcopy in the
+   *  list UI when admin scans for who's behind on invoicing. */
+  invoices_issued: number;
   stripe_subscription_id: string | null;
-  is_stripe_setup: boolean;
 }

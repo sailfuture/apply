@@ -137,20 +137,6 @@ export function useApplicationSteps(yearId: number) {
     { revalidateOnFocus: false, dedupingInterval: 10000 }
   );
 
-  // Family-payment row — drives the Payment Setup step. The flag we
-  // read here (`isStripeSetup`) latches `true` when Stripe Checkout
-  // completes (via the webhook handler). Lives on
-  // `registration_families_payment` next to the PandaDoc envelope
-  // state, parallel pattern to `is_enrollment_agreement_signed`.
-  const { data: familyPaymentData } = useSWR<{
-    isStripeSetup?: boolean;
-    stripe_subscription_id?: string | null;
-  } | null>(
-    yearId ? `/api/family-payment?yearId=${yearId}` : null,
-    fetcher,
-    { revalidateOnFocus: false, dedupingInterval: 10000 }
-  );
-
   // Per-student packets for the year — needed because the
   // liability-waiver fields moved off the application row onto this
   // packet table. The sidenav reads the first packet's status to
@@ -536,13 +522,9 @@ export function useApplicationSteps(yearId: number) {
 
   // Post-acceptance registration steps — driven exclusively by the section
   // bools on the `registration_student_registration_progress` bridge row,
-  // EXCEPT for Payment Setup which reads from `registration_families_payment`
-  // (parallel pattern to the existing enrollment-agreement / PandaDoc state
-  // that also lives on the payment row).
   // No legacy fallbacks; the bool is the only signal that counts.
   const tuitionReviewed = regProgressData?.isTuition === true;
   const postEnrollmentSigned = regProgressData?.isEnrollment === true;
-  const paymentSetupComplete = familyPaymentData?.isStripeSetup === true;
   const registrationComplete = regProgressData?.isRegistration === true;
   const volunteerAcknowledged = regProgressData?.isVolunteerHours === true;
   // Volunteer Hours is always navigable from the moment registration
@@ -554,10 +536,6 @@ export function useApplicationSteps(yearId: number) {
   // "Started" signals are independent of the completion bools so an
   // in-progress section shows as yellow instead of gray.
   const postEnrollmentStarted = !!regProgressData?.enrollment_agreement_pandadoc_id;
-  // Payment Setup unlocks once the enrollment agreement is signed —
-  // we want a signed contract before billing kicks in. Stays "started"
-  // even after the parent navigates away so the sidenav stays amber.
-  const paymentSetupStarted = postEnrollmentSigned;
   // Each subsequent step unlocks once the prior section's bool is true.
   const registrationStarted = tuitionReviewed;
   // Force the "started" flag on so `getStatus` returns `in_progress`
@@ -565,10 +543,13 @@ export function useApplicationSteps(yearId: number) {
   // circle). The family can land on this step at any time.
   const volunteerStarted = true;
 
+  // Billing is no longer a parent-facing step — admin creates the
+  // Stripe `send_invoice` subscription on Confirm Registration, and
+  // the family receives invoice emails directly from Stripe. So the
+  // "all sections complete" rollup drops the old payment-setup gate.
   const allRegistrationSectionsComplete =
     tuitionReviewed &&
     postEnrollmentSigned &&
-    paymentSetupComplete &&
     registrationComplete &&
     volunteerAcknowledged;
 
@@ -592,18 +573,6 @@ export function useApplicationSteps(yearId: number) {
       },
       {
         number: 3,
-        title: "Set Up Monthly Payment",
-        description: "Set up your card on Stripe for monthly tuition billing.",
-        status: getStatus(paymentSetupComplete, paymentSetupStarted),
-        detail: paymentSetupComplete
-          ? "Card on file"
-          : paymentSetupStarted
-            ? "In progress"
-            : "Locked",
-        href: `${base}/payment-setup`,
-      },
-      {
-        number: 4,
         title: "Begin Registration Process",
         description: "Complete the final registration steps to confirm your student\u2019s seat.",
         status: getStatus(registrationComplete, true),
@@ -611,7 +580,7 @@ export function useApplicationSteps(yearId: number) {
         href: `${base}/registration`,
       },
       {
-        number: 5,
+        number: 4,
         title: "Volunteer Hours Acknowledgment",
         description: "Acknowledge the mandatory volunteer-hours commitment for the year.",
         status: getStatus(volunteerAcknowledged, volunteerStarted),
@@ -619,7 +588,7 @@ export function useApplicationSteps(yearId: number) {
         href: `${base}/volunteer-hours`,
       },
       {
-        number: 6,
+        number: 5,
         title: "Submit Registration",
         description: "Review and submit your completed registration.",
         status: allRegistrationSectionsComplete ? "in_progress" as StepStatus : "not_started" as StepStatus,
@@ -632,8 +601,6 @@ export function useApplicationSteps(yearId: number) {
       base,
       tuitionReviewed,
       postEnrollmentSigned,
-      paymentSetupComplete,
-      paymentSetupStarted,
       registrationComplete,
       volunteerAcknowledged,
       volunteerStarted,

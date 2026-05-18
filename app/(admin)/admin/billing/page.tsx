@@ -26,22 +26,18 @@ import type { BillingRow } from "@/app/api/admin/billing/route";
 
 /**
  * Admin Billing list — every family with a Stripe subscription on
- * file for the selected school year. Each row drills into the family
- * registration detail page where the Billing card hits Stripe live
- * for status, invoices, and admin actions (pause / resume / cancel /
- * update amount / refund last payment).
+ * file for the selected school year. Each row shows the year-level
+ * billing totals (monthly amount, year total, paid YTD, outstanding)
+ * computed from the payment-transactions mirror — no Stripe API
+ * calls per row.
  *
- * Why two layers of indirection?
- *   - Listing N families requires only Xano data here (no per-row
- *     Stripe API calls) — fast page load, no Stripe rate-limit risk
- *     at list scale.
- *   - Per-family deep dive on the detail page hits Stripe live, so
- *     the admin always sees fresh status the moment they act on a
- *     specific family.
+ * Row click → `/admin/families/[id]/billing?yearId=Y`, which renders
+ * the 12-month invoice schedule for that specific family.
  *
- * Data source: `/api/admin/billing?yearId=Y` → rows from
- * `registration_families_payment` filtered to rows with a
- * `stripe_subscription_id` set.
+ * Data source: `/api/admin/billing?yearId=Y` — joins
+ * `registration_families_payment` (for the subscription pointer +
+ * monthly amount) with `registration_payment_transactions` (for the
+ * paid/outstanding aggregations).
  */
 export default function AdminBillingPage() {
   const router = useRouter();
@@ -60,11 +56,11 @@ export default function AdminBillingPage() {
       <div>
         <h1 className="text-2xl font-bold">Billing</h1>
         <p className="text-sm text-muted-foreground">
-          Families with a Stripe subscription on file for the selected
-          year. Click a row to open the family&rsquo;s registration
-          detail page, where the Billing card surfaces live Stripe
-          status, invoice history, and admin actions (pause, resume,
-          cancel, update amount, refund last payment).
+          Every enrolled family with a Stripe subscription for the
+          selected year. Monthly amount, full-year total, and paid /
+          outstanding balances all reflect the payment-transactions
+          mirror (webhook-fed from Stripe). Click a row to see that
+          family&rsquo;s 12-month invoice schedule.
         </p>
       </div>
 
@@ -88,7 +84,7 @@ export default function AdminBillingPage() {
           rows={rows}
           onRowClick={(row) =>
             router.push(
-              `/admin/registrations/${row.family_id}?yearId=${row.year_id}#section-billing`
+              `/admin/families/${row.family_id}/billing?yearId=${row.year_id}`
             )
           }
         />
@@ -140,17 +136,23 @@ function BillingTable({
         <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[28%]">
+              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[22%]">
                 Family
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[30%]">
+              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[22%]">
                 Primary Contact
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[18%] text-right">
+              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[12%] text-right">
                 Monthly
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[18%]">
-                Status
+              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[12%] text-right">
+                Year total
+              </TableHead>
+              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[12%] text-right">
+                Paid
+              </TableHead>
+              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[14%] text-right">
+                Outstanding
               </TableHead>
               <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[6%] text-right" />
             </TableRow>
@@ -159,7 +161,7 @@ function BillingTable({
             {visible.length === 0 ? (
               <TableRow className="hover:bg-transparent">
                 <TableCell
-                  colSpan={5}
+                  colSpan={7}
                   className="py-8 text-center text-sm italic text-muted-foreground"
                 >
                   No families match &ldquo;{search}&rdquo;.
@@ -181,21 +183,23 @@ function BillingTable({
                     </span>
                   </TableCell>
                   <TableCell className="text-sm text-right tabular-nums">
-                    {row.monthly_tuition != null
-                      ? `$${row.monthly_tuition.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-                      : "—"}
+                    {formatMonthly(row.monthly_tuition)}
                   </TableCell>
-                  <TableCell>
-                    <span
-                      className={cn(
-                        "inline-flex items-center rounded-full border border-border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider",
-                        row.is_stripe_setup
-                          ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                          : "bg-muted text-muted-foreground"
-                      )}
-                    >
-                      {row.is_stripe_setup ? "Card on file" : "Pending"}
-                    </span>
+                  <TableCell className="text-sm text-right tabular-nums">
+                    {formatMonthly(row.year_total)}
+                  </TableCell>
+                  <TableCell className="text-sm text-right tabular-nums text-emerald-700">
+                    {formatCents(row.paid_cents)}
+                  </TableCell>
+                  <TableCell
+                    className={cn(
+                      "text-sm text-right tabular-nums",
+                      row.outstanding_cents > 0
+                        ? "text-red-700 font-medium"
+                        : "text-muted-foreground"
+                    )}
+                  >
+                    {formatCents(row.outstanding_cents)}
                   </TableCell>
                   <TableCell className="text-right">
                     <ChevronRight className="size-4 text-muted-foreground inline" />
@@ -234,12 +238,33 @@ function BillingEmptyState() {
         </div>
         <h3 className="text-base font-semibold">No subscriptions yet</h3>
         <p className="mt-1 text-sm text-muted-foreground max-w-md mx-auto">
-          A family appears here once they complete the Payment Setup
-          step in their registration flow. Head to{" "}
-          <strong>Registrations</strong> to see who&rsquo;s still
-          in-progress on enrollment.
+          A family appears here once admin confirms their registration —
+          that cascade auto-starts the monthly billing subscription.
+          Check the <strong>Registrations</strong> queue for in-progress
+          families.
         </p>
       </CardContent>
     </Card>
   );
+}
+
+/** Format a dollars value (monthly amount, year total) consistently
+ *  with the Outstanding / Paid columns below — same "$X,XXX.XX"
+ *  shape. Null becomes em-dash. */
+function formatMonthly(dollars: number | null): string {
+  if (dollars == null) return "—";
+  return `$${dollars.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+/** Format a cents value (paid_cents, outstanding_cents) for display.
+ *  Zero renders as "$0.00" rather than em-dash because zero is
+ *  meaningful here ("paid nothing yet" vs "unknown"). */
+function formatCents(cents: number): string {
+  return `$${(cents / 100).toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
 }

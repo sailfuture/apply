@@ -8,8 +8,8 @@ import {
   Circle,
   ExternalLink,
   FileText,
-  FileUp,
   Loader2,
+  Plus,
   RotateCcw,
   X,
 } from "lucide-react";
@@ -983,79 +983,102 @@ function DocRow({
         ) : null}
       </TableCell>
       <TableCell className="align-middle">
+        {/* Files column + inline "+" upload trigger laid out as a
+            single horizontal row so a row with one file + one upload
+            affordance reads as a single line. `min-w-0` on the files
+            container lets the long filenames truncate inside their
+            `<FileLink>` instead of pushing the "+" button off-screen.
+            Pending upload chips render BELOW the row so they don't
+            squash the inline line height. */}
         <div className="space-y-1.5">
-          {row.files.length === 0 ? (
-            <p className="text-[11px] italic text-muted-foreground">
-              {row.emptyHint ?? "No file uploaded."}
-            </p>
-          ) : (
-            <ul className="space-y-1">
-              {row.files.map((f, i) => (
-                <FileLink
-                  key={`${row.key}-${f.name ?? f.path ?? i}-${i}`}
-                  file={f}
-                  fallbackIndex={i}
-                />
-              ))}
-            </ul>
-          )}
-          {/* Upload-on-behalf-of-family affordance — only renders
-              when the row was built with an `upload` config (today:
-              the SNAP path's award-letter row). Admin picks file(s)
-              from their local disk; the row's `onUpload` POSTs them
-              to /api/upload + PATCHes the appropriate Xano column.
-              Pending chips stay visible until the parent's SWR
-              refresh flips `row.files` so the row doesn't flicker
-              through an empty state mid-upload. */}
-          {row.upload ? (
-            <FileUpload
-              maxFiles={row.upload.maxFiles ?? 5}
-              maxSize={10 * 1024 * 1024}
-              accept={row.upload.accept ?? ".pdf,.jpg,.jpeg,.png"}
-              value={pending}
-              onValueChange={handleFilesChange}
-              disabled={uploading}
-            >
-              <FileUploadDropzone className="border-0 p-0 cursor-pointer hover:bg-transparent w-fit min-h-0">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-7 text-xs leading-none bg-white"
-                  disabled={uploading}
-                  asChild
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="flex-1 min-w-0">
+              {row.files.length === 0 ? (
+                <p
+                  className="text-[11px] italic text-muted-foreground truncate"
+                  title={row.emptyHint ?? "No file uploaded."}
                 >
-                  <span>
-                    {uploading ? (
-                      <Loader2 className="size-3 animate-spin" />
-                    ) : (
-                      <FileUp className="size-3" />
-                    )}
-                    <span className="ml-1">
-                      {uploading
+                  {row.emptyHint ?? "No file uploaded."}
+                </p>
+              ) : (
+                <ul className="space-y-1">
+                  {row.files.map((f, i) => (
+                    <FileLink
+                      key={`${row.key}-${f.name ?? f.path ?? i}-${i}`}
+                      file={f}
+                      fallbackIndex={i}
+                    />
+                  ))}
+                </ul>
+              )}
+            </div>
+            {/* Upload-on-behalf-of-family affordance — only renders
+                when the row was built with an `upload` config (today:
+                the SNAP path's award-letter row). Admin picks file(s)
+                from their local disk; the row's `onUpload` POSTs them
+                to /api/upload + PATCHes the appropriate Xano column.
+                Renders as an inline "+" icon button so it doesn't push
+                anything to a second line. */}
+            {row.upload ? (
+              <FileUpload
+                maxFiles={row.upload.maxFiles ?? 5}
+                maxSize={10 * 1024 * 1024}
+                accept={row.upload.accept ?? ".pdf,.jpg,.jpeg,.png"}
+                value={pending}
+                onValueChange={handleFilesChange}
+                disabled={uploading}
+              >
+                <FileUploadDropzone className="border-0 p-0 cursor-pointer hover:bg-transparent w-fit min-h-0 shrink-0">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    className="size-7 bg-white shrink-0"
+                    disabled={uploading}
+                    aria-label={
+                      uploading
+                        ? "Uploading"
+                        : row.files.length === 0
+                          ? "Upload file"
+                          : "Add another file"
+                    }
+                    title={
+                      uploading
                         ? "Uploading…"
                         : row.files.length === 0
-                          ? "Upload"
-                          : "Add file"}
+                          ? "Upload file"
+                          : "Add another file"
+                    }
+                    asChild
+                  >
+                    <span>
+                      {uploading ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : (
+                        <Plus className="size-3.5" />
+                      )}
                     </span>
-                  </span>
-                </Button>
-              </FileUploadDropzone>
-              <FileUploadList>
-                {pending.map((f, i) => (
-                  <FileUploadItem key={i} value={f}>
-                    <FileUploadItemPreview />
-                    <FileUploadItemMetadata />
-                    <FileUploadItemDelete asChild>
-                      <Button variant="ghost" size="icon" className="size-7">
-                        <X className="size-4" />
-                      </Button>
-                    </FileUploadItemDelete>
-                  </FileUploadItem>
-                ))}
-              </FileUploadList>
-            </FileUpload>
-          ) : null}
+                  </Button>
+                </FileUploadDropzone>
+                {/* Pending chips render below the inline row — keeps
+                    the file/upload line tight while still showing
+                    in-flight uploads with progress + cancel. */}
+                <FileUploadList>
+                  {pending.map((f, i) => (
+                    <FileUploadItem key={i} value={f}>
+                      <FileUploadItemPreview />
+                      <FileUploadItemMetadata />
+                      <FileUploadItemDelete asChild>
+                        <Button variant="ghost" size="icon" className="size-7">
+                          <X className="size-4" />
+                        </Button>
+                      </FileUploadItemDelete>
+                    </FileUploadItem>
+                  ))}
+                </FileUploadList>
+              </FileUpload>
+            ) : null}
+          </div>
         </div>
       </TableCell>
       {/* Confirmed By + Time — own columns (rather than stacked

@@ -5657,18 +5657,6 @@ function ScholarshipReviewBlock({
               </tr>
               <tr className="bg-white">
                 <td className="px-4 py-2 font-medium">
-                  Transport
-                  <span className="block text-[11px] text-muted-foreground font-normal">
-                    {formatCurrency(baseTransport)} × {numStudents} student
-                    {numStudents === 1 ? "" : "s"}
-                  </span>
-                </td>
-                <td className="px-4 py-2 text-right tabular-nums">
-                  {formatCurrency(transportTotal)}
-                </td>
-              </tr>
-              <tr className="bg-white">
-                <td className="px-4 py-2 font-medium">
                   SUFS coverage
                   <span className="block text-[11px] text-muted-foreground font-normal">
                     Combined per-student SUFS awards

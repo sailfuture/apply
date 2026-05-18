@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import useSWR from "swr";
@@ -10,6 +11,7 @@ import {
   Mail,
   Phone,
   SquarePen,
+  User,
 } from "lucide-react";
 import {
   Card,
@@ -27,10 +29,19 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { formatUSPhone } from "@/lib/phone";
 import { cn } from "@/lib/utils";
 import type { AdminFamilyOverviewResponse } from "@/app/api/admin/family-overview/[id]/route";
+
+type Parent = AdminFamilyOverviewResponse["parents"][number];
 
 /**
  * Admin family overview — single page that shows everything about
@@ -57,6 +68,11 @@ export default function FamilyOverviewPage() {
     swrKey,
     adminFetcher
   );
+
+  // Selected parent for the detail modal. Click on a parent row →
+  // open modal with the full record. Stays open until admin closes
+  // or selects another parent.
+  const [openParent, setOpenParent] = useState<Parent | null>(null);
 
   if (isLoading && !data) {
     return (
@@ -122,14 +138,17 @@ export default function FamilyOverviewPage() {
 
       {/* Parents — full bio + contact links. Lowest-id-first
           ordering so the primary parent (typically the row that
-          got created first) lands at the top. */}
+          got created first) lands at the top. Each row is
+          clickable and opens a detail modal so admin can see the
+          full bio + address without the table needing every
+          column wide enough to display it. */}
       <Card className="overflow-hidden gap-0 py-0 bg-white">
         <CardHeader className="py-3 !pb-3 border-b">
           <CardTitle className="text-base">Parents</CardTitle>
         </CardHeader>
-        <CardContent className="py-0 px-0 bg-white">
+        <CardContent className="px-3 pb-3 bg-white">
           {parents.length === 0 ? (
-            <p className="text-sm italic text-muted-foreground px-5 py-4">
+            <p className="text-sm italic text-muted-foreground px-2 py-4">
               No parents on file for this family.
             </p>
           ) : (
@@ -162,13 +181,21 @@ export default function FamilyOverviewPage() {
                     .filter(Boolean)
                     .join(", ");
                   return (
-                    <TableRow key={p.id}>
+                    <TableRow
+                      key={p.id}
+                      className="cursor-pointer"
+                      onClick={() => setOpenParent(p)}
+                    >
                       <TableCell className="font-medium">{name}</TableCell>
                       <TableCell>
                         {p.email ? (
+                          // `stopPropagation` so clicking the mailto
+                          // link doesn't also fire the row's modal.
+                          // Same pattern on the tel link below.
                           <a
                             href={`mailto:${p.email}`}
-                            className="inline-flex items-center gap-1 hover:underline"
+                            onClick={(e) => e.stopPropagation()}
+                            className="inline-flex items-center gap-1 hover:underline max-w-full min-w-0"
                           >
                             <Mail className="size-3 shrink-0" />
                             <span className="truncate">{p.email}</span>
@@ -181,6 +208,7 @@ export default function FamilyOverviewPage() {
                         {p.phone ? (
                           <a
                             href={`tel:${String(p.phone).replace(/\D/g, "")}`}
+                            onClick={(e) => e.stopPropagation()}
                             className="inline-flex items-center gap-1 hover:underline tabular-nums"
                           >
                             <Phone className="size-3 shrink-0" />
@@ -220,7 +248,7 @@ export default function FamilyOverviewPage() {
         <CardHeader className="py-3 !pb-3 border-b">
           <CardTitle className="text-base">Students</CardTitle>
         </CardHeader>
-        <CardContent className="py-0 px-0 bg-white">
+        <CardContent className="px-3 pb-3 bg-white">
           {students.length === 0 ? (
             <p className="text-sm italic text-muted-foreground px-5 py-4">
               No students on file for this family.
@@ -318,7 +346,7 @@ export default function FamilyOverviewPage() {
         <CardHeader className="py-3 !pb-3 border-b">
           <CardTitle className="text-base">Emergency Contacts</CardTitle>
         </CardHeader>
-        <CardContent className="py-0 px-0 bg-white">
+        <CardContent className="px-3 pb-3 bg-white">
           {emergency_contacts.length === 0 ? (
             <p className="text-sm italic text-muted-foreground px-5 py-4">
               No emergency contacts on file for this family.
@@ -405,6 +433,116 @@ export default function FamilyOverviewPage() {
           family workspace still reachable via the "Open year"
           buttons elsewhere; this overview surface stays focused on
           the family-level summary. */}
+
+      <ParentDetailModal
+        parent={openParent}
+        onClose={() => setOpenParent(null)}
+      />
+    </div>
+  );
+}
+
+/**
+ * Parent detail modal — opens from a row click on the Parents
+ * table. Shows the full bio + contact + address fields the table
+ * can't surface inline without going wide. Email/phone are
+ * actionable links inside the modal too.
+ */
+function ParentDetailModal({
+  parent,
+  onClose,
+}: {
+  parent: Parent | null;
+  onClose: () => void;
+}) {
+  const open = parent !== null;
+  const fullName = parent
+    ? `${parent.first_name ?? ""} ${parent.last_name ?? ""}`.trim() ||
+      `Parent #${parent.id}`
+    : "";
+  const addressLines = parent
+    ? [
+        parent.address_line_1,
+        parent.address_line_2,
+        [parent.city, parent.state, parent.zipcode].filter(Boolean).join(", "),
+      ].filter(Boolean)
+    : [];
+  return (
+    <Dialog open={open} onOpenChange={(o) => (!o ? onClose() : null)}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <User className="size-4 text-muted-foreground" aria-hidden="true" />
+            {fullName}
+          </DialogTitle>
+          <DialogDescription>
+            {parent?.relationship
+              ? `${parent.relationship} · Parent record #${parent.id}`
+              : `Parent record #${parent?.id ?? ""}`}
+          </DialogDescription>
+        </DialogHeader>
+        {parent ? (
+          <dl className="space-y-3 text-sm">
+            <DetailRow label="Email">
+              {parent.email ? (
+                <a
+                  href={`mailto:${parent.email}`}
+                  className="inline-flex items-center gap-1.5 hover:underline break-all"
+                >
+                  <Mail className="size-3.5 shrink-0 text-muted-foreground" />
+                  {parent.email}
+                </a>
+              ) : (
+                <span className="text-muted-foreground">—</span>
+              )}
+            </DetailRow>
+            <DetailRow label="Phone">
+              {parent.phone ? (
+                <a
+                  href={`tel:${String(parent.phone).replace(/\D/g, "")}`}
+                  className="inline-flex items-center gap-1.5 hover:underline tabular-nums"
+                >
+                  <Phone className="size-3.5 shrink-0 text-muted-foreground" />
+                  {formatUSPhone(parent.phone)}
+                </a>
+              ) : (
+                <span className="text-muted-foreground">—</span>
+              )}
+            </DetailRow>
+            <DetailRow label="Address">
+              {addressLines.length === 0 ? (
+                <span className="text-muted-foreground">—</span>
+              ) : (
+                <span className="block whitespace-pre-line">
+                  {addressLines.join("\n")}
+                </span>
+              )}
+            </DetailRow>
+            <DetailRow label="Invite status">
+              <span className="text-muted-foreground">
+                {parent.invite_status || "—"}
+              </span>
+            </DetailRow>
+          </dl>
+        ) : null}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function DetailRow({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="grid grid-cols-[6.5rem_1fr] gap-3 items-start">
+      <dt className="text-xs font-medium uppercase tracking-wider text-muted-foreground pt-0.5">
+        {label}
+      </dt>
+      <dd className="min-w-0">{children}</dd>
     </div>
   );
 }

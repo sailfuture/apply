@@ -2,11 +2,9 @@
  * Server-side Stripe client + helpers.
  *
  * The whole apply repo only needs Stripe on the server: every flow
- * (Checkout session creation, webhook handling, admin billing actions)
+ * (subscription creation, webhook handling, admin billing actions)
  * runs through Route Handlers. We never ship the secret key to the
- * browser — parent-side payment kicks off via a POST to
- * `/api/payment-setup`, which builds a Checkout Session and returns the
- * URL for `window.location.href = url`.
+ * browser.
  *
  * Env vars (set on Vercel):
  *   STRIPE_SECRET_KEY         — `sk_live_...` (or `sk_test_...` on
@@ -18,27 +16,31 @@
  *                                Subscription generates at creation
  *                                time, not on pre-created Price
  *                                objects)
- *   NEXT_PUBLIC_APP_URL       — base URL for Checkout success/cancel
- *                                redirects (e.g. `https://apply.sailfuture.org`)
+ *   NEXT_PUBLIC_APP_URL       — base URL (e.g. `https://apply.sailfuture.org`)
  *
  * Architecture choices baked in here:
  *   - One Stripe Customer per family, long-lived across academic
  *     years. Customer ID is stored on `registration_families`.
- *   - One Stripe Subscription per family per year, with inline
- *     `price_data` carrying the family's scholarship-adjusted monthly
- *     amount. Subscription ID is stored on
- *     `registration_families_payment` (the per-year billing row,
- *     parallel to the existing PandaDoc envelope state).
+ *   - One Stripe Subscription per family per year, in `send_invoice`
+ *     collection mode — Stripe generates a hosted invoice each month
+ *     and emails the link to the family. No card on file required.
+ *     Inline `price_data` carries the family's scholarship-adjusted
+ *     monthly amount. Subscription ID lives on
+ *     `registration_families_payment` (per-year billing row).
  *   - `billing_cycle_anchor` lives on `registration_school_years` as
  *     `billing_start_date` (e.g. `2025-08-01`). Subscriptions created
  *     before that date use `trial_end = billing_start_date_unix` so
- *     the first charge defers to the anchor — no upfront charge at
- *     signup. Subscriptions created after the date charge immediately
- *     (we set `trial_end` to "now" effectively a no-op).
- *   - Admin reads live from Stripe for status displays (per the
- *     "read live" choice on rollout). We cache nothing here; the
- *     webhook handler is only for state-change events (subscription
- *     created / payment failed / canceled), not for routine display.
+ *     the first invoice defers to the anchor — no early invoicing at
+ *     signup. Subscriptions created after the date invoice
+ *     immediately.
+ *   - Admin triggers subscription creation: cascade on Confirm Family
+ *     Registration is the happy path; admin Billing card has a manual
+ *     "Start Monthly Billing" button as the override / retry path
+ *     when the cascade hit a precondition error.
+ *   - Admin reads live from Stripe for status displays. We cache
+ *     nothing here; the webhook handler is only for state-change
+ *     events (subscription created/deleted, invoice paid/failed/finalized),
+ *     not for routine display.
  */
 
 import Stripe from "stripe";
@@ -157,37 +159,49 @@ export async function getOrCreateCustomer({
   return { customer, created: true };
 }
 
-/* ─────────────────────── Checkout session ─────────────────────── */
+/* ─────────────────────── Invoice subscription ─────────────────────── */
 
-interface CreateCheckoutInput {
+interface CreateInvoiceSubscriptionInput {
   customerId: string;
   monthlyTuitionCents: number;
   /** ISO date string (YYYY-MM-DD) from `school_years.billing_start_date`.
    *  When the date is in the future, we set `trial_end` to that date so
-   *  the first charge defers. When in the past or today, we bill
-   *  immediately (no trial). */
+   *  the first invoice fires on the anchor. When in the past or today,
+   *  Stripe generates the first invoice immediately. */
   billingStartDate: string | null;
   familyId: number;
   yearId: number;
-  /** Where to send the user on Checkout success / cancel. */
-  successUrl: string;
-  cancelUrl: string;
+  /** Days from invoice issue date until it's marked overdue. Net 15
+   *  per the SailFuture billing policy. */
+  daysUntilDue?: number;
 }
 
 /**
- * Build a Stripe Checkout Session in subscription mode. Returns the
- * `{ url, id }` for client-side redirect. The Subscription is created
- * by Stripe upon Checkout completion — at that point our webhook
- * handler grabs the subscription id and persists it.
+ * Create a Stripe Subscription in `send_invoice` collection mode.
+ * Stripe generates a hosted invoice each month and emails the link
+ * to the customer — the family pays however they want (card on the
+ * hosted page, ACH, or pay outside Stripe via check and admin marks
+ * paid manually).
+ *
+ * Distinct from a charge-automatically subscription (which we used
+ * to have): no card on file is required; the parent has nothing to
+ * "set up" before billing kicks in. Admin triggers subscription
+ * creation directly — either auto-cascade from Confirm Registration
+ * or via the manual "Start Monthly Billing" button on the admin
+ * Billing card.
  *
  * `subscription_data.trial_end` defers the first invoice to the
  * school year's `billing_start_date`. If the date has already passed
- * (e.g. family enrolls mid-year), Stripe bills immediately — we omit
- * `trial_end` for past dates rather than passing a stale timestamp.
+ * (e.g. family enrolls mid-year), Stripe issues the first invoice
+ * immediately — we omit `trial_end` for past dates rather than
+ * passing a stale timestamp.
+ *
+ * Returns the created Subscription; caller persists `id` onto the
+ * `registration_families_payment.stripe_subscription_id` column.
  */
-export async function createCheckoutSession(
-  input: CreateCheckoutInput
-): Promise<Stripe.Checkout.Session> {
+export async function createInvoiceSubscription(
+  input: CreateInvoiceSubscriptionInput
+): Promise<Stripe.Subscription> {
   const stripe = getStripeClient();
   const productId = getTuitionProductId();
 
@@ -200,16 +214,20 @@ export async function createCheckoutSession(
     const unix = Math.floor(ms / 1000);
     // Stripe requires trial_end to be at least 48 hours in the future
     // when set on a Subscription. Skip the trial if the date is too
-    // close — better to bill immediately than have Checkout fail.
+    // close — better to invoice immediately than have create fail.
     const nowUnix = Math.floor(Date.now() / 1000);
     if (unix <= nowUnix + 48 * 60 * 60) return null;
     return unix;
   })();
 
-  return stripe.checkout.sessions.create({
-    mode: "subscription",
+  return stripe.subscriptions.create({
     customer: input.customerId,
-    line_items: [
+    // `send_invoice` flips Stripe from auto-charge-on-card to
+    // generate-and-email-an-invoice. Required pairing with
+    // `days_until_due`.
+    collection_method: "send_invoice",
+    days_until_due: input.daysUntilDue ?? 15,
+    items: [
       {
         quantity: 1,
         price_data: {
@@ -220,25 +238,12 @@ export async function createCheckoutSession(
         },
       },
     ],
-    subscription_data: {
-      ...(billingAnchorUnix ? { trial_end: billingAnchorUnix } : {}),
-      metadata: {
-        family_id: String(input.familyId),
-        year_id: String(input.yearId),
-      },
-      description: `SailFuture Academy monthly tuition · family ${input.familyId} · year ${input.yearId}`,
-    },
-    // Link the Session back to our records so the webhook handler can
-    // find them without re-querying Xano. `client_reference_id` is the
-    // canonical place; we also stamp metadata as a backup for tooling
-    // that filters in the Stripe Dashboard.
-    client_reference_id: `family-${input.familyId}-year-${input.yearId}`,
+    ...(billingAnchorUnix ? { trial_end: billingAnchorUnix } : {}),
     metadata: {
       family_id: String(input.familyId),
       year_id: String(input.yearId),
     },
-    success_url: input.successUrl,
-    cancel_url: input.cancelUrl,
+    description: `SailFuture Academy monthly tuition · family ${input.familyId} · year ${input.yearId}`,
   });
 }
 

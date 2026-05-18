@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import type Stripe from "stripe";
 import { xano } from "@/lib/xano";
+import type { XanoPaymentTransaction } from "@/lib/xano";
 import { verifyWebhookSignature } from "@/lib/stripe";
 
 /**
@@ -10,26 +11,39 @@ import { verifyWebhookSignature } from "@/lib/stripe";
  * not retry (signature errors are caller-side problems, not transport
  * issues), but the failure shows in the Dashboard's webhook log.
  *
- * Idempotency: every state-change handler reads the current Xano row
- * first and skips the write when the field is already set. If Stripe
- * retries an event (legitimate transient retry), the second pass is
- * a no-op.
+ * Idempotency: handlers upsert on natural keys
+ * (`stripe_subscription_id` for the family-payment row,
+ * `stripe_invoice_id` for the payment-transactions mirror). If Stripe
+ * retries an event the second pass is a PATCH instead of a duplicate
+ * INSERT, so we can't double-write.
+ *
+ * Billing model: subscriptions run in `send_invoice` mode — Stripe
+ * generates a hosted invoice each month and emails the link to the
+ * family. The parent has nothing to set up; admin creates the
+ * Subscription on Confirm Registration. So there's no
+ * `checkout.session.completed` handler — Checkout is dead in the
+ * current flow.
  *
  * Events handled:
- *   - `checkout.session.completed` — Checkout finished, subscription
- *     created. Pull `subscription` + `customer` from the Session,
- *     resolve the family-payment row via metadata, stamp
- *     `stripe_subscription_id` + `isStripeSetup: true`. Also
- *     idempotently write `stripe_customer_id` on the family in case
- *     the /api/payment-setup route's best-effort write missed.
- *   - `customer.subscription.created` — backup for the above; same
- *     logic, in case Stripe delivers `subscription.created` before
- *     `checkout.session.completed` (rare but documented as possible).
- *   - `invoice.payment_failed` — log for admin visibility. No Xano
- *     mirror needed; admin reads live from Stripe API.
- *   - `customer.subscription.deleted` — clear `isStripeSetup` so the
- *     parent registration step re-opens. Subscription id stays for
- *     audit trail.
+ *   - `customer.subscription.created` — admin created a Subscription
+ *     (via the cascade on Confirm Registration or the manual Start
+ *     Billing button). Persist `stripe_subscription_id` onto the
+ *     family-payment row + back-fill `stripe_customer_id` on the
+ *     family if it isn't already mirrored.
+ *   - `customer.subscription.deleted` — admin canceled the
+ *     subscription. Clear `stripe_subscription_id` so the admin
+ *     Billing card flips back to the "Start Monthly Billing" empty
+ *     state.
+ *   - `invoice.finalized` — Stripe stamped + sent the invoice. UPSERT
+ *     into the payment-transactions mirror so the admin billing
+ *     aggregation surfaces have a row for this period.
+ *   - `invoice.paid` — invoice cleared. UPSERT (status → paid,
+ *     paid_at = now, amount_paid_cents updated).
+ *   - `invoice.payment_failed` — UPSERT to keep amount_due in sync
+ *     and bump the audit trail. Status stays `open` (Stripe's own
+ *     attempt counter lives on the invoice).
+ *   - `invoice.voided` — admin voided the invoice in Dashboard.
+ *     UPSERT (status → void).
  *
  * Anything else is acknowledged with 200 so Stripe stops retrying
  * but logs the unhandled-event type for visibility.
@@ -59,17 +73,17 @@ export async function POST(req: NextRequest) {
 
   try {
     switch (event.type) {
-      case "checkout.session.completed":
-        await handleCheckoutCompleted(event.data.object);
-        break;
       case "customer.subscription.created":
         await handleSubscriptionCreated(event.data.object);
         break;
-      case "invoice.payment_failed":
-        await handlePaymentFailed(event.data.object);
-        break;
       case "customer.subscription.deleted":
         await handleSubscriptionDeleted(event.data.object);
+        break;
+      case "invoice.finalized":
+      case "invoice.paid":
+      case "invoice.payment_failed":
+      case "invoice.voided":
+        await upsertInvoiceFromEvent(event.type, event.data.object);
         break;
       default:
         // Acknowledge unhandled types so Stripe stops retrying. The
@@ -94,53 +108,14 @@ export async function POST(req: NextRequest) {
   }
 }
 
-/* ─────────────────────── Handlers ─────────────────────── */
-
-async function handleCheckoutCompleted(
-  session: Stripe.Checkout.Session
-): Promise<void> {
-  // Subscription mode Checkout — both `subscription` and `customer`
-  // should be present. They land as either a string id or an
-  // expanded object depending on Stripe's whim; normalize.
-  const subscriptionId = idOrString(session.subscription);
-  const customerId = idOrString(session.customer);
-  if (!subscriptionId) {
-    console.warn(
-      "[/api/webhooks/stripe] checkout.session.completed missing subscription id, session:",
-      session.id
-    );
-    return;
-  }
-
-  // Resolve family + year from metadata. The /api/payment-setup route
-  // stamps both on the session AND the subscription metadata, so
-  // either source works; prefer session metadata since that's what we
-  // explicitly own.
-  const familyId = Number(session.metadata?.family_id);
-  const yearId = Number(session.metadata?.year_id);
-  if (!Number.isFinite(familyId) || !Number.isFinite(yearId)) {
-    console.error(
-      "[/api/webhooks/stripe] checkout.session.completed missing family_id/year_id metadata on session:",
-      session.id
-    );
-    return;
-  }
-
-  await persistSubscriptionForFamily({
-    familyId,
-    yearId,
-    subscriptionId,
-    customerId,
-  });
-}
+/* ─────────────────────── Subscription handlers ─────────────────────── */
 
 async function handleSubscriptionCreated(
   subscription: Stripe.Subscription
 ): Promise<void> {
-  // Backup path — most of the time the checkout.session.completed
-  // handler already persisted this. Read metadata off the
-  // subscription itself (which /api/payment-setup also stamps via
-  // `subscription_data.metadata`).
+  // Admin created the Subscription via the cascade on Confirm
+  // Registration or the manual Start Billing button. Read family +
+  // year off the metadata our create flow stamped on.
   const familyId = Number(subscription.metadata?.family_id);
   const yearId = Number(subscription.metadata?.year_id);
   if (!Number.isFinite(familyId) || !Number.isFinite(yearId)) {
@@ -157,9 +132,9 @@ async function handleSubscriptionCreated(
 }
 
 /**
- * Idempotently write the subscription id + customer id + stripe-setup
- * flag back to Xano. Reads the current row first and skips writes
- * for any field already populated correctly, so retries are no-ops.
+ * Idempotently write the subscription id + customer id back to Xano.
+ * Reads the current row first and skips writes for any field already
+ * populated correctly, so retries are no-ops.
  */
 async function persistSubscriptionForFamily({
   familyId,
@@ -183,19 +158,14 @@ async function persistSubscriptionForFamily({
     return;
   }
 
-  const needsSubscriptionUpdate =
-    payment.stripe_subscription_id !== subscriptionId ||
-    payment.isStripeSetup !== true;
-  if (needsSubscriptionUpdate) {
+  if (payment.stripe_subscription_id !== subscriptionId) {
     await xano.familyPayments.update(payment.id, {
       stripe_subscription_id: subscriptionId,
-      isStripeSetup: true,
     });
   }
 
-  // Backup write for the family's stripe_customer_id — the route
-  // handler tries this best-effort, but if it failed we want the
-  // webhook to fill in.
+  // Backup write for the family's stripe_customer_id — the create
+  // route writes this best-effort, but if it failed we fill in here.
   if (customerId) {
     try {
       const family = await xano.families.getById(familyId);
@@ -206,33 +176,13 @@ async function persistSubscriptionForFamily({
       }
     } catch (err) {
       // Best-effort — failing to mirror the customer id doesn't
-      // break the subscription flow. Log and move on.
+      // break anything. Log and move on.
       console.error(
         `[/api/webhooks/stripe] failed to persist stripe_customer_id on family ${familyId}:`,
         err
       );
     }
   }
-}
-
-async function handlePaymentFailed(invoice: Stripe.Invoice): Promise<void> {
-  // Admin reads live from Stripe for status, so we don't mirror
-  // payment_status fields here. The log line + the Dashboard's
-  // "Failed payments" view are the visibility surface. If we ever
-  // want a Xano mirror for fast filtering, add a
-  // `payment_health` enum field here and update it.
-  const subscriptionField = (
-    invoice as Stripe.Invoice & {
-      subscription?: string | { id: string } | null;
-    }
-  ).subscription;
-  const subscriptionId =
-    typeof subscriptionField === "string"
-      ? subscriptionField
-      : subscriptionField?.id ?? null;
-  console.warn(
-    `[/api/webhooks/stripe] invoice.payment_failed for invoice ${invoice.id} (subscription ${subscriptionId}). Amount due: ${invoice.amount_due / 100}, attempt count: ${invoice.attempt_count}.`
-  );
 }
 
 async function handleSubscriptionDeleted(
@@ -248,14 +198,215 @@ async function handleSubscriptionDeleted(
   );
   if (!payment) return;
 
-  // Flip the step gate back off so the parent's registration nav
-  // surfaces the Payment Setup step again. Subscription id stays
-  // on the row for admin audit; the new Checkout will overwrite it
-  // when the parent re-runs payment setup.
-  if (payment.isStripeSetup) {
+  // Clear the subscription id so the admin Billing card flips back
+  // to the "Start Monthly Billing" empty state. Admin can re-create
+  // a fresh Subscription whenever they're ready.
+  if (payment.stripe_subscription_id === subscription.id) {
     await xano.familyPayments.update(payment.id, {
-      isStripeSetup: false,
+      stripe_subscription_id: null,
     });
+  }
+}
+
+/* ─────────────────────── Invoice mirror ─────────────────────── */
+
+/**
+ * Upsert the payment-transactions mirror from any of the four
+ * invoice lifecycle events. Resolves (family, year) two ways — first
+ * try the invoice's own `subscription_details.metadata`, then fall
+ * back to looking up the family-payment row by `stripe_subscription_id`.
+ * This redundancy matters because Stripe puts subscription metadata
+ * on the invoice for newly-created invoices but older invoices (and
+ * some retry paths) only carry it on the parent subscription record.
+ */
+async function upsertInvoiceFromEvent(
+  eventType: string,
+  invoice: Stripe.Invoice
+): Promise<void> {
+  if (!invoice.id) {
+    console.warn(`[/api/webhooks/stripe] ${eventType} missing invoice id`);
+    return;
+  }
+  const subscriptionId = invoiceSubscriptionId(invoice);
+  if (!subscriptionId) {
+    // No subscription — not a tuition invoice (maybe a one-off, or
+    // pre-subscription). Nothing to mirror.
+    console.log(
+      `[/api/webhooks/stripe] ${eventType} for ${invoice.id} has no subscription — skipping mirror.`
+    );
+    return;
+  }
+
+  const { familyId, yearId, paymentRowId } = await resolveFamilyYearForInvoice(
+    invoice,
+    subscriptionId
+  );
+  if (!familyId || !yearId || !paymentRowId) {
+    console.error(
+      `[/api/webhooks/stripe] ${eventType}: could not resolve (family, year, paymentRow) for invoice ${invoice.id} / sub ${subscriptionId}. Skipping mirror.`
+    );
+    return;
+  }
+
+  const now = Date.now();
+  // Stripe's status values: draft, open, paid, void, uncollectible.
+  // We store whatever Stripe sends so the column matches the source
+  // 1:1 — the UI does the friendly mapping ("Complete" / "Pending"
+  // / "Failed").
+  const status = invoice.status ?? "open";
+  const paidAt =
+    eventType === "invoice.paid" || status === "paid" ? now : null;
+  const finalizedAtFromEvent =
+    eventType === "invoice.finalized" ? now : null;
+  const periodStart = (invoice.period_start ?? 0) * 1000;
+  const periodEnd = (invoice.period_end ?? 0) * 1000;
+  const dueDate = invoice.due_date ? invoice.due_date * 1000 : null;
+
+  const existing = await xano.paymentTransactions.findByStripeId(invoice.id);
+
+  // Preserve `finalized_at` on subsequent events — only the
+  // `invoice.finalized` event should stamp it, but other events
+  // (paid, payment_failed) may arrive without a prior finalized in
+  // our log if the mirror is being backfilled or events arrived out
+  // of order. Keep whatever timestamp we have.
+  const finalizedAt =
+    finalizedAtFromEvent ?? existing?.finalized_at ?? null;
+
+  const payload: Omit<XanoPaymentTransaction, "id" | "created_at"> = {
+    registration_families_id: familyId,
+    registration_school_years_id: yearId,
+    registration_families_payment_id: paymentRowId,
+    stripe_invoice_id: invoice.id,
+    stripe_subscription_id: subscriptionId,
+    period_start: periodStart,
+    period_end: periodEnd,
+    amount_due_cents: invoice.amount_due ?? 0,
+    amount_paid_cents: invoice.amount_paid ?? 0,
+    status,
+    hosted_invoice_url: invoice.hosted_invoice_url ?? null,
+    invoice_pdf_url: invoice.invoice_pdf ?? null,
+    due_date: dueDate,
+    paid_at: paidAt ?? existing?.paid_at ?? null,
+    finalized_at: finalizedAt,
+    last_synced_at: now,
+  };
+
+  if (existing) {
+    await xano.paymentTransactions.update(existing.id, payload);
+  } else {
+    await xano.paymentTransactions.create(payload);
+  }
+}
+
+/**
+ * Resolve (familyId, yearId, paymentRowId) for an invoice. Two
+ * resolution paths:
+ *   1. Read `subscription_details.metadata` off the invoice — Stripe
+ *      sets this from the subscription's metadata at finalization
+ *      time. Fastest path; no extra Xano calls.
+ *   2. Fall back to looking up the family-payment row by
+ *      `stripe_subscription_id`. We need the row id anyway for the
+ *      FK column, so this always runs at least to fetch the row.
+ */
+async function resolveFamilyYearForInvoice(
+  invoice: Stripe.Invoice,
+  subscriptionId: string
+): Promise<{
+  familyId: number | null;
+  yearId: number | null;
+  paymentRowId: number | null;
+}> {
+  // The subscription_details field carries the subscription's
+  // metadata at finalization time. Available on most modern invoice
+  // events; older or non-subscription invoices may lack it.
+  const subDetails = (
+    invoice as Stripe.Invoice & {
+      subscription_details?: {
+        metadata?: Record<string, string | undefined> | null;
+      } | null;
+    }
+  ).subscription_details;
+  const metaFromInvoice = subDetails?.metadata ?? null;
+  let familyId = metaFromInvoice
+    ? Number(metaFromInvoice.family_id)
+    : NaN;
+  let yearId = metaFromInvoice
+    ? Number(metaFromInvoice.year_id)
+    : NaN;
+
+  // We always need the family-payment row id (for the FK), so the
+  // lookup happens regardless of whether we got metadata above.
+  // We'll also use the row's family/year as the fallback if metadata
+  // was missing.
+  if (!Number.isFinite(familyId) || !Number.isFinite(yearId)) {
+    const paymentRow = await findFamilyPaymentBySubscriptionId(
+      subscriptionId
+    );
+    if (paymentRow) {
+      familyId = Number(paymentRow.registration_families_id);
+      yearId = Number(paymentRow.registration_school_years_id);
+      return {
+        familyId: Number.isFinite(familyId) ? familyId : null,
+        yearId: Number.isFinite(yearId) ? yearId : null,
+        paymentRowId: paymentRow.id,
+      };
+    }
+    return { familyId: null, yearId: null, paymentRowId: null };
+  }
+
+  // Metadata had family + year; still need the paymentRowId.
+  const paymentRow = await xano.familyPayments.getByFamilyAndYear(
+    familyId,
+    yearId
+  );
+  return {
+    familyId,
+    yearId,
+    paymentRowId: paymentRow?.id ?? null,
+  };
+}
+
+/**
+ * Find the per-year family-payment row by its
+ * `stripe_subscription_id`. No dedicated Xano endpoint for this —
+ * we scan via the existing year-list endpoints. Inefficient but
+ * only runs on the cold fallback path (metadata missing). The hot
+ * path uses metadata and a direct (family, year) lookup.
+ */
+async function findFamilyPaymentBySubscriptionId(
+  subscriptionId: string
+): Promise<{
+  id: number;
+  registration_families_id: number;
+  registration_school_years_id: number;
+} | null> {
+  // We don't have a "find by stripe_subscription_id" helper; this
+  // path only fires when invoice metadata is missing, which should
+  // be rare. If it becomes hot, add a dedicated Xano query.
+  try {
+    const years = await xano.schoolYears.getAll();
+    for (const year of years) {
+      const rows = await xano.familyPayments.getAllByYear(year.id);
+      const match = rows.find(
+        (r) => r.stripe_subscription_id === subscriptionId
+      );
+      if (match) {
+        return {
+          id: match.id,
+          registration_families_id: Number(match.registration_families_id),
+          registration_school_years_id: Number(
+            match.registration_school_years_id
+          ),
+        };
+      }
+    }
+    return null;
+  } catch (err) {
+    console.error(
+      `[/api/webhooks/stripe] findFamilyPaymentBySubscriptionId(${subscriptionId}) failed:`,
+      err
+    );
+    return null;
   }
 }
 
@@ -269,4 +420,16 @@ function idOrString(
   if (!value) return null;
   if (typeof value === "string") return value;
   return value.id;
+}
+
+/** Stripe's Invoice type has `subscription` as a loose `string | object`
+ *  union the generated types don't fully model. Normalize to a string
+ *  id we can log. */
+function invoiceSubscriptionId(invoice: Stripe.Invoice): string | null {
+  const subscriptionField = (
+    invoice as Stripe.Invoice & {
+      subscription?: string | { id: string } | null;
+    }
+  ).subscription;
+  return idOrString(subscriptionField);
 }

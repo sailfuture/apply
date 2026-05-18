@@ -118,26 +118,28 @@ export default function EnrolledStudentsPage() {
 
   const rows = useMemo(() => (Array.isArray(data) ? data : []), [data]);
 
-  // Split into enrolled vs not-enrolled before grouping by grade.
-  // Two top-level groups so admin can see the full population of
-  // students tied to the year, with the workflow status as the
-  // group divide. Within each group we still grade-group so cohort
-  // sizes read at a glance.
+  // Two top-level groups: currently enrolled, and formerly
+  // enrolled but later unenrolled. We deliberately exclude the
+  // "accepted but never made it through registration" cohort from
+  // this surface — those students belong in the application /
+  // registration queues, not in the enrolled roster. The unenrolled
+  // bucket has to stay visible so admin can find historical records
+  // for students who left mid-year.
   const enrolledRows = useMemo(
     () => rows.filter((r) => r.is_enrolled === true),
     [rows]
   );
-  const notEnrolledRows = useMemo(
-    () => rows.filter((r) => r.is_enrolled !== true),
+  const unenrolledRows = useMemo(
+    () => rows.filter((r) => r.is_archived === true),
     [rows]
   );
   const groupedEnrolled = useMemo(
     () => groupByGrade(enrolledRows),
     [enrolledRows]
   );
-  const groupedNotEnrolled = useMemo(
-    () => groupByGrade(notEnrolledRows),
-    [notEnrolledRows]
+  const groupedUnenrolled = useMemo(
+    () => groupByGrade(unenrolledRows),
+    [unenrolledRows]
   );
 
   // Shared column shape across all grade groups so widths line up
@@ -260,12 +262,12 @@ export default function EnrolledStudentsPage() {
           ) : null}
         </h1>
         <p className="text-sm text-muted-foreground">
-          Every student with an active application for the selected
-          year. The Enrolled group covers students whose registration
-          packet has been admin-confirmed; the Not Enrolled group
-          covers students who are accepted but not yet through
-          registration, plus formally unenrolled students. Click any
-          row to see only that student&rsquo;s details.
+          Currently enrolled students for the selected year, plus
+          any students who were previously enrolled and have since
+          been unenrolled. Students who never finished registration
+          are tracked in the application + registration queues, not
+          here. Click any row to see only that student&rsquo;s
+          details.
         </p>
       </div>
 
@@ -306,18 +308,21 @@ export default function EnrolledStudentsPage() {
               )
             }
           />
-          {/* Not Enrolled group — students with applications for the
-              year but `is_enrolled !== true`. Renders only when
-              there are rows in this bucket; an empty bucket is the
-              healthy steady state once a cohort is fully through
-              registration. */}
-          {notEnrolledRows.length > 0 ? (
+          {/* Unenrolled group — students who were officially
+              enrolled at some point and have since been unenrolled
+              via the Unenroll modal (sets `isArchived=true`).
+              Renders only when there are rows in this bucket; an
+              empty bucket is the healthy steady state for most
+              years. Never-enrolled students are intentionally
+              excluded from this surface — they live in the
+              application / registration queues. */}
+          {unenrolledRows.length > 0 ? (
             <EnrolledRoster
-              title="Not Enrolled"
-              description="Students accepted but not yet through registration, plus formally unenrolled / archived students."
+              title="Unenrolled"
+              description="Students who were enrolled at some point this year and have since been formally unenrolled."
               columns={columns}
-              grouped={groupedNotEnrolled}
-              totalCount={notEnrolledRows.length}
+              grouped={groupedUnenrolled}
+              totalCount={unenrolledRows.length}
               emptyLabel="No students in this bucket."
               onRowClick={(row) =>
                 router.push(
@@ -353,7 +358,7 @@ function EnrolledRoster({
   emptyLabel,
   onRowClick,
 }: {
-  /** Card header label — "Enrolled" or "Not Enrolled" so the page
+  /** Card header label — "Enrolled" or "Unenrolled" so the page
    *  can render two stacked rosters with the same chrome. */
   title: string;
   /** One-liner explaining what's in this bucket. Sits under the
@@ -403,7 +408,7 @@ function EnrolledRoster({
         </div>
         <p className="text-xs text-muted-foreground">{description}</p>
       </CardHeader>
-      <CardContent className="p-4 bg-white space-y-3">
+      <CardContent className="p-6 bg-white space-y-3">
         {/* Search bar mirrors the chrome on the Registrations
             page's group cards. Filters across every grade group
             in real time — empty groups drop out of the render
@@ -495,7 +500,7 @@ function EnrolledRoster({
                 the total so admin sees both at a glance. Label is
                 "Total" rather than "Total enrolled" because the
                 page now stacks two rosters and "enrolled" doesn't
-                apply to the Not Enrolled bucket. */}
+                apply to the Unenrolled bucket. */}
             <TableRow className="bg-muted/30 hover:bg-muted/30 border-t-2">
               <TableCell
                 colSpan={colCount}

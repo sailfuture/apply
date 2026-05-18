@@ -127,11 +127,22 @@ export default async function Page() {
     appProgress?.isAccepted === true ||
     yearApps.some((a) => a.isAccepted === true);
 
+  // `isRegistrationConfirmed` is the family-level latch admin flips
+  // via the Family Registration Confirmation card. It's the
+  // authoritative gate for "this family is officially enrolled" —
+  // without it, the parent stays in the registration flow even if
+  // every per-student packet has been admin-verified, because admin
+  // unconfirm only clears this single field (`isSubmitted` +
+  // per-student `registrationConfirmed` are deliberately sticky on
+  // unconfirm — see app/api/admin/registration-progress/route.ts).
+  const isRegistrationConfirmed =
+    regProgress?.isRegistrationConfirmed === true;
   const isRegistrationSubmitted = regProgress?.isSubmitted === true;
   const allPacketsConfirmed =
     yearPackets.length > 0 &&
     yearPackets.every((p) => p.registrationConfirmed === true);
-  const isEnrolled = isRegistrationSubmitted && allPacketsConfirmed;
+  const isEnrolled =
+    isRegistrationConfirmed && isRegistrationSubmitted && allPacketsConfirmed;
 
   if (isAccepted && isEnrolled) {
     redirect(`/dashboard?yearId=${targetYearId}`);

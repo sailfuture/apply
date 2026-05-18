@@ -4,42 +4,36 @@ import { xano } from "@/lib/xano";
 import {
   cancelSubscriptionAtPeriodEnd,
   getBillingSnapshot,
-  pauseSubscription,
   refundInvoice,
-  resumeSubscription,
   updateSubscriptionMonthlyAmount,
 } from "@/lib/stripe";
+import { startMonthlyBilling, BillingPreconditionError } from "@/lib/billing";
 
 /**
  * Admin billing endpoint — one route, action-dispatched.
  *
  *   GET  /api/admin/families/:id/billing?yearId=Y
- *     Returns a billing snapshot: subscription + last 12 invoices
- *     + a derived `statusLabel` pill. Reads live from Stripe each
- *     call — no Xano cache, no stale state. Used by the Billing
- *     card on the family registration detail page.
+ *     Returns a billing snapshot when a Subscription exists, or
+ *     `{ subscription: null, ... }` when billing hasn't been started
+ *     yet (so the admin Billing card renders its "Start Monthly
+ *     Billing" empty state instead of erroring). Reads live from
+ *     Stripe each call — no Xano cache.
  *
  *   POST /api/admin/families/:id/billing?yearId=Y
- *     Body: `{ action: "pause" | "resume" | "cancel" | "update-amount" | "refund", ...payload }`
- *     Runs the action against the family's Subscription (resolved
- *     via the per-(family, year) `family_payment.stripe_subscription_id`)
- *     and returns a refreshed snapshot. Errors surface as 4xx for
- *     missing inputs, 502 for Stripe transport.
+ *     Body: `{ action: "start" | "cancel" | "update-amount" | "refund", ...payload }`
+ *     Runs the action and returns a refreshed snapshot. Errors
+ *     surface as 4xx for caller-fixable issues, 502 for Stripe
+ *     transport.
  *
- * The `id` URL param is the Xano `registration_families.id`. We use
- * it + `yearId` to find the right `family_payment` row, and pull
- * `stripe_subscription_id` from there. Returning a snapshot after
- * every action keeps the admin card consistent without a separate
- * follow-up GET.
+ * Billing mode: subscriptions run with `collection_method: send_invoice`
+ * — Stripe generates a hosted invoice each month and emails the link
+ * to the family. No card on file required up front. So actions like
+ * `pause`/`resume` (which control auto-charge behavior) are dropped
+ * — the equivalent in invoice mode is just cancel.
  */
 
 interface BillingActionBody {
-  action:
-    | "pause"
-    | "resume"
-    | "cancel"
-    | "update-amount"
-    | "refund";
+  action: "start" | "cancel" | "update-amount" | "refund";
   /** Required when `action === "update-amount"`. New monthly amount
    *  in DOLLARS (matching `monthly_tuition_payment` storage). We
    *  convert to cents before calling Stripe. */
@@ -58,14 +52,15 @@ export async function GET(
     const yearId = resolveYearId(req);
     const subscriptionId = await resolveSubscriptionId(familyId, yearId);
     if (!subscriptionId) {
-      return NextResponse.json(
-        {
-          error:
-            "No Stripe Subscription on file for this family + year. " +
-            "Has the parent completed payment setup?",
-        },
-        { status: 404 }
-      );
+      // No subscription yet — return a null snapshot so the admin
+      // card can render its "Start Monthly Billing" empty state
+      // without treating it as an error.
+      return NextResponse.json({
+        subscription: null,
+        invoices: [],
+        lastPaidInvoice: null,
+        statusLabel: "Not Started" as const,
+      });
     }
     const snapshot = await getBillingSnapshot(subscriptionId);
     return NextResponse.json(snapshot);
@@ -82,13 +77,6 @@ export async function POST(
     await requireAdmin();
     const familyId = await resolveFamilyId(params);
     const yearId = resolveYearId(req);
-    const subscriptionId = await resolveSubscriptionId(familyId, yearId);
-    if (!subscriptionId) {
-      return NextResponse.json(
-        { error: "No Stripe Subscription on file." },
-        { status: 404 }
-      );
-    }
 
     const body = (await req.json().catch(() => null)) as BillingActionBody | null;
     if (!body?.action) {
@@ -98,13 +86,30 @@ export async function POST(
       );
     }
 
+    // `start` doesn't need an existing subscription — it creates one.
+    // Every other action does. Resolve up front + branch.
+    if (body.action === "start") {
+      try {
+        const result = await startMonthlyBilling({ familyId, yearId });
+        const snapshot = await getBillingSnapshot(result.subscription.id);
+        return NextResponse.json(snapshot);
+      } catch (err) {
+        if (err instanceof BillingPreconditionError) {
+          return NextResponse.json({ error: err.message }, { status: 409 });
+        }
+        throw err;
+      }
+    }
+
+    const subscriptionId = await resolveSubscriptionId(familyId, yearId);
+    if (!subscriptionId) {
+      return NextResponse.json(
+        { error: "No Stripe Subscription on file. Click Start Monthly Billing first." },
+        { status: 404 }
+      );
+    }
+
     switch (body.action) {
-      case "pause":
-        await pauseSubscription(subscriptionId);
-        break;
-      case "resume":
-        await resumeSubscription(subscriptionId);
-        break;
       case "cancel":
         await cancelSubscriptionAtPeriodEnd(subscriptionId);
         break;

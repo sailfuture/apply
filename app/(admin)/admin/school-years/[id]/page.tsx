@@ -1132,7 +1132,7 @@ function BracketMatrixCard({
           </div>
         </div>
       </CardHeader>
-      <CardContent className="p-0 bg-white">
+      <CardContent className="px-3 pb-3 bg-white">
         {error ? (
           <div className="p-4 text-sm text-red-700 bg-red-50 border-b border-red-200">
             Failed to load matrix:{" "}
@@ -1349,7 +1349,7 @@ function CalculatedMatrixCard({
           <p className="text-xs text-muted-foreground mt-1">{description}</p>
         </div>
       </CardHeader>
-      <CardContent className="p-0 bg-white">
+      <CardContent className="px-3 pb-3 bg-white">
         {isLoading ? (
           <div className="p-4 space-y-3">
             <Skeleton className="h-9 w-full" />
@@ -1924,7 +1924,7 @@ function BracketListCard({
             </Button>
           </div>
         </CardHeader>
-        <CardContent className="p-0 bg-white">
+        <CardContent className="px-3 pb-3 bg-white">
           {error ? (
             <div className="p-4 text-sm text-red-700 bg-red-50 border-b border-red-200">
               Failed to load list:{" "}
@@ -2058,7 +2058,7 @@ function CalculatedListCard({
           <p className="text-xs text-muted-foreground mt-1">{description}</p>
         </div>
       </CardHeader>
-      <CardContent className="p-0 bg-white">
+      <CardContent className="px-3 pb-3 bg-white">
         {isLoading ? (
           <div className="p-4 space-y-3">
             <Skeleton className="h-9 w-full" />

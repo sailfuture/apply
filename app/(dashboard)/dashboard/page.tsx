@@ -12,6 +12,13 @@ const fetcher = (url: string) => fetch(url).then((r) => r.json());
 interface YearProgress {
   registration_school_years_id: number;
   isSubmitted?: boolean;
+  /** Family-level latch flipped via the admin Family Registration
+   *  Confirmation card. Authoritative "this family is enrolled" gate.
+   *  When admin unconfirms, this drops to false while `isSubmitted`
+   *  and per-student `registrationConfirmed` stay sticky — so we have
+   *  to check this here or the parent never regresses out of the
+   *  enrolled-dashboard view. */
+  isRegistrationConfirmed?: boolean;
 }
 
 interface YearPacket {
@@ -130,13 +137,18 @@ export default function EnrolledHomePage() {
           const allConfirmed =
             packets.length > 0 &&
             packets.every((p) => p.registrationConfirmed === true);
+          // Family-level admin latch — see YearProgress comment. Must
+          // be checked alongside `submitted` and `allConfirmed` so the
+          // year drops out of "enrolled" mode when admin unconfirms
+          // (admin unconfirm only clears this single flag).
+          const adminConfirmed = !!progress?.isRegistrationConfirmed;
           // Enrolled takes priority — if the family completed
           // registration for this year, it shows as enrolled even if
           // an apply row also exists (a re-enroller mid-cycle whose
           // registration somehow finished early would still belong on
           // the enrolled card).
           let mode: YearMode = null;
-          if (submitted && allConfirmed) {
+          if (adminConfirmed && submitted && allConfirmed) {
             mode = "enrolled";
           } else if (applyProgress?.type === "Re-Enrollment") {
             mode = "applying";

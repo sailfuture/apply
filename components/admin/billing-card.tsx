@@ -9,8 +9,7 @@ import {
   CreditCard,
   ExternalLink,
   Loader2,
-  PauseCircle,
-  PlayCircle,
+  Play,
   RefreshCw,
   XCircle,
 } from "lucide-react";
@@ -44,17 +43,27 @@ import { cn } from "@/lib/utils";
  * a low-volume admin surface; trades a few hundred ms of latency for
  * always-fresh state.
  *
+ * Billing model: subscriptions run with `collection_method: send_invoice`
+ * — Stripe generates a hosted invoice each month and emails the link
+ * to the family. No card-on-file required, no parent setup step.
+ * Billing is triggered server-side when admin clicks Confirm Family
+ * Registration (cascade in the registration-progress route), or
+ * manually from the "Start Monthly Billing" button on this card if
+ * the cascade hit a precondition error (missing tuition amount,
+ * etc.).
+ *
  * Surfaced data:
- *   - Status pill (Active / Trialing / Past Due / Paused / Canceled)
- *   - Monthly amount + next billing date
+ *   - Status pill (Not Started / Active / Trialing / Past Due /
+ *     Paused / Canceled)
+ *   - Monthly amount + next invoice date
  *   - "View in Stripe Dashboard" deep link to the Customer view
  *   - Last 12 invoices in a small table (date, amount, status,
  *     hosted invoice URL)
  *
  * Actions (POST to the same endpoint with `{ action }` body):
- *   - Pause / Resume (toggles based on `pause_collection`)
- *   - Cancel at period end (preserves access through the paid-for
- *     period; confirmation dialog)
+ *   - Start Monthly Billing (only shown when no subscription yet)
+ *   - Cancel at period end (preserves access through the
+ *     paid-for period; confirmation dialog)
  *   - Update Monthly Amount (dialog with input — also mirrors back
  *     to `family_payment.monthly_tuition_payment` for receipt parity)
  *   - Refund Last Invoice (confirmation dialog, full refund of the
@@ -80,7 +89,7 @@ interface BillingSnapshot {
         };
       }>;
     };
-  };
+  } | null;
   invoices: Array<{
     id: string;
     created: number;
@@ -93,6 +102,7 @@ interface BillingSnapshot {
   }>;
   lastPaidInvoice: { id: string } | null;
   statusLabel:
+    | "Not Started"
     | "Active"
     | "Trialing"
     | "Past Due"
@@ -108,27 +118,23 @@ interface Props {
   /** Current monthly tuition from Xano — pre-fills the Update Amount
    *  dialog so admin sees the existing value before changing. */
   currentMonthlyTuition: number | null;
-  /** Set when the parent hasn't completed payment setup yet —
-   *  drives the empty state instead of an error toast on 404. */
-  isSetup: boolean;
 }
+
+type BillingAction = "start" | "cancel" | "update-amount" | "refund";
 
 export function BillingCard({
   familyId,
   yearId,
   currentMonthlyTuition,
-  isSetup,
 }: Props) {
   const endpoint = `/api/admin/families/${familyId}/billing?yearId=${yearId}`;
   const { data, error, isLoading, mutate } = useSWR<BillingSnapshot>(
-    isSetup ? endpoint : null,
+    endpoint,
     adminFetcher,
     { revalidateOnFocus: false, dedupingInterval: 10000 }
   );
 
-  const [pending, setPending] = useState<
-    null | "pause" | "resume" | "cancel" | "update-amount" | "refund"
-  >(null);
+  const [pending, setPending] = useState<BillingAction | null>(null);
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [confirmRefund, setConfirmRefund] = useState(false);
   const [updateOpen, setUpdateOpen] = useState(false);
@@ -137,7 +143,7 @@ export function BillingCard({
   );
 
   async function runAction(
-    action: "pause" | "resume" | "cancel" | "update-amount" | "refund",
+    action: BillingAction,
     payload?: Record<string, unknown>
   ): Promise<void> {
     setPending(action);
@@ -158,26 +164,6 @@ export function BillingCard({
     } finally {
       setPending(null);
     }
-  }
-
-  if (!isSetup) {
-    return (
-      <div className="rounded-md border bg-muted/10 p-6">
-        <div className="flex items-start gap-3">
-          <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-muted/50">
-            <CreditCard className="size-5 text-muted-foreground" aria-hidden="true" />
-          </div>
-          <div className="space-y-1">
-            <p className="text-sm font-medium">No payment method on file</p>
-            <p className="text-xs text-muted-foreground max-w-lg">
-              The parent hasn&rsquo;t completed the Payment Setup step yet.
-              Once they finish Stripe Checkout, this card will show the
-              subscription + invoice history.
-            </p>
-          </div>
-        </div>
-      </div>
-    );
   }
 
   if (isLoading) {
@@ -216,16 +202,62 @@ export function BillingCard({
     );
   }
 
+  // No subscription yet — render the Start Monthly Billing empty
+  // state. Happens when:
+  //   - Admin hasn't confirmed registration yet (cascade hasn't
+  //     fired), or
+  //   - The cascade fired but hit a precondition error (missing
+  //     tuition amount, missing parent email). Admin can fix the
+  //     precondition + click Start here to retry.
+  if (!data.subscription) {
+    return (
+      <div className="rounded-md border bg-muted/10 p-6 space-y-4">
+        <div className="flex items-start gap-3">
+          <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-muted/50">
+            <CreditCard className="size-5 text-muted-foreground" aria-hidden="true" />
+          </div>
+          <div className="space-y-1 min-w-0 flex-1">
+            <p className="text-sm font-medium">Monthly billing not started</p>
+            <p className="text-xs text-muted-foreground max-w-lg">
+              Confirming this family&rsquo;s registration automatically
+              starts monthly invoicing. If that didn&rsquo;t happen (or
+              you need to retry after fixing the tuition amount), use
+              the button below to start it manually.
+            </p>
+          </div>
+        </div>
+        <div>
+          <Button
+            size="sm"
+            disabled={pending !== null || currentMonthlyTuition == null || currentMonthlyTuition <= 0}
+            onClick={() => runAction("start")}
+          >
+            {pending === "start" ? (
+              <Loader2 className="size-3.5 mr-1.5 animate-spin" aria-hidden="true" />
+            ) : (
+              <Play className="size-3.5 mr-1.5" aria-hidden="true" />
+            )}
+            Start Monthly Billing
+          </Button>
+          {currentMonthlyTuition == null || currentMonthlyTuition <= 0 ? (
+            <p className="text-xs text-muted-foreground mt-2">
+              Set a monthly tuition amount on the Tuition card first.
+            </p>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
   const sub = data.subscription;
   const item = sub.items?.data?.[0] ?? null;
   const monthlyCents = item?.price?.unit_amount ?? 0;
   const monthlyDollars = monthlyCents / 100;
-  const isPaused = !!sub.pause_collection;
   const isCanceled = sub.status === "canceled";
   const cancelingAtPeriodEnd = sub.cancel_at_period_end;
   const customerId = typeof sub.customer === "string" ? sub.customer : sub.customer.id;
   const stripeDashboardUrl = `https://dashboard.stripe.com/customers/${customerId}`;
-  const nextBillingDate = sub.current_period_end
+  const nextInvoiceDate = sub.current_period_end
     ? new Date(sub.current_period_end * 1000).toLocaleDateString("en-US", {
         month: "long",
         day: "numeric",
@@ -235,7 +267,7 @@ export function BillingCard({
 
   return (
     <div className="rounded-md border bg-muted/10 p-4 space-y-5">
-      {/* Header — status pill + amount + next billing */}
+      {/* Header — status pill + amount + next invoice */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div className="space-y-1.5">
           <div className="flex items-center gap-2">
@@ -245,7 +277,7 @@ export function BillingCard({
             <StatusPill label={data.statusLabel} />
             {cancelingAtPeriodEnd && !isCanceled ? (
               <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 text-amber-800 ring-1 ring-amber-200 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide">
-                Cancels {nextBillingDate}
+                Cancels {nextInvoiceDate}
               </span>
             ) : null}
           </div>
@@ -254,10 +286,10 @@ export function BillingCard({
           </p>
           <p className="text-xs text-muted-foreground">
             {sub.status === "trialing"
-              ? `First charge ${nextBillingDate}`
+              ? `First invoice ${nextInvoiceDate}`
               : isCanceled
                 ? "Subscription canceled"
-                : `Next charge ${nextBillingDate}`}
+                : `Next invoice ${nextInvoiceDate}`}
           </p>
         </div>
         <Button asChild variant="outline" size="sm" className="bg-white">
@@ -271,37 +303,6 @@ export function BillingCard({
       {/* Actions — laid out in a flex row, hidden when canceled */}
       {!isCanceled ? (
         <div className="flex flex-wrap gap-2">
-          {isPaused ? (
-            <Button
-              variant="outline"
-              size="sm"
-              className="bg-white"
-              disabled={pending !== null}
-              onClick={() => runAction("resume")}
-            >
-              {pending === "resume" ? (
-                <Loader2 className="size-3.5 mr-1.5 animate-spin" aria-hidden="true" />
-              ) : (
-                <PlayCircle className="size-3.5 mr-1.5" aria-hidden="true" />
-              )}
-              Resume billing
-            </Button>
-          ) : (
-            <Button
-              variant="outline"
-              size="sm"
-              className="bg-white"
-              disabled={pending !== null}
-              onClick={() => runAction("pause")}
-            >
-              {pending === "pause" ? (
-                <Loader2 className="size-3.5 mr-1.5 animate-spin" aria-hidden="true" />
-              ) : (
-                <PauseCircle className="size-3.5 mr-1.5" aria-hidden="true" />
-              )}
-              Pause billing
-            </Button>
-          )}
           <Button
             variant="outline"
             size="sm"
@@ -346,7 +347,7 @@ export function BillingCard({
         </p>
         {data.invoices.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            No invoices yet — the first charge will run on {nextBillingDate}.
+            No invoices yet — the first invoice goes out on {nextInvoiceDate}.
           </p>
         ) : (
           <div className="rounded-md border bg-white overflow-hidden">
@@ -403,9 +404,9 @@ export function BillingCard({
           <AlertDialogHeader>
             <AlertDialogTitle>Cancel subscription at period end?</AlertDialogTitle>
             <AlertDialogDescription>
-              The family keeps access through {nextBillingDate}. After that
-              date, no further charges run and the subscription ends. You can
-              re-enroll the family later if needed.
+              The family keeps access through {nextInvoiceDate}. After that
+              date, no further invoices generate and the subscription ends.
+              You can re-enroll the family later if needed.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -529,6 +530,7 @@ function StatusPill({ label }: { label: BillingSnapshot["statusLabel"] }) {
         return "bg-red-50 text-red-700 ring-red-200";
       case "Paused":
         return "bg-amber-50 text-amber-700 ring-amber-200";
+      case "Not Started":
       case "Canceled":
       case "Incomplete":
         return "bg-muted text-muted-foreground ring-border";
@@ -541,9 +543,7 @@ function StatusPill({ label }: { label: BillingSnapshot["statusLabel"] }) {
       ? CheckCircle2
       : label === "Past Due"
         ? AlertCircle
-        : label === "Paused"
-          ? PauseCircle
-          : XCircle;
+        : XCircle;
   return (
     <span
       className={cn(
@@ -557,14 +557,10 @@ function StatusPill({ label }: { label: BillingSnapshot["statusLabel"] }) {
   );
 }
 
-function actionSuccessMessage(
-  action: "pause" | "resume" | "cancel" | "update-amount" | "refund"
-): string {
+function actionSuccessMessage(action: BillingAction): string {
   switch (action) {
-    case "pause":
-      return "Billing paused. Future invoices won't generate until you resume.";
-    case "resume":
-      return "Billing resumed.";
+    case "start":
+      return "Monthly billing started. Stripe will email the first invoice on the billing start date.";
     case "cancel":
       return "Subscription will cancel at the end of the current billing period.";
     case "update-amount":
