@@ -53,8 +53,10 @@ import { cn } from "@/lib/utils";
  * etc.).
  *
  * Surfaced data:
- *   - Status pill (Not Started / Active / Trialing / Past Due /
- *     Paused / Canceled)
+ *   - Status pill (Not Started / Active / Scheduled / Past Due /
+ *     Paused / Canceled). "Scheduled" is our rename of Stripe's
+ *     `trialing` status — in our flow that just means "first
+ *     invoice deferred until billing_start_date," not a free trial.
  *   - Monthly amount + next invoice date
  *   - "View in Stripe Dashboard" deep link to the Customer view
  *   - Last 12 invoices in a small table (date, amount, status,
@@ -104,7 +106,7 @@ interface BillingSnapshot {
   statusLabel:
     | "Not Started"
     | "Active"
-    | "Trialing"
+    | "Scheduled"
     | "Past Due"
     | "Paused"
     | "Canceled"
@@ -462,8 +464,8 @@ export function BillingCard({
           <DialogHeader>
             <DialogTitle>Update monthly amount</DialogTitle>
             <DialogDescription>
-              Changes apply to the next invoice. Stripe prorates the
-              difference for the current period.
+              The new amount will be reflected on the next monthly
+              invoice.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2 py-4">
@@ -524,7 +526,7 @@ function StatusPill({ label }: { label: BillingSnapshot["statusLabel"] }) {
   const tone = useMemo(() => {
     switch (label) {
       case "Active":
-      case "Trialing":
+      case "Scheduled":
         return "bg-emerald-50 text-emerald-700 ring-emerald-200";
       case "Past Due":
         return "bg-red-50 text-red-700 ring-red-200";
@@ -539,7 +541,7 @@ function StatusPill({ label }: { label: BillingSnapshot["statusLabel"] }) {
     }
   }, [label]);
   const Icon =
-    label === "Active" || label === "Trialing"
+    label === "Active" || label === "Scheduled"
       ? CheckCircle2
       : label === "Past Due"
         ? AlertCircle

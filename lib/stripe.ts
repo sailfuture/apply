@@ -258,7 +258,13 @@ export interface BillingSnapshot {
   /** Quick-status pill: derived from subscription.status plus
    *  collection_paused so the admin UI doesn't have to know about
    *  every Stripe substatus. */
-  statusLabel: "Active" | "Trialing" | "Past Due" | "Paused" | "Canceled" | "Incomplete" | "Unknown";
+  /** Display label for the status pill. We map Stripe's raw status
+   *  values onto these friendlier labels — notably `trialing` →
+   *  "Scheduled" because in our flow a "trialing" subscription is
+   *  one whose first invoice is deferred until `billing_start_date`,
+   *  not a free trial of the school. Calling it Scheduled keeps
+   *  staff from misreading the pill. */
+  statusLabel: "Active" | "Scheduled" | "Past Due" | "Paused" | "Canceled" | "Incomplete" | "Unknown";
 }
 
 /**
@@ -290,7 +296,10 @@ export async function getBillingSnapshot(
         statusLabel = "Active";
         break;
       case "trialing":
-        statusLabel = "Trialing";
+        // See `statusLabel` docstring — "Scheduled" reads more
+        // accurately than Stripe's raw "Trialing" for the
+        // "first invoice deferred until billing_start_date" state.
+        statusLabel = "Scheduled";
         break;
       case "past_due":
       case "unpaid":
