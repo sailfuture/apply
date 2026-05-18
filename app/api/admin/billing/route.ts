@@ -48,11 +48,16 @@ export async function GET(req: NextRequest) {
       familiesResult,
       parentsResult,
       transactionsResult,
+      yearPacketsResult,
     ] = await Promise.allSettled([
       xano.familyPayments.getAllByYear(yearId),
       xano.families.getAll(),
       xano.parents.getAll(),
       xano.paymentTransactions.getAllByYear(yearId),
+      // Per-student `monthly_amount` is the source of truth for the
+      // family monthly total now — fetch the year's packets so we
+      // can sum per-family below.
+      xano.studentRegistration.getByYear(yearId),
     ]);
 
     if (paymentsResult.status === "rejected") {
@@ -79,6 +84,12 @@ export async function GET(req: NextRequest) {
         transactionsResult.reason
       );
     }
+    if (yearPacketsResult.status === "rejected") {
+      console.error(
+        "[/api/admin/billing] failed to load year packets:",
+        yearPacketsResult.reason
+      );
+    }
 
     const payments =
       paymentsResult.status === "fulfilled" ? paymentsResult.value : [];
@@ -90,6 +101,32 @@ export async function GET(req: NextRequest) {
       transactionsResult.status === "fulfilled"
         ? transactionsResult.value
         : [];
+    const yearPackets =
+      yearPacketsResult.status === "fulfilled"
+        ? yearPacketsResult.value
+        : [];
+
+    // Per-family monthly total derived from per-student
+    // `monthly_amount` sums. Build a `familyId → monthlyDollars`
+    // map once so the per-row reduce below stays O(1) per family.
+    // Map student id → family id via the students roster so we can
+    // attribute each packet to its family without per-row lookup.
+    const studentToFamily = new Map<number, number>();
+    for (const f of families) {
+      for (const sid of xano.families.getStudentIds(f)) {
+        studentToFamily.set(sid, f.id);
+      }
+    }
+    const monthlyByFamily = new Map<number, number>();
+    for (const packet of yearPackets) {
+      const sid = Number(packet.registration_students_id);
+      const fid = studentToFamily.get(sid);
+      if (!fid) continue;
+      const amount =
+        typeof packet.monthly_amount === "number" ? packet.monthly_amount : 0;
+      if (amount <= 0) continue;
+      monthlyByFamily.set(fid, (monthlyByFamily.get(fid) ?? 0) + amount);
+    }
 
     // Aggregate transactions by family id once so the per-row
     // reduce below is O(1) per family. `paid` = sum of amount_paid
@@ -139,7 +176,8 @@ export async function GET(req: NextRequest) {
         const familyId = Number(p.registration_families_id);
         const family = familyById.get(familyId) ?? null;
         const primary = primaryByFamily.get(familyId) ?? null;
-        const monthly = p.monthly_tuition_payment ?? null;
+        const derived = monthlyByFamily.get(familyId);
+        const monthly = derived && derived > 0 ? derived : null;
         const yearTotal = monthly != null ? monthly * 12 : null;
         const agg = aggByFamily.get(familyId) ?? {
           paidCents: 0,

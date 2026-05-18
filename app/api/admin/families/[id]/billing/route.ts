@@ -6,7 +6,6 @@ import {
   getBillingSnapshot,
   refundInvoice,
   uncancelSubscription,
-  updateSubscriptionMonthlyAmount,
 } from "@/lib/stripe";
 import { startMonthlyBilling, BillingPreconditionError } from "@/lib/billing";
 
@@ -21,10 +20,15 @@ import { startMonthlyBilling, BillingPreconditionError } from "@/lib/billing";
  *     Stripe each call — no Xano cache.
  *
  *   POST /api/admin/families/:id/billing?yearId=Y
- *     Body: `{ action: "start" | "cancel" | "update-amount" | "refund", ...payload }`
+ *     Body: `{ action: "start" | "cancel" | "uncancel" | "refund", ...payload }`
  *     Runs the action and returns a refreshed snapshot. Errors
  *     surface as 4xx for caller-fixable issues, 502 for Stripe
  *     transport.
+ *
+ * The legacy `"update-amount"` action is gone — per-student
+ * `monthly_amount` is the source of truth now, and changes to it
+ * land via `/api/admin/student-registration/[id]` (which calls
+ * `updateStudentItemAmount` on the relevant Stripe item).
  *
  * Billing mode: subscriptions run with `collection_method: send_invoice`
  * — Stripe generates a hosted invoice each month and emails the link
@@ -34,10 +38,9 @@ import { startMonthlyBilling, BillingPreconditionError } from "@/lib/billing";
  */
 
 interface BillingActionBody {
-  action: "start" | "cancel" | "uncancel" | "update-amount" | "refund";
-  /** Required when `action === "update-amount"`. New monthly amount
-   *  in DOLLARS (matching `monthly_tuition_payment` storage). We
-   *  convert to cents before calling Stripe. */
+  action: "start" | "cancel" | "uncancel" | "refund";
+  /** Legacy field kept on the type to tolerate older clients sending
+   *  it; the route ignores the value now. */
   monthlyTuition?: number;
   /** Required when `action === "refund"`. Invoice id to refund. */
   invoiceId?: string;
@@ -123,40 +126,6 @@ export async function POST(
         // Start Monthly Billing button instead.
         await uncancelSubscription(subscriptionId);
         break;
-      case "update-amount": {
-        const dollars = Number(body.monthlyTuition);
-        if (!Number.isFinite(dollars) || dollars <= 0) {
-          return NextResponse.json(
-            { error: "`monthlyTuition` must be a positive number." },
-            { status: 400 }
-          );
-        }
-        await updateSubscriptionMonthlyAmount({
-          subscriptionId,
-          newMonthlyCents: Math.round(dollars * 100),
-        });
-        // Mirror the new amount on the per-year family_payment row
-        // so admin tuition cards + receipts stay in sync with
-        // Stripe. Failures here don't block the Stripe update —
-        // admin can sync manually if needed.
-        try {
-          const payment = await xano.familyPayments.getByFamilyAndYear(
-            familyId,
-            yearId
-          );
-          if (payment) {
-            await xano.familyPayments.update(payment.id, {
-              monthly_tuition_payment: dollars,
-            });
-          }
-        } catch (err) {
-          console.error(
-            `[/api/admin/families/${familyId}/billing] update-amount Xano mirror failed:`,
-            err
-          );
-        }
-        break;
-      }
       case "refund": {
         if (!body.invoiceId) {
           return NextResponse.json(

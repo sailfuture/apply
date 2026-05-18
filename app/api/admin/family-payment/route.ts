@@ -4,11 +4,8 @@ import { xano } from "@/lib/xano";
 
 /**
  * Admin upsert for `registration_families_payment` — one row per
- * (family, year). Used by the Scholarship Determination card to
- * snapshot the final payment amounts at family-approval time, so
- * downstream surfaces (tuition review, billing) can read a single
- * authoritative row instead of recomputing across per-student
- * rows.
+ * (family, year). Used by the Approve flow to flip the family-level
+ * acceptance latch and snapshot family-scoped transportation_total.
  *
  * Distinct from the parent-side `/api/family-payment` route, which
  * is scoped to the authenticated parent's own family. Admin needs
@@ -19,44 +16,31 @@ import { xano } from "@/lib/xano";
  * Body:
  *   - `familyId` (required)
  *   - `yearId` (required)
- *   - `monthly_tuition_payment` (required) — the family's monthly
- *     total for the year. Equals `(annual_fee_total + sum of
- *     per-student opportunity_scholarship_award_amount + transport
- *     where applicable) / 12`. SNAP-confirmed families collapse to
- *     `annual_fee_total / 12` since their tuition + transport are
- *     auto-rebated by the Opportunity Scholarship.
- *   - `annual_fee_total` (optional) — total admin/annual fees for
- *     the year, typically `$500 × N students`. Snapshotted alongside
- *     the monthly figure so downstream callers can break the
- *     receipt back into its line items without re-deriving from per
- *     student rows.
  *   - `transportation_total` (optional) — total transportation the
  *     family owes for the year. Pass `null` (explicit) for SNAP
  *     families to indicate transport is waived. **Omit otherwise**
  *     — the route derives the total server-side by summing
  *     `transportation_cost` across every active application for
- *     the (family, year). Passing a number override is still
- *     accepted for backwards-compat but discouraged; the
- *     server-derived sum is authoritative because it can't drift
- *     from a stale client cache.
- *   - `sufs_total` (optional) — total SUFS scholarship dollars
- *     awarded across every active student in the family for the
- *     year. Sum of each application's `sufs_award_amount` (admin
- *     captures these per-student during the Scholarship
- *     Determination flow). Pass `null` when the family has no
- *     SUFS scholarship on file; pass a number for the total.
+ *     the (family, year). Server-derived sum is authoritative
+ *     because it can't drift from a stale client cache.
  *   - `isFamilyAccepted` (optional, defaults to true) — usually
- *     called from the Approve flow so this is `true`; left
- *     pluggable for future surfaces that snapshot before approval.
+ *     called from the Approve flow so this is `true`.
+ *
+ * Per-student tuition amounts moved to
+ * `registration_student_registration` (one packet per student) and
+ * the family-level rollups (`monthly_tuition_payment` /
+ * `annual_fee_total` / `sufs_total`) were retired. The Approve flow
+ * now writes per-student values onto each packet row directly and
+ * leaves this route to handle only the family-scoped fields
+ * (acceptance latch + transport).
  *
  * Strategy:
- *   - If a row already exists for (family, year), PATCH the
- *     amount fields + `isFamilyAccepted`.
- *   - Otherwise CREATE a row with the captured amounts.
+ *   - If a row already exists for (family, year), PATCH.
+ *   - Otherwise CREATE.
  *
  * Other columns on the row (signature, enrollment_agreement_*,
- * tuition_reviewed, etc.) are owned by downstream surfaces and
- * stay at their defaults on first write.
+ * etc.) are owned by downstream surfaces and stay at their defaults
+ * on first write.
  */
 /**
  * Admin GET — read-only fetch of the family-payment snapshot for a
@@ -108,37 +92,6 @@ export async function POST(req: NextRequest) {
     if (!Number.isFinite(yearId) || yearId <= 0) {
       return NextResponse.json(
         { error: "yearId is required" },
-        { status: 400 }
-      );
-    }
-
-    const monthly = Number(body?.monthly_tuition_payment);
-    if (!Number.isFinite(monthly)) {
-      return NextResponse.json(
-        { error: "monthly_tuition_payment is required" },
-        { status: 400 }
-      );
-    }
-
-    // Optional snapshots — null means "explicitly null" (e.g.
-    // SNAP transport waiver), undefined means "don't change". We
-    // distinguish the two so passing `transportation_total: null`
-    // from the client clears the column rather than being silently
-    // dropped.
-    const hasAnnualFeeTotal =
-      body && Object.prototype.hasOwnProperty.call(body, "annual_fee_total");
-    const annualFeeTotal: number | null | undefined = hasAnnualFeeTotal
-      ? body.annual_fee_total === null
-        ? null
-        : Number(body.annual_fee_total)
-      : undefined;
-    if (
-      hasAnnualFeeTotal &&
-      annualFeeTotal !== null &&
-      !Number.isFinite(annualFeeTotal as number)
-    ) {
-      return NextResponse.json(
-        { error: "annual_fee_total must be a number or null" },
         { status: 400 }
       );
     }
@@ -195,31 +148,6 @@ export async function POST(req: NextRequest) {
       }, 0);
     }
 
-    // `sufs_total` follows the same null-aware pattern as the other
-    // optional totals — the Approve flow snapshots the sum of every
-    // active student's `sufs_award_amount` onto this column so the
-    // billing surfaces don't have to re-sum per-student rows. Treat
-    // explicit `null` as "unknown" rather than coercing to 0; that
-    // way a SNAP family (no SUFS) reads as N/A instead of "no
-    // scholarship awarded."
-    const hasSufsTotal =
-      body && Object.prototype.hasOwnProperty.call(body, "sufs_total");
-    const sufsTotal: number | null | undefined = hasSufsTotal
-      ? body.sufs_total === null
-        ? null
-        : Number(body.sufs_total)
-      : undefined;
-    if (
-      hasSufsTotal &&
-      sufsTotal !== null &&
-      !Number.isFinite(sufsTotal as number)
-    ) {
-      return NextResponse.json(
-        { error: "sufs_total must be a number or null" },
-        { status: 400 }
-      );
-    }
-
     const isFamilyAccepted =
       typeof body?.isFamilyAccepted === "boolean"
         ? body.isFamilyAccepted
@@ -230,31 +158,18 @@ export async function POST(req: NextRequest) {
       yearId
     );
     if (existing) {
-      const patch: Record<string, unknown> = {
-        monthly_tuition_payment: monthly,
-        isFamilyAccepted,
-      };
-      if (annualFeeTotal !== undefined) {
-        patch.annual_fee_total = annualFeeTotal;
-      }
+      const patch: Record<string, unknown> = { isFamilyAccepted };
       if (transportationTotal !== undefined) {
         patch.transportation_total = transportationTotal;
-      }
-      if (sufsTotal !== undefined) {
-        patch.sufs_total = sufsTotal;
       }
       const updated = await xano.familyPayments.update(existing.id, patch);
       return NextResponse.json(updated);
     }
 
     // Create payload only carries columns that still exist on the
-    // live Xano schema. The retired `registration_fee_waiver_id`
-    // and `tuition_reviewed` triplet (`tuition_reviewed`,
-    // `tuition_reviewed_at`, `tuition_reviewed_by`) used to be
-    // here but were dropped from the table — sending them would
-    // cause Xano to reject the whole create on unknown columns,
-    // which is why first-time approves were silently failing to
-    // land a row.
+    // live Xano schema. Per-student tuition amounts live on
+    // `registration_student_registration` and are written by the
+    // Approve flow directly, not through this route.
     const created = await xano.familyPayments.create({
       registration_families_id: familyId,
       registration_school_years_id: yearId,
@@ -262,12 +177,8 @@ export async function POST(req: NextRequest) {
       signature: {},
       name: "",
       signature_data: null,
-      monthly_tuition_payment: monthly,
-      annual_fee_total:
-        annualFeeTotal === undefined ? null : annualFeeTotal,
       transportation_total:
         transportationTotal === undefined ? null : transportationTotal,
-      sufs_total: sufsTotal === undefined ? null : sufsTotal,
       enrollment_agreement_pandadoc_id: "",
       enrollment_agreement_status: "",
       enrollment_agreement_sent_at: null,

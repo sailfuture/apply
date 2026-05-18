@@ -413,32 +413,17 @@ export interface XanoFamilyPayment {
   signature: Record<string, unknown>;
   name: string;
   signature_data: Record<string, unknown> | null;
-  /** `monthly_tuition_payment` is nullable on Xano now — pre-
-   *  acceptance rows can carry null instead of a 0 sentinel so the
-   *  receipt surfaces can tell "not yet approved" apart from
-   *  "approved for $0 / month." Writes from the admin route still
-   *  send a number on approval. */
-  monthly_tuition_payment: number | null;
-  /** Total annual admin fees the family owes for the year — `$500 × N`
-   *  for N active students. Snapshotted at family approval time so the
-   *  billing surfaces don't have to recompute from per-student rows.
-   *  Optional on the type because legacy rows pre-date the column. */
-  annual_fee_total?: number | null;
   /** Total annual transportation the family owes for the year. Sum of
    *  per-student transport fees for students whose
    *  `is_bus_transportation=true`. Set to `null` for SNAP families
    *  (transportation is waived for them) so downstream consumers can
    *  render N/A rather than `$0` and avoid charging in error.
-   *  Optional on the type because legacy rows pre-date the column. */
+   *  Optional on the type because legacy rows pre-date the column.
+   *
+   *  Stays on the family-payment row (vs. moving per-student) because
+   *  the per-student transport columns haven't been added yet. When
+   *  they are, this rolls up to a derived `Σ packet.transport_amount`. */
   transportation_total?: number | null;
-  /** Total SUFS scholarship dollars awarded to the family for the
-   *  year — sum of every active student's
-   *  `sufs_award_amount` on `registration_application`. Captured
-   *  at family approval time so the billing surfaces have a single
-   *  authoritative number instead of re-summing per-student rows
-   *  later. Optional on the type because legacy rows pre-date the
-   *  column. */
-  sufs_total?: number | null;
   enrollment_agreement_pandadoc_id: string;
   enrollment_agreement_status: string;
   enrollment_agreement_sent_at: string | null;
@@ -446,28 +431,15 @@ export interface XanoFamilyPayment {
   is_enrollment_agreement_signed: boolean;
   /** Stripe Subscription id (`sub_...`). One per family per year —
    *  this row is per-(family, year), so the id is naturally scoped.
-   *  Stamped by the Stripe webhook handler when Checkout completes:
-   *  `checkout.session.completed` carries the subscription id, we
-   *  PATCH it back here. Null until then.
-   *
-   *  The subscription itself uses inline `price_data` carrying the
-   *  family's scholarship-adjusted monthly amount, so no pre-created
-   *  Stripe Price object exists per family — the amount lives only
-   *  on the SubscriptionItem. Admin reads live from Stripe API
-   *  (`stripe.subscriptions.retrieve`) for status displays.
+   *  Family-level parent record; per-student SubscriptionItem ids
+   *  live on each `registration_student_registration` packet
+   *  (`stripe_subscription_item_id`). Webhook handler stamps this
+   *  on subscription.created; the per-student item ids are
+   *  persisted by `lib/billing.ts` after `createSubscriptionWithStudentItems`
+   *  returns.
    *
    *  Optional on the type because legacy rows pre-date the column. */
   stripe_subscription_id?: string | null;
-  /** @deprecated Held the "card on file" latch back when the parent
-   *  ran a Stripe Checkout flow to authorize automatic charges. The
-   *  billing model has since flipped to `send_invoice` subscriptions
-   *  — there's no parent setup step, admin creates the subscription
-   *  directly on Confirm Registration. Existence of
-   *  `stripe_subscription_id` is now the authoritative "billing
-   *  active" signal. Field kept on the type for backwards-compat
-   *  with any legacy rows that still carry it; new code should not
-   *  read or write this. */
-  isStripeSetup?: boolean;
 }
 
 /**
@@ -1263,12 +1235,13 @@ export interface XanoStudentRegistrationProgress {
    *  `{ path, url, mime, size, meta, ... }`. Null before the signature lands. */
   tuition_scholarship_signature: Record<string, unknown> | null;
 
-  // --- Family billing + enrollment-agreement fields -----------------------
-  // All family-level (one per family per year). Absorbed from the retired
-  // `registration_families_payment` table so we have a single row to read
-  // and write for the registration lifecycle.
-  monthly_tuition_payment: number;
-  monthly_transportation_payment: number;
+  // --- Family enrollment-agreement fields ---------------------------------
+  // Family-level (one per family per year). The PandaDoc envelope +
+  // signature live here; per-student tuition amounts moved to
+  // `registration_student_registration` (one row per student) so this
+  // row no longer carries `monthly_tuition_payment` /
+  // `monthly_transportation_payment` rollups — those are derived from
+  // packet sums via `sumFamilyBillingTotals`.
   enrollment_agreement_pandadoc_id: string;
   enrollment_agreement_status: string;
   /** When the enrollment agreement was sent (ISO string or epoch ms). */
@@ -1331,7 +1304,7 @@ export interface XanoStudentRegistrationProgress {
    *  whole-family final confirmation). */
   is_registration_admin_confirm?: boolean;
   is_registration_admin_confirm_time?: number | null;
-  is_registration_admin_confirm_admin?: string;
+  registration_admin_confirmed_admin?: string;
 
   /** Family-level "registration confirmed" latch — the rollup admin
    *  flips after every per-section verify (tuition, enrollment,
@@ -1379,6 +1352,99 @@ export interface XanoStudentRegistration {
   /** Year this packet belongs to. Packets are per (student, year); a fresh
    *  row is created each year so historical data stays intact. */
   registration_school_years_id: number;
+  /** Stripe SubscriptionItem id for this student's recurring tuition
+   *  line on the family's per-year subscription. Lives on the per-year
+   *  packet (not the evergreen student row) because each enrollment
+   *  year is its own subscription with its own item — re-enrolling
+   *  the same student next year creates a brand new packet row + new
+   *  Stripe item, independent of last year's id.
+   *
+   *  Non-null when the student is currently being billed (one item
+   *  per student, all rolled into one family invoice). Cleared when
+   *  the student is archived/unenrolled — the cascade removes the
+   *  item from Stripe AND nulls this column so the two sources
+   *  can't drift.
+   *
+   *  Orthogonal to the student's `isArchived` flag (which lives on
+   *  `registration_students` and means "evergreen-not-in-program").
+   *  Valid combinations:
+   *    - student.isArchived=false, this id=non-null → enrolled, billing
+   *    - student.isArchived=false, this id=null     → enrolled, billing not yet started
+   *    - student.isArchived=true,  this id=null     → unenrolled
+   *  The id-non-null + student.isArchived=true combo would be a bug
+   *  (cascade half-failed); audit logs flag it.
+   *
+   *  XANO SCHEMA NOTE: nullable `text` column named
+   *  `stripe_subscription_item_id` on
+   *  `registration_student_registration`. */
+  stripe_subscription_item_id?: string | null;
+
+  // ── Per-student cost columns (source of truth for billing) ──────
+  // Each student's recurring tuition line on the family's Stripe
+  // subscription is built directly from `monthly_amount` — no
+  // family-total-divided-by-N math, no rounding drift. The other
+  // five columns are intermediates stored for display +
+  // reconciliation so admin can see how the monthly figure was
+  // derived without re-running the math.
+  //
+  // Derivation chain:
+  //   tuition_total     = school_year.tuition - sufs_amount
+  //   tuition_sub_total = tuition_total - opportunity_award_amount + annual_fee
+  //   monthly_amount    = tuition_sub_total / 12
+  //
+  // Billing math (what Phase 2 reads):
+  //   per_student_monthly = monthly_amount     (read directly)
+  //   family_monthly      = Σ monthly_amount   (over active students)
+  //
+  // Worked example (academic year tuition = $27,522):
+  //   sufs_amount              = 7000
+  //   tuition_total            = 27522 - 7000 = 20522
+  //   opportunity_award_amount = 19522
+  //   annual_fee               = 500
+  //   tuition_sub_total        = 20522 - 19522 + 500 = 1500
+  //   monthly_amount           = 1500 / 12 = $125.00
+  //
+  // All optional on the type because legacy rows pre-date the add;
+  // Phase 2 billing requires `monthly_amount` to be set and refuses
+  // to start a subscription for a student without it
+  // (BillingPreconditionError).
+
+  /** Snapshot of the school year's gross tuition for this student,
+   *  net of the SUFS award. Derived: `school_year.tuition - sufs_amount`.
+   *  Stored on the row at Approve time so historical math survives
+   *  future tuition-amount changes. */
+  tuition_total?: number | null;
+
+  /** Per-student SUFS award amount. Mirrors the value entered on the
+   *  Scholarship Determination card. Subtracted from gross tuition
+   *  to produce `tuition_total`. */
+  sufs_amount?: number | null;
+
+  /** Snapshot of the Opportunity Scholarship coverage for this
+   *  student. The family-paid remainder is implicit:
+   *  `tuition_total - opportunity_award_amount`. Display /
+   *  reconciliation — doesn't enter the billing math directly
+   *  except through its contribution to `tuition_sub_total`. */
+  opportunity_award_amount?: number | null;
+
+  /** Per-student flat annual fee. Always $500 today, stored on the
+   *  row so future policy changes (different fee per year, waivers
+   *  per student, etc.) don't require a code change. */
+  annual_fee?: number | null;
+
+  /** Annual amount the family owes for this student. Derived:
+   *  `tuition_total - opportunity_award_amount + annual_fee`. Equals
+   *  `monthly_amount * 12` (within rounding). Stored on the row so
+   *  the Tuition card / receipts have a single source of truth that
+   *  matches what was sent to Stripe. */
+  tuition_sub_total?: number | null;
+
+  /** Monthly amount the family is charged for this student via
+   *  Stripe — Phase 2 reads this directly when building each
+   *  student's SubscriptionItem. Derived: `tuition_sub_total / 12`.
+   *  Stored on the row so the value Stripe bills is the same value
+   *  every admin surface displays. */
+  monthly_amount?: number | null;
   /** New Enrollment vs Re-Enrollment — admin-set, drives which forms/templates
    *  get used for this year's registration. */
   registration_type_id: number;
@@ -1426,11 +1492,12 @@ export interface XanoStudentRegistration {
    *  compatibility with legacy data + parent-side dashboard reads. */
   registrationConfirmed: boolean;
   /** Audit timestamp + admin name for `registrationConfirmed`.
-   *  Optional because the columns were added after launch — note the
-   *  `regisration_*` typo on the second column matches the live Xano
-   *  schema and shouldn't be "corrected" client-side. */
+   *  Optional because the columns were added after launch. The
+   *  admin name column previously carried a `regisration_*` typo
+   *  on the Xano side; it's been corrected to
+   *  `is_registration_admin_confirm_admin`. */
   registration_confirmed_admin_time?: number | null;
-  regisration_admin_confirmed_admin?: string;
+  is_registration_admin_confirm_admin?: string;
   /** Last-edited timestamp on the packet row. Bumped whenever any
    *  admin or parent write changes the row; useful for audit /
    *  staleness checks alongside the parallel `last_edited_time` on
@@ -3988,8 +4055,6 @@ export const xano = {
         signature_data_volunteer: null,
         volunteer_signature_data: null,
         name_volunteer: "",
-        monthly_tuition_payment: 0,
-        monthly_transportation_payment: 0,
         enrollment_agreement_pandadoc_id: "",
         enrollment_agreement_status: "",
         enrollment_agreement_sent: null,

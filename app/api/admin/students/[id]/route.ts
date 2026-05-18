@@ -66,9 +66,9 @@ const DOC_CONFIRM_PAIRS: Array<{
  * this route too, but admin verification was moved back to the
  * per-packet `registrationConfirmed` flag (with audit pair
  * `registration_confirmed_admin_time` /
- * `regisration_admin_confirmed_admin` — typo intentional, matches
- * Xano). Use `/api/admin/student-registration/[id]` for the verify
- * toggle now; that route auto-stamps the packet's audit pair.
+ * `is_registration_admin_confirm_admin`). Use
+ * `/api/admin/student-registration/[id]` for the verify toggle now;
+ * that route auto-stamps the packet's audit pair.
  *
  * Parents never write to these columns; their /api/students/[id]
  * route excludes the admin-only fields from its allowlist.

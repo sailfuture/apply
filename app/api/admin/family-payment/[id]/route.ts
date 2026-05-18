@@ -59,20 +59,14 @@ export async function PATCH(
     // Numeric columns — accept either a number or explicit null
     // (clears the column). Reject anything else so a bad client
     // doesn't write garbage into the billing snapshot.
+    // Per-student tuition columns moved to `registration_student_registration`
+    // (one row per student); the family-level rollups
+    // (`monthly_tuition_payment` / `annual_fee_total` / `sufs_total`)
+    // were retired and only `transportation_total` remains as a
+    // family-scoped numeric.
     const NUMERIC_OR_NULL: Array<
-      keyof Pick<
-        XanoFamilyPayment,
-        | "monthly_tuition_payment"
-        | "annual_fee_total"
-        | "transportation_total"
-        | "sufs_total"
-      >
-    > = [
-      "monthly_tuition_payment",
-      "annual_fee_total",
-      "transportation_total",
-      "sufs_total",
-    ];
+      keyof Pick<XanoFamilyPayment, "transportation_total">
+    > = ["transportation_total"];
     for (const key of NUMERIC_OR_NULL) {
       if (!Object.prototype.hasOwnProperty.call(body, key)) continue;
       const raw = body[key];

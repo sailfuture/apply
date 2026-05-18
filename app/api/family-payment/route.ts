@@ -65,7 +65,6 @@ export async function POST(req: NextRequest) {
     if (body.signature) updateData.signature = body.signature;
     if (body.signature_data) updateData.signature_data = body.signature_data;
     if (body.name) updateData.name = body.name;
-    if (body.monthly_tuition_payment !== undefined) updateData.monthly_tuition_payment = body.monthly_tuition_payment;
     if (body.enrollment_agreement_pandadoc_id !== undefined) updateData.enrollment_agreement_pandadoc_id = body.enrollment_agreement_pandadoc_id;
     if (body.enrollment_agreement_status !== undefined) updateData.enrollment_agreement_status = body.enrollment_agreement_status;
     if (body.enrollment_agreement_sent_at !== undefined) updateData.enrollment_agreement_sent_at = body.enrollment_agreement_sent_at;
@@ -88,7 +87,6 @@ export async function POST(req: NextRequest) {
     signature: body.signature ?? {},
     name: body.name ?? "",
     signature_data: body.signature_data ?? null,
-    monthly_tuition_payment: body.monthly_tuition_payment ?? null,
     enrollment_agreement_pandadoc_id: body.enrollment_agreement_pandadoc_id ?? "",
     enrollment_agreement_status: body.enrollment_agreement_status ?? "",
     enrollment_agreement_sent_at: body.enrollment_agreement_sent_at ?? null,

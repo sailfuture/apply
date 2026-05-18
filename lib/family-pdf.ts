@@ -28,7 +28,9 @@ import type {
   XanoScholarshipHome,
   XanoScholarshipVehicle,
   XanoSchoolYear,
+  XanoStudentRegistration,
 } from "@/lib/xano";
+import { sumFamilyBillingTotals } from "@/lib/per-student-billing";
 import type jsPDF from "jspdf";
 
 interface ExportInput {
@@ -117,17 +119,29 @@ export async function exportFamilyPDF({
   // Each route 401s on its own when admin auth is missing, so we
   // don't need to short-circuit; the error bubbles to the caller's
   // catch.
-  const [appsRes, paymentRes, payCellsRes, netAssetsCellsRes] =
-    await Promise.all([
-      fetch(
-        `/api/admin/registration-application-by-family?familyId=${familyId}&yearId=${yearId}`
-      ),
-      fetch(
-        `/api/admin/family-payment?familyId=${familyId}&yearId=${yearId}`
-      ),
-      fetch(`/api/admin/school-year-brackets?yearId=${yearId}`),
-      fetch(`/api/admin/school-year-net-assets-brackets?yearId=${yearId}`),
-    ]);
+  const [
+    appsRes,
+    paymentRes,
+    payCellsRes,
+    netAssetsCellsRes,
+    registrationRes,
+  ] = await Promise.all([
+    fetch(
+      `/api/admin/registration-application-by-family?familyId=${familyId}&yearId=${yearId}`
+    ),
+    fetch(
+      `/api/admin/family-payment?familyId=${familyId}&yearId=${yearId}`
+    ),
+    fetch(`/api/admin/school-year-brackets?yearId=${yearId}`),
+    fetch(`/api/admin/school-year-net-assets-brackets?yearId=${yearId}`),
+    // Pulls `students[].packet` so we can read per-student tuition
+    // columns (`monthly_amount`, `annual_fee`, `sufs_amount`, etc.)
+    // and derive the family-level rollups the PDF prints. Replaces
+    // the legacy `registration_families_payment.monthly_tuition_payment`
+    // etc. reads — those columns were retired in favor of per-student
+    // source of truth.
+    fetch(`/api/admin/registrations/${familyId}?yearId=${yearId}`),
+  ]);
   if (!appsRes.ok) {
     throw new Error(`Family applications fetch failed (${appsRes.status})`);
   }
@@ -141,6 +155,22 @@ export async function exportFamilyPDF({
   const netAssetsCells: AwardBracketCell[] = netAssetsCellsRes.ok
     ? ((await netAssetsCellsRes.json()) as AwardBracketCell[])
     : [];
+  // Per-student packet rows for the year — used to derive family
+  // monthly / annual fee / SUFS totals below. Tolerates a failed
+  // fetch by falling back to an empty array; the report will print
+  // $0 / em-dashes for the derived rows in that case, same UX as
+  // pre-acceptance state.
+  const registrationData = registrationRes.ok
+    ? ((await registrationRes.json()) as {
+        students?: Array<{ packet?: XanoStudentRegistration | null }>;
+      })
+    : null;
+  const activePackets: XanoStudentRegistration[] = (
+    registrationData?.students ?? []
+  )
+    .map((s) => s.packet)
+    .filter((p): p is XanoStudentRegistration => p !== null && p !== undefined);
+  const familyBillingTotals = sumFamilyBillingTotals(activePackets);
 
   // The new endpoint already pre-joins the student row, family row,
   // and school-year row onto every app — read the first app's
@@ -746,13 +776,13 @@ export async function exportFamilyPDF({
     startY: cursorY,
     head: [["Snapshot Totals", ""]],
     body: [
-      ["Monthly tuition payment", fmt$(familyPayment?.monthly_tuition_payment)],
-      ["Annual fee total", fmt$(familyPayment?.annual_fee_total)],
+      ["Monthly tuition payment", fmt$(familyBillingTotals.monthlyTotal)],
+      ["Annual fee total", fmt$(familyBillingTotals.annualFeeTotal)],
       [
         "Transportation total (year)",
         fmt$(familyPayment?.transportation_total),
       ],
-      ["SUFS total", fmt$(familyPayment?.sufs_total)],
+      ["SUFS total", fmt$(familyBillingTotals.sufsTotal)],
     ],
     theme: "grid",
     margin: { left: marginX, right: marginX },
@@ -774,16 +804,19 @@ export async function exportFamilyPDF({
   /* ────────── Total Tuition Receipt ────────── */
 
   sectionHeader("Total Tuition");
-  const monthly = familyPayment?.monthly_tuition_payment ?? null;
+  const monthly =
+    familyBillingTotals.monthlyTotal > 0
+      ? familyBillingTotals.monthlyTotal
+      : null;
   const annualFromMonthly = monthly != null ? monthly * 12 : null;
   autoTable(doc, {
     startY: cursorY,
     head: [["Receipt", ""]],
     body: [
       ["Active students", String(activeApps.length)],
-      ["Annual admin fees", fmt$(familyPayment?.annual_fee_total)],
+      ["Annual admin fees", fmt$(familyBillingTotals.annualFeeTotal)],
       ["Annual transportation", fmt$(familyPayment?.transportation_total)],
-      ["SUFS scholarship awarded", fmt$(familyPayment?.sufs_total)],
+      ["SUFS scholarship awarded", fmt$(familyBillingTotals.sufsTotal)],
       ["Monthly tuition payment", fmt$(monthly)],
       ["Annual tuition (monthly × 12)", fmt$(annualFromMonthly)],
     ],

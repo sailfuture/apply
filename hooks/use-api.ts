@@ -36,6 +36,31 @@ export function useStudents() {
   });
 }
 
+/**
+ * All `registration_student_registration` packets for the authenticated
+ * parent's family for the given school year. Used by parent-facing
+ * tuition pages to read per-student billing values
+ * (`monthly_amount`, `sufs_amount`, `opportunity_award_amount`,
+ * `tuition_sub_total`, `annual_fee`) — those values moved from the
+ * application row onto the per-year packet, so the dashboard /
+ * apply-flow tuition surfaces fetch them from here.
+ *
+ * Revalidates on focus + every 30s, same cadence as
+ * `useApplications` — admin can edit per-student amounts on the
+ * Scholarship Determination card while the parent has the tuition
+ * page open and the new figures should appear without a manual
+ * reload.
+ */
+export function useStudentRegistrationPackets(yearId: number | null) {
+  const key =
+    yearId !== null ? `/api/student-registration?yearId=${yearId}` : null;
+  return useSWR(key, fetcher, {
+    revalidateOnFocus: true,
+    refreshInterval: 30000,
+    dedupingInterval: 10000,
+  });
+}
+
 export function useApplications() {
   // Revalidate on focus + every 30s. The `isAccepted` / `isOffered`
   // flags on each application row are admin-controlled (admin flips

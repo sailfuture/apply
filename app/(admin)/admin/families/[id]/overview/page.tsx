@@ -30,12 +30,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { EmailNotificationsCard } from "@/components/admin/email-notifications-card";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { formatUSPhone } from "@/lib/phone";
@@ -753,7 +753,7 @@ export default function FamilyOverviewPage() {
         <EmailNotificationsCard familyId={familyId} yearId={yearId} />
       ) : null}
 
-      <ParentDetailModal
+      <ParentDetailSheet
         parent={openParent}
         onClose={() => setOpenParent(null)}
       />
@@ -762,12 +762,14 @@ export default function FamilyOverviewPage() {
 }
 
 /**
- * Parent detail modal — opens from a row click on the Parents
+ * Parent detail sheet — opens from a row click on the Parents
  * table. Shows the full bio + contact + address fields the table
  * can't surface inline without going wide. Email/phone are
- * actionable links inside the modal too.
+ * actionable links inside the sheet too. Mirrors the inquiry detail
+ * pattern (slide-out drawer rather than centered modal) so the
+ * surrounding page stays in context while admin reviews details.
  */
-function ParentDetailModal({
+function ParentDetailSheet({
   parent,
   onClose,
 }: {
@@ -787,21 +789,21 @@ function ParentDetailModal({
       ].filter(Boolean)
     : [];
   return (
-    <Dialog open={open} onOpenChange={(o) => (!o ? onClose() : null)}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
+    <Sheet open={open} onOpenChange={(o) => (!o ? onClose() : null)}>
+      <SheetContent className="w-full sm:max-w-md flex flex-col p-0 gap-0">
+        <SheetHeader className="border-b px-6 py-4">
+          <SheetTitle className="flex items-center gap-2">
             <User className="size-4 text-muted-foreground" aria-hidden="true" />
             {fullName}
-          </DialogTitle>
-          <DialogDescription>
+          </SheetTitle>
+          <SheetDescription>
             {parent?.relationship
               ? `${parent.relationship} · Parent record #${parent.id}`
               : `Parent record #${parent?.id ?? ""}`}
-          </DialogDescription>
-        </DialogHeader>
+          </SheetDescription>
+        </SheetHeader>
         {parent ? (
-          <dl className="space-y-3 text-sm">
+          <dl className="space-y-3 text-sm px-6 py-4 overflow-y-auto">
             <DetailRow label="Email">
               {parent.email ? (
                 <a
@@ -844,8 +846,8 @@ function ParentDetailModal({
             </DetailRow>
           </dl>
         ) : null}
-      </DialogContent>
-    </Dialog>
+      </SheetContent>
+    </Sheet>
   );
 }
 

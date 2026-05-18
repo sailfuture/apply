@@ -149,20 +149,22 @@ export async function PATCH(
     const updated = await xano.scholarship.update(id, patch);
 
     // SNAP-confirm cascade — backup safeguard. Once admin confirms
-    // SNAP benefits, the Opportunity Scholarship auto-rebates the
-    // family's tuition + transport, so any stale
-    // `opportunity_scholarship_award_amount` value sitting on the
-    // application rows would be misleading (admin would see a dollar
-    // figure on a row whose tuition is now $0). We clear those
-    // amounts to `null` on every active application for this family
-    // / year so the rows reflect the post-confirm reality.
+    // SNAP benefits, the Opportunity Scholarship auto-rebates
+    // tuition beyond SUFS so the family owes only the annual fee
+    // per student. We re-derive each active packet's billing
+    // columns with `opportunityScholarshipRemaining: 0` so the
+    // family-pays-tuition portion collapses to zero and the
+    // monthly amount drops to `annual_fee / 12`. SUFS amounts are
+    // preserved on the packet — SUFS applies independently of OS
+    // coverage.
+    //
+    // Stripe is re-synced when each packet has a live
+    // SubscriptionItem so the next invoice bills the new amount.
     //
     // Best-effort: failures here are logged but don't roll back the
     // confirmation itself — the scholarship row's `is_snap_confirmed`
     // flip is the source of truth, and the cascade can be retried by
-    // un-confirming + re-confirming if it fails. Un-confirm doesn't
-    // restore the prior amounts (admin re-enters them manually if
-    // needed).
+    // un-confirming + re-confirming if it fails.
     if (
       "is_snap_confirmed" in patch &&
       patch.is_snap_confirmed === true
@@ -170,18 +172,55 @@ export async function PATCH(
       try {
         const familyId = updated.registration_families_id;
         const yearId = updated.registration_school_years_id;
-        const apps = await xano.applications.getByFamilyId(familyId);
-        const yearApps = apps.filter(
-          (a) =>
-            Number(a.registration_school_years_id) === yearId &&
-            (a as { isActive?: boolean }).isActive !== false
+        const [apps, yearPackets, schoolYear, {
+          derivePacketBillingValues,
+          syncStripeForPacket,
+        }] = await Promise.all([
+          xano.applications.getByFamilyId(familyId),
+          xano.studentRegistration.getByYear(yearId),
+          xano.schoolYears.getById(yearId).catch(() => null),
+          import("@/lib/per-student-billing"),
+        ]);
+        const activeStudentIds = new Set(
+          apps
+            .filter(
+              (a) =>
+                Number(a.registration_school_years_id) === yearId &&
+                (a as { isActive?: boolean }).isActive !== false
+            )
+            .map((a) => Number(a.registration_students_id))
+        );
+        const activePackets = yearPackets.filter((p) =>
+          activeStudentIds.has(Number(p.registration_students_id))
         );
         await Promise.allSettled(
-          yearApps.map((app) =>
-            xano.applications.update(app.id, {
-              opportunity_scholarship_award_amount: null,
-            })
-          )
+          activePackets.map(async (packet) => {
+            // Preserve the packet's SUFS amount (SUFS award still
+            // applies); collapse the family-pays-tuition portion to
+            // 0 so OS coverage absorbs everything beyond SUFS.
+            // `annualFee: null` lets the deriver fall through to the
+            // school year's `annual_fees` policy.
+            const derived = derivePacketBillingValues({
+              schoolYearTuition: schoolYear?.tuition ?? 0,
+              schoolYearAnnualFees: schoolYear?.annual_fees ?? null,
+              sufsAwardAmount: packet.sufs_amount ?? 0,
+              opportunityScholarshipRemaining: 0,
+              annualFee: null,
+            });
+            const updatedPacket = await xano.studentRegistration.update(
+              packet.id,
+              derived
+            );
+            try {
+              await syncStripeForPacket(updatedPacket);
+            } catch (err) {
+              console.error(
+                "[/api/admin/scholarships/[id]] Stripe sync failed for packet",
+                packet.id,
+                err
+              );
+            }
+          })
         );
       } catch (err) {
         console.error(

@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
+import {
+  fetchActiveFamilyPackets,
+  sumFamilyBillingTotals,
+} from "@/lib/per-student-billing";
 
 /**
  * Per-family 12-month billing schedule for the admin billing
@@ -60,16 +64,19 @@ export async function GET(
       );
     }
 
-    const [payment, year, transactions] = await Promise.all([
-      xano.familyPayments.getByFamilyAndYear(familyId, yearId),
+    const [year, transactions, activePackets] = await Promise.all([
       xano.schoolYears.getById(yearId),
       xano.paymentTransactions.getByFamilyAndYear(familyId, yearId),
+      fetchActiveFamilyPackets(familyId, yearId),
     ]);
 
+    // Family monthly total is derived from per-student
+    // `monthly_amount` on each active packet — the legacy
+    // `registration_families_payment.monthly_tuition_payment`
+    // rollup was retired in favor of per-student source of truth.
+    const totals = sumFamilyBillingTotals(activePackets);
     const monthlyAmountCents =
-      payment?.monthly_tuition_payment != null
-        ? Math.round(payment.monthly_tuition_payment * 100)
-        : null;
+      totals.monthlyTotal > 0 ? Math.round(totals.monthlyTotal * 100) : null;
     const billingStartDate = year?.billing_start_date ?? null;
 
     // Build 12 month slots anchored to billing_start_date. If admin

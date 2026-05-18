@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
 import type { XanoStudentRegistration } from "@/lib/xano";
+import { syncStripeForPacket } from "@/lib/per-student-billing";
 
 /**
  * Admin-only PATCH for one `registration_student_registration` packet.
@@ -57,11 +58,10 @@ export async function PATCH(
     // auto-stamps for every writer.
     //
     // The audit columns `registration_confirmed_admin_time` and
-    // `regisration_admin_confirmed_admin` (the typo on the column
-    // name matches the live Xano schema and is intentional) are NOT
-    // on the body allowlist; we stamp them here from the requesting
-    // admin's display name + Date.now() based on the bool's new
-    // value. Mirrors the audit pattern in `/api/admin/family-progress`.
+    // `is_registration_admin_confirm_admin` are NOT on the body
+    // allowlist; we stamp them here from the requesting admin's
+    // display name + Date.now() based on the bool's new value.
+    // Mirrors the audit pattern in `/api/admin/family-progress`.
     const ALLOWED: Array<keyof XanoStudentRegistration> = [
       "registrationConfirmed",
       "liability_waiver_pandadoc_id",
@@ -92,6 +92,19 @@ export async function PATCH(
       // Pickup permissions
       "other_adults_approved_for_pickup",
       "prohibited_adults",
+      // Per-student tuition columns (Scholarship Determination card
+      // writes these as admin moves through per-student aid awards).
+      // Inputs: `sufs_amount`, `opportunity_award_amount`,
+      // `annual_fee`. Derived: `tuition_total`, `tuition_sub_total`,
+      // `monthly_amount` (Phase 2 client computes them client-side
+      // from the inputs; a future revision can move that derivation
+      // server-side for consistency).
+      "tuition_total",
+      "sufs_amount",
+      "opportunity_award_amount",
+      "annual_fee",
+      "tuition_sub_total",
+      "monthly_amount",
     ];
     const patch: Record<string, unknown> = {};
     for (const key of ALLOWED) {
@@ -105,9 +118,7 @@ export async function PATCH(
     if ("registrationConfirmed" in patch) {
       const next = patch.registrationConfirmed === true;
       patch.registration_confirmed_admin_time = next ? Date.now() : null;
-      // Note: the column name has a typo ("regisration_*") — keep
-      // it exactly as Xano has it, do not "correct" client-side.
-      patch.regisration_admin_confirmed_admin = next
+      patch.is_registration_admin_confirm_admin = next
         ? admin?.name ?? ""
         : "";
     }
@@ -123,6 +134,25 @@ export async function PATCH(
     // — every caller (admin, parent, PandaDoc) gets it for free, so
     // we don't add it to the patch here.
     const updated = await xano.studentRegistration.update(id, patch);
+
+    // Stripe re-price cascade: when admin changes a student's
+    // `monthly_amount` AND the packet already has a live Stripe
+    // SubscriptionItem (i.e. billing has started), swap the item's
+    // Price so the next invoice bills the new amount. Best-effort
+    // — failures are logged but don't fail the Xano write so admin
+    // sees the row update either way. `syncStripeForPacket` no-ops
+    // when there's no subscription item or no positive amount, so
+    // we can call it unconditionally on a monthly_amount change.
+    if ("monthly_amount" in patch) {
+      try {
+        await syncStripeForPacket(updated);
+      } catch (err) {
+        console.error(
+          "[/api/admin/student-registration/[id]] Stripe re-price failed:",
+          err
+        );
+      }
+    }
 
     // Cascade: when admin verifies a packet (registrationConfirmed
     // flips to true), check whether every active student in the
@@ -235,3 +265,4 @@ async function cascadeFamilyRegistrationCompleted(
     });
   }
 }
+

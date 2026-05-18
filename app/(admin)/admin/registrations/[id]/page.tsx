@@ -96,6 +96,7 @@ import type {
   XanoStudentRegistration,
   XanoStudentRegistrationProgress,
 } from "@/lib/xano";
+import { sumFamilyBillingTotals } from "@/lib/per-student-billing";
 
 const xanoBase =
   process.env.NEXT_PUBLIC_XANO_BASE ?? "https://xsc3-mvx7-r86m.n7e.xano.io";
@@ -242,6 +243,17 @@ export default function FamilyRegistrationDetailPage() {
     };
   const familyName =
     family?.family_name?.trim() || `Family #${family?.id ?? familyId}`;
+
+  // Per-student packets for this family-year — pulled off the
+  // students roster the response already includes. Drives all the
+  // family-level billing totals (Tuition card, Billing card monthly
+  // figure) via `sumFamilyBillingTotals`. The per-student source of
+  // truth replaces the retired family-level rollups on
+  // `registration_families_payment`.
+  const activePackets: XanoStudentRegistration[] = students
+    .map((s) => s.packet)
+    .filter((p): p is XanoStudentRegistration => p !== null && p !== undefined);
+  const familyBillingTotals = sumFamilyBillingTotals(activePackets);
 
   const refresh = () => {
     // Return the combined SWR-mutate promise so callers that need
@@ -502,13 +514,13 @@ export default function FamilyRegistrationDetailPage() {
             we've confirmed the apply-side state one way or the
             other before rendering the lock. */}
         {applyProgress !== undefined && !accepted ? (
-          <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 flex items-start gap-3">
-            <AlertCircle className="size-5 text-amber-700 shrink-0 mt-0.5" />
+          <div className="rounded-lg border bg-white px-4 py-3 flex items-start gap-3 shadow-sm">
+            <AlertCircle className="size-5 text-muted-foreground shrink-0 mt-0.5" />
             <div className="min-w-0 flex-1 space-y-1">
-              <p className="text-sm font-medium text-amber-900">
+              <p className="text-sm font-medium text-foreground">
                 Acceptance revoked
               </p>
-              <p className="text-xs text-amber-800">
+              <p className="text-xs text-muted-foreground">
                 This family isn&rsquo;t currently accepted for{" "}
                 {school_year?.year_name ?? "this year"}. The
                 registration surface is locked until the family is
@@ -534,6 +546,24 @@ export default function FamilyRegistrationDetailPage() {
             </div>
           </div>
         ) : null}
+
+        {/* All page content below the banner gets dimmed +
+            pointer-disabled when acceptance is revoked. Banner above
+            stays at full opacity (white card on a faded backdrop) so
+            admin's eye is drawn to the only actionable affordance
+            on the page — the Re-approve link. Sections still render
+            so existing packet data is visible for audit, but admin
+            can't act on anything until the apply-side flag flips
+            back. */}
+        <div
+          className={cn(
+            "space-y-6 transition-opacity",
+            applyProgress !== undefined &&
+              !accepted &&
+              "opacity-50 pointer-events-none select-none"
+          )}
+          aria-disabled={applyProgress !== undefined && !accepted}
+        >
 
         {/* Billing — Stripe subscription state, invoice history, and
             admin actions (cancel at period end / undo cancel /
@@ -562,7 +592,11 @@ export default function FamilyRegistrationDetailPage() {
             <BillingCard
               familyId={Number(family?.id ?? familyId)}
               yearId={Number(yearId)}
-              currentMonthlyTuition={familyPayment?.monthly_tuition_payment ?? null}
+              currentMonthlyTuition={
+                familyBillingTotals.monthlyTotal > 0
+                  ? familyBillingTotals.monthlyTotal
+                  : null
+              }
               billingStartDate={school_year?.billing_start_date ?? null}
               registrationConfirmed={progress?.isRegistrationConfirmed === true}
             />
@@ -612,10 +646,7 @@ export default function FamilyRegistrationDetailPage() {
               progress={progress}
               schoolYear={school_year}
               familyPayment={familyPayment ?? null}
-              tuitionVerified={
-                progress?.tuition_admin_confirm === true
-              }
-              onChanged={refresh}
+              billingTotals={familyBillingTotals}
             />
             {/* Per-student breakdown table — mirrors the same view the
                 parent sees on `/dashboard/tuition`. No inputs; pure
@@ -694,7 +725,7 @@ export default function FamilyRegistrationDetailPage() {
               verifiedTime:
                 progress?.is_registration_admin_confirm_time ?? null,
               verifiedByName:
-                progress?.is_registration_admin_confirm_admin?.trim() ||
+                progress?.registration_admin_confirmed_admin?.trim() ||
                 null,
               saving: savingSection === "registration",
               onToggle: (next) =>
@@ -798,6 +829,7 @@ export default function FamilyRegistrationDetailPage() {
             <VolunteerHoursBlock progress={progress} />
           </SectionShell>
         </section>
+        </div>
       </main>
     </div>
   );
@@ -1650,79 +1682,28 @@ function PacketEditTextarea({
  * value, and Family Accepted has its own latch path through the
  * Acceptance card on the apply-flow page.
  */
-type TuitionDraft = {
-  monthly_tuition_payment: string;
-  annual_fee_total: string;
-  transportation_total: string;
-  sufs_total: string;
-};
-
-function paymentToTuitionDraft(
-  p: XanoFamilyPayment | null
-): TuitionDraft {
-  const fmt = (n: number | null | undefined): string =>
-    n === null || n === undefined ? "" : String(n);
-  return {
-    monthly_tuition_payment: fmt(p?.monthly_tuition_payment),
-    annual_fee_total: fmt(p?.annual_fee_total),
-    transportation_total: fmt(p?.transportation_total),
-    sufs_total: fmt(p?.sufs_total),
-  };
-}
-
 function TuitionBlock({
   progress,
   schoolYear,
   familyPayment,
-  tuitionVerified,
-  onChanged,
+  billingTotals,
 }: {
   progress: AdminFamilyRegistrationResponse["progress"];
   schoolYear: AdminFamilyRegistrationResponse["school_year"];
-  /** Canonical family-payment row for the (family, year). All
-   *  dollar figures + the printed name + the captured signature
-   *  read from here so the Tuition card reflects what admin
-   *  approved on the apply-flow Acceptance card. `null` when no
-   *  row has been snapshotted yet (pre-acceptance families) — the
-   *  card falls back to em dashes / `$0` in that case. */
+  /** Family-payment row — used now only for the signature/printed
+   *  name + transportation total. The per-student tuition columns
+   *  it used to carry (`monthly_tuition_payment`, `annual_fee_total`,
+   *  `sufs_total`) were retired in favor of per-student source of
+   *  truth; those values arrive via `billingTotals` below. */
   familyPayment: XanoFamilyPayment | null;
-  /** When true, admin has verified the Tuition section. The Edit
-   *  button is disabled — same audit treatment the SectionShell
-   *  uses for the verified-state Edit affordance: admin Undoes the
-   *  verify on the footer before amending the snapshot. */
-  tuitionVerified?: boolean;
-  /** Re-fetches the surrounding registration detail so the saved
-   *  amounts and the per-student breakdown table below refresh
-   *  together. */
-  onChanged?: () => void;
+  /** Derived family-level rollups summed across each active
+   *  student's `registration_student_registration` packet. Source
+   *  of truth for what the family is billed. Per-student edits
+   *  happen on the Scholarship Determination card on the apply-flow
+   *  detail page; this surface is read-only. */
+  billingTotals: ReturnType<typeof sumFamilyBillingTotals>;
 }) {
-  const [editing, setEditing] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [draft, setDraft] = useState<TuitionDraft>(() =>
-    paymentToTuitionDraft(familyPayment)
-  );
-
-  // Defensive lock: if the section flips to verified while admin
-  // is in edit mode (e.g. another tab verified, or the page
-  // refetches in the middle of an edit), force-exit the editor
-  // and discard the draft. Prevents the inputs from staying live
-  // when the section is supposed to be settled.
-  useEffect(() => {
-    if (tuitionVerified && editing) {
-      setEditing(false);
-      setDraft(paymentToTuitionDraft(familyPayment));
-    }
-  }, [tuitionVerified, editing, familyPayment]);
-
-  // All numeric values come from the family-payment row. Legacy
-  // copies on the progress row (`monthly_tuition_payment`, etc.)
-  // were drifting from the apply-flow source, so we read the
-  // apply-flow row directly to keep both surfaces consistent.
-  const monthlyTuition = familyPayment?.monthly_tuition_payment ?? 0;
-  const annualFeeTotal = familyPayment?.annual_fee_total ?? 0;
-  const transportationTotal = familyPayment?.transportation_total ?? 0;
-  const sufsTotal = familyPayment?.sufs_total ?? 0;
-  // Printed name + signature also live on the family-payment row.
+  // Printed name + signature live on the family-payment row.
   // Fall back to the progress row for ancient packets that signed
   // before the migration; new packets only write to the
   // family-payment row.
@@ -1733,169 +1714,43 @@ function TuitionBlock({
     progress?.signature_data ??
     null;
 
-  // Helper — render the column value as `$X,XXX.XX` so the four
-  // tuition fields all line up; falls back to `—` when there's no
-  // family-payment row (pre-acceptance state).
+  // Pre-acceptance state — no packets have monthly_amount filled
+  // in yet — gets em-dashes across the board so admin can tell
+  // "not yet approved" apart from "approved at $0."
+  const hasTotals = billingTotals.monthlyTotal > 0;
   const fmt$ = (n: number) =>
-    familyPayment === null
+    !hasTotals
       ? "—"
       : `$${n.toLocaleString(undefined, {
           minimumFractionDigits: 2,
           maximumFractionDigits: 2,
         })}`;
-
-  // Only families with an existing payment row can be edited — the
-  // PATCH route writes by id. Pre-acceptance families have to go
-  // through the apply-flow Acceptance card first to create the
-  // initial row (that's where the printed name + signature also
-  // land), so this guard rails admin to the right surface.
-  const editable = familyPayment !== null;
-
-  function enterEdit() {
-    setDraft(paymentToTuitionDraft(familyPayment));
-    setEditing(true);
-  }
-
-  function cancelEdit() {
-    setDraft(paymentToTuitionDraft(familyPayment));
-    setEditing(false);
-  }
-
-  /** Diff the draft against the live row, coerce string inputs
-   *  back to the column's native type (`number` or explicit `null`
-   *  to clear), and PATCH only what changed. Empty string maps to
-   *  `null` for transport / sufs (those columns are nullable and
-   *  carry semantics — null = waived / not on file) and `0` for
-   *  monthly / admin fee (which are always numbers). */
-  async function runSave() {
-    if (!familyPayment) return;
-    const patch: Record<string, number | null> = {};
-    const parse = (raw: string): number | null => {
-      const trimmed = raw.trim().replace(/,/g, "");
-      if (trimmed === "") return null;
-      const n = Number(trimmed);
-      return Number.isFinite(n) ? n : null;
-    };
-    const fields = [
-      {
-        key: "monthly_tuition_payment" as const,
-        prev: familyPayment.monthly_tuition_payment ?? null,
-        // monthly + admin fee aren't conceptually nullable —
-        // empty input clears to 0 so the receipt still reads as
-        // "approved, just $0/mo" rather than "not yet approved."
-        emptyAs: 0 as number | null,
-      },
-      {
-        key: "annual_fee_total" as const,
-        prev: familyPayment.annual_fee_total ?? null,
-        emptyAs: 0 as number | null,
-      },
-      {
-        key: "transportation_total" as const,
-        prev: familyPayment.transportation_total ?? null,
-        // transport stays nullable — clearing it means
-        // "transport waived" (SNAP families), distinct from $0.
-        emptyAs: null as number | null,
-      },
-      {
-        key: "sufs_total" as const,
-        prev: familyPayment.sufs_total ?? null,
-        // SUFS stays nullable — null means "no SUFS on file";
-        // $0 would imply "applied but awarded nothing."
-        emptyAs: null as number | null,
-      },
-    ];
-    for (const f of fields) {
-      const parsed = parse(draft[f.key]);
-      const next = parsed === null ? f.emptyAs : parsed;
-      if (next !== f.prev) {
-        patch[f.key] = next;
-      }
-    }
-    if (Object.keys(patch).length === 0) {
-      setEditing(false);
-      return;
-    }
-    setSaving(true);
-    try {
-      const res = await fetch(`/api/admin/family-payment/${familyPayment.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(patch),
-      });
-      if (!res.ok) {
-        const errBody = await res.json().catch(() => null);
-        throw new Error(errBody?.error ?? `Save failed (${res.status})`);
-      }
-      toast.success("Tuition snapshot saved.");
-      setEditing(false);
-      onChanged?.();
-    } catch (err) {
-      console.error("[TuitionBlock.runSave]", err);
-      toast.error(err instanceof Error ? err.message : "Couldn't save.");
-    } finally {
-      setSaving(false);
-    }
-  }
+  const transportationTotal = familyPayment?.transportation_total ?? null;
+  const fmtTransport =
+    transportationTotal === null
+      ? "—"
+      : `$${transportationTotal.toLocaleString(undefined, {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })}`;
 
   return (
     <div className="rounded-md border bg-muted/10 p-4 space-y-5">
-      {/* Sub-header — title + Edit/Save/Cancel cluster docked
-          right. Mirrors the per-student packet card affordance
-          pair so the two inline-edit surfaces feel of-a-piece. */}
+      {/* Read-only sub-header — per-student edits live on the
+          Scholarship Determination card on the apply-flow detail
+          page, so this Tuition block just rolls up what's already
+          stored on each packet. */}
       <div className="flex items-center justify-between gap-3">
         <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           Tuition Snapshot
         </p>
-        {editable ? (
-          <div className="flex items-center gap-2">
-            {editing ? (
-              <>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={cancelEdit}
-                  disabled={saving}
-                  className="bg-white"
-                >
-                  Cancel
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  onClick={() => void runSave()}
-                  disabled={saving}
-                  className="bg-blue-600 hover:bg-blue-700 text-white"
-                >
-                  {saving ? (
-                    <Loader2 className="size-3.5 mr-1.5 animate-spin" />
-                  ) : (
-                    <Check className="size-3.5 mr-1.5" />
-                  )}
-                  Save
-                </Button>
-              </>
-            ) : (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={enterEdit}
-                disabled={!!tuitionVerified}
-                title={
-                  tuitionVerified
-                    ? "Undo the Tuition verification below to edit."
-                    : "Edit the tuition snapshot"
-                }
-                className="bg-white"
-              >
-                <Pencil className="size-3.5 mr-1.5" />
-                Edit
-              </Button>
-            )}
-          </div>
-        ) : null}
+        <span className="text-xs text-muted-foreground">
+          {billingTotals.activeStudentCount > 0
+            ? `Derived from ${billingTotals.activeStudentCount} active ${
+                billingTotals.activeStudentCount === 1 ? "student" : "students"
+              }`
+            : "No active students"}
+        </span>
       </div>
       <div>
         <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
@@ -1904,66 +1759,24 @@ function TuitionBlock({
             value={schoolYear.year_name || ""}
             placeholder="—"
           />
-          {editing ? (
-            <>
-              <PacketEditInput
-                label="Monthly Tuition"
-                value={draft.monthly_tuition_payment}
-                onChange={(v) =>
-                  setDraft((d) => ({ ...d, monthly_tuition_payment: v }))
-                }
-                disabled={saving || !!tuitionVerified}
-              />
-              <PacketEditInput
-                label="Annual Admin Fee"
-                value={draft.annual_fee_total}
-                onChange={(v) =>
-                  setDraft((d) => ({ ...d, annual_fee_total: v }))
-                }
-                disabled={saving || !!tuitionVerified}
-              />
-              <PacketEditInput
-                label="Transportation Total"
-                value={draft.transportation_total}
-                onChange={(v) =>
-                  setDraft((d) => ({ ...d, transportation_total: v }))
-                }
-                disabled={saving || !!tuitionVerified}
-              />
-            </>
-          ) : (
-            <>
-              <DisabledField
-                label="Monthly Tuition"
-                value={fmt$(monthlyTuition)}
-              />
-              <DisabledField
-                label="Annual Admin Fee"
-                value={fmt$(annualFeeTotal)}
-              />
-              <DisabledField
-                label="Transportation Total"
-                value={fmt$(transportationTotal)}
-              />
-            </>
-          )}
+          <DisabledField
+            label="Monthly Tuition"
+            value={fmt$(billingTotals.monthlyTotal)}
+          />
+          <DisabledField
+            label="Annual Admin Fee"
+            value={fmt$(billingTotals.annualFeeTotal)}
+          />
+          <DisabledField
+            label="Transportation Total"
+            value={fmtTransport}
+          />
         </div>
         <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 mt-3">
-          {editing ? (
-            <PacketEditInput
-              label="SUFS Scholarship Total"
-              value={draft.sufs_total}
-              onChange={(v) =>
-                setDraft((d) => ({ ...d, sufs_total: v }))
-              }
-              disabled={saving || !!tuitionVerified}
-            />
-          ) : (
-            <DisabledField
-              label="SUFS Scholarship Total"
-              value={fmt$(sufsTotal)}
-            />
-          )}
+          <DisabledField
+            label="SUFS Scholarship Total"
+            value={fmt$(billingTotals.sufsTotal)}
+          />
           <DisabledField
             label="Family Accepted"
             value={
@@ -1976,13 +1789,6 @@ function TuitionBlock({
             placeholder="—"
           />
         </div>
-        {editing ? (
-          <p className="mt-3 text-xs text-muted-foreground">
-            Leave Transportation or SUFS blank to clear (transport
-            blank = waived for SNAP families; SUFS blank = no SUFS on
-            file). Monthly and Admin Fee blank reads as $0.
-          </p>
-        ) : null}
       </div>
       <SectionGroup title="Acknowledgement">
         <div className="grid gap-4 grid-cols-1">
@@ -2649,11 +2455,11 @@ function StudentPacketBlock({
   // Admin verification lives on the per-packet
   // `registration_student_registration` row — `registrationConfirmed`
   // bool plus the audit pair `registration_confirmed_admin_time` and
-  // `regisration_admin_confirmed_admin` (typo on the column name
-  // intentional, matches Xano). Re-enrolling students get a fresh
-  // verify state per year since each year creates its own packet.
-  // The detail API surfaces these on the row's `is_verified*` fields
-  // so the UI can stay agnostic about which table they live in.
+  // `is_registration_admin_confirm_admin`. Re-enrolling students get
+  // a fresh verify state per year since each year creates its own
+  // packet. The detail API surfaces these on the row's
+  // `is_verified*` fields so the UI can stay agnostic about which
+  // table they live in.
   const verified = row.is_verified === true;
   const verifiedTime = row.is_admin_verified_time ?? null;
   const verifiedByName = row.is_admin_verified_admin?.trim() || null;

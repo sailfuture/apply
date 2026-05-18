@@ -152,37 +152,13 @@ export async function GET(
         ? scholarshipResult.value
         : null;
 
-    // Backfill the progress row's monthly columns from the legacy
-    // `registration_families_payment` row when missing. Conditions:
-    //   - Progress column reads as 0 / undefined (default).
-    //   - Legacy column carries a real value.
-    // The legacy `transportation_total` is annual; convert to monthly
-    // before comparing/assigning. Mutates the in-memory `progress`
-    // only — Xano isn't written from here. This is a read-side
-    // shim; the durable fix lives on the Approve flow's dual-write.
-    if (progress && familyPayment) {
-      // `monthly_tuition_payment` on the legacy row is nullable now
-      // (pre-acceptance rows carry null). Narrow before comparing.
-      if (
-        (!progress.monthly_tuition_payment ||
-          progress.monthly_tuition_payment === 0) &&
-        typeof familyPayment.monthly_tuition_payment === "number" &&
-        familyPayment.monthly_tuition_payment > 0
-      ) {
-        progress.monthly_tuition_payment =
-          familyPayment.monthly_tuition_payment;
-      }
-      if (
-        (!progress.monthly_transportation_payment ||
-          progress.monthly_transportation_payment === 0) &&
-        typeof familyPayment.transportation_total === "number" &&
-        familyPayment.transportation_total > 0
-      ) {
-        progress.monthly_transportation_payment =
-          Math.round((familyPayment.transportation_total / 12) * 100) /
-          100;
-      }
-    }
+    // Note: the old backfill shim that mirrored `monthly_tuition_payment`
+    // and `monthly_transportation_payment` from `registration_families_payment`
+    // onto `registration_student_registration_progress` is gone. Both
+    // columns moved per-student onto `registration_student_registration`
+    // (the packet rows return as part of `students[].packet` below),
+    // and downstream surfaces derive family totals via
+    // `sumFamilyBillingTotals(packets)`.
 
     if (!agg) {
       return NextResponse.json(
@@ -306,7 +282,7 @@ export async function GET(
           is_admin_verified_time:
             packet?.registration_confirmed_admin_time ?? null,
           is_admin_verified_admin:
-            packet?.regisration_admin_confirmed_admin ?? "",
+            packet?.is_registration_admin_confirm_admin ?? "",
           // Per-application fields driving the Tuition card's
           // per-student breakdown table. Same data the parent's
           // `/dashboard/tuition` reads — the family-side and admin-

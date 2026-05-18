@@ -72,11 +72,15 @@ import { cn } from "@/lib/utils";
  *   - Start Monthly Billing (only shown when no subscription yet)
  *   - Cancel at period end (preserves access through the
  *     paid-for period; confirmation dialog)
- *   - Update Monthly Amount (dialog with input — also mirrors back
- *     to `family_payment.monthly_tuition_payment` for receipt parity)
  *   - Refund Last Invoice (confirmation dialog, full refund of the
  *     most recent paid invoice; partial refunds via the Stripe
  *     Dashboard if needed)
+ *
+ * Monthly amount edits no longer live here — per-student
+ * `monthly_amount` is the source of truth, edited on the
+ * Scholarship Determination card; the per-student PATCH route
+ * automatically re-prices the matching Stripe SubscriptionItem via
+ * `updateStudentItemAmount`.
  */
 
 interface BillingSnapshot {
@@ -141,12 +145,7 @@ interface Props {
   registrationConfirmed: boolean;
 }
 
-type BillingAction =
-  | "start"
-  | "cancel"
-  | "uncancel"
-  | "update-amount"
-  | "refund";
+type BillingAction = "start" | "cancel" | "uncancel" | "refund";
 
 export function BillingCard({
   familyId,
@@ -174,10 +173,6 @@ export function BillingCard({
   const [pending, setPending] = useState<BillingAction | null>(null);
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [confirmRefund, setConfirmRefund] = useState(false);
-  const [updateOpen, setUpdateOpen] = useState(false);
-  const [updateAmount, setUpdateAmount] = useState(
-    currentMonthlyTuition != null ? String(currentMonthlyTuition) : ""
-  );
 
   // Per-family payment schedule deep link — shown alongside the
   // Stripe-side action buttons so admin can pivot to the historical
@@ -408,19 +403,14 @@ export function BillingCard({
         </div>
       </div>
 
-      {/* Actions — laid out in a flex row, hidden when canceled */}
+      {/* Actions — laid out in a flex row, hidden when canceled.
+          Note: the legacy "Update amount" button is gone — per-student
+          `monthly_amount` is the source of truth now and is edited
+          on the Scholarship Determination card. Changes there
+          re-price the matching Stripe SubscriptionItem automatically
+          via the per-student PATCH route. */}
       {!isCanceled ? (
         <div className="flex flex-wrap gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            className="bg-white"
-            disabled={pending !== null}
-            onClick={() => setUpdateOpen(true)}
-          >
-            <RefreshCw className="size-3.5 mr-1.5" aria-hidden="true" />
-            Update amount
-          </Button>
           {data.lastPaidInvoice ? (
             <Button
               variant="outline"
@@ -532,66 +522,6 @@ export function BillingCard({
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Update-amount dialog */}
-      <Dialog open={updateOpen} onOpenChange={(o) => !pending && setUpdateOpen(o)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Update monthly amount</DialogTitle>
-            <DialogDescription>
-              The new amount will be reflected on the next monthly
-              invoice.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2 py-4">
-            <label
-              htmlFor="billing-update-amount"
-              className="text-xs uppercase tracking-wider text-muted-foreground font-medium"
-            >
-              Monthly amount
-            </label>
-            <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-                $
-              </span>
-              <Input
-                id="billing-update-amount"
-                type="number"
-                inputMode="decimal"
-                step="0.01"
-                min="0"
-                value={updateAmount}
-                onChange={(e) => setUpdateAmount(e.target.value)}
-                className="pl-7"
-                placeholder="0.00"
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              disabled={pending !== null}
-              onClick={() => setUpdateOpen(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              disabled={pending !== null || !updateAmount.trim()}
-              onClick={() => {
-                const dollars = Number(updateAmount);
-                if (!Number.isFinite(dollars) || dollars <= 0) {
-                  toast.error("Enter a positive amount.");
-                  return;
-                }
-                void runAction("update-amount", { monthlyTuition: dollars }).then(
-                  () => setUpdateOpen(false)
-                );
-              }}
-            >
-              {pending === "update-amount" ? "Saving…" : "Save"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
@@ -656,8 +586,6 @@ function actionSuccessMessage(action: BillingAction): string {
       return "Subscription will cancel at the end of the current billing period.";
     case "uncancel":
       return "Cancellation reversed. Monthly billing continues as scheduled.";
-    case "update-amount":
-      return "Monthly amount updated. The new amount will be reflected on the next monthly invoice.";
     case "refund":
       return "Refund issued. The family will see it on their original payment method in 5-10 business days.";
   }

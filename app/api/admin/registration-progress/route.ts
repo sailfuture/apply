@@ -97,7 +97,7 @@ const SECTION_VERIFY_PAIRS: Array<{
     // separately on the per-student card footer.
     confirmKey: "is_registration_admin_confirm",
     timeKey: "is_registration_admin_confirm_time",
-    adminKey: "is_registration_admin_confirm_admin",
+    adminKey: "registration_admin_confirmed_admin",
     completedKey: "isRegistration",
   },
 ];
@@ -184,8 +184,6 @@ export async function PATCH(req: NextRequest) {
       // submission record.
       "isSubmitted",
       "submitted_date",
-      "monthly_tuition_payment",
-      "monthly_transportation_payment",
       "enrollment_agreement_pandadoc_id",
       "enrollment_agreement_status",
       "enrollment_agreement_sent",
@@ -286,7 +284,7 @@ export async function PATCH(req: NextRequest) {
         if (!("is_registration_admin_confirm" in patch)) {
           patch.is_registration_admin_confirm = true;
           patch.is_registration_admin_confirm_time = now;
-          patch.is_registration_admin_confirm_admin = adminName;
+          patch.registration_admin_confirmed_admin = adminName;
         }
       }
     }

@@ -112,10 +112,14 @@ export async function POST(req: NextRequest) {
     // (which flips this to false) hides them from the admin pipeline
     // without losing the row.
     isActive: true,
-    opportunity_scholarship_award_amount: 0,
-    // Liability-waiver fields removed — they live on
-    // `registration_student_registration` (the per-student packet)
-    // and get initialized when the packet itself is created.
+    // Per-student tuition columns moved onto the per-student packet
+    // row (`registration_student_registration`); these are kept as
+    // explicit `null` on the application row so the type contract
+    // is satisfied without implying a $0 determination. The
+    // Scholarship Determination card writes the real per-student
+    // values onto the packet during admin review.
+    opportunity_scholarship_award_amount: null,
+    // Liability-waiver fields live on the packet too.
     enrollment_agreement_pandadoc_id: "",
     enrollment_agreement_status: "",
     enrollment_agreement_sent_at: null,

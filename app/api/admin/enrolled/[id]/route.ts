@@ -292,12 +292,11 @@ function shapePacket(p: XanoStudentRegistration) {
     registrationConfirmed: p.registrationConfirmed === true,
     /** Audit pair on `registrationConfirmed` — surfaced on the page so
      *  admin sees "Confirmed by Mr. Thompson · Oct 28" next to the
-     *  badge. The column name with the typo (`regisration_*`) is
-     *  intentional — matches the live Xano schema. */
+     *  badge. */
     registration_confirmed_admin_time:
       p.registration_confirmed_admin_time ?? null,
     registration_confirmed_admin_name:
-      p.regisration_admin_confirmed_admin ?? "",
+      p.is_registration_admin_confirm_admin ?? "",
     /** Last write to the packet row. Surfaced alongside the student's
      *  `last_edited_time` in the page header so admin can spot stale
      *  packet data (parent edited bio recently but never updated the

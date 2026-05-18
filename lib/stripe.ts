@@ -376,46 +376,6 @@ export async function uncancelSubscription(
 }
 
 /**
- * Update the family's monthly amount on an existing Subscription.
- * Stripe requires us to swap the SubscriptionItem with a new
- * inline-`price_data` payload since we don't have pre-created Prices
- * per family. Proration behavior follows Stripe defaults (creates
- * prorated line items on the next invoice); admin gets the standard
- * "next invoice will include a prorated difference" behavior.
- */
-export async function updateSubscriptionMonthlyAmount({
-  subscriptionId,
-  newMonthlyCents,
-}: {
-  subscriptionId: string;
-  newMonthlyCents: number;
-}): Promise<Stripe.Subscription> {
-  const stripe = getStripeClient();
-  const productId = getTuitionProductId();
-  const subscription = await stripe.subscriptions.retrieve(subscriptionId);
-  const currentItem = subscription.items.data[0];
-  if (!currentItem) {
-    throw new Error(
-      `Subscription ${subscriptionId} has no items — cannot update amount.`
-    );
-  }
-  return stripe.subscriptions.update(subscriptionId, {
-    items: [
-      {
-        id: currentItem.id,
-        price_data: {
-          currency: "usd",
-          product: productId,
-          unit_amount: newMonthlyCents,
-          recurring: { interval: "month" },
-        },
-      },
-    ],
-    proration_behavior: "create_prorations",
-  });
-}
-
-/**
  * Refund the most recent paid invoice on a Subscription. Refunds the
  * underlying Charge in full; partial refunds are out of scope for the
  * standard admin flow (admin can issue partial refunds via the Stripe
@@ -444,6 +404,400 @@ export async function refundInvoice(
     payment_intent: paymentIntentId,
     reason: "requested_by_customer",
   });
+}
+
+/* ─────────────────────── Per-student subscription items ───────── */
+
+/**
+ * One per-student line on a family's monthly subscription. The
+ * caller (Phase 2 wiring in `lib/billing.ts`) builds this from the
+ * per-student tuition math + the student record.
+ */
+export interface StudentItemInput {
+  /** Internal Xano student id — round-tripped through Stripe
+   *  metadata so webhook handlers can map a Stripe line back to a
+   *  student row without an extra round trip. */
+  studentId: number;
+  /** Display name on the parent's invoice line ("Hunter Thompson").
+   *  Shows up as the line description; the named Price below carries
+   *  a fuller "<Family> — <Student> — <Year>" string for the
+   *  Stripe Dashboard. */
+  studentName: string;
+  /** Per-student monthly amount in cents. Each student gets a
+   *  one-off `Price` at this amount — same student-by-student
+   *  math the family-level total used to roll up. */
+  monthlyCents: number;
+}
+
+interface CreatePerStudentSubscriptionInput {
+  customerId: string;
+  /** Used only to name the Price in the Stripe Dashboard so admin
+   *  can scan the catalog. Format: `<Family> — <Student> — <Year>`. */
+  familyName: string;
+  yearName: string;
+  /** Whichever students are active for this family-year at the
+   *  moment the subscription is created. Order is preserved on the
+   *  resulting `items` map so the caller can persist per-student
+   *  ids by zipping arrays if it wants. */
+  students: StudentItemInput[];
+  /** Same `trial_end` semantics as `createInvoiceSubscription` —
+   *  ISO date, defers the first invoice when in the future. */
+  billingStartDate: string | null;
+  familyId: number;
+  yearId: number;
+  /** Defaults to 15 (SailFuture's standard net-15 terms). */
+  daysUntilDue?: number;
+}
+
+/** Result of the per-student subscription create. The `items` array
+ *  carries the studentId → subscriptionItemId mapping so the caller
+ *  can persist `stripe_subscription_item_id` onto each student row. */
+export interface PerStudentSubscriptionResult {
+  subscription: Stripe.Subscription;
+  items: Array<{
+    studentId: number;
+    subscriptionItemId: string;
+    /** The dedicated Price created for this student. Stored on the
+     *  result mostly for audit / debugging — callers don't currently
+     *  need to persist it since the SubscriptionItem id alone is
+     *  enough to remove the student from billing later. */
+    priceId: string;
+  }>;
+}
+
+/**
+ * Create a family Stripe Subscription with one line item per
+ * active student. Replaces the family-level single-item shape used
+ * by `createInvoiceSubscription` — one customer, one subscription,
+ * one invoice per month, but the invoice carries N itemized lines
+ * so the parent sees per-student amounts.
+ *
+ * Each student gets a dedicated one-off `Price` (created inline
+ * via `stripe.prices.create`, not catalogued — see the design
+ * thread in the conversation history for why ad-hoc beats a
+ * shared catalog for our use case). Each Price gets a
+ * `nickname` so admins scanning the Stripe Dashboard can tell
+ * which family/student/year the line belongs to. The price's
+ * `unit_amount` is the per-student monthly cents from the
+ * caller's math.
+ *
+ * `description` on the SubscriptionItem becomes the line text on
+ * the hosted invoice the parent receives — set to "<Student> —
+ * Monthly tuition" so the parent sees student names on their
+ * receipt without admin/internal Family-Year decoration leaking
+ * through.
+ *
+ * Side-effects on each student row are the caller's job: take the
+ * returned `items` map and persist each
+ * `subscriptionItemId` onto the matching
+ * `registration_students.stripe_subscription_item_id`. We don't
+ * touch Xano here so this helper stays pure-Stripe and reusable
+ * from any orchestration site.
+ */
+export async function createSubscriptionWithStudentItems(
+  input: CreatePerStudentSubscriptionInput
+): Promise<PerStudentSubscriptionResult> {
+  const stripe = getStripeClient();
+  const productId = getTuitionProductId();
+
+  // Same trial-end derivation as the legacy single-item flow —
+  // mirrored exactly so the two paths behave the same on dates.
+  const billingAnchorUnix = (() => {
+    if (!input.billingStartDate) return null;
+    const ms = Date.parse(`${input.billingStartDate}T00:00:00Z`);
+    if (!Number.isFinite(ms)) return null;
+    const unix = Math.floor(ms / 1000);
+    const nowUnix = Math.floor(Date.now() / 1000);
+    if (unix <= nowUnix + 48 * 60 * 60) return null;
+    return unix;
+  })();
+
+  if (input.students.length === 0) {
+    throw new Error(
+      "createSubscriptionWithStudentItems called with zero students — at least one is required."
+    );
+  }
+
+  // Create one Price per student, sequentially, so we can attach a
+  // nickname for the Stripe Dashboard. Parallelizing would be a
+  // minor latency win but breaks the deterministic ordering we
+  // want in the `items` result.
+  const studentPrices: Array<{
+    studentId: number;
+    studentName: string;
+    monthlyCents: number;
+    priceId: string;
+  }> = [];
+  for (const s of input.students) {
+    const price = await stripe.prices.create({
+      currency: "usd",
+      unit_amount: s.monthlyCents,
+      product: productId,
+      recurring: { interval: "month" },
+      nickname: `${input.familyName} — ${s.studentName} — ${input.yearName}`,
+      metadata: {
+        family_id: String(input.familyId),
+        year_id: String(input.yearId),
+        student_id: String(s.studentId),
+      },
+    });
+    studentPrices.push({
+      studentId: s.studentId,
+      studentName: s.studentName,
+      monthlyCents: s.monthlyCents,
+      priceId: price.id,
+    });
+  }
+
+  const subscription = await stripe.subscriptions.create({
+    customer: input.customerId,
+    collection_method: "send_invoice",
+    days_until_due: input.daysUntilDue ?? 15,
+    items: studentPrices.map((s) => ({
+      price: s.priceId,
+      quantity: 1,
+      metadata: {
+        student_id: String(s.studentId),
+      },
+    })),
+    ...(billingAnchorUnix ? { trial_end: billingAnchorUnix } : {}),
+    metadata: {
+      family_id: String(input.familyId),
+      year_id: String(input.yearId),
+    },
+    description: `SailFuture Academy monthly tuition · family ${input.familyId} · year ${input.yearId}`,
+  });
+
+  // Zip the created SubscriptionItems back onto the studentPrices
+  // by matching on the metadata.student_id stamp we just set —
+  // safer than relying on array index alignment in case Stripe
+  // returns the items in a different order than we sent them.
+  const itemsByStudentId = new Map<number, string>();
+  for (const item of subscription.items.data) {
+    const stamped = item.metadata?.student_id;
+    if (!stamped) continue;
+    const sid = Number(stamped);
+    if (Number.isFinite(sid)) itemsByStudentId.set(sid, item.id);
+  }
+
+  const items = studentPrices.map((s) => {
+    const subscriptionItemId = itemsByStudentId.get(s.studentId);
+    if (!subscriptionItemId) {
+      throw new Error(
+        `Stripe returned no SubscriptionItem for student ${s.studentId} after create. ` +
+          `Created subscription ${subscription.id} — admin should reconcile manually.`
+      );
+    }
+    return {
+      studentId: s.studentId,
+      subscriptionItemId,
+      priceId: s.priceId,
+    };
+  });
+
+  return { subscription, items };
+}
+
+interface AddStudentItemInput {
+  subscriptionId: string;
+  /** Family/student/year naming for the Price nickname — same
+   *  format the create flow uses so the Dashboard catalog stays
+   *  consistent regardless of which entrypoint added the student. */
+  familyName: string;
+  studentName: string;
+  yearName: string;
+  /** Per-student monthly amount in cents. */
+  monthlyCents: number;
+  studentId: number;
+  familyId: number;
+  yearId: number;
+}
+
+/** Result of adding one student to an existing subscription. Caller
+ *  persists `subscriptionItemId` onto the student row. */
+export interface AddStudentItemResult {
+  subscriptionItemId: string;
+  priceId: string;
+}
+
+/**
+ * Add a single student's recurring tuition line to an existing
+ * family subscription. Used when a family adds a student mid-cycle
+ * (new student joins after the subscription is already running) or
+ * when an admin re-enrolls a previously-archived student.
+ *
+ * Defaults `proration_behavior: 'none'` — matches the user's spec
+ * for mid-cycle additions: the new student doesn't pay this cycle,
+ * joins billing on the next invoice. Caller can override if a
+ * specific case warrants proration.
+ */
+export async function addStudentItemToSubscription(
+  input: AddStudentItemInput
+): Promise<AddStudentItemResult> {
+  const stripe = getStripeClient();
+  const productId = getTuitionProductId();
+
+  const price = await stripe.prices.create({
+    currency: "usd",
+    unit_amount: input.monthlyCents,
+    product: productId,
+    recurring: { interval: "month" },
+    nickname: `${input.familyName} — ${input.studentName} — ${input.yearName}`,
+    metadata: {
+      family_id: String(input.familyId),
+      year_id: String(input.yearId),
+      student_id: String(input.studentId),
+    },
+  });
+
+  const item = await stripe.subscriptionItems.create({
+    subscription: input.subscriptionId,
+    price: price.id,
+    quantity: 1,
+    proration_behavior: "none",
+    metadata: {
+      student_id: String(input.studentId),
+    },
+  });
+
+  return { subscriptionItemId: item.id, priceId: price.id };
+}
+
+interface UpdateStudentItemInput {
+  subscriptionItemId: string;
+  /** Family/student/year naming for the new Price's nickname — same
+   *  format the create + add flows use so the Dashboard catalog
+   *  stays consistent. */
+  familyName: string;
+  studentName: string;
+  yearName: string;
+  /** New per-student monthly amount in cents. */
+  monthlyCents: number;
+  studentId: number;
+  familyId: number;
+  yearId: number;
+}
+
+export interface UpdateStudentItemResult {
+  subscriptionItemId: string;
+  /** New Price id pointing the item at the updated monthly amount.
+   *  Returned so callers can audit / persist if they want; the
+   *  SubscriptionItem id itself doesn't change. */
+  priceId: string;
+}
+
+/**
+ * Re-price a single student's recurring tuition line. Used when
+ * admin edits a per-student value on the Scholarship Determination
+ * card and the packet's `monthly_amount` changes — we mint a new
+ * one-off Stripe Price at the new amount and swap the
+ * SubscriptionItem to point at it.
+ *
+ * Defaults `proration_behavior: 'none'` (matches the rest of the
+ * per-student helpers): family pays the current month at the
+ * existing amount; the new amount kicks in on the next invoice.
+ *
+ * The SubscriptionItem id itself doesn't change — only its underlying
+ * Price — so the packet row's `stripe_subscription_item_id` stays
+ * the same handle. The previous Price is left behind in the Stripe
+ * Dashboard as a historical record; one-off Prices accumulate but
+ * that's the tradeoff we picked when going ad-hoc instead of
+ * cataloged. Each new Price gets a fresh `nickname` derived from
+ * the same `<Family> — <Student> — <Year>` format so admin can
+ * still scan the catalog.
+ */
+export async function updateStudentItemAmount(
+  input: UpdateStudentItemInput
+): Promise<UpdateStudentItemResult> {
+  const stripe = getStripeClient();
+  const productId = getTuitionProductId();
+
+  const price = await stripe.prices.create({
+    currency: "usd",
+    unit_amount: input.monthlyCents,
+    product: productId,
+    recurring: { interval: "month" },
+    nickname: `${input.familyName} — ${input.studentName} — ${input.yearName}`,
+    metadata: {
+      family_id: String(input.familyId),
+      year_id: String(input.yearId),
+      student_id: String(input.studentId),
+    },
+  });
+
+  await stripe.subscriptionItems.update(input.subscriptionItemId, {
+    price: price.id,
+    proration_behavior: "none",
+  });
+
+  return { subscriptionItemId: input.subscriptionItemId, priceId: price.id };
+}
+
+/** Outcome of removing a student's line — communicates whether the
+ *  removal also retired the parent subscription (i.e. the student
+ *  was the last one). Callers use this to decide whether to clear
+ *  the family-level `stripe_subscription_id` too. */
+export interface RemoveStudentItemResult {
+  /** True when the subscription itself was cancelled because the
+   *  removed item was the last one. */
+  subscriptionCancelled: boolean;
+  /** When `subscriptionCancelled === true`, the updated
+   *  Subscription object so the caller can read `cancel_at` to
+   *  populate UI. Null when only the item was removed and the
+   *  subscription itself continues. */
+  subscription: Stripe.Subscription | null;
+}
+
+/**
+ * Remove a single student's recurring tuition line from a family's
+ * subscription. Defaults `proration_behavior: 'none'` — per the
+ * user's spec, the family pays the current month in full and the
+ * student drops off the next invoice.
+ *
+ * When the removed item is the **last** item on the subscription,
+ * this helper also cancels the subscription itself
+ * (`cancel_at_period_end: true`) so the family doesn't sit on an
+ * empty $0 subscription. Caller can use the `subscriptionCancelled`
+ * flag to update the family-level Stripe column.
+ */
+export async function removeStudentItemFromSubscription({
+  subscriptionId,
+  subscriptionItemId,
+}: {
+  subscriptionId: string;
+  subscriptionItemId: string;
+}): Promise<RemoveStudentItemResult> {
+  const stripe = getStripeClient();
+
+  // Check sibling count BEFORE deletion — if the item we're about
+  // to remove is the only one, we'll cancel the subscription right
+  // after the delete. Doing the count first avoids a race where a
+  // concurrent admin adds another student between our delete and
+  // our cancel-check.
+  const subscriptionBefore = await stripe.subscriptions.retrieve(
+    subscriptionId
+  );
+  const wasLastItem =
+    subscriptionBefore.items.data.length === 1 &&
+    subscriptionBefore.items.data[0]?.id === subscriptionItemId;
+
+  await stripe.subscriptionItems.del(subscriptionItemId, {
+    proration_behavior: "none",
+  });
+
+  if (!wasLastItem) {
+    return { subscriptionCancelled: false, subscription: null };
+  }
+
+  // Last item just left — cancel the parent subscription at period
+  // end so the family doesn't get billed $0 next cycle. We deliberately
+  // pick `cancel_at_period_end` (not immediate cancel) so the
+  // family still has access through the cycle they already paid
+  // for, matching the rest of the cancel-paths in this file.
+  const cancelled = await stripe.subscriptions.update(subscriptionId, {
+    cancel_at_period_end: true,
+  });
+  return { subscriptionCancelled: true, subscription: cancelled };
 }
 
 /* ─────────────────────── Webhook helpers ─────────────────────── */

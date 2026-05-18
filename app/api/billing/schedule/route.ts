@@ -1,6 +1,10 @@
 import { auth, currentUser } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
 import { xano } from "@/lib/xano";
+import {
+  fetchActiveFamilyPackets,
+  sumFamilyBillingTotals,
+} from "@/lib/per-student-billing";
 
 /**
  * Parent-side billing schedule. Same shape as the admin schedule
@@ -44,16 +48,19 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const [payment, year, transactions] = await Promise.all([
+  const [payment, year, transactions, activePackets] = await Promise.all([
     xano.familyPayments.getByFamilyAndYear(familyId, yearId),
     xano.schoolYears.getById(yearId),
     xano.paymentTransactions.getByFamilyAndYear(familyId, yearId),
+    fetchActiveFamilyPackets(familyId, yearId),
   ]);
 
+  // Family monthly total = Σ per-student `monthly_amount`. Matches
+  // the admin schedule route's derivation so the parent + admin
+  // surfaces show the same number.
+  const totals = sumFamilyBillingTotals(activePackets);
   const monthlyAmountCents =
-    payment?.monthly_tuition_payment != null
-      ? Math.round(payment.monthly_tuition_payment * 100)
-      : null;
+    totals.monthlyTotal > 0 ? Math.round(totals.monthlyTotal * 100) : null;
   const billingStartDate = year?.billing_start_date ?? null;
 
   const anchor = parseAnchorDate(billingStartDate);

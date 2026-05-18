@@ -3988,22 +3988,25 @@ function DecisionCard({
               {/* Archive lives in the page header — same slot on
                   both apply-flow and registration pages — so the
                   pre-accept footer focuses on the decision pair:
-                  Return Application (send back for edits, only when
-                  submitted) + Approve. */}
-              <div
-                className={cn(
-                  "grid gap-2",
-                  familySubmitted ? "grid-cols-2" : "grid-cols-1"
-                )}
-              >
-                {familySubmitted ? (
-                  <RejectApplicationButton
-                    familyId={familyId}
-                    yearId={yearId}
-                    familyName={familyName}
-                    onRejected={onChanged}
-                  />
-                ) : null}
+                  Return Application (send back for edits) + Approve.
+                  Return stays mounted at all times — disabled when
+                  the family hasn't submitted yet — so the action
+                  surface is stable across states and admin sees the
+                  full lifecycle vocabulary regardless of where the
+                  family is in the flow. */}
+              <div className="grid gap-2 grid-cols-2">
+                <RejectApplicationButton
+                  familyId={familyId}
+                  yearId={yearId}
+                  familyName={familyName}
+                  onRejected={onChanged}
+                  disabled={!familySubmitted}
+                  disabledReason={
+                    !familySubmitted
+                      ? "Family hasn't submitted yet — nothing to return."
+                      : undefined
+                  }
+                />
                 <ApproveFamilyButton
                   familyId={familyId}
                   yearId={yearId}
@@ -4676,13 +4679,16 @@ function ApproveFamilyButton({
         throw new Error(errBody?.error ?? `Approve failed (${res.status})`);
       }
 
-      // Bring the family-payment row's `isFamilyAccepted` flag in
-      // sync. The monthly amount itself was already snapshotted at
-      // each per-student Confirm Scholarship Award Amount click —
-      // this final write just flips the acceptance flag and
-      // refreshes the monthly figure with the latest computed
-      // value (in case admin tweaked any per-student amount
-      // between confirms).
+      // Sync the family-payment row's `isFamilyAccepted` flag. The
+      // per-student tuition/SUFS/annual_fee/monthly_amount columns
+      // are already populated on each packet by the per-student
+      // Confirm Scholarship Award Amount flow — admin walks through
+      // each student on the Scholarship Determination card before
+      // they ever get here, so the source-of-truth values are
+      // already in place. This route also captures the family-
+      // scoped transportation_total (server-derives the sum from
+      // each app's `transportation_cost` when not provided
+      // explicitly).
       try {
         const snapRes = await fetch(`/api/admin/family-payment`, {
           method: "POST",
@@ -4690,24 +4696,12 @@ function ApproveFamilyButton({
           body: JSON.stringify({
             familyId,
             yearId,
-            monthly_tuition_payment: monthlyTuitionPayment,
-            // Line-item snapshot — admin fee always set. For
-            // transport, SNAP families pass explicit `null`
-            // (waived) and non-SNAP families OMIT the field so
-            // the route server-derives the sum from every active
-            // app's `transportation_cost`. The route is the
-            // authoritative computer; the page deliberately
-            // doesn't pass its own sum to avoid drift from stale
-            // SWR caches.
-            annual_fee_total: annualFeeTotal,
+            // SNAP families pass explicit `null` (transport waived);
+            // non-SNAP families omit the field so the route server-
+            // derives the sum across active apps.
             ...(transportationTotal === null
               ? { transportation_total: null }
               : {}),
-            // SUFS total — sum of every active student's
-            // `sufs_award_amount`. `null` when the family has no
-            // SUFS scholarship; the route preserves null vs.
-            // undefined so legacy rows don't get clobbered with 0.
-            sufs_total: sufsTotal,
             isFamilyAccepted: true,
           }),
         });
@@ -4721,52 +4715,12 @@ function ApproveFamilyButton({
       } catch (snapErr) {
         console.error("[ApproveFamilyButton] snapshot threw:", snapErr);
       }
-
-      // Mirror the snapshot onto `registration_student_registration_progress`
-      // — the registration-flow detail page (`/admin/registrations/[id]`)
-      // reads its Tuition card from `monthly_tuition_payment` +
-      // `monthly_transportation_payment` on this row, so the legacy
-      // `registration_families_payment` snapshot above isn't enough on
-      // its own. Without this PATCH, the registrations page renders
-      // $0 / $0 in the Monthly Snapshot grid even though the family
-      // has been accepted with real numbers.
-      //
-      // `monthly_transportation_payment` is the monthly figure (the
-      // column above is the annualized total — divide by 12). SNAP
-      // families have `transportationTotal === null` (transport
-      // waived); we collapse to 0 there since the column is typed
-      // as `number` rather than nullable.
-      try {
-        const monthlyTransport =
-          transportationTotal == null
-            ? 0
-            : Math.round((transportationTotal / 12) * 100) / 100;
-        const regSnapRes = await fetch(
-          `/api/admin/registration-progress`,
-          {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              familyId,
-              yearId,
-              monthly_tuition_payment: monthlyTuitionPayment,
-              monthly_transportation_payment: monthlyTransport,
-            }),
-          }
-        );
-        if (!regSnapRes.ok) {
-          const regErr = await regSnapRes.json().catch(() => null);
-          console.error(
-            "[ApproveFamilyButton] registration-progress snapshot failed:",
-            regErr
-          );
-        }
-      } catch (regErr) {
-        console.error(
-          "[ApproveFamilyButton] registration-progress snapshot threw:",
-          regErr
-        );
-      }
+      // Note: the old registration_student_registration_progress
+      // mirror (writing `monthly_tuition_payment` /
+      // `monthly_transportation_payment` to the per-year progress
+      // row) is gone — both columns were retired in favor of
+      // per-student `monthly_amount` on each packet, which the
+      // Tuition card reads directly via `sumFamilyBillingTotals`.
 
       toast.success(`${familyName || "Family"} approved for this year.`);
       setOpen(false);
@@ -4864,11 +4818,21 @@ function RejectApplicationButton({
   yearId,
   familyName,
   onRejected,
+  disabled,
+  disabledReason,
 }: {
   familyId: number;
   yearId: number;
   familyName: string;
   onRejected: () => void;
+  /** When true, the button stays mounted but non-interactive. Used
+   *  in the pre-accept footer so the action surface is always
+   *  visible — admin sees the full lifecycle vocabulary at a glance
+   *  even when one button doesn't apply yet (e.g. family hasn't
+   *  submitted, so there's nothing to return). */
+  disabled?: boolean;
+  /** Tooltip text shown on the disabled button. */
+  disabledReason?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -4909,12 +4873,16 @@ function RejectApplicationButton({
         type="button"
         variant="outline"
         size="lg"
-        disabled={saving}
+        disabled={saving || !!disabled}
         onClick={() => setOpen(true)}
         // Neutral gray, not red — returning for revisions is a
         // routine action, not a destructive permanent denial.
         className="bg-white"
-        title="Send this application back to the family for edits"
+        title={
+          disabled && disabledReason
+            ? disabledReason
+            : "Send this application back to the family for edits"
+        }
       >
         {saving ? (
           <Loader2 className="size-4 mr-1.5 animate-spin shrink-0" />
@@ -6421,6 +6389,59 @@ function DecisionStudentRow({
   }
 
   /**
+   * Per-student billing PATCH — writes scholarship inputs (SUFS
+   * amount, family-paid tuition portion) to the matching packet
+   * row via the `/by-student` endpoint. The server derives all six
+   * billing columns + re-syncs the Stripe SubscriptionItem when
+   * billing is live, so the card just sends the raw inputs.
+   *
+   * Per-student values used to land on the application row; the
+   * write moved to the per-student packet to avoid the same data
+   * living in two places. Application row columns
+   * (`sufs_award_amount`, `opportunity_scholarship_award_amount`)
+   * are read-only legacy now — backfilled per-student values are
+   * the source of truth.
+   */
+  async function patchPerStudentBilling(
+    body: {
+      sufsAwardAmount?: number;
+      opportunityScholarshipRemaining?: number;
+    }
+  ) {
+    if (!app) return;
+    const yearId = Number(app.registration_school_years_id);
+    if (!Number.isFinite(yearId) || yearId <= 0) return;
+    setSavingField("per_student_billing");
+    try {
+      const res = await fetch(
+        `/api/admin/student-registration/by-student`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            studentId: student.id,
+            yearId,
+            ...body,
+          }),
+        }
+      );
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Save failed (${res.status})`);
+      }
+      onSaved();
+    } catch (err) {
+      console.error(
+        "[DecisionStudentRow.patchPerStudentBilling] failed:",
+        err
+      );
+      toast.error(err instanceof Error ? err.message : "Couldn't save.");
+    } finally {
+      setSavingField(null);
+    }
+  }
+
+  /**
    * Open the confirm-flow modal. The actual flip happens after the
    * admin confirms in the dialog — `runToggleConfirmed` below.
    *
@@ -6440,29 +6461,18 @@ function DecisionStudentRow({
     if (!app) return;
     setConfirming(true);
     try {
-      // On confirm (flipping `confirmed_scholarship` true), also
-      // stamp the SUFS award amount onto the row so the column
-      // captures the dollar value at the moment admin locked in
-      // the award. Without this, a tier change after confirmation
-      // could drift the stored amount away from "what admin
-      // confirmed" — the snapshot semantic is important for
-      // billing audits.
-      //
-      // On undo (flipping to false), we deliberately keep the
-      // amount column intact rather than zeroing it out. The bool
-      // is the source of truth for "is this confirmed"; the
-      // amount is just the captured number, useful even when the
-      // confirmation is cleared.
+      // The Confirm button just flips `confirmed_scholarship` on
+      // the application row — the dollar amount lives on the
+      // per-student packet (`packet.sufs_amount`) and is written
+      // separately when admin picks a SUFS tier or edits "Cost
+      // per student" above. Re-stamping the amount here used to
+      // be necessary when the app row was the source of truth;
+      // the packet is canonical now, so this is a pure-bool
+      // toggle.
       const next = !sufsConfirmed;
       const body: Record<string, unknown> = {
         confirmed_scholarship: next,
       };
-      if (next) {
-        body.sufs_award_amount = sufsAmountFor(
-          sufsType ?? "",
-          schoolYear
-        );
-      }
       const res = await fetch(`/api/admin/applications/${app.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -6526,19 +6536,23 @@ function DecisionStudentRow({
                   value={sufsType || "__none"}
                   onValueChange={(v) => {
                     const nextType = v === "__none" ? "" : v;
-                    // Also stamp the derived dollar amount onto
-                    // `sufs_award_amount` so the column on the
-                    // application row tracks what admin picked.
-                    // The amount used to live only as derived state
-                    // (computed from `sufs_type` + the school year's
-                    // tier dollars on every render), but billing
-                    // surfaces need a stored figure that survives
-                    // future year-amount edits. Tier change writes
-                    // both columns in the same PATCH.
+                    // SUFS tier select writes two values to two
+                    // different homes:
+                    //   1. `sufs_type` (the tier label, e.g. "fes_eo_9")
+                    //      stays on the application row — that's
+                    //      where the admin queue + filters read it.
+                    //   2. The derived dollar amount lands on the
+                    //      per-student packet via
+                    //      `/by-student` so billing reads the
+                    //      single per-student source of truth.
+                    // We deliberately stopped mirroring the amount
+                    // onto the application row's
+                    // `sufs_award_amount` — that column is legacy;
+                    // packet's `sufs_amount` is canonical now.
                     const nextAmount = sufsAmountFor(nextType, schoolYear);
-                    patchField("sufs_type", {
-                      sufs_type: nextType,
-                      sufs_award_amount: nextAmount,
+                    patchField("sufs_type", { sufs_type: nextType });
+                    void patchPerStudentBilling({
+                      sufsAwardAmount: nextAmount,
                     });
                   }}
                 >
@@ -6759,19 +6773,26 @@ function DecisionStudentRow({
                         draft.opportunity_scholarship_award_amount
                       );
                       const safe = Number.isFinite(next) ? next : 0;
-                      // Compare against the raw persisted value, NOT
-                      // against `?? 0` — `null` / `undefined` (column
-                      // never set) must be treated as DIFFERENT from
-                      // `0` (admin explicitly set zero), otherwise
-                      // typing "0" on a fresh row silently no-ops and
-                      // the confirm button never gets a value to save.
-                      // Strict-equality keeps `null !== 0` and
-                      // `undefined !== 0`, which is what we want.
+                      // No-op when the value hasn't changed. Compare
+                      // against the app row's legacy column for the
+                      // moment so admins editing pre-migration data
+                      // still see a no-op; once existing rows are
+                      // backfilled to the packet we can flip to
+                      // reading from `packet.tuition_sub_total -
+                      // packet.annual_fee` instead.
                       const persisted =
                         app.opportunity_scholarship_award_amount;
                       if (safe === persisted) return;
-                      patchField("opportunity_scholarship_award_amount", {
-                        opportunity_scholarship_award_amount: safe,
+                      // Writes only to the per-student packet via
+                      // the new `/by-student` endpoint (which
+                      // derives the six billing columns server-side
+                      // and re-prices Stripe if billing is live).
+                      // The application row's legacy
+                      // `opportunity_scholarship_award_amount`
+                      // column is no longer the source of truth and
+                      // we deliberately stop writing to it here.
+                      void patchPerStudentBilling({
+                        opportunityScholarshipRemaining: safe,
                       });
                     }}
                     className="border-input pl-7 tabular-nums"

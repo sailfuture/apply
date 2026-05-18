@@ -12,6 +12,7 @@ import {
   useSchoolYears,
   useFamily,
   useScholarship,
+  useStudentRegistrationPackets,
 } from "@/hooks/use-api";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
@@ -20,18 +21,6 @@ import { Field, FieldLabel } from "@/components/ui/field";
 import { CheckCircle2, Loader2, HelpCircle } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import SignatureCanvas from "react-signature-canvas";
-
-/** Maps sufs_type to the corresponding SchoolYear field */
-const SUFS_FIELDS: Record<string, string> = {
-  fes_eo_8: "fes_eo_8",
-  fes_eo_9: "fes_eo_9",
-  ftc_8: "ftc_8",
-  ftc_9: "ftc_9",
-  fes_ua_8_ese_1_3: "fes_ua_8_ese_1_3",
-  fes_ua_9_ese_1_3: "fes_ua_9_ese_1_3",
-  fes_ua_ese_4: "fes_ua_ese_4",
-  fes_ua_ese_5: "fes_ua_ese_5",
-};
 
 /** Human-readable labels for SUFS award types */
 const SUFS_LABELS: Record<string, string> = {
@@ -113,6 +102,11 @@ export default function TuitionPage() {
   const { data: students } = useStudents();
   const { data: applications } = useApplications();
   const { data: yearsData } = useSchoolYears();
+  // Per-student packet rows for this year — source of truth for
+  // tuition figures (sufs_amount, opportunity_award_amount,
+  // tuition_sub_total, annual_fee). Replaces the legacy reads off
+  // the application row's `opportunity_scholarship_award_amount`.
+  const { data: packets } = useStudentRegistrationPackets(yearId);
   // Scholarship row drives the Remaining Tuition Amount breakout —
   // when the family is on the OS path we render a dedicated
   // "Remaining Tuition Amount" line right above the subtotal so the
@@ -261,17 +255,42 @@ export default function TuitionPage() {
     ) as (typeof yearsData extends (infer T)[] ? T : never) | undefined ?? null;
   }, [yearsData, yearId]);
 
-  // Build per-student rows from real data
+  // Build per-student rows from per-year packet values — those carry
+  // the authoritative per-student tuition figures (sufs_amount,
+  // opportunity_award_amount, tuition_sub_total, annual_fee) that
+  // admin enters on the Scholarship Determination card. We still
+  // join the application row for the SUFS tier label
+  // (`sufs_status` / `sufs_type`) which lives on the app side.
   const studentRows: StudentRow[] = useMemo(() => {
-    if (!students || !applications || !schoolYear) return [];
+    if (!students || !applications || !packets || !schoolYear) return [];
 
     const yearApps = (applications as {
       registration_school_years_id: number;
       registration_students_id: number;
       sufs_status?: string;
       sufs_type?: string;
-      opportunity_scholarship_award_amount?: number;
     }[]).filter((a) => a.registration_school_years_id === yearId);
+
+    // Index packets by student id for O(1) lookup per app row.
+    const packetByStudentId = new Map<
+      number,
+      {
+        registration_students_id: number;
+        sufs_amount?: number | null;
+        opportunity_award_amount?: number | null;
+        annual_fee?: number | null;
+        tuition_sub_total?: number | null;
+      }
+    >();
+    for (const p of packets as Array<{
+      registration_students_id: number;
+      sufs_amount?: number | null;
+      opportunity_award_amount?: number | null;
+      annual_fee?: number | null;
+      tuition_sub_total?: number | null;
+    }>) {
+      packetByStudentId.set(Number(p.registration_students_id), p);
+    }
 
     const rows: StudentRow[] = [];
     const sy = schoolYear as Record<string, unknown>;
@@ -280,49 +299,40 @@ export default function TuitionPage() {
       const student = (students as { id: number; first_name: string; last_name: string }[])
         .find((s) => s.id === app.registration_students_id);
       if (!student) continue;
+      const packet = packetByStudentId.get(app.registration_students_id);
 
       const tuition = (sy.tuition as number) ?? 0;
-      const adminFees = (sy.annual_fees as number) ?? 0;
-
-      // SUFS amount: look up SchoolYear field based on scholarship type
       const sufsType = app.sufs_type ?? "";
-      const sufsField = SUFS_FIELDS[sufsType];
-      const stepUpAmount = sufsField && sy[sufsField] ? (sy[sufsField] as number) : 0;
-
-      // Step Up status from application
       const stepUpStatus = app.sufs_status ?? "";
 
-      // The `opportunity_scholarship_award_amount` field stores the
-      // amount the family will pay toward tuition — NOT a scholarship
-      // discount. The Opportunity Scholarship covers everything that
-      // remains after SUFS and the family's portion.
-      //
-      // Defaults to 0 when missing/null so the OS line appears as a
-      // full-coverage scholarship, not a placeholder.
-      const familyPaysForTuition =
-        app.opportunity_scholarship_award_amount ?? 0;
+      // Read per-student billing values from the packet. Missing
+      // packet (pre-acceptance state) collapses everything to 0 —
+      // matches the pre-acceptance UX ("nothing determined yet").
+      const stepUpAmount =
+        typeof packet?.sufs_amount === "number" ? packet.sufs_amount : 0;
+      const scholarshipCoverage =
+        typeof packet?.opportunity_award_amount === "number"
+          ? packet.opportunity_award_amount
+          : 0;
+      const adminFees =
+        typeof packet?.annual_fee === "number" ? packet.annual_fee : 0;
+      const subtotal =
+        typeof packet?.tuition_sub_total === "number"
+          ? packet.tuition_sub_total
+          : 0;
+      // "Cost per student" — the family-paid tuition portion before
+      // the admin fee. Implicit on the packet as
+      // `tuition_sub_total - annual_fee`.
+      const familyPaysForTuition = Math.max(subtotal - adminFees, 0);
 
-      // Transportation used to be a separate line + a SNAP-vs-non-SNAP
-      // branch in this math (SNAP folded transport into the OS
-      // coverage so the parent's subtotal collapsed to the admin fee).
-      // It's been rolled into the tuition figure itself now — same
-      // total cost, simpler breakdown. The SNAP path is still valid;
-      // for SNAP families `familyPaysForTuition` is 0, so the subtotal
-      // naturally collapses to `adminFees`.
-      //
-      // `hasOSDetermination` gates the OS Cost Per Student breakout +
-      // the OS Award coverage. Set when the family is flagged on OS
-      // or SNAP, OR admin has entered a per-student award amount
-      // (covers the case where admin enters the per-student value
-      // before the family-level scholarship path flag is set).
+      // OS determination signal — true when family flagged OS/SNAP
+      // OR admin has entered any per-student determination
+      // (anything non-zero on the packet's billing columns).
       const hasOSDetermination =
         isOpportunityScholarshipFamily ||
         isSnapFamily ||
-        app.opportunity_scholarship_award_amount != null;
-      const scholarshipCoverage = hasOSDetermination
-        ? Math.max(0, tuition - stepUpAmount - familyPaysForTuition)
-        : 0;
-      const subtotal = familyPaysForTuition + adminFees;
+        familyPaysForTuition > 0 ||
+        scholarshipCoverage > 0;
 
       rows.push({
         studentName: `${student.first_name} ${student.last_name}`,
@@ -330,13 +340,8 @@ export default function TuitionPage() {
         stepUpStatus,
         stepUpType: sufsType,
         stepUpAmount,
-        // `scholarshipAmount` field on the row now represents OS
-        // *coverage* (what scholarship pays for), shown as a negative
-        // discount on the breakdown.
-        scholarshipAmount: scholarshipCoverage,
-        // `remaining` is unused by the renderer but kept on the row
-        // shape for any caller that introspects the breakdown.
-        remaining: scholarshipCoverage,
+        scholarshipAmount: hasOSDetermination ? scholarshipCoverage : 0,
+        remaining: hasOSDetermination ? scholarshipCoverage : 0,
         adminFees,
         familyPaysForTuition,
         hasOSDetermination,
@@ -345,7 +350,15 @@ export default function TuitionPage() {
     }
 
     return rows;
-  }, [students, applications, schoolYear, yearId, isOpportunityScholarshipFamily, isSnapFamily]);
+  }, [
+    students,
+    applications,
+    packets,
+    schoolYear,
+    yearId,
+    isOpportunityScholarshipFamily,
+    isSnapFamily,
+  ]);
 
   // Totals
   const grandTotal = studentRows.reduce((sum, r) => sum + r.subtotal, 0);

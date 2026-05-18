@@ -110,10 +110,10 @@ export async function POST(req: NextRequest) {
           isSubmitted: false,
           isOffered: false,
           isAccepted: false,
-          opportunity_scholarship_award_amount: 0,
-          // Liability-waiver fields removed from the application row —
-          // they live on `registration_student_registration` (the
-          // packet) and reset on the per-year packet clone below.
+          // Per-student tuition columns moved onto the per-year
+          // packet; the app-row column is kept as `null` to satisfy
+          // the type contract without implying a $0 determination.
+          opportunity_scholarship_award_amount: null,
           enrollment_agreement_pandadoc_id: "",
           enrollment_agreement_status: "",
           enrollment_agreement_sent_at: null,
@@ -143,11 +143,13 @@ export async function POST(req: NextRequest) {
       // New year's application starts active regardless of last
       // year's flag. Admin views filter on `isActive=true`.
       isActive: true,
-      opportunity_scholarship_award_amount: 0,
-      // PandaDoc identifiers reset — last year's signed docs aren't valid
-      // for this year's enrollment. Liability-waiver fields removed from
-      // the application row; they reset on the per-year packet clone
-      // below where they actually live.
+      // Per-student tuition columns live on the per-year packet
+      // (cloned below). App-row column kept as `null` per the
+      // type contract; admin re-determines via the Scholarship
+      // Determination card. PandaDoc identifiers reset — last
+      // year's signed docs aren't valid for this year's
+      // enrollment.
+      opportunity_scholarship_award_amount: null,
       enrollment_agreement_pandadoc_id: "",
       enrollment_agreement_status: "",
       enrollment_agreement_sent_at: null,

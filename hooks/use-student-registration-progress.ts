@@ -67,8 +67,6 @@ export function useStudentRegistrationProgress(
           | "signature_data_volunteer"
           | "volunteer_signature_data"
           | "name_volunteer"
-          | "monthly_tuition_payment"
-          | "monthly_transportation_payment"
           | "enrollment_agreement_pandadoc_id"
           | "enrollment_agreement_status"
           | "enrollment_agreement_sent"

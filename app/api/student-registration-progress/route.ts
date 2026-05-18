@@ -86,8 +86,6 @@ export async function PATCH(req: NextRequest) {
     "signature_data_volunteer",
     "volunteer_signature_data",
     "name_volunteer",
-    "monthly_tuition_payment",
-    "monthly_transportation_payment",
     "enrollment_agreement_pandadoc_id",
     "enrollment_agreement_status",
     "enrollment_agreement_sent",
@@ -146,7 +144,7 @@ export async function PATCH(req: NextRequest) {
       completedKey: "isRegistration",
       confirmKey: "is_registration_admin_confirm",
       timeKey: "is_registration_admin_confirm_time",
-      adminKey: "is_registration_admin_confirm_admin",
+      adminKey: "registration_admin_confirmed_admin",
     },
   ];
   for (const pair of VERIFY_CASCADE) {
