@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import {
   ArrowLeft,
@@ -36,9 +36,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { EmailNotificationsCard } from "@/components/admin/email-notifications-card";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { formatUSPhone } from "@/lib/phone";
 import { cn } from "@/lib/utils";
+import {
+  STATUS_META,
+  deriveApplicationStatus,
+} from "@/lib/application-status";
 import type { AdminFamilyOverviewResponse } from "@/app/api/admin/family-overview/[id]/route";
 
 type Parent = AdminFamilyOverviewResponse["parents"][number];
@@ -53,13 +58,21 @@ type Parent = AdminFamilyOverviewResponse["parents"][number];
  * (with enrollment status), emergency contacts, and every
  * application the family has ever submitted across school years.
  *
- * URL: `/admin/families/[id]/overview` — no yearId required.
- * Action buttons on the family detail page link here when admin
- * wants the cross-year picture.
+ * URL: `/admin/families/[id]/overview` — yearId is optional and
+ * appears as a query param (`?yearId=N`) when admin enters from a
+ * year-scoped surface. The cross-year summary always renders; the
+ * year-scoped Sent emails card only renders when yearId is in the
+ * URL so the audit log can filter to that year's notifications.
  */
 export default function FamilyOverviewPage() {
   const params = useParams<{ id: string }>();
+  const searchParams = useSearchParams();
   const familyId = Number(params.id);
+  const yearIdParam = searchParams.get("yearId");
+  const yearId =
+    yearIdParam && Number.isFinite(Number(yearIdParam))
+      ? Number(yearIdParam)
+      : null;
 
   const swrKey = Number.isFinite(familyId)
     ? `/api/admin/family-overview/${familyId}`
@@ -76,7 +89,7 @@ export default function FamilyOverviewPage() {
 
   if (isLoading && !data) {
     return (
-      <div className="p-6 max-w-5xl mx-auto space-y-4">
+      <div className="p-6 max-w-7xl mx-auto space-y-4">
         <Skeleton className="h-8 w-48" />
         <Skeleton className="h-10 w-72" />
         <Skeleton className="h-48 w-full" />
@@ -88,7 +101,7 @@ export default function FamilyOverviewPage() {
 
   if (error || !data) {
     return (
-      <div className="p-6 max-w-5xl mx-auto">
+      <div className="p-6 max-w-7xl mx-auto">
         <BackLink />
         <div className="rounded-lg border bg-white px-6 py-12 text-center text-sm text-muted-foreground">
           {error instanceof Error
@@ -99,9 +112,26 @@ export default function FamilyOverviewPage() {
     );
   }
 
-  const { family, parents, students, emergency_contacts, applications } = data;
+  const {
+    family,
+    parents,
+    students,
+    emergency_contacts,
+    applications,
+    application_progress,
+    registration_progress,
+    inquiries,
+    school_years,
+  } = data;
   const familyName =
     family.family_name?.trim() || `Family #${family.id}`;
+
+  /** Look up a year_name from the response's `school_years` map.
+   *  Falls back to "Year #N" if the map didn't include the id (Xano
+   *  schoolYears fetch fell over, or the row references a stale
+   *  year). Keeps the table cells stable across degraded reads. */
+  const yearLabel = (yearId: number): string =>
+    school_years[String(yearId)] || `Year #${yearId}`;
 
   // Per-student "latest year with an active app" lookup — drives the
   // Students table's clickable links. Clicking a student row jumps to
@@ -119,7 +149,7 @@ export default function FamilyOverviewPage() {
   }
 
   return (
-    <div className="p-6 max-w-5xl mx-auto space-y-6">
+    <div className="p-6 max-w-7xl mx-auto space-y-6">
       <BackLink />
 
       <div className="space-y-1">
@@ -427,12 +457,301 @@ export default function FamilyOverviewPage() {
         </CardContent>
       </Card>
 
-      {/* Applications table retired — clicking a student row in the
-          card above takes admin into the per-student enrolled detail
-          page, where per-year status + drill-down lives. Cross-year
-          family workspace still reachable via the "Open year"
-          buttons elsewhere; this overview surface stays focused on
-          the family-level summary. */}
+      {/* Inquiries — pre-application touchpoints submitted via the
+          public /inquiry form. We match by email (primary OR
+          secondary parent) since the inquiry side only records a
+          primary email. Each row deep-links to the inquiries page
+          for the full record. */}
+      <Card className="overflow-hidden gap-0 py-0 bg-white">
+        <CardHeader className="py-3 !pb-3 border-b">
+          <CardTitle className="text-base">
+            Inquiries
+            <span className="ml-2 text-xs font-normal text-muted-foreground">
+              · matches any parent email on file
+            </span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="px-3 pb-3 bg-white">
+          {inquiries.length === 0 ? (
+            <p className="text-sm italic text-muted-foreground px-2 py-4">
+              No inquiries match this family&rsquo;s parent emails.
+            </p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                    Submitted
+                  </TableHead>
+                  <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                    Parent
+                  </TableHead>
+                  <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                    Student
+                  </TableHead>
+                  <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                    Grade
+                  </TableHead>
+                  <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                    Followed up
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {inquiries.map((inq) => {
+                  const parentName =
+                    `${inq.primary_first_name ?? ""} ${inq.primary_last_name ?? ""}`.trim() ||
+                    inq.primary_email ||
+                    "—";
+                  const studentName =
+                    `${inq.student_first_name ?? ""} ${inq.student_last_name ?? ""}`.trim() ||
+                    "—";
+                  return (
+                    <TableRow
+                      key={inq.id}
+                      className="cursor-pointer"
+                      onClick={() => {
+                        // Inquiries list page — admin can drill into
+                        // the full inquiry record from there.
+                        window.location.href = "/admin/inquiries";
+                      }}
+                    >
+                      <TableCell className="tabular-nums text-xs text-muted-foreground whitespace-nowrap">
+                        {formatDateShort(inq.created_at)}
+                      </TableCell>
+                      <TableCell className="font-medium">{parentName}</TableCell>
+                      <TableCell>{studentName}</TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {inq.starting_grade || inq.current_grade || "—"}
+                      </TableCell>
+                      <TableCell>
+                        {inq.isFollowedUp ? (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-800">
+                            <CheckCircle2 className="size-2.5" />
+                            Followed up
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-amber-800">
+                            <SquarePen className="size-2.5" />
+                            Pending
+                          </span>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Applications — one row per (family, year). Status pill
+          uses the same lifecycle derivation (`deriveApplicationStatus`)
+          the admin Applications list uses, so the label here matches
+          what admin sees in the queue. Each row deep-links to the
+          per-year application workspace. */}
+      <Card className="overflow-hidden gap-0 py-0 bg-white">
+        <CardHeader className="py-3 !pb-3 border-b">
+          <CardTitle className="text-base">Applications</CardTitle>
+        </CardHeader>
+        <CardContent className="px-3 pb-3 bg-white">
+          {application_progress.length === 0 ? (
+            <p className="text-sm italic text-muted-foreground px-2 py-4">
+              No applications on file for this family.
+            </p>
+          ) : (
+            // Column widths match the Registrations table directly
+            // below so the two surfaces read as a single tabular
+            // comparison. Keep these in sync: School year 15% ·
+            // col-2 20% · Status 30% · Submitted 25% · Open 10%.
+            <Table className="table-fixed">
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead className="w-[15%] text-[10px] uppercase tracking-wider text-muted-foreground">
+                    School year
+                  </TableHead>
+                  <TableHead className="w-[20%] text-[10px] uppercase tracking-wider text-muted-foreground">
+                    Type
+                  </TableHead>
+                  <TableHead className="w-[30%] text-[10px] uppercase tracking-wider text-muted-foreground">
+                    Status
+                  </TableHead>
+                  <TableHead className="w-[25%] text-[10px] uppercase tracking-wider text-muted-foreground">
+                    Submitted
+                  </TableHead>
+                  <TableHead className="w-[10%] text-[10px] uppercase tracking-wider text-muted-foreground" />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {application_progress.map((ap) => {
+                  const yid = Number(ap.registration_school_years_id);
+                  const status = deriveApplicationStatus({
+                    isSubmitted: ap.isSubmitted,
+                    // The family-progress row doesn't carry per-
+                    // student offer/deny flags — those live on
+                    // `registration_application`. For the rollup
+                    // pill we collapse to "accepted" once the
+                    // family-level latch flips; "submitted" /
+                    // "draft" cover the earlier states.
+                    isAccepted: ap.isAccepted,
+                  });
+                  const meta = STATUS_META[status];
+                  return (
+                    <TableRow key={ap.id}>
+                      <TableCell className="font-medium whitespace-nowrap">
+                        {yearLabel(yid)}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {ap.type ?? "New Application"}
+                      </TableCell>
+                      <TableCell>
+                        <span
+                          className={cn(
+                            "inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider",
+                            meta.className
+                          )}
+                        >
+                          {meta.label}
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-muted-foreground tabular-nums text-xs whitespace-nowrap">
+                        {ap.submitted_at
+                          ? formatDateShort(ap.submitted_at)
+                          : "—"}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Button
+                          asChild
+                          variant="ghost"
+                          size="sm"
+                          className="h-auto p-0 text-xs"
+                        >
+                          <Link href={`/admin/families/${family.id}?yearId=${yid}`}>
+                            Open
+                            <ExternalLink className="size-3 ml-1" aria-hidden="true" />
+                          </Link>
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Registrations — per-year post-acceptance progress. Each row
+          reflects how far the family is through the four registration
+          sections (tuition, enrollment, packet, volunteer hours) +
+          whether admin has confirmed the family. Deep-links into the
+          per-year registration workspace. */}
+      <Card className="overflow-hidden gap-0 py-0 bg-white">
+        <CardHeader className="py-3 !pb-3 border-b">
+          <CardTitle className="text-base">Registrations</CardTitle>
+        </CardHeader>
+        <CardContent className="px-3 pb-3 bg-white">
+          {registration_progress.length === 0 ? (
+            <p className="text-sm italic text-muted-foreground px-2 py-4">
+              No registration packets started for this family.
+            </p>
+          ) : (
+            // Column widths match the Applications table directly
+            // above — same five-cell shape so admin scans the two
+            // tables as parallel cross-year timelines.
+            <Table className="table-fixed">
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead className="w-[15%] text-[10px] uppercase tracking-wider text-muted-foreground">
+                    School year
+                  </TableHead>
+                  <TableHead className="w-[20%] text-[10px] uppercase tracking-wider text-muted-foreground">
+                    Sections complete
+                  </TableHead>
+                  <TableHead className="w-[30%] text-[10px] uppercase tracking-wider text-muted-foreground">
+                    Status
+                  </TableHead>
+                  <TableHead className="w-[25%] text-[10px] uppercase tracking-wider text-muted-foreground">
+                    Submitted
+                  </TableHead>
+                  <TableHead className="w-[10%] text-[10px] uppercase tracking-wider text-muted-foreground" />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {registration_progress.map((rp) => {
+                  const yid = Number(rp.registration_school_years_id);
+                  const sections = [
+                    rp.isTuition,
+                    rp.isEnrollment,
+                    rp.isRegistration,
+                    rp.isVolunteerHours,
+                  ];
+                  const done = sections.filter(Boolean).length;
+                  return (
+                    <TableRow key={rp.id}>
+                      <TableCell className="font-medium whitespace-nowrap">
+                        {yearLabel(yid)}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground tabular-nums">
+                        {done} / 4
+                      </TableCell>
+                      <TableCell>
+                        {rp.isRegistrationConfirmed ? (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-800">
+                            <CheckCircle2 className="size-2.5" />
+                            Confirmed
+                          </span>
+                        ) : rp.isSubmitted ? (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-amber-800">
+                            Awaiting confirmation
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                            <SquarePen className="size-2.5" />
+                            In progress
+                          </span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground tabular-nums text-xs whitespace-nowrap">
+                        {rp.submitted_date
+                          ? formatDateShort(rp.submitted_date)
+                          : "—"}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Button
+                          asChild
+                          variant="ghost"
+                          size="sm"
+                          className="h-auto p-0 text-xs"
+                        >
+                          <Link href={`/admin/registrations/${family.id}?yearId=${yid}`}>
+                            Open
+                            <ExternalLink className="size-3 ml-1" aria-hidden="true" />
+                          </Link>
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Sent emails — audit log of every transactional notification
+          Resend has fired for this (family, year). Renders only when
+          the URL carries a `yearId` query param since the log is
+          year-scoped; cross-year navigation lands here without one
+          and the section is skipped to keep the overview focused on
+          the cross-year summary above. The card brings its own
+          header + Refresh affordance so no wrapping shell is needed.
+          Reads from `registration_email_notifications` written by
+          `lib/emails/send.ts`. */}
+      {yearId !== null ? (
+        <EmailNotificationsCard familyId={familyId} yearId={yearId} />
+      ) : null}
 
       <ParentDetailModal
         parent={openParent}
@@ -586,6 +905,22 @@ function StudentStatusPills({
       In progress
     </span>
   );
+}
+
+/** Compact date formatter shared across the per-year tables — "May
+ *  17, 2026". Wraps the standard locale formatter so every row uses
+ *  the same compact display without inlining the options 5 times. */
+function formatDateShort(ms: number): string {
+  if (!ms) return "—";
+  try {
+    return new Date(ms).toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+  } catch {
+    return "—";
+  }
 }
 
 /** Back link mirroring the style on every other admin detail

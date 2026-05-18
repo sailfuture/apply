@@ -53,11 +53,12 @@ export async function startMonthlyBilling({
   familyId: number;
   yearId: number;
 }): Promise<StartBillingResult> {
-  const [family, payment, year, parents] = await Promise.all([
+  const [family, payment, year, parents, regProgress] = await Promise.all([
     xano.families.getById(familyId),
     xano.familyPayments.getByFamilyAndYear(familyId, yearId),
     xano.schoolYears.getById(yearId),
     xano.parents.getAll(),
+    xano.studentRegistrationProgress.getByFamilyAndYear(familyId, yearId),
   ]);
 
   if (!family) {
@@ -65,6 +66,17 @@ export async function startMonthlyBilling({
   }
   if (!year) {
     throw new BillingPreconditionError(`School year ${yearId} not found.`);
+  }
+  // Registration must be confirmed before billing starts — billing
+  // commits the family to a recurring Stripe charge, and we don't
+  // want that side-effect firing on a family who hasn't completed
+  // the registration packet + been admin-confirmed yet. UI gates
+  // the button too (BillingCard receives the same flag), but
+  // enforcing it server-side closes the manual-API loophole.
+  if (regProgress?.isRegistrationConfirmed !== true) {
+    throw new BillingPreconditionError(
+      "Family registration isn't confirmed yet — confirm registration before starting monthly billing."
+    );
   }
   if (!payment) {
     throw new BillingPreconditionError(

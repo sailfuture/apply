@@ -6,6 +6,7 @@ import Link from "next/link";
 import useSWR from "swr";
 import { toast } from "sonner";
 import {
+  AlertCircle,
   ArrowLeft,
   Archive as ArchiveIcon,
   Check,
@@ -21,6 +22,7 @@ import {
   RotateCcw,
   SquarePen,
   Undo2,
+  Users,
   X,
   XCircle,
 } from "lucide-react";
@@ -70,7 +72,6 @@ import {
 } from "@/components/ui/dialog";
 import { FamilyNotesSheet } from "@/components/admin/family-notes-sheet";
 import { BillingCard } from "@/components/admin/billing-card";
-import { EmailNotificationsCard } from "@/components/admin/email-notifications-card";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { cn } from "@/lib/utils";
 import {
@@ -152,6 +153,27 @@ export default function FamilyRegistrationDetailPage() {
   const { data: familyPayment, mutate: mutateFamilyPayment } =
     useSWR<XanoFamilyPayment | null>(familyPaymentKey, adminFetcher);
 
+  // Apply-side acceptance latch — fetched separately from the main
+  // detail SWR because `isAccepted` lives on the
+  // `registration_family_application_progress` row (apply phase),
+  // not the `registration_student_registration_progress` row
+  // (registration phase) we pull above. We need it on the
+  // registration page so we can lock the surface when admin revokes
+  // acceptance from either side: the page acts as a read-only audit
+  // surface until the family is re-approved on the application
+  // page. `mutate: refreshApplyProgress` so the Revoke flow can
+  // re-render the locked state in place without a full page
+  // reload.
+  const applyProgressKey =
+    Number.isFinite(familyId) && yearId
+      ? `/api/admin/family-progress?familyId=${familyId}&yearId=${yearId}`
+      : null;
+  const { data: applyProgress, mutate: refreshApplyProgress } = useSWR<{
+    id: number;
+    isAccepted: boolean;
+  } | null>(applyProgressKey, adminFetcher);
+  const accepted = applyProgress?.isAccepted === true;
+
   // Tracks which section is mid-PATCH so the spinner inside that
   // section's verify footer is scoped — clicking Verify on Tuition
   // doesn't gray out Enrollment's button.
@@ -225,10 +247,17 @@ export default function FamilyRegistrationDetailPage() {
     // Return the combined SWR-mutate promise so callers that need
     // to await the refresh (e.g. AdminDocumentUpload waits for
     // `files` to catch up before clearing its pending list) can do
-    // so. Fire both fetches in parallel; the resolved value
+    // so. Fire all fetches in parallel; the resolved value
     // (Promise<[...]>) is fine to discard at the void-typed call
-    // sites that don't care.
-    return Promise.all([mutate(), mutateFamilyPayment()]);
+    // sites that don't care. `refreshApplyProgress` joins the
+    // batch so the Revoke acceptance flow (which flips
+    // `isAccepted` on the apply-side row) re-renders the lock
+    // state on this page in the same paint.
+    return Promise.all([
+      mutate(),
+      mutateFamilyPayment(),
+      refreshApplyProgress(),
+    ]);
   };
 
   // Page-level registration-confirmed latch. Once admin has flipped
@@ -409,21 +438,42 @@ export default function FamilyRegistrationDetailPage() {
             ) : null}
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            {/* Header carries the cross-surface jump (View
-                application) + Notes. View application sits to the
-                left so admin's left-to-right reading order goes
-                "look back at the apply-flow" → "log a note." The
-                destructive Revoke acceptance + Archive affordances
-                live on the Confirmation card's footer below
-                rather than up here, since they're rarer and
-                belong with the rest of the family-level decision
-                actions. */}
+            {/* Header action row — Archive on the far left so admin
+                reaches for it intentionally (not as muscle memory),
+                cross-surface jumps in the middle, Notes on the far
+                right. Archive lives up here to match the apply-flow
+                family detail page's pattern — both pages keep their
+                year-scoped lifecycle action in the same header
+                slot. Revoke acceptance + Undo registration
+                confirmation stay on the Confirmation card's footer
+                below since they're tied to the confirmation
+                decision. */}
+            <ArchiveRegistrationButton
+              familyId={Number(family?.id ?? familyId)}
+              yearId={Number(yearId)}
+              familyName={familyName}
+              archived={progress?.isArchived === true}
+              onChanged={() => void refresh()}
+              size="sm"
+            />
             <Button asChild variant="outline" size="sm" className="bg-white">
               <Link
                 href={`/admin/families/${family?.id ?? familyId}?yearId=${yearId}`}
               >
                 <ExternalLink className="size-3.5 mr-1.5" />
                 View application
+              </Link>
+            </Button>
+            {/* Cross-surface jump to the family overview page —
+                cross-year summary + matching inquiries / applications
+                / registrations / sent emails. Year-scoped link so
+                the overview's email log filters to this year. */}
+            <Button asChild variant="outline" size="sm" className="bg-white">
+              <Link
+                href={`/admin/families/${family?.id ?? familyId}/overview?yearId=${yearId}`}
+              >
+                <Users className="size-3.5 mr-1.5" />
+                Family overview
               </Link>
             </Button>
             {/* Page-header notes drawer is phase-scoped — hits the
@@ -437,6 +487,53 @@ export default function FamilyRegistrationDetailPage() {
             />
           </div>
         </div>
+
+        {/* Acceptance-revoked banner — when the apply-side
+            `isAccepted` latch is missing or false, the family
+            isn't in a valid registration state. Banner sits above
+            every section so admin can't miss it; the page below
+            still renders as a read-only audit surface (existing
+            section data + verifies stay visible) but the
+            actionable affordances downstream gate off the same
+            `accepted` flag so nothing can be advanced until a
+            re-approval lands on the application page.
+            `applyProgress !== undefined` guards against flashing
+            the banner during SWR's loading window — wait until
+            we've confirmed the apply-side state one way or the
+            other before rendering the lock. */}
+        {applyProgress !== undefined && !accepted ? (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 flex items-start gap-3">
+            <AlertCircle className="size-5 text-amber-700 shrink-0 mt-0.5" />
+            <div className="min-w-0 flex-1 space-y-1">
+              <p className="text-sm font-medium text-amber-900">
+                Acceptance revoked
+              </p>
+              <p className="text-xs text-amber-800">
+                This family isn&rsquo;t currently accepted for{" "}
+                {school_year?.year_name ?? "this year"}. The
+                registration surface is locked until the family is
+                re-approved. Existing section data + verifies stay
+                visible for audit; nothing downstream can advance
+                until acceptance is restored.
+              </p>
+              <div className="pt-1 flex items-center gap-2">
+                <Button
+                  asChild
+                  variant="outline"
+                  size="sm"
+                  className="bg-white"
+                >
+                  <Link
+                    href={`/admin/families/${family?.id ?? familyId}?yearId=${yearId}`}
+                  >
+                    <ExternalLink className="size-3.5 mr-1.5" />
+                    Re-approve on application page
+                  </Link>
+                </Button>
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         {/* Billing — Stripe subscription state, invoice history, and
             admin actions (cancel at period end / undo cancel /
@@ -467,6 +564,7 @@ export default function FamilyRegistrationDetailPage() {
               yearId={Number(yearId)}
               currentMonthlyTuition={familyPayment?.monthly_tuition_payment ?? null}
               billingStartDate={school_year?.billing_start_date ?? null}
+              registrationConfirmed={progress?.isRegistrationConfirmed === true}
             />
           </SectionShell>
         </section>
@@ -482,6 +580,7 @@ export default function FamilyRegistrationDetailPage() {
           familyName={familyName}
           progress={progress}
           students={students}
+          accepted={accepted}
           onConfirmed={refresh}
         />
 
@@ -697,31 +796,6 @@ export default function FamilyRegistrationDetailPage() {
             }}
           >
             <VolunteerHoursBlock progress={progress} />
-          </SectionShell>
-        </section>
-
-        {/* Sent emails — audit log of every transactional notification
-            Resend has fired for this (family, year). Lives at the
-            bottom of the page so it doesn't compete with the
-            operational sections above, but stays scannable for admin
-            who want to confirm what a family has received without
-            jumping to the Resend dashboard. Reads from the
-            `registration_email_notifications` Xano table written by
-            `lib/emails/send.ts`. */}
-        <section id="section-emails" className="scroll-mt-20">
-          <SectionShell
-            title="Sent emails"
-            notes={{
-              familyId: Number(family?.id ?? familyId),
-              yearId: Number(yearId),
-              section: "section-emails",
-              title: "Notes — Sent emails",
-            }}
-          >
-            <EmailNotificationsCard
-              familyId={Number(family?.id ?? familyId)}
-              yearId={Number(yearId)}
-            />
           </SectionShell>
         </section>
       </main>
@@ -4787,18 +4861,19 @@ function RevokeAcceptanceButton({
   familyId,
   yearId,
   familyName,
-  acceptedAtAll,
+  accepted,
   registrationConfirmed,
   onRevoked,
 }: {
   familyId: number;
   yearId: number;
   familyName: string;
-  /** Whether there's any apply-flow progress row for this (family,
-   *  year) at all. The PATCH route resolves-or-creates a row, so the
-   *  call would technically succeed for any family, but rendering
-   *  the button on a never-accepted family is just visual noise. */
-  acceptedAtAll: boolean;
+  /** Apply-side acceptance latch. When false, the family is already
+   *  in a revoked state — the affordance collapses to a muted
+   *  "Acceptance revoked" chip in the same grid cell so the cell
+   *  layout stays stable and admin can see the lifecycle state at
+   *  a glance. */
+  accepted: boolean;
   /** When true, admin can't revoke acceptance — the registration's
    *  downstream confirmation has to be undone first. Reason rides
    *  on the button's title tooltip so admin sees why it's locked
@@ -4832,16 +4907,38 @@ function RevokeAcceptanceButton({
     }
   }
 
-  // Always render the button so the footer's 4-cell layout stays
-  // stable across pre-/post-acceptance and pre-/post-confirmation.
-  // Disabled when there's no acceptance to revoke (family never
-  // accepted) or when the downstream registration confirmation locks
-  // it. Tooltip carries the reason in both cases.
-  const lockedReason = !acceptedAtAll
-    ? "Family hasn't been accepted yet — nothing to revoke."
-    : registrationConfirmed
-      ? "Undo registration confirmation above before revoking acceptance."
-      : undefined;
+  // Disabled only when the downstream registration confirmation is
+  // active — that's the one cross-state constraint that actually
+  // matters (the Undo button on this same card is the unlock). The
+  // PATCH route resolves-or-creates the apply-side progress row, so
+  // it's safe to call even when no row exists yet (e.g. families
+  // affected by the legacy cascade-delete incident whose
+  // family_application_progress row is gone).
+  const lockedReason = registrationConfirmed
+    ? "Undo registration confirmation above before revoking acceptance."
+    : undefined;
+
+  // When acceptance is already revoked, the affordance collapses
+  // to a non-interactive "Acceptance revoked" chip — same cell size
+  // and visual weight so the grid layout stays stable. The full
+  // disabled-button styling reads as the post-action state ("this
+  // already happened"); admin's next move is the banner's
+  // Re-approve link above.
+  if (!accepted) {
+    return (
+      <Button
+        type="button"
+        variant="outline"
+        size="lg"
+        disabled
+        className="bg-muted text-muted-foreground cursor-default disabled:opacity-100 w-full"
+        title="The family's apply-side acceptance is currently revoked. Re-approve on the application page to restore registration access."
+      >
+        <XCircle className="size-4 mr-1.5 shrink-0" />
+        <span className="truncate">Acceptance revoked</span>
+      </Button>
+    );
+  }
 
   return (
     <>
@@ -4849,7 +4946,7 @@ function RevokeAcceptanceButton({
         type="button"
         variant="outline"
         size="lg"
-        disabled={saving || !acceptedAtAll || registrationConfirmed}
+        disabled={saving || registrationConfirmed}
         title={lockedReason}
         onClick={() => setOpen(true)}
         className="bg-white w-full"
@@ -4944,6 +5041,7 @@ function FamilyRegistrationConfirmationCard({
   familyName,
   progress,
   students,
+  accepted,
   onConfirmed,
 }: {
   familyId: number;
@@ -4951,6 +5049,10 @@ function FamilyRegistrationConfirmationCard({
   familyName: string;
   progress: XanoStudentRegistrationProgress | null;
   students: AdminFamilyRegistrationStudentRow[];
+  /** Apply-side acceptance latch. When false, the family isn't
+   *  validly in the registration flow — the Revoke button collapses
+   *  to a muted "Acceptance revoked" chip and Confirm is gated. */
+  accepted: boolean;
   onConfirmed: () => void;
 }) {
   const [saving, setSaving] = useState(false);
@@ -4997,12 +5099,20 @@ function FamilyRegistrationConfirmationCard({
   const allStudentsConfirmed =
     studentChecklist.length > 0 &&
     studentChecklist.every((s) => s.confirmed);
-  const canConfirm = allSectionsVerified && allStudentsConfirmed;
+  // Acceptance is the top-of-tree precondition for Confirm — if the
+  // family isn't accepted, nothing downstream can roll up.
+  const canConfirm = accepted && allSectionsVerified && allStudentsConfirmed;
 
   // Reason string for the gated state — admin sees what's blocking
-  // the confirm without having to hover or scroll up.
+  // the confirm without having to hover or scroll up. Acceptance
+  // takes precedence so admin sees the highest-priority blocker
+  // first (no point reporting missing section verifies if the
+  // family hasn't been accepted at all).
   const gateReason = (() => {
     if (canConfirm) return null;
+    if (!accepted) {
+      return "Re-approve the family on the application page first.";
+    }
     const missingSections = sectionChecklist
       .filter((s) => !s.verified)
       .map((s) => s.label);
@@ -5199,29 +5309,25 @@ function FamilyRegistrationConfirmationCard({
           pill in the button row already conveys the state, and
           duplicating it as a caption made the footer feel
           stacked. */}
-      {/* Footer is always a 4-cell grid (Archive · Revoke acceptance ·
-          Undo · Confirm / Registration Confirmed) so the row layout
-          stays consistent across pre- and post-confirmation states.
+      {/* Footer is always a 3-cell grid (Revoke acceptance · Undo ·
+          Confirm / Registration Confirmed) so the row layout stays
+          consistent across pre- and post-confirmation states.
           Buttons that don't apply in the current state stay rendered
           but disabled — admin gets the same visual structure either
           way, and tooltips explain why a button is locked. The
           "Confirmed" pill sits at the far right when confirmed so
           it's the last thing admin's eye lands on as the headline
-          state. */}
+          state. Archive lives in the page header rather than down
+          here so the two phase pages (apply-flow family detail +
+          this one) keep their year-scoped lifecycle action in the
+          same slot. */}
       <div className="border-t bg-white px-5 py-3">
-        <div className="grid gap-2 grid-cols-4">
-          <ArchiveRegistrationButton
-            familyId={familyId}
-            yearId={yearId}
-            familyName={familyName}
-            archived={archived}
-            onChanged={onConfirmed}
-          />
+        <div className="grid gap-2 grid-cols-3">
           <RevokeAcceptanceButton
             familyId={familyId}
             yearId={yearId}
             familyName={familyName}
-            acceptedAtAll={progress !== null}
+            accepted={accepted}
             registrationConfirmed={confirmed}
             onRevoked={onConfirmed}
           />
@@ -5344,12 +5450,17 @@ function ArchiveRegistrationButton({
   familyName,
   archived,
   onChanged,
+  size = "lg",
 }: {
   familyId: number;
   yearId: number;
   familyName: string;
   archived: boolean;
   onChanged: () => void;
+  /** `lg` matches the footer's grid siblings (Revoke / Undo /
+   *  Confirm). `sm` matches the other chips when rendered in the
+   *  page header. */
+  size?: "sm" | "lg";
 }) {
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -5390,10 +5501,18 @@ function ArchiveRegistrationButton({
       <Button
         type="button"
         variant="outline"
-        size="lg"
+        size={size}
         disabled={saving}
         onClick={() => setOpen(true)}
-        className="bg-white w-full"
+        // `w-full` for the footer grid (cells need to fill their
+        // column); header usage skips it so the button sizes to
+        // its label like the other header chips.
+        className={cn("bg-white", size === "lg" && "w-full")}
+        title={
+          archived
+            ? "Unarchive this family's registration"
+            : "Archive this family's registration for the year"
+        }
       >
         {saving ? (
           <Loader2 className="size-4 mr-1.5 animate-spin shrink-0" />

@@ -167,8 +167,11 @@ export function FamilyNotesSheet({
   disabled,
 }: Props) {
   const [open, setOpen] = useState(false);
-  // SWR key carries phase + section filters so each scope maps to
-  // its own cache entry. Two phase modes hit different server-side
+  // SWR key carries phase but NOT section — section filtering is
+  // applied client-side below so every section-scoped drawer on the
+  // page shares one underlying fetch (one family detail page can
+  // mount 5+ section drawers, and they all needed the same
+  // family-year payload). Two phase modes hit different server-side
   // filters:
   //   - registration → the dedicated
   //     `registration_admin_notes_by_registration` query (only
@@ -176,7 +179,7 @@ export function FamilyNotesSheet({
   //   - application → the standard family GET, server-side filtered
   //     to drop notes WITH the registration FK set (so apply
   //     drawers don't show registration comms)
-  // Both result in distinct SWR cache keys so flipping between an
+  // Phase-scoped cache keys stay distinct so flipping between an
   // apply-flow detail page and a registration detail page doesn't
   // serve the wrong cache.
   const phaseQuery =
@@ -185,9 +188,7 @@ export function FamilyNotesSheet({
       : phase === "application"
         ? `&phase=application${defaultYearId ? `&yearId=${defaultYearId}` : ""}`
         : "";
-  const swrKey = section
-    ? `/api/admin/notes?familyId=${familyId}&section=${encodeURIComponent(section)}${phaseQuery}`
-    : `/api/admin/notes?familyId=${familyId}${phaseQuery}`;
+  const swrKey = `/api/admin/notes?familyId=${familyId}${phaseQuery}`;
   const { data, isLoading, mutate } = useSWR<XanoAdminNote[]>(swrKey, fetcher, {
     revalidateOnFocus: false,
   });
@@ -206,7 +207,13 @@ export function FamilyNotesSheet({
       (key) => typeof key === "string" && key.startsWith(familyKeyPrefix)
     );
 
-  const allNotes = data ?? [];
+  // Section scoping moved client-side so every section-scoped drawer
+  // on the page shares the same underlying SWR fetch. The shared
+  // payload already arrives filtered by phase server-side; here we
+  // narrow to the section the drawer instance was mounted with.
+  const allNotes = section
+    ? (data ?? []).filter((n) => n.section === section)
+    : (data ?? []);
   // Phase filter state lives up here (rather than next to the
   // composer-related state below) because the filter feeds the
   // `notes` derivation that drives every downstream group + the
@@ -215,8 +222,8 @@ export function FamilyNotesSheet({
   // Filtered notes for this drawer. Section-scoped drawers and
   // phase-scoped drawers (`phase="registration"`, etc.) ignore the
   // client-side phase pills — the whole list is already pre-filtered
-  // server-side, so adding another axis would just hide notes
-  // without giving admin a way back.
+  // (section above, phase server-side), so adding another axis
+  // would just hide notes without giving admin a way back.
   const notes =
     section || phase || phaseFilter === "all"
       ? allNotes

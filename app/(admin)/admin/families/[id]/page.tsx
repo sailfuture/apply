@@ -20,6 +20,7 @@ import {
   SquarePen,
   Trash2,
   Undo2,
+  Users,
   XCircle,
 } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -564,20 +565,47 @@ export default function FamilyDetailPage() {
             </h1>
           </div>
           {/* Header action row — left-to-right order is deliberate:
-              destructive Delete on the far left so admin reaches
-              for it intentionally (not as muscle memory), Decision
-              actions in the middle (the daily work), Export PDF
-              just left of Notes (frequent enough to be page-level
-              but not the primary action), Notes on the far right
-              as the most-clicked utility. All four only render
-              when a year is selected — they're year-scoped. */}
+              Archive on the far left so admin reaches for it
+              intentionally (not as muscle memory), Decision actions
+              in the middle (the daily work), Export PDF just left
+              of Notes (frequent enough to be page-level but not the
+              primary action), Notes on the far right as the
+              most-clicked utility. All four only render when a year
+              is selected — they're year-scoped. */}
           <div className="flex items-center gap-2 shrink-0">
             {yearId ? (
-              <DeleteApplicationButton
+              <ArchiveApplicationButton
                 familyId={Number(familyId)}
                 yearId={Number(yearId)}
                 familyName={family.family_name}
+                size="sm"
+                onArchived={() => {
+                  refreshDetail();
+                  refreshProgress();
+                }}
               />
+            ) : null}
+            {/* Cross-surface jump to the family overview page —
+                cross-year summary + matching inquiries / applications
+                / registrations / sent emails. Year-scoped link so
+                the overview's email log filters to this year. Lives
+                next to Delete since both are family-scoped
+                navigation/lifecycle actions; Decision / Export PDF /
+                Notes that follow are the year-scoped action set. */}
+            {yearId ? (
+              <Button
+                asChild
+                variant="outline"
+                size="sm"
+                className="bg-white"
+              >
+                <Link
+                  href={`/admin/families/${Number(familyId)}/overview?yearId=${Number(yearId)}`}
+                >
+                  <Users className="size-3.5 mr-1.5" />
+                  Family overview
+                </Link>
+              </Button>
             ) : null}
             {yearId ? (
               <FamilyDecisionActions
@@ -3645,7 +3673,7 @@ function DecisionCard({
   // acceptance would orphan a confirmed registration on a
   // no-longer-accepted family. Admin has to undo the registration
   // confirmation first.
-  const { data: regProgress } = useSWR<{
+  const { data: regProgress, mutate: refreshRegProgress } = useSWR<{
     isRegistrationConfirmed?: boolean;
   } | null>(
     familyId && yearId
@@ -3864,8 +3892,12 @@ function DecisionCard({
         Approve / Revoke decision in the footer. Rendered FIRST in
         the section so admin lands on "is this family accepted yet?"
         immediately on page open; Scholarship Determination follows
-        with the supporting per-student awards + financial review. */}
-    {!loading && students.length > 0 ? (
+        with the supporting per-student awards + financial review.
+        Renders even when `students` is empty so admin retains
+        access to Archive / Revoke in the footer — without this,
+        families whose `registration_application` rows are missing
+        get stranded with no lifecycle actions on the page. */}
+    {!loading ? (
       <Card
         id="section-acceptance"
         className={cn(
@@ -3922,16 +3954,25 @@ function DecisionCard({
           {/* Per-student tuition receipt — mirrors the parent's
               /tuition page row-by-row so admin sees the exact
               figures the family will see immediately before
-              approving or revoking. */}
-          <TuitionBreakdownTable
-            students={students}
-            apps={apps}
-            schoolYear={schoolYear}
-            isOpportunityScholarshipFamily={
-              scholarship?.isOpportunityScholarship === true
-            }
-            isSnapFamily={scholarship?.isSNAPBenefits === true}
-          />
+              approving or revoking. Empty fallback covers families
+              with no active applications for the year (e.g. data
+              loss, or pre-application stragglers) — keeps the
+              footer actions reachable. */}
+          {students.length > 0 ? (
+            <TuitionBreakdownTable
+              students={students}
+              apps={apps}
+              schoolYear={schoolYear}
+              isOpportunityScholarshipFamily={
+                scholarship?.isOpportunityScholarship === true
+              }
+              isSnapFamily={scholarship?.isSNAPBenefits === true}
+            />
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              No students on file for this year.
+            </p>
+          )}
         </CardContent>
         {/* Footer mirrors the SectionConfirmFooter pattern: divider
             + bg-white px-5 py-3 anchor row. Two paths:
@@ -3944,18 +3985,17 @@ function DecisionCard({
         <div className="border-t bg-white px-5 py-3 space-y-2">
           {!accepted ? (
             <>
+              {/* Archive lives in the page header — same slot on
+                  both apply-flow and registration pages — so the
+                  pre-accept footer focuses on the decision pair:
+                  Return Application (send back for edits, only when
+                  submitted) + Approve. */}
               <div
                 className={cn(
                   "grid gap-2",
-                  familySubmitted ? "grid-cols-3" : "grid-cols-2"
+                  familySubmitted ? "grid-cols-2" : "grid-cols-1"
                 )}
               >
-                <ArchiveApplicationButton
-                  familyId={familyId}
-                  yearId={yearId}
-                  familyName={familyName}
-                  onArchived={onChanged}
-                />
                 {familySubmitted ? (
                   <RejectApplicationButton
                     familyId={familyId}
@@ -3985,17 +4025,18 @@ function DecisionCard({
                   hanging a second explanation line under it. */}
             </>
           ) : (
-            // Post-accept footer — Revoke far left, View
-            // registration far right. The two actions split the
-            // post-acceptance surface: Revoke is the destructive
-            // escape hatch (rarely used, lives where it won't be
-            // hit by accident), View registration is the
-            // forward-motion link admin clicks to keep working on
-            // the family's enrollment paperwork. `justify-between`
-            // pushes them to opposite ends; on narrow widths the
-            // row stays single-line because both buttons truncate
-            // their labels rather than wrapping.
-            <div className="flex items-center justify-between gap-2">
+            // Post-accept footer — 3-cell grid: Revoke (destructive
+            // escape, left), Undo registration confirmation
+            // (prerequisite for Revoke when registration is
+            // confirmed, middle), View registration (forward-motion
+            // link to keep working on enrollment paperwork, right).
+            // Both Revoke and Undo stay mounted at all times; their
+            // disable state is driven by `registrationConfirmed` so
+            // admin always sees the full action set and the gate
+            // reads from the disabled tooltip rather than a missing
+            // button. Equal-width cells make the row read as a
+            // single decision surface.
+            <div className="grid gap-2 grid-cols-3">
               <RevokeAcceptanceButton
                 familyId={familyId}
                 yearId={yearId}
@@ -4003,10 +4044,27 @@ function DecisionCard({
                 disabled={registrationConfirmed}
                 disabledReason={
                   registrationConfirmed
-                    ? "Undo registration confirmation on the registration page before revoking."
+                    ? "Undo registration confirmation first."
                     : undefined
                 }
                 onRevoked={onChanged}
+              />
+              <UndoRegistrationConfirmationButton
+                familyId={familyId}
+                yearId={yearId}
+                familyName={familyName}
+                registrationConfirmed={registrationConfirmed}
+                onUndone={() => {
+                  // `onChanged` only refreshes the apply-side detail +
+                  // progress SWR caches; the Undo PATCH flips
+                  // `isRegistrationConfirmed` on the registration-side
+                  // progress row, which is fetched by a separate
+                  // hook (`refreshRegProgress`). Without this the
+                  // adjacent Revoke acceptance button stays disabled
+                  // until the page reloads.
+                  refreshRegProgress();
+                  onChanged();
+                }}
               />
               <Button
                 asChild
@@ -4794,16 +4852,12 @@ function ApproveFamilyButton({
 }
 
 /**
- * Family-level "reject" — sends the application back to the
- * editable apply flow by flipping `isSubmitted=false` and clearing
- * `submitted_at`. Lives next to Approve in each `<DecisionStudentRow>`
- * footer so admin can reject from the same surface they review.
- *
- * Naming note: the underlying behavior is "return for revisions"
- * rather than a final denial — the family can re-submit once they
- * fix things. We use "Reject" for the button label because that's
- * the term the rest of the admin-side conversation uses; the modal
- * copy below clarifies the actual semantics.
+ * Sends the application back to the family for edits by flipping
+ * `isSubmitted=false` and clearing `submitted_at`. The application
+ * drops out of the admissions review queue and returns to the
+ * editable apply flow on the family's side. Lives next to Approve
+ * in the Acceptance card footer so admin can return-for-revisions
+ * from the same surface they review.
  */
 function RejectApplicationButton({
   familyId,
@@ -4819,7 +4873,7 @@ function RejectApplicationButton({
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  async function runReject() {
+  async function runReturn() {
     setSaving(true);
     try {
       const res = await fetch(`/api/admin/family-progress`, {
@@ -4834,7 +4888,7 @@ function RejectApplicationButton({
       });
       if (!res.ok) {
         const errBody = await res.json().catch(() => null);
-        throw new Error(errBody?.error ?? `Reject failed (${res.status})`);
+        throw new Error(errBody?.error ?? `Return failed (${res.status})`);
       }
       toast.success(
         `${familyName || "Family"} application returned — back to the editable apply flow.`
@@ -4842,8 +4896,8 @@ function RejectApplicationButton({
       setOpen(false);
       onRejected();
     } catch (err) {
-      console.error("[RejectApplicationButton.runReject] failed:", err);
-      toast.error(err instanceof Error ? err.message : "Couldn't reject.");
+      console.error("[RejectApplicationButton.runReturn] failed:", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't return.");
     } finally {
       setSaving(false);
     }
@@ -4857,18 +4911,17 @@ function RejectApplicationButton({
         size="lg"
         disabled={saving}
         onClick={() => setOpen(true)}
-        // Neutral gray rather than red — reject is a routine "send
-        // back for revisions" action, not a destructive permanent
-        // denial. The modal copy below carries the full semantics.
+        // Neutral gray, not red — returning for revisions is a
+        // routine action, not a destructive permanent denial.
         className="bg-white"
-        title="Send this application back to the family for revisions"
+        title="Send this application back to the family for edits"
       >
         {saving ? (
-          <Loader2 className="size-4 mr-1.5 animate-spin" />
+          <Loader2 className="size-4 mr-1.5 animate-spin shrink-0" />
         ) : (
-          <Undo2 className="size-4 mr-1.5" />
+          <Undo2 className="size-4 mr-1.5 shrink-0" />
         )}
-        Reject
+        <span className="truncate">Return Application to Family</span>
       </Button>
 
       <AlertDialog
@@ -4892,16 +4945,16 @@ function RejectApplicationButton({
             <AlertDialogCancel disabled={saving}>Cancel</AlertDialogCancel>
             <AlertDialogAction
               disabled={saving}
-              className="bg-red-600 hover:bg-red-700 text-white"
+              className="bg-amber-600 hover:bg-amber-700 text-white"
               onClick={(e) => {
                 e.preventDefault();
-                void runReject();
+                void runReturn();
               }}
             >
               {saving ? (
                 <Loader2 className="size-4 mr-1.5 animate-spin" />
               ) : null}
-              Yes, reject
+              Yes, return
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -4931,11 +4984,16 @@ function ArchiveApplicationButton({
   yearId,
   familyName,
   onArchived,
+  size = "lg",
 }: {
   familyId: number;
   yearId: number;
   familyName: string;
   onArchived: () => void;
+  /** `lg` matches the Reject/Approve siblings in the determination
+   *  card footer; `sm` matches the other header chips (Family
+   *  overview, Export PDF, Notes) when rendered up top. */
+  size?: "sm" | "lg";
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -4983,12 +5041,12 @@ function ArchiveApplicationButton({
       <Button
         type="button"
         variant="outline"
-        size="lg"
+        size={size}
         disabled={saving}
         onClick={() => setOpen(true)}
-        // `size="lg"` so it visually matches Reject + Approve in
-        // the determination card footer; the prior `sm` was sized
-        // for the page header it used to live in.
+        // `lg` matches Reject + Approve in the determination card
+        // footer; `sm` matches the other chips when rendered in the
+        // page header.
         className="bg-white"
         title="Archive this family's application for the year"
       >
@@ -5061,193 +5119,6 @@ function ArchiveApplicationButton({
                 <Archive className="size-4 mr-1.5" />
               )}
               Archive application
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </>
-  );
-}
-
-/**
- * Admin escape hatch — hard-delete a family's per-year application
- * AND every row that hangs off it (apply-flow scholarship cluster,
- * student application rows, registration packets, progress rows,
- * payment snapshot). Family / parents / students stay so the
- * record survives for re-application; this is for wiping the
- * year-scoped data only.
- *
- * Dropped behind a typed-confirmation modal because the cascade is
- * irreversible — the admin has to type the family name (or "delete"
- * if no name is on file) before the destructive button unlocks.
- * Mirrors the safety affordance on similar admin nukes elsewhere.
- *
- * On success, navigates back to the Applications list since the
- * page we're sitting on no longer has data to render. Failures
- * are toasted with the upstream error so admin can tell whether
- * the cascade partially landed.
- */
-function DeleteApplicationButton({
-  familyId,
-  yearId,
-  familyName,
-}: {
-  familyId: number;
-  yearId: number;
-  familyName: string;
-}) {
-  const router = useRouter();
-  const [open, setOpen] = useState(false);
-  const [confirmText, setConfirmText] = useState("");
-  const [deleting, setDeleting] = useState(false);
-
-  // Required typed confirmation — defaults to the family name when
-  // it's on file, falls back to the literal string "delete" so the
-  // affordance still works for unnamed/blank families. Comparison
-  // is case-insensitive + trim-tolerant since admin will sometimes
-  // type "Smith" with a trailing space.
-  const expected = (familyName || "delete").trim();
-  const matches =
-    confirmText.trim().toLowerCase() === expected.toLowerCase();
-
-  async function runDelete() {
-    if (!matches) return;
-    setDeleting(true);
-    try {
-      const res = await fetch(
-        `/api/admin/family-applications/${familyId}?yearId=${yearId}`,
-        { method: "DELETE" }
-      );
-      if (!res.ok) {
-        const errBody = await res.json().catch(() => null);
-        throw new Error(errBody?.error ?? `Delete failed (${res.status})`);
-      }
-      const result = (await res.json()) as {
-        ok?: boolean;
-        failures?: Array<{ step: string; message: string }>;
-      };
-      // Surface partial-failure info: if the route reports any
-      // step's row didn't delete, warn admin so they can retry or
-      // check the underlying Xano table directly.
-      if (Array.isArray(result.failures) && result.failures.length > 0) {
-        console.warn(
-          "[DeleteApplicationButton] partial cascade:",
-          result.failures
-        );
-        toast.warning(
-          `Deleted with ${result.failures.length} leftover row${
-            result.failures.length === 1 ? "" : "s"
-          }. Check console for details.`
-        );
-      } else {
-        toast.success(
-          `${familyName || "Family"}'s application deleted for the year.`
-        );
-      }
-      setOpen(false);
-      setConfirmText("");
-      router.push(`/admin/applications?yearId=${yearId}`);
-    } catch (err) {
-      console.error("[DeleteApplicationButton.runDelete] failed:", err);
-      toast.error(err instanceof Error ? err.message : "Couldn't delete.");
-    } finally {
-      setDeleting(false);
-    }
-  }
-
-  return (
-    <>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        disabled={deleting}
-        onClick={() => setOpen(true)}
-        // Red text + border so the action reads as destructive even
-        // before the modal opens. `bg-white` keeps it from competing
-        // with the colored Approve button down the page.
-        className="bg-white border-red-200 text-red-700 hover:bg-red-50 hover:text-red-700"
-        title="Permanently delete this family's application for the year"
-      >
-        <Trash2 className="size-4 mr-1.5" />
-        Delete application
-      </Button>
-
-      <Dialog
-        open={open}
-        onOpenChange={(o) => {
-          if (deleting) return;
-          setOpen(o);
-          if (!o) setConfirmText("");
-        }}
-      >
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle className="text-red-700">
-              Delete {familyName || "this family"}&rsquo;s application?
-            </DialogTitle>
-            <DialogDescription>
-              This wipes the family&rsquo;s application row, all per-student
-              applications, the scholarship + every contributing
-              member / home / vehicle / benefit underneath it, both
-              progress rows for the year, and the payment snapshot.
-              The family, parents, students, and emergency contacts
-              stay so the record survives for re-application.
-              <br />
-              <br />
-              <span className="font-medium text-foreground">
-                This can&rsquo;t be undone.
-              </span>{" "}
-              Type{" "}
-              <span className="font-mono text-xs px-1.5 py-0.5 rounded bg-muted text-foreground">
-                {expected}
-              </span>{" "}
-              below to confirm.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2">
-            <Label
-              htmlFor="delete-confirm"
-              className="text-xs font-medium"
-            >
-              Confirmation
-            </Label>
-            <Input
-              id="delete-confirm"
-              value={confirmText}
-              onChange={(e) => setConfirmText(e.target.value)}
-              placeholder={expected}
-              disabled={deleting}
-              autoComplete="off"
-            />
-          </div>
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={deleting}
-              onClick={() => {
-                if (deleting) return;
-                setOpen(false);
-                setConfirmText("");
-              }}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              disabled={deleting || !matches}
-              onClick={() => void runDelete()}
-              className="bg-red-600 hover:bg-red-700 text-white disabled:opacity-50"
-            >
-              {deleting ? (
-                <Loader2 className="size-4 mr-1.5 animate-spin" />
-              ) : (
-                <Trash2 className="size-4 mr-1.5" />
-              )}
-              Yes, delete application
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -7376,6 +7247,136 @@ function RevokeAcceptanceButton({
                 <Loader2 className="size-4 mr-1.5 animate-spin" />
               ) : null}
               Yes, revoke
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
+}
+
+/* ─────────── Undo registration confirmation (inline) ─────────── */
+
+/**
+ * Inline mirror of the Undo affordance that lives on the
+ * registration detail page. Sits next to Revoke acceptance in the
+ * post-accept footer so admin can do the full "rollback acceptance"
+ * flow without bouncing between pages.
+ *
+ * The button stays mounted regardless of state — admin sees the
+ * surface area for both Undo and Revoke at all times. Disabled when
+ * `registrationConfirmed === false` (nothing to undo); when enabled
+ * it's the prerequisite for the adjacent Revoke acceptance button,
+ * which the Acceptance card's footer gates on the same flag.
+ *
+ * Same PATCH contract as the registration page's Undo button —
+ * clears `isRegistrationConfirmed` on the per-year registration
+ * progress row without touching per-section verifies or per-student
+ * packet confirmations. Re-confirmable from the registration page
+ * any time after.
+ */
+function UndoRegistrationConfirmationButton({
+  familyId,
+  yearId,
+  familyName,
+  registrationConfirmed,
+  onUndone,
+}: {
+  familyId: number;
+  yearId: number;
+  familyName: string;
+  registrationConfirmed: boolean;
+  onUndone: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  async function runUndo() {
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/admin/registration-progress`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          familyId,
+          yearId,
+          isRegistrationConfirmed: false,
+        }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Update failed (${res.status})`);
+      }
+      toast.success(
+        `Registration confirmation cleared for ${familyName || "family"}.`
+      );
+      setOpen(false);
+      onUndone();
+    } catch (err) {
+      console.error(
+        "[UndoRegistrationConfirmationButton.runUndo] failed:",
+        err
+      );
+      toast.error(err instanceof Error ? err.message : "Couldn't undo.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const disabled = !registrationConfirmed;
+
+  return (
+    <>
+      <Button
+        type="button"
+        variant="outline"
+        size="lg"
+        disabled={saving || disabled}
+        title={
+          disabled
+            ? "Registration isn't confirmed — nothing to undo."
+            : undefined
+        }
+        onClick={() => setOpen(true)}
+        className="bg-white"
+      >
+        <Undo2 className="size-4 mr-1.5" />
+        Undo registration confirmation
+      </Button>
+
+      <AlertDialog
+        open={open}
+        onOpenChange={(next) => {
+          if (!next && !saving) setOpen(next);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Undo {familyName || "family"} registration confirmation?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This clears the family-level registration latch.
+              Per-section verifies and per-student packet
+              confirmations stay intact — only the rollup audit is
+              cleared. You can re-confirm at any time from the
+              registration page.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={saving}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={saving}
+              className="bg-amber-600 hover:bg-amber-700 text-white"
+              onClick={(e) => {
+                e.preventDefault();
+                void runUndo();
+              }}
+            >
+              {saving ? (
+                <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+              ) : null}
+              Yes, undo
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

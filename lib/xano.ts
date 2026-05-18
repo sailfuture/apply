@@ -2570,11 +2570,10 @@ export const xano = {
     },
 
     /**
-     * Delete a scholarship row by id. Used by the admin
-     * `/api/admin/family-applications/[id]` cascade — callers MUST
-     * delete the scholarship's children (contributing members,
-     * homes, vehicles, benefits) before this fires, otherwise Xano
-     * will reject the delete on FK constraint.
+     * Delete a scholarship row by id. Callers MUST delete the
+     * scholarship's children (contributing members, homes, vehicles,
+     * benefits) first, otherwise Xano will reject the delete on FK
+     * constraint.
      */
     async delete(id: number): Promise<void> {
       const res = await fetch(`${getBaseUrl()}/registration_opportunity_scholarship/${id}`, {

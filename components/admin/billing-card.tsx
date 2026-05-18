@@ -132,6 +132,13 @@ interface Props {
    *  state so admin knows when the first invoice will fire if they
    *  click Start Monthly Billing. */
   billingStartDate: string | null;
+  /** Whether the family's registration has been admin-confirmed for
+   *  this year (`isRegistrationConfirmed` on the registration-progress
+   *  row). Billing is gated on this — Start Monthly Billing stays
+   *  disabled with an inline explanation until confirmation lands.
+   *  The server-side `startMonthlyBilling` helper enforces the same
+   *  gate so a direct API call can't bypass the UI. */
+  registrationConfirmed: boolean;
 }
 
 type BillingAction =
@@ -146,12 +153,22 @@ export function BillingCard({
   yearId,
   currentMonthlyTuition,
   billingStartDate,
+  registrationConfirmed,
 }: Props) {
   const endpoint = `/api/admin/families/${familyId}/billing?yearId=${yearId}`;
   const { data, error, isLoading, mutate } = useSWR<BillingSnapshot>(
     endpoint,
     adminFetcher,
-    { revalidateOnFocus: false, dedupingInterval: 10000 }
+    {
+      revalidateOnFocus: false,
+      dedupingInterval: 10000,
+      // Don't retry on error — when STRIPE_SECRET_KEY is missing or
+      // Stripe returns 500, SWR's default 5-attempt exponential
+      // backoff hammers the failing endpoint and pollutes dev logs.
+      // One attempt is enough; admin can hit Refresh manually if
+      // the failure was transient.
+      shouldRetryOnError: false,
+    }
   );
 
   const [pending, setPending] = useState<BillingAction | null>(null);
@@ -240,7 +257,23 @@ export function BillingCard({
     const billingStartLabel = billingStartDate
       ? formatStartDate(billingStartDate)
       : null;
-    const startDisabled = pending !== null || !hasAmount;
+    // Start button is gated on TWO preconditions and we surface
+    // whichever is blocking first below the action row:
+    //   1. Registration must be admin-confirmed for the year
+    //      (avoids committing a family to recurring Stripe charges
+    //      before the packet is fully reviewed). Tuition gate
+    //      sits below because the natural admin flow confirms the
+    //      packet first, then snapshots the amount via Approve.
+    //   2. Monthly tuition amount must be set on the family-payment
+    //      row (Stripe needs a price to subscribe to).
+    // Both are also enforced server-side in `startMonthlyBilling`
+    // so a direct API call can't bypass the UI gate.
+    const blockReason: string | null = !registrationConfirmed
+      ? "Confirm this family's registration above before starting billing."
+      : !hasAmount
+        ? "Monthly tuition amount isn't set on the family payment row yet — admin must complete the Approve flow first."
+        : null;
+    const startDisabled = pending !== null || blockReason !== null;
     return (
       <div className="rounded-md border bg-muted/10 p-6 space-y-4">
         <div className="flex items-start gap-3">
@@ -274,13 +307,13 @@ export function BillingCard({
             schedule. Three actions live on one line so admin can
             scan their options at a glance instead of hunting between
             a header-tucked link and a body button. The Start button
-            stays disabled until the family-payment row carries a
-            monthly amount; the message below the row explains why
-            when that precondition isn't met. */}
+            stays disabled until BOTH preconditions are met; the
+            message below the row explains which one is blocking. */}
         <div className="flex flex-wrap items-center gap-2">
           <Button
             disabled={startDisabled}
             onClick={() => runAction("start")}
+            title={blockReason ?? undefined}
           >
             {pending === "start" ? (
               <Loader2 className="size-3.5 mr-1.5 animate-spin" aria-hidden="true" />
@@ -309,12 +342,8 @@ export function BillingCard({
             </Link>
           </Button>
         </div>
-        {!hasAmount ? (
-          <p className="text-xs text-muted-foreground">
-            Monthly tuition amount isn&rsquo;t set on the family
-            payment row yet — admin must complete the Approve flow
-            first.
-          </p>
+        {blockReason ? (
+          <p className="text-xs text-muted-foreground">{blockReason}</p>
         ) : null}
       </div>
     );
