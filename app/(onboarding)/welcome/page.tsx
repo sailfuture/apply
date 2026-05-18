@@ -18,6 +18,7 @@ import {
   FieldLabel,
   FieldDescription,
 } from "@/components/ui/field";
+import { Spinner } from "@/components/ui/spinner";
 import { StateSelect } from "@/components/state-select";
 
 /**
@@ -118,7 +119,7 @@ export default function WelcomePage() {
   if (loading) {
     return (
       <div className="flex min-h-[calc(100vh-7.5rem)] items-center justify-center">
-        <p className="text-muted-foreground">Loading...</p>
+        <Spinner className="size-8 text-muted-foreground" />
       </div>
     );
   }

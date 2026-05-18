@@ -34,6 +34,10 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { adminFetcher } from "@/lib/admin-fetcher";
+import {
+  STRIPE_INVOICES_DASHBOARD_URL,
+  stripeCustomerDashboardUrl,
+} from "@/lib/stripe-dashboard";
 import { cn } from "@/lib/utils";
 
 /**
@@ -127,6 +131,11 @@ interface Props {
    *  start billing now (or when the cascade fires after Confirm
    *  Registration). */
   billingStartDate: string | null;
+  /** Called after admin sets the monthly tuition amount inline from
+   *  the empty state. The parent page revalidates its family-payment
+   *  SWR cache so `currentMonthlyTuition` flips from `null` to the
+   *  new value and re-enables Start Monthly Billing. */
+  onTuitionAmountSet?: () => void | Promise<unknown>;
 }
 
 type BillingAction =
@@ -141,6 +150,7 @@ export function BillingCard({
   yearId,
   currentMonthlyTuition,
   billingStartDate,
+  onTuitionAmountSet,
 }: Props) {
   const endpoint = `/api/admin/families/${familyId}/billing?yearId=${yearId}`;
   const { data, error, isLoading, mutate } = useSWR<BillingSnapshot>(
@@ -156,6 +166,48 @@ export function BillingCard({
   const [updateAmount, setUpdateAmount] = useState(
     currentMonthlyTuition != null ? String(currentMonthlyTuition) : ""
   );
+
+  // Inline "Set tuition amount" form for the empty state — the
+  // billing cascade fails the precondition when monthly_tuition_payment
+  // isn't set on the family-payment row, so we give admin a way to
+  // fix that right here instead of bouncing them to the apply-flow
+  // page. Local state because the snapshot-amount POST is a one-shot
+  // — once it lands, the parent re-fetches and the empty state flips.
+  const [tuitionInput, setTuitionInput] = useState("");
+  const [savingTuition, setSavingTuition] = useState(false);
+
+  async function saveTuitionAmount() {
+    const dollars = Number(tuitionInput);
+    if (!Number.isFinite(dollars) || dollars <= 0) {
+      toast.error("Enter a positive amount.");
+      return;
+    }
+    setSavingTuition(true);
+    try {
+      const res = await fetch(`/api/admin/family-payment`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          familyId,
+          yearId,
+          monthly_tuition_payment: dollars,
+        }),
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(body?.error ?? `Save failed (${res.status})`);
+      }
+      toast.success("Monthly tuition amount saved.");
+      // Tell the parent to refresh its family-payment SWR cache so
+      // `currentMonthlyTuition` flips from null to the new value and
+      // re-enables the Start Monthly Billing button.
+      await onTuitionAmountSet?.();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Save failed");
+    } finally {
+      setSavingTuition(false);
+    }
+  }
 
   async function runAction(
     action: BillingAction,
@@ -183,11 +235,8 @@ export function BillingCard({
 
   if (isLoading) {
     return (
-      <div className="rounded-md border bg-muted/10 p-6">
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-          Loading billing details from Stripe…
-        </div>
+      <div className="flex items-center justify-center rounded-md border bg-muted/10 p-12">
+        <Loader2 className="size-6 animate-spin text-muted-foreground" aria-hidden="true" />
       </div>
     );
   }
@@ -249,7 +298,25 @@ export function BillingCard({
             <CreditCard className="size-5 text-muted-foreground" aria-hidden="true" />
           </div>
           <div className="space-y-2 min-w-0 flex-1">
-            <p className="text-sm font-medium">Monthly billing not started</p>
+            <div className="flex items-start justify-between gap-3 flex-wrap">
+              <p className="text-sm font-medium">Monthly billing not started</p>
+              {/* Always-available link out to Stripe — useful even
+                  before a customer exists (admin can spot-check
+                  whether another invoice already exists for this
+                  family in Stripe before starting a new
+                  subscription). The customer-scoped link below
+                  becomes available once `data.subscription` is set. */}
+              <Button asChild variant="outline" size="sm" className="bg-white">
+                <a
+                  href={STRIPE_INVOICES_DASHBOARD_URL}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <ExternalLink className="size-3.5 mr-1.5" aria-hidden="true" />
+                  View invoices in Stripe
+                </a>
+              </Button>
+            </div>
             <p className="text-xs text-muted-foreground">
               Confirm this family&rsquo;s registration in the
               Confirmation card below — that automatically starts
@@ -271,30 +338,69 @@ export function BillingCard({
             )}
           </div>
         </div>
-        <div>
-          <Button
-            size="sm"
-            disabled={startDisabled}
-            onClick={() => runAction("start")}
-          >
-            {pending === "start" ? (
-              <Loader2 className="size-3.5 mr-1.5 animate-spin" aria-hidden="true" />
-            ) : (
-              <Play className="size-3.5 mr-1.5" aria-hidden="true" />
-            )}
-            Start Monthly Billing
-            {monthlyLabel ? (
-              <span className="ml-1.5 opacity-90">— {monthlyLabel}</span>
-            ) : null}
-          </Button>
-          {currentMonthlyTuition == null || currentMonthlyTuition <= 0 ? (
-            <p className="text-xs text-muted-foreground mt-2">
-              Monthly tuition amount isn&rsquo;t set on the family
-              payment row yet — admin must complete the Approve flow
-              first.
+        {/* Precondition: monthly tuition amount must exist on the
+            family-payment row before Stripe will accept a price for
+            the subscription. Normally set by the apply-flow Approve
+            button; surface an inline form here so admin can fix the
+            precondition without leaving the page when the snapshot
+            never landed (or got cleared). */}
+        {currentMonthlyTuition == null || currentMonthlyTuition <= 0 ? (
+          <div className="rounded-md border bg-white p-3 space-y-2">
+            <p className="text-xs font-medium">
+              Set monthly tuition amount
             </p>
-          ) : null}
-        </div>
+            <p className="text-xs text-muted-foreground">
+              No amount on the family-payment row yet. Set it here, or
+              complete the Approve flow on the family detail page to
+              snapshot it from the scholarship totals.
+            </p>
+            <div className="flex items-stretch gap-2">
+              <div className="relative flex-1">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
+                  $
+                </span>
+                <Input
+                  type="number"
+                  inputMode="decimal"
+                  step="0.01"
+                  min="0"
+                  value={tuitionInput}
+                  onChange={(e) => setTuitionInput(e.target.value)}
+                  placeholder="0.00"
+                  className="pl-7"
+                />
+              </div>
+              <Button
+                size="sm"
+                disabled={savingTuition || !tuitionInput.trim()}
+                onClick={() => void saveTuitionAmount()}
+              >
+                {savingTuition ? (
+                  <Loader2 className="size-3.5 mr-1.5 animate-spin" aria-hidden="true" />
+                ) : null}
+                Save
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div>
+            <Button
+              size="sm"
+              disabled={startDisabled}
+              onClick={() => runAction("start")}
+            >
+              {pending === "start" ? (
+                <Loader2 className="size-3.5 mr-1.5 animate-spin" aria-hidden="true" />
+              ) : (
+                <Play className="size-3.5 mr-1.5" aria-hidden="true" />
+              )}
+              Start Monthly Billing
+              {monthlyLabel ? (
+                <span className="ml-1.5 opacity-90">— {monthlyLabel}</span>
+              ) : null}
+            </Button>
+          </div>
+        )}
       </div>
     );
   }
@@ -306,7 +412,7 @@ export function BillingCard({
   const isCanceled = sub.status === "canceled";
   const cancelingAtPeriodEnd = sub.cancel_at_period_end;
   const customerId = typeof sub.customer === "string" ? sub.customer : sub.customer.id;
-  const stripeDashboardUrl = `https://dashboard.stripe.com/customers/${customerId}`;
+  const stripeDashboardUrl = stripeCustomerDashboardUrl(customerId);
   const nextInvoiceDate = sub.current_period_end
     ? new Date(sub.current_period_end * 1000).toLocaleDateString("en-US", {
         month: "long",

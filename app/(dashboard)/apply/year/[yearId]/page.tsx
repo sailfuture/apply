@@ -11,7 +11,7 @@ import { PreSubmitReviewModal, type SectionStatus } from "@/components/pre-submi
 import { EnrolledFamilyDashboard } from "@/components/enrolled-family-dashboard";
 import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
 import { ArrowRight, Clock, CheckCircle2, Lock } from "lucide-react";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
 import Image from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -491,7 +491,12 @@ export default function YearOverviewPage() {
       ? `/api/student-registration?yearId=${yearId}`
       : null,
     (url: string) => fetch(url).then((r) => r.json()),
-    { revalidateOnFocus: false, dedupingInterval: 10000 }
+    // Live-poll the per-student packets while the parent waits on
+    // admin to confirm each one. Without this the "Registration in
+    // review" view stays stuck on the snapshot the page was loaded
+    // with; the parent has to hard-reload to see "Confirmed by
+    // admissions" flip on for each student.
+    { revalidateOnFocus: true, refreshInterval: 30000, dedupingInterval: 10000 }
   );
 
   const allStudentsConfirmed =
@@ -665,28 +670,7 @@ export default function YearOverviewPage() {
   if (loading || willRedirect || acceptedAwaitingRegProgress) {
     return (
       <div className="flex min-h-[calc(100vh-7.5rem)] items-center justify-center px-4 bg-gray-50 dark:bg-background">
-        <div className="w-full max-w-2xl py-8">
-          <div className="text-center mb-8">
-            <Skeleton className="size-16 rounded-full mx-auto mb-4" />
-            <Skeleton className="h-7 w-3/4 mx-auto" />
-            <Skeleton className="h-7 w-2/3 mx-auto mt-2" />
-            <Skeleton className="h-4 w-full max-w-lg mx-auto mt-4" />
-            <Skeleton className="h-4 w-5/6 max-w-lg mx-auto mt-2" />
-          </div>
-          <div className="rounded-xl bg-background p-1.5 shadow-sm border">
-            <div className="overflow-hidden rounded-lg border">
-              <div className="divide-y">
-                {Array.from({ length: 5 }).map((_, i) => (
-                  <div key={i} className="flex items-center px-4 py-4 gap-3">
-                    <Skeleton className="size-8 rounded-full shrink-0" />
-                    <Skeleton className="h-4 w-48 flex-1" />
-                    <Skeleton className="size-7 rounded-md shrink-0" />
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
+        <Spinner className="size-8 text-muted-foreground" />
       </div>
     );
   }

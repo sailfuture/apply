@@ -1,28 +1,22 @@
-import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
 
 /**
  * Top-level loading boundary — Next.js renders this for any route
  * segment transition that doesn't have its own more-specific
- * `loading.tsx`. Without this, the app shows a blank screen during
- * server-component data fetches (the `/` redirect chain after sign-in
- * was the worst offender — a full white frame between Clerk landing
- * the user and the destination chrome appearing).
+ * `loading.tsx`. Used during the post-sign-in redirect chain from `/`
+ * to the lifecycle-resolved destination (admin / welcome / apply /
+ * registration / dashboard).
  *
- * Intentionally minimal: a single soft skeleton block centered in the
- * viewport. It doesn't try to mimic any specific page chrome — that
- * would just trade one flash for another (skeleton chrome → real
- * chrome). Showing a content-sized placeholder reads as "we're
- * working" without committing to a layout shape.
+ * Single centered spinner — no skeleton chrome. Skeletons committed
+ * to a layout shape that doesn't match the destination, so they read
+ * as a second layout flash before the real page renders. A bare
+ * spinner says "working" without misleading the user about what's
+ * about to appear.
  */
 export default function RootLoading() {
   return (
     <div className="flex min-h-[calc(100vh-7.5rem)] items-center justify-center px-4">
-      <div className="w-full max-w-2xl space-y-4">
-        <Skeleton className="h-8 w-48" />
-        <Skeleton className="h-4 w-3/4" />
-        <Skeleton className="h-4 w-1/2" />
-        <Skeleton className="h-64 w-full rounded-xl" />
-      </div>
+      <Spinner className="size-8 text-muted-foreground" />
     </div>
   );
 }

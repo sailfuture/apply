@@ -4,6 +4,7 @@ import { usePathname } from "next/navigation";
 import { useAuth } from "@clerk/nextjs";
 import { AppSidebar } from "@/components/app-sidebar";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+import { Spinner } from "@/components/ui/spinner";
 
 export default function DashboardLayout({
   children,
@@ -38,7 +39,7 @@ export default function DashboardLayout({
   if (!isLoaded) {
     return (
       <div className="flex min-h-[40vh] items-center justify-center">
-        <p className="text-muted-foreground text-sm">Loading...</p>
+        <Spinner className="size-8 text-muted-foreground" />
       </div>
     );
   }

@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { useApplications, useSchoolYears } from "@/hooks/use-api";
 import { EnrolledFamilyDashboard } from "@/components/enrolled-family-dashboard";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
@@ -249,19 +249,8 @@ export default function EnrolledHomePage() {
 
   if (loading) {
     return (
-      <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
-        <div className="flex items-center justify-between border-b pb-4">
-          <div className="space-y-2">
-            <Skeleton className="h-3 w-24" />
-            <Skeleton className="h-7 w-64" />
-          </div>
-        </div>
-        {Array.from({ length: 4 }).map((_, i) => (
-          <div key={i} className="rounded-lg border p-6 space-y-3">
-            <Skeleton className="h-4 w-32" />
-            <Skeleton className="h-16 w-full" />
-          </div>
-        ))}
+      <div className="flex min-h-[calc(100vh-7.5rem)] items-center justify-center px-4">
+        <Spinner className="size-8 text-muted-foreground" />
       </div>
     );
   }

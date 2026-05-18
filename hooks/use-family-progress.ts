@@ -24,10 +24,14 @@ export type ProgressSection =
  */
 export function useFamilyProgress(yearId: number | null | undefined) {
   const key = yearId ? `/api/family-progress?yearId=${yearId}` : null;
+  // Revalidate on focus + every 30s. The application-progress row is
+  // downstream of admin-side actions (Approve / accept), so without
+  // this the parent stays on a stale view of their own state until
+  // they hard-reload.
   const { data, error, isLoading, mutate } = useSWR<XanoFamilyApplicationProgress | null>(
     key,
     fetcher,
-    { revalidateOnFocus: false, dedupingInterval: 10000 }
+    { revalidateOnFocus: true, refreshInterval: 30000, dedupingInterval: 10000 }
   );
 
   const { trackAutosave } = useApplicationFlow();

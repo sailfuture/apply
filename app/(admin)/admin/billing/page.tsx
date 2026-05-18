@@ -3,7 +3,8 @@
 import { useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
-import { ChevronRight, CreditCard, Search } from "lucide-react";
+import { ChevronRight, CreditCard, ExternalLink, Search } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   Card,
@@ -12,6 +13,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { STRIPE_INVOICES_DASHBOARD_URL } from "@/lib/stripe-dashboard";
 import {
   Table,
   TableBody,
@@ -53,15 +55,31 @@ export default function AdminBillingPage() {
 
   return (
     <div className="p-6 space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Billing</h1>
-        <p className="text-sm text-muted-foreground">
-          Every enrolled family with a Stripe subscription for the
-          selected year. Monthly amount, full-year total, and paid /
-          outstanding balances all reflect the payment-transactions
-          mirror (webhook-fed from Stripe). Click a row to see that
-          family&rsquo;s 12-month invoice schedule.
-        </p>
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-bold">Billing</h1>
+          <p className="text-sm text-muted-foreground">
+            Every enrolled family with a Stripe subscription for the
+            selected year. Monthly amount, full-year total, and paid
+            / outstanding balances all reflect the payment-transactions
+            mirror (webhook-fed from Stripe). Click a row to see that
+            family&rsquo;s 12-month invoice schedule.
+          </p>
+        </div>
+        {/* Direct link to Stripe's global invoices view for the
+            SailFuture account. Useful for cross-checking against the
+            local mirror, refunds we issued out-of-band, or
+            invoice-level edits that Stripe is the authority on. */}
+        <Button asChild variant="outline" size="sm" className="bg-white shrink-0">
+          <a
+            href={STRIPE_INVOICES_DASHBOARD_URL}
+            target="_blank"
+            rel="noreferrer"
+          >
+            <ExternalLink className="size-3.5 mr-1.5" aria-hidden="true" />
+            View invoices in Stripe
+          </a>
+        </Button>
       </div>
 
       {error ? (

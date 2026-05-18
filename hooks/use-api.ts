@@ -37,8 +37,15 @@ export function useStudents() {
 }
 
 export function useApplications() {
+  // Revalidate on focus + every 30s. The `isAccepted` / `isOffered`
+  // flags on each application row are admin-controlled (admin flips
+  // them from /admin/families and /admin/registrations), and the
+  // parent's lifecycle stage at /apply/year/[id] depends on them. No
+  // revalidation here means the parent has to hard-reload to see
+  // they've been accepted.
   return useSWR("/api/applications", fetcher, {
-    revalidateOnFocus: false,
+    revalidateOnFocus: true,
+    refreshInterval: 30000,
     dedupingInterval: 10000,
   });
 }

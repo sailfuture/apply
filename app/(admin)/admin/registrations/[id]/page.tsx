@@ -32,6 +32,7 @@ import { PhoneInput } from "@/components/ui/phone-input";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
@@ -178,10 +179,8 @@ export default function FamilyRegistrationDetailPage() {
 
   if (isLoading && !data) {
     return (
-      <div className="p-6 max-w-7xl mx-auto space-y-4">
-        <Skeleton className="h-12 w-72" />
-        <Skeleton className="h-48 w-full" />
-        <Skeleton className="h-48 w-full" />
+      <div className="flex min-h-[calc(100vh-12rem)] items-center justify-center px-4">
+        <Spinner className="size-8 text-muted-foreground" />
       </div>
     );
   }
@@ -467,6 +466,7 @@ export default function FamilyRegistrationDetailPage() {
               yearId={Number(yearId)}
               currentMonthlyTuition={familyPayment?.monthly_tuition_payment ?? null}
               billingStartDate={school_year?.billing_start_date ?? null}
+              onTuitionAmountSet={() => refresh()}
             />
           </SectionShell>
         </section>
@@ -848,15 +848,14 @@ function RegistrationSideNav({
               <span
                 className={cn(
                   "flex-1 truncate",
-                  // Admin rows render in the muted color regardless
-                  // of completion — the gray circle + gray label
-                  // matches the "admin-owned chrome" visual the
-                  // apply-flow nav uses for Acceptance / Scholarship.
-                  item.isAdmin
-                    ? "font-medium text-muted-foreground"
-                    : item.complete
-                      ? "font-semibold text-foreground"
-                      : "font-medium text-muted-foreground"
+                  // Completed rows (admin or parent) bold + dark. The
+                  // earlier rule muted admin rows regardless of state,
+                  // which meant Confirmation / Billing never visually
+                  // signaled "done" — admin had no left-nav feedback
+                  // after flipping the confirmation latch.
+                  item.complete
+                    ? "font-semibold text-foreground"
+                    : "font-medium text-muted-foreground"
                 )}
               >
                 {item.label}
@@ -896,15 +895,16 @@ function RegistrationSideNav({
  * `FamilyDetailNav.NavCircle` from the apply-flow page so both
  * admin surfaces use the same visual vocabulary.
  *
- * `isAdmin` flips the not-yet-complete state from the amber
+ * `isAdmin` swaps the not-yet-complete affordance from amber
  * square-pen ("parent has work to do") to a muted gray check
  * ("admin hasn't acted yet"). Used for admin-owned rows like
- * Confirmation where the parent isn't actively editing anything —
- * the amber square-pen would imply edit-in-progress, which doesn't
- * apply. The same muted gray check applies to the resolved state
- * too: the row stays understated even after admin acts, since the
- * Confirmation card is the page's chrome rather than its primary
- * work surface.
+ * Confirmation / Billing where the parent isn't actively editing
+ * anything. Once an admin row is `complete`, the circle still
+ * goes green — admin needs the same "yes, this is done" signal
+ * on their own rows as they get on parent-facing rows. Without
+ * this, the Confirmation row stayed gray after admin clicked
+ * Confirm Registration and there was no left-nav feedback that
+ * the rollup latch had flipped.
  */
 function NavCircle({
   complete,
@@ -913,16 +913,16 @@ function NavCircle({
   complete: boolean;
   isAdmin?: boolean;
 }) {
-  if (isAdmin) {
+  if (complete) {
     return (
-      <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground/60 border border-muted-foreground/20">
+      <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-green-500 text-white">
         <Check className="size-4" />
       </div>
     );
   }
-  if (complete) {
+  if (isAdmin) {
     return (
-      <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-green-500 text-white">
+      <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground/60 border border-muted-foreground/20">
         <Check className="size-4" />
       </div>
     );

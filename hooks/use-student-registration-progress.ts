@@ -35,9 +35,17 @@ export function useStudentRegistrationProgress(
   const key = yearId
     ? `/api/student-registration-progress?yearId=${yearId}`
     : null;
+  // Revalidate on focus + every 30s. The parent's view of registration
+  // status is downstream of admin actions (admin confirms a packet /
+  // confirms the family), and there's no client-push channel — so the
+  // parent's page is stuck on stale state until they reload. Focus
+  // revalidation handles tab-switchers; the 30s interval handles the
+  // case where the parent leaves the tab open and stares at the
+  // "registration in review" view waiting for admissions to finish.
   const { data, error, isLoading, mutate } =
     useSWR<XanoStudentRegistrationProgress | null>(key, fetcher, {
-      revalidateOnFocus: false,
+      revalidateOnFocus: true,
+      refreshInterval: 30000,
       dedupingInterval: 10000,
     });
 
