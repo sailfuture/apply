@@ -313,6 +313,13 @@ export default function FamilyRegistrationDetailPage() {
       completed: progress?.isRegistrationConfirmed === true,
       verified: null as boolean | null,
     },
+    // Billing — green once a Stripe subscription has been created
+    // for the (family, year). Admin-only row; `stripe_subscription_id`
+    // on the family-payment row is the authoritative signal.
+    billing: {
+      completed: !!familyPayment?.stripe_subscription_id,
+      verified: null as boolean | null,
+    },
   };
 
   // Per-section verify state — wraps the admin registration-progress
@@ -431,12 +438,43 @@ export default function FamilyRegistrationDetailPage() {
           </div>
         </div>
 
-        {/* Family Registration Confirmation — the rollup latch.
-            Sits at the TOP of the page (same pattern as Acceptance
-            on the apply-flow detail) so admin lands on the
-            family's status + the per-student roster + the family-
-            level actions (Revoke / View / Archive / Confirm)
-            before scrolling into the per-section work below. */}
+        {/* Billing — Stripe subscription state, invoice history, and
+            admin actions (cancel at period end / undo cancel /
+            update amount / refund last payment / start monthly
+            billing). Lifted to the top of the page so admin sees
+            billing status the moment they land — same level of
+            prominence as the Confirmation rollup. Empty state when
+            no subscription has been started yet (cascade runs on
+            Confirm Registration; the empty state's button is the
+            manual override / retry path). */}
+        <section id="section-billing" className="scroll-mt-20">
+          <SectionShell
+            title="Billing"
+            status={
+              familyPayment?.stripe_subscription_id
+                ? "complete"
+                : "in_progress"
+            }
+            notes={{
+              familyId: Number(family?.id ?? familyId),
+              yearId: Number(yearId),
+              section: "section-billing",
+              title: "Notes — Billing",
+            }}
+          >
+            <BillingCard
+              familyId={Number(family?.id ?? familyId)}
+              yearId={Number(yearId)}
+              currentMonthlyTuition={familyPayment?.monthly_tuition_payment ?? null}
+            />
+          </SectionShell>
+        </section>
+
+        {/* Family Registration Confirmation — the rollup latch for
+            the per-section work below. Sits beneath Billing so admin
+            scans the financial state first, then drops into the
+            family-level latch and the per-student roster + actions
+            (Revoke / View / Archive / Confirm). */}
         <FamilyRegistrationConfirmationCard
           familyId={Number(family?.id ?? familyId)}
           yearId={Number(yearId)}
@@ -525,36 +563,6 @@ export default function FamilyRegistrationDetailPage() {
             }}
           >
             <EnrollmentAgreementBlock progress={progress} />
-          </SectionShell>
-        </section>
-
-        {/* Billing — Stripe subscription state, invoice history, and
-            admin actions (pause / resume / cancel at period end /
-            update amount / refund last payment). Lives directly after
-            Enrollment because billing follows the signed agreement.
-            All data reads live from the Stripe API on page load — no
-            Xano mirror to keep in sync. Empty state when the parent
-            hasn't completed Payment Setup yet. */}
-        <section id="section-billing" className="scroll-mt-20">
-          <SectionShell
-            title="Billing"
-            status={
-              familyPayment?.stripe_subscription_id
-                ? "complete"
-                : "in_progress"
-            }
-            notes={{
-              familyId: Number(family?.id ?? familyId),
-              yearId: Number(yearId),
-              section: "section-billing",
-              title: "Notes — Billing",
-            }}
-          >
-            <BillingCard
-              familyId={Number(family?.id ?? familyId)}
-              yearId={Number(yearId)}
-              currentMonthlyTuition={familyPayment?.monthly_tuition_payment ?? null}
-            />
           </SectionShell>
         </section>
 
@@ -714,6 +722,7 @@ function RegistrationSideNav({
     emergency_contacts: { completed: boolean; verified: boolean };
     volunteer: { completed: boolean; verified: boolean };
     confirmation: { completed: boolean; verified: boolean | null };
+    billing: { completed: boolean; verified: boolean | null };
   };
 }) {
   const items: Array<{
@@ -731,14 +740,28 @@ function RegistrationSideNav({
     isAdmin?: boolean;
   }> = [
     {
-      // Confirmation moved to the top so admin lands on the
-      // family's rollup status first — same spirit as the apply-
-      // flow page where Acceptance leads the side nav. Marked
+      // Billing leads the side nav now — it's the first thing
+      // admin sees on the page, mirroring the body order. Marked
       // `isAdmin` so the circle renders as the muted gray check
-      // (no amber square-pen for "parent in progress" — admin
-      // owns this section). `verified: null` drops the trailing
-      // check since the main circle already conveys this row's
-      // state on its own.
+      // pattern (admin owns this section end-to-end; there's no
+      // parent in-progress amber state). `verified: null` drops
+      // the trailing check since "subscription exists" is the
+      // only meaningful binary signal — the circle conveys it.
+      key: "billing",
+      label: "Billing",
+      href: "#section-billing",
+      complete: sectionStatus.billing.completed,
+      verified: null,
+      isAdmin: true,
+    },
+    {
+      // Confirmation sits second — admin lands on Billing first,
+      // then drops into the rollup latch. Marked `isAdmin` so the
+      // circle renders as the muted gray check (no amber
+      // square-pen for "parent in progress" — admin owns this
+      // section). `verified: null` drops the trailing check since
+      // the main circle already conveys this row's state on its
+      // own.
       key: "confirmation",
       label: "Confirmation",
       href: "#section-confirmation",
