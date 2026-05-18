@@ -122,7 +122,12 @@ interface Props {
   currentMonthlyTuition: number | null;
 }
 
-type BillingAction = "start" | "cancel" | "update-amount" | "refund";
+type BillingAction =
+  | "start"
+  | "cancel"
+  | "uncancel"
+  | "update-amount"
+  | "refund";
 
 export function BillingCard({
   familyId,
@@ -327,7 +332,27 @@ export function BillingCard({
               Refund last payment
             </Button>
           ) : null}
-          {!cancelingAtPeriodEnd ? (
+          {cancelingAtPeriodEnd ? (
+            // Undo the pending cancellation. Only valid while the
+            // subscription is still alive (we're inside the grace
+            // window before period_end). Once Stripe deletes the
+            // subscription, the row's stripe_subscription_id clears
+            // and the empty state takes over.
+            <Button
+              variant="outline"
+              size="sm"
+              className="bg-white"
+              disabled={pending !== null}
+              onClick={() => runAction("uncancel")}
+            >
+              {pending === "uncancel" ? (
+                <Loader2 className="size-3.5 mr-1.5 animate-spin" aria-hidden="true" />
+              ) : (
+                <RefreshCw className="size-3.5 mr-1.5" aria-hidden="true" />
+              )}
+              Undo cancellation
+            </Button>
+          ) : (
             <Button
               variant="outline"
               size="sm"
@@ -338,7 +363,7 @@ export function BillingCard({
               <XCircle className="size-3.5 mr-1.5" aria-hidden="true" />
               Cancel at period end
             </Button>
-          ) : null}
+          )}
         </div>
       ) : null}
 
@@ -565,8 +590,10 @@ function actionSuccessMessage(action: BillingAction): string {
       return "Monthly billing started. Stripe will email the first invoice on the billing start date.";
     case "cancel":
       return "Subscription will cancel at the end of the current billing period.";
+    case "uncancel":
+      return "Cancellation reversed. Monthly billing continues as scheduled.";
     case "update-amount":
-      return "Monthly amount updated. Stripe will prorate on the next invoice.";
+      return "Monthly amount updated. The new amount will be reflected on the next monthly invoice.";
     case "refund":
       return "Refund issued. The family will see it on their original payment method in 5-10 business days.";
   }

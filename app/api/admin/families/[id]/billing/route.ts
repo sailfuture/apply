@@ -5,6 +5,7 @@ import {
   cancelSubscriptionAtPeriodEnd,
   getBillingSnapshot,
   refundInvoice,
+  uncancelSubscription,
   updateSubscriptionMonthlyAmount,
 } from "@/lib/stripe";
 import { startMonthlyBilling, BillingPreconditionError } from "@/lib/billing";
@@ -33,7 +34,7 @@ import { startMonthlyBilling, BillingPreconditionError } from "@/lib/billing";
  */
 
 interface BillingActionBody {
-  action: "start" | "cancel" | "update-amount" | "refund";
+  action: "start" | "cancel" | "uncancel" | "update-amount" | "refund";
   /** Required when `action === "update-amount"`. New monthly amount
    *  in DOLLARS (matching `monthly_tuition_payment` storage). We
    *  convert to cents before calling Stripe. */
@@ -112,6 +113,15 @@ export async function POST(
     switch (body.action) {
       case "cancel":
         await cancelSubscriptionAtPeriodEnd(subscriptionId);
+        break;
+      case "uncancel":
+        // Reverse a pending cancellation. Only valid while the
+        // subscription is still alive (admin clicked Cancel and
+        // hasn't waited for the period end). Once the period ends
+        // and Stripe deletes the subscription, the row's
+        // stripe_subscription_id gets cleared and admin uses the
+        // Start Monthly Billing button instead.
+        await uncancelSubscription(subscriptionId);
         break;
       case "update-amount": {
         const dollars = Number(body.monthlyTuition);

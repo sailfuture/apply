@@ -361,6 +361,20 @@ export async function cancelSubscriptionAtPeriodEnd(
   });
 }
 
+/** Reverse a pending cancellation. Clears `cancel_at_period_end` so
+ *  the subscription continues normally past the current period end.
+ *  Only meaningful while the cancellation is still pending — once
+ *  the period ends Stripe deletes the subscription and there's
+ *  nothing to undo (admin must start a fresh subscription instead). */
+export async function uncancelSubscription(
+  subscriptionId: string
+): Promise<Stripe.Subscription> {
+  const stripe = getStripeClient();
+  return stripe.subscriptions.update(subscriptionId, {
+    cancel_at_period_end: false,
+  });
+}
+
 /**
  * Update the family's monthly amount on an existing Subscription.
  * Stripe requires us to swap the SubscriptionItem with a new
