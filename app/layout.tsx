@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
+import { Analytics } from "@vercel/analytics/next";
 import { Toaster } from "@/components/ui/sonner";
 import { AppChrome } from "@/components/app-chrome";
 import "./globals.css";
@@ -36,6 +37,7 @@ export default function RootLayout({
           {/* Position is responsive — top-center on mobile (so it doesn't
               collide with the fixed bottom nav), bottom-right on xl+. */}
           <Toaster />
+          <Analytics />
         </body>
       </html>
     </ClerkProvider>
