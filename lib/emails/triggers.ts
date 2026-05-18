@@ -44,6 +44,12 @@ interface FamilyContext {
   family: XanoFamily;
   parents: XanoParent[];
   students: XanoStudent[];
+  /** Scope for the email-notifications audit log. `familyId` is
+   *  always set; `yearId` is set when the originating event is
+   *  year-scoped (which is all current triggers — left optional on
+   *  the type for forward-compat with future global notifications). */
+  familyId: number;
+  yearId?: number;
 }
 
 /** Pick the primary parent — lowest id wins, matches the convention
@@ -128,6 +134,8 @@ export async function resolveFamilyContext(
         firstName: s.first_name?.trim() || "your student",
       })),
       loginUrl: getLoginUrl(),
+      familyId,
+      yearId,
     };
   } catch (err) {
     console.error(
@@ -198,6 +206,8 @@ export async function sendApplicationReceivedEmail(
       login_url: ctx.loginUrl,
     }),
     tag: "application-received",
+    familyId: ctx.familyId,
+    yearId: ctx.yearId,
   });
 }
 
@@ -218,6 +228,8 @@ export async function sendAcceptanceEmail(
       login_url: ctx.loginUrl,
     }),
     tag: "accepted",
+    familyId: ctx.familyId,
+    yearId: ctx.yearId,
   });
 }
 
@@ -240,6 +252,8 @@ export async function sendRegistrationReceivedEmail(
       login_url: ctx.loginUrl,
     }),
     tag: "registration-received",
+    familyId: ctx.familyId,
+    yearId: ctx.yearId,
   });
 }
 
@@ -260,6 +274,8 @@ export async function sendEnrolledEmail(
       login_url: ctx.loginUrl,
     }),
     tag: "enrolled",
+    familyId: ctx.familyId,
+    yearId: ctx.yearId,
   });
 }
 
@@ -282,6 +298,8 @@ export async function sendNotAcceptedEmail(
       login_url: ctx.loginUrl,
     }),
     tag: "not-accepted",
+    familyId: ctx.familyId,
+    yearId: ctx.yearId,
   });
 }
 
@@ -303,6 +321,8 @@ export async function sendDraftReminderEmail(
       login_url: ctx.loginUrl,
     }),
     tag: "draft-reminder",
+    familyId: ctx.familyId,
+    yearId: ctx.yearId,
   });
 }
 
@@ -321,6 +341,8 @@ export async function sendEnrollmentReminderEmail(
       login_url: ctx.loginUrl,
     }),
     tag: "enrollment-reminder",
+    familyId: ctx.familyId,
+    yearId: ctx.yearId,
   });
 }
 
@@ -340,5 +362,7 @@ export async function sendBackToSchoolEmail(
       login_url: ctx.loginUrl,
     }),
     tag: "back-to-school",
+    familyId: ctx.familyId,
+    yearId: ctx.yearId,
   });
 }

@@ -525,6 +525,42 @@ export interface XanoPaymentTransaction {
   last_synced_at: number;
 }
 
+/** Audit row written by `lib/emails/send.ts` after every Resend API
+ *  call. Backs the admin "Sent emails" log on the family registration
+ *  detail page so admin can confirm which notifications a family has
+ *  received (and which failed / dry-ran).
+ *
+ *  XANO SCHEMA NOTE: create a table `registration_email_notifications`
+ *  with the columns below before deploying — without it the audit
+ *  writes 404 and the log table is empty. Columns:
+ *    - id (int, pk, auto)
+ *    - created_at (timestamp, auto)
+ *    - registration_families_id (int, FK → registration_families)
+ *    - registration_school_years_id (int, nullable — null for sends
+ *      that aren't year-scoped)
+ *    - template (text — matches the `tag` field on send, e.g.
+ *      "application-received", "accepted", "not-accepted")
+ *    - subject (text)
+ *    - recipient_emails (text — comma-separated list)
+ *    - cc_emails (text — comma-separated list)
+ *    - status (text — "sent" | "failed" | "dry_run")
+ *    - resend_id (text, nullable — Resend's email id when ok)
+ *    - error_message (text, nullable — populated on failed sends)
+ */
+export interface XanoEmailNotification {
+  id: number;
+  created_at: number;
+  registration_families_id: number;
+  registration_school_years_id: number | null;
+  template: string;
+  subject: string;
+  recipient_emails: string;
+  cc_emails: string;
+  status: "sent" | "failed" | "dry_run" | string;
+  resend_id: string | null;
+  error_message: string | null;
+}
+
 /** Single volunteer-hour entry for a family. Rows are created by admin
  *  on the staff side as families log time at Academy events; the parent
  *  dashboard reads them via `volunteer_hours_by_family` (admin group).
@@ -3102,6 +3138,75 @@ export const xano = {
       if (!res.ok)
         throw new Error(`Xano error ${res.status}: ${await res.text()}`);
       return res.json();
+    },
+  },
+
+  /**
+   * Audit log for outbound transactional email. One row per Resend
+   * send attempt (including dry runs in dev). Written by
+   * `lib/emails/send.ts` as a best-effort tail call — log failures
+   * never fail the email send itself. Surfaced by the admin
+   * "Sent emails" section on the family registration detail page.
+   *
+   * See `XanoEmailNotification` interface for the table schema.
+   */
+  emailNotifications: {
+    async create(
+      data: Omit<XanoEmailNotification, "id" | "created_at">
+    ): Promise<XanoEmailNotification> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_email_notifications`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        }
+      );
+      if (!res.ok) {
+        throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      }
+      return res.json();
+    },
+
+    /** Every email row for a single family, sorted newest first.
+     *  Optionally scoped to a year — pass `yearId` to filter, omit
+     *  to see all years. Returns `[]` on any error so the UI gets a
+     *  predictable empty state without throwing. */
+    async getByFamily(
+      familyId: number,
+      yearId?: number
+    ): Promise<XanoEmailNotification[]> {
+      try {
+        const params = new URLSearchParams({
+          registration_families_id: String(familyId),
+        });
+        if (yearId) {
+          params.set("registration_school_years_id", String(yearId));
+        }
+        const res = await fetch(
+          `${getBaseUrl()}/registration_email_notifications?${params.toString()}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) return [];
+        const results = await res.json();
+        if (!Array.isArray(results)) return [];
+        // Defensive filter in case Xano's query-param matching isn't
+        // wired on a fresh environment — same belt-and-suspenders
+        // pattern other groups use.
+        const filtered = (results as XanoEmailNotification[]).filter((r) => {
+          if (Number(r.registration_families_id) !== familyId) return false;
+          if (yearId && Number(r.registration_school_years_id) !== yearId)
+            return false;
+          return true;
+        });
+        return filtered.sort((a, b) => b.created_at - a.created_at);
+      } catch (err) {
+        console.error(
+          `[xano.emailNotifications.getByFamily] threw for familyId=${familyId} yearId=${yearId}:`,
+          err
+        );
+        return [];
+      }
     },
   },
 

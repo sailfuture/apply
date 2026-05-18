@@ -70,6 +70,7 @@ import {
 } from "@/components/ui/dialog";
 import { FamilyNotesSheet } from "@/components/admin/family-notes-sheet";
 import { BillingCard } from "@/components/admin/billing-card";
+import { EmailNotificationsCard } from "@/components/admin/email-notifications-card";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { cn } from "@/lib/utils";
 import {
@@ -696,6 +697,31 @@ export default function FamilyRegistrationDetailPage() {
             }}
           >
             <VolunteerHoursBlock progress={progress} />
+          </SectionShell>
+        </section>
+
+        {/* Sent emails — audit log of every transactional notification
+            Resend has fired for this (family, year). Lives at the
+            bottom of the page so it doesn't compete with the
+            operational sections above, but stays scannable for admin
+            who want to confirm what a family has received without
+            jumping to the Resend dashboard. Reads from the
+            `registration_email_notifications` Xano table written by
+            `lib/emails/send.ts`. */}
+        <section id="section-emails" className="scroll-mt-20">
+          <SectionShell
+            title="Sent emails"
+            notes={{
+              familyId: Number(family?.id ?? familyId),
+              yearId: Number(yearId),
+              section: "section-emails",
+              title: "Notes — Sent emails",
+            }}
+          >
+            <EmailNotificationsCard
+              familyId={Number(family?.id ?? familyId)}
+              yearId={Number(yearId)}
+            />
           </SectionShell>
         </section>
       </main>
@@ -4806,7 +4832,16 @@ function RevokeAcceptanceButton({
     }
   }
 
-  if (!acceptedAtAll) return null;
+  // Always render the button so the footer's 4-cell layout stays
+  // stable across pre-/post-acceptance and pre-/post-confirmation.
+  // Disabled when there's no acceptance to revoke (family never
+  // accepted) or when the downstream registration confirmation locks
+  // it. Tooltip carries the reason in both cases.
+  const lockedReason = !acceptedAtAll
+    ? "Family hasn't been accepted yet — nothing to revoke."
+    : registrationConfirmed
+      ? "Undo registration confirmation above before revoking acceptance."
+      : undefined;
 
   return (
     <>
@@ -4814,12 +4849,8 @@ function RevokeAcceptanceButton({
         type="button"
         variant="outline"
         size="lg"
-        disabled={saving || registrationConfirmed}
-        title={
-          registrationConfirmed
-            ? "Undo registration confirmation above before revoking acceptance."
-            : undefined
-        }
+        disabled={saving || !acceptedAtAll || registrationConfirmed}
+        title={lockedReason}
         onClick={() => setOpen(true)}
         className="bg-white w-full"
       >
@@ -5168,17 +5199,17 @@ function FamilyRegistrationConfirmationCard({
           pill in the button row already conveys the state, and
           duplicating it as a caption made the footer feel
           stacked. */}
+      {/* Footer is always a 4-cell grid (Archive · Revoke acceptance ·
+          Undo · Confirm / Registration Confirmed) so the row layout
+          stays consistent across pre- and post-confirmation states.
+          Buttons that don't apply in the current state stay rendered
+          but disabled — admin gets the same visual structure either
+          way, and tooltips explain why a button is locked. The
+          "Confirmed" pill sits at the far right when confirmed so
+          it's the last thing admin's eye lands on as the headline
+          state. */}
       <div className="border-t bg-white px-5 py-3">
-        <div
-          className={cn(
-            "grid gap-2",
-            // Pre-confirm: Archive / Revoke / Confirm. Post-confirm
-            // the Confirm slot splits into a muted "Registration
-            // Confirmed" pill + an Undo button, so we widen the
-            // grid to 4 cells so everything keeps full-width.
-            confirmed ? "grid-cols-4" : "grid-cols-3"
-          )}
-        >
+        <div className="grid gap-2 grid-cols-4">
           <ArchiveRegistrationButton
             familyId={familyId}
             yearId={yearId}
@@ -5194,75 +5225,46 @@ function FamilyRegistrationConfirmationCard({
             registrationConfirmed={confirmed}
             onRevoked={onConfirmed}
           />
+          {/* Undo: disabled (gray, tooltip-explained) until the
+              family has been confirmed. Active outline button once
+              there's a confirmation latch to undo. */}
+          <Button
+            type="button"
+            variant="outline"
+            size="lg"
+            onClick={() => setUndoOpen(true)}
+            disabled={saving || !confirmed}
+            title={
+              !confirmed
+                ? "Nothing to undo — registration hasn't been confirmed yet."
+                : undefined
+            }
+            className="bg-white w-full"
+          >
+            {saving && confirmed ? (
+              <Loader2 className="size-4 mr-1.5 animate-spin shrink-0" />
+            ) : (
+              <Undo2 className="size-4 mr-1.5 shrink-0" />
+            )}
+            <span className="truncate">Undo</span>
+          </Button>
+          {/* Last cell flips identity based on confirmation state:
+              pre-confirm it's the primary green "Confirm Family
+              Registration" action; post-confirm it collapses into
+              the muted "Registration Confirmed" pill. Pre-confirm
+              the button is disabled when prerequisites aren't met
+              (gateReason carries the why on hover). */}
           {confirmed ? (
-            <>
-              {/* Order in the grid (left→right) when confirmed:
-                  Archive · Revoke acceptance · Undo · Registration
-                  Confirmed. The Confirmed pill sits at the far
-                  right so it's the last thing admin's eye lands
-                  on — the headline state, not a button to
-                  click. */}
-              <Button
-                type="button"
-                variant="outline"
-                size="lg"
-                onClick={() => setUndoOpen(true)}
-                disabled={saving}
-                className="bg-white w-full"
-              >
-                {saving ? (
-                  <Loader2 className="size-4 mr-1.5 animate-spin shrink-0" />
-                ) : (
-                  <Undo2 className="size-4 mr-1.5 shrink-0" />
-                )}
-                <span className="truncate">Undo</span>
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="lg"
-                disabled
-                className="bg-muted text-muted-foreground cursor-default disabled:opacity-100 w-full"
-              >
-                <CheckCircle2 className="size-4 mr-1.5 shrink-0" />
-                <span className="truncate">Registration Confirmed</span>
-              </Button>
-              <AlertDialog open={undoOpen} onOpenChange={setUndoOpen}>
-                <AlertDialogContent>
-                  <AlertDialogHeader>
-                    <AlertDialogTitle>
-                      Undo {familyName || "family"} registration
-                      confirmation?
-                    </AlertDialogTitle>
-                    <AlertDialogDescription>
-                      This clears the family-level registration
-                      latch. Per-section verifies and per-student
-                      packet confirmations stay intact — only the
-                      rollup audit is cleared. You can re-confirm at
-                      any time.
-                    </AlertDialogDescription>
-                  </AlertDialogHeader>
-                  <AlertDialogFooter>
-                    <AlertDialogCancel disabled={saving}>
-                      Cancel
-                    </AlertDialogCancel>
-                    <AlertDialogAction
-                      disabled={saving}
-                      className="bg-amber-600 hover:bg-amber-700 text-white"
-                      onClick={(e) => {
-                        e.preventDefault();
-                        void patchConfirmed(false);
-                      }}
-                    >
-                      {saving ? (
-                        <Loader2 className="size-3.5 mr-1.5 animate-spin" />
-                      ) : null}
-                      Yes, undo
-                    </AlertDialogAction>
-                  </AlertDialogFooter>
-                </AlertDialogContent>
-              </AlertDialog>
-            </>
+            <Button
+              type="button"
+              variant="outline"
+              size="lg"
+              disabled
+              className="bg-muted text-muted-foreground cursor-default disabled:opacity-100 w-full"
+            >
+              <CheckCircle2 className="size-4 mr-1.5 shrink-0" />
+              <span className="truncate">Registration Confirmed</span>
+            </Button>
           ) : (
             <Button
               type="button"
@@ -5283,6 +5285,42 @@ function FamilyRegistrationConfirmationCard({
               </span>
             </Button>
           )}
+          {/* Undo confirmation dialog — lifted out of the conditional
+              so the trigger stays mounted across state changes. */}
+          <AlertDialog open={undoOpen} onOpenChange={setUndoOpen}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>
+                  Undo {familyName || "family"} registration
+                  confirmation?
+                </AlertDialogTitle>
+                <AlertDialogDescription>
+                  This clears the family-level registration latch.
+                  Per-section verifies and per-student packet
+                  confirmations stay intact — only the rollup audit
+                  is cleared. You can re-confirm at any time.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel disabled={saving}>
+                  Cancel
+                </AlertDialogCancel>
+                <AlertDialogAction
+                  disabled={saving}
+                  className="bg-amber-600 hover:bg-amber-700 text-white"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    void patchConfirmed(false);
+                  }}
+                >
+                  {saving ? (
+                    <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                  ) : null}
+                  Yes, undo
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
       </div>
     </Card>
