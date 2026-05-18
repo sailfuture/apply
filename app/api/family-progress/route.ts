@@ -1,6 +1,7 @@
 import { auth, currentUser } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
 import { xano } from "@/lib/xano";
+import { sendApplicationReceivedEmail } from "@/lib/emails/triggers";
 
 /**
  * Read-or-create the progress row for the current Clerk user's family + a
@@ -175,5 +176,21 @@ export async function PATCH(req: NextRequest) {
 
   const row = await resolveProgress(familyId, yearId);
   const updated = await xano.familyApplicationProgress.update(row.id, patch);
+
+  // Email 1: parent flipped `isSubmitted` from false → true. Send
+  // the "we received your application" confirmation. We compare
+  // against the pre-patch row so re-submissions (admin un-locks,
+  // parent re-submits) or no-op PATCHes don't fire duplicates.
+  // Best-effort: a failed Resend send doesn't fail the PATCH the
+  // parent just made.
+  if (patch.isSubmitted === true && row.isSubmitted !== true) {
+    sendApplicationReceivedEmail(familyId, yearId).catch((err) => {
+      console.error(
+        `[/api/family-progress] sendApplicationReceivedEmail failed for family=${familyId} year=${yearId}:`,
+        err
+      );
+    });
+  }
+
   return NextResponse.json(updated, { status: 200 });
 }

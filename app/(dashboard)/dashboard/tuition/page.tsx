@@ -290,7 +290,7 @@ export default function DashboardTuitionPage() {
           { label: yearName, href: dashboardHref },
           { label: "Tuition & Fees" },
         ]}
-        title={`${yearName} academic year — payment schedule`}
+        title={`Tuition & Fees — ${yearName} School Year`}
         subtitle={`Per-student breakdown of tuition, scholarships, and fees for the ${yearName} school year. Same breakdown you reviewed and signed during registration.`}
       />
 

@@ -466,7 +466,6 @@ export default function FamilyRegistrationDetailPage() {
               yearId={Number(yearId)}
               currentMonthlyTuition={familyPayment?.monthly_tuition_payment ?? null}
               billingStartDate={school_year?.billing_start_date ?? null}
-              onTuitionAmountSet={() => refresh()}
             />
           </SectionShell>
         </section>

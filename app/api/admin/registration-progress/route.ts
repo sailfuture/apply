@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
 import type { XanoStudentRegistrationProgress } from "@/lib/xano";
+import { sendEnrolledEmail } from "@/lib/emails/triggers";
 
 /**
  * Admin-only PATCH for the per-year `registration_student_registration_progress`
@@ -271,6 +272,22 @@ export async function PATCH(req: NextRequest) {
       patch.registration_confirmed_admin = next ? adminName : "";
       if (next) {
         if (!("isSubmitted" in patch)) patch.isSubmitted = true;
+        // Cascade: family-level confirmation implies the Registration
+        // Packet section is complete + verified. Without this, the
+        // sidebar's "Registration" dot stays yellow even after admin
+        // has confirmed the family, because the per-student packet
+        // confirms only cascade `isRegistration=true` when EVERY
+        // active student has a confirmed packet — and the family-level
+        // Confirm button can be reached via different paths (admin
+        // overrides, etc.) where that condition might not be true.
+        // Flipping both here keeps the visual state coherent with the
+        // confirmation latch.
+        if (!("isRegistration" in patch)) patch.isRegistration = true;
+        if (!("is_registration_admin_confirm" in patch)) {
+          patch.is_registration_admin_confirm = true;
+          patch.is_registration_admin_confirm_time = now;
+          patch.is_registration_admin_confirm_admin = adminName;
+        }
       }
     }
 
@@ -326,34 +343,28 @@ export async function PATCH(req: NextRequest) {
           cascadeErr
         );
       }
-      // Auto-start monthly billing on the same confirmation event.
-      // `startMonthlyBilling` is idempotent — if a subscription
-      // already exists on the family-payment row (admin reconfirm
-      // after unconfirm, or admin already clicked the manual Start
-      // Billing button), it returns the existing one without
-      // creating a duplicate. Best-effort: precondition failures
-      // (no tuition amount, no primary parent email) log and let
-      // admin retry via the manual button.
-      try {
-        const { startMonthlyBilling, BillingPreconditionError } =
-          await import("@/lib/billing");
-        try {
-          await startMonthlyBilling({ familyId, yearId });
-        } catch (billingErr) {
-          if (billingErr instanceof BillingPreconditionError) {
-            console.warn(
-              `[/api/admin/registration-progress] billing cascade skipped for (family=${familyId}, year=${yearId}): ${billingErr.message}`
-            );
-          } else {
-            throw billingErr;
-          }
-        }
-      } catch (cascadeErr) {
-        console.error(
-          "[/api/admin/registration-progress] billing cascade failed:",
-          cascadeErr
-        );
+
+      // Email 4: "officially enrolled" message. Guarded against
+      // re-confirms by comparing the pre-patch row — admin clicking
+      // Confirm a second time (rare, but possible after an unconfirm/
+      // reconfirm cycle) shouldn't re-fire the welcome email. Best-
+      // effort: failures log and don't break the confirmation.
+      if (row.isRegistrationConfirmed !== true) {
+        sendEnrolledEmail(familyId, yearId).catch((err) => {
+          console.error(
+            `[/api/admin/registration-progress] sendEnrolledEmail failed for family=${familyId} year=${yearId}:`,
+            err
+          );
+        });
       }
+      // NOTE: monthly billing is no longer auto-started here. Admin
+      // must click the explicit "Start Monthly Billing" button on the
+      // family registration detail page's Billing card. That button
+      // makes the decision visible and surfaces the monthly amount
+      // before the subscription gets created. Confirmation no longer
+      // implies a Stripe write — the two events are deliberately
+      // decoupled so admin can confirm a packet for record-keeping
+      // even if the family hasn't agreed to billing terms yet.
     }
 
     return NextResponse.json(updated);

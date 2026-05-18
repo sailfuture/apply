@@ -1153,6 +1153,41 @@ export interface XanoFamilyApplicationProgress {
   scholarship_admin_complete?: boolean;
   scholarship_complete_admin_time?: number | null;
   scholarship_admin_complete_admin?: string;
+
+  // ── Email-notification tracking ────────────────────────────────
+  // These columns gate the cron-driven reminder emails (Email 5
+  // draft reminder, Email 6 enrollment-agreement reminder, Email 11
+  // back-to-school). All four are optional on the type because the
+  // columns were added after launch — undefined and null both mean
+  // "not stamped." Stamp values are unix-ms `Date.now()` timestamps.
+  //
+  // XANO SCHEMA NOTE: add these four columns to
+  // `registration_family_application_progress` as nullable int
+  // (timestamp) types before deploying the cron — otherwise the
+  // reminder dedupe writes will silently fail on the Xano side
+  // and the cron will spam the same email every tick.
+
+  /** Stamped by `/api/admin/family-progress` on the first
+   *  `isAccepted` false → true transition. Cleared back to null
+   *  when admin revokes acceptance so a fresh accept restarts the
+   *  reminder window. Anchors Email 6's "5 days since acceptance"
+   *  computation in the cron. */
+  accepted_at?: number | null;
+  /** Stamped by the cron once Email 5 (draft reminder) has been
+   *  sent for this family + year. One-way latch — never cleared,
+   *  so families that drift in and out of the 3-5 day window only
+   *  receive the nudge once. */
+  draft_reminder_sent_at?: number | null;
+  /** Stamped by the cron once Email 6 (enrollment-agreement
+   *  reminder) has been sent for this family + year. Cleared
+   *  alongside `accepted_at` when admin revokes acceptance so a
+   *  re-accept can re-send. */
+  acceptance_reminder_sent_at?: number | null;
+  /** Stamped by the cron once Email 11 (back-to-school) has been
+   *  sent for this family + year. One-way latch — even if a parent
+   *  un-enrolls and re-enrolls before August, we only welcome them
+   *  back-to-school once per year. */
+  back_to_school_sent_at?: number | null;
 }
 
 /** Bridge row: one per family per school year, covering the POST-acceptance

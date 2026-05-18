@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
 import type { XanoFamilyApplicationProgress } from "@/lib/xano";
+import { sendAcceptanceEmail } from "@/lib/emails/triggers";
 
 /**
  * Admin GET — resolves the per-year progress row for a family. Mirrors
@@ -225,6 +226,22 @@ export async function PATCH(req: NextRequest) {
       if (patch.isSubmitted === undefined) patch.isSubmitted = true;
     }
 
+    // Stamp `accepted_at` on the false → true transition so the
+    // cron-driven enrollment-agreement reminder (Email 6) has a
+    // reliable anchor for "5 days since acceptance". Only set on
+    // first acceptance — re-accepts after a revoke preserve the
+    // original timestamp so we don't reset the reminder clock.
+    // Clear back to null on revoke so a fresh accept starts a
+    // fresh window. Tracked alongside the dedupe stamp
+    // `acceptance_reminder_sent_at` written by the cron itself.
+    if (patch.isAccepted === true && row.isAccepted !== true && !row.accepted_at) {
+      patch.accepted_at = Date.now();
+    }
+    if (patch.isAccepted === false && row.isAccepted === true) {
+      patch.accepted_at = null;
+      patch.acceptance_reminder_sent_at = null;
+    }
+
     // Auto-stamp the audit pair + cascade to parent-completion for
     // every section-confirm bool that appears in the patch.
     //
@@ -271,6 +288,21 @@ export async function PATCH(req: NextRequest) {
     }
 
     const updated = await xano.familyApplicationProgress.update(row.id, patch);
+
+    // Email 2: admin flipped `isAccepted` from false → true. Send
+    // the "you've been accepted" notification to all parents on the
+    // family. Best-effort: a failed send doesn't fail the PATCH.
+    // Transition guard against the pre-patch row prevents duplicate
+    // sends on re-saves (admin clicks Accept twice, or PATCHes
+    // another field while acceptance is already true).
+    if (patch.isAccepted === true && row.isAccepted !== true) {
+      sendAcceptanceEmail(familyId, yearId).catch((err) => {
+        console.error(
+          `[/api/admin/family-progress] sendAcceptanceEmail failed for family=${familyId} year=${yearId}:`,
+          err
+        );
+      });
+    }
 
     // Cascade to the registration progress row when admin flips
     // acceptance. Two directions:

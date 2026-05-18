@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
+import { sendNotAcceptedEmail } from "@/lib/emails/triggers";
 
 /**
  * Admin GET / PATCH for a single `registration_application` row.
@@ -158,7 +159,42 @@ export async function PATCH(
       );
     }
 
+    // Snapshot pre-patch state for the denial-email transition guard
+    // below. Only loaded when this PATCH is touching `isDenied`, since
+    // every other path doesn't need the row's prior state. Best-effort:
+    // if the read fails the email check is skipped — better to silently
+    // miss one notification than fail the admin's PATCH.
+    let priorIsDenied: boolean | undefined;
+    if ("isDenied" in patch) {
+      try {
+        const prior = await xano.applications.getById(id);
+        priorIsDenied = prior.isDenied;
+      } catch (err) {
+        console.warn(
+          `[/api/admin/applications/${id}] couldn't read prior isDenied — skipping denial-email transition guard:`,
+          err
+        );
+      }
+    }
+
     const updated = await xano.applications.update(id, patch);
+
+    // Email 8: admin denied this application. Per-application
+    // rather than family-level — the family might have other
+    // students still in flight, and the message should reference
+    // the specific denied student by name. Transition guard prevents
+    // re-saves (admin clicks Deny twice, or PATCHes another field
+    // while already denied) from re-firing the email. Best-effort
+    // send.
+    if (patch.isDenied === true && priorIsDenied !== true) {
+      sendNotAcceptedEmail(id).catch((err) => {
+        console.error(
+          `[/api/admin/applications/${id}] sendNotAcceptedEmail failed:`,
+          err
+        );
+      });
+    }
+
     return NextResponse.json(updated);
   } catch (err) {
     return handleAdminError(err);

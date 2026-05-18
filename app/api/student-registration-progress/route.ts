@@ -2,6 +2,7 @@ import { auth, currentUser } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
 import { xano } from "@/lib/xano";
 import type { XanoStudentRegistrationProgress } from "@/lib/xano";
+import { sendRegistrationReceivedEmail } from "@/lib/emails/triggers";
 
 /**
  * Read-or-create the registration progress row for the current Clerk user's
@@ -163,16 +164,32 @@ export async function PATCH(req: NextRequest) {
   // it if a bool later flips back. This keeps the post-enrollment dashboard
   // sticky across unlock/re-lock cycles.
   const next = { ...row, ...patch };
-  if (
+  const justSubmitted =
     next.isTuition === true &&
     next.isEnrollment === true &&
     next.isRegistration === true &&
     next.isVolunteerHours === true &&
-    (!row.submitted_date || row.submitted_date === null)
-  ) {
+    (!row.submitted_date || row.submitted_date === null);
+  if (justSubmitted) {
     patch.submitted_date = Date.now();
   }
 
   const updated = await xano.studentRegistrationProgress.update(row.id, patch);
+
+  // Email 3: parent just completed the registration packet. Fires
+  // on the same one-way latch that stamps `submitted_date` above —
+  // first PATCH that lands all four section bools true wins. Re-
+  // PATCHes after submission are no-ops because `submitted_date` is
+  // already populated, so the guard above is false. Best-effort
+  // send: a failed email doesn't fail the parent's submission.
+  if (justSubmitted) {
+    sendRegistrationReceivedEmail(familyId, yearId).catch((err) => {
+      console.error(
+        `[/api/student-registration-progress] sendRegistrationReceivedEmail failed for family=${familyId} year=${yearId}:`,
+        err
+      );
+    });
+  }
+
   return NextResponse.json(updated, { status: 200 });
 }
