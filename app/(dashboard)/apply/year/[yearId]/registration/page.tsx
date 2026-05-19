@@ -1390,42 +1390,39 @@ export default function RegistrationPage() {
         }
       }
 
-      // 3. Student registrations: POST new, PATCH existing
+      // 3. Student registrations: PATCH existing packets only.
+      //
+      // Packet creation lives on the admin-side accept cascade
+      // (`/api/admin/family-progress` + `/api/admin/applications/[id]`)
+      // — when admin accepts a family or a single application, every
+      // active student's packet is resolve-or-created server-side
+      // with the billing + SUFS columns mirrored from the
+      // application row. By the time a parent reaches this form,
+      // each active student already has a packet, so this client
+      // only needs to PATCH.
+      //
+      // A missing `reg.id` here means either (a) the parent loaded
+      // this page before acceptance landed (shouldn't happen — the
+      // route gate hides this view pre-acceptance), or (b) the
+      // server-side cascade failed for that student. We log loudly
+      // so the failure surfaces instead of silently re-creating a
+      // duplicate packet, but skip the save for that row.
       for (const reg of Object.values(registrations)) {
+        if (!reg.id) {
+          console.error(
+            `Skipping registration save for student ${reg.registration_students_id}: no packet id on file. Acceptance cascade should have created the row server-side.`
+          );
+          continue;
+        }
         const payload = { ...reg };
         delete (payload as Record<string, unknown>)["id"];
-
-        if (reg.id) {
-          promises.push(
-            fetch(`/api/student-registration/${reg.id}`, {
-              method: "PATCH",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(payload),
-            })
-          );
-        } else {
-          promises.push(
-            fetch("/api/student-registration", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(payload),
-            }).then(async (res) => {
-              if (res.ok) {
-                const created = await res.json();
-                setRegistrations((prev) => {
-                  const next = { ...prev };
-                  next[reg.registration_students_id] = created;
-                  return next;
-                });
-              } else {
-                const errBody = await res.text().catch(() => "");
-                console.error(
-                  `Failed to create student registration for student ${reg.registration_students_id}: ${res.status} ${errBody}`
-                );
-              }
-            })
-          );
-        }
+        promises.push(
+          fetch(`/api/student-registration/${reg.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          })
+        );
       }
 
       await trackAutosave(

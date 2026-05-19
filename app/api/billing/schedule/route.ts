@@ -2,7 +2,7 @@ import { auth, currentUser } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
 import { xano } from "@/lib/xano";
 import {
-  fetchActiveFamilyPackets,
+  fetchActiveFamilyApplications,
   sumFamilyBillingTotals,
 } from "@/lib/per-student-billing";
 
@@ -48,17 +48,17 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const [payment, year, transactions, activePackets] = await Promise.all([
+  const [payment, year, transactions, activeApps] = await Promise.all([
     xano.familyPayments.getByFamilyAndYear(familyId, yearId),
     xano.schoolYears.getById(yearId),
     xano.paymentTransactions.getByFamilyAndYear(familyId, yearId),
-    fetchActiveFamilyPackets(familyId, yearId),
+    fetchActiveFamilyApplications(familyId, yearId),
   ]);
 
-  // Family monthly total = Σ per-student `monthly_amount`. Matches
-  // the admin schedule route's derivation so the parent + admin
-  // surfaces show the same number.
-  const totals = sumFamilyBillingTotals(activePackets);
+  // Family monthly total = Σ per-student `monthly_amount` on the
+  // active application rows. Matches the admin schedule route's
+  // derivation so the parent + admin surfaces show the same number.
+  const totals = sumFamilyBillingTotals(activeApps);
   const monthlyAmountCents =
     totals.monthlyTotal > 0 ? Math.round(totals.monthlyTotal * 100) : null;
   const billingStartDate = year?.billing_start_date ?? null;

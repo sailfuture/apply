@@ -91,6 +91,7 @@ import type {
   AdminFamilyRegistrationStudentRow,
 } from "@/app/api/admin/registrations/[id]/route";
 import type {
+  XanoApplication,
   XanoEmergencyContact,
   XanoFamilyPayment,
   XanoStudentRegistration,
@@ -100,6 +101,28 @@ import { sumFamilyBillingTotals } from "@/lib/per-student-billing";
 
 const xanoBase =
   process.env.NEXT_PUBLIC_XANO_BASE ?? "https://xsc3-mvx7-r86m.n7e.xano.io";
+
+/**
+ * Predicate for the Emergency Contacts section status. A bare row
+ * with id + family fk but no parent-typed data shouldn't flip the
+ * section green — admin's verifying a UI tile that's literally
+ * empty otherwise. We require at least one of the four
+ * parent-typed identity fields (first_name, last_name, email,
+ * phone) to be non-blank. Address fields aren't enough because
+ * they could be inherited defaults; identity is what gets typed
+ * intentionally.
+ */
+function hasPopulatedEmergencyContact(
+  contacts: XanoEmergencyContact[]
+): boolean {
+  return contacts.some((c) => {
+    const first = (c.first_name ?? "").trim();
+    const last = (c.last_name ?? "").trim();
+    const email = (c.email ?? "").trim();
+    const phone = (c.phone ?? "").trim();
+    return first || last || email || phone;
+  });
+}
 
 /**
  * Admin family-focused registration detail page.
@@ -244,16 +267,21 @@ export default function FamilyRegistrationDetailPage() {
   const familyName =
     family?.family_name?.trim() || `Family #${family?.id ?? familyId}`;
 
-  // Per-student packets for this family-year — pulled off the
-  // students roster the response already includes. Drives all the
-  // family-level billing totals (Tuition card, Billing card monthly
-  // figure) via `sumFamilyBillingTotals`. The per-student source of
-  // truth replaces the retired family-level rollups on
-  // `registration_families_payment`.
-  const activePackets: XanoStudentRegistration[] = students
-    .map((s) => s.packet)
-    .filter((p): p is XanoStudentRegistration => p !== null && p !== undefined);
-  const familyBillingTotals = sumFamilyBillingTotals(activePackets);
+  // Per-student billing math now lives on the application row.
+  // The page's `students` rows project that math directly so the
+  // family-level totals can be summed without re-fetching the
+  // application list.
+  const familyBillingTotals = sumFamilyBillingTotals(
+    students.map((s) => ({
+      tuition_total: s.tuition_total,
+      sufs_amount: s.sufs_amount,
+      opportunity_award_amount: s.opportunity_award_amount,
+      annual_fee: s.annual_fee,
+      tuition_sub_total: s.tuition_sub_total,
+      monthly_amount: s.monthly_amount,
+      remaining_opportunity_amount: s.remaining_opportunity_amount,
+    })) as unknown as XanoApplication[]
+  );
 
   const refresh = () => {
     // Return the combined SWR-mutate promise so callers that need
@@ -335,11 +363,12 @@ export default function FamilyRegistrationDetailPage() {
     },
     // Emergency contacts has no parent-completion bool — it's
     // evergreen family data. Treat "completed" as "at least one
-    // contact on file" so the parent's side has something
-    // meaningful to flip green. Admin verify is the separate
-    // signal.
+    // contact has meaningful data on it" (name OR email OR phone),
+    // not just "a row exists" — an empty placeholder row that the
+    // parent never filled out shouldn't flip the section green.
+    // Admin verify is the separate signal.
     emergency_contacts: {
-      completed: emergency_contacts.length > 0,
+      completed: hasPopulatedEmergencyContact(emergency_contacts),
       verified: progress?.emergency_contacts_admin_confirm === true,
     },
     volunteer: {
@@ -757,7 +786,9 @@ export default function FamilyRegistrationDetailPage() {
           <SectionShell
             title="Emergency Contacts"
             status={
-              emergency_contacts.length > 0 ? "complete" : "not_started"
+              hasPopulatedEmergencyContact(emergency_contacts)
+                ? "complete"
+                : "not_started"
             }
             notes={{
               familyId: Number(family?.id ?? familyId),
@@ -3794,38 +3825,13 @@ function RequiredDocumentsTable({
   row: AdminFamilyRegistrationStudentRow;
   onChanged: () => void;
 }) {
-  // Inline state for which document is mid-PATCH so the spinner
-  // shows on just the affected row's button. Keyed by the doc
-  // bool's column name so the switch below stays mechanical.
-  const [savingDoc, setSavingDoc] = useState<
-    | "birth_certificate_admin_confirm"
-    | "school_health_form_admin_confirm"
-    | "transcripts_admin_confirm"
-    | "immunization_admin_confirm"
-    | null
-  >(null);
-
+  // Per-document type spec — drives the four card components
+  // rendered below. `fieldKey` identifies the file-array column on
+  // the student row; per-file confirm fields live inline on each
+  // metadata blob (`confirmed`, `confirmed_at`, `confirmed_admin`).
   type DocSpec = {
-    /** Display name in the table. */
     label: string;
-    /** Files attached on the student row. */
     files: Record<string, unknown>[];
-    /** Current confirm state + audit. */
-    confirm: {
-      confirmed: boolean;
-      confirmed_time: number | null;
-      confirmed_admin: string;
-    };
-    /** Bool column on the student row that the Verify button flips. */
-    confirmKey:
-      | "birth_certificate_admin_confirm"
-      | "school_health_form_admin_confirm"
-      | "transcripts_admin_confirm"
-      | "immunization_admin_confirm";
-    /** File array column on the student row — drives the per-row
-     *  Upload affordance. Separate from `confirmKey` because the
-     *  upload PATCHes a different column (the metadata array) than
-     *  the confirm toggle (the bool). */
     fieldKey:
       | "birth_certificate"
       | "school_health_form"
@@ -3837,265 +3843,284 @@ function RequiredDocumentsTable({
     {
       label: "Birth Certificate",
       files: row.student_documents.birth_certificate,
-      confirm: row.document_confirms.birth_certificate,
-      confirmKey: "birth_certificate_admin_confirm",
       fieldKey: "birth_certificate",
     },
     {
       label: "School Health Form",
       files: row.student_documents.school_health_form,
-      confirm: row.document_confirms.school_health_form,
-      confirmKey: "school_health_form_admin_confirm",
       fieldKey: "school_health_form",
     },
     {
       label: "Transcripts",
       files: row.student_documents.transcripts,
-      confirm: row.document_confirms.transcripts,
-      confirmKey: "transcripts_admin_confirm",
       fieldKey: "transcripts",
     },
     {
       label: "Immunization Forms",
       files: row.student_documents.immunization_forms,
-      confirm: row.document_confirms.immunization_forms,
-      confirmKey: "immunization_admin_confirm",
       fieldKey: "immunization_forms",
     },
   ];
 
-  async function toggleDoc(doc: DocSpec, next: boolean) {
-    setSavingDoc(doc.confirmKey);
+  return (
+    <div className="space-y-3">
+      {docs.map((doc) => (
+        <RequiredDocumentSlotCard
+          key={doc.fieldKey}
+          studentId={row.student_id}
+          fieldKey={doc.fieldKey}
+          label={doc.label}
+          files={doc.files}
+          onChanged={onChanged}
+        />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * One card per required-document type. Header carries the doc name
+ * + X/Y confirmed counter. Body is a table where each row is a
+ * single uploaded file with its own Mark Confirmed / Undo button —
+ * per-file confirm fields live inline on each file's metadata blob
+ * (`confirmed`, `confirmed_at`, `confirmed_admin`) and the route
+ * recomputes the slot-level `*_admin_confirm` bool so the section
+ * verify gate stays in sync. Footer holds a compact dropzone for
+ * uploading additional files on the family's behalf.
+ */
+function RequiredDocumentSlotCard({
+  studentId,
+  fieldKey,
+  label,
+  files,
+  onChanged,
+}: {
+  studentId: number;
+  fieldKey:
+    | "birth_certificate"
+    | "school_health_form"
+    | "transcripts"
+    | "immunization_forms";
+  label: string;
+  files: Record<string, unknown>[];
+  onChanged: () => void;
+}) {
+  // Per-file saving state — keyed by file index so only the row
+  // mid-PATCH spins, not the whole card.
+  const [savingIndex, setSavingIndex] = useState<number | null>(null);
+
+  // X/Y confirmed counter — counts files whose blob carries
+  // `confirmed === true`. Empty cards show "Pending upload" instead.
+  const total = files.length;
+  const confirmedCount = files.filter(
+    (f) => (f as { confirmed?: boolean }).confirmed === true
+  ).length;
+
+  async function toggleFile(fileIndex: number, confirmed: boolean) {
+    setSavingIndex(fileIndex);
     try {
-      const res = await fetch(`/api/admin/students/${row.student_id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ [doc.confirmKey]: next }),
-      });
+      const res = await fetch(
+        `/api/admin/students/${studentId}/document-file`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ fieldKey, fileIndex, confirmed }),
+        }
+      );
       if (!res.ok) {
         const errBody = await res.json().catch(() => null);
         throw new Error(errBody?.error ?? `Update failed (${res.status})`);
       }
       toast.success(
-        next
-          ? `${doc.label} confirmed.`
-          : `${doc.label} confirmation cleared.`
+        confirmed
+          ? `${label} file confirmed.`
+          : `${label} file confirmation cleared.`
       );
       onChanged();
     } catch (err) {
-      console.error("[RequiredDocumentsTable.toggleDoc]", err);
+      console.error("[RequiredDocumentSlotCard.toggleFile]", err);
       toast.error(err instanceof Error ? err.message : "Couldn't update.");
     } finally {
-      setSavingDoc(null);
+      setSavingIndex(null);
     }
   }
 
-  // X/Y CONFIRMED counter in the header strip — only counts docs
-  // that have files (a doc without files isn't "confirmable", so
-  // excluding them keeps the denominator honest).
-  const confirmableDocs = docs.filter((d) => d.files.length > 0);
-  const confirmedCount = confirmableDocs.filter(
-    (d) => d.confirm.confirmed
-  ).length;
-
   return (
-    <div className="rounded-md border bg-muted/20 overflow-hidden">
-      {/* Header strip — pixel-aligned with the financial-aid
-          DocumentsToReviewBlock so admin reads both surfaces with
-          the same visual vocabulary. Counter on the right tracks
-          confirmed / total uploaded. */}
+    <div className="rounded-md border bg-white overflow-hidden">
+      {/* Header strip — doc name on the left, X/Y confirmed counter
+          on the right when there's something to count. */}
       <div className="px-4 py-2 border-b bg-muted/40 flex items-center justify-between gap-2">
-        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          Documents to Review
-        </p>
-        {confirmableDocs.length > 0 ? (
+        <p className="text-sm font-semibold">{label}</p>
+        {total > 0 ? (
           <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-            {confirmedCount}/{confirmableDocs.length} confirmed
+            {confirmedCount}/{total} confirmed
           </span>
-        ) : null}
+        ) : (
+          <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+            No files uploaded
+          </span>
+        )}
       </div>
-      <Table className="text-sm table-fixed">
-        <TableHeader>
-          <TableRow className="hover:bg-transparent">
-            <TableHead className="w-[28%] text-[10px] uppercase tracking-wider text-muted-foreground">
-              Document
-            </TableHead>
-            <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
-              File(s)
-            </TableHead>
-            <TableHead className="w-[15%] text-[10px] uppercase tracking-wider text-muted-foreground">
-              Confirmed by
-            </TableHead>
-            <TableHead className="w-[80px] text-[10px] uppercase tracking-wider text-muted-foreground">
-              Time
-            </TableHead>
-            <TableHead className="w-[170px] text-right text-[10px] uppercase tracking-wider text-muted-foreground">
-              Confirmation
-            </TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {docs.map((doc) => {
-            const hasFiles = doc.files.length > 0;
-            const confirmed = doc.confirm.confirmed;
-            const saving = savingDoc === doc.confirmKey;
-            // Confirmed-by string. Treat "0" as the unset sentinel
-            // — Xano left the original int default behind when the
-            // text column was added, so legacy rows come back as
-            // the literal string "0" rather than "".
-            const confirmedByName = (() => {
-              if (!confirmed) return null;
-              const name = doc.confirm.confirmed_admin?.trim();
-              if (!name || name === "0") return null;
-              return name;
-            })();
-            const confirmedWhen = confirmed && doc.confirm.confirmed_time
-              ? formatRelativeShort(doc.confirm.confirmed_time)
-              : null;
-            const confirmedWhenLong =
-              confirmed && doc.confirm.confirmed_time
-                ? formatNoteTimestamp(doc.confirm.confirmed_time)
-                : null;
-            return (
-              <TableRow
-                key={doc.confirmKey}
-                className={cn(
-                  confirmed ? "bg-emerald-50/40 hover:bg-emerald-50/60" : ""
-                )}
-              >
-                <TableCell className="align-middle">
-                  <p
-                    className="text-sm font-medium truncate"
-                    title={doc.label}
-                  >
-                    {doc.label}
-                  </p>
-                </TableCell>
-                <TableCell className="align-middle">
-                  <div className="space-y-1.5">
-                    {hasFiles ? (
-                      <ul className="space-y-1">
-                        {doc.files.map((f, idx) => (
-                          <RequiredDocFileLink
-                            key={`${doc.confirmKey}-${idx}`}
-                            file={f}
-                            fallbackIndex={idx}
-                          />
-                        ))}
-                      </ul>
+      {total > 0 ? (
+        // `table-fixed` forces the browser to honor the explicit
+        // column widths instead of auto-sizing to content. Without
+        // it, a long filename pushes the whole table wider than the
+        // card and triggers horizontal scroll. With it, the File
+        // column gets bounded by the remaining width and the inner
+        // `truncate` on the filename actually clips with an ellipsis.
+        <Table className="text-sm table-fixed">
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                File
+              </TableHead>
+              <TableHead className="w-[80px] text-[10px] uppercase tracking-wider text-muted-foreground">
+                Size
+              </TableHead>
+              <TableHead className="w-[160px] text-[10px] uppercase tracking-wider text-muted-foreground">
+                Confirmed by
+              </TableHead>
+              <TableHead className="w-[180px] text-right text-[10px] uppercase tracking-wider text-muted-foreground">
+                Confirmation
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {files.map((file, idx) => {
+              const meta = file as {
+                confirmed?: boolean;
+                confirmed_at?: number | null;
+                confirmed_admin?: string;
+                size?: number;
+              };
+              const confirmed = meta.confirmed === true;
+              const saving = savingIndex === idx;
+              const sizeKb =
+                typeof meta.size === "number"
+                  ? `${(meta.size / 1024).toFixed(0)} KB`
+                  : "—";
+              const confirmedByName = (() => {
+                if (!confirmed) return null;
+                const name = meta.confirmed_admin?.trim();
+                if (!name || name === "0") return null;
+                return name;
+              })();
+              const confirmedWhen =
+                confirmed && meta.confirmed_at
+                  ? formatRelativeShort(meta.confirmed_at)
+                  : null;
+              const confirmedWhenLong =
+                confirmed && meta.confirmed_at
+                  ? formatNoteTimestamp(meta.confirmed_at)
+                  : null;
+              return (
+                <TableRow
+                  key={`${fieldKey}-${idx}`}
+                  className={cn(
+                    confirmed ? "bg-emerald-50/40 hover:bg-emerald-50/60" : ""
+                  )}
+                >
+                  <TableCell className="align-middle">
+                    <ul className="m-0 p-0">
+                      <RequiredDocFileLink
+                        file={file}
+                        fallbackIndex={idx}
+                      />
+                    </ul>
+                  </TableCell>
+                  <TableCell className="align-middle text-xs tabular-nums text-muted-foreground">
+                    {sizeKb}
+                  </TableCell>
+                  <TableCell className="align-middle">
+                    {confirmedByName ? (
+                      <div className="text-xs text-muted-foreground">
+                        <p className="truncate" title={confirmedByName}>
+                          {confirmedByName}
+                        </p>
+                        {confirmedWhen ? (
+                          <p
+                            className="text-[10px] text-muted-foreground/80"
+                            title={confirmedWhenLong ?? undefined}
+                          >
+                            {confirmedWhen}
+                          </p>
+                        ) : null}
+                      </div>
                     ) : (
-                      <p className="text-[11px] italic text-muted-foreground">
-                        No file uploaded.
-                      </p>
+                      <span className="text-xs text-muted-foreground">—</span>
                     )}
-                    {/* Compact upload trigger — sits below the file
-                        list so admin can attach pages on the
-                        family's behalf without leaving the table.
-                        The Verify button's `hasFiles` gate still
-                        applies, so admin can upload then confirm in
-                        the same pass. */}
-                    <AdminDocumentUpload
-                      studentId={row.student_id}
-                      fieldKey={doc.fieldKey}
-                      files={doc.files}
-                      label={doc.label}
-                      onChanged={onChanged}
-                      compact
-                    />
-                  </div>
-                </TableCell>
-                <TableCell className="align-middle">
-                  {confirmedByName ? (
-                    <p
-                      className="text-sm text-muted-foreground truncate"
-                      title={confirmedByName}
-                    >
-                      {confirmedByName}
-                    </p>
-                  ) : (
-                    <span className="text-xs text-muted-foreground/70">
-                      —
-                    </span>
-                  )}
-                </TableCell>
-                <TableCell className="align-middle">
-                  {confirmedWhen ? (
-                    <p
-                      className="text-sm text-muted-foreground truncate tabular-nums"
-                      title={confirmedWhenLong ?? confirmedWhen}
-                    >
-                      {confirmedWhen}
-                    </p>
-                  ) : (
-                    <span className="text-xs text-muted-foreground/70">
-                      —
-                    </span>
-                  )}
-                </TableCell>
-                <TableCell className="text-right align-middle">
-                  {/* Mark Confirmed (primary, becomes emerald-filled
-                      once confirmed) + Undo icon button. Same pair
-                      the financial-aid table uses so admin doesn't
-                      have to learn a new affordance shape here. */}
-                  <div className="inline-flex items-center gap-1">
-                    <Button
-                      type="button"
-                      variant={confirmed ? "default" : "outline"}
-                      size="sm"
-                      disabled={saving || confirmed || !hasFiles}
-                      onClick={() => void toggleDoc(doc, true)}
-                      className={cn(
-                        "h-7 text-xs leading-none",
-                        confirmed &&
-                          "bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-100",
-                        !confirmed && "bg-white"
-                      )}
-                      title={
-                        confirmed
-                          ? "Already confirmed — use the Undo button to clear"
-                          : hasFiles
-                            ? `Mark ${doc.label} as reviewed`
-                            : "Upload the document before confirming"
-                      }
-                    >
-                      {saving && !confirmed ? (
-                        <Loader2 className="size-3 animate-spin" />
-                      ) : confirmed ? (
-                        <CheckCircle2 className="size-3" />
-                      ) : (
-                        <Circle className="size-3" />
-                      )}
-                      <span>{confirmed ? "Confirmed" : "Mark confirmed"}</span>
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="icon"
-                      className="size-7 bg-white"
-                      disabled={saving || !confirmed}
-                      onClick={() => void toggleDoc(doc, false)}
-                      title={
-                        confirmed ? "Undo this confirmation" : "Nothing to undo"
-                      }
-                      aria-label={
-                        confirmed
-                          ? "Undo confirmation"
-                          : "Undo (disabled — nothing to undo)"
-                      }
-                    >
-                      {saving && confirmed ? (
-                        <Loader2 className="size-3.5 animate-spin" />
-                      ) : (
-                        <RotateCcw className="size-3.5" />
-                      )}
-                    </Button>
-                  </div>
-                </TableCell>
-              </TableRow>
-            );
-          })}
-        </TableBody>
-      </Table>
+                  </TableCell>
+                  <TableCell className="align-middle text-right">
+                    <div className="inline-flex items-center gap-1">
+                      <Button
+                        type="button"
+                        variant={confirmed ? "default" : "outline"}
+                        size="sm"
+                        disabled={saving || confirmed}
+                        onClick={() => void toggleFile(idx, true)}
+                        className={cn(
+                          "h-7 text-xs leading-none",
+                          confirmed &&
+                            "bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-100",
+                          !confirmed && "bg-white"
+                        )}
+                        title={
+                          confirmed
+                            ? "Already confirmed — use the Undo button to clear"
+                            : `Mark this ${label.toLowerCase()} file as reviewed`
+                        }
+                      >
+                        {saving && !confirmed ? (
+                          <Loader2 className="size-3 animate-spin" />
+                        ) : confirmed ? (
+                          <CheckCircle2 className="size-3" />
+                        ) : (
+                          <Circle className="size-3" />
+                        )}
+                        <span>{confirmed ? "Confirmed" : "Mark confirmed"}</span>
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon"
+                        className="size-7 bg-white"
+                        disabled={saving || !confirmed}
+                        onClick={() => void toggleFile(idx, false)}
+                        title={
+                          confirmed ? "Undo this confirmation" : "Nothing to undo"
+                        }
+                        aria-label={
+                          confirmed
+                            ? "Undo confirmation"
+                            : "Undo (disabled — nothing to undo)"
+                        }
+                      >
+                        {saving && confirmed ? (
+                          <Loader2 className="size-3.5 animate-spin" />
+                        ) : (
+                          <RotateCcw className="size-3.5" />
+                        )}
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      ) : null}
+      {/* Compact dropzone footer — admin can upload more files on
+          the family's behalf without leaving the card. */}
+      <div className="border-t bg-muted/10 px-4 py-3">
+        <AdminDocumentUpload
+          studentId={studentId}
+          fieldKey={fieldKey}
+          files={files}
+          label={label}
+          onChanged={onChanged}
+          compact
+        />
+      </div>
     </div>
   );
 }

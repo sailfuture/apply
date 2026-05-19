@@ -107,41 +107,41 @@ export async function startMonthlyBilling({
   const familyStudentById = new Map(
     students.filter((s) => !s.isArchived).map((s) => [s.id, s])
   );
-  const activeStudentIds = new Set<number>();
-  for (const app of apps) {
-    if (Number(app.registration_school_years_id) !== yearId) continue;
-    if (app.isActive === false) continue;
-    const sid = Number(app.registration_students_id);
-    if (familyStudentById.has(sid)) activeStudentIds.add(sid);
-  }
-
-  // Packet rows scoped to this family's active students for this
-  // year — one packet per student. Sort by student id for
-  // deterministic Stripe Price creation order so dashboard scans
-  // line up across families with the same student order.
-  const activePackets = yearPackets
-    .filter((p) => activeStudentIds.has(Number(p.registration_students_id)))
+  // Active applications for this family + year. Application row is
+  // the source of truth for per-student billing math (monthly_amount,
+  // etc.) — the packet only carries the Stripe-side
+  // `stripe_subscription_item_id` link after billing starts. Sort by
+  // student id for deterministic Stripe Price creation order so
+  // Dashboard scans line up across families with the same student
+  // order.
+  const activeApps = apps
+    .filter(
+      (app) =>
+        Number(app.registration_school_years_id) === yearId &&
+        app.isActive !== false &&
+        familyStudentById.has(Number(app.registration_students_id))
+    )
     .sort(
       (a, b) =>
         Number(a.registration_students_id) -
         Number(b.registration_students_id)
     );
 
-  if (activePackets.length === 0) {
+  if (activeApps.length === 0) {
     throw new BillingPreconditionError(
-      "No active students with registration packets for this year."
+      "No active students with applications for this year."
     );
   }
 
-  // Per-student amount validation. Every packet must carry a
+  // Per-student amount validation. Every application must carry a
   // `monthly_amount` written by the Scholarship Determination card
   // (or admin's manual entry on the per-student tuition flow).
   // Rather than billing a wrong amount silently, refuse to create
   // the subscription until the column is populated.
   const missing: string[] = [];
-  for (const packet of activePackets) {
-    const sid = Number(packet.registration_students_id);
-    const monthly = packet.monthly_amount;
+  for (const app of activeApps) {
+    const sid = Number(app.registration_students_id);
+    const monthly = app.monthly_amount;
     if (typeof monthly !== "number" || monthly <= 0) {
       const student = familyStudentById.get(sid);
       const name = student
@@ -157,6 +157,15 @@ export async function startMonthlyBilling({
         `Set the tuition on the Scholarship Determination card before starting billing.`
     );
   }
+
+  // Packets keyed by student id. Each active student should have a
+  // packet (created by the acceptance cascade); we look these up to
+  // store the Stripe SubscriptionItem id on each. Missing packet
+  // here is a defensive case — we'll skip the persist with a loud
+  // log rather than fail the entire billing start.
+  const packetByStudent = new Map(
+    yearPackets.map((p) => [Number(p.registration_students_id), p])
+  );
 
   // Idempotency: if a subscription id already lives on the family-
   // payment row, return it. Catches admin double-clicks and the
@@ -213,15 +222,16 @@ export async function startMonthlyBilling({
   // becomes one SubscriptionItem with a one-off Price nicknamed
   // `<Family> — <Student> — <Year>` for Dashboard scanability and
   // a `description` of `<Student> — Monthly tuition` for the
-  // parent's invoice line.
-  const studentItems = activePackets.map((packet) => {
-    const sid = Number(packet.registration_students_id);
+  // parent's invoice line. Monthly amount sourced from the
+  // application row.
+  const studentItems = activeApps.map((app) => {
+    const sid = Number(app.registration_students_id);
     const student = familyStudentById.get(sid);
     const studentName = student
       ? `${student.first_name ?? ""} ${student.last_name ?? ""}`.trim() ||
         `Student #${sid}`
       : `Student #${sid}`;
-    const monthlyCents = Math.round((packet.monthly_amount ?? 0) * 100);
+    const monthlyCents = Math.round((app.monthly_amount ?? 0) * 100);
     return { studentId: sid, studentName, monthlyCents };
   });
 
@@ -261,10 +271,16 @@ export async function startMonthlyBilling({
   // loudly so admin can reconcile from the Stripe Dashboard.
   await Promise.allSettled(
     result.items.map(async (item) => {
-      const packet = activePackets.find(
-        (p) => Number(p.registration_students_id) === item.studentId
-      );
-      if (!packet) return;
+      const packet = packetByStudent.get(item.studentId);
+      if (!packet) {
+        // Packet should exist (created by the acceptance cascade) —
+        // log so we can reconcile from the Dashboard if the cascade
+        // ever missed a student.
+        console.error(
+          `[startMonthlyBilling] no packet found for student ${item.studentId}; can't persist stripe_subscription_item_id ${item.subscriptionItemId}. Reconcile from Stripe Dashboard.`
+        );
+        return;
+      }
       try {
         await xano.studentRegistration.update(packet.id, {
           stripe_subscription_item_id: item.subscriptionItemId,

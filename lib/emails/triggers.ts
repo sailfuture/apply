@@ -72,7 +72,7 @@ function joinStudentNames(names: string[]): string {
 }
 
 function getLoginUrl(): string {
-  return process.env.NEXT_PUBLIC_APP_URL ?? "https://apply.sailfuture.org";
+  return process.env.NEXT_PUBLIC_APP_URL ?? "https://apply.sailfutureacademy.org";
 }
 
 /** Resolve the To-list + display variables for an entire family.

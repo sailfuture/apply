@@ -122,6 +122,12 @@ interface BillingSnapshot {
     | "Canceled"
     | "Incomplete"
     | "Unknown";
+  /** Family's Stripe customer id, surfaced even when no subscription
+   *  has been started yet so "View invoices in Stripe" can deep-link
+   *  to the family's customer page (which lists invoices/subs/
+   *  payments) instead of the global invoices view. Null when the
+   *  family has never had a Stripe customer provisioned. */
+  customerId?: string | null;
 }
 
 interface Props {
@@ -321,8 +327,18 @@ export function BillingCard({
             ) : null}
           </Button>
           <Button asChild variant="outline" className="bg-white">
+            {/* Prefer the family's customer page (lists their invoices,
+                subscriptions, and payment history) when we have a
+                `stripe_customer_id` on file. Falls back to the global
+                invoices view only when no customer has been provisioned
+                — at which point there's nothing customer-scoped to
+                link to. */}
             <a
-              href={STRIPE_INVOICES_DASHBOARD_URL}
+              href={
+                data?.customerId
+                  ? stripeCustomerDashboardUrl(data.customerId)
+                  : STRIPE_INVOICES_DASHBOARD_URL
+              }
               target="_blank"
               rel="noreferrer"
             >

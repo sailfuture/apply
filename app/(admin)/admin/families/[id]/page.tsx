@@ -4315,7 +4315,7 @@ function DecisionCard({
  * /tuition page row-by-row so admin sees the exact figures the
  * family will see — the two surfaces share the same math:
  *
- *   familyPaysForTuition = opportunity_scholarship_award_amount ?? 0
+ *   familyPaysForTuition = remaining_opportunity_amount ?? 0
  *   scholarshipCoverage  = tuition − SUFS − familyPaysForTuition
  *   subtotal             = familyPaysForTuition + adminFee
  *
@@ -4323,8 +4323,8 @@ function DecisionCard({
  * rolled into the annual tuition figure, so the SNAP-vs-non-SNAP
  * branching that used to handle the extra transport line is gone
  * too. SNAP families still get full OS coverage; their
- * `opportunity_scholarship_award_amount` is just 0, so the
- * subtotal collapses to the annual admin fee on its own.
+ * `remaining_opportunity_amount` is just 0, so the subtotal
+ * collapses to the annual admin fee on its own.
  *
  * `isOpportunityScholarshipFamily` gates a dedicated "Opportunity
  * Scholarship (Cost Per Student)" line that surfaces what the
@@ -4378,17 +4378,17 @@ function TuitionBreakdownTable({
     const stepUpAmount = sufsAmountFor(app.sufs_type ?? "", schoolYear);
     const stepUpStatus = app.sufs_status ?? "";
     const stepUpType = app.sufs_type ?? "";
-    const familyPaysForTuition = app.opportunity_scholarship_award_amount ?? 0;
+    const familyPaysForTuition = app.remaining_opportunity_amount ?? 0;
     // A row has an OS determination when the family is on a
     // scholarship path OR admin has entered a per-student amount.
     // The third clause covers the case where admin enters the
-    // per-student award amount before formally flipping the
+    // per-student remaining amount before formally flipping the
     // family-level scholarship path flag — the breakout row + the
     // OS Award coverage should still render.
     const hasOSDetermination =
       isOpportunityScholarshipFamily ||
       isSnapFamily ||
-      app.opportunity_scholarship_award_amount != null;
+      app.remaining_opportunity_amount != null;
     const scholarshipCoverage = hasOSDetermination
       ? Math.max(0, tuition - stepUpAmount - familyPaysForTuition)
       : 0;
@@ -4438,20 +4438,21 @@ function TuitionBreakdownTable({
 
               <tr className="border-t">
                 <td className="px-4 py-3 text-muted-foreground">
-                  Annual Admin Fee
-                </td>
-                <td className="px-4 py-3 text-right font-medium tabular-nums">
-                  ${formatCurrency2(row.adminFee)}
-                </td>
-              </tr>
-
-              <tr className="border-t">
-                <td className="px-4 py-3 text-muted-foreground">
                   Step Up for Students Award Status
                 </td>
                 <td className="px-4 py-3 text-right text-sm">
                   {row.stepUpStatus ? (
-                    <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                    // Approved → green badge; anything else (Pending,
+                    // Denied, etc.) stays muted-gray so the eye is drawn
+                    // to the success-state cases.
+                    <span
+                      className={cn(
+                        "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium",
+                        row.stepUpStatus.toLowerCase() === "approved"
+                          ? "bg-green-100 text-green-700"
+                          : "bg-muted text-muted-foreground"
+                      )}
+                    >
                       {row.stepUpStatus}
                     </span>
                   ) : (
@@ -4544,6 +4545,15 @@ function TuitionBreakdownTable({
                   </td>
                 </tr>
               ) : null}
+
+              <tr className="border-t">
+                <td className="px-4 py-3 text-muted-foreground">
+                  Annual Admin Fee
+                </td>
+                <td className="px-4 py-3 text-right font-medium tabular-nums">
+                  ${formatCurrency2(row.adminFee)}
+                </td>
+              </tr>
 
               <tr className="border-t bg-muted/20">
                 <td className="px-4 py-3 font-medium">
@@ -5674,20 +5684,6 @@ function ScholarshipReviewBlock({
     ? transportBeforeOptIn
     : 0;
 
-  // Coordinates the matrix views use to highlight the matching cell.
-  // Stable keys built from the bracket bounds + household so the
-  // highlight survives re-orders/sorts.
-  const matchedPayKey = useNetAssetsMatrix
-    ? null
-    : matchedCell
-      ? `${matchedCell.household_size}::${matchedCell.income_min}-${
-          matchedCell.income_max ?? "null"
-        }`
-      : null;
-  const matchedNetKey = useNetAssetsMatrix && matchedCell
-    ? `${matchedCell.net_asset_min}-${matchedCell.net_asset_max ?? "null"}`
-    : null;
-
   // SNAP and opt-out paths short-circuit above this point — the
   // remainder of the block is the full Opportunity Scholarship
   // review (financial picture + matrix + documents). No SNAP
@@ -5793,423 +5789,11 @@ function ScholarshipReviewBlock({
         </table>
       </div>
 
-      {/* Matrix bracket determination — final per-family payment
-          breakdown rendered as a small table so it reads as a
-          receipt: Tuition + Transport + Annual Fee = Total. The
-          $500 annual fee applies to every family regardless of the
-          matrix path. */}
-      <div className="rounded-md border bg-muted/20 overflow-hidden">
-        <div className="px-4 py-2 border-b bg-muted/40 flex items-center justify-between gap-2">
-          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Pay Matrix Determination
-          </p>
-          <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-            {useNetAssetsMatrix ? "High net assets" : "Standard"}
-          </span>
-        </div>
-        <p className="text-xs text-muted-foreground px-4 pt-3">
-          {useNetAssetsMatrix
-            ? `Net assets ${formatCurrency(netAssets)} exceed $100k — using the high-net-assets sliding scale.${anyBusTransportation ? " Transport is the full base fee." : ""}`
-            : `Household of ${householdSize}, annual income ${formatCurrency(totalAnnualIncome)} — using the standard tuition matrix.`}
-        </p>
-        {matchedCell ? (
-          // Body rows are explicit `bg-white`; the muted wrapper only
-          // shows through on the bottom totals rows so admin's eye
-          // lands on the totals section.
-          <table className="w-full text-sm mt-2">
-            <tbody className="divide-y border-t">
-              {/* Family-pays percentage — hidden when the matched
-                  bracket assigns the family $0 of tuition (i.e.
-                  household income / assets fall below the matrix's
-                  minimum-payment threshold). A literal "Family
-                  pays 0%" row reads like an empty bracket; better
-                  to drop it entirely and let the Tuition row's $0
-                  carry the message. */}
-              {tuitionPct > 0 ? (
-                <tr className="bg-white">
-                  <td className="px-4 py-2 font-medium">Family pays</td>
-                  <td className="px-4 py-2 text-right tabular-nums">
-                    {tuitionPct}%
-                  </td>
-                </tr>
-              ) : null}
-              <tr className="bg-white">
-                <td className="px-4 py-2 font-medium">Tuition</td>
-                <td className="px-4 py-2 text-right tabular-nums">
-                  {formatCurrency(calculatedTuition)}
-                </td>
-              </tr>
-              <tr className="bg-white">
-                <td className="px-4 py-2 font-medium">
-                  {useNetAssetsMatrix ? "Transport (full)" : "Transport"}
-                  {!anyBusTransportation ? (
-                    <span className="block text-[11px] text-muted-foreground font-normal">
-                      No student opted into bus transportation
-                    </span>
-                  ) : null}
-                </td>
-                <td
-                  className={cn(
-                    "px-4 py-2 text-right tabular-nums",
-                    !anyBusTransportation && "text-muted-foreground"
-                  )}
-                >
-                  {anyBusTransportation
-                    ? formatCurrency(calculatedTransport)
-                    : "—"}
-                </td>
-              </tr>
-              <tr className="bg-white">
-                <td className="px-4 py-2 font-medium">
-                  Annual fee
-                  <span className="block text-[11px] text-muted-foreground">
-                    Applies to every family regardless of bracket
-                  </span>
-                </td>
-                <td className="px-4 py-2 text-right tabular-nums align-top">
-                  {formatCurrency(annualFees)}
-                </td>
-              </tr>
-              <tr className="bg-muted/40">
-                <td className="px-4 py-2 font-semibold">Family owed total</td>
-                <td className="px-4 py-2 text-right tabular-nums font-semibold">
-                  {formatCurrency(
-                    calculatedTuition + calculatedTransport + annualFees
-                  )}
-                </td>
-              </tr>
-              {/* Monthly cadence — matches the acceptance-side
-                  tuition page so admin and parent see the same
-                  monthly figure. Aug–Jul, 12 equal months; the
-                  cadence is inlined as a bulleted suffix on the
-                  label rather than a stacked subtitle. */}
-              <tr className="bg-muted/40">
-                <td className="px-4 py-2 font-semibold">
-                  Monthly payment
-                  <span className="ml-1.5 text-[11px] text-muted-foreground font-normal">
-                    · 12 months
-                  </span>
-                </td>
-                <td className="px-4 py-2 text-right tabular-nums font-semibold">
-                  {formatCurrency(
-                    (calculatedTuition + calculatedTransport + annualFees) / 12
-                  )}
-                  /mo
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        ) : (
-          <p className="text-xs italic text-muted-foreground px-4 py-3">
-            No matrix cell matches this family&rsquo;s bracket. Verify
-            the matrix is configured for the relevant{" "}
-            {useNetAssetsMatrix
-              ? "net-asset bracket"
-              : "household size + income range"}{" "}
-            on the school year page.
-          </p>
-        )}
-      </div>
-
-      {/* Only render the applicable matrix — the inactive path adds
-          noise without clarifying the determination. Net assets >
-          $100k → high-net-assets table; otherwise → standard pay
-          matrix. */}
-      {useNetAssetsMatrix ? (
-        <NetAssetsMatrixView
-          cells={netAssetsCells ?? []}
-          matchedKey={matchedNetKey}
-          baseTuition={baseTuition}
-          dimmed={false}
-        />
-      ) : (
-        <PayMatrixView
-          cells={payCells ?? []}
-          matchedKey={matchedPayKey}
-          matchedHouseholdSize={householdSize}
-          baseTuition={baseTuition}
-          dimmed={false}
-        />
-      )}
-
       {/* `DocumentsToReviewBlock` moved out — now rendered once at
           the `DecisionCard` level (between the per-student SUFS
           rows and this block) so the card flow reads:
             SUFS rows → Documents to Review → Scholarship Review →
             Student-Specific Payments. */}
-    </div>
-  );
-}
-
-/* ─── Full pay matrix (read-only, with highlighted bracket) ─── */
-
-function bracketLabelMoney(min: number, max: number | null | undefined): string {
-  if (max === null || max === undefined) return `${formatCurrency(min)} +`;
-  return `${formatCurrency(min)} – ${formatCurrency(max)}`;
-}
-
-function PayMatrixView({
-  cells,
-  matchedKey,
-  matchedHouseholdSize,
-  baseTuition,
-  dimmed,
-}: {
-  cells: AwardBracketCell[];
-  /** `${household_size}::${min}-${max}` or null when this matrix
-   *  isn't the active path for this family. */
-  matchedKey: string | null;
-  /** Household size for the active row highlight. Null = no row
-   *  highlight (e.g. when this matrix is dimmed). */
-  matchedHouseholdSize: number | null;
-  baseTuition: number;
-  /** When true, the matrix renders at 50% opacity with a "Not
-   *  applicable" hint — the family routes through the other matrix. */
-  dimmed: boolean;
-}) {
-  const sizes = Array.from(
-    new Set(cells.map((c) => c.household_size ?? 0).filter((s) => s > 0))
-  ).sort((a, b) => a - b);
-
-  // Distinct brackets, sorted by income_min; null max sinks to bottom.
-  const brackets: Array<{
-    key: string;
-    income_min: number;
-    income_max: number | null;
-  }> = [];
-  const seen = new Set<string>();
-  for (const c of cells) {
-    const min = c.income_min ?? 0;
-    const max = c.income_max ?? null;
-    const key = `${min}-${max ?? "null"}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      brackets.push({ key, income_min: min, income_max: max });
-    }
-  }
-  brackets.sort((a, b) => {
-    if (a.income_max === null && b.income_max !== null) return 1;
-    if (b.income_max === null && a.income_max !== null) return -1;
-    return a.income_min - b.income_min;
-  });
-
-  const cellLookup = new Map<string, AwardBracketCell>();
-  for (const c of cells) {
-    const key = `${c.household_size}::${c.income_min}-${
-      c.income_max ?? "null"
-    }`;
-    cellLookup.set(key, c);
-  }
-
-  // The bracket-key portion of `matchedKey` (after `::`) — used to
-  // highlight the matching column header.
-  const matchedColKey = matchedKey ? matchedKey.split("::")[1] : null;
-
-  if (sizes.length === 0 || brackets.length === 0) {
-    return (
-      <div className="rounded-md border bg-white p-4">
-        <h5 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          Family Tuition Payment Matrix
-        </h5>
-        <p className="text-xs text-muted-foreground mt-1">
-          No matrix configured for this year yet.
-        </p>
-      </div>
-    );
-  }
-
-  return (
-    <div
-      className={cn(
-        "rounded-md border bg-white overflow-hidden",
-        dimmed && "opacity-60"
-      )}
-    >
-      <div className="px-4 py-3 border-b flex items-center justify-between gap-2">
-        <h5 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          Family Tuition Payment Matrix
-        </h5>
-        {dimmed ? (
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-            Not applicable — net assets &gt; $100k
-          </span>
-        ) : (
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-            Active path
-          </span>
-        )}
-      </div>
-      {/* Same body styling as the rest of the admin tables: text-sm
-          rows, px-4 py-3 cells, xs uppercase tracking-wider headers.
-          Highlight is intentionally subtle — yellow-50 wash on the
-          active row, slightly darker yellow-100 on the matched cell,
-          no heavy amber ring. */}
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="bg-muted/40">
-            <tr>
-              <th className="text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground px-4 py-3">
-                Household
-              </th>
-              {brackets.map((b) => (
-                <th
-                  key={b.key}
-                  className={cn(
-                    "text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground px-4 py-3 whitespace-nowrap",
-                    b.key === matchedColKey && !dimmed && "bg-yellow-50"
-                  )}
-                >
-                  {bracketLabelMoney(b.income_min, b.income_max)}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className="divide-y">
-            {sizes.map((size) => {
-              const isMatchedRow =
-                !dimmed && size === matchedHouseholdSize;
-              return (
-                <tr
-                  key={size}
-                  className={isMatchedRow ? "bg-yellow-50/60" : ""}
-                >
-                  <td className="px-4 py-3 font-medium whitespace-nowrap">
-                    {size} {size === 1 ? "person" : "people"}
-                  </td>
-                  {brackets.map((b) => {
-                    const cell = cellLookup.get(`${size}::${b.key}`);
-                    const pct = cell?.tuition_percentage ?? 0;
-                    const dollars = baseTuition * (pct / 100);
-                    const isMatchedCell =
-                      !dimmed &&
-                      `${size}::${b.key}` === matchedKey;
-                    return (
-                      <td
-                        key={b.key}
-                        className={cn(
-                          "px-4 py-3 tabular-nums whitespace-nowrap",
-                          isMatchedCell &&
-                            "bg-yellow-100 font-semibold"
-                        )}
-                      >
-                        {pct}% • {formatCurrency(dollars)}
-                      </td>
-                    );
-                  })}
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-/* ─── Full net-assets matrix (read-only, with highlighted row) ─── */
-
-function NetAssetsMatrixView({
-  cells,
-  matchedKey,
-  baseTuition,
-  dimmed,
-}: {
-  cells: AwardBracketCell[];
-  /** `${min}-${max}` of the matching net-asset bracket, or null when
-   *  this matrix isn't the active path. */
-  matchedKey: string | null;
-  baseTuition: number;
-  dimmed: boolean;
-}) {
-  // Sort by net_asset_min; null max (the "+ unbounded" row) sinks to
-  // the bottom so the matrix reads in ascending order.
-  const sorted = [...cells].sort((a, b) => {
-    const aMax = a.net_asset_max ?? null;
-    const bMax = b.net_asset_max ?? null;
-    if (aMax === null && bMax !== null) return 1;
-    if (bMax === null && aMax !== null) return -1;
-    return (a.net_asset_min ?? 0) - (b.net_asset_min ?? 0);
-  });
-
-  if (sorted.length === 0) {
-    return (
-      <div className="rounded-md border bg-white p-4">
-        <h5 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          Net Assets &gt; $100k Payment Percentage
-        </h5>
-        <p className="text-xs text-muted-foreground mt-1">
-          No high-net-assets brackets configured for this year yet.
-        </p>
-      </div>
-    );
-  }
-
-  return (
-    <div
-      className={cn(
-        "rounded-md border bg-white overflow-hidden",
-        dimmed && "opacity-60"
-      )}
-    >
-      <div className="px-4 py-3 border-b flex items-center justify-between gap-2">
-        <h5 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          Net Assets &gt; $100k Payment Percentage
-        </h5>
-        {dimmed ? (
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-            Not applicable — net assets ≤ $100k
-          </span>
-        ) : (
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-            Active path
-          </span>
-        )}
-      </div>
-      {/* Standardized table styling — text-sm body, px-4 py-3 cells,
-          xs uppercase headers. Highlight: a soft yellow-50 row
-          background instead of the previous amber-100 + ring-2
-          combo. Subtle enough to scan past, distinct enough to land
-          on. */}
-      <table className="w-full text-sm">
-        <thead className="bg-muted/40">
-          <tr>
-            <th className="text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground px-4 py-3 w-1/2">
-              Net Asset Bracket
-            </th>
-            <th className="text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground px-4 py-3 w-1/2">
-              Family Pays
-            </th>
-          </tr>
-        </thead>
-        <tbody className="divide-y">
-          {sorted.map((c) => {
-            const min = c.net_asset_min ?? 0;
-            const max = c.net_asset_max ?? null;
-            const key = `${min}-${max ?? "null"}`;
-            const isMatched = !dimmed && key === matchedKey;
-            const pct = c.percentage_of_total_tuition ?? 0;
-            const dollars = baseTuition * (pct / 100);
-            return (
-              <tr
-                key={key}
-                className={cn(isMatched && "bg-yellow-50")}
-              >
-                <td className="px-4 py-3 font-medium whitespace-nowrap">
-                  {bracketLabelMoney(min, max)}
-                </td>
-                <td
-                  className={cn(
-                    "px-4 py-3 tabular-nums whitespace-nowrap",
-                    isMatched && "font-semibold"
-                  )}
-                >
-                  {pct}% • {formatCurrency(dollars)}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
     </div>
   );
 }
@@ -6292,7 +5876,12 @@ function DecisionStudentRow({
   // suggestion stops fighting the manual entry.
   const baseTuition = schoolYear?.tuition ?? 0;
   const snapSuggestedCost = Math.max(baseTuition - sufsAmount, 0);
-  const persistedAward = app?.opportunity_scholarship_award_amount;
+  // The "Remaining Amount Family Pays" input now reads from the
+  // dedicated `remaining_opportunity_amount` column on the app row
+  // (mirrored from the packet when one exists). The older
+  // `opportunity_scholarship_award_amount` column is legacy — no
+  // longer the source of truth for this input.
+  const persistedAward = app?.remaining_opportunity_amount;
   const shouldAutoFillSnap =
     approveCtx.isSNAPPath &&
     (persistedAward === null ||
@@ -6302,19 +5891,9 @@ function DecisionStudentRow({
   // Local mirror of the editable fields so typing feels native.
   // Each field's onBlur compares against the source `app` snapshot
   // and PATCHes only the diff, so concurrent edits to other fields
-  // don't get clobbered. Cost per student initializes to the SNAP
-  // suggestion when applicable; admin can overwrite at will.
-  // Transportation cost — per-student column on the app row,
-  // editable by admin. Defaults to the school year's
-  // `transportation_fees` when the parent opted into bus
-  // transportation but admin hasn't set an override yet. `null`
-  // when bus wasn't elected, so the receipt math distinguishes
-  // "no transport" from "transport at $0". Stringified in the
-  // draft so the controlled input doesn't fight React's number
-  // → string coercion.
-  const persistedTransportCost = app?.transportation_cost;
-  const defaultTransportCost = schoolYear?.transportation_fees ?? 0;
-
+  // don't get clobbered. Remaining-amount-family-pays initializes
+  // to the SNAP suggestion when applicable; admin can overwrite at
+  // will.
   const [draft, setDraft] = useState({
     sufs_award_id: app?.sufs_award_id ? String(app.sufs_award_id) : "",
     opportunity_scholarship_award_amount: persistedAward
@@ -6322,12 +5901,6 @@ function DecisionStudentRow({
       : shouldAutoFillSnap
         ? String(snapSuggestedCost)
         : "",
-    transportation_cost:
-      persistedTransportCost != null
-        ? String(persistedTransportCost)
-        : app?.is_bus_transportation
-          ? String(defaultTransportCost)
-          : "",
   });
 
   useEffect(() => {
@@ -6338,24 +5911,11 @@ function DecisionStudentRow({
         : shouldAutoFillSnap
           ? String(snapSuggestedCost)
           : "",
-      transportation_cost:
-        persistedTransportCost != null
-          ? String(persistedTransportCost)
-          : app?.is_bus_transportation
-            ? String(defaultTransportCost)
-            : "",
     });
     // Re-derive only when the source data changes; deliberate stale
     // closure on shouldAutoFillSnap is fine since it's computed
     // from `app` + `approveCtx.isSNAPPath` which are both deps.
-  }, [
-    app,
-    persistedAward,
-    shouldAutoFillSnap,
-    snapSuggestedCost,
-    persistedTransportCost,
-    defaultTransportCost,
-  ]);
+  }, [app, persistedAward, shouldAutoFillSnap, snapSuggestedCost]);
 
   /**
    * Single-field PATCH. Compares a stringified `current` against the
@@ -6405,7 +5965,7 @@ function DecisionStudentRow({
   async function patchPerStudentBilling(
     body: {
       sufsAwardAmount?: number;
-      opportunityScholarshipRemaining?: number;
+      remainingOpportunityAmount?: number;
     }
   ) {
     if (!app) return;
@@ -6462,13 +6022,12 @@ function DecisionStudentRow({
     setConfirming(true);
     try {
       // The Confirm button just flips `confirmed_scholarship` on
-      // the application row — the dollar amount lives on the
-      // per-student packet (`packet.sufs_amount`) and is written
-      // separately when admin picks a SUFS tier or edits "Cost
-      // per student" above. Re-stamping the amount here used to
-      // be necessary when the app row was the source of truth;
-      // the packet is canonical now, so this is a pure-bool
-      // toggle.
+      // the application row. The per-student billing math
+      // (`sufs_amount`, `opportunity_award_amount`, etc.) lives
+      // on the same application row and is written separately by
+      // the Determination card's `/by-student` calls when admin
+      // picks a SUFS tier or edits "Remaining Amount Family
+      // Pays". This handler is a pure-bool toggle.
       const next = !sufsConfirmed;
       const body: Record<string, unknown> = {
         confirmed_scholarship: next,
@@ -6670,84 +6229,18 @@ function DecisionStudentRow({
               per-student input here would let admin overwrite a
               derived value with a hand-typed one and split-brain
               the math. The matrix path keeps the manual input. */}
-          {/* ─── Transportation sub-card ─── Only renders when
-              the parent opted into bus transportation on their
-              application. Stores the per-student fee on
-              `transportation_cost` (decimal, nullable). Admin can
-              override the school-year default; clearing the input
-              writes `null` so the family-level transport total
-              treats this student as "no transport." */}
-          {app?.is_bus_transportation ? (
-            <div className="rounded-md border bg-white p-4 space-y-3">
-              <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Transportation
-              </h4>
-              <Field>
-                <FieldLabel className="text-xs">Cost per student</FieldLabel>
-                <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground pointer-events-none">
-                    $
-                  </span>
-                  <Input
-                    value={draft.transportation_cost}
-                    type="number"
-                    inputMode="decimal"
-                    placeholder={String(defaultTransportCost)}
-                    onChange={(e) =>
-                      setDraft((d) => ({
-                        ...d,
-                        transportation_cost: e.target.value,
-                      }))
-                    }
-                    onBlur={() => {
-                      const raw = draft.transportation_cost.trim();
-                      // Empty input → write null so the column
-                      // distinguishes "admin cleared it" from
-                      // "admin set it to 0." `null` propagates
-                      // through the family-payment transport
-                      // total as "no transport for this student."
-                      if (raw === "") {
-                        if (
-                          persistedTransportCost == null
-                        )
-                          return;
-                        patchField("transportation_cost", {
-                          transportation_cost: null,
-                        });
-                        return;
-                      }
-                      const next = Number(raw);
-                      if (!Number.isFinite(next)) return;
-                      if (next === persistedTransportCost) return;
-                      patchField("transportation_cost", {
-                        transportation_cost: next,
-                      });
-                    }}
-                    className="border-input pl-7 tabular-nums"
-                  />
-                </div>
-                <p className="text-[11px] text-muted-foreground">
-                  Bus stop: {app?.bus_stop || "—"}
-                </p>
-              </Field>
-            </div>
-          ) : null}
-
           {!approveCtx.isSNAPPath ? (
             <div className="rounded-md border bg-white p-4 space-y-3">
               <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                 Opportunity Scholarship
               </h4>
               <Field>
-                {/* Label reads as "what the family will pay per
-                    student" — that's the value admin types here, not
-                    a scholarship award amount. The underlying column
-                    is still `opportunity_scholarship_award_amount` for
-                    backwards compatibility, but the field's
-                    user-facing meaning is the per-student family
-                    cost. Allows $0 (admin explicitly set zero). */}
+                {/* The input persists onto the new
+                    `remaining_opportunity_amount` column on the app
+                    row (mirrored to the packet when one exists).
+                    Allows $0 (admin explicitly set zero). */}
                 <FieldLabel className="text-xs">
-                  Cost per student
+                  Remaining Amount Family Pays
                 </FieldLabel>
                 {/* Currency input — leading "$" sigil on the left
                     matches every other money input on the page so
@@ -6774,25 +6267,17 @@ function DecisionStudentRow({
                       );
                       const safe = Number.isFinite(next) ? next : 0;
                       // No-op when the value hasn't changed. Compare
-                      // against the app row's legacy column for the
-                      // moment so admins editing pre-migration data
-                      // still see a no-op; once existing rows are
-                      // backfilled to the packet we can flip to
-                      // reading from `packet.tuition_sub_total -
-                      // packet.annual_fee` instead.
-                      const persisted =
-                        app.opportunity_scholarship_award_amount;
+                      // against the row's persisted
+                      // `remaining_opportunity_amount` — the column
+                      // that captures this input. The `/by-student`
+                      // route derives the remaining billing columns
+                      // server-side and re-prices Stripe if billing
+                      // is live; it also mirrors the write across
+                      // app + packet when both exist.
+                      const persisted = app.remaining_opportunity_amount;
                       if (safe === persisted) return;
-                      // Writes only to the per-student packet via
-                      // the new `/by-student` endpoint (which
-                      // derives the six billing columns server-side
-                      // and re-prices Stripe if billing is live).
-                      // The application row's legacy
-                      // `opportunity_scholarship_award_amount`
-                      // column is no longer the source of truth and
-                      // we deliberately stop writing to it here.
                       void patchPerStudentBilling({
-                        opportunityScholarshipRemaining: safe,
+                        remainingOpportunityAmount: safe,
                       });
                     }}
                     className="border-input pl-7 tabular-nums"

@@ -127,6 +127,18 @@ export async function PATCH(
       "isDenied",
       "isActive",
       "opportunity_scholarship_award_amount",
+      // Per-student billing columns mirroring the packet's six
+      // derived values. Pre-acceptance edits land here directly
+      // (the `/by-student` route auto-routes to whichever row
+      // exists); the acceptance cascade copies these onto the
+      // packet at flip time.
+      "tuition_total",
+      "opportunity_award_amount",
+      "annual_fee",
+      "sufs_amount",
+      "tuition_sub_total",
+      "monthly_amount",
+      "remaining_opportunity_amount",
       // Liability-waiver fields removed — they live on the per-student
       // `registration_student_registration` packet now. Use
       // `/api/admin/student-registration/[id]` to PATCH waiver state
@@ -160,24 +172,54 @@ export async function PATCH(
     }
 
     // Snapshot pre-patch state for the denial-email transition guard
-    // below. Only loaded when this PATCH is touching `isDenied`, since
-    // every other path doesn't need the row's prior state. Best-effort:
-    // if the read fails the email check is skipped — better to silently
-    // miss one notification than fail the admin's PATCH.
+    // below AND the acceptance cascade. Loaded when the patch touches
+    // either `isDenied` or `isAccepted`. Best-effort: if the read
+    // fails the guards are skipped — better to silently miss one
+    // notification than fail the admin's PATCH.
     let priorIsDenied: boolean | undefined;
-    if ("isDenied" in patch) {
+    let priorIsAccepted: boolean | undefined;
+    if ("isDenied" in patch || "isAccepted" in patch) {
       try {
         const prior = await xano.applications.getById(id);
         priorIsDenied = prior.isDenied;
+        priorIsAccepted = prior.isAccepted;
       } catch (err) {
         console.warn(
-          `[/api/admin/applications/${id}] couldn't read prior isDenied — skipping denial-email transition guard:`,
+          `[/api/admin/applications/${id}] couldn't read prior state — skipping transition guards:`,
           err
         );
       }
     }
 
     const updated = await xano.applications.update(id, patch);
+
+    // On acceptance (isAccepted false → true): ensure a
+    // `registration_student_registration` packet exists for this
+    // (student, year) so the parent's post-acceptance registration
+    // paperwork has a home to write to. Billing math lives on the
+    // application row (single source of truth), so the packet
+    // doesn't need any column copies — just needs to exist.
+    // Best-effort — log and continue if anything fails (admin's
+    // accept already succeeded).
+    if (patch.isAccepted === true && priorIsAccepted !== true) {
+      try {
+        const studentId = Number(updated.registration_students_id);
+        const yearId = Number(updated.registration_school_years_id);
+        if (
+          Number.isFinite(studentId) &&
+          studentId > 0 &&
+          Number.isFinite(yearId) &&
+          yearId > 0
+        ) {
+          await xano.studentRegistration.resolve(studentId, yearId);
+        }
+      } catch (err) {
+        console.error(
+          `[/api/admin/applications/${id}] failed to ensure packet on acceptance:`,
+          err
+        );
+      }
+    }
 
     // Email 8: admin denied this application. Per-application
     // rather than family-level — the family might have other

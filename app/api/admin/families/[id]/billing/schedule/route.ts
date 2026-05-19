@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
 import {
-  fetchActiveFamilyPackets,
+  fetchActiveFamilyApplications,
   sumFamilyBillingTotals,
 } from "@/lib/per-student-billing";
 
@@ -64,17 +64,17 @@ export async function GET(
       );
     }
 
-    const [year, transactions, activePackets] = await Promise.all([
+    const [year, transactions, activeApps] = await Promise.all([
       xano.schoolYears.getById(yearId),
       xano.paymentTransactions.getByFamilyAndYear(familyId, yearId),
-      fetchActiveFamilyPackets(familyId, yearId),
+      fetchActiveFamilyApplications(familyId, yearId),
     ]);
 
     // Family monthly total is derived from per-student
-    // `monthly_amount` on each active packet — the legacy
-    // `registration_families_payment.monthly_tuition_payment`
-    // rollup was retired in favor of per-student source of truth.
-    const totals = sumFamilyBillingTotals(activePackets);
+    // `monthly_amount` on each active application row — the
+    // application row is the per-student source of truth for
+    // billing math.
+    const totals = sumFamilyBillingTotals(activeApps);
     const monthlyAmountCents =
       totals.monthlyTotal > 0 ? Math.round(totals.monthlyTotal * 100) : null;
     const billingStartDate = year?.billing_start_date ?? null;

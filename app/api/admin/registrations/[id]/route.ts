@@ -225,15 +225,58 @@ export async function GET(
           // columns are legacy / empty). Parents can upload multiple
           // files per category, so the row carries the raw arrays;
           // the per-student card renders one row per file.
+          //
+          // Per-file confirm fields (`confirmed`, `confirmed_at`,
+          // `confirmed_admin`) get hydrated from the slot-level audit
+          // bool on first read when individual files don't have them
+          // yet — that way legacy rows that were "slot confirmed"
+          // before per-file confirm shipped don't visually regress to
+          // unconfirmed. New writes go per-file via the
+          // `/document-file` route, which also recomputes the slot
+          // bool so downstream gates stay in sync.
           student_documents: {
-            birth_certificate: normalizeFileArray(student?.birth_certificate),
-            school_health_form: normalizeFileArray(
-              student?.school_health_form
+            birth_certificate: hydrateFileConfirms(
+              student?.birth_certificate,
+              {
+                slotConfirmed:
+                  student?.birth_certificate_admin_confirm === true,
+                slotConfirmedAt:
+                  student?.birth_certificate_admin_confirm_time ?? null,
+                slotConfirmedAdmin:
+                  student?.birth_certificate_admin_confirm_admin ?? "",
+              }
             ),
-            transcripts: normalizeFileArray(student?.transcripts),
+            school_health_form: hydrateFileConfirms(
+              student?.school_health_form,
+              {
+                slotConfirmed:
+                  student?.school_health_form_admin_confirm === true,
+                slotConfirmedAt:
+                  student?.school_health_form_admin_confirm_time ?? null,
+                slotConfirmedAdmin:
+                  student?.school_health_form_admin_confirm_admin ?? "",
+              }
+            ),
+            transcripts: hydrateFileConfirms(student?.transcripts, {
+              slotConfirmed: student?.transcripts_admin_confirm === true,
+              slotConfirmedAt:
+                student?.transcripts_admin_confirm_time ?? null,
+              slotConfirmedAdmin:
+                student?.transcripts_admin_confirm_admin ?? "",
+            }),
             iep: normalizeFileArray(student?.iep),
             ssn_card: normalizeFileArray(student?.ssn_card),
-            immunization_forms: normalizeFileArray(student?.immunization_forms),
+            immunization_forms: hydrateFileConfirms(
+              student?.immunization_forms,
+              {
+                slotConfirmed:
+                  student?.immunization_admin_confirm === true,
+                slotConfirmedAt:
+                  student?.immunization_admin_confirm_time ?? null,
+                slotConfirmedAdmin:
+                  student?.immunization_admin_confirm_admin ?? "",
+              }
+            ),
             passport: normalizeFileArray(student?.passport),
             student_state_id: normalizeFileArray(student?.student_state_id),
           },
@@ -294,6 +337,17 @@ export async function GET(
             app.opportunity_scholarship_award_amount ?? null,
           is_bus_transportation: !!app.is_bus_transportation,
           bus_stop: app.bus_stop ?? "",
+          // Per-student billing math (source of truth: the
+          // application row). Surfaced here so the page's family
+          // billing totals can sum them without an extra fetch.
+          tuition_total: app.tuition_total ?? null,
+          sufs_amount: app.sufs_amount ?? null,
+          opportunity_award_amount: app.opportunity_award_amount ?? null,
+          annual_fee: app.annual_fee ?? null,
+          tuition_sub_total: app.tuition_sub_total ?? null,
+          monthly_amount: app.monthly_amount ?? null,
+          remaining_opportunity_amount:
+            app.remaining_opportunity_amount ?? null,
         };
       }
     );
@@ -487,6 +541,17 @@ export interface AdminFamilyRegistrationStudentRow {
   opportunity_scholarship_award_amount: number | null;
   is_bus_transportation: boolean;
   bus_stop: string;
+  /** Per-student billing math from the application row (source of
+   *  truth). Driven by admin's inputs on the Scholarship
+   *  Determination card; the page sums these into the family
+   *  monthly total via `sumFamilyBillingTotals`. */
+  tuition_total: number | null;
+  sufs_amount: number | null;
+  opportunity_award_amount: number | null;
+  annual_fee: number | null;
+  tuition_sub_total: number | null;
+  monthly_amount: number | null;
+  remaining_opportunity_amount: number | null;
 }
 
 /**
@@ -504,4 +569,40 @@ function normalizeFileArray(raw: unknown): Record<string, unknown>[] {
     );
   }
   return [];
+}
+
+/**
+ * Normalize a file array AND hydrate each file's per-file confirm
+ * fields from the slot-level audit bool when the file blob doesn't
+ * carry them yet. Used for the four required-doc slots
+ * (birth_certificate, school_health_form, transcripts,
+ * immunization_forms) where per-file confirmation replaced the
+ * single per-slot bool. Legacy rows where admin already confirmed
+ * the slot survive the migration — every file in such a slot reads
+ * back as `confirmed: true` until admin explicitly toggles a
+ * particular file off.
+ */
+function hydrateFileConfirms(
+  raw: unknown,
+  slot: {
+    slotConfirmed: boolean;
+    slotConfirmedAt: number | null;
+    slotConfirmedAdmin: string;
+  }
+): Record<string, unknown>[] {
+  const files = normalizeFileArray(raw);
+  return files.map((file) => {
+    if (Object.prototype.hasOwnProperty.call(file, "confirmed")) {
+      // File already carries an explicit per-file confirm — trust
+      // it as-is. Skipping the inherit here is what lets admin toggle
+      // a previously slot-confirmed file back to unconfirmed.
+      return file;
+    }
+    return {
+      ...file,
+      confirmed: slot.slotConfirmed,
+      confirmed_at: slot.slotConfirmed ? slot.slotConfirmedAt : null,
+      confirmed_admin: slot.slotConfirmed ? slot.slotConfirmedAdmin : "",
+    };
+  });
 }

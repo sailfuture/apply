@@ -40,6 +40,11 @@ export interface BaseContext {
 const SUPPORT_EMAIL = "admissions@sailfuture.org";
 const SUPPORT_PHONE = "727-902-7641";
 const TEAM_SIGNATURE = "The SailFuture Academy admissions team";
+/** Absolute logo URL for email chrome. Must be absolute — email
+ *  clients don't resolve relative paths against the original sender
+ *  domain. Falls back to the production host so transactional sends
+ *  out of a preview deployment still render the brand mark. */
+const LOGO_URL = `${process.env.NEXT_PUBLIC_APP_URL ?? "https://apply.sailfutureacademy.org"}/logo.jpg`;
 
 /* ────────────────────────── HTML layout helpers ────────────────────────── */
 
@@ -82,8 +87,8 @@ function layout({
       <td align="center" style="padding:32px 16px;">
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,0.04);">
           <tr>
-            <td style="padding:28px 32px 16px;border-bottom:1px solid #e5e7eb;">
-              <div style="font-size:18px;font-weight:700;color:#0F2A4A;letter-spacing:0.3px;">SailFuture Academy</div>
+            <td align="center" style="background:#0F2A4A;padding:32px 32px 28px;">
+              <img src="${LOGO_URL}" alt="SailFuture Academy" width="72" height="72" style="display:block;width:72px;height:72px;border-radius:50%;border:0;outline:none;text-decoration:none;">
             </td>
           </tr>
           <tr>
@@ -167,17 +172,24 @@ export function applicationReceived(ctx: BaseContext): EmailContent {
 /* Accepted — sign enrollment agreement. */
 
 export function accepted(ctx: BaseContext): EmailContent {
-  const subject = `${ctx.student_first_name} has been accepted to SailFuture Academy`;
-  const preheader = `Congratulations — sign the enrollment agreement to reserve ${ctx.student_first_name}'s spot.`;
+  // `student_first_name` may be a single name ("Hunter") or a
+  // joined list ("Hunter and Tom") for families with multiple
+  // accepted students. Verb agreement on "X has/have been
+  // accepted" needs a count — instead of branching, we phrase
+  // around the agreement issue entirely: "we'd like to welcome X
+  // to SailFuture Academy" reads naturally for both singular and
+  // plural names ("welcome Hunter" / "welcome Hunter and Tom").
+  const subject = `Welcome to SailFuture Academy`;
+  const preheader = `Sign the enrollment agreement to reserve your spot for the 2026/2027 school year.`;
   const html = layout({
     preheader,
     body:
       p(`Congratulations ${ctx.parent_first_name},`) +
       p(
-        `We're excited to share that ${ctx.student_first_name} has been accepted to SailFuture Academy for the 2026/2027 school year.`
+        `We'd like to welcome ${ctx.student_first_name} to SailFuture Academy for the 2026/2027 school year.`
       ) +
       p(
-        `To reserve ${ctx.student_first_name}'s spot, sign the enrollment agreement and complete the registration paperwork inside your family portal. Spots are limited and assigned in the order families complete enrollment, so we recommend signing as soon as you can.`
+        `To reserve your spot, sign the enrollment agreement and complete the registration paperwork inside your family portal. Spots are limited and assigned in the order families complete enrollment, so we recommend signing as soon as you can.`
       ) +
       p(
         `If you have questions about acceptance or what comes next, email ${SUPPORT_EMAIL} or call ${SUPPORT_PHONE}.`
@@ -190,9 +202,9 @@ export function accepted(ctx: BaseContext): EmailContent {
   const text = [
     `Congratulations ${ctx.parent_first_name},`,
     "",
-    `We're excited to share that ${ctx.student_first_name} has been accepted to SailFuture Academy for the 2026/2027 school year.`,
+    `We'd like to welcome ${ctx.student_first_name} to SailFuture Academy for the 2026/2027 school year.`,
     "",
-    `To reserve ${ctx.student_first_name}'s spot, sign the enrollment agreement and complete the registration paperwork inside your family portal. Spots are limited and assigned in the order families complete enrollment, so we recommend signing as soon as you can.`,
+    `To reserve your spot, sign the enrollment agreement and complete the registration paperwork inside your family portal. Spots are limited and assigned in the order families complete enrollment, so we recommend signing as soon as you can.`,
     "",
     `Sign enrollment agreement: ${ctx.login_url}`,
     "",

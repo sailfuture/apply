@@ -802,6 +802,62 @@ function buildRows({
             setSavingSlot(null);
           }
         };
+        // Upload-on-behalf-of-family for this slot. Uploads each
+        // file through `/api/upload`, concatenates the returned
+        // metadata onto the slot's existing array, then PATCHes the
+        // whole array back onto the member row. Same shape the
+        // tax-return upload uses on the scholarship row above.
+        const uploadSlot = async (newFiles: File[]) => {
+          if (newFiles.length === 0) return;
+          setSavingSlot(slotPathKey);
+          try {
+            let acc = [...slot.files];
+            for (const f of newFiles) {
+              const formData = new FormData();
+              formData.append("file", f);
+              const uploadRes = await fetch("/api/upload", {
+                method: "POST",
+                body: formData,
+              });
+              if (!uploadRes.ok) {
+                const body = await uploadRes.json().catch(() => null);
+                throw new Error(
+                  body?.error ?? `Upload failed (${uploadRes.status})`
+                );
+              }
+              const metadata =
+                (await uploadRes.json()) as Record<string, unknown>;
+              acc = [...acc, metadata];
+            }
+            const patchRes = await fetch(
+              `/api/admin/contributing-members/${m.id}`,
+              {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ [slot.slotKey]: acc }),
+              }
+            );
+            if (!patchRes.ok) {
+              const body = await patchRes.json().catch(() => null);
+              throw new Error(
+                body?.error ?? `Save failed (${patchRes.status})`
+              );
+            }
+            toast.success(
+              newFiles.length === 1
+                ? `${slot.label} uploaded.`
+                : `${newFiles.length} files uploaded.`
+            );
+            mutateMembers();
+          } catch (err) {
+            console.error("Failed to upload slot:", err);
+            toast.error(
+              err instanceof Error ? err.message : "Couldn't upload file."
+            );
+          } finally {
+            setSavingSlot(null);
+          }
+        };
         // Audit metadata — only meaningful when the slot is
         // currently confirmed. Cleared columns return null / empty
         // string; pass them through anyway and let the row presenter
@@ -819,6 +875,11 @@ function buildRows({
           key: slotPathKey,
           label: `${memberLabel} · ${slot.label}`,
           files: slot.files,
+          upload: {
+            onUpload: uploadSlot,
+            accept: ".pdf,.jpg,.jpeg,.png",
+            maxFiles: 10,
+          },
           confirmation: {
             confirmed,
             saving: savingSlot === slotPathKey,

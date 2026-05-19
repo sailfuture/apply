@@ -12,7 +12,6 @@ import {
   useSchoolYears,
   useFamily,
   useScholarship,
-  useStudentRegistrationPackets,
 } from "@/hooks/use-api";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
@@ -24,14 +23,14 @@ import SignatureCanvas from "react-signature-canvas";
 
 /** Human-readable labels for SUFS award types */
 const SUFS_LABELS: Record<string, string> = {
-  fes_eo_8: "FES-EO (Grade 8)",
-  fes_eo_9: "FES-EO (Grade 9)",
-  ftc_8: "FTC (Grade 8)",
-  ftc_9: "FTC (Grade 9)",
-  fes_ua_8_ese_1_3: "FES-UA ESE 1-3 (Grade 8)",
-  fes_ua_9_ese_1_3: "FES-UA ESE 1-3 (Grade 9)",
-  fes_ua_ese_4: "FES-UA ESE 4",
-  fes_ua_ese_5: "FES-UA ESE 5",
+  fes_eo_8: "FES-EO · Grade 8",
+  fes_eo_9: "FES-EO · Grade 9",
+  ftc_8: "FTC · Grade 8",
+  ftc_9: "FTC · Grade 9",
+  fes_ua_8_ese_1_3: "FES-UA · ESE 1-3 · Grade 8",
+  fes_ua_9_ese_1_3: "FES-UA · ESE 1-3 · Grade 9",
+  fes_ua_ese_4: "FES-UA · ESE 4",
+  fes_ua_ese_5: "FES-UA · ESE 5",
 };
 
 interface StudentRow {
@@ -102,11 +101,9 @@ export default function TuitionPage() {
   const { data: students } = useStudents();
   const { data: applications } = useApplications();
   const { data: yearsData } = useSchoolYears();
-  // Per-student packet rows for this year — source of truth for
-  // tuition figures (sufs_amount, opportunity_award_amount,
-  // tuition_sub_total, annual_fee). Replaces the legacy reads off
-  // the application row's `opportunity_scholarship_award_amount`.
-  const { data: packets } = useStudentRegistrationPackets(yearId);
+  // Per-student billing math lives on the application row now —
+  // the `applications` data above already carries it. Packet table
+  // no longer holds tuition columns.
   // Scholarship row drives the Remaining Tuition Amount breakout —
   // when the family is on the OS path we render a dedicated
   // "Remaining Tuition Amount" line right above the subtotal so the
@@ -255,42 +252,24 @@ export default function TuitionPage() {
     ) as (typeof yearsData extends (infer T)[] ? T : never) | undefined ?? null;
   }, [yearsData, yearId]);
 
-  // Build per-student rows from per-year packet values — those carry
-  // the authoritative per-student tuition figures (sufs_amount,
-  // opportunity_award_amount, tuition_sub_total, annual_fee) that
-  // admin enters on the Scholarship Determination card. We still
-  // join the application row for the SUFS tier label
-  // (`sufs_status` / `sufs_type`) which lives on the app side.
+  // Build per-student rows from per-year application values — the
+  // application row carries the authoritative per-student tuition
+  // figures (sufs_amount, opportunity_award_amount, tuition_sub_total,
+  // annual_fee) that admin enters on the Scholarship Determination
+  // card.
   const studentRows: StudentRow[] = useMemo(() => {
-    if (!students || !applications || !packets || !schoolYear) return [];
+    if (!students || !applications || !schoolYear) return [];
 
     const yearApps = (applications as {
       registration_school_years_id: number;
       registration_students_id: number;
       sufs_status?: string;
       sufs_type?: string;
-    }[]).filter((a) => a.registration_school_years_id === yearId);
-
-    // Index packets by student id for O(1) lookup per app row.
-    const packetByStudentId = new Map<
-      number,
-      {
-        registration_students_id: number;
-        sufs_amount?: number | null;
-        opportunity_award_amount?: number | null;
-        annual_fee?: number | null;
-        tuition_sub_total?: number | null;
-      }
-    >();
-    for (const p of packets as Array<{
-      registration_students_id: number;
       sufs_amount?: number | null;
       opportunity_award_amount?: number | null;
       annual_fee?: number | null;
-      tuition_sub_total?: number | null;
-    }>) {
-      packetByStudentId.set(Number(p.registration_students_id), p);
-    }
+      remaining_opportunity_amount?: number | null;
+    }[]).filter((a) => a.registration_school_years_id === yearId);
 
     const rows: StudentRow[] = [];
     const sy = schoolYear as Record<string, unknown>;
@@ -299,31 +278,39 @@ export default function TuitionPage() {
       const student = (students as { id: number; first_name: string; last_name: string }[])
         .find((s) => s.id === app.registration_students_id);
       if (!student) continue;
-      const packet = packetByStudentId.get(app.registration_students_id);
 
       const tuition = (sy.tuition as number) ?? 0;
       const sufsType = app.sufs_type ?? "";
       const stepUpStatus = app.sufs_status ?? "";
 
-      // Read per-student billing values from the packet. Missing
-      // packet (pre-acceptance state) collapses everything to 0 —
-      // matches the pre-acceptance UX ("nothing determined yet").
+      // Read per-student billing values directly from the application
+      // row's "input" columns (`sufs_amount`, `remaining_opportunity_amount`,
+      // `annual_fee`). Subtotal is derived client-side so the displayed
+      // numbers stay internally consistent even if any stored
+      // "summary" column (`tuition_sub_total`, `monthly_amount`) drifted
+      // due to a partial write or schema migration.
       const stepUpAmount =
-        typeof packet?.sufs_amount === "number" ? packet.sufs_amount : 0;
-      const scholarshipCoverage =
-        typeof packet?.opportunity_award_amount === "number"
-          ? packet.opportunity_award_amount
-          : 0;
+        typeof app.sufs_amount === "number" ? app.sufs_amount : 0;
       const adminFees =
-        typeof packet?.annual_fee === "number" ? packet.annual_fee : 0;
-      const subtotal =
-        typeof packet?.tuition_sub_total === "number"
-          ? packet.tuition_sub_total
+        typeof app.annual_fee === "number" ? app.annual_fee : 0;
+      // "Remaining Tuition Amount" — admin's input on the Determination
+      // card. Source of truth lives on `remaining_opportunity_amount`.
+      const familyPaysForTuition =
+        typeof app.remaining_opportunity_amount === "number"
+          ? app.remaining_opportunity_amount
           : 0;
-      // "Cost per student" — the family-paid tuition portion before
-      // the admin fee. Implicit on the packet as
-      // `tuition_sub_total - annual_fee`.
-      const familyPaysForTuition = Math.max(subtotal - adminFees, 0);
+      // Opportunity Scholarship coverage — re-derived from the
+      // inputs so the parent's view always matches the math regardless
+      // of any stale stored `opportunity_award_amount`. Equals
+      // `tuition - sufs - remaining`.
+      const scholarshipCoverage = Math.max(
+        tuition - stepUpAmount - familyPaysForTuition,
+        0
+      );
+      // Per-student subtotal — what the family actually owes for this
+      // student per year. Computed from inputs, not read from the
+      // stored `tuition_sub_total` column.
+      const subtotal = familyPaysForTuition + adminFees;
 
       // OS determination signal — true when family flagged OS/SNAP
       // OR admin has entered any per-student determination
@@ -353,7 +340,6 @@ export default function TuitionPage() {
   }, [
     students,
     applications,
-    packets,
     schoolYear,
     yearId,
     isOpportunityScholarshipFamily,
@@ -490,28 +476,6 @@ export default function TuitionPage() {
                       <td className="px-4 py-3 text-right font-medium">${formatCurrency(row.tuition)}</td>
                     </tr>
 
-                    {/* Admin Fee — moved up under Annual Tuition so the
-                        family sees the base school costs (tuition + fees)
-                        before the awards that offset them. */}
-                    <tr className="border-t">
-                      <td className="px-4 py-3 text-muted-foreground">
-                        <span className="inline-flex items-center gap-1.5">
-                          Annual Admin Fee
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <button type="button" className="inline-flex text-muted-foreground/50 hover:text-muted-foreground transition-colors">
-                                <HelpCircle className="size-3.5" />
-                              </button>
-                            </TooltipTrigger>
-                            <TooltipContent side="top" className="max-w-xs text-xs">
-                              <p>The annual administrative fee covers registration, technology, materials, and other operational costs for the school year. This fee is required for all enrolled students.</p>
-                            </TooltipContent>
-                          </Tooltip>
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-right font-medium">${formatCurrency(row.adminFees)}</td>
-                    </tr>
-
                     {/* Step Up Status */}
                     <tr className="border-t">
                       <td className="px-4 py-3 text-muted-foreground">Step Up for Students Award Status</td>
@@ -610,6 +574,19 @@ export default function TuitionPage() {
                         </td>
                       </tr>
                     ) : null}
+
+                    {/* Annual Admin Fee — sits directly above the
+                        subtotal so the family reads the receipt
+                        top-to-bottom: gross tuition, awards that
+                        offset it, then the line items that make up
+                        what they actually owe (remaining tuition +
+                        admin fee = subtotal). */}
+                    <tr className="border-t">
+                      <td className="px-4 py-3 text-muted-foreground">
+                        Annual Admin Fee
+                      </td>
+                      <td className="px-4 py-3 text-right font-medium">${formatCurrency(row.adminFees)}</td>
+                    </tr>
 
                     {/* Student subtotal */}
                     <tr className="border-t bg-muted/20">

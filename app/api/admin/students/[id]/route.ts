@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
 import type { XanoStudent } from "@/lib/xano";
+import { removeStripeItemsForArchivedStudent } from "@/lib/per-student-billing";
 
 /**
  * Document-confirm pairs — each entry maps the confirm bool to its
@@ -207,6 +208,24 @@ export async function PATCH(
     // logging a meaningless timestamp bump.
     (patch as Record<string, unknown>).last_edited_time = now;
 
+    // Snapshot prior `isArchived` so we can detect a false → true
+    // transition AFTER the write lands and trigger the Stripe-item
+    // cleanup cascade below. Best-effort lookup — if the prior read
+    // fails we skip the cascade rather than guess; admin can repeat
+    // the archive action to retry.
+    let priorIsArchived: boolean | undefined;
+    if ("isArchived" in patch) {
+      try {
+        const prior = await xano.students.getById(id);
+        priorIsArchived = prior.isArchived === true;
+      } catch (err) {
+        console.warn(
+          `[/api/admin/students/${id}] couldn't read prior isArchived — skipping Stripe cascade guard:`,
+          err
+        );
+      }
+    }
+
     // Route through the admin API group when any admin-only
     // column is in the patch — those columns were added against
     // the `2GcBXyoA` query and aren't on the default group's CRUD
@@ -214,6 +233,23 @@ export async function PATCH(
     const updated = touchesAdminGroupFields
       ? await xano.students.updateOnAdminGroup(id, patch)
       : await xano.students.update(id, patch);
+
+    // On `isArchived` false → true: pull every active Stripe
+    // SubscriptionItem the student is on. Walks every packet for
+    // the student (across all years) and removes any items with a
+    // live `stripe_subscription_item_id`. If a removal empties the
+    // parent subscription, Stripe cancels it at period end via the
+    // helper. Best-effort — failures log but don't fail the admin's
+    // archive (the student row already flipped).
+    if (patch.isArchived === true && priorIsArchived !== true) {
+      removeStripeItemsForArchivedStudent(id).catch((err) => {
+        console.error(
+          `[/api/admin/students/${id}] Stripe item cleanup failed:`,
+          err
+        );
+      });
+    }
+
     return NextResponse.json(updated);
   } catch (err) {
     return handleAdminError(err);

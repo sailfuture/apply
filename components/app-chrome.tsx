@@ -38,22 +38,24 @@ export function AppChrome({ children }: { children: React.ReactNode }) {
 
   return (
     <>
-      {/* Header sits in document flow via `sticky` (not `fixed`) so
-          Radix's scroll-lock body padding-right keeps it aligned
-          when a Select/Dialog opens. The Suspense fallback matches
-          the real header's positioning so layout reserves the same
-          14px slot during hydration. `<main>` no longer needs the
-          `pt-14` spacer it had when the header was fixed — the
-          sticky header takes its own space at the top of the
-          document. */}
+      {/* Header is `fixed` (not `sticky`) because Radix's
+          `react-remove-scroll` (used by Select/Dialog) freezes the
+          body's scroll position when a dropdown opens — sticky
+          elements drop away from the viewport mid-page when that
+          happens. Fixed positioning is anchored to the viewport
+          directly so it stays put. Scrollbar-width compensation
+          lives on the header itself via the
+          `--removed-body-scroll-bar-size` CSS var; `<main>`
+          reserves the 14px slot with `pt-14` so content doesn't
+          tuck under the fixed header. */}
       <Suspense
         fallback={
-          <header className="sticky top-0 z-50 h-14 border-b bg-white" />
+          <header className="fixed inset-x-0 top-0 z-50 h-14 border-b bg-white" />
         }
       >
         <GlobalHeader />
       </Suspense>
-      <main className="pb-16 min-h-screen">
+      <main className="pt-14 pb-16 min-h-screen">
         <TooltipProvider>{children}</TooltipProvider>
       </main>
       <GlobalFooter />

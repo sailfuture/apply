@@ -80,15 +80,26 @@ export function GlobalHeader() {
   })();
 
   return (
-    // `sticky` (not `fixed`) — Radix-based dropdowns/dialogs lock
-    // body scroll by adding `padding-right` to the body to
-    // compensate for the scrollbar disappearance. A `position: fixed`
-    // header is anchored to the viewport and doesn't shift with the
-    // body, so it visually slides offscreen the moment a Select
-    // opens. Sticky lives in the document flow and respects the
-    // body padding, so the header stays anchored when Radix locks
-    // scroll. Matches the admin top nav's pattern.
-    <header className="sticky top-0 z-50 border-b bg-white">
+    // `fixed` (not `sticky`) — when Radix opens a Select / Dialog,
+    // `react-remove-scroll` engages and freezes the body's scroll
+    // position (typically via `position: fixed` + a negative `top`
+    // offset on the body to preserve the visual scroll). Sticky
+    // elements stop sticking once their scrolling ancestor loses
+    // its scroll context, so a previously-sticky header drops
+    // away from the top of the viewport the moment a Select opens
+    // mid-page — exactly the bug users reported.
+    //
+    // Fixed positioning sidesteps the scroll-lock entirely since
+    // it's anchored to the viewport, not to body flow. We use
+    // `react-remove-scroll`'s own CSS var
+    // (`--removed-body-scroll-bar-size`) to compensate for the
+    // scrollbar width that disappears when scroll is locked —
+    // without this, the fixed header would extend over the now-
+    // empty scrollbar gutter on the right.
+    <header
+      className="fixed inset-x-0 top-0 z-50 border-b bg-white"
+      style={{ paddingRight: "var(--removed-body-scroll-bar-size, 0px)" }}
+    >
       <div className="mx-auto flex h-14 items-center justify-between px-4 lg:px-6">
         {/* Left: Logo (clickable) + Title + Family name */}
         <div className="flex items-center gap-3">

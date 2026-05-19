@@ -114,28 +114,35 @@ interface Scholarship {
   household_adults: number;
   household_children: number;
   no_contributing_member: boolean;
-  business_income_monthly: number;
-  capital_gains_monthly: number;
-  child_support_monthly: number;
-  alimony_monthly: number;
-  trusts_monthly: number;
-  other_income_monthly: number;
+  // Monetary fields are nullable — null means "untouched", 0 means
+  // "explicitly entered as zero." The CurrencyInput component reads
+  // null as the placeholder state ("$ 0" greyed out) and a typed 0
+  // as a real value the family asserted (e.g. confirming no income
+  // from a particular source). Saving back to Xano preserves both
+  // states; the scholarship math coerces null -> 0 at the call site.
+  business_income_monthly: number | null;
+  capital_gains_monthly: number | null;
+  child_support_monthly: number | null;
+  alimony_monthly: number | null;
+  trusts_monthly: number | null;
+  other_income_monthly: number | null;
   describe_other_income: string;
-  assets_checking: number;
-  assets_savings: number;
-  assets_retirement_savings: number;
-  assets_stocks_bonds_securities: number;
-  assets_trusts_inheritance: number;
-  assets_business: number;
-  debts_credit_cards: number;
-  debts_student_loans: number;
-  debts_personal_loans: number;
+  assets_checking: number | null;
+  assets_savings: number | null;
+  assets_retirement_savings: number | null;
+  assets_stocks_bonds_securities: number | null;
+  assets_trusts_inheritance: number | null;
+  assets_business: number | null;
+  debts_credit_cards: number | null;
+  debts_student_loans: number | null;
+  debts_personal_loans: number | null;
   government_benefits: boolean;
-  family_contribution_per_month: number;
+  family_contribution_per_month: number | null;
   scholarship_advocacy_letter: string;
   snap_benefits: Record<string, unknown>[];
   other_benefits: Record<string, unknown>[];
   signature: Record<string, unknown> | null;
+  full_name_signature?: string | null;
   /** Multi-file array of unemployment / termination proof — required when
    *  `no_contributing_member` is true. Replaces the older single-file
    *  `termination_letter` column. */
@@ -271,22 +278,31 @@ function CurrencyInput({
   className: extraClassName,
 }: {
   id?: string;
-  value: number;
-  onChange: (val: number) => void;
+  /** `null` = untouched (placeholder shown); a number = explicitly
+   *  entered amount, including `0` ("yes, I confirm no income from
+   *  this source"). */
+  value: number | null;
+  /** `null` is sent when the field is cleared back to empty so the
+   *  caller can distinguish untouched from explicit-zero on save. */
+  onChange: (val: number | null) => void;
   onBlur?: () => void;
   disabled?: boolean;
   placeholder?: string;
   className?: string;
 }) {
   const [display, setDisplay] = useState(
-    value ? formatCurrencyDisplay(value) : ""
+    value !== null ? formatCurrencyDisplay(value) : ""
   );
   const focusedRef = useRef(false);
-  const localValueRef = useRef(value);
+  // Local mirror of the canonical value so onBlur can commit either
+  // a number (including 0) or null without re-deriving from
+  // `display`. Display "$0" round-trips to 0; empty display
+  // round-trips to null.
+  const localValueRef = useRef<number | null>(value);
 
   useEffect(() => {
     if (!focusedRef.current) {
-      setDisplay(value ? formatCurrencyDisplay(value) : "");
+      setDisplay(value !== null ? formatCurrencyDisplay(value) : "");
     }
     localValueRef.current = value;
   }, [value]);
@@ -305,15 +321,25 @@ function CurrencyInput({
         onFocus={() => { focusedRef.current = true; }}
         onChange={(e) => {
           const raw = e.target.value.replace(/[^0-9]/g, "");
-          const num = Number(raw) || 0;
-          setDisplay(raw ? formatCurrencyDisplay(num) : "");
-          localValueRef.current = num;
+          if (raw === "") {
+            // Empty input clears the field back to "untouched".
+            setDisplay("");
+            localValueRef.current = null;
+            return;
+          }
+          const num = Number(raw);
+          // Number coercion can't return NaN here because `raw` is
+          // guaranteed digit-only after the regex strip, but guard
+          // anyway so a stray edge case doesn't write NaN to state.
+          const safe = Number.isFinite(num) ? num : 0;
+          setDisplay(formatCurrencyDisplay(safe));
+          localValueRef.current = safe;
         }}
         onBlur={() => {
           focusedRef.current = false;
-          const num = localValueRef.current;
-          setDisplay(num ? formatCurrencyDisplay(num) : "");
-          onChange(num);
+          const next = localValueRef.current;
+          setDisplay(next !== null ? formatCurrencyDisplay(next) : "");
+          onChange(next);
           onBlur?.();
         }}
       />
@@ -374,28 +400,34 @@ export default function ScholarshipPage() {
   const [householdChildren, setHouseholdChildren] = useState(0);
   const [noContributing, setNoContributing] = useState(false);
 
-  const [businessIncome, setBusinessIncome] = useState(0);
-  const [capitalGains, setCapitalGains] = useState(0);
-  const [childSupport, setChildSupport] = useState(0);
-  const [alimony, setAlimony] = useState(0);
-  const [trustsIncome, setTrustsIncome] = useState(0);
-  const [otherIncome, setOtherIncome] = useState(0);
+  // Monetary state defaults to null ("untouched") so the
+  // placeholder is shown until the family explicitly types a
+  // value. A typed `0` is preserved as `0` and saved as `0` —
+  // distinct from null so admin can tell "didn't fill in this
+  // field" apart from "confirmed no income from this source."
+  const [businessIncome, setBusinessIncome] = useState<number | null>(null);
+  const [capitalGains, setCapitalGains] = useState<number | null>(null);
+  const [childSupport, setChildSupport] = useState<number | null>(null);
+  const [alimony, setAlimony] = useState<number | null>(null);
+  const [trustsIncome, setTrustsIncome] = useState<number | null>(null);
+  const [otherIncome, setOtherIncome] = useState<number | null>(null);
   const [describeOtherIncome, setDescribeOtherIncome] = useState("");
 
-  const [assetsChecking, setAssetsChecking] = useState(0);
-  const [assetsSavings, setAssetsSavings] = useState(0);
-  const [assetsRetirement, setAssetsRetirement] = useState(0);
-  const [assetsStocks, setAssetsStocks] = useState(0);
-  const [assetsTrusts, setAssetsTrusts] = useState(0);
-  const [assetsBusiness, setAssetsBusiness] = useState(0);
+  const [assetsChecking, setAssetsChecking] = useState<number | null>(null);
+  const [assetsSavings, setAssetsSavings] = useState<number | null>(null);
+  const [assetsRetirement, setAssetsRetirement] = useState<number | null>(null);
+  const [assetsStocks, setAssetsStocks] = useState<number | null>(null);
+  const [assetsTrusts, setAssetsTrusts] = useState<number | null>(null);
+  const [assetsBusiness, setAssetsBusiness] = useState<number | null>(null);
 
-  const [debtsCreditCards, setDebtsCreditCards] = useState(0);
-  const [debtsStudentLoans, setDebtsStudentLoans] = useState(0);
-  const [debtsPersonalLoans, setDebtsPersonalLoans] = useState(0);
+  const [debtsCreditCards, setDebtsCreditCards] = useState<number | null>(null);
+  const [debtsStudentLoans, setDebtsStudentLoans] = useState<number | null>(null);
+  const [debtsPersonalLoans, setDebtsPersonalLoans] = useState<number | null>(null);
 
   const [govBenefits, setGovBenefits] = useState(false);
-  const [familyContribution, setFamilyContribution] = useState(0);
+  const [familyContribution, setFamilyContribution] = useState<number | null>(null);
   const [advocacyLetter, setAdvocacyLetter] = useState("");
+  const [fullNameSignature, setFullNameSignature] = useState("");
   const [signatureMeta, setSignatureMeta] = useState<Record<string, unknown> | null>(null);
   const [signatureLocalUrl, setSignatureLocalUrl] = useState<string | null>(null);
   const [signatureUploading, setSignatureUploading] = useState(false);
@@ -517,7 +549,8 @@ export default function ScholarshipPage() {
     (vehicles.length === 0 || vehicles.every(v => v.type && v.car_make && v.car_model && v.car_year && v.total_value > 0 && v.remaining_debt >= 0))
   );
 
-  const contributionComplete = familyContribution > 0 && advocacyLetter.trim().length > 0;
+  const contributionComplete =
+    (familyContribution ?? 0) > 0 && advocacyLetter.trim().length > 0;
 
   // Default every section to OPEN on initial load. Users can manually collapse
   // via the chevron, but completion never auto-collapses anything.
@@ -537,7 +570,7 @@ export default function ScholarshipPage() {
       otherIncome, describeOtherIncome, assetsChecking, assetsSavings,
       assetsRetirement, assetsStocks, assetsTrusts, assetsBusiness,
       debtsCreditCards, debtsStudentLoans, debtsPersonalLoans,
-      govBenefits, familyContribution, advocacyLetter,
+      govBenefits, familyContribution, advocacyLetter, fullNameSignature,
       signatureMeta, unemploymentLetter, taxReturnFiles,
       members, homes, vehicles, benefits,
     });
@@ -550,7 +583,7 @@ export default function ScholarshipPage() {
     otherIncome, describeOtherIncome, assetsChecking, assetsSavings,
     assetsRetirement, assetsStocks, assetsTrusts, assetsBusiness,
     debtsCreditCards, debtsStudentLoans, debtsPersonalLoans,
-    govBenefits, familyContribution, advocacyLetter,
+    govBenefits, familyContribution, advocacyLetter, fullNameSignature,
     signatureMeta, unemploymentLetter, taxReturnFiles,
     members, homes, vehicles, benefits,
   ]);
@@ -613,29 +646,36 @@ export default function ScholarshipPage() {
             setHomes(loadedHomes);
             setVehicles(loadedVehicles);
             setBenefits(loadedBenefits);
+            // Monetary fields pass null through to the snapshot
+            // so the dirty-check below can distinguish "untouched
+            // since hydrate" from "user typed and then cleared back
+            // to empty" later in the session. Counts + booleans
+            // still coerce to 0 / false defaults since they don't
+            // have a meaningful null state on this surface.
             initialSnapshotRef.current = JSON.stringify({
               householdAdults: s.household_adults ?? 0,
               householdChildren: s.household_children ?? 0,
               noContributing: s.no_contributing_member ?? false,
-              businessIncome: s.business_income_monthly ?? 0,
-              capitalGains: s.capital_gains_monthly ?? 0,
-              childSupport: s.child_support_monthly ?? 0,
-              alimony: s.alimony_monthly ?? 0,
-              trustsIncome: s.trusts_monthly ?? 0,
-              otherIncome: s.other_income_monthly ?? 0,
+              businessIncome: s.business_income_monthly ?? null,
+              capitalGains: s.capital_gains_monthly ?? null,
+              childSupport: s.child_support_monthly ?? null,
+              alimony: s.alimony_monthly ?? null,
+              trustsIncome: s.trusts_monthly ?? null,
+              otherIncome: s.other_income_monthly ?? null,
               describeOtherIncome: s.describe_other_income ?? "",
-              assetsChecking: s.assets_checking ?? 0,
-              assetsSavings: s.assets_savings ?? 0,
-              assetsRetirement: s.assets_retirement_savings ?? 0,
-              assetsStocks: s.assets_stocks_bonds_securities ?? 0,
-              assetsTrusts: s.assets_trusts_inheritance ?? 0,
-              assetsBusiness: s.assets_business ?? 0,
-              debtsCreditCards: s.debts_credit_cards ?? 0,
-              debtsStudentLoans: s.debts_student_loans ?? 0,
-              debtsPersonalLoans: s.debts_personal_loans ?? 0,
+              assetsChecking: s.assets_checking ?? null,
+              assetsSavings: s.assets_savings ?? null,
+              assetsRetirement: s.assets_retirement_savings ?? null,
+              assetsStocks: s.assets_stocks_bonds_securities ?? null,
+              assetsTrusts: s.assets_trusts_inheritance ?? null,
+              assetsBusiness: s.assets_business ?? null,
+              debtsCreditCards: s.debts_credit_cards ?? null,
+              debtsStudentLoans: s.debts_student_loans ?? null,
+              debtsPersonalLoans: s.debts_personal_loans ?? null,
               govBenefits: s.government_benefits ?? false,
-              familyContribution: s.family_contribution_per_month ?? 0,
+              familyContribution: s.family_contribution_per_month ?? null,
               advocacyLetter: s.scholarship_advocacy_letter ?? "",
+              fullNameSignature: s.full_name_signature ?? "",
               signatureMeta: (() => {
                 if (!s.signature) return null;
                 let sig: Record<string, unknown>;
@@ -701,25 +741,29 @@ export default function ScholarshipPage() {
     setHouseholdAdults(s.household_adults ?? 0);
     setHouseholdChildren(s.household_children ?? 0);
     setNoContributing(s.no_contributing_member ?? false);
-    setBusinessIncome(s.business_income_monthly ?? 0);
-    setCapitalGains(s.capital_gains_monthly ?? 0);
-    setChildSupport(s.child_support_monthly ?? 0);
-    setAlimony(s.alimony_monthly ?? 0);
-    setTrustsIncome(s.trusts_monthly ?? 0);
-    setOtherIncome(s.other_income_monthly ?? 0);
+    // Monetary fields hydrate as null when Xano returns null —
+    // preserves the "untouched" placeholder state. A real zero
+    // saved by the family round-trips back as `0`.
+    setBusinessIncome(s.business_income_monthly ?? null);
+    setCapitalGains(s.capital_gains_monthly ?? null);
+    setChildSupport(s.child_support_monthly ?? null);
+    setAlimony(s.alimony_monthly ?? null);
+    setTrustsIncome(s.trusts_monthly ?? null);
+    setOtherIncome(s.other_income_monthly ?? null);
     setDescribeOtherIncome(s.describe_other_income ?? "");
-    setAssetsChecking(s.assets_checking ?? 0);
-    setAssetsSavings(s.assets_savings ?? 0);
-    setAssetsRetirement(s.assets_retirement_savings ?? 0);
-    setAssetsStocks(s.assets_stocks_bonds_securities ?? 0);
-    setAssetsTrusts(s.assets_trusts_inheritance ?? 0);
-    setAssetsBusiness(s.assets_business ?? 0);
-    setDebtsCreditCards(s.debts_credit_cards ?? 0);
-    setDebtsStudentLoans(s.debts_student_loans ?? 0);
-    setDebtsPersonalLoans(s.debts_personal_loans ?? 0);
+    setAssetsChecking(s.assets_checking ?? null);
+    setAssetsSavings(s.assets_savings ?? null);
+    setAssetsRetirement(s.assets_retirement_savings ?? null);
+    setAssetsStocks(s.assets_stocks_bonds_securities ?? null);
+    setAssetsTrusts(s.assets_trusts_inheritance ?? null);
+    setAssetsBusiness(s.assets_business ?? null);
+    setDebtsCreditCards(s.debts_credit_cards ?? null);
+    setDebtsStudentLoans(s.debts_student_loans ?? null);
+    setDebtsPersonalLoans(s.debts_personal_loans ?? null);
     setGovBenefits(s.government_benefits ?? false);
-    setFamilyContribution(s.family_contribution_per_month ?? 0);
+    setFamilyContribution(s.family_contribution_per_month ?? null);
     setAdvocacyLetter(s.scholarship_advocacy_letter ?? "");
+    setFullNameSignature(s.full_name_signature ?? "");
     if (s.last_edited) setLastSaved(new Date(s.last_edited));
     if (s.signature) {
       let sig: Record<string, unknown>;
@@ -879,6 +923,7 @@ export default function ScholarshipPage() {
           government_benefits: govBenefits,
           family_contribution_per_month: familyContribution,
           scholarship_advocacy_letter: advocacyLetter,
+          full_name_signature: fullNameSignature,
           snap_benefits: snapBenefitsFiles,
           other_benefits: otherBenefitsFiles,
           signature: signatureMeta,
@@ -1333,7 +1378,8 @@ export default function ScholarshipPage() {
     membersComplete &&
     assetsComplete &&
     contributionComplete &&
-    !!signatureMeta;
+    !!signatureMeta &&
+    fullNameSignature.trim().length > 0;
 
   // Per-student SUFS block. Rendered on both the chooser screen (!showForm)
   // and the full Opportunity Scholarship form (showForm) so it's always visible.
@@ -2227,7 +2273,7 @@ export default function ScholarshipPage() {
                             </FieldLabel>
                             <CurrencyInput
                               value={benefit.amount_monthly}
-                              onChange={(val) => patchBenefitLocal(benefit.id, { amount_monthly: val })}
+                              onChange={(val) => patchBenefitLocal(benefit.id, { amount_monthly: val ?? 0 })}
                               disabled={isReadonly}
                               className={!benefit.amount_monthly ? "border-2 border-red-400" : ""}
                             />
@@ -2566,7 +2612,7 @@ export default function ScholarshipPage() {
                           <FieldLabel className="text-xs">Estimated Annual Income <span className="text-red-400">*</span></FieldLabel>
                           <CurrencyInput
                             value={member.estimated_annual_income || 0}
-                            onChange={(val) => patchMemberLocal(member.id, { estimated_annual_income: val })}
+                            onChange={(val) => patchMemberLocal(member.id, { estimated_annual_income: val ?? 0 })}
                             disabled={isReadonly}
                             className={!(member.estimated_annual_income || 0) ? "border-2 border-red-400" : ""}
                           />
@@ -2798,7 +2844,7 @@ export default function ScholarshipPage() {
                   />
                 </Field>
               </div>
-              {otherIncome > 0 && (
+              {(otherIncome ?? 0) > 0 && (
                 <div className="mt-4">
                   <Field>
                     <FieldLabel className="text-xs">
@@ -3079,7 +3125,7 @@ export default function ScholarshipPage() {
                           </FieldLabel>
                           <CurrencyInput
                             value={home.total_value ?? 0}
-                            onChange={(val) => patchHomeLocal(home.id, { total_value: val })}
+                            onChange={(val) => patchHomeLocal(home.id, { total_value: val ?? 0 })}
                             disabled={isReadonly}
                             className={!(home.total_value ?? 0) ? "border-2 border-red-400" : ""}
                           />
@@ -3098,7 +3144,7 @@ export default function ScholarshipPage() {
                           </FieldLabel>
                           <CurrencyInput
                             value={home.outstanding_debt ?? 0}
-                            onChange={(val) => patchHomeLocal(home.id, { outstanding_debt: val })}
+                            onChange={(val) => patchHomeLocal(home.id, { outstanding_debt: val ?? 0 })}
                             disabled={isReadonly}
                           />
                         </Field>
@@ -3245,7 +3291,7 @@ export default function ScholarshipPage() {
                           </FieldLabel>
                           <CurrencyInput
                             value={vehicle.total_value ?? 0}
-                            onChange={(val) => patchVehicleLocal(vehicle.id, { total_value: val })}
+                            onChange={(val) => patchVehicleLocal(vehicle.id, { total_value: val ?? 0 })}
                             disabled={isReadonly}
                             className={!(vehicle.total_value ?? 0) ? "border-2 border-red-400" : ""}
                           />
@@ -3264,7 +3310,7 @@ export default function ScholarshipPage() {
                           </FieldLabel>
                           <CurrencyInput
                             value={vehicle.remaining_debt ?? 0}
-                            onChange={(val) => patchVehicleLocal(vehicle.id, { remaining_debt: val })}
+                            onChange={(val) => patchVehicleLocal(vehicle.id, { remaining_debt: val ?? 0 })}
                             disabled={isReadonly}
                           />
                         </Field>
@@ -3439,6 +3485,24 @@ export default function ScholarshipPage() {
                     Clear Signature
                   </Button>
                 )}
+              </div>
+              <div className="mt-4">
+                <label className="text-sm font-medium" htmlFor="full-name-signature">
+                  Type your full legal name
+                </label>
+                <Input
+                  id="full-name-signature"
+                  type="text"
+                  className="mt-1.5"
+                  value={fullNameSignature}
+                  onChange={(e) => setFullNameSignature(e.target.value)}
+                  disabled={isReadonly}
+                  placeholder="Full legal name"
+                  autoComplete="off"
+                />
+                <p className="mt-1.5 text-xs text-muted-foreground">
+                  By typing your name above, you confirm the signature you drew and certify the application.
+                </p>
               </div>
             </section>
           </CardContent>
@@ -3962,22 +4026,30 @@ function FinancialSummaryCard({
    *  table full of $0s before the saved row hydrates. */
   loading?: boolean;
   members: Array<{ estimated_annual_income?: number }>;
-  businessIncome: number;
-  capitalGains: number;
-  childSupport: number;
-  alimony: number;
-  trustsIncome: number;
-  otherIncome: number;
-  assetsChecking: number;
-  assetsSavings: number;
-  assetsRetirement: number;
-  assetsStocks: number;
-  assetsTrusts: number;
-  assetsBusiness: number;
-  debtsCreditCards: number;
-  debtsStudentLoans: number;
-  debtsPersonalLoans: number;
+  // Monetary inputs are nullable to mirror the form state — null
+  // means the family hasn't entered a value, 0 means they have.
+  // The summary math collapses both to 0 since the rollup doesn't
+  // distinguish the two; the distinction matters upstream for
+  // "did the family fill in this field?" reads, not for sums.
+  businessIncome: number | null;
+  capitalGains: number | null;
+  childSupport: number | null;
+  alimony: number | null;
+  trustsIncome: number | null;
+  otherIncome: number | null;
+  assetsChecking: number | null;
+  assetsSavings: number | null;
+  assetsRetirement: number | null;
+  assetsStocks: number | null;
+  assetsTrusts: number | null;
+  assetsBusiness: number | null;
+  debtsCreditCards: number | null;
+  debtsStudentLoans: number | null;
+  debtsPersonalLoans: number | null;
 }) {
+  // Treat null as 0 for the rollup — null = "untouched", which
+  // contributes nothing to the summary sums.
+  const n = (v: number | null) => v ?? 0;
   // Wages: each contributing member's stated annual income.
   // Passive: monthly fields × 12 to land on the same yearly axis.
   const wagesAnnual = members.reduce(
@@ -3985,25 +4057,25 @@ function FinancialSummaryCard({
     0
   );
   const passiveAnnual =
-    (businessIncome +
-      capitalGains +
-      childSupport +
-      alimony +
-      trustsIncome +
-      otherIncome) *
+    (n(businessIncome) +
+      n(capitalGains) +
+      n(childSupport) +
+      n(alimony) +
+      n(trustsIncome) +
+      n(otherIncome)) *
     12;
   const totalAnnualIncome = wagesAnnual + passiveAnnual;
 
   const totalAssets =
-    assetsChecking +
-    assetsSavings +
-    assetsRetirement +
-    assetsStocks +
-    assetsTrusts +
-    assetsBusiness;
+    n(assetsChecking) +
+    n(assetsSavings) +
+    n(assetsRetirement) +
+    n(assetsStocks) +
+    n(assetsTrusts) +
+    n(assetsBusiness);
 
   const totalDebts =
-    debtsCreditCards + debtsStudentLoans + debtsPersonalLoans;
+    n(debtsCreditCards) + n(debtsStudentLoans) + n(debtsPersonalLoans);
 
   // Project-defined formula: income + assets − debts. Mixes flow
   // (annual income) with stock (assets / debts), which is unusual

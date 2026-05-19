@@ -66,7 +66,21 @@ export function AdminTopNav({ admin }: { admin: AdminUser | null }) {
   );
 
   return (
-    <header className="sticky top-0 z-50 border-b bg-white">
+    // `fixed` (not `sticky`) — when Radix opens a Select / Dialog,
+    // `react-remove-scroll` engages and freezes the body's scroll
+    // position. Sticky elements stop sticking the moment their
+    // scrolling ancestor loses its scroll context, so a previously-
+    // sticky header drops away from the top of the viewport mid-page
+    // the moment a Select opens. Fixed positioning is anchored to the
+    // viewport directly so it stays put. We compensate for the
+    // scrollbar width that disappears during the scroll lock via
+    // `--removed-body-scroll-bar-size` so the bar doesn't extend
+    // over the now-empty scrollbar gutter. Layout adds `pt-14` to
+    // `<main>` so content doesn't tuck under the fixed header.
+    <header
+      className="fixed inset-x-0 top-0 z-50 border-b bg-white"
+      style={{ paddingRight: "var(--removed-body-scroll-bar-size, 0px)" }}
+    >
       {/* Inner container is constrained to the same max-width as the page
           content (`max-w-7xl` on the layout's `<main>`), so the bar's
           contents line up vertically with everything below it instead of

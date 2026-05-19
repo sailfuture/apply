@@ -86,6 +86,16 @@ export async function PATCH(
       "paystub_2_confirm",
       "paystub_3_confirm",
       "paystub_4_confirm",
+      // File-array columns. Admin can append/replace files on-behalf-of
+      // the family from the Documents to Review block's "+" button.
+      // Each is a multi-file array (`Record<string, unknown>[]`) so the
+      // client builds the next array (existing + new uploads) and
+      // PATCHes the whole slot in one round-trip.
+      "w2",
+      "paystub_1",
+      "paystub_2",
+      "paystub_3",
+      "paystub_4",
     ];
     const patch: Record<string, unknown> = {};
     for (const key of allowed) {

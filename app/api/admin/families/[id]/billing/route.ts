@@ -54,20 +54,29 @@ export async function GET(
     await requireAdmin();
     const familyId = await resolveFamilyId(params);
     const yearId = resolveYearId(req);
-    const subscriptionId = await resolveSubscriptionId(familyId, yearId);
+    // Fetch the family's Stripe customer id in parallel with the
+    // subscription lookup. Returned on the snapshot so the admin
+    // Billing card can deep-link "View in Stripe" to the customer
+    // page (which lists invoices/subscriptions/payments) even when
+    // no subscription has been started yet — `stripe_customer_id`
+    // can exist on the family row before the first subscription is
+    // created (e.g. customer was provisioned for a prior year).
+    const [subscriptionId, family] = await Promise.all([
+      resolveSubscriptionId(familyId, yearId),
+      xano.families.getById(familyId).catch(() => null),
+    ]);
+    const customerId = family?.stripe_customer_id ?? null;
     if (!subscriptionId) {
-      // No subscription yet — return a null snapshot so the admin
-      // card can render its "Start Monthly Billing" empty state
-      // without treating it as an error.
       return NextResponse.json({
         subscription: null,
         invoices: [],
         lastPaidInvoice: null,
         statusLabel: "Not Started" as const,
+        customerId,
       });
     }
     const snapshot = await getBillingSnapshot(subscriptionId);
-    return NextResponse.json(snapshot);
+    return NextResponse.json({ ...snapshot, customerId });
   } catch (err) {
     return handleAdminError(err);
   }

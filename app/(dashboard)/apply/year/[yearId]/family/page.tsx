@@ -39,7 +39,6 @@ import {
 } from "@/components/ui/field";
 import { StateSelect } from "@/components/state-select";
 import { Trash2, Plus } from "lucide-react";
-import { AnimatePresence, motion } from "framer-motion";
 import { toast } from "sonner";
 import { useSWRConfig } from "swr";
 import { GlobalSaveStatusPill } from "@/components/save-status-pill";
@@ -97,8 +96,6 @@ export default function FamilyStepPage() {
   const [inviteRelationship, setInviteRelationship] = useState("");
   const [inviting, setInviting] = useState(false);
   const [inviteError, setInviteError] = useState("");
-  const [openParents, setOpenParents] = useState<Set<number>>(new Set());
-  const initialCollapseRef = useRef(false);
 
   function isParentComplete(p: Parent): boolean {
     return !!(
@@ -112,15 +109,6 @@ export default function FamilyStepPage() {
       p.state &&
       p.zipcode
     );
-  }
-
-  function toggleParent(id: number) {
-    setOpenParents((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
   }
 
   const fetchData = useCallback(async () => {
@@ -149,14 +137,6 @@ export default function FamilyStepPage() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
-
-  // Default all parents to open on initial load — don't auto-collapse completed
-  // ones. Users can manually collapse via the chevron.
-  useEffect(() => {
-    if (loading || initialCollapseRef.current || parents.length === 0) return;
-    initialCollapseRef.current = true;
-    setOpenParents(new Set(parents.map((p) => p.id)));
-  }, [loading, parents]);
 
   function updateParentLocal(parentId: number, field: string, value: string) {
     setParents((prev) =>
@@ -475,10 +455,7 @@ export default function FamilyStepPage() {
                 id={`parent-${idx}`}
                 className="overflow-hidden gap-0 py-0 ring-0 border scroll-mt-20"
               >
-                <CardHeader
-                  className="border-b py-3 !pb-3 cursor-pointer select-none"
-                  onClick={() => toggleParent(parent.id)}
-                >
+                <CardHeader className="border-b py-3 !pb-3">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
                       <Avatar className="size-10">
@@ -510,31 +487,14 @@ export default function FamilyStepPage() {
                           variant="outline"
                           size="icon"
                           className="size-8 text-muted-foreground hover:text-red-600"
-                          onClick={(e) => { e.stopPropagation(); setPendingDeleteParent({ id: parent.id, name: `${parent.first_name} ${parent.last_name}` }); }}
+                          onClick={() => setPendingDeleteParent({ id: parent.id, name: `${parent.first_name} ${parent.last_name}` })}
                         >
                           <Trash2 className="size-4" />
                         </Button>
                       )}
-                      <div
-                        className="flex size-8 items-center justify-center rounded-md border border-input text-muted-foreground hover:bg-muted/50 transition-colors"
-                        onClick={(e) => { e.stopPropagation(); toggleParent(parent.id); }}
-                      >
-                        <svg className={`size-4 transition-transform duration-200 ${openParents.has(parent.id) ? "rotate-180" : ""}`} viewBox="0 0 20 20" fill="currentColor">
-                          <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
-                        </svg>
-                      </div>
                     </div>
                   </div>
                 </CardHeader>
-                <AnimatePresence initial={false}>
-                {openParents.has(parent.id) && (
-                  <motion.div
-                    initial={{ height: 0, opacity: 0 }}
-                    animate={{ height: "auto", opacity: 1 }}
-                    exit={{ height: 0, opacity: 0 }}
-                    transition={{ duration: 0.25, ease: "easeInOut" }}
-                    className="overflow-hidden"
-                  >
                 <CardContent className="space-y-6 py-5 bg-white dark:bg-background">
                   {/* Name — editable for every parent (primary + secondary).
                       Auto-saves on blur via the same per-field pattern the
@@ -741,9 +701,6 @@ export default function FamilyStepPage() {
                     </div>
                   </section>
                 </CardContent>
-                  </motion.div>
-                )}
-                </AnimatePresence>
               </Card>
             ))}
             <Button

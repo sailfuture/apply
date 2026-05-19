@@ -16,7 +16,7 @@
  *                                Subscription generates at creation
  *                                time, not on pre-created Price
  *                                objects)
- *   NEXT_PUBLIC_APP_URL       — base URL (e.g. `https://apply.sailfuture.org`)
+ *   NEXT_PUBLIC_APP_URL       — base URL (e.g. `https://apply.sailfutureacademy.org`)
  *
  * Architecture choices baked in here:
  *   - One Stripe Customer per family, long-lived across academic

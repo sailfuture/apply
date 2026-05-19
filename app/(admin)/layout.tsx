@@ -47,7 +47,11 @@ export default function AdminLayout({
   return (
     <div className="min-h-screen bg-gray-50">
       <AdminTopNav admin={admin} />
-      <main className="mx-auto w-full max-w-7xl">{children}</main>
+      {/* `pt-14` reserves the 56px slot for the now-`fixed` top nav so
+          the first page section doesn't tuck under the bar. See the
+          comment on `AdminTopNav` for why the nav is fixed instead of
+          sticky. */}
+      <main className="mx-auto w-full max-w-7xl pt-14">{children}</main>
     </div>
   );
 }

@@ -124,7 +124,6 @@ export async function exportFamilyPDF({
     paymentRes,
     payCellsRes,
     netAssetsCellsRes,
-    registrationRes,
   ] = await Promise.all([
     fetch(
       `/api/admin/registration-application-by-family?familyId=${familyId}&yearId=${yearId}`
@@ -134,13 +133,6 @@ export async function exportFamilyPDF({
     ),
     fetch(`/api/admin/school-year-brackets?yearId=${yearId}`),
     fetch(`/api/admin/school-year-net-assets-brackets?yearId=${yearId}`),
-    // Pulls `students[].packet` so we can read per-student tuition
-    // columns (`monthly_amount`, `annual_fee`, `sufs_amount`, etc.)
-    // and derive the family-level rollups the PDF prints. Replaces
-    // the legacy `registration_families_payment.monthly_tuition_payment`
-    // etc. reads — those columns were retired in favor of per-student
-    // source of truth.
-    fetch(`/api/admin/registrations/${familyId}?yearId=${yearId}`),
   ]);
   if (!appsRes.ok) {
     throw new Error(`Family applications fetch failed (${appsRes.status})`);
@@ -155,22 +147,11 @@ export async function exportFamilyPDF({
   const netAssetsCells: AwardBracketCell[] = netAssetsCellsRes.ok
     ? ((await netAssetsCellsRes.json()) as AwardBracketCell[])
     : [];
-  // Per-student packet rows for the year — used to derive family
-  // monthly / annual fee / SUFS totals below. Tolerates a failed
-  // fetch by falling back to an empty array; the report will print
-  // $0 / em-dashes for the derived rows in that case, same UX as
-  // pre-acceptance state.
-  const registrationData = registrationRes.ok
-    ? ((await registrationRes.json()) as {
-        students?: Array<{ packet?: XanoStudentRegistration | null }>;
-      })
-    : null;
-  const activePackets: XanoStudentRegistration[] = (
-    registrationData?.students ?? []
-  )
-    .map((s) => s.packet)
-    .filter((p): p is XanoStudentRegistration => p !== null && p !== undefined);
-  const familyBillingTotals = sumFamilyBillingTotals(activePackets);
+  // Per-student billing math lives on the application row.
+  // `activeApps` (typed as `XanoApplicationByFamily extends
+  // XanoApplication`) already carries the seven billing columns,
+  // so we sum directly — no second fetch needed.
+  const familyBillingTotals = sumFamilyBillingTotals(activeApps);
 
   // The new endpoint already pre-joins the student row, family row,
   // and school-year row onto every app — read the first app's

@@ -3,7 +3,10 @@ import {
   type XanoApplication,
   type XanoStudentRegistration,
 } from "@/lib/xano";
-import { updateStudentItemAmount } from "@/lib/stripe";
+import {
+  removeStudentItemFromSubscription,
+  updateStudentItemAmount,
+} from "@/lib/stripe";
 
 /**
  * Last-resort fallback for the per-student annual fee when the
@@ -15,29 +18,46 @@ import { updateStudentItemAmount } from "@/lib/stripe";
 export const FALLBACK_PER_STUDENT_ANNUAL_FEE = 500;
 
 /**
- * Compute the six per-student billing columns from the inputs that
- * admin actually edits (SUFS award amount + family-paid portion of
- * tuition) plus the school year's gross tuition. Centralizes the
- * math so every callsite that auto-populates packet columns
- * (applications PATCH cascade, future migration helpers, etc.)
- * produces consistent values.
+ * Compute the per-student billing columns from the inputs admin
+ * actually edits (SUFS award amount + the "Remaining Amount Family
+ * Pays" toward tuition via Opportunity Scholarship) plus the school
+ * year's gross tuition. Centralizes the math so every callsite that
+ * auto-populates the application row (`/by-student` route, SNAP
+ * cascade, future migration helpers) produces consistent values.
  *
- * Worked example (year tuition = $27,522):
- *   sufs_award_amount                = 7000
- *   opportunity_scholarship_award_amount (what family pays toward
- *     tuition before annual_fee)    = 1000
- *   schoolYearTuition                = 27522
+ * All billing math + the SUFS audit snapshot live on
+ * `registration_application` now. `registration_student_registration`
+ * (the per-student packet) only carries `stripe_subscription_item_id`
+ * — the Stripe-side link — not any of the math columns.
  *
- *   sufs_amount                      = 7000
- *   tuition_total                    = 27522 - 7000 = 20522
- *   opportunity_award_amount         = 27522 - 7000 - 1000 = 19522
- *   annual_fee                       = 500
- *   tuition_sub_total                = 1000 + 500 = 1500
- *   monthly_amount                   = 1500 / 12 = $125
+ * Column meanings (on the application row):
+ *   - `tuition_total`              — school year's gross tuition.
+ *   - `sufs_amount`                — SUFS award (tier amount).
+ *   - `remaining_opportunity_amount` — what the family pays toward
+ *                                    tuition via the Opportunity
+ *                                    Scholarship remainder.
+ *   - `opportunity_award_amount`    — what the Opportunity Scholarship
+ *                                    actually covers.
+ *   - `annual_fee`                  — per-student annual fee for the year.
+ *   - `tuition_sub_total`           — family-paid annual total
+ *                                    (`remaining_opportunity_amount +
+ *                                    annual_fee`).
+ *   - `monthly_amount`              — `tuition_sub_total / 12`.
+ *
+ * Worked example (year tuition = $27,522, SUFS FTC Grade 9 = $7,770,
+ * Remaining Amount Family Pays = $0, annual fee = $500):
+ *   tuition_total                 = 27,522
+ *   sufs_amount                   = 7,770
+ *   remaining_opportunity_amount  = 0
+ *   opportunity_award_amount      = 27,522 − 7,770 − 0 = 19,752
+ *   annual_fee                    = 500
+ *   tuition_sub_total             = 0 + 500 = 500
+ *   monthly_amount                = 500 / 12 = $41.67
  */
 export interface PacketBillingValues {
   sufs_amount: number;
   tuition_total: number;
+  remaining_opportunity_amount: number;
   opportunity_award_amount: number;
   annual_fee: number;
   tuition_sub_total: number;
@@ -48,35 +68,33 @@ export function derivePacketBillingValues({
   schoolYearTuition,
   schoolYearAnnualFees,
   sufsAwardAmount,
-  opportunityScholarshipRemaining,
+  remainingOpportunityAmount,
   annualFee,
 }: {
   schoolYearTuition: number;
   /** Per-student annual fee for the school year, sourced from
-   *  `school_year.annual_fees`. Becomes the packet's `annual_fee`
+   *  `school_year.annual_fees`. Becomes the row's `annual_fee`
    *  default — admin sets the policy at the year level and every
-   *  packet derived this year inherits it. */
+   *  application derived this year inherits it. */
   schoolYearAnnualFees: number | null | undefined;
   /** Per-student SUFS award (the dollar value of the chosen tier). */
   sufsAwardAmount: number;
-  /** Family-paid portion of tuition after Opportunity Scholarship
-   *  coverage — what admin types into "Cost per student" on the
-   *  Scholarship Determination card. Currently persisted on
-   *  `registration_application.opportunity_scholarship_award_amount`
-   *  (the column name lags the field's meaning for backwards
-   *  compatibility). */
-  opportunityScholarshipRemaining: number;
-  /** Per-packet override of the year-level annual fee (e.g. waiver,
+  /** Family-paid portion of tuition via the Opportunity Scholarship
+   *  remainder — what admin types into "Remaining Amount Family
+   *  Pays" on the Determination card. Persists onto the
+   *  `remaining_opportunity_amount` column on the application row. */
+  remainingOpportunityAmount: number;
+  /** Per-student override of the year-level annual fee (e.g. waiver,
    *  scholarship recipient with fee included elsewhere). When set,
    *  takes precedence over `schoolYearAnnualFees`. */
   annualFee?: number | null;
 }): PacketBillingValues {
   const sufs = Number.isFinite(sufsAwardAmount) ? sufsAwardAmount : 0;
-  const remaining = Number.isFinite(opportunityScholarshipRemaining)
-    ? opportunityScholarshipRemaining
+  const remaining = Number.isFinite(remainingOpportunityAmount)
+    ? remainingOpportunityAmount
     : 0;
   // Annual fee resolution order:
-  //   1. Per-packet override (admin set a one-off on this packet)
+  //   1. Per-student override (admin set a one-off on this app)
   //   2. School year's `annual_fees` (the per-year policy)
   //   3. Hard-coded fallback (year row missing/null — last resort)
   // Each step `isFinite` checks because Xano can return null for
@@ -90,8 +108,14 @@ export function derivePacketBillingValues({
         : FALLBACK_PER_STUDENT_ANNUAL_FEE;
   const tuition = Number.isFinite(schoolYearTuition) ? schoolYearTuition : 0;
 
-  const tuition_total = Math.max(tuition - sufs, 0);
-  const opportunity_award_amount = Math.max(tuition - sufs - remaining, 0);
+  // `tuition_total` is the year's gross tuition. SUFS + Opportunity
+  // Scholarship cover the rest; the family pays
+  // `remaining_opportunity_amount + annual_fee` per year.
+  const tuition_total = tuition;
+  const opportunity_award_amount = Math.max(
+    tuition - sufs - remaining,
+    0
+  );
   const tuition_sub_total = remaining + fee;
   // Round monthly to 2 decimal places — Stripe accepts integer
   // cents downstream, this just keeps the stored figure readable
@@ -101,6 +125,7 @@ export function derivePacketBillingValues({
   return {
     sufs_amount: sufs,
     tuition_total,
+    remaining_opportunity_amount: remaining,
     opportunity_award_amount,
     annual_fee: fee,
     tuition_sub_total,
@@ -109,23 +134,28 @@ export function derivePacketBillingValues({
 }
 
 /**
- * Re-price a packet's Stripe SubscriptionItem to match its current
- * `monthly_amount`. No-op when the packet has no
- * `stripe_subscription_item_id` (billing hasn't started) or
- * `monthly_amount <= 0`. Best-effort — caller wraps in try/catch
- * and continues on Stripe failure (the Xano write succeeded; the
- * next manual edit can re-sync).
+ * Re-price an application's per-student Stripe SubscriptionItem to
+ * match its current `monthly_amount`. The application row carries
+ * the billing math; the matching packet carries the Stripe-side
+ * `stripe_subscription_item_id` that identifies which item to re-
+ * price. No-op when the packet has no item id (billing hasn't
+ * started) or `app.monthly_amount` is missing/<=0.
+ *
+ * Best-effort — caller wraps in try/catch and continues on Stripe
+ * failure (the Xano write succeeded; the next manual edit can
+ * re-sync).
  *
  * Resolves student / family / year labels via three Xano reads so
  * the new Stripe Price gets the canonical
  * `<Family> — <Student> — <Year>` nickname that
  * `createSubscriptionWithStudentItems` originally stamped.
  */
-export async function syncStripeForPacket(
-  packet: XanoStudentRegistration
+export async function syncStripeForApplication(
+  app: XanoApplication,
+  packet: XanoStudentRegistration | null
 ): Promise<void> {
-  const subscriptionItemId = packet.stripe_subscription_item_id;
-  const monthlyAmount = packet.monthly_amount;
+  const subscriptionItemId = packet?.stripe_subscription_item_id;
+  const monthlyAmount = app.monthly_amount;
   if (
     !subscriptionItemId ||
     typeof monthlyAmount !== "number" ||
@@ -133,15 +163,12 @@ export async function syncStripeForPacket(
   ) {
     return;
   }
-  const studentId = Number(packet.registration_students_id);
-  const yearId = Number(packet.registration_school_years_id);
+  const studentId = Number(app.registration_students_id);
+  const yearId = Number(app.registration_school_years_id);
+  const familyId = Number(app.registration_families_id);
 
-  const student =
-    packet._registration_students_2 ??
-    (await xano.students.getById(studentId));
-  const familyId = Number(student.registration_families_id);
-
-  const [family, year] = await Promise.all([
+  const [student, family, year] = await Promise.all([
+    xano.students.getById(studentId),
     xano.families.getById(familyId),
     xano.schoolYears.getById(yearId),
   ]);
@@ -165,6 +192,91 @@ export async function syncStripeForPacket(
 }
 
 /**
+ * Take an archived student's per-year tuition lines off every
+ * active Stripe subscription they're attached to. Walks every
+ * packet for the student (typically one — the current year —
+ * but re-enrolling students can have packets across multiple
+ * years), and for each packet with a `stripe_subscription_item_id`:
+ *
+ *   1. Look up the family's `stripe_subscription_id` from the
+ *      family-payment row for that packet's year.
+ *   2. Call `removeStudentItemFromSubscription` so Stripe drops
+ *      the item from the next invoice (and cancels the parent
+ *      subscription at period end if this was the last item).
+ *   3. Null the packet's `stripe_subscription_item_id` so the
+ *      local handle matches Stripe's state.
+ *
+ * Best-effort throughout — each packet's cleanup is wrapped in
+ * try/catch so a single Stripe failure doesn't stop the rest,
+ * and the caller (the archive PATCH) doesn't fail if Stripe is
+ * unreachable. Errors log loudly so admin can reconcile from the
+ * Dashboard.
+ *
+ * No-op when:
+ *   - the student has no packets, or
+ *   - none of their packets have a `stripe_subscription_item_id`
+ *     (billing hasn't started yet), or
+ *   - the matching family-payment row has no `stripe_subscription_id`
+ *     (subscription was already cancelled / never created).
+ */
+export async function removeStripeItemsForArchivedStudent(
+  studentId: number
+): Promise<void> {
+  if (!Number.isInteger(studentId) || studentId <= 0) return;
+  const packets = await xano.studentRegistration.getAllByStudentId(studentId);
+  const liveItems = packets.filter(
+    (p) =>
+      typeof p.stripe_subscription_item_id === "string" &&
+      p.stripe_subscription_item_id.length > 0
+  );
+  if (liveItems.length === 0) return;
+
+  await Promise.allSettled(
+    liveItems.map(async (packet) => {
+      const itemId = packet.stripe_subscription_item_id!;
+      const yearId = Number(packet.registration_school_years_id);
+      // Find the family for this packet via its embedded student
+      // (Xano often pre-joins) or a fallback `students.getById` hop.
+      const studentRow =
+        packet._registration_students_2 ??
+        (await xano.students
+          .getById(Number(packet.registration_students_id))
+          .catch(() => null));
+      const familyId = Number(studentRow?.registration_families_id ?? 0);
+      if (!familyId || !yearId) return;
+
+      try {
+        const payment = await xano.familyPayments.getByFamilyAndYear(
+          familyId,
+          yearId
+        );
+        const subscriptionId = payment?.stripe_subscription_id ?? null;
+        if (!subscriptionId) {
+          // No active subscription on file. Just clear the stale
+          // packet handle and move on.
+          await xano.studentRegistration.update(packet.id, {
+            stripe_subscription_item_id: null,
+          });
+          return;
+        }
+        await removeStudentItemFromSubscription({
+          subscriptionId,
+          subscriptionItemId: itemId,
+        });
+        await xano.studentRegistration.update(packet.id, {
+          stripe_subscription_item_id: null,
+        });
+      } catch (err) {
+        console.error(
+          `[removeStripeItemsForArchivedStudent] failed to remove item ${itemId} for packet ${packet.id} (student ${studentId}, year ${yearId}):`,
+          err
+        );
+      }
+    })
+  );
+}
+
+/**
  * Resolve the matching `registration_student_registration` packet
  * for an application row (one packet per student per year). Returns
  * null if no packet exists yet — caller can decide whether to
@@ -185,61 +297,60 @@ export async function findPacketForApplication(
 }
 
 /**
- * Resolve the set of `registration_student_registration` rows that
- * should bill for a given (family, year). Returns packets whose
- * student is not archived AND whose per-year application is
- * `isActive`. Used by every server-side billing surface that needs
- * to derive a family total from per-student values without
- * duplicating the filtering plumbing.
+ * Resolve the set of active `registration_application` rows that
+ * should bill for a given (family, year). Used by every server-side
+ * billing surface that needs to derive a family total from per-
+ * student values without duplicating the filtering plumbing.
  *
- * Three round-trips (students + applications + year's packets) run
- * in parallel. Callers that already have any of these arrays in
- * scope can call `filterActiveFamilyPackets` directly instead.
+ * Filter:
+ *   - student exists on the family and isn't archived
+ *   - app is for the requested year
+ *   - app `isActive !== false`
  *
- * Returns `[]` when there are no active students for the year —
- * legitimate state for pre-acceptance families, so callers should
- * handle the empty case rather than treating it as an error.
+ * Two round-trips (students + applications) run in parallel.
+ * Callers that already have either array in scope can call
+ * `filterActiveFamilyApplications` directly instead.
+ *
+ * Returns `[]` when no active applications match — legitimate state
+ * for pre-acceptance families, so callers should handle the empty
+ * case rather than treating it as an error.
  */
-export async function fetchActiveFamilyPackets(
+export async function fetchActiveFamilyApplications(
   familyId: number,
   yearId: number
-): Promise<XanoStudentRegistration[]> {
-  const [students, apps, yearPackets] = await Promise.all([
+): Promise<XanoApplication[]> {
+  const [students, apps] = await Promise.all([
     xano.students.getByFamilyId(familyId),
     xano.applications.getByFamilyId(familyId),
-    xano.studentRegistration.getByYear(yearId),
   ]);
-  return filterActiveFamilyPackets({
+  return filterActiveFamilyApplications({
     familyId,
     yearId,
     students,
     apps,
-    yearPackets,
   });
 }
 
 /**
- * Pure version of `fetchActiveFamilyPackets` — same active-student
- * filter, but takes the three input arrays directly so callers
+ * Pure version of `fetchActiveFamilyApplications` — same active-
+ * student filter, but takes the input arrays directly so callers
  * that already fetched them don't pay for a second round trip.
  */
-export function filterActiveFamilyPackets({
+export function filterActiveFamilyApplications({
   familyId,
   yearId,
   students,
   apps,
-  yearPackets,
 }: {
   familyId: number;
   yearId: number;
-  students: Array<{ id: number; isArchived: boolean; registration_families_id: number }>;
-  apps: Array<{
-    registration_students_id: number;
-    registration_school_years_id: number;
-    isActive?: boolean;
+  students: Array<{
+    id: number;
+    isArchived: boolean;
+    registration_families_id: number;
   }>;
-  yearPackets: XanoStudentRegistration[];
-}): XanoStudentRegistration[] {
+  apps: XanoApplication[];
+}): XanoApplication[] {
   const familyStudentIds = new Set(
     students
       .filter(
@@ -248,73 +359,63 @@ export function filterActiveFamilyPackets({
       )
       .map((s) => s.id)
   );
-  const activeStudentIds = new Set<number>();
-  for (const app of apps) {
-    if (Number(app.registration_school_years_id) !== yearId) continue;
-    if (app.isActive === false) continue;
-    const sid = Number(app.registration_students_id);
-    if (familyStudentIds.has(sid)) activeStudentIds.add(sid);
-  }
-  return yearPackets.filter((p) =>
-    activeStudentIds.has(Number(p.registration_students_id))
+  return apps.filter(
+    (app) =>
+      Number(app.registration_school_years_id) === yearId &&
+      app.isActive !== false &&
+      familyStudentIds.has(Number(app.registration_students_id))
   );
 }
 
 /**
- * Rolled-up family totals derived from each active student's packet.
- *
- * Replaces the old family-level columns
- * (`monthly_tuition_payment` / `annual_fee_total` / `sufs_total`)
- * that used to live on `registration_families_payment`. Per-student
- * amounts are the source of truth now; this helper just sums them
- * for display surfaces (Tuition card, PDF, billing schedule) that
- * still want a single family figure.
+ * Rolled-up family totals derived from each active student's
+ * application row. The application row is the single source of
+ * truth for per-student billing math now (the packet only carries
+ * `stripe_subscription_item_id`), so we sum across applications
+ * rather than packets.
  *
  * All sums tolerate `null` / `undefined` (legacy rows or new rows
  * before admin fills them in) — missing values are treated as 0.
  * Callers that need to distinguish "$0 / mo" from "not yet filled
- * in" should check the underlying packets directly.
+ * in" should check the underlying application rows directly.
  */
 export interface FamilyBillingTotals {
-  /** Σ `packet.monthly_amount` — what Stripe bills the family each
+  /** Σ `app.monthly_amount` — what Stripe bills the family each
    *  month, when all per-student items are active. */
   monthlyTotal: number;
-  /** Σ `packet.annual_fee` — total admin / annual fees the family
+  /** Σ `app.annual_fee` — total admin / annual fees the family
    *  owes for the year (`$500 × N` today). */
   annualFeeTotal: number;
-  /** Σ `packet.sufs_amount` — total SUFS scholarship dollars awarded
+  /** Σ `app.sufs_amount` — total SUFS scholarship dollars awarded
    *  to the family across all active students. */
   sufsTotal: number;
-  /** Σ `packet.tuition_total` — sum of each student's gross tuition
-   *  net of SUFS (i.e. `school_year.tuition - sufs_amount`). */
+  /** Σ `app.tuition_total` — sum of each student's gross tuition. */
   tuitionTotal: number;
-  /** Σ `packet.opportunity_award_amount` — total Opportunity
+  /** Σ `app.opportunity_award_amount` — total Opportunity
    *  Scholarship coverage across active students. */
   oppAwardTotal: number;
-  /** Σ `packet.tuition_sub_total` — annual family-paid total before
+  /** Σ `app.tuition_sub_total` — annual family-paid total before
    *  monthly division. Should equal `monthlyTotal * 12` within
    *  rounding. */
   subTotal: number;
-  /** Count of packets that contributed to the sums. Useful for
-   *  rendering "$X / mo across N students" microcopy. */
+  /** Count of applications that contributed to the sums. */
   activeStudentCount: number;
 }
 
 /**
- * Sum each per-student column across the supplied packets.
+ * Sum each per-student column across the supplied applications.
  *
- * Caller is responsible for filtering to only the packets that
- * should bill — usually "active students for the year" (i.e.
- * matching `registration_application.isActive !== false` and
- * `registration_students.isArchived !== true`). This helper sums
- * whatever is passed; it doesn't know about enrollment state.
+ * Caller is responsible for filtering to only the applications
+ * that should bill — usually `filterActiveFamilyApplications` /
+ * `fetchActiveFamilyApplications` above. This helper sums whatever
+ * is passed; it doesn't know about enrollment state.
  */
 export function sumFamilyBillingTotals(
-  packets: XanoStudentRegistration[]
+  apps: XanoApplication[]
 ): FamilyBillingTotals {
-  const sumField = (field: keyof XanoStudentRegistration): number =>
-    packets.reduce((acc, p) => {
-      const value = p[field];
+  const sumField = (field: keyof XanoApplication): number =>
+    apps.reduce((acc, a) => {
+      const value = a[field];
       return acc + (typeof value === "number" ? value : 0);
     }, 0);
 
@@ -325,6 +426,6 @@ export function sumFamilyBillingTotals(
     tuitionTotal: sumField("tuition_total"),
     oppAwardTotal: sumField("opportunity_award_amount"),
     subTotal: sumField("tuition_sub_total"),
-    activeStudentCount: packets.length,
+    activeStudentCount: apps.length,
   };
 }

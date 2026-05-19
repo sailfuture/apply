@@ -61,6 +61,33 @@ function extractIds(items: any[]): number[] {
     .filter((id): id is number => typeof id === "number");
 }
 
+/**
+ * Normalize a single FK field that Xano may return either as a raw
+ * number or as an expanded `{ id: N, ... }` relation object. Used by
+ * resolve-style lookups that need to filter by FK — strict-equality
+ * against the raw column blows past expanded relations and leaks
+ * "row exists but I can't see it → create another one" duplicates.
+ * Returns null when the value can't be coerced (e.g. `null`, missing
+ * object id field, string that doesn't parse).
+ */
+function toIdOrNull(v: unknown): number | null {
+  if (v == null) return null;
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string") {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+  if (typeof v === "object") {
+    const id = (v as { id?: unknown }).id;
+    if (typeof id === "number" && Number.isFinite(id)) return id;
+    if (typeof id === "string") {
+      const n = Number(id);
+      return Number.isFinite(n) ? n : null;
+    }
+  }
+  return null;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function extractParents(items: any[]): XanoParent[] {
   return items.filter(
@@ -300,6 +327,25 @@ export interface XanoApplication {
    *  When admin approves a family, the page sums these per-student
    *  values into `XanoFamilyPayment.sufs_total`. */
   sufs_award_amount?: number | null;
+  /** Per-student billing columns mirroring the packet's billing
+   *  columns. Admin edits land here pre-acceptance (when no packet
+   *  exists yet); on acceptance these values get copied to the
+   *  matching `registration_student_registration` row, which then
+   *  becomes the source of truth post-acceptance. All nullable so
+   *  rows can sit untouched. See `lib/per-student-billing.ts` for
+   *  the derivation. */
+  tuition_total?: number | null;
+  opportunity_award_amount?: number | null;
+  annual_fee?: number | null;
+  sufs_amount?: number | null;
+  tuition_sub_total?: number | null;
+  monthly_amount?: number | null;
+  /** Family-paid portion of tuition via the Opportunity Scholarship
+   *  remainder — the "Remaining Amount Family Pays" admin enters on
+   *  the Determination card. The Opportunity Scholarship covers the
+   *  gap between this and tuition (after SUFS). Nullable so the
+   *  default state distinguishes "untouched" from $0. */
+  remaining_opportunity_amount?: number | null;
   // PandaDoc enrollment-agreement state. Liability-waiver fields used
   // to live here too but moved to `registration_student_registration`
   // (the per-student packet) — those fields are no longer on this
@@ -565,22 +611,29 @@ export interface XanoScholarship {
   household_adults: number;
   household_children: number;
   no_contributing_member: boolean;
-  business_income_monthly: number;
-  capital_gains_monthly: number;
-  child_support_monthly: number;
-  alimony_monthly: number;
-  trusts_monthly: number;
-  other_income_monthly: number;
+  // Monetary scholarship inputs are nullable on Xano now — null
+  // means "untouched" (placeholder shown on the apply form), 0
+  // means "explicitly entered zero" (e.g. family confirmed no
+  // income from this source). Downstream scholarship math coerces
+  // null -> 0 at the call site so the matrix bracket calculations
+  // still work; the distinction matters for admin "did the family
+  // fill this in?" reads.
+  business_income_monthly: number | null;
+  capital_gains_monthly: number | null;
+  child_support_monthly: number | null;
+  alimony_monthly: number | null;
+  trusts_monthly: number | null;
+  other_income_monthly: number | null;
   describe_other_income: string;
-  assets_checking: number;
-  assets_savings: number;
-  assets_retirement_savings: number;
-  assets_stocks_bonds_securities: number;
-  assets_trusts_inheritance: number;
-  assets_business: number;
-  debts_credit_cards: number;
-  debts_student_loans: number;
-  debts_personal_loans: number;
+  assets_checking: number | null;
+  assets_savings: number | null;
+  assets_retirement_savings: number | null;
+  assets_stocks_bonds_securities: number | null;
+  assets_trusts_inheritance: number | null;
+  assets_business: number | null;
+  debts_credit_cards: number | null;
+  debts_student_loans: number | null;
+  debts_personal_loans: number | null;
   government_benefits: boolean;
   snap_benefits: Record<string, unknown>[];
   /** Admin verification trail for the SNAP award letter. Same pattern
@@ -592,9 +645,14 @@ export interface XanoScholarship {
   snap_confirm_time?: number | null;
   snap_confirm_admin?: number;
   other_benefits: Record<string, unknown>[];
-  family_contribution_per_month: number;
+  family_contribution_per_month: number | null;
   scholarship_advocacy_letter: string;
   signature: Record<string, unknown> | null;
+  /** Typed full-name signature captured alongside the drawn signature on
+   *  the scholarship certification block. Acts as a secondary attestation
+   *  — the parent types their full legal name to confirm the drawn
+   *  signature. Nullable on legacy rows. */
+  full_name_signature?: string | null;
   /** Proof of unemployment / job termination — required when the family
    *  marks "no contributing members" on the scholarship. Multi-file array
    *  so a packet of letters can all live on one row. Replaces the older
@@ -1379,72 +1437,17 @@ export interface XanoStudentRegistration {
    *  `registration_student_registration`. */
   stripe_subscription_item_id?: string | null;
 
-  // ── Per-student cost columns (source of truth for billing) ──────
-  // Each student's recurring tuition line on the family's Stripe
-  // subscription is built directly from `monthly_amount` — no
-  // family-total-divided-by-N math, no rounding drift. The other
-  // five columns are intermediates stored for display +
-  // reconciliation so admin can see how the monthly figure was
-  // derived without re-running the math.
-  //
-  // Derivation chain:
-  //   tuition_total     = school_year.tuition - sufs_amount
-  //   tuition_sub_total = tuition_total - opportunity_award_amount + annual_fee
-  //   monthly_amount    = tuition_sub_total / 12
-  //
-  // Billing math (what Phase 2 reads):
-  //   per_student_monthly = monthly_amount     (read directly)
-  //   family_monthly      = Σ monthly_amount   (over active students)
-  //
-  // Worked example (academic year tuition = $27,522):
-  //   sufs_amount              = 7000
-  //   tuition_total            = 27522 - 7000 = 20522
-  //   opportunity_award_amount = 19522
-  //   annual_fee               = 500
-  //   tuition_sub_total        = 20522 - 19522 + 500 = 1500
-  //   monthly_amount           = 1500 / 12 = $125.00
-  //
-  // All optional on the type because legacy rows pre-date the add;
-  // Phase 2 billing requires `monthly_amount` to be set and refuses
-  // to start a subscription for a student without it
-  // (BillingPreconditionError).
+  // Per-student billing math (tuition_total, sufs_amount,
+  // opportunity_award_amount, annual_fee, tuition_sub_total,
+  // monthly_amount, remaining_opportunity_amount) and the SUFS
+  // audit snapshot (sufs_type, sufs_status, sufs_award_id) now live
+  // exclusively on `registration_application`. Single source of
+  // truth — admin enters values on the Determination card and they
+  // persist on the application row. `stripe_subscription_item_id`
+  // above is the only billing column that remains on the packet
+  // because it's billing infrastructure (the Stripe-side link),
+  // not billing math.
 
-  /** Snapshot of the school year's gross tuition for this student,
-   *  net of the SUFS award. Derived: `school_year.tuition - sufs_amount`.
-   *  Stored on the row at Approve time so historical math survives
-   *  future tuition-amount changes. */
-  tuition_total?: number | null;
-
-  /** Per-student SUFS award amount. Mirrors the value entered on the
-   *  Scholarship Determination card. Subtracted from gross tuition
-   *  to produce `tuition_total`. */
-  sufs_amount?: number | null;
-
-  /** Snapshot of the Opportunity Scholarship coverage for this
-   *  student. The family-paid remainder is implicit:
-   *  `tuition_total - opportunity_award_amount`. Display /
-   *  reconciliation — doesn't enter the billing math directly
-   *  except through its contribution to `tuition_sub_total`. */
-  opportunity_award_amount?: number | null;
-
-  /** Per-student flat annual fee. Always $500 today, stored on the
-   *  row so future policy changes (different fee per year, waivers
-   *  per student, etc.) don't require a code change. */
-  annual_fee?: number | null;
-
-  /** Annual amount the family owes for this student. Derived:
-   *  `tuition_total - opportunity_award_amount + annual_fee`. Equals
-   *  `monthly_amount * 12` (within rounding). Stored on the row so
-   *  the Tuition card / receipts have a single source of truth that
-   *  matches what was sent to Stripe. */
-  tuition_sub_total?: number | null;
-
-  /** Monthly amount the family is charged for this student via
-   *  Stripe — Phase 2 reads this directly when building each
-   *  student's SubscriptionItem. Derived: `tuition_sub_total / 12`.
-   *  Stored on the row so the value Stripe bills is the same value
-   *  every admin surface displays. */
-  monthly_amount?: number | null;
   /** New Enrollment vs Re-Enrollment — admin-set, drives which forms/templates
    *  get used for this year's registration. */
   registration_type_id: number;
@@ -1531,7 +1534,11 @@ const pendingEnsure = new Map<string, Promise<XanoParent>>();
  */
 const pendingProgressResolve = new Map<
   string,
-  Promise<XanoStudentRegistrationProgress | XanoFamilyApplicationProgress>
+  Promise<
+    | XanoStudentRegistrationProgress
+    | XanoFamilyApplicationProgress
+    | XanoStudentRegistration
+  >
 >();
 
 /**
@@ -1616,6 +1623,48 @@ async function dedupeProgressRows<
   );
 
   return final;
+}
+
+/**
+ * Dedupe duplicate packets in `registration_student_registration`
+ * down to a single keeper. Sorts by `last_edited_time` desc, falling
+ * back to `created_at` desc and then id asc so every caller
+ * converges on the same keeper. Loser rows are hard-deleted; failure
+ * to delete is logged but doesn't block the resolve (the next call
+ * retries the cleanup). Packets carry far more state than the
+ * progress-row dedupe handles, so this helper deliberately doesn't
+ * merge fields — the keeper survives intact and we drop the losers.
+ * Callers should ensure the keeper has the up-to-date columns.
+ */
+async function dedupeStudentRegistrationRows(
+  matches: XanoStudentRegistration[],
+  deleteFn: (id: number) => Promise<void>
+): Promise<XanoStudentRegistration> {
+  if (matches.length === 1) return matches[0];
+  const sorted = matches.slice().sort((a, b) => {
+    const aT = a.last_edited_time ?? a.created_at ?? 0;
+    const bT = b.last_edited_time ?? b.created_at ?? 0;
+    if (aT !== bT) return bT - aT;
+    return a.id - b.id;
+  });
+  const keeper = sorted[0];
+  const losers = sorted.slice(1);
+  console.warn(
+    `[xano.studentRegistration.resolve] ${matches.length} duplicate packets detected; keeping id=${keeper.id} and deleting ${losers
+      .map((l) => l.id)
+      .join(",")}`
+  );
+  await Promise.allSettled(
+    losers.map((l) =>
+      deleteFn(l.id).catch((err) => {
+        console.warn(
+          `[xano.studentRegistration.resolve] delete of loser id=${l.id} failed:`,
+          err
+        );
+      })
+    )
+  );
+  return keeper;
 }
 
 /**
@@ -3370,10 +3419,46 @@ export const xano = {
         if (!res.ok) return null;
         const results = await res.json();
         const items = Array.isArray(results) ? results : [];
-        const match = items.find((r: XanoStudentRegistration) => r.registration_students_id === studentId);
+        // FK can come back as a scalar or an expanded `{id}` object —
+        // `toIdOrNull` handles both so a Xano relation expansion can't
+        // make the row "invisible" and trick resolve into creating a
+        // duplicate.
+        const match = items.find(
+          (r: XanoStudentRegistration) =>
+            toIdOrNull(r.registration_students_id) === studentId
+        );
         return match ?? null;
       } catch {
         return null;
+      }
+    },
+
+    /**
+     * All packets for a student across every year. Used by the
+     * archive cascade — when admin archives a student, we walk
+     * every year's packet to take the student's Stripe item off
+     * the matching subscription. Re-enrolling students have one
+     * packet per year; most students will have just one (the
+     * current year's) here. Returns `[]` on any error so the
+     * caller can skip cleanly.
+     */
+    async getAllByStudentId(
+      studentId: number
+    ): Promise<XanoStudentRegistration[]> {
+      try {
+        const res = await fetch(
+          `${getBaseUrl()}/registration_student_registration?registration_students_id=${studentId}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) return [];
+        const results = await res.json();
+        const items = Array.isArray(results) ? results : [];
+        return items.filter(
+          (r: XanoStudentRegistration) =>
+            toIdOrNull(r.registration_students_id) === studentId
+        );
+      } catch {
+        return [];
       }
     },
 
@@ -3389,33 +3474,66 @@ export const xano = {
       studentId: number,
       yearId: number
     ): Promise<XanoStudentRegistration | null> {
+      const all = await this._getAllMatches(studentId, yearId);
+      // Return the most-recent keeper when multiples slipped past
+      // historical races; dedupe is owned by `_doResolve` so this
+      // read path stays a pure read.
+      if (all.length === 0) return null;
+      if (all.length === 1) return all[0];
+      return all.slice().sort((a, b) => {
+        const aT = a.last_edited_time ?? a.created_at ?? 0;
+        const bT = b.last_edited_time ?? b.created_at ?? 0;
+        if (aT !== bT) return bT - aT;
+        return a.id - b.id;
+      })[0];
+    },
+
+    /**
+     * Read every packet matching `(studentId, yearId)` without
+     * deduping. Used by the resolve mutex's pre/post create checks
+     * AND by `getByStudentAndYear` (which picks one keeper). FK
+     * fields are normalized via `toIdOrNull` so Xano expanding a
+     * relation into an object can't make rows "invisible".
+     */
+    async _getAllMatches(
+      studentId: number,
+      yearId: number
+    ): Promise<XanoStudentRegistration[]> {
       try {
         const res = await fetch(
           `${getBaseUrl()}/registration_student_registration?registration_students_id=${studentId}`,
           { cache: "no-store" }
         );
-        if (!res.ok) return null;
+        if (!res.ok) return [];
         const results = await res.json();
         const items = Array.isArray(results) ? results : [];
-        const match = items.find(
+        return items.filter(
           (r: XanoStudentRegistration) =>
-            r.registration_students_id === studentId &&
-            Number(r.registration_school_years_id) === yearId
+            toIdOrNull(r.registration_students_id) === studentId &&
+            toIdOrNull(r.registration_school_years_id) === yearId
         );
-        return match ?? null;
       } catch {
-        return null;
+        return [];
       }
     },
 
     /**
      * Fetch-or-create the per (student, year) packet. Used by the
-     * PandaDoc waiver routes since waiver state lives on the packet
-     * but a parent may trigger the waiver before they've started
-     * filling out the rest of the registration form — in which case
-     * a minimal packet needs to exist for the waiver fields to land
-     * on. Defaults mirror the empty-row shape Xano expects on a
-     * fresh POST.
+     * PandaDoc waiver routes (waiver state lives on the packet but a
+     * parent may trigger the waiver before they've started filling
+     * out the rest of the registration form) and by the application
+     * acceptance cascade (the cascade copies billing/SUFS columns
+     * onto the packet at acceptance time).
+     *
+     * Race-safe via an in-process mutex (`pendingProgressResolve`)
+     * keyed on `studentRegistration:<studentId>:<yearId>`. Two
+     * concurrent acceptance flips on the same (student, year) share
+     * the in-flight promise instead of each launching their own
+     * create. Post-create the resolver re-reads and, if a parallel
+     * process beat us to the punch (or pre-existing dupes from
+     * before this hardening), collapses the extras into a single
+     * keeper. Mirrors the dedupe pattern already applied to
+     * `studentRegistrationProgress.resolve` / `familyApplicationProgress.resolve`.
      *
      * `registration_type_id` defaults to `1` (new enrollment) since
      * that's the apply-flow default; pass an explicit value when
@@ -3426,9 +3544,35 @@ export const xano = {
       yearId: number,
       registration_type_id: number = 1
     ): Promise<XanoStudentRegistration> {
-      const existing = await this.getByStudentAndYear(studentId, yearId);
-      if (existing) return existing;
-      return this.create({
+      const lockKey = `studentRegistration:${studentId}:${yearId}`;
+      const inflight = pendingProgressResolve.get(lockKey);
+      if (inflight) {
+        return inflight as Promise<XanoStudentRegistration>;
+      }
+      const promise = this._doResolve(
+        studentId,
+        yearId,
+        registration_type_id
+      ).finally(() => {
+        pendingProgressResolve.delete(lockKey);
+      });
+      pendingProgressResolve.set(lockKey, promise);
+      return promise;
+    },
+
+    async _doResolve(
+      studentId: number,
+      yearId: number,
+      registration_type_id: number
+    ): Promise<XanoStudentRegistration> {
+      const pre = await this._getAllMatches(studentId, yearId);
+      if (pre.length === 1) return pre[0];
+      if (pre.length > 1) {
+        // Pre-existing duplicates from before this hardening shipped
+        // — collapse without creating yet another row.
+        return dedupeStudentRegistrationRows(pre, (id) => this.delete(id));
+      }
+      const created = await this.create({
         registration_students_id: studentId,
         registration_school_years_id: yearId,
         registration_type_id,
@@ -3467,6 +3611,11 @@ export const xano = {
         liability_waiver_pdf_url: "",
         registrationConfirmed: false,
       });
+      // Re-check — if a parallel process raced past us, we now have
+      // multiple rows. Dedupe to a single keeper.
+      const post = await this._getAllMatches(studentId, yearId);
+      if (post.length <= 1) return post[0] ?? created;
+      return dedupeStudentRegistrationRows(post, (id) => this.delete(id));
     },
 
     /**
@@ -3749,6 +3898,27 @@ export const xano = {
       yearId: number,
       registration_type_id: number = 1
     ): Promise<XanoFamilyApplicationProgress> {
+      // Hard-guard against bad inputs at the entry point. A `null`,
+      // `undefined`, `0`, or NaN here used to leak through every
+      // create call and seed an orphan progress row that admin could
+      // never reconcile (FK pointed at a deleted family, dedup
+      // filter missed it because `null !== undefined`). Throwing
+      // here forces the bug back up to the caller where it can be
+      // diagnosed instead of silently corrupting the table.
+      if (!Number.isInteger(familyId) || familyId <= 0) {
+        throw new Error(
+          `xano.familyApplicationProgress.resolve: familyId must be a positive integer (got ${String(
+            familyId
+          )})`
+        );
+      }
+      if (!Number.isInteger(yearId) || yearId <= 0) {
+        throw new Error(
+          `xano.familyApplicationProgress.resolve: yearId must be a positive integer (got ${String(
+            yearId
+          )})`
+        );
+      }
       const lockKey = `familyApplicationProgress:${familyId}:${yearId}`;
       const inflight = pendingProgressResolve.get(lockKey);
       if (inflight) return inflight as Promise<XanoFamilyApplicationProgress>;
@@ -3776,6 +3946,21 @@ export const xano = {
           "xano.familyApplicationProgress",
           (id) => this.delete(id),
           (id, patch) => this.update(id, patch)
+        );
+      }
+
+      // No row yet. Before creating, verify the family actually
+      // exists — calling `resolve` on a deleted family (e.g. admin
+      // navigating to an orphan `/admin/families/23` list entry)
+      // used to seed a fresh progress row pointing at a tombstoned
+      // FK, multiplying the orphan problem on every admin visit.
+      // Throw on a missing family so the bug surfaces instead of
+      // compounding.
+      try {
+        await xano.families.getById(familyId);
+      } catch {
+        throw new Error(
+          `xano.familyApplicationProgress.resolve: family ${familyId} does not exist — refusing to create an orphan progress row`
         );
       }
 
@@ -4006,6 +4191,24 @@ export const xano = {
       yearId: number,
       registration_type_id: number = 1
     ): Promise<XanoStudentRegistrationProgress> {
+      // Same input guard as `familyApplicationProgress.resolve` —
+      // refuse to seed an orphan row from a `null` / `undefined` /
+      // `0` / NaN familyId. See that resolver for the full
+      // rationale; this hard-throw stops the leak at the source.
+      if (!Number.isInteger(familyId) || familyId <= 0) {
+        throw new Error(
+          `xano.studentRegistrationProgress.resolve: familyId must be a positive integer (got ${String(
+            familyId
+          )})`
+        );
+      }
+      if (!Number.isInteger(yearId) || yearId <= 0) {
+        throw new Error(
+          `xano.studentRegistrationProgress.resolve: yearId must be a positive integer (got ${String(
+            yearId
+          )})`
+        );
+      }
       const lockKey = `studentRegistrationProgress:${familyId}:${yearId}`;
       const inflight = pendingProgressResolve.get(lockKey);
       if (inflight)
@@ -4042,7 +4245,20 @@ export const xano = {
         );
       }
 
-      // No row yet — create one.
+      // No row yet. Verify the family exists before creating —
+      // admin navigating to an orphan `/admin/families/23` URL used
+      // to seed a fresh registration-progress row pointing at a
+      // tombstoned FK on every visit. Throwing on a missing family
+      // surfaces the bug instead of compounding orphans.
+      try {
+        await xano.families.getById(familyId);
+      } catch {
+        throw new Error(
+          `xano.studentRegistrationProgress.resolve: family ${familyId} does not exist — refusing to create an orphan progress row`
+        );
+      }
+
+      // Create the row.
       const created = await this.create({
         registration_families_id: familyId,
         registration_school_years_id: yearId,

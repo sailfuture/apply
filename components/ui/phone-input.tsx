@@ -82,12 +82,25 @@ export function PhoneInput({
   className,
   "aria-describedby": describedBy,
 }: PhoneInputProps) {
-  // Display is the formatted version of `value`. Re-sync whenever
-  // the canonical value changes externally (e.g. parent reset).
+  // Display is the formatted version of `value`. Re-sync only when
+  // the canonical value actually drifts from what we're displaying
+  // — guards against the round-trip clobber where typing fires
+  // onChange → parent re-renders with the new value prop → this
+  // effect would re-run and call setDisplay(formatUSPhone(value)),
+  // which returns the raw digit string for partial inputs (only
+  // formats at exactly 10 digits). That clobbered the progressive
+  // "(813) 555-…" formatting mid-type and caused cursor jumps /
+  // selection flicker on every keystroke.
   const [display, setDisplay] = useState(() => formatUSPhone(value));
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
-    setDisplay(formatUSPhone(value));
+    const currentDigits = digitsOnly(display);
+    if (currentDigits !== value) {
+      setDisplay(formatUSPhone(value));
+    }
+    // `display` deliberately excluded from deps — re-running on
+    // every display change would defeat the purpose of the guard.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
 
   const handleChange = useCallback(

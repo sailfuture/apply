@@ -369,6 +369,42 @@ export async function PATCH(req: NextRequest) {
           cascadeErr
         );
       }
+
+      // Per-student packet cascade — fires only on accept (not on
+      // revoke; revoking shouldn't tear down packet rows). For every
+      // active application in this family + year, resolve-or-create
+      // the matching `registration_student_registration` row so the
+      // parent's post-acceptance registration paperwork has a home
+      // to write to. Billing math lives on the application row now
+      // (single source of truth), so nothing gets copied — we just
+      // ensure the packet exists.
+      //
+      // Each app is processed in parallel via `Promise.allSettled` so
+      // a single failure doesn't block the rest. The whole block is
+      // wrapped in try/catch as a backstop — failure here logs but
+      // doesn't fail the admin's accept.
+      if (accepting) {
+        try {
+          const apps = await xano.applications.getByFamilyId(familyId);
+          const activeApps = apps.filter(
+            (a) =>
+              Number(a.registration_school_years_id) === yearId &&
+              a.isActive !== false
+          );
+          await Promise.allSettled(
+            activeApps.map(async (app) => {
+              const studentId = Number(app.registration_students_id);
+              if (!Number.isFinite(studentId) || studentId <= 0) return;
+              await xano.studentRegistration.resolve(studentId, yearId);
+            })
+          );
+        } catch (cascadeErr) {
+          console.error(
+            "[/api/admin/family-progress] per-student packet cascade failed:",
+            cascadeErr
+          );
+        }
+      }
     }
 
     return NextResponse.json(updated);

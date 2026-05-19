@@ -1033,13 +1033,7 @@ export default function StudentsStepPage() {
                            exactly where pickup happens. */}
                   <section className="border-t pt-5">
                     <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <h3 className="text-sm font-medium">Transportation</h3>
-                        <p className="text-xs text-muted-foreground mt-0.5">
-                          Bus transportation is a per-family $1,500 fee. Toggle
-                          on for any students who&rsquo;ll ride.
-                        </p>
-                      </div>
+                      <h3 className="text-sm font-medium">Transportation</h3>
                       <Switch
                         checked={app.is_bus_transportation}
                         onCheckedChange={(v) =>
@@ -1072,7 +1066,7 @@ export default function StudentsStepPage() {
                         {parents.length > 0 ? (
                           <Field>
                             <FieldLabel className="text-xs">
-                              Use which address to pick a stop?
+                              Choose your student&rsquo;s primary address
                             </FieldLabel>
                             <div className="grid gap-2 sm:grid-cols-2">
                               {parents.map((p) => {
@@ -1189,7 +1183,6 @@ export default function StudentsStepPage() {
                               if (!stop) return null;
                               return (
                                 <p className="text-xs text-muted-foreground mt-1.5">
-                                  {stop.address ? `${stop.address} · ` : ""}
                                   Pickup{" "}
                                   {new Date(
                                     stop.pick_up_time
