@@ -1965,22 +1965,22 @@ function TuitionBreakdownTable({
     const stepUpAmount = sufsField
       ? (schoolYear[sufsField] as number | undefined) ?? 0
       : 0;
-    // Opportunity Scholarship Award = the coverage the scholarship
-    // pays. Always computed as `tuition - SUFS - familyPays` (not
-    // read straight off `opportunity_scholarship_award_amount` —
-    // that field stores what the FAMILY pays, not what the
-    // scholarship covers). Mirrors the apply-flow Tuition Breakdown
-    // exactly. SNAP families have `familyPays === 0`, so the
-    // coverage collapses to `tuition - SUFS` automatically. The
-    // separate `null` sentinel below distinguishes "no scholarship
-    // determination at all" from "$0 award" so the rendered row
-    // can show `—` instead of $0 for opted-out families.
-    const familyPaysForTuition =
-      s.opportunity_scholarship_award_amount ?? 0;
+    // Remaining Tuition Amount comes from the application row's
+    // `remaining_opportunity_amount` column — admin's "Remaining
+    // Amount Family Pays" input on the Determination card.
+    // Opportunity Scholarship Award is re-derived from inputs
+    // (`tuition - SUFS - remaining`) so the displayed coverage is
+    // always internally consistent with the row regardless of any
+    // stale stored `opportunity_award_amount`. SNAP families have
+    // `remaining === 0`, so the coverage collapses to `tuition - SUFS`
+    // automatically. The `null` sentinel below distinguishes "no
+    // scholarship determination at all" from "$0 award" so the
+    // rendered row shows `—` instead of $0 for opted-out families.
+    const familyPaysForTuition = s.remaining_opportunity_amount ?? 0;
     const hasOSDetermination =
       isSnapAutoCover ||
       scholarship.isOpportunityScholarship === true ||
-      s.opportunity_scholarship_award_amount != null;
+      s.remaining_opportunity_amount != null;
     const scholarshipAmount: number | null = hasOSDetermination
       ? Math.max(0, tuition - stepUpAmount - familyPaysForTuition)
       : null;
@@ -2027,16 +2027,6 @@ function TuitionBreakdownTable({
                 </td>
                 <td className="px-4 py-3 text-right font-medium">
                   ${formatTuitionCurrency(row.tuition)}
-                </td>
-              </tr>
-
-              {/* Annual Admin Fee */}
-              <tr className="border-t">
-                <td className="px-4 py-3 text-muted-foreground">
-                  Annual Admin Fee
-                </td>
-                <td className="px-4 py-3 text-right font-medium">
-                  ${formatTuitionCurrency(row.adminFees)}
                 </td>
               </tr>
 
@@ -2144,6 +2134,20 @@ function TuitionBreakdownTable({
                   </td>
                 </tr>
               ) : null}
+
+              {/* Annual Admin Fee — sits directly above the
+                  subtotal so the receipt reads top-to-bottom: gross
+                  tuition, awards that offset it, then the line
+                  items that make up what the family actually owes
+                  (remaining tuition + admin fee = subtotal). */}
+              <tr className="border-t">
+                <td className="px-4 py-3 text-muted-foreground">
+                  Annual Admin Fee
+                </td>
+                <td className="px-4 py-3 text-right font-medium">
+                  ${formatTuitionCurrency(row.adminFees)}
+                </td>
+              </tr>
 
               {/* Student subtotal */}
               <tr className="border-t bg-muted/20">
