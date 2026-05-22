@@ -5877,20 +5877,33 @@ function DecisionStudentRow({
   // Local mirror of the editable fields so typing feels native.
   // Each field's onBlur compares against the source `app` snapshot
   // and PATCHes only the diff, so concurrent edits to other fields
-  // don't get clobbered.
+  // don't get clobbered. `persistedAward == null` collapses both
+  // `null` and `undefined` to the empty-input sentinel; everything
+  // else (including the legitimately-stored `0`) round-trips through
+  // `String()` so a literal zero renders as "0" not "".
   const [draft, setDraft] = useState({
     sufs_award_id: app?.sufs_award_id ? String(app.sufs_award_id) : "",
     opportunity_scholarship_award_amount:
-      typeof persistedAward === "number" ? String(persistedAward) : "",
+      persistedAward == null ? "" : String(persistedAward),
   });
 
+  // Re-init the draft only when we navigate to a different student
+  // (`app.id` changes). The previous deps were `[app, persistedAward]`,
+  // which made the effect re-fire on every SWR refetch — and any
+  // refetch that came back with the column as null (whether because
+  // the server lost the `0` we just wrote, or because the aggregated
+  // query represents `0` as null) would wipe the admin's just-typed
+  // value back to `""`. Pegging the deps to `app?.id` means the
+  // sticky local draft survives refetches; the next genuine
+  // student-change still reseeds it from the row.
   useEffect(() => {
     setDraft({
       sufs_award_id: app?.sufs_award_id ? String(app.sufs_award_id) : "",
       opportunity_scholarship_award_amount:
-        typeof persistedAward === "number" ? String(persistedAward) : "",
+        persistedAward == null ? "" : String(persistedAward),
     });
-  }, [app, persistedAward]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [app?.id]);
 
   /**
    * Single-field PATCH. Compares a stringified `current` against the
