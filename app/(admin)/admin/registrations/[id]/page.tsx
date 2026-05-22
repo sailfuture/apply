@@ -1981,6 +1981,12 @@ function TuitionBreakdownTable({
       isSnapAutoCover ||
       scholarship.isOpportunityScholarship === true ||
       s.remaining_opportunity_amount != null;
+    // Per-student award is only "finalized" once admin clicks
+    // Confirm Scholarship Award Amount on the family-page
+    // Determination card. Until then, the Opportunity Scholarship
+    // Award row stays blank — admin shouldn't see a dollar value
+    // before it's locked in.
+    const awardConfirmed = s.confirmed_scholarship === true;
     const scholarshipAmount: number | null = hasOSDetermination
       ? Math.max(0, tuition - stepUpAmount - familyPaysForTuition)
       : null;
@@ -1992,6 +1998,7 @@ function TuitionBreakdownTable({
       stepUpType: s.sufs_type,
       stepUpAmount,
       scholarshipAmount,
+      awardConfirmed,
       adminFees,
       familyPaysForTuition,
       hasOSDetermination,
@@ -2076,7 +2083,8 @@ function TuitionBreakdownTable({
                   Opportunity Scholarship Award
                 </td>
                 <td className="px-4 py-3 text-right font-medium text-green-600">
-                  {row.scholarshipAmount != null &&
+                  {row.awardConfirmed &&
+                  row.scholarshipAmount != null &&
                   row.scholarshipAmount > 0 ? (
                     `-$${formatTuitionCurrency(row.scholarshipAmount)}`
                   ) : (

@@ -88,7 +88,7 @@ function layout({
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,0.04);">
           <tr>
             <td align="center" style="background:#0F2A4A;padding:32px 32px 28px;">
-              <img src="${LOGO_URL}" alt="SailFuture Academy" width="72" height="72" style="display:block;width:72px;height:72px;border-radius:50%;border:0;outline:none;text-decoration:none;">
+              <img src="${LOGO_URL}" alt="SailFuture Academy" width="72" height="72" style="display:block;width:72px;height:72px;border-radius:50%;border:2px solid #ffffff;outline:none;text-decoration:none;">
             </td>
           </tr>
           <tr>

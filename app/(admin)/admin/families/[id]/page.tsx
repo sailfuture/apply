@@ -4206,7 +4206,6 @@ function DecisionCard({
                     approveCtx={{
                       accepted,
                       allDocsConfirmed,
-                      isSNAPPath: scholarship?.isSNAPBenefits === true,
                       // `scholarshipSectionVerified` locks per-
                       // student Undo until admin unconfirms the
                       // Scholarship section. Keeps the
@@ -4389,6 +4388,12 @@ function TuitionBreakdownTable({
       isOpportunityScholarshipFamily ||
       isSnapFamily ||
       app.remaining_opportunity_amount != null;
+    // Per-student award is only "finalized" once admin clicks
+    // Confirm Scholarship Award Amount on the Determination card.
+    // Until then, the Opportunity Scholarship coverage row stays
+    // blank — admin shouldn't see a dollar value the family could
+    // act on until they've locked it in.
+    const awardConfirmed = app.confirmed_scholarship === true;
     const scholarshipCoverage = hasOSDetermination
       ? Math.max(0, tuition - stepUpAmount - familyPaysForTuition)
       : 0;
@@ -4402,6 +4407,7 @@ function TuitionBreakdownTable({
       stepUpStatus,
       stepUpType,
       scholarshipCoverage,
+      awardConfirmed,
       hasOSDetermination,
       subtotal,
     };
@@ -4489,7 +4495,7 @@ function TuitionBreakdownTable({
                   Opportunity Scholarship Award
                 </td>
                 <td className="px-4 py-3 text-right font-medium tabular-nums text-green-600">
-                  {row.scholarshipCoverage > 0
+                  {row.awardConfirmed && row.scholarshipCoverage > 0
                     ? `-$${formatCurrency2(row.scholarshipCoverage)}`
                     : <span className="text-muted-foreground">—</span>}
                 </td>
@@ -5831,12 +5837,6 @@ function DecisionStudentRow({
      *  Award Amount button is gated on this so admin can't lock
      *  in a per-student award before reviewing the income docs. */
     allDocsConfirmed: boolean;
-    /** True when the family pre-qualifies via SNAP. Drives the
-     *  per-student Cost per student auto-fill: SNAP families have
-     *  no Opportunity Scholarship award form, so the cost defaults
-     *  to (base tuition − student's SUFS amount). Admin can still
-     *  override the value manually. */
-    isSNAPPath: boolean;
     /** True when admin has verified the Scholarship section
      *  (`scholarship_admin_complete=true`). Locks the per-student
      *  Undo button — admin can't unwind a single student's award
@@ -5865,57 +5865,32 @@ function DecisionStudentRow({
   // truth on the row is the new column.
   const sufsConfirmed = app?.confirmed_scholarship === true;
 
-  // Cost per student auto-fill for SNAP families. SNAP path has no
-  // Opportunity Scholarship form, so the per-student cost defaults
-  // to (base tuition − this student's SUFS award) — i.e. "tuition
-  // remaining after SUFS." Only fills the input when:
-  //   - the family is on the SNAP path
-  //   - the persisted value on the row is null/0 (admin hasn't
-  //     entered a manual override yet)
-  // Once admin types a value or saves a non-zero amount, the
-  // suggestion stops fighting the manual entry.
-  const baseTuition = schoolYear?.tuition ?? 0;
-  const snapSuggestedCost = Math.max(baseTuition - sufsAmount, 0);
-  // The "Remaining Amount Family Pays" input now reads from the
-  // dedicated `remaining_opportunity_amount` column on the app row
-  // (mirrored from the packet when one exists). The older
-  // `opportunity_scholarship_award_amount` column is legacy — no
-  // longer the source of truth for this input.
+  // The "Remaining Amount Family Pays" input reads from the
+  // `remaining_opportunity_amount` column on the app row. There's
+  // intentionally no auto-fill (used to suggest `tuition − SUFS`
+  // for SNAP families) — admin types the value per-student on
+  // every path. Auto-fill made admin's manual entries get
+  // overwritten on certain transitions; the input stays empty
+  // until admin enters a number.
   const persistedAward = app?.remaining_opportunity_amount;
-  const shouldAutoFillSnap =
-    approveCtx.isSNAPPath &&
-    (persistedAward === null ||
-      persistedAward === undefined ||
-      persistedAward === 0);
 
   // Local mirror of the editable fields so typing feels native.
   // Each field's onBlur compares against the source `app` snapshot
   // and PATCHes only the diff, so concurrent edits to other fields
-  // don't get clobbered. Remaining-amount-family-pays initializes
-  // to the SNAP suggestion when applicable; admin can overwrite at
-  // will.
+  // don't get clobbered.
   const [draft, setDraft] = useState({
     sufs_award_id: app?.sufs_award_id ? String(app.sufs_award_id) : "",
-    opportunity_scholarship_award_amount: persistedAward
-      ? String(persistedAward)
-      : shouldAutoFillSnap
-        ? String(snapSuggestedCost)
-        : "",
+    opportunity_scholarship_award_amount:
+      typeof persistedAward === "number" ? String(persistedAward) : "",
   });
 
   useEffect(() => {
     setDraft({
       sufs_award_id: app?.sufs_award_id ? String(app.sufs_award_id) : "",
-      opportunity_scholarship_award_amount: persistedAward
-        ? String(persistedAward)
-        : shouldAutoFillSnap
-          ? String(snapSuggestedCost)
-          : "",
+      opportunity_scholarship_award_amount:
+        typeof persistedAward === "number" ? String(persistedAward) : "",
     });
-    // Re-derive only when the source data changes; deliberate stale
-    // closure on shouldAutoFillSnap is fine since it's computed
-    // from `app` + `approveCtx.isSNAPPath` which are both deps.
-  }, [app, persistedAward, shouldAutoFillSnap, snapSuggestedCost]);
+  }, [app, persistedAward]);
 
   /**
    * Single-field PATCH. Compares a stringified `current` against the
@@ -6093,6 +6068,12 @@ function DecisionStudentRow({
                 <FieldLabel className="text-xs">SUFS award tier</FieldLabel>
                 <Select
                   value={sufsType || "__none"}
+                  // Locked once the scholarship is confirmed — admin
+                  // has to click Undo on the per-student footer to
+                  // re-edit. Prevents accidental changes while the
+                  // family-level approve gate is reading these
+                  // values.
+                  disabled={sufsConfirmed}
                   onValueChange={(v) => {
                     const nextType = v === "__none" ? "" : v;
                     // SUFS tier select writes two values to two
@@ -6161,6 +6142,7 @@ function DecisionStudentRow({
                 <FieldLabel className="text-xs">SUFS status</FieldLabel>
                 <Select
                   value={sufsStatus || "__none"}
+                  disabled={sufsConfirmed}
                   onValueChange={(v) =>
                     patchField("sufs_status", {
                       sufs_status: v === "__none" ? "" : v,
@@ -6189,6 +6171,7 @@ function DecisionStudentRow({
                   value={draft.sufs_award_id}
                   type="text"
                   inputMode="numeric"
+                  disabled={sufsConfirmed}
                   // SUFS portal hands out a fixed 9-digit numeric
                   // ID. Constrain the input shape so admin can't
                   // typo extra digits or paste a longer string in
@@ -6222,70 +6205,74 @@ function DecisionStudentRow({
             </div>
           </div>
 
-          {/* ─── Opportunity Scholarship sub-card ─── Hidden on the
-              SNAP path: SNAP families' Opportunity Scholarship is
-              auto-calculated at the family level (the rebate row
-              on the SNAP cost determination card up top), so a
-              per-student input here would let admin overwrite a
-              derived value with a hand-typed one and split-brain
-              the math. The matrix path keeps the manual input. */}
-          {!approveCtx.isSNAPPath ? (
-            <div className="rounded-md border bg-white p-4 space-y-3">
-              <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Opportunity Scholarship
-              </h4>
-              <Field>
-                {/* The input persists onto the new
-                    `remaining_opportunity_amount` column on the app
-                    row (mirrored to the packet when one exists).
-                    Allows $0 (admin explicitly set zero). */}
-                <FieldLabel className="text-xs">
-                  Remaining Amount Family Pays
-                </FieldLabel>
-                {/* Currency input — leading "$" sigil on the left
-                    matches every other money input on the page so
-                    admins see this field as a dollar value at a
-                    glance. */}
-                <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground pointer-events-none">
-                    $
-                  </span>
-                  <Input
-                    value={draft.opportunity_scholarship_award_amount}
-                    type="number"
-                    inputMode="decimal"
-                    placeholder="0"
-                    onChange={(e) =>
-                      setDraft((d) => ({
-                        ...d,
-                        opportunity_scholarship_award_amount: e.target.value,
-                      }))
-                    }
-                    onBlur={() => {
-                      const next = Number(
-                        draft.opportunity_scholarship_award_amount
-                      );
-                      const safe = Number.isFinite(next) ? next : 0;
-                      // No-op when the value hasn't changed. Compare
-                      // against the row's persisted
-                      // `remaining_opportunity_amount` — the column
-                      // that captures this input. The `/by-student`
-                      // route derives the remaining billing columns
-                      // server-side and re-prices Stripe if billing
-                      // is live; it also mirrors the write across
-                      // app + packet when both exist.
-                      const persisted = app.remaining_opportunity_amount;
-                      if (safe === persisted) return;
-                      void patchPerStudentBilling({
-                        remainingOpportunityAmount: safe,
-                      });
-                    }}
-                    className="border-input pl-7 tabular-nums"
-                  />
-                </div>
-              </Field>
-            </div>
-          ) : null}
+          {/* ─── Opportunity Scholarship sub-card ─── Shown on
+              every scholarship path. The input is the single
+              source of truth for the per-student
+              `remaining_opportunity_amount`; admin types it
+              manually for SNAP, Opportunity Scholarship, and
+              opted-out families alike. No auto-fill or cascade
+              derives this value — earlier versions zeroed it on
+              SNAP-confirm or pre-filled it with `tuition − SUFS`,
+              both of which silently overwrote admin's manual
+              entries on certain transitions. */}
+          <div className="rounded-md border bg-white p-4 space-y-3">
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Opportunity Scholarship
+            </h4>
+            <Field>
+              {/* The input persists onto the new
+                  `remaining_opportunity_amount` column on the app
+                  row (mirrored to the packet when one exists).
+                  Allows $0 (admin explicitly set zero). */}
+              <FieldLabel className="text-xs">
+                Remaining Amount Family Pays
+              </FieldLabel>
+              {/* Currency input — leading "$" sigil on the left
+                  matches every other money input on the page so
+                  admins see this field as a dollar value at a
+                  glance. */}
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground pointer-events-none">
+                  $
+                </span>
+                <Input
+                  value={draft.opportunity_scholarship_award_amount}
+                  type="number"
+                  inputMode="decimal"
+                  placeholder="0"
+                  disabled={sufsConfirmed}
+                  onChange={(e) =>
+                    setDraft((d) => ({
+                      ...d,
+                      opportunity_scholarship_award_amount: e.target.value,
+                    }))
+                  }
+                  onBlur={() => {
+                    const raw = draft.opportunity_scholarship_award_amount;
+                    // Blank input = "no change" rather than an
+                    // implicit $0. Admin who tabs through without
+                    // typing shouldn't overwrite a persisted value.
+                    if (raw === "" || raw == null) return;
+                    const next = Number(raw);
+                    if (!Number.isFinite(next)) return;
+                    // No-op when the value hasn't changed. Compare
+                    // against the row's persisted
+                    // `remaining_opportunity_amount` — the column
+                    // that captures this input. The `/by-student`
+                    // route derives the remaining billing columns
+                    // server-side and re-prices Stripe if billing
+                    // is live.
+                    const persisted = app.remaining_opportunity_amount;
+                    if (next === persisted) return;
+                    void patchPerStudentBilling({
+                      remainingOpportunityAmount: next,
+                    });
+                  }}
+                  className="border-input pl-7 tabular-nums"
+                />
+              </div>
+            </Field>
+          </div>
 
           {/* ─── Confirm Scholarship Award Amount ─── Per-student
               terminal action — flips `confirmed_scholarship` for

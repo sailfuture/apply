@@ -44,6 +44,30 @@ export async function GET(
   return NextResponse.json(application, { status: 200 });
 }
 
+// Fields the parent apply-flow surfaces are allowed to PATCH.
+// Anything outside this list — billing math, scholarship-confirm
+// audit columns, decision booleans, status FKs — is admin-owned
+// and writable only through `/api/admin/*` routes. The allowlist
+// is the structural guardrail against a buggy or stale parent
+// client (autosave, optimistic write, etc.) clobbering an admin-
+// entered value like `remaining_opportunity_amount`.
+const PARENT_FIELD_ALLOWLIST = [
+  // Student Details step — school history + transportation
+  "current_previous_school",
+  "last_grade_completed",
+  "current_grade",
+  "describe_student_strengths",
+  "describe_student_opportunities_for_growth",
+  "is_bus_transportation",
+  "bus_stop",
+  "primary_home",
+  // Initial Testing step
+  "nwea_testing_complete",
+  "nwea_testing_scheduled",
+  // Financial Aid step — parent's SUFS tier pick
+  "sufs_award_id",
+] as const;
+
 export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -74,7 +98,18 @@ export async function PATCH(
     }
 
     const body = await req.json();
-    const updated = await xano.applications.update(appId, body);
+    const patch: Record<string, unknown> = {};
+    for (const field of PARENT_FIELD_ALLOWLIST) {
+      if (field in body) patch[field] = body[field];
+    }
+    if (Object.keys(patch).length === 0) {
+      return NextResponse.json(
+        { error: "No editable fields in body" },
+        { status: 400 }
+      );
+    }
+
+    const updated = await xano.applications.update(appId, patch);
     return NextResponse.json(updated, { status: 200 });
   } catch (err) {
     console.error("Failed to update application:", err);

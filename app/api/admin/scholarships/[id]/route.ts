@@ -148,90 +148,18 @@ export async function PATCH(
 
     const updated = await xano.scholarship.update(id, patch);
 
-    // SNAP-confirm cascade — backup safeguard. Once admin confirms
-    // SNAP benefits, the Opportunity Scholarship auto-rebates
-    // tuition beyond SUFS so the family owes only the annual fee
-    // per student. We re-derive each active packet's billing
-    // columns with `remainingOpportunityAmount: 0` so the
-    // family-pays-tuition portion collapses to zero and the
-    // monthly amount drops to `annual_fee / 12`. SUFS amounts are
-    // preserved on the packet — SUFS applies independently of OS
-    // coverage.
-    //
-    // Stripe is re-synced when each packet has a live
-    // SubscriptionItem so the next invoice bills the new amount.
-    //
-    // Best-effort: failures here are logged but don't roll back the
-    // confirmation itself — the scholarship row's `is_snap_confirmed`
-    // flip is the source of truth, and the cascade can be retried by
-    // un-confirming + re-confirming if it fails.
-    if (
-      "is_snap_confirmed" in patch &&
-      patch.is_snap_confirmed === true
-    ) {
-      try {
-        const familyId = updated.registration_families_id;
-        const yearId = updated.registration_school_years_id;
-        const [apps, yearPackets, schoolYear, {
-          derivePacketBillingValues,
-          syncStripeForApplication,
-        }] = await Promise.all([
-          xano.applications.getByFamilyId(familyId),
-          xano.studentRegistration.getByYear(yearId),
-          xano.schoolYears.getById(yearId).catch(() => null),
-          import("@/lib/per-student-billing"),
-        ]);
-        const activeApps = apps.filter(
-          (a) =>
-            Number(a.registration_school_years_id) === yearId &&
-            (a as { isActive?: boolean }).isActive !== false
-        );
-        // Packets are looked up once for Stripe re-pricing (the
-        // packet carries `stripe_subscription_item_id`); billing
-        // math itself lives on the application row.
-        const packetByStudent = new Map(
-          yearPackets.map((p) => [Number(p.registration_students_id), p])
-        );
-        await Promise.allSettled(
-          activeApps.map(async (app) => {
-            // Preserve the app's SUFS amount (SUFS award still
-            // applies); collapse the family-pays-tuition portion to
-            // 0 so OS coverage absorbs everything beyond SUFS.
-            // `annualFee: null` lets the deriver fall through to the
-            // school year's `annual_fees` policy.
-            const derived = derivePacketBillingValues({
-              schoolYearTuition: schoolYear?.tuition ?? 0,
-              schoolYearAnnualFees: schoolYear?.annual_fees ?? null,
-              sufsAwardAmount: app.sufs_amount ?? 0,
-              remainingOpportunityAmount: 0,
-              annualFee: null,
-            });
-            const updatedApp = await xano.applications.update(
-              app.id,
-              derived
-            );
-            try {
-              const packet =
-                packetByStudent.get(
-                  Number(app.registration_students_id)
-                ) ?? null;
-              await syncStripeForApplication(updatedApp, packet);
-            } catch (err) {
-              console.error(
-                "[/api/admin/scholarships/[id]] Stripe sync failed for app",
-                app.id,
-                err
-              );
-            }
-          })
-        );
-      } catch (err) {
-        console.error(
-          "[/api/admin/scholarships/[id]] SNAP cascade failed:",
-          err
-        );
-      }
-    }
+    // Note: confirming SNAP is an audit-only flip. It does NOT
+    // touch any application row's billing math. Admin enters the
+    // per-student "Remaining Amount Family Pays" manually on the
+    // Determination card — the same way they do on every other
+    // scholarship path — and that value is the single input that
+    // drives `remaining_opportunity_amount`, `opportunity_award_amount`,
+    // `tuition_sub_total`, and `monthly_amount`. An earlier
+    // cascade here zeroed `remaining_opportunity_amount` across every
+    // active app on SNAP-confirm; that auto-mutation surprised admins
+    // who had typed non-zero values and got them wiped, so the entire
+    // billing-mutation block (and its Stripe re-sync) is intentionally
+    // gone. SUFS / OS coverage math is now 100% admin-driven.
 
     return NextResponse.json(updated);
   } catch (err) {

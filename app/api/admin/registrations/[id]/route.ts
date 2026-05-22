@@ -348,6 +348,12 @@ export async function GET(
           monthly_amount: app.monthly_amount ?? null,
           remaining_opportunity_amount:
             app.remaining_opportunity_amount ?? null,
+          // Per-student scholarship-confirmation latch. Flipped by
+          // admin's "Confirm Scholarship Award Amount" button on the
+          // family page Determination card; gates whether the
+          // Opportunity Scholarship Award dollar value renders on
+          // the tuition breakdown.
+          confirmed_scholarship: app.confirmed_scholarship === true,
         };
       }
     );
@@ -552,6 +558,11 @@ export interface AdminFamilyRegistrationStudentRow {
   tuition_sub_total: number | null;
   monthly_amount: number | null;
   remaining_opportunity_amount: number | null;
+  /** True when admin has clicked Confirm Scholarship Award Amount
+   *  on the Determination card for this student. Used by the
+   *  tuition breakdown to gate whether the Opportunity Scholarship
+   *  Award dollar value renders or shows as "—" pending. */
+  confirmed_scholarship: boolean;
 }
 
 /**

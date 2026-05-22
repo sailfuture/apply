@@ -117,6 +117,41 @@ interface BusStop {
   address: string;
 }
 
+// Fields the Students step persists onto the application row.
+// Drives both the dirty-diff comparison and the autosave PATCH body
+// — only these keys ever ride along with a save from this page.
+// Transportation lives alongside school-history because the apply-flow
+// folded the standalone transportation step back into this one.
+const TRACKED_FIELDS: (keyof Application)[] = [
+  "current_previous_school",
+  "last_grade_completed",
+  "current_grade",
+  "describe_student_strengths",
+  "describe_student_opportunities_for_growth",
+  "is_bus_transportation",
+  "bus_stop",
+  "primary_home",
+];
+
+// Diff a single app against its saved snapshot. Returns the subset
+// of tracked fields that actually changed — the autosave PATCH body
+// is exactly this object, so we never send unchanged fields. Edits
+// to one student therefore never trigger writes against another
+// student's row, and unchanged fields never appear in a PATCH body
+// (which avoids re-firing any Xano-side hooks on the application row
+// for no-op writes).
+function getDirtyFields(
+  app: Application,
+  saved: Application | undefined
+): Partial<Application> {
+  if (!saved) return {};
+  const dirty: Record<string, unknown> = {};
+  for (const f of TRACKED_FIELDS) {
+    if (app[f] !== saved[f]) dirty[f] = app[f];
+  }
+  return dirty as Partial<Application>;
+}
+
 function formatAge(dob: string): string {
   const birth = new Date(dob);
   const today = new Date();
@@ -485,20 +520,9 @@ export default function StudentsStepPage() {
     );
   }
 
-  const trackedFields: (keyof Application)[] = [
-    "current_previous_school",
-    "last_grade_completed", "current_grade",
-    "describe_student_strengths", "describe_student_opportunities_for_growth",
-    // Transportation moved onto this page — every change here should
-    // mark the application dirty so the autosave / save-all picks up
-    // the new value alongside the school-history fields.
-    "is_bus_transportation", "bus_stop", "primary_home",
-  ];
-
   const isDirty = applications.some((app) => {
     const saved = savedApplications.find((s) => s.id === app.id);
-    if (!saved) return false;
-    return trackedFields.some((f) => app[f] !== saved[f]);
+    return Object.keys(getDirtyFields(app, saved)).length > 0;
   });
 
   useEffect(() => {
@@ -510,59 +534,56 @@ export default function StudentsStepPage() {
     return () => window.removeEventListener("beforeunload", handler);
   }, [isDirty]);
 
-  // Auto-save a single application field on blur
-  async function autoSaveAppField(appId: number, field: string, value: unknown) {
-    try {
-      await fetch(`/api/applications/${appId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ [field]: value }),
-      });
-    } catch (err) {
-      console.error(`Auto-save failed for ${field}:`, err);
-    }
-  }
-
   const [savingAll, setSavingAll] = useState(false);
+
+  // PATCH a single application, sending only the fields that
+  // actually changed. Used by both the per-app debounced autosave
+  // and the explicit Complete-Section save-all — keeping the network
+  // primitive in one place ensures both flows scope writes to the
+  // dirty diff.
+  const saveSingleApp = useCallback(
+    async (appId: number): Promise<boolean> => {
+      const app = applications.find((a) => a.id === appId);
+      if (!app) return true;
+      const saved = savedApplications.find((s) => s.id === appId);
+      const dirty = getDirtyFields(app, saved);
+      if (Object.keys(dirty).length === 0) return true;
+      try {
+        const res = await fetch(`/api/applications/${appId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(dirty),
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => null);
+          console.error(`Failed to save application ${appId}:`, res.status, body);
+          return false;
+        }
+        setSavedApplications((prev) =>
+          prev.map((s) => (s.id === appId ? { ...app } : s))
+        );
+        return true;
+      } catch (err) {
+        console.error(`Failed to save application ${appId}:`, err);
+        return false;
+      }
+    },
+    [applications, savedApplications]
+  );
+  const saveSingleAppRef = useRef(saveSingleApp);
+  saveSingleAppRef.current = saveSingleApp;
 
   async function handleSaveAllApps() {
     setSavingAll(true);
     try {
       const results = await trackAutosave(
         Promise.all(
-          applications.map(async (app) => {
-            const res = await fetch(`/api/applications/${app.id}`, {
-              method: "PATCH",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                // SUFS lives on the Financial Aid step — not part of
-                // this save. Transportation is now part of this step
-                // (folded back from the standalone page) so its three
-                // fields ride along with the school-history saves.
-                current_previous_school: app.current_previous_school,
-                last_grade_completed: app.last_grade_completed,
-                current_grade: app.current_grade,
-                describe_student_strengths: app.describe_student_strengths,
-                describe_student_opportunities_for_growth:
-                  app.describe_student_opportunities_for_growth,
-                is_bus_transportation: app.is_bus_transportation,
-                bus_stop: app.bus_stop,
-                primary_home: app.primary_home,
-              }),
-            });
-            if (!res.ok) {
-              const body = await res.json().catch(() => null);
-              console.error(`Failed to save application ${app.id}:`, res.status, body);
-              throw new Error(`Save failed (${res.status})`);
-            }
-            return res;
-          })
+          applications.map((a) => saveSingleAppRef.current(a.id))
         )
       );
-      if (results.some((r) => !r.ok)) {
+      if (results.some((ok) => !ok)) {
         throw new Error("Some applications failed to save");
       }
-      setSavedApplications(applications.map((a) => ({ ...a })));
       mutate("/api/applications");
     } catch (err) {
       console.error("Failed to save:", err);
@@ -652,18 +673,42 @@ export default function StudentsStepPage() {
   // parent was trying to edit the brand-new student's empty fields.
   // The inline approach unlocks the section atomically with the add.
 
-  // Auto-save on changes (debounced)
-  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Per-app debounced autosave. Each app gets its own 2s timer
+  // keyed on `app.id`, so typing in one student's card only schedules
+  // (and eventually PATCHes) that student's row — edits to one app
+  // never trigger writes against any other app. The save itself
+  // (`saveSingleApp`) only sends the diff against `savedApplications`,
+  // so a PATCH body never carries unchanged fields.
+  const autoSaveTimersRef = useRef<
+    Map<number, ReturnType<typeof setTimeout>>
+  >(new Map());
   useEffect(() => {
-    if (!isDirty || savingAll) return;
-    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
-    autoSaveTimerRef.current = setTimeout(() => {
-      handleSaveAllAppsRef.current();
-    }, 2000);
+    if (savingAll) return;
+    const timers = autoSaveTimersRef.current;
+    for (const app of applications) {
+      const saved = savedApplications.find((s) => s.id === app.id);
+      const dirty = getDirtyFields(app, saved);
+      if (Object.keys(dirty).length === 0) continue;
+      const existing = timers.get(app.id);
+      if (existing) clearTimeout(existing);
+      const appId = app.id;
+      const timer = setTimeout(() => {
+        void saveSingleAppRef.current(appId);
+        timers.delete(appId);
+      }, 2000);
+      timers.set(appId, timer);
+    }
+  }, [applications, savedApplications, savingAll]);
+
+  // Cancel any in-flight per-app timers on unmount so a setTimeout
+  // doesn't fire against a stale `applications` snapshot.
+  useEffect(() => {
+    const timers = autoSaveTimersRef.current;
     return () => {
-      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+      for (const t of timers.values()) clearTimeout(t);
+      timers.clear();
     };
-  }, [isDirty, savingAll]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   const isDirtyRef = useRef(isDirty);
   isDirtyRef.current = isDirty;

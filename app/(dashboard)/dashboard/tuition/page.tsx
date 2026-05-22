@@ -209,6 +209,7 @@ export default function DashboardTuitionPage() {
         opportunity_award_amount?: number | null;
         annual_fee?: number | null;
         remaining_opportunity_amount?: number | null;
+        confirmed_scholarship?: boolean;
       }[]
     ).filter((a) => a.registration_school_years_id === yearId);
 
@@ -251,6 +252,12 @@ export default function DashboardTuitionPage() {
         isSnapFamily ||
         familyPaysForTuition > 0 ||
         scholarshipCoverage > 0;
+      // Don't surface the Opportunity Scholarship Award dollar
+      // figure to the family until admin has clicked Confirm
+      // Scholarship Award Amount on the Determination card. Until
+      // then the row reads "—" so the parent doesn't see a value
+      // that's still in flux.
+      const awardConfirmed = app.confirmed_scholarship === true;
 
       rows.push({
         studentName: `${student.first_name} ${student.last_name}`,
@@ -258,7 +265,8 @@ export default function DashboardTuitionPage() {
         stepUpStatus,
         stepUpType: sufsType,
         stepUpAmount,
-        scholarshipAmount: hasOSDetermination ? scholarshipCoverage : 0,
+        scholarshipAmount:
+          awardConfirmed && hasOSDetermination ? scholarshipCoverage : 0,
         remaining: hasOSDetermination ? scholarshipCoverage : 0,
         adminFees,
         familyPaysForTuition,
