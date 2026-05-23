@@ -213,11 +213,32 @@ export async function sendApplicationReceivedEmail(
 
 /** Email 2: admin accepted the family. Fires from PATCH
  *  /api/admin/family-progress when `isAccepted` transitions
- *  false→true. */
+ *  false→true.
+ *
+ *  Once-per-family-year: the audit log is the source of truth.
+ *  If a prior `accepted` send for this (family, year) already
+ *  landed as `status="sent"`, we skip — this dedupes the case
+ *  where admin clicks Undo and then Accept again (each toggle
+ *  re-trips the `false → true` PATCH guard, but the family has
+ *  already received the email). Failed sends are NOT counted so
+ *  a transient Resend error can be retried by a re-Accept. Dev
+ *  `dry_run` rows are also ignored so contributors can iterate
+ *  without `RESEND_API_KEY` set. */
 export async function sendAcceptanceEmail(
   familyId: number,
   yearId: number
 ): Promise<SendResult> {
+  const alreadySent = await hasAlreadySentEmail({
+    familyId,
+    yearId,
+    template: "accepted",
+  });
+  if (alreadySent) {
+    console.log(
+      `[email/accepted] dedupe — family=${familyId} year=${yearId} already received the acceptance email`
+    );
+    return { ok: true, id: "deduped" };
+  }
   const ctx = await resolveFamilyContext(familyId, yearId);
   if (!ctx) return { ok: false, error: "context-failed" };
   return sendEmail({
@@ -231,6 +252,35 @@ export async function sendAcceptanceEmail(
     familyId: ctx.familyId,
     yearId: ctx.yearId,
   });
+}
+
+/** Audit-log dedupe — returns true when there's a successful
+ *  prior send for the (family, year, template) tuple. Used by
+ *  triggers that need once-per-family-year semantics. Failures
+ *  (Xano down, table missing) coerce to `false` so the email
+ *  still fires; better to risk a duplicate than to silently
+ *  swallow a legitimate send because we couldn't read the log. */
+async function hasAlreadySentEmail({
+  familyId,
+  yearId,
+  template,
+}: {
+  familyId: number;
+  yearId: number;
+  template: string;
+}): Promise<boolean> {
+  try {
+    const rows = await xano.emailNotifications.getByFamily(familyId, yearId);
+    return rows.some(
+      (r) => r.template === template && r.status === "sent"
+    );
+  } catch (err) {
+    console.error(
+      `[email/${template}] dedupe lookup failed for family=${familyId} year=${yearId}:`,
+      err
+    );
+    return false;
+  }
 }
 
 /** Email 3: parent submitted the registration packet. Fires from
