@@ -4,6 +4,7 @@ import { ClerkProvider } from "@clerk/nextjs";
 import { Analytics } from "@vercel/analytics/next";
 import { Toaster } from "@/components/ui/sonner";
 import { AppChrome } from "@/components/app-chrome";
+import { SWRProvider } from "./swr-provider";
 import "./globals.css";
 import { cn } from "@/lib/utils";
 
@@ -33,7 +34,9 @@ export default function RootLayout({
         <body
           className={`${geistSans.variable} ${geistMono.variable} antialiased bg-gray-50`}
         >
-          <AppChrome>{children}</AppChrome>
+          <SWRProvider>
+            <AppChrome>{children}</AppChrome>
+          </SWRProvider>
           {/* Position is responsive — top-center on mobile (so it doesn't
               collide with the fixed bottom nav), bottom-right on xl+. */}
           <Toaster />

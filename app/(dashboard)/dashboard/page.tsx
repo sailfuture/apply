@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { useApplications, useSchoolYears } from "@/hooks/use-api";
 import { EnrolledFamilyDashboard } from "@/components/enrolled-family-dashboard";
+import { ServiceUnavailable } from "@/components/service-unavailable";
 import { Spinner } from "@/components/ui/spinner";
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
@@ -84,8 +85,8 @@ export default function EnrolledHomePage() {
     const n = Number(raw);
     return Number.isFinite(n) ? n : null;
   })();
-  const { data: appsData } = useApplications();
-  const { data: yearsData } = useSchoolYears();
+  const { data: appsData, error: appsError } = useApplications();
+  const { data: yearsData, error: yearsError } = useSchoolYears();
 
   // Years the family has any application for — the candidate set for
   // "which years should we look up registration progress on".
@@ -114,9 +115,11 @@ export default function EnrolledHomePage() {
   const swrKey = candidateYearIds.length
     ? `enrolled-resolver:${candidateYearIds.join(",")}`
     : null;
-  const { data: yearStatusMap, isLoading: enrolledLoading } = useSWR<
-    Record<number, { mode: YearMode }>
-  >(
+  const {
+    data: yearStatusMap,
+    error: yearStatusError,
+    isLoading: enrolledLoading,
+  } = useSWR<Record<number, { mode: YearMode }>>(
     swrKey,
     async () => {
       const entries = await Promise.all(
@@ -243,6 +246,16 @@ export default function EnrolledHomePage() {
     if (requestedYearId === targetYearId) return;
     router.replace(`/dashboard?yearId=${targetYearId}`);
   }, [targetYearId, requestedYearId, router]);
+
+  // Surface a friendly "we're making improvements" card once any of the
+  // three fetches has exhausted SWR's retry budget (capped at 3 in
+  // `<SWRProvider>`). Without this the page falls back to `loading`
+  // forever — `appsData` / `yearsData` stay undefined while `error` is
+  // set, so the spinner never resolves.
+  const hasError = !!(appsError || yearsError || yearStatusError);
+  if (hasError) {
+    return <ServiceUnavailable />;
+  }
 
   const loading =
     !appsData || !yearsData || enrolledLoading || targetYearId === null;
