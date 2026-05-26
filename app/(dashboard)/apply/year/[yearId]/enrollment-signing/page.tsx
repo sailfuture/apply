@@ -35,6 +35,7 @@ export default function EnrollmentSigningPage() {
   const {
     progress: regProgress,
     patchProgress: patchRegProgress,
+    refresh: refreshRegProgress,
   } = useStudentRegistrationProgress(yearId);
   const { data: familyData } = useFamily();
   const { data: appsData } = useApplications();
@@ -45,6 +46,7 @@ export default function EnrollmentSigningPage() {
   const signingInstanceRef = useRef<{ destroy: () => void } | null>(null);
   const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoInitRef = useRef(false);
+  const verifyOnMountRef = useRef(false);
 
   useEffect(() => {
     setPageTitle("Enrollment");
@@ -89,6 +91,30 @@ export default function EnrollmentSigningPage() {
       handleSign();
     }
   }, [loading, applications.length, isCompleted, isSent, signingLoading, signingSession]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Verify-on-mount: if the row claims the EA is signed, do a one-shot
+  // PandaDoc status check before trusting the latch. PandaDoc-side
+  // reverts (admin voided / reopened the envelope in the PandaDoc
+  // dashboard) flip the doc back to a non-completed state, but our
+  // app doesn't get a push notification for that — without this
+  // check, `isEnrollment === true` outlives the actual envelope state
+  // and the parent sees the (now-unsigned) PDF rendered as if it were
+  // the signed copy. The status route clears the latches on downgrade,
+  // and `refreshRegProgress` then pulls the corrected row so the page
+  // re-renders into the signing flow. Fires once per mount.
+  useEffect(() => {
+    if (verifyOnMountRef.current) return;
+    if (loading || !isCompleted) return;
+    const docId = regProgress?.enrollment_agreement_pandadoc_id;
+    const appId = applications[0]?.id;
+    if (!docId || !appId) return;
+    verifyOnMountRef.current = true;
+    fetch(
+      `/api/pandadoc/status?documentId=${docId}&applicationId=${appId}&type=enrollment_agreement`
+    )
+      .then(() => refreshRegProgress())
+      .catch(() => {});
+  }, [loading, isCompleted, regProgress, applications, refreshRegProgress]);
 
   const pdfUrl = useMemo(() => {
     const docId = regProgress?.enrollment_agreement_pandadoc_id;

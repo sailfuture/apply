@@ -97,16 +97,23 @@ export async function GET(req: NextRequest) {
             application.registration_students_id,
             application.registration_school_years_id
           );
-          if (packetRow.liability_waiver_status !== normalizedStatus) {
+          const wantCompleted = normalizedStatus === "completed";
+          const hasUrl = !!packetRow.liability_waiver_pdf_url;
+          const statusChanged =
+            packetRow.liability_waiver_status !== normalizedStatus;
+          // If status is not "completed" but a pdf_url is still
+          // stored, the row is in a stale post-revert state — clear
+          // the url alongside the status so downstream readers don't
+          // keep serving the pre-revert bytes.
+          if (statusChanged || (!wantCompleted && hasUrl)) {
             const updateData: Partial<
               import("@/lib/xano").XanoStudentRegistration
             > = {
               liability_waiver_status: normalizedStatus,
+              liability_waiver_pdf_url: wantCompleted
+                ? getDocumentDownloadUrl(documentId)
+                : "",
             };
-            if (normalizedStatus === "completed") {
-              updateData.liability_waiver_pdf_url =
-                getDocumentDownloadUrl(documentId);
-            }
             await xano.studentRegistration.update(packetRow.id, updateData);
           }
         } else {
@@ -114,21 +121,43 @@ export async function GET(req: NextRequest) {
           // registration progress row. Also latches `isEnrollment` when
           // the document is completed so the sidenav and enrolled
           // dashboard reflect it without a second PATCH.
+          //
+          // Downgrade handling (load-bearing): when PandaDoc reports
+          // a non-completed status (e.g. admin voided/reopened the
+          // envelope in the PandaDoc dashboard, sending it back to
+          // `viewed`), clear the latches too. `isEnrollment` and
+          // `is_enrollment_agreement_signed` are one-way booleans
+          // that the signing page reads to decide whether to render
+          // the signed PDF iframe — leaving them set after a revert
+          // means the parent sees the (now-unsigned) PDF loaded as
+          // if it were signed. The conditional also fires on
+          // latch-drift (status already "viewed" in the DB but the
+          // latch is still true from a prior completed state), so
+          // a single status check repairs stale rows even when the
+          // status field itself didn't change.
           const progressRow = await xano.studentRegistrationProgress.resolve(
             familyId,
             application.registration_school_years_id
           );
-          if (progressRow.enrollment_agreement_status !== normalizedStatus) {
+          const wantCompleted = normalizedStatus === "completed";
+          const isLatched =
+            progressRow.is_enrollment_agreement_signed === true ||
+            progressRow.isEnrollment === true ||
+            !!progressRow.enrollment_agreement_pdf_url;
+          const statusChanged =
+            progressRow.enrollment_agreement_status !== normalizedStatus;
+          const latchMismatch = wantCompleted !== isLatched;
+          if (statusChanged || latchMismatch) {
             const updateData: Partial<
               import("@/lib/xano").XanoStudentRegistrationProgress
             > = {
               enrollment_agreement_status: normalizedStatus,
+              enrollment_agreement_pdf_url: wantCompleted
+                ? getDocumentDownloadUrl(documentId)
+                : "",
+              is_enrollment_agreement_signed: wantCompleted,
+              isEnrollment: wantCompleted,
             };
-            if (normalizedStatus === "completed") {
-              updateData.enrollment_agreement_pdf_url = getDocumentDownloadUrl(documentId);
-              updateData.is_enrollment_agreement_signed = true;
-              updateData.isEnrollment = true;
-            }
             await xano.studentRegistrationProgress.update(
               progressRow.id,
               updateData

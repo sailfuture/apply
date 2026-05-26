@@ -59,6 +59,17 @@ const SECTION_VERIFY_PAIRS: Array<{
    *  which is family-evergreen) leave this `null` and skip the
    *  cascade. */
   completedKey: keyof XanoStudentRegistrationProgress | null;
+  /** When `true`, un-verifying (verify bool → false) ALSO flips
+   *  `completedKey` to `false`. Default behavior is asymmetric —
+   *  verify cascades to parent-completion but un-verify doesn't,
+   *  on the theory that "I need to re-review" shouldn't kick the
+   *  parent back to editing. That theory doesn't apply to
+   *  enrollment: there's no parent-editable form there — either
+   *  the PandaDoc envelope is signed or it isn't. So un-verifying
+   *  enrollment means the signature needs redoing, and the parent
+   *  needs to be sent back to the signing flow. Set on enrollment
+   *  only. */
+  cascadeOnUnverify?: boolean;
 }> = [
   {
     confirmKey: "tuition_admin_confirm",
@@ -71,6 +82,7 @@ const SECTION_VERIFY_PAIRS: Array<{
     timeKey: "enrollment_admin_confirm_time",
     adminKey: "enrollment_admin_confirm_admin",
     completedKey: "isEnrollment",
+    cascadeOnUnverify: true,
   },
   {
     confirmKey: "volunteer_admin_confirm",
@@ -230,11 +242,23 @@ export async function PATCH(req: NextRequest) {
     //
     // On un-verify (false):
     //   - time = null, admin = ""
-    //   - DO NOT touch `isXxx` — un-verifying is "I need to
-    //     re-review", not "kick the parent back to editing".
-    //     The existing parent-side cascade clears the verify pair
-    //     when the parent flips `isXxx=false`, so the two
-    //     directions stay coherent.
+    //   - By default, DO NOT touch `isXxx` — un-verifying is
+    //     "I need to re-review", not "kick the parent back to
+    //     editing". The existing parent-side cascade clears the
+    //     verify pair when the parent flips `isXxx=false`, so the
+    //     two directions stay coherent.
+    //   - Exception: sections marked `cascadeOnUnverify` (currently
+    //     just enrollment) DO flip `isXxx=false` on un-verify,
+    //     because the section has no parent-editable form — the
+    //     only way to "fix" it is to redo the signature, so the
+    //     parent has to be sent back to the signing flow. For
+    //     enrollment we also clear the latches that mark the EA
+    //     as signed (`is_enrollment_agreement_signed`,
+    //     `enrollment_agreement_pdf_url`); the PandaDoc envelope
+    //     itself isn't touched here — admin's "I don't trust this
+    //     signature" is independent of the envelope's PandaDoc
+    //     state, and the create route will void/re-create the
+    //     envelope on the next sign attempt if needed.
     const now = Date.now();
     const adminName = admin?.name ?? "";
     for (const pair of SECTION_VERIFY_PAIRS) {
@@ -242,8 +266,16 @@ export async function PATCH(req: NextRequest) {
         const next = patch[pair.confirmKey] === true;
         patch[pair.timeKey] = next ? now : null;
         patch[pair.adminKey] = next ? adminName : "";
-        if (next && pair.completedKey) {
-          patch[pair.completedKey] = true;
+        if (pair.completedKey) {
+          if (next) {
+            patch[pair.completedKey] = true;
+          } else if (pair.cascadeOnUnverify) {
+            patch[pair.completedKey] = false;
+            if (pair.confirmKey === "enrollment_admin_confirm") {
+              patch.is_enrollment_agreement_signed = false;
+              patch.enrollment_agreement_pdf_url = "";
+            }
+          }
         }
       }
     }

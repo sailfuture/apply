@@ -42,20 +42,35 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  // Ownership check — accept the document if its ID is stored in
-  // either of the two tables a PandaDoc ID can live in for this
-  // family:
+  // Ownership + signed-status check. The document is downloadable
+  // iff (a) its ID is stored on a row owned by this family, AND (b)
+  // that row's status field is `"completed"`. Both halves matter:
   //
-  //   1. `registration_student_registration` (the packet — canonical
-  //      location for liability waivers, per-student per-year)
-  //   2. `registration_student_registration_progress` (per-family
-  //      per-year — canonical location for enrollment agreements)
+  //   - Ownership prevents one family from grabbing another family's
+  //     signed PDFs by guessing document IDs.
+  //   - The signed-status gate prevents serving the pre-signature
+  //     (or post-revert) bytes of a PandaDoc envelope. Without it,
+  //     anyone with a docId-on-their-family can pull a half-signed
+  //     or admin-voided PDF as if it were the legal signed copy.
+  //     The UI side has a latching `isEnrollment` boolean that can
+  //     outlive a PandaDoc-side revert (see `pandadoc/status` for
+  //     the downgrade logic) — even with that fixed, we keep this
+  //     server-side gate as defense-in-depth.
   //
-  // The waiver columns used to live on `registration_application`
-  // too, but those have been removed; the packet is the single source
-  // of truth now.
-  let owns =
-    application.enrollment_agreement_pandadoc_id === documentId;
+  // Three rows can carry a PandaDoc ID for a family:
+  //   1. `registration_application` — legacy EA mirror (rarely
+  //      populated today, but check for completeness)
+  //   2. `registration_student_registration_progress` — canonical
+  //      EA location, per-family per-year
+  //   3. `registration_student_registration` — packet, canonical
+  //      liability-waiver location, per-student per-year
+  let owns = false;
+  let signed = false;
+
+  if (application.enrollment_agreement_pandadoc_id === documentId) {
+    owns = true;
+    signed = application.enrollment_agreement_status === "completed";
+  }
 
   if (!owns) {
     const progressRow =
@@ -63,7 +78,10 @@ export async function GET(req: NextRequest) {
         familyId,
         application.registration_school_years_id
       );
-    owns = progressRow?.enrollment_agreement_pandadoc_id === documentId;
+    if (progressRow?.enrollment_agreement_pandadoc_id === documentId) {
+      owns = true;
+      signed = progressRow.enrollment_agreement_status === "completed";
+    }
   }
 
   if (!owns) {
@@ -72,7 +90,10 @@ export async function GET(req: NextRequest) {
         application.registration_students_id,
         application.registration_school_years_id
       );
-      owns = packet?.liability_waiver_pandadoc_id === documentId;
+      if (packet?.liability_waiver_pandadoc_id === documentId) {
+        owns = true;
+        signed = packet.liability_waiver_status === "completed";
+      }
     } catch {
       // Ignore — leaves `owns = false` and we fall through to 404.
     }
@@ -80,6 +101,13 @@ export async function GET(req: NextRequest) {
 
   if (!owns) {
     return NextResponse.json({ error: "Document not found" }, { status: 404 });
+  }
+
+  if (!signed) {
+    return NextResponse.json(
+      { error: "Document has not been signed yet" },
+      { status: 403 }
+    );
   }
 
   try {
