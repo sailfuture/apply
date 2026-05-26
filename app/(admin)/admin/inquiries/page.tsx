@@ -161,16 +161,18 @@ export default function InquiriesPage() {
 
   const rows: Inquiry[] = useMemo(
     () =>
-      (Array.isArray(data) ? data : []).map((r) => ({
-        ...r,
-        primary_email: cleanEmail(r.primary_email),
-        parent_name: `${r.primary_first_name ?? ""} ${
-          r.primary_last_name ?? ""
-        }`.trim(),
-        student_name: `${r.student_first_name ?? ""} ${
-          r.student_last_name ?? ""
-        }`.trim(),
-      })),
+      (Array.isArray(data) ? data : [])
+        .map((r) => ({
+          ...r,
+          primary_email: cleanEmail(r.primary_email),
+          parent_name: `${r.primary_first_name ?? ""} ${
+            r.primary_last_name ?? ""
+          }`.trim(),
+          student_name: `${r.student_first_name ?? ""} ${
+            r.student_last_name ?? ""
+          }`.trim(),
+        }))
+        .sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0)),
     [data]
   );
 
