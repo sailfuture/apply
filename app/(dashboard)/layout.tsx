@@ -39,13 +39,7 @@ export default function DashboardLayout({
   if (!isLoaded) {
     return (
       <div className="flex min-h-[40vh] items-center justify-center">
-        <LoadingScreen
-          messages={[
-            "Loading your dashboard...",
-            "Getting things ready...",
-            "Almost there...",
-          ]}
-        />
+        <LoadingScreen />
       </div>
     );
   }

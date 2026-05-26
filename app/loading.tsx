@@ -7,20 +7,15 @@ import { LoadingScreen } from "@/components/loading-screen";
  * to the lifecycle-resolved destination (admin / welcome / apply /
  * registration / dashboard).
  *
- * The root `/` page does several server-side Xano queries + Clerk
- * metadata write before redirecting, so this can easily linger a few
- * seconds — cycling text reassures the user that work is happening.
+ * Uses the shared parent-flow message sequence; sessionStorage
+ * persistence in `LoadingScreen` keeps the cycling text progressing
+ * across the back-to-back loading screens that fire during the chain
+ * (this one → dashboard-segment loading → page-level SWR spinner).
  */
 export default function RootLoading() {
   return (
     <div className="flex min-h-[calc(100vh-7.5rem)] items-center justify-center px-4">
-      <LoadingScreen
-        messages={[
-          "Loading your application...",
-          "Getting things ready...",
-          "Almost there...",
-        ]}
-      />
+      <LoadingScreen />
     </div>
   );
 }

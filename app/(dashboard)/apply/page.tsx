@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/breadcrumb";
 import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
+import { LoadingScreen } from "@/components/loading-screen";
 
 interface SchoolYear {
   id: number;
@@ -147,7 +148,7 @@ export default function ApplyIndexPage() {
           </div>
         </header>
         <div className="flex min-h-[40vh] items-center justify-center">
-          <p className="text-muted-foreground">Loading...</p>
+          <LoadingScreen />
         </div>
       </>
     );

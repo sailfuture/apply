@@ -11,7 +11,7 @@ import { PreSubmitReviewModal, type SectionStatus } from "@/components/pre-submi
 import { EnrolledFamilyDashboard } from "@/components/enrolled-family-dashboard";
 import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
 import { ArrowRight, Clock, CheckCircle2, Lock } from "lucide-react";
-import { Spinner } from "@/components/ui/spinner";
+import { LoadingScreen } from "@/components/loading-screen";
 import Image from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -704,7 +704,7 @@ export default function YearOverviewPage() {
   if (initialDataLoading || willRedirect || stageJustChanged) {
     return (
       <div className="flex min-h-[calc(100vh-7.5rem)] items-center justify-center px-4 bg-gray-50 dark:bg-background">
-        <Spinner className="size-8 text-muted-foreground" />
+        <LoadingScreen />
       </div>
     );
   }

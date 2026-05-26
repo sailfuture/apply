@@ -16,13 +16,7 @@ export default function OnboardingLayout({
         children
       ) : (
         <div className="flex min-h-[40vh] items-center justify-center">
-          <LoadingScreen
-            messages={[
-              "Loading your application...",
-              "Setting things up...",
-              "Almost there...",
-            ]}
-          />
+          <LoadingScreen />
         </div>
       )}
     </div>

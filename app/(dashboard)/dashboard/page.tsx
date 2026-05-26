@@ -6,7 +6,7 @@ import useSWR from "swr";
 import { useApplications, useSchoolYears } from "@/hooks/use-api";
 import { EnrolledFamilyDashboard } from "@/components/enrolled-family-dashboard";
 import { ServiceUnavailable } from "@/components/service-unavailable";
-import { Spinner } from "@/components/ui/spinner";
+import { LoadingScreen } from "@/components/loading-screen";
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
@@ -263,7 +263,7 @@ export default function EnrolledHomePage() {
   if (loading) {
     return (
       <div className="flex min-h-[calc(100vh-7.5rem)] items-center justify-center px-4">
-        <Spinner className="size-8 text-muted-foreground" />
+        <LoadingScreen />
       </div>
     );
   }
