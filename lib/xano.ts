@@ -2212,6 +2212,22 @@ export const xano = {
       // students page (and other surfaces that index `applications[0]`
       // as "the family's first student", like the waiver flow) would
       // behave inconsistently across reloads.
+      //
+      // DEFENSIVE CLIENT-SIDE FILTER (load-bearing): the Xano query
+      // input `registration_families_id` on `/registration_application`
+      // is currently NOT wired up — Xano returns the entire table
+      // regardless of the value. Without the post-fetch filter, every
+      // family would receive every other family's applications (PII
+      // leak), and surfaces that index `applications[0]` as "this
+      // family's first app" (waiver flow, enrollment-signing page,
+      // students list) would pick whichever app happens to come first
+      // in the unfiltered set — almost certainly the wrong family's.
+      // Every other `getByFamilyId` / `getByFamilyAndYear` in this file
+      // already filters client-side for the same reason; this one was
+      // the lone exception and the cause of cross-family pollution on
+      // the enrollment-signing flow. `toIdOrNull` handles the case
+      // where Xano returns `registration_families_id` as an expanded
+      // relation object (e.g. `{ id: 60, ... }`) rather than a scalar.
       try {
         const res = await fetch(
           `${getBaseUrl()}/registration_application?registration_families_id=${familyId}`,
@@ -2220,17 +2236,18 @@ export const xano = {
         if (!res.ok) {
           const all = await this.getAll();
           return all
-            .filter((a) => a.registration_families_id === familyId)
+            .filter((a) => toIdOrNull(a.registration_families_id) === familyId)
             .sort((a, b) => a.id - b.id);
         }
         const results: XanoApplication[] = await res.json();
-        return Array.isArray(results)
-          ? results.slice().sort((a, b) => a.id - b.id)
-          : [];
+        const items = Array.isArray(results) ? results : [];
+        return items
+          .filter((a) => toIdOrNull(a.registration_families_id) === familyId)
+          .sort((a, b) => a.id - b.id);
       } catch {
         const all = await this.getAll();
         return all
-          .filter((a) => a.registration_families_id === familyId)
+          .filter((a) => toIdOrNull(a.registration_families_id) === familyId)
           .sort((a, b) => a.id - b.id);
       }
     },
