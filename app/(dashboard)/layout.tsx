@@ -4,7 +4,7 @@ import { usePathname } from "next/navigation";
 import { useAuth } from "@clerk/nextjs";
 import { AppSidebar } from "@/components/app-sidebar";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
-import { Spinner } from "@/components/ui/spinner";
+import { LoadingScreen } from "@/components/loading-screen";
 
 export default function DashboardLayout({
   children,
@@ -39,7 +39,13 @@ export default function DashboardLayout({
   if (!isLoaded) {
     return (
       <div className="flex min-h-[40vh] items-center justify-center">
-        <Spinner className="size-8 text-muted-foreground" />
+        <LoadingScreen
+          messages={[
+            "Loading your dashboard...",
+            "Getting things ready...",
+            "Almost there...",
+          ]}
+        />
       </div>
     );
   }

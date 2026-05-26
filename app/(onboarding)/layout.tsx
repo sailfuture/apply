@@ -1,6 +1,7 @@
 "use client";
 
 import { useAuth } from "@clerk/nextjs";
+import { LoadingScreen } from "@/components/loading-screen";
 
 export default function OnboardingLayout({
   children,
@@ -15,7 +16,13 @@ export default function OnboardingLayout({
         children
       ) : (
         <div className="flex min-h-[40vh] items-center justify-center">
-          <p className="text-muted-foreground text-sm">Loading...</p>
+          <LoadingScreen
+            messages={[
+              "Loading your application...",
+              "Setting things up...",
+              "Almost there...",
+            ]}
+          />
         </div>
       )}
     </div>

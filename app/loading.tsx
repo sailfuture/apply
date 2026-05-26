@@ -1,4 +1,4 @@
-import { Spinner } from "@/components/ui/spinner";
+import { LoadingScreen } from "@/components/loading-screen";
 
 /**
  * Top-level loading boundary — Next.js renders this for any route
@@ -7,16 +7,20 @@ import { Spinner } from "@/components/ui/spinner";
  * to the lifecycle-resolved destination (admin / welcome / apply /
  * registration / dashboard).
  *
- * Single centered spinner — no skeleton chrome. Skeletons committed
- * to a layout shape that doesn't match the destination, so they read
- * as a second layout flash before the real page renders. A bare
- * spinner says "working" without misleading the user about what's
- * about to appear.
+ * The root `/` page does several server-side Xano queries + Clerk
+ * metadata write before redirecting, so this can easily linger a few
+ * seconds — cycling text reassures the user that work is happening.
  */
 export default function RootLoading() {
   return (
     <div className="flex min-h-[calc(100vh-7.5rem)] items-center justify-center px-4">
-      <Spinner className="size-8 text-muted-foreground" />
+      <LoadingScreen
+        messages={[
+          "Loading your application...",
+          "Getting things ready...",
+          "Almost there...",
+        ]}
+      />
     </div>
   );
 }
