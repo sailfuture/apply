@@ -9,67 +9,6 @@ import {
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
-interface FullScholarshipResponse {
-  opportunity_scholarship: {
-    id: number;
-    household_adults: number;
-    household_children: number;
-    no_contributing_member: boolean;
-    government_benefits: boolean;
-    family_contribution_per_month: number;
-    scholarship_advocacy_letter: string;
-    isNotParticipating: boolean;
-    isSNAPBenefits: boolean;
-    isOpportunityScholarship: boolean;
-    snap_benefits: Record<string, unknown>[];
-  };
-  contributing_members: {
-    first_name: string;
-    last_name: string;
-    address_1: string;
-    city: string;
-    state: string;
-    zipcode: string;
-    estimated_annual_income: number;
-    /** Income verification flags + multi-file arrays (one slot can hold
-     *  every page of a W-2 or pay-stub packet). Optional / nullable so
-     *  legacy single-object rows still type-check during the schema
-     *  transition — `hasFile` normalizes both shapes. */
-    isW2?: boolean;
-    isPayStubs?: boolean;
-    w2?: Record<string, unknown>[] | Record<string, unknown> | null;
-    paystub_1?: Record<string, unknown>[] | Record<string, unknown> | null;
-    paystub_2?: Record<string, unknown>[] | Record<string, unknown> | null;
-    paystub_3?: Record<string, unknown>[] | Record<string, unknown> | null;
-    paystub_4?: Record<string, unknown>[] | Record<string, unknown> | null;
-  }[];
-  homes: {
-    type: string;
-    address_1: string;
-    city: string;
-    state: string;
-    zipcode: string;
-    total_value: number;
-    outstanding_debt: number;
-  }[];
-  vehicles: {
-    type: string;
-    car_make: string;
-    car_model: string;
-    car_year: string;
-    total_value: number;
-    remaining_debt: number;
-  }[];
-  benefits: {
-    type: string;
-    amount_monthly: number;
-    /** Per-benefit documentation array — required upload of award letter
-     *  / approval notice for each listed benefit. Replaces the old
-     *  family-wide `other_benefits` blob. */
-    benefit_documentation?: Record<string, unknown>[];
-  }[];
-}
-
 export type StepStatus = "complete" | "in_progress" | "not_started";
 
 export interface StepDef {
@@ -137,25 +76,6 @@ export function useApplicationSteps(yearId: number) {
     { revalidateOnFocus: false, dedupingInterval: 10000 }
   );
 
-  // Per-student packets for the year — needed because the
-  // liability-waiver fields moved off the application row onto this
-  // packet table. The sidenav reads the first packet's status to
-  // decide whether the waiver step is complete / in-progress.
-  // Returns `null` (not `[]`) until the fetch lands so we can tell
-  // "loading" from "none yet" downstream.
-  const { data: packetsData } = useSWR<
-    | {
-        registration_students_id?: number;
-        liability_waiver_status?: string | null;
-        liability_waiver_pandadoc_id?: string | null;
-      }[]
-    | null
-  >(
-    yearId ? `/api/student-registration?yearId=${yearId}` : null,
-    fetcher,
-    { revalidateOnFocus: false, dedupingInterval: 10000 }
-  );
-
   const loading = !familyData || !yearsData || !appsData;
 
   const schoolYear = useMemo(() => {
@@ -174,63 +94,13 @@ export function useApplicationSteps(yearId: number) {
     ).filter((a) => a.registration_school_years_id === yearId);
   }, [appsData, yearId]);
 
-  const familyComplete = useMemo(() => {
-    const parents = familyData?.parents ?? [];
-    if (parents.length === 0) return false;
-    return parents.every(
-      (p: {
-        first_name: string;
-        last_name: string;
-        email: string;
-        phone: string;
-        relationship: string;
-        address_line_1: string;
-        city: string;
-        state: string;
-        zipcode: string;
-      }) =>
-        p.first_name &&
-        p.last_name &&
-        p.email &&
-        p.phone &&
-        p.relationship &&
-        p.address_line_1 &&
-        p.city &&
-        p.state &&
-        p.zipcode
-    );
-  }, [familyData]);
-
   const familyStarted = (familyData?.parents ?? []).length > 0;
-
-  // Student Details completion — school-history fields only.
-  // NWEA, SUFS, and Transportation live on other steps and don't gate this one.
-  const studentsComplete = useMemo(() => {
-    if (yearApps.length === 0) return false;
-    return yearApps.every((app) => {
-      const a = app as Record<string, unknown>;
-      if (!a.current_previous_school) return false;
-      if (!a.last_grade_completed) return false;
-      if (!a.current_grade) return false;
-      if (!a.describe_student_strengths) return false;
-      if (!a.describe_student_opportunities_for_growth) return false;
-      return true;
-    });
-  }, [yearApps]);
 
   const studentsStarted = yearApps.length > 0;
 
-  // NWEA completion — admin-entered. Complete when every yearApp has
-  // nwea_testing_complete flipped on (or has test scores as a legacy signal).
-  // Started when at least one is scheduled or has scores. Doesn't block Submit.
-  const nweaComplete = useMemo(() => {
-    if (yearApps.length === 0) return false;
-    return yearApps.every((app) => {
-      const a = app as Record<string, unknown>;
-      return a.nwea_testing_complete === true || !!a.test_scores;
-    });
-  }, [yearApps]);
-
+  // NWEA "started" — true once at least one yearApp is scheduled or has scores.
+  // Drives the in-progress signal on the sidenav step. Admin flips
+  // `testing_completed` on the progress row for the "complete" state.
   const nweaStarted = useMemo(() => {
     return yearApps.some((app) => {
       const a = app as Record<string, unknown>;
@@ -238,186 +108,19 @@ export function useApplicationSteps(yearId: number) {
     });
   }, [yearApps]);
 
-  // SUFS completion — every yearApp must have a sufs_award_id entered (parent's
-  // 6-digit Step Up For Students Award ID). Admin-only sufs_type is separate.
-  const sufsComplete = useMemo(() => {
-    if (yearApps.length === 0) return false;
-    return yearApps.every((app) => {
-      const a = app as { sufs_award_id?: number };
-      return typeof a.sufs_award_id === "number" && a.sufs_award_id > 0;
-    });
-  }, [yearApps]);
+  // Side-nav avoids flashing grey-then-green by waiting for the
+  // scholarship row to settle alongside the core fetches.
+  const stepsLoading = loading || scholarshipLoading;
 
-  // Fetch full scholarship data (including sub-entities) for proper completion checks
-  const scholarshipId = scholarshipData?.id ?? null;
-  const { data: fullScholarship } = useSWR<FullScholarshipResponse>(
-    scholarshipId ? `/api/scholarship/${scholarshipId}` : null,
-    fetcher,
-    { revalidateOnFocus: false, dedupingInterval: 10000 }
-  );
-
-  // Full loading state — includes all scholarship waterfall steps settling
-  // Used by side nav to avoid showing grey circles that then flip to green
-  const stepsLoading = loading || scholarshipLoading || (!!scholarshipId && !fullScholarship);
-
-  const scholarshipComplete = useMemo(() => {
-    if (!fullScholarship?.opportunity_scholarship) return false;
-    const s = fullScholarship.opportunity_scholarship;
-
-    // Opted out of financial aid — counts as complete
-    if (s.isNotParticipating) return true;
-
-    // SNAP benefits path — complete if at least one document uploaded
-    if (s.isSNAPBenefits) return Array.isArray(s.snap_benefits) && s.snap_benefits.length > 0;
-
-    // Full application path — must have chosen to participate
-    if (!s.isOpportunityScholarship) return false;
-
-    const members = fullScholarship.contributing_members ?? [];
-    const homes = fullScholarship.homes ?? [];
-    const vehicles = fullScholarship.vehicles ?? [];
-    const benefits = fullScholarship.benefits ?? [];
-
-    // Helpers: a Xano file slot has a usable file when at least one
-    // metadata object inside it carries a canonical `path`. Both helpers
-    // accept either the legacy single-object shape or the new array shape
-    // — w2/paystub_*/benefit_documentation moved from object → array
-    // mid-cycle, so we have to handle both during the transition.
-    const hasFileObject = (f: unknown): boolean =>
-      !!f &&
-      typeof f === "object" &&
-      !Array.isArray(f) &&
-      typeof (f as { path?: unknown }).path === "string" &&
-      (f as { path: string }).path.length > 0;
-    const hasFile = (v: unknown): boolean => {
-      if (Array.isArray(v)) return v.some(hasFileObject);
-      return hasFileObject(v);
-    };
-
-    // Household size + per-benefit documentation. Each listed benefit
-    // must carry its own `benefit_documentation` upload — the old
-    // family-wide `other_benefits` blob is gone.
-    const incomeComplete =
-      s.household_adults > 0 &&
-      s.household_children > 0 &&
-      (!s.government_benefits ||
-        (benefits.length > 0 &&
-          benefits.every(
-            (b) =>
-              b.type &&
-              b.amount_monthly > 0 &&
-              hasFile(b.benefit_documentation)
-          )));
-
-    // Per-member income verification: one of W-2 or pay stubs selected,
-    // with the matching file slot(s) actually uploaded. Without this we
-    // can't gate sections that depend on a verifiable income.
-    const memberIncomeVerified = (m: (typeof members)[number]): boolean => {
-      if (m.isW2) return hasFile(m.w2);
-      if (m.isPayStubs) {
-        return (
-          hasFile(m.paystub_1) &&
-          hasFile(m.paystub_2) &&
-          hasFile(m.paystub_3) &&
-          hasFile(m.paystub_4)
-        );
-      }
-      return false;
-    };
-
-    // Contributing Members: identity + address + income amount + verified.
-    const membersComplete =
-      s.no_contributing_member ||
-      (members.length > 0 &&
-        members.every(
-          (m) =>
-            m.first_name &&
-            m.last_name &&
-            m.address_1 &&
-            m.city &&
-            m.state &&
-            m.zipcode &&
-            m.estimated_annual_income > 0 &&
-            memberIncomeVerified(m)
-        ));
-
-    // Home/Real Estate: all fields required per property (address_2 optional)
-    // Vehicles: all fields required per vehicle
-    const assetsComplete =
-      (homes.length === 0 ||
-        homes.every(
-          (h) =>
-            h.type &&
-            h.address_1 &&
-            h.city &&
-            h.state &&
-            h.zipcode &&
-            h.total_value > 0 &&
-            h.outstanding_debt >= 0
-        )) &&
-      (vehicles.length === 0 ||
-        vehicles.every(
-          (v) =>
-            v.type &&
-            v.car_make &&
-            v.car_model &&
-            v.car_year &&
-            v.total_value > 0 &&
-            v.remaining_debt >= 0
-        ));
-
-    // Family Contribution + Scholarship Advocacy Letter
-    const contributionComplete =
-      s.family_contribution_per_month > 0 &&
-      (s.scholarship_advocacy_letter ?? "").trim().length > 0;
-
-    return incomeComplete && membersComplete && assetsComplete && contributionComplete;
-  }, [fullScholarship]);
-
-  // Financial Aid (the sidenav step) combines SUFS selection + Opportunity Scholarship.
-  const financialAidComplete = scholarshipComplete && sufsComplete;
   const scholarshipStarted = !!(scholarshipData && scholarshipData.id);
   const financialAidStarted = scholarshipStarted || yearApps.some((app) => {
     const a = app as { sufs_award_id?: number };
     return typeof a.sufs_award_id === "number" && a.sufs_award_id > 0;
   });
 
-  const firstApp = yearApps[0] as
-    | {
-        registration_students_id?: number;
-        enrollment_agreement_status?: string | null;
-        enrollment_agreement_pandadoc_id?: string | null;
-        isSubmitted?: boolean;
-        isOffered?: boolean;
-        isAccepted?: boolean;
-      }
-    | undefined;
-
-  // Liability-waiver state lives on the per-student packet now.
-  // Match the first application's student to its packet, then read
-  // status + pandadoc_id from there.
-  const firstPacket = (() => {
-    if (!packetsData || !firstApp?.registration_students_id) return null;
-    return (
-      packetsData.find(
-        (p) => p?.registration_students_id === firstApp.registration_students_id
-      ) ?? null
-    );
-  })();
-
-  const liabilityComplete =
-    firstPacket?.liability_waiver_status === "completed";
-  const liabilitySent = !!firstPacket?.liability_waiver_pandadoc_id;
-  const enrollmentComplete =
-    firstApp?.enrollment_agreement_status === "completed";
-  const enrollmentSent = !!firstApp?.enrollment_agreement_pandadoc_id;
-
-  // A section is ONLY considered "done" when the explicit bool on the
-  // `registration_family_application_progress` row is true. The derived
-  // `*Complete` checks (based on field presence) are kept around purely to
-  // decide whether the in-progress state has been entered (see `*Started`
-  // below), so an unchecked-but-filled-out section doesn't prematurely flip
-  // the sidenav to green.
+  // A section is "done" only when the explicit bool on the
+  // `registration_family_application_progress` row is true — the
+  // bridge row is the source of truth, not field-presence inference.
   const familyDone = !!progressData?.family_completed;
   const studentsDone = !!progressData?.students_completed;
   const financialAidDone = !!progressData?.financial_aid_completed;
@@ -502,7 +205,6 @@ export function useApplicationSteps(yearId: number) {
       });
       return allSteps;
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       base,
       familyDone,
@@ -527,20 +229,10 @@ export function useApplicationSteps(yearId: number) {
   const postEnrollmentSigned = regProgressData?.isEnrollment === true;
   const registrationComplete = regProgressData?.isRegistration === true;
   const volunteerAcknowledged = regProgressData?.isVolunteerHours === true;
-  // Volunteer Hours is always navigable from the moment registration
-  // opens — there's no preceding gate that needs to clear before the
-  // family can read the acknowledgment. So the side nav always shows
-  // the amber edit affordance (instead of the muted "locked" numbered
-  // circle) until the parent confirms it.
-
-  // "Started" signals are independent of the completion bools so an
-  // in-progress section shows as yellow instead of gray.
-  const postEnrollmentStarted = !!regProgressData?.enrollment_agreement_pandadoc_id;
-  // Each subsequent step unlocks once the prior section's bool is true.
-  const registrationStarted = tuitionReviewed;
   // Force the "started" flag on so `getStatus` returns `in_progress`
   // (amber edit pencil) rather than `not_started` (muted numbered
-  // circle). The family can land on this step at any time.
+  // circle). The family can land on this step at any time without
+  // any preceding gate clearing.
   const volunteerStarted = true;
 
   // Billing is no longer a parent-facing step — admin creates the
@@ -596,7 +288,6 @@ export function useApplicationSteps(yearId: number) {
         href: `#`, // No page — triggers modal from overview
       },
     ],
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       base,
       tuitionReviewed,

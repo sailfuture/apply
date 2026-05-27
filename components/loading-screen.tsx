@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Spinner } from "@/components/ui/spinner";
+import { useIsClient } from "@/hooks/use-is-client";
 import { cn } from "@/lib/utils";
 
 /**
@@ -97,22 +98,29 @@ export function LoadingScreen({
   // we've reconciled with whatever progress earlier loading screens
   // logged this session. Avoids a hydration mismatch on the text
   // node.
-  const [mounted, setMounted] = useState(false);
-  const [index, setIndex] = useState(0);
-
-  useEffect(() => {
+  const mounted = useIsClient();
+  const [index, setIndex] = useState(() => {
+    if (typeof window === "undefined") return 0;
     const now = Date.now();
     const session = readSession();
-    let startedAt: number;
-    if (!session || now - session.lastTick > HEARTBEAT_STALE_MS) {
-      startedAt = now;
-    } else {
-      startedAt = session.startedAt;
-    }
-    const initial = computeIndex(now - startedAt, intervalMs, messages.length);
+    const startedAt =
+      !session || now - session.lastTick > HEARTBEAT_STALE_MS
+        ? now
+        : session.startedAt;
+    return computeIndex(now - startedAt, intervalMs, messages.length);
+  });
+
+  useEffect(() => {
+    // Record this mount in sessionStorage so a sibling LoadingScreen
+    // that takes over within HEARTBEAT_STALE_MS picks up the sequence
+    // mid-stream instead of restarting.
+    const now = Date.now();
+    const session = readSession();
+    const startedAt =
+      !session || now - session.lastTick > HEARTBEAT_STALE_MS
+        ? now
+        : session.startedAt;
     writeSession({ startedAt, lastTick: now });
-    setIndex(initial);
-    setMounted(true);
   }, [intervalMs, messages.length]);
 
   useEffect(() => {

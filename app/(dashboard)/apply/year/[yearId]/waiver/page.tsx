@@ -126,6 +126,10 @@ export default function WaiverPage() {
     if (applications.length === 0) return;
     // Auto-initiate signing if not completed and not already in a signing session
     if (!isCompleted && !signing.signingLoading && !signing.signingSession) {
+      // useRef.current is designed to be mutated; the rule misfires here.
+      // We use a ref instead of state because we don't want a re-render
+      // — just a one-shot guard against re-entry while signing.* settles.
+      // eslint-disable-next-line react-hooks/immutability
       autoInitRef.current = true;
       signing.handleSign("liability_waiver");
     }

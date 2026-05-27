@@ -390,6 +390,11 @@ function FileUpload(props: FileUploadProps) {
     return {
       getState: () => state,
       dispatch: (action) => {
+        // External-store reducer pattern from the upstream shadcn
+        // file-upload primitive. The closure is intentionally mutated
+        // so subscribers see the latest state; the React 19 lint rule
+        // doesn't understand the pattern.
+        // eslint-disable-next-line react-hooks/immutability
         state = reducer(state, action);
         for (const listener of listeners) {
           listener();
@@ -789,6 +794,11 @@ function FileUploadDropzone(props: FileUploadDropzoneProps) {
         dataTransfer.items.add(file);
       }
 
+      // HTMLInputElement.files is a settable property; programmatic
+      // assignment via DataTransfer is the supported way to inject
+      // files into a file input. The rule sees `context.inputRef`
+      // mutation but the actual target is the DOM node.
+      // eslint-disable-next-line react-hooks/immutability
       inputElement.files = dataTransfer.files;
       inputElement.dispatchEvent(new Event("change", { bubbles: true }));
     },
@@ -828,6 +838,11 @@ function FileUploadDropzone(props: FileUploadDropzoneProps) {
         dataTransfer.items.add(file);
       }
 
+      // HTMLInputElement.files is a settable property; programmatic
+      // assignment via DataTransfer is the supported way to inject
+      // files into a file input. The rule sees `context.inputRef`
+      // mutation but the actual target is the DOM node.
+      // eslint-disable-next-line react-hooks/immutability
       inputElement.files = dataTransfer.files;
       inputElement.dispatchEvent(new Event("change", { bubbles: true }));
     },

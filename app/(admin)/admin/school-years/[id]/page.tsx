@@ -1457,11 +1457,18 @@ function BracketHeader({
   const [editing, setEditing] = useState(false);
   const [min, setMin] = useState(minStr(bracket.income_min));
   const [max, setMax] = useState(maxStr(bracket.income_max));
+  const [prevMin, setPrevMin] = useState(bracket.income_min);
+  const [prevMax, setPrevMax] = useState(bracket.income_max);
 
-  useEffect(() => {
+  // Resync inputs when the canonical bracket values change from
+  // outside (e.g. SWR revalidation). Done during render to satisfy
+  // react-hooks/set-state-in-effect.
+  if (bracket.income_min !== prevMin || bracket.income_max !== prevMax) {
+    setPrevMin(bracket.income_min);
+    setPrevMax(bracket.income_max);
     setMin(minStr(bracket.income_min));
     setMax(maxStr(bracket.income_max));
-  }, [bracket.income_min, bracket.income_max]);
+  }
 
   // Reformat free-typed input with locale commas so the display
   // stays consistent ("26,822") while the user types. Returns "" if
@@ -1599,10 +1606,12 @@ function MatrixCell({
   // before SWR settles.
   const safeInitial = Number.isFinite(initial) ? initial : 0;
   const [value, setValue] = useState(String(safeInitial));
+  const [prevInitial, setPrevInitial] = useState(initial);
 
-  useEffect(() => {
+  if (initial !== prevInitial) {
+    setPrevInitial(initial);
     setValue(String(Number.isFinite(initial) ? initial : 0));
-  }, [initial]);
+  }
 
   function commit() {
     const n = value === "" ? 0 : Number(value);

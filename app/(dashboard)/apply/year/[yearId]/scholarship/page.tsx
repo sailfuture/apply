@@ -248,20 +248,25 @@ function LocalInput({
   onBlurSave: (val: string) => void;
 }) {
   const [local, setLocal] = useState(value);
-  const focusedRef = useRef(false);
+  const [prevValue, setPrevValue] = useState(value);
+  const [focused, setFocused] = useState(false);
 
-  useEffect(() => {
-    if (!focusedRef.current) setLocal(value);
-  }, [value]);
+  // Reset local mirror when the canonical prop changes from outside —
+  // but only while the user isn't typing. Set-state-during-render is
+  // the React-19-clean way to derive state from props.
+  if (value !== prevValue) {
+    setPrevValue(value);
+    if (!focused) setLocal(value);
+  }
 
   return (
     <Input
       {...props}
       value={local}
-      onFocus={() => { focusedRef.current = true; }}
+      onFocus={() => setFocused(true)}
       onChange={(e) => setLocal(e.target.value)}
       onBlur={(e) => {
-        focusedRef.current = false;
+        setFocused(false);
         onBlurSave(e.target.value);
       }}
     />
@@ -293,17 +298,25 @@ function CurrencyInput({
   const [display, setDisplay] = useState(
     value !== null ? formatCurrencyDisplay(value) : ""
   );
-  const focusedRef = useRef(false);
+  const [prevValue, setPrevValue] = useState(value);
+  const [focused, setFocused] = useState(false);
   // Local mirror of the canonical value so onBlur can commit either
   // a number (including 0) or null without re-deriving from
   // `display`. Display "$0" round-trips to 0; empty display
   // round-trips to null.
   const localValueRef = useRef<number | null>(value);
 
-  useEffect(() => {
-    if (!focusedRef.current) {
+  if (value !== prevValue) {
+    setPrevValue(value);
+    if (!focused) {
       setDisplay(value !== null ? formatCurrencyDisplay(value) : "");
     }
+  }
+
+  useEffect(() => {
+    // Mirror the canonical value into a ref so onBlur can commit the
+    // last-known number (or null) without depending on render-time
+    // state. Ref writes inside effects are lint-clean.
     localValueRef.current = value;
   }, [value]);
 
@@ -318,7 +331,7 @@ function CurrencyInput({
         value={display}
         placeholder={placeholder ?? "0"}
         disabled={disabled}
-        onFocus={() => { focusedRef.current = true; }}
+        onFocus={() => setFocused(true)}
         onChange={(e) => {
           const raw = e.target.value.replace(/[^0-9]/g, "");
           if (raw === "") {
@@ -336,7 +349,7 @@ function CurrencyInput({
           localValueRef.current = safe;
         }}
         onBlur={() => {
-          focusedRef.current = false;
+          setFocused(false);
           const next = localValueRef.current;
           setDisplay(next !== null ? formatCurrencyDisplay(next) : "");
           onChange(next);

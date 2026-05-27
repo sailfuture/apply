@@ -28,7 +28,6 @@ import type {
   XanoScholarshipHome,
   XanoScholarshipVehicle,
   XanoSchoolYear,
-  XanoStudentRegistration,
 } from "@/lib/xano";
 import { sumFamilyBillingTotals } from "@/lib/per-student-billing";
 import type jsPDF from "jspdf";
