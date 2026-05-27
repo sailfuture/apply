@@ -641,7 +641,16 @@ export default function ScholarshipPage() {
           const fullRes = await fetch(`/api/scholarship/${data.id}`);
           if (fullRes.ok) {
             const resp: FullScholarshipResponse = await fullRes.json();
-            const s = resp.opportunity_scholarship;
+            const s = resp?.opportunity_scholarship;
+            // Xano occasionally returns the wrapper without the joined
+            // `opportunity_scholarship` row (e.g. the scholarship_id
+            // points at a deleted row, or the addon expansion fails).
+            // Bail rather than crashing with
+            // `Cannot read properties of undefined (reading 'household_adults')`.
+            if (!s) {
+              setLoading(false);
+              return;
+            }
             setScholarship(s);
             populateForm(s);
             if (s.isNotParticipating) {

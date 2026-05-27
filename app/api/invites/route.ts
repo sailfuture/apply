@@ -1,10 +1,15 @@
-import { auth, clerkClient } from "@clerk/nextjs/server";
+import { auth, clerkClient, currentUser } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
 import { xano } from "@/lib/xano";
 
 export async function POST(req: NextRequest) {
   const { userId } = await auth();
   if (!userId) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const user = await currentUser();
+  if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -23,12 +28,43 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const currentParent = await xano.parents.findByClerkId(userId);
-  if (!currentParent) {
-    return NextResponse.json({ error: "Parent record not found" }, { status: 404 });
+  // Use Clerk publicMetadata.registration_families_id as the source of
+  // truth for "which family does this user belong to" — same pattern as
+  // /api/students and /api/applications. The previous parent->family
+  // lookup via findByParentId was failing for users whose Xano relation
+  // had drifted (Xano many-relation filter quirks, expansion glitches)
+  // even though the metadata pointer was correct. Fall back to the
+  // parent-lookup only if metadata is missing, so users created before
+  // the metadata stamping was added still work.
+  let familyId = user.publicMetadata.registration_families_id as
+    | number
+    | undefined;
+
+  if (!familyId) {
+    const currentParent = await xano.parents.findByClerkId(userId);
+    if (!currentParent) {
+      return NextResponse.json({ error: "Parent record not found" }, { status: 404 });
+    }
+    const fallback = await xano.families.findByParentId(currentParent.id);
+    if (!fallback) {
+      return NextResponse.json(
+        { error: "You must create a family first" },
+        { status: 400 }
+      );
+    }
+    familyId = fallback.id;
+    // Repair the metadata pointer so subsequent calls hit the fast path.
+    try {
+      const clerk = await clerkClient();
+      await clerk.users.updateUserMetadata(userId, {
+        publicMetadata: { registration_families_id: familyId },
+      });
+    } catch (err) {
+      console.error(`Failed to backfill registration_families_id for ${userId}:`, err);
+    }
   }
 
-  const family = await xano.families.findByParentId(currentParent.id);
+  const family = await xano.families.getById(familyId);
   if (!family) {
     return NextResponse.json(
       { error: "You must create a family first" },
