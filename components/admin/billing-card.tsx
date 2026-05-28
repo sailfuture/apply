@@ -94,6 +94,7 @@ interface BillingSnapshot {
     items: {
       data: Array<{
         id: string;
+        quantity?: number;
         price: {
           unit_amount: number | null;
           currency: string;
@@ -361,8 +362,13 @@ export function BillingCard({
   }
 
   const sub = data.subscription;
-  const item = sub.items?.data?.[0] ?? null;
-  const monthlyCents = item?.price?.unit_amount ?? 0;
+  // The family's monthly total is the sum of every per-student
+  // SubscriptionItem, not just the first. Reading only items.data[0]
+  // showed a single student's amount on multi-student families.
+  const monthlyCents = (sub.items?.data ?? []).reduce(
+    (total, it) => total + (it.price?.unit_amount ?? 0) * (it.quantity ?? 1),
+    0
+  );
   const monthlyDollars = monthlyCents / 100;
   const isCanceled = sub.status === "canceled";
   const cancelingAtPeriodEnd = sub.cancel_at_period_end;
