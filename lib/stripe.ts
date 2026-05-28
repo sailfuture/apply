@@ -475,17 +475,19 @@ export interface PerStudentSubscriptionResult {
  * Each student gets a dedicated one-off `Price` (created inline
  * via `stripe.prices.create`, not catalogued — see the design
  * thread in the conversation history for why ad-hoc beats a
- * shared catalog for our use case). Each Price gets a
- * `nickname` so admins scanning the Stripe Dashboard can tell
- * which family/student/year the line belongs to. The price's
- * `unit_amount` is the per-student monthly cents from the
- * caller's math.
+ * shared catalog for our use case). The price's `unit_amount` is
+ * the per-student monthly cents from the caller's math, and its
+ * `nickname` (`<Family> — <Student> — <Year>`) helps admins scan
+ * the Dashboard.
  *
- * `description` on the SubscriptionItem becomes the line text on
- * the hosted invoice the parent receives — set to "<Student> —
- * Monthly tuition" so the parent sees student names on their
- * receipt without admin/internal Family-Year decoration leaking
- * through.
+ * Student names land on the parent's invoice via the Price's
+ * inline `product_data.name` (`<Student> — Monthly Tuition &
+ * Fees`). Stripe derives each invoice line's text from the
+ * product name — subscription items have no description field —
+ * so a product per student is the only way to label the lines.
+ * This mints a Stripe Product per student (and another on each
+ * re-price), the same accumulation tradeoff we already accept for
+ * one-off Prices.
  *
  * Side-effects on each student row are the caller's job: take the
  * returned `items` map and persist each
@@ -498,7 +500,6 @@ export async function createSubscriptionWithStudentItems(
   input: CreatePerStudentSubscriptionInput
 ): Promise<PerStudentSubscriptionResult> {
   const stripe = getStripeClient();
-  const productId = getTuitionProductId();
 
   // Same trial-end derivation as the legacy single-item flow —
   // mirrored exactly so the two paths behave the same on dates.
@@ -532,7 +533,14 @@ export async function createSubscriptionWithStudentItems(
     const price = await stripe.prices.create({
       currency: "usd",
       unit_amount: s.monthlyCents,
-      product: productId,
+      product_data: {
+        name: `${s.studentName} — Monthly Tuition & Fees`,
+        metadata: {
+          family_id: String(input.familyId),
+          year_id: String(input.yearId),
+          student_id: String(s.studentId),
+        },
+      },
       recurring: { interval: "month" },
       nickname: `${input.familyName} — ${s.studentName} — ${input.yearName}`,
       metadata: {
@@ -635,12 +643,18 @@ export async function addStudentItemToSubscription(
   input: AddStudentItemInput
 ): Promise<AddStudentItemResult> {
   const stripe = getStripeClient();
-  const productId = getTuitionProductId();
 
   const price = await stripe.prices.create({
     currency: "usd",
     unit_amount: input.monthlyCents,
-    product: productId,
+    product_data: {
+      name: `${input.studentName} — Monthly Tuition & Fees`,
+      metadata: {
+        family_id: String(input.familyId),
+        year_id: String(input.yearId),
+        student_id: String(input.studentId),
+      },
+    },
     recurring: { interval: "month" },
     nickname: `${input.familyName} — ${input.studentName} — ${input.yearName}`,
     metadata: {
@@ -710,12 +724,18 @@ export async function updateStudentItemAmount(
   input: UpdateStudentItemInput
 ): Promise<UpdateStudentItemResult> {
   const stripe = getStripeClient();
-  const productId = getTuitionProductId();
 
   const price = await stripe.prices.create({
     currency: "usd",
     unit_amount: input.monthlyCents,
-    product: productId,
+    product_data: {
+      name: `${input.studentName} — Monthly Tuition & Fees`,
+      metadata: {
+        family_id: String(input.familyId),
+        year_id: String(input.yearId),
+        student_id: String(input.studentId),
+      },
+    },
     recurring: { interval: "month" },
     nickname: `${input.familyName} — ${input.studentName} — ${input.yearName}`,
     metadata: {

@@ -220,10 +220,10 @@ export async function startMonthlyBilling({
 
   // Build per-student item input for the Stripe helper. Each item
   // becomes one SubscriptionItem with a one-off Price nicknamed
-  // `<Family> — <Student> — <Year>` for Dashboard scanability and
-  // a `description` of `<Student> — Monthly tuition` for the
-  // parent's invoice line. Monthly amount sourced from the
-  // application row.
+  // `<Family> — <Student> — <Year>` for Dashboard scanability; the
+  // Price's product is named `<Student> — Monthly Tuition & Fees`
+  // so the parent's invoice line shows the student. Monthly amount
+  // sourced from the application row.
   const studentItems = activeApps.map((app) => {
     const sid = Number(app.registration_students_id);
     const student = familyStudentById.get(sid);
