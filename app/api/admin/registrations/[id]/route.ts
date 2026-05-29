@@ -222,6 +222,10 @@ export async function GET(
             : `Student #${studentId}`,
           student_date_of_birth: student?.date_of_birth ?? "",
           student_grade: app.current_grade ?? "",
+          // Parent-entered "Current / previous school" from the
+          // application — surfaced so the Request-records dialog can
+          // pre-fill the recipient school (matches the enrolled page).
+          student_previous_school: app.current_previous_school ?? "",
           packet,
           // Evergreen document uploads live on the *student* row as
           // arrays of file blobs (not on the per-year packet — those
@@ -507,6 +511,10 @@ export interface AdminFamilyRegistrationStudentRow {
   student_full_name: string;
   student_date_of_birth: string;
   student_grade: string;
+  /** Parent-entered "Current / previous school" from the application.
+   *  Pre-fills the Request-records dialog; empty for residential /
+   *  re-application rows that seed it blank. */
+  student_previous_school: string;
   /** Full packet object; null when the parent hasn't started one yet. */
   packet: XanoStudentRegistration | null;
   /** Evergreen document arrays from the student row (not the packet).

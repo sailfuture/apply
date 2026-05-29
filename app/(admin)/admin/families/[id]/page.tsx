@@ -560,11 +560,13 @@ export default function FamilyDetailPage() {
       </aside>
 
       <main className="flex-1 min-w-0 space-y-6">
-        {/* Page header — family name + year on a single line, with the
+        {/* Page header — family name + year stacked on top, with the
             primary admin actions (Return Application / Approve) on
-            the right. Action buttons live up here so admins don't
-            have to scroll to act. */}
-        <div className="flex items-start justify-between gap-4">
+            their own full-width row beneath so the name gets the full
+            width and the buttons sit just above the content below.
+            Action buttons live up here so admins don't have to scroll
+            to act. */}
+        <div className="space-y-3">
           <div className="min-w-0">
             <h1 className="text-2xl font-semibold truncate">
               {family.family_name || `Family #${family.id}`}
@@ -583,7 +585,7 @@ export default function FamilyDetailPage() {
               primary action), Notes on the far right as the
               most-clicked utility. All four only render when a year
               is selected — they're year-scoped. */}
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex flex-wrap items-center gap-2">
             {yearId ? (
               <ArchiveApplicationButton
                 familyId={Number(familyId)}

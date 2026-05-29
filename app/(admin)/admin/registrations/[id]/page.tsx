@@ -478,7 +478,11 @@ export default function FamilyRegistrationDetailPage() {
       </aside>
 
       <main className="flex-1 min-w-0 space-y-6">
-        <div className="flex items-start justify-between gap-4">
+        {/* Page header — family name + parent details stacked on top,
+            with the action buttons on their own full-width row beneath
+            so the name gets the full width and the buttons sit just
+            above the billing section. */}
+        <div className="space-y-3">
           <div className="min-w-0">
             <h1 className="text-2xl font-semibold truncate">
               {familyName}
@@ -497,7 +501,7 @@ export default function FamilyRegistrationDetailPage() {
               </p>
             ) : null}
           </div>
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex flex-wrap items-center gap-2">
             {/* Header action row — Archive on the far left so admin
                 reaches for it intentionally (not as muscle memory),
                 cross-surface jumps in the middle, Notes on the far
@@ -2740,6 +2744,7 @@ function StudentPacketBlock({
             defaults={{
               studentName: row.student_full_name,
               dateOfBirth: row.student_date_of_birth,
+              previousSchool: row.student_previous_school,
               academicYear: yearName,
             }}
             familyId={familyId}
