@@ -160,10 +160,8 @@ export default function AddStudentRegistrationPage() {
     if (!nonEmpty(app.describe_student_strengths)) return false;
     if (!nonEmpty(app.describe_student_opportunities_for_growth)) return false;
     if (app.is_bus_transportation && !nonEmpty(app.bus_stop)) return false;
-    // SUFS Award ID required (the Opportunity Scholarship is skipped for
-    // these externally-funded placements).
-    if (!((app.sufs_award_id ?? 0) > 0)) return false;
-    // NWEA initial testing must be scheduled.
+    // NWEA initial testing must be scheduled. SUFS Award ID is optional —
+    // the state may not have issued it by the time a placement arrives.
     if (!(app.nwea_testing_scheduled || app.nwea_testing_complete)) return false;
     return true;
   }, [app]);
@@ -451,16 +449,16 @@ export default function AddStudentRegistrationPage() {
           </Button>
           <Field>
             <FieldLabel className="text-xs">
-              SUFS Award ID <span className="text-red-400">*</span>
+              SUFS Award ID{" "}
+              <span className="font-normal text-muted-foreground">
+                (optional)
+              </span>
             </FieldLabel>
             <Input
               inputMode="numeric"
               pattern="[0-9]*"
               maxLength={9}
               placeholder="000000000"
-              className={
-                (app.sufs_award_id ?? 0) > 0 ? "" : "border-2 border-red-400"
-              }
               value={app.sufs_award_id || ""}
               onChange={(e) => {
                 const digits = e.target.value.replace(/\D/g, "").slice(0, 9);
