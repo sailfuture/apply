@@ -14,8 +14,18 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ArrowLeft, Clock } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { ArrowLeft, Calendar, Clock, ExternalLink } from "lucide-react";
 import { ResidentialPacketForm } from "./residential-packet-form";
+
+const STEP_UP_URL = "https://www.stepupforstudents.org/scholarships/logins/";
+const NWEA_BOOKING_URL = "https://calendar.app.google/FsBaobZrsRToxuGq9";
 
 /**
  * Per-student mid-year registration flow for residential / foster
@@ -26,10 +36,11 @@ import { ResidentialPacketForm } from "./residential-packet-form";
  *
  * Scoped to ONE student's application — it never touches the family's
  * year-level progress rows, so completing it can't disturb the rest of
- * the family's enrolled state. Captures the same Student Details the
- * apply wizard collects (school history, strengths/growth, transport),
- * then submits the application for admin review. No financial aid, no
- * tuition — funding for these placements is handled externally.
+ * the family's enrolled state. Captures Student Details (school history,
+ * strengths/growth, transport), the Step Up For Students (SUFS) Award ID,
+ * and NWEA initial-testing scheduling, then submits the application for
+ * admin review. The Opportunity Scholarship and tuition / enrollment-
+ * signing steps are skipped — funding for these placements is external.
  */
 interface AppRow {
   id: number;
@@ -42,6 +53,9 @@ interface AppRow {
   describe_student_opportunities_for_growth: string;
   is_bus_transportation: boolean;
   bus_stop: string;
+  sufs_award_id?: number;
+  nwea_testing_scheduled?: boolean;
+  nwea_testing_complete?: boolean;
   isSubmitted: boolean;
   isAccepted: boolean;
   is_residential_addition?: boolean;
@@ -71,6 +85,7 @@ export default function AddStudentRegistrationPage() {
   const [busStops, setBusStops] = useState<BusStop[]>([]);
   const [saving, setSaving] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [scheduleDialogOpen, setScheduleDialogOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -110,6 +125,9 @@ export default function AddStudentRegistrationPage() {
             appData.describe_student_opportunities_for_growth ?? "",
           is_bus_transportation: !!appData.is_bus_transportation,
           bus_stop: appData.bus_stop ?? "",
+          sufs_award_id: appData.sufs_award_id ?? 0,
+          nwea_testing_scheduled: !!appData.nwea_testing_scheduled,
+          nwea_testing_complete: !!appData.nwea_testing_complete,
         });
         setStudent(
           students.find(
@@ -142,6 +160,11 @@ export default function AddStudentRegistrationPage() {
     if (!nonEmpty(app.describe_student_strengths)) return false;
     if (!nonEmpty(app.describe_student_opportunities_for_growth)) return false;
     if (app.is_bus_transportation && !nonEmpty(app.bus_stop)) return false;
+    // SUFS Award ID required (the Opportunity Scholarship is skipped for
+    // these externally-funded placements).
+    if (!((app.sufs_award_id ?? 0) > 0)) return false;
+    // NWEA initial testing must be scheduled.
+    if (!(app.nwea_testing_scheduled || app.nwea_testing_complete)) return false;
     return true;
   }, [app]);
 
@@ -159,6 +182,9 @@ export default function AddStudentRegistrationPage() {
           app.describe_student_opportunities_for_growth,
         is_bus_transportation: app.is_bus_transportation,
         bus_stop: app.is_bus_transportation ? app.bus_stop : "",
+        sufs_award_id: app.sufs_award_id ?? 0,
+        nwea_testing_scheduled: !!app.nwea_testing_scheduled,
+        nwea_testing_complete: !!app.nwea_testing_complete,
       }),
     });
     return res.ok;
@@ -261,6 +287,10 @@ export default function AddStudentRegistrationPage() {
       </div>
     );
   }
+
+  const nweaScheduled = !!(
+    app.nwea_testing_scheduled || app.nwea_testing_complete
+  );
 
   return (
     <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
@@ -393,6 +423,108 @@ export default function AddStudentRegistrationPage() {
         </CardContent>
       </Card>
 
+      {/* Step Up For Students (SUFS) — capture the per-student Award ID.
+          The Opportunity Scholarship is intentionally skipped for these
+          externally-funded placements. */}
+      <Card className="overflow-hidden gap-0 py-0">
+        <CardHeader className="py-3 !pb-3 border-b">
+          <CardTitle className="text-base">
+            Step Up For Students (SUFS) Award
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3 py-5 bg-white dark:bg-background">
+          <p className="text-sm text-muted-foreground">
+            If this student has a Step Up For Students scholarship, enter their
+            9-digit Award ID. Don&rsquo;t have one yet? Apply through Step Up
+            below.
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            className="bg-white"
+            onClick={() =>
+              window.open(STEP_UP_URL, "_blank", "noopener,noreferrer")
+            }
+          >
+            <ExternalLink className="size-4 mr-1.5 shrink-0" />
+            Apply for the Step Up for Students Scholarship
+          </Button>
+          <Field>
+            <FieldLabel className="text-xs">
+              SUFS Award ID <span className="text-red-400">*</span>
+            </FieldLabel>
+            <Input
+              inputMode="numeric"
+              pattern="[0-9]*"
+              maxLength={9}
+              placeholder="000000000"
+              className={
+                (app.sufs_award_id ?? 0) > 0 ? "" : "border-2 border-red-400"
+              }
+              value={app.sufs_award_id || ""}
+              onChange={(e) => {
+                const digits = e.target.value.replace(/\D/g, "").slice(0, 9);
+                setField("sufs_award_id", digits === "" ? 0 : Number(digits));
+              }}
+            />
+            <p className="text-xs text-muted-foreground mt-1.5">
+              Enter the 9-digit Award ID from your Step Up For Students parent
+              portal (under your student&rsquo;s scholarship details).
+            </p>
+          </Field>
+        </CardContent>
+      </Card>
+
+      {/* Initial Testing (NWEA) — standard scheduling flow: book a slot via
+          the Google Calendar dialog, then confirm. */}
+      <Card className="overflow-hidden gap-0 py-0">
+        <CardHeader className="py-3 !pb-3 border-b">
+          <CardTitle className="text-base">Initial Testing (NWEA)</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4 py-5 bg-white dark:bg-background">
+          <p className="text-sm text-muted-foreground">
+            All applying students complete an NWEA screening in Reading and Math
+            at SailFuture Academy (about 60&ndash;90 minutes total). Schedule a
+            time, then confirm below.
+          </p>
+          <Button
+            type="button"
+            className={`w-full ${
+              nweaScheduled
+                ? "bg-muted text-muted-foreground hover:bg-muted cursor-default"
+                : ""
+            }`}
+            disabled={nweaScheduled}
+            onClick={() => setScheduleDialogOpen(true)}
+          >
+            <Calendar className="size-4 mr-1.5 shrink-0" />
+            {nweaScheduled
+              ? "NWEA Testing Scheduled"
+              : "Click to Schedule NWEA Testing"}
+          </Button>
+          <label
+            className={`flex items-start gap-3 cursor-pointer rounded-md border px-4 py-3 transition-colors ${
+              nweaScheduled ? "border-input" : "border-2 border-red-400"
+            }`}
+          >
+            <input
+              type="checkbox"
+              className="size-5 mt-0.5 cursor-pointer rounded accent-primary"
+              checked={nweaScheduled}
+              onChange={(e) => {
+                const v = e.target.checked;
+                setField("nwea_testing_scheduled", v);
+                setField("nwea_testing_complete", v);
+              }}
+            />
+            <span className="text-sm font-medium">
+              Yes, I&rsquo;ve scheduled NWEA testing for my child at SailFuture
+              Academy.
+            </span>
+          </label>
+        </CardContent>
+      </Card>
+
       <div className="flex items-center justify-end gap-3">
         <Button variant="outline" onClick={handleSave} disabled={saving || submitting}>
           {saving ? "Saving…" : "Save for Later"}
@@ -401,6 +533,26 @@ export default function AddStudentRegistrationPage() {
           {submitting ? "Submitting…" : "Submit for Review"}
         </Button>
       </div>
+
+      {/* NWEA scheduling — embeds the Google Calendar booking flow. */}
+      <Dialog open={scheduleDialogOpen} onOpenChange={setScheduleDialogOpen}>
+        <DialogContent className="sm:max-w-[95vw] w-[95vw] h-[90vh] p-0 flex flex-col overflow-hidden">
+          <DialogHeader className="px-6 pt-6 pb-2 shrink-0">
+            <DialogTitle>Schedule NWEA Testing</DialogTitle>
+            <DialogDescription>
+              Select a date and time to complete NWEA testing at SailFuture
+              Academy.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex-1 m-6 mt-0 overflow-hidden rounded-lg border">
+            <iframe
+              src={NWEA_BOOKING_URL}
+              className="h-full w-full border-0"
+              title="Schedule NWEA Testing"
+            />
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
