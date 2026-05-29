@@ -24,6 +24,10 @@ interface Props {
   /** Optional content (year picker, action button) shown right-aligned next
    *  to the title block on wider screens. */
   rightSlot?: React.ReactNode;
+  /** Optional action rendered on the Back-button row, right-aligned opposite
+   *  the Back button — e.g. a "Request a change" button anchored to the
+   *  page's top-right. Wraps below the Back button on narrow screens. */
+  backRowAction?: React.ReactNode;
 }
 
 /**
@@ -36,7 +40,7 @@ interface Props {
  *   Breadcrumb · Year · Section            [optional rightSlot]
  *   Title (h1)
  *   Subtitle paragraph
- *   [← Back to Dashboard]   (white-bg outline button)
+ *   [← Back to Dashboard]        [optional backRowAction]
  *   ─────────────────────── (border-b divider)
  */
 export function DashboardPageHeader({
@@ -46,6 +50,7 @@ export function DashboardPageHeader({
   title,
   subtitle,
   rightSlot,
+  backRowAction,
 }: Props) {
   return (
     <div className="border-b pb-4 space-y-3">
@@ -59,17 +64,15 @@ export function DashboardPageHeader({
         </div>
         {rightSlot ? <div className="shrink-0">{rightSlot}</div> : null}
       </div>
-      <Button
-        asChild
-        variant="outline"
-        size="sm"
-        className="bg-white self-start"
-      >
-        <Link href={backHref}>
-          <ChevronLeft className="size-4 mr-1.5" />
-          {backLabel}
-        </Link>
-      </Button>
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <Button asChild variant="outline" size="sm" className="bg-white">
+          <Link href={backHref}>
+            <ChevronLeft className="size-4 mr-1.5" />
+            {backLabel}
+          </Link>
+        </Button>
+        {backRowAction ? backRowAction : null}
+      </div>
     </div>
   );
 }

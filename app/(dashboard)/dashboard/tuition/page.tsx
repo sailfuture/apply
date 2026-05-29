@@ -305,6 +305,16 @@ export default function DashboardTuitionPage() {
         subtitle={`Per-student breakdown of tuition, scholarships, and fees for the ${yearName} school year. Same breakdown you reviewed and signed during registration.`}
       />
 
+      {/* Billing summary + 12-month invoice schedule — surfaced ABOVE the
+          per-student breakdown so the family sees what they owe and how to
+          pay it first, with the line-item breakdown below for reference.
+          Mirrors the admin Billing schedule view; reads from
+          /api/billing/schedule (gated to the authenticated parent's own
+          family). "Manage billing" opens the Stripe Customer Portal where
+          the parent can save a payment method, opt into autopay, and
+          download invoices. */}
+      {yearId ? <BillingScheduleSection yearId={yearId} /> : null}
+
       {loading ? (
         <Skeleton className="h-96 w-full rounded-xl" />
       ) : studentRows.length === 0 ? (
@@ -540,14 +550,6 @@ export default function DashboardTuitionPage() {
           </div>
         </div>
       )}
-
-      {/* 12-month invoice schedule — mirrors the admin Billing
-          schedule view so parent + admin see the same shape. Reads
-          from /api/billing/schedule (gated to the authenticated
-          parent's own family). The "Manage billing" button opens
-          the Stripe Customer Portal where the parent can save a
-          payment method, opt into autopay, and download invoices. */}
-      {yearId ? <BillingScheduleSection yearId={yearId} /> : null}
 
       <p className="text-xs text-muted-foreground text-center pt-4 border-t">
         For questions about your account, please{" "}

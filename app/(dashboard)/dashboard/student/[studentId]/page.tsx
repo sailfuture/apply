@@ -195,18 +195,17 @@ export default function StudentDetailPage() {
     );
   }, [yearId, yearsData]);
 
-  if (!student) {
-    return (
-      <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
-        <div className="border-b pb-4 space-y-2">
-          <Skeleton className="h-3 w-32" />
-          <Skeleton className="h-7 w-64" />
-          <Skeleton className="h-4 w-48" />
-        </div>
-        <Skeleton className="h-24 w-full rounded-xl" />
-        <Skeleton className="h-64 w-full rounded-xl" />
-      </div>
-    );
+  // Skeleton the whole page until the student record, the year's
+  // application row, AND the registration packet have all loaded. Gating
+  // on all three — rather than rendering each section the moment its own
+  // fetch resolves — stops the page popping in piecemeal (personal info
+  // first, then health/pickup/apparel a beat later as the packet arrives).
+  // `packet` is `undefined` only while in flight; it settles to `null` for
+  // students with no packet, so this still resolves for them.
+  const loading =
+    !studentsData || !applicationsData || packet === undefined || !student;
+  if (loading) {
+    return <StudentDetailSkeleton />;
   }
 
   const dashboardHref = yearId ? `/dashboard?yearId=${yearId}` : "/dashboard";
@@ -225,6 +224,17 @@ export default function StudentDetailPage() {
           { label: `${student.first_name} ${student.last_name}` },
         ]}
         title={`${student.first_name} ${student.last_name}`}
+        backRowAction={
+          <Button asChild variant="outline" size="sm" className="bg-white">
+            <a
+              href={`mailto:tward@sailfuture.org?subject=${encodeURIComponent(
+                `Update request — ${student.first_name} ${student.last_name}`
+              )}`}
+            >
+              Request a change to this student
+            </a>
+          </Button>
+        }
       />
 
       {/* Student info table */}
@@ -399,16 +409,62 @@ export default function StudentDetailPage() {
         </div>
       </div>
 
-      <div className="text-center pt-4">
-        <Button asChild variant="outline" className="bg-white">
-          <a
-            href={`mailto:tward@sailfuture.org?subject=${encodeURIComponent(
-              `Update request — ${student.first_name} ${student.last_name}`
-            )}`}
-          >
-            Request a change to this student
-          </a>
-        </Button>
+    </div>
+  );
+}
+
+/**
+ * Full-page loading state for the student detail page. Mirrors the real
+ * layout — header (breadcrumb + title, then the Back / request-change row)
+ * followed by the stacked detail sections and document tables — so the page
+ * appears once, fully formed, instead of section-by-section as each fetch
+ * resolves.
+ */
+function StudentDetailSkeleton() {
+  return (
+    <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
+      {/* Header — matches DashboardPageHeader: breadcrumb + title above a
+          row with the Back button (left) and request-change action (right). */}
+      <div className="border-b pb-4 space-y-3">
+        <div className="space-y-2">
+          <Skeleton className="h-3 w-48" />
+          <Skeleton className="h-7 w-56" />
+        </div>
+        <div className="flex items-center justify-between gap-3">
+          <Skeleton className="h-8 w-36 rounded-md" />
+          <Skeleton className="h-8 w-52 rounded-md" />
+        </div>
+      </div>
+
+      {/* Detail sections — h2 label over a bordered table card. Row counts
+          loosely track the real sections (personal, academic, health,
+          pickup/apparel) plus the two document tables. */}
+      <SectionSkeleton rows={3} />
+      <SectionSkeleton rows={6} />
+      <SectionSkeleton rows={5} />
+      <SectionSkeleton rows={4} />
+      <SectionSkeleton rows={4} />
+    </div>
+  );
+}
+
+/** One labelled table-card skeleton block used by StudentDetailSkeleton. */
+function SectionSkeleton({ rows }: { rows: number }) {
+  return (
+    <div>
+      <Skeleton className="h-4 w-40 mb-3" />
+      <div className="rounded-xl bg-background p-1.5 shadow-sm border">
+        <div className="overflow-hidden rounded-lg border divide-y">
+          {Array.from({ length: rows }).map((_, i) => (
+            <div
+              key={i}
+              className="flex items-center justify-between gap-4 px-4 py-3"
+            >
+              <Skeleton className="h-3 w-40" />
+              <Skeleton className="h-3 w-24" />
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
