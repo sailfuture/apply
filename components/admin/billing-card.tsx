@@ -385,100 +385,99 @@ export function BillingCard({
   return (
     <div className="rounded-md border bg-muted/10 p-4 space-y-5">
       {/* Header — status pill + amount + next invoice */}
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div className="space-y-1.5">
-          <div className="flex items-center gap-2">
-            <p className="text-xs uppercase tracking-wider text-muted-foreground font-medium">
-              Subscription
-            </p>
-            <StatusPill label={data.statusLabel} />
-            {cancelingAtPeriodEnd && !isCanceled ? (
-              <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 text-amber-800 ring-1 ring-amber-200 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide">
-                Cancels {nextInvoiceDate}
-              </span>
-            ) : null}
-          </div>
-          <p className="text-lg font-semibold">
-            ${monthlyDollars.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} / month
+      <div className="space-y-1.5">
+        <div className="flex items-center gap-2">
+          <p className="text-xs uppercase tracking-wider text-muted-foreground font-medium">
+            Subscription
           </p>
-          <p className="text-xs text-muted-foreground">
-            {sub.status === "trialing"
-              ? `First invoice ${nextInvoiceDate}`
-              : isCanceled
-                ? "Subscription canceled"
-                : `Next invoice ${nextInvoiceDate}`}
-          </p>
+          <StatusPill label={data.statusLabel} />
+          {cancelingAtPeriodEnd && !isCanceled ? (
+            <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 text-amber-800 ring-1 ring-amber-200 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide">
+              Cancels {nextInvoiceDate}
+            </span>
+          ) : null}
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button asChild variant="outline" size="sm" className="bg-white">
-            <Link href={paymentScheduleHref}>
-              <Calendar className="size-3.5 mr-1.5" aria-hidden="true" />
-              View payment schedule
-            </Link>
-          </Button>
-          <Button asChild variant="outline" size="sm" className="bg-white">
-            <a href={stripeDashboardUrl} target="_blank" rel="noreferrer">
-              <ExternalLink className="size-3.5 mr-1.5" aria-hidden="true" />
-              View in Stripe
-            </a>
-          </Button>
-        </div>
+        <p className="text-lg font-semibold">
+          ${monthlyDollars.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} / month
+        </p>
+        <p className="text-xs text-muted-foreground">
+          {sub.status === "trialing"
+            ? `First invoice ${nextInvoiceDate}`
+            : isCanceled
+              ? "Subscription canceled"
+              : `Next invoice ${nextInvoiceDate}`}
+        </p>
       </div>
 
-      {/* Actions — laid out in a flex row, hidden when canceled.
-          Note: the legacy "Update amount" button is gone — per-student
-          `monthly_amount` is the source of truth now and is edited
-          on the Scholarship Determination card. Changes there
-          re-price the matching Stripe SubscriptionItem automatically
-          via the per-student PATCH route. */}
-      {!isCanceled ? (
-        <div className="flex flex-wrap gap-2">
-          {data.lastPaidInvoice ? (
-            <Button
-              variant="outline"
-              size="sm"
-              className="bg-white"
-              disabled={pending !== null}
-              onClick={() => setConfirmRefund(true)}
-            >
-              <RefreshCw className="size-3.5 mr-1.5" aria-hidden="true" />
-              Refund last payment
-            </Button>
-          ) : null}
-          {cancelingAtPeriodEnd ? (
-            // Undo the pending cancellation. Only valid while the
-            // subscription is still alive (we're inside the grace
-            // window before period_end). Once Stripe deletes the
-            // subscription, the row's stripe_subscription_id clears
-            // and the empty state takes over.
-            <Button
-              variant="outline"
-              size="sm"
-              className="bg-white"
-              disabled={pending !== null}
-              onClick={() => runAction("uncancel")}
-            >
-              {pending === "uncancel" ? (
-                <Loader2 className="size-3.5 mr-1.5 animate-spin" aria-hidden="true" />
-              ) : (
+      {/* Actions — every button on one row, inline with Cancel at period
+          end. The View links always render (still useful after the
+          subscription is canceled); the refund / undo / cancel actions
+          only apply while it's live, so they stay gated on !isCanceled.
+          (The legacy "Update amount" button is gone — per-student
+          `monthly_amount` is edited on the Scholarship Determination
+          card; see the file docblock.) */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Button asChild variant="outline" size="sm" className="bg-white">
+          <Link href={paymentScheduleHref}>
+            <Calendar className="size-3.5 mr-1.5" aria-hidden="true" />
+            View payment schedule
+          </Link>
+        </Button>
+        <Button asChild variant="outline" size="sm" className="bg-white">
+          <a href={stripeDashboardUrl} target="_blank" rel="noreferrer">
+            <ExternalLink className="size-3.5 mr-1.5" aria-hidden="true" />
+            View in Stripe
+          </a>
+        </Button>
+        {!isCanceled ? (
+          <>
+            {data.lastPaidInvoice ? (
+              <Button
+                variant="outline"
+                size="sm"
+                className="bg-white"
+                disabled={pending !== null}
+                onClick={() => setConfirmRefund(true)}
+              >
                 <RefreshCw className="size-3.5 mr-1.5" aria-hidden="true" />
-              )}
-              Undo cancellation
-            </Button>
-          ) : (
-            <Button
-              variant="outline"
-              size="sm"
-              className="bg-white text-red-700 hover:text-red-800 hover:bg-red-50"
-              disabled={pending !== null}
-              onClick={() => setConfirmCancel(true)}
-            >
-              <XCircle className="size-3.5 mr-1.5" aria-hidden="true" />
-              Cancel at period end
-            </Button>
-          )}
-        </div>
-      ) : null}
+                Refund last payment
+              </Button>
+            ) : null}
+            {cancelingAtPeriodEnd ? (
+              // Undo the pending cancellation. Only valid while the
+              // subscription is still alive (we're inside the grace
+              // window before period_end). Once Stripe deletes the
+              // subscription, the row's stripe_subscription_id clears
+              // and the empty state takes over.
+              <Button
+                variant="outline"
+                size="sm"
+                className="bg-white"
+                disabled={pending !== null}
+                onClick={() => runAction("uncancel")}
+              >
+                {pending === "uncancel" ? (
+                  <Loader2 className="size-3.5 mr-1.5 animate-spin" aria-hidden="true" />
+                ) : (
+                  <RefreshCw className="size-3.5 mr-1.5" aria-hidden="true" />
+                )}
+                Undo cancellation
+              </Button>
+            ) : (
+              <Button
+                variant="outline"
+                size="sm"
+                className="bg-white text-red-700 hover:text-red-800 hover:bg-red-50"
+                disabled={pending !== null}
+                onClick={() => setConfirmCancel(true)}
+              >
+                <XCircle className="size-3.5 mr-1.5" aria-hidden="true" />
+                Cancel at period end
+              </Button>
+            )}
+          </>
+        ) : null}
+      </div>
 
       {/* Invoice history table removed — admins use the per-family
           payment schedule page (`/admin/families/[id]/billing`) for
