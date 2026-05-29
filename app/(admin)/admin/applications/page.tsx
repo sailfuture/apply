@@ -170,6 +170,23 @@ export default function ApplicationsPage() {
       ),
     },
     {
+      key: "student_names",
+      header: "Students",
+      sortable: true,
+      searchable: true,
+      width: "w-[24%]",
+      render: (row) => (
+        <span className="inline-flex items-center gap-2 min-w-0 max-w-full">
+          <span className="text-xs tabular-nums text-muted-foreground shrink-0">
+            {row.student_count}
+          </span>
+          <span className="block truncate" title={row.student_names}>
+            {row.student_names || "—"}
+          </span>
+        </span>
+      ),
+    },
+    {
       key: "primary_email",
       header: "Primary Contact",
       sortable: true,
@@ -189,23 +206,6 @@ export default function ApplicationsPage() {
       render: (row) => (
         <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
           {row.flow_type === "reapply" ? "Reapply" : "New"}
-        </span>
-      ),
-    },
-    {
-      key: "student_names",
-      header: "Students",
-      sortable: true,
-      searchable: true,
-      width: "w-[24%]",
-      render: (row) => (
-        <span className="inline-flex items-center gap-2 min-w-0 max-w-full">
-          <span className="text-xs tabular-nums text-muted-foreground shrink-0">
-            {row.student_count}
-          </span>
-          <span className="block truncate" title={row.student_names}>
-            {row.student_names || "—"}
-          </span>
         </span>
       ),
     },

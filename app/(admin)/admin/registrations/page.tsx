@@ -253,18 +253,6 @@ export default function RegistrationsPage() {
       ),
     },
     {
-      key: "primary_email",
-      header: "Primary Contact",
-      sortable: true,
-      searchable: true,
-      width: "w-[22%]",
-      render: (row) => (
-        <span className="block truncate">
-          {row.primary_email || row.primary_name || "—"}
-        </span>
-      ),
-    },
-    {
       key: "student_names",
       header: "Students",
       sortable: true,
@@ -278,6 +266,18 @@ export default function RegistrationsPage() {
           <span className="block truncate" title={row.student_names}>
             {row.student_names || "—"}
           </span>
+        </span>
+      ),
+    },
+    {
+      key: "primary_email",
+      header: "Primary Contact",
+      sortable: true,
+      searchable: true,
+      width: "w-[22%]",
+      render: (row) => (
+        <span className="block truncate">
+          {row.primary_email || row.primary_name || "—"}
         </span>
       ),
     },
@@ -307,7 +307,17 @@ export default function RegistrationsPage() {
             ? "Sent"
             : row.enrollment_agreement_status || "—";
         return (
-          <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+          <span
+            className={cn(
+              "inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider",
+              // Signed (PandaDoc "completed") reads as a done-state, so
+              // it gets the green pill; every other state — Sent, Viewed,
+              // not-yet-sent — stays muted/gray.
+              row.is_enrollment_agreement_signed
+                ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                : "border-border bg-muted text-muted-foreground"
+            )}
+          >
             {label}
           </span>
         );
