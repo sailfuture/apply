@@ -135,24 +135,41 @@ export async function generateRecordsRequestPdf(
 
   // ── Letterhead ──────────────────────────────────────────────────
   const logo = loadLogoDataUrl();
+  const headerTop = y;
   if (logo) {
     try {
-      doc.addImage(logo, "JPEG", MARGIN, y, 46, 46);
+      doc.addImage(logo, "JPEG", MARGIN, headerTop, 46, 46);
     } catch {
       // Non-fatal — fall through to the text-only letterhead.
     }
   }
   const headX = logo ? MARGIN + 60 : MARGIN;
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(16);
-  doc.setTextColor(...BRAND_NAVY);
-  doc.text("SailFuture Academy", headX, y + 20);
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(10);
-  doc.setTextColor(90, 90, 90);
-  doc.text("St. Petersburg, FL", headX, y + 36);
+  const HEAD_LINE = 13;
+  let hy = headerTop + 11; // first baseline
 
-  y += 64;
+  // Org name — bold navy, but the same 10pt size as the address lines.
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(10);
+  doc.setTextColor(...BRAND_NAVY);
+  doc.text("SailFuture Academy", headX, hy);
+  hy += HEAD_LINE;
+
+  // Address + contact — normal weight, gray, same size.
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(90, 90, 90);
+  for (const line of [
+    "2154 27th Ave N",
+    "St. Petersburg, FL 33713",
+    "admissions@sailfuture.org",
+    "https://sailfutureacademy.org",
+  ]) {
+    doc.text(line, headX, hy);
+    hy += HEAD_LINE;
+  }
+  doc.setTextColor(0, 0, 0);
+
+  // Rule sits below whichever is taller — the logo or the text block.
+  y = Math.max(headerTop + (logo ? 46 : 0), hy) + 8;
   doc.setDrawColor(220, 220, 220);
   doc.line(MARGIN, y, PAGE_W - MARGIN, y);
   y += 24;
