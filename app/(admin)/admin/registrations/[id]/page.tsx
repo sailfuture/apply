@@ -34,7 +34,7 @@ import { PhoneInput } from "@/components/ui/phone-input";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Spinner } from "@/components/ui/spinner";
+import { LoadingScreen } from "@/components/loading-screen";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
@@ -72,6 +72,7 @@ import {
 } from "@/components/ui/dialog";
 import { FamilyNotesSheet } from "@/components/admin/family-notes-sheet";
 import { BillingCard } from "@/components/admin/billing-card";
+import { RequestRecordsDialog } from "@/components/admin/request-records-dialog";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { cn } from "@/lib/utils";
 import {
@@ -225,9 +226,20 @@ export default function FamilyRegistrationDetailPage() {
   }
 
   if (isLoading && !data) {
+    // Match the route-level loader (app/(admin)/admin/loading.tsx) exactly —
+    // same container, same LoadingScreen, same messages — so the RSC
+    // navigation loader hands off to this client SWR loader as one
+    // continuous spinner instead of a bare Spinner that jumps position
+    // (the route loader reserves a text line, nudging its spinner up).
     return (
       <div className="flex min-h-[calc(100vh-12rem)] items-center justify-center px-4">
-        <Spinner className="size-8 text-muted-foreground" />
+        <LoadingScreen
+          messages={[
+            "Loading admin...",
+            "Fetching the latest data...",
+            "Almost there...",
+          ]}
+        />
       </div>
     );
   }
@@ -770,6 +782,8 @@ export default function FamilyRegistrationDetailPage() {
               students={students}
               emergencyContacts={emergency_contacts}
               yearId={Number(yearId)}
+              familyId={Number(family?.id ?? familyId)}
+              yearName={school_year?.year_name ?? ""}
               onChanged={refresh}
             />
           </SectionShell>
@@ -2313,6 +2327,8 @@ function RegistrationPacketBlock({
   students,
   emergencyContacts,
   yearId,
+  familyId,
+  yearName,
   onChanged,
 }: {
   students: AdminFamilyRegistrationStudentRow[];
@@ -2321,6 +2337,11 @@ function RegistrationPacketBlock({
    *  packet" button on missing-packet students can bootstrap a row
    *  scoped to the right year. */
   yearId: number;
+  /** Family id + year label — threaded down so each student's
+   *  records-request send is audit-logged against the family and the
+   *  letter prefills the academic year. */
+  familyId: number;
+  yearName: string;
   onChanged: () => void;
 }) {
   if (students.length === 0) {
@@ -2344,6 +2365,8 @@ function RegistrationPacketBlock({
           key={row.student_id}
           row={row}
           yearId={yearId}
+          familyId={familyId}
+          yearName={yearName}
           onChanged={onChanged}
         />
       ))}
@@ -2439,6 +2462,8 @@ function packetToDraft(p: XanoStudentRegistration | null | undefined): PacketDra
 function StudentPacketBlock({
   row,
   yearId,
+  familyId,
+  yearName,
   onChanged,
 }: {
   row: AdminFamilyRegistrationStudentRow;
@@ -2446,6 +2471,9 @@ function StudentPacketBlock({
    *  admin when the parent hasn't started the registration flow
    *  themselves yet. */
   yearId: number;
+  /** Family id + year label for the records-request send. */
+  familyId: number;
+  yearName: string;
   onChanged: () => void;
 }) {
   const [saving, setSaving] = useState(false);
@@ -2684,15 +2712,25 @@ function StudentPacketBlock({
               : ""}
           </p>
         </div>
-        {/* Edit / Save / Cancel cluster — only renders when a packet
-            exists (no point editing a row that hasn't been created
-            yet; admin uses Create Packet below in that case).
-            Disabled while verified so the per-student verify state
-            stays the single source of truth — admin can Undo the
-            verification first if they need to amend the packet. */}
-        {hasPacket ? (
-          <div className="flex items-center gap-2 shrink-0">
-            {editing ? (
+        {/* Right-side action cluster. The Request records button is
+            always available (it only needs the student's identity, not
+            a packet); the Edit / Save / Cancel controls render only
+            when a packet exists (no point editing a row that hasn't
+            been created yet; admin uses Create Packet below in that
+            case) and are disabled while verified so the per-student
+            verify state stays the single source of truth. */}
+        <div className="flex items-center gap-2 shrink-0">
+          <RequestRecordsDialog
+            defaults={{
+              studentName: row.student_full_name,
+              dateOfBirth: row.student_date_of_birth,
+              academicYear: yearName,
+            }}
+            familyId={familyId}
+            yearId={yearId}
+          />
+          {hasPacket ? (
+            editing ? (
               <>
                 <Button
                   type="button"
@@ -2736,9 +2774,9 @@ function StudentPacketBlock({
                 <Pencil className="size-3.5 mr-1.5" />
                 Edit
               </Button>
-            )}
-          </div>
-        ) : null}
+            )
+          ) : null}
+        </div>
       </div>
 
       {/* Body — opacity fades when verified so the form reads as

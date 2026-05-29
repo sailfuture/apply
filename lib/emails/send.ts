@@ -38,6 +38,10 @@ export interface SendArgs {
    *  notifications (e.g. a future global announcement) might not
    *  be year-scoped. */
   yearId?: number;
+  /** Optional file attachments, passed straight through to Resend.
+   *  Each carries a filename + raw bytes. Used by the records-request
+   *  send to attach the generated PDF letter; most sends omit this. */
+  attachments?: { filename: string; content: Buffer }[];
 }
 
 export interface SendResult {
@@ -93,6 +97,7 @@ export async function sendEmail(args: SendArgs): Promise<SendResult> {
       subject: args.content.subject,
       html: args.content.html,
       text: args.content.text,
+      attachments: args.attachments,
       tags: [{ name: "template", value: tag }],
     });
     if (error) {

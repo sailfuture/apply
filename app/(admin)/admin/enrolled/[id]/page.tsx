@@ -67,6 +67,7 @@ import {
   FileUploadItemPreview,
   FileUploadList,
 } from "@/components/ui/file-upload";
+import { RequestRecordsDialog } from "@/components/admin/request-records-dialog";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { cn } from "@/lib/utils";
 import {
@@ -235,6 +236,16 @@ export default function EnrolledStudentDetailPage() {
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <BackLink href={backHref} />
         <div className="flex items-center gap-2 shrink-0 flex-wrap">
+          <RequestRecordsDialog
+            defaults={{
+              studentName: `${student.first_name ?? ""} ${student.last_name ?? ""}`.trim(),
+              dateOfBirth: student.date_of_birth ?? "",
+              previousSchool: app?.current_previous_school ?? "",
+              academicYear: school_year?.year_name ?? "",
+            }}
+            familyId={family ? Number(family.id) : undefined}
+            yearId={yearId ? Number(yearId) : undefined}
+          />
           {packet ? (
             <RemoveStudentButton
               packetId={packet.id}

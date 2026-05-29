@@ -218,6 +218,8 @@ function templateLabel(tag: string): string {
       return "Enrollment agreement reminder";
     case "back-to-school":
       return "Back-to-school";
+    case "records-request":
+      return "Records request";
     default:
       return tag;
   }

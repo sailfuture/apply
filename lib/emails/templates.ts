@@ -447,3 +447,44 @@ export function backToSchool(ctx: BaseContext): EmailContent {
   ].join("\n");
   return { subject, html, text };
 }
+
+/* ───────────────────────── Records request ───────────────────────── */
+/* Admin-initiated request to a student's previous school to transfer
+ * their academic records. Unlike the templates above, this goes to an
+ * external institution (not a parent), and the substantive content is
+ * the attached PDF letter — this email is just the cover note that
+ * carries it. */
+
+export interface RecordsRequestContext {
+  /** Full student name, e.g. "Charlee Howard". */
+  student_name: string;
+}
+
+export function recordsRequest(ctx: RecordsRequestContext): EmailContent {
+  const subject = `Records request — ${ctx.student_name}`;
+  const preheader = `A request to transfer ${ctx.student_name}'s academic records to SailFuture Academy.`;
+  const html = layout({
+    preheader,
+    body:
+      p(`To Whom It May Concern,`) +
+      p(
+        `Please find attached a formal request for the transfer of ${ctx.student_name}'s academic records to SailFuture Academy.`
+      ) +
+      p(
+        `The attached letter outlines the specific records we are requesting and how to reach us with any questions.`
+      ) +
+      p(`Thank you,`) +
+      p(`The SailFuture Academy admissions team`),
+  });
+  const text = [
+    `To Whom It May Concern,`,
+    "",
+    `Please find attached a formal request for the transfer of ${ctx.student_name}'s academic records to SailFuture Academy.`,
+    "",
+    `The attached letter outlines the specific records we are requesting and how to reach us with any questions.`,
+    "",
+    `Thank you,`,
+    `The SailFuture Academy admissions team`,
+  ].join("\n");
+  return { subject, html, text };
+}
