@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useRouter, usePathname, useSearchParams } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import { UserButton } from "@clerk/nextjs";
 import { useFamily, useSchoolYears } from "@/hooks/use-api";
 
@@ -10,7 +10,6 @@ const REGISTRATION_SEGMENTS = new Set(["tuition", "enrollment-signing", "registr
 export function GlobalHeader() {
   const router = useRouter();
   const pathname = usePathname();
-  const searchParams = useSearchParams();
   const { data: familyData } = useFamily();
   const { data: yearsData } = useSchoolYears();
   const familyName = familyData?.family_name ?? null;
@@ -58,15 +57,9 @@ export function GlobalHeader() {
   // destination that's already correct for the user — no chained
   // redirects. The `if` ladder short-circuits before falling through to
   // the apply/registration default so users never bounce through pages
-  // they shouldn't see.
+  // they shouldn't see. This covers every flow EXCEPT the dashboard,
+  // whose `?yearId` is read at click time in `handleLogoClick` below.
   const homeHref = (() => {
-    // On the parent dashboard, logo just stays on the dashboard for
-    // whichever year is currently in view. Preserves `?yearId` so the
-    // year picker doesn't reset when the user clicks home.
-    if (isDashboard) {
-      const yearParam = searchParams.get("yearId");
-      return yearParam ? `/dashboard?yearId=${yearParam}` : "/dashboard";
-    }
     const years =
       (yearsData as
         | { id: number; isNextYear?: boolean; isActive?: boolean }[]
@@ -78,6 +71,25 @@ export function GlobalHeader() {
       ? `/registration/year/${target.id}`
       : `/apply/year/${target.id}`;
   })();
+
+  // On the parent dashboard the logo stays on the dashboard for whichever
+  // year is in view, preserving `?yearId` so the year picker doesn't
+  // reset. We read that param from the live URL at click time rather than
+  // via `useSearchParams` at render — that hook would force the entire
+  // header under a Suspense boundary (CSR-bailout rule for prerendered
+  // routes), which flashed an empty header bar on first paint. Reading at
+  // click time also always reflects the current picker selection.
+  const handleLogoClick = () => {
+    if (isDashboard) {
+      const yearParam =
+        typeof window !== "undefined"
+          ? new URLSearchParams(window.location.search).get("yearId")
+          : null;
+      router.push(yearParam ? `/dashboard?yearId=${yearParam}` : "/dashboard");
+      return;
+    }
+    router.push(homeHref);
+  };
 
   return (
     // `fixed` (not `sticky`) — when Radix opens a Select / Dialog,
@@ -104,7 +116,7 @@ export function GlobalHeader() {
         {/* Left: Logo (clickable) + Title + Family name */}
         <div className="flex items-center gap-3">
           <button
-            onClick={() => router.push(homeHref)}
+            onClick={handleLogoClick}
             className="flex size-9 items-center justify-center overflow-hidden rounded-full border-2 border-gray-200 dark:border-gray-700 shadow-sm transition-opacity hover:opacity-80"
           >
             <Image

@@ -1,9 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Spinner } from "@/components/ui/spinner";
-import { useIsClient } from "@/hooks/use-is-client";
 import { cn } from "@/lib/utils";
 
 /**
@@ -31,6 +30,11 @@ const STORAGE_KEY = "loading-screen-session";
  * resetting to "Loading..." on a navigation that comes minutes later.
  */
 const HEARTBEAT_STALE_MS = 1500;
+
+/** No-op subscribe for the client-detection probe in LoadingScreen. The
+ *  "are we on the client yet" signal flips exactly once and never again,
+ *  so there's no external store to subscribe to. */
+const subscribeNoop = () => () => {};
 
 interface SessionState {
   startedAt: number;
@@ -93,12 +97,19 @@ export function LoadingScreen({
   className,
   spinnerClassName,
 }: LoadingScreenProps) {
-  // `mounted` defers the sessionStorage read to the client. The
-  // server-rendered HTML is just the spinner; the text fades in once
-  // we've reconciled with whatever progress earlier loading screens
-  // logged this session. Avoids a hydration mismatch on the text
-  // node.
-  const mounted = useIsClient();
+  // Defer the text to the client for hydration safety: sessionStorage
+  // isn't readable on the server, so the index there is always 0 and
+  // server-rendering the text would risk a mismatch. `useSyncExternalStore`
+  // returns the server snapshot (false) only during the FIRST loader's
+  // hydration render — matching the SSR HTML (spinner only) — then flips
+  // to true. Every *later* loader in the sign-in chain is a fresh client
+  // mount, so it reads true synchronously on its first render and paints
+  // its text immediately, never blanking at the handoff.
+  const hydrated = useSyncExternalStore(
+    subscribeNoop,
+    () => true,
+    () => false,
+  );
   const [index, setIndex] = useState(() => {
     if (typeof window === "undefined") return 0;
     const now = Date.now();
@@ -124,7 +135,7 @@ export function LoadingScreen({
   }, [intervalMs, messages.length]);
 
   useEffect(() => {
-    if (!mounted) return;
+    if (!hydrated) return;
     // Heartbeat — keeps the session "live" so a sibling LoadingScreen
     // mounting milliseconds after this one unmounts continues the
     // sequence instead of resetting.
@@ -152,7 +163,7 @@ export function LoadingScreen({
       clearInterval(heartbeatId);
       clearInterval(advanceId);
     };
-  }, [mounted, intervalMs, messages.length]);
+  }, [hydrated, intervalMs, messages.length]);
 
   return (
     <div
@@ -166,20 +177,32 @@ export function LoadingScreen({
       <Spinner
         className={cn("size-8 text-muted-foreground", spinnerClassName)}
       />
-      {mounted && (
-        <AnimatePresence mode="wait">
-          <motion.p
-            key={index}
-            initial={{ opacity: 0, y: 4 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -4 }}
-            transition={{ duration: 0.35, ease: "easeOut" }}
-            className="text-sm text-muted-foreground"
-          >
-            {messages[index]}
-          </motion.p>
-        </AnimatePresence>
-      )}
+      {/* Reserve the text line's height even before the first message
+          renders (and during the single pre-hydration frame of the first
+          loader) so the spinner stays put — no vertical jitter as the
+          text appears or as one loader hands off to the next. */}
+      <div className="flex min-h-5 items-center justify-center">
+        {hydrated && (
+          // `initial={false}` suppresses the enter animation on an
+          // AnimatePresence's first render. So a freshly-mounted loader
+          // paints its current message instantly (continuing the
+          // sequence the previous loader was on) instead of fading in
+          // from zero again — only genuine message *changes* within a
+          // single loader's lifetime crossfade.
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.p
+              key={index}
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -4 }}
+              transition={{ duration: 0.35, ease: "easeOut" }}
+              className="text-sm text-muted-foreground"
+            >
+              {messages[index]}
+            </motion.p>
+          </AnimatePresence>
+        )}
+      </div>
     </div>
   );
 }

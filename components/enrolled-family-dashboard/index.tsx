@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { useUser } from "@clerk/nextjs";
 import { useFamily, useStudents, useApplications, useSchoolYears, mutateFamily } from "@/hooks/use-api";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
+import { LoadingScreen } from "@/components/loading-screen";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   Select,
@@ -385,22 +385,20 @@ export function EnrolledFamilyDashboard({
     !yearsData ||
     emergencyContacts === undefined;
 
+  // Continue the shared spinner sequence rather than swapping to a gray
+  // skeleton. This component is the final hop of the post-sign-in chain
+  // (root → dashboard segment → dashboard page → here), and the page-level
+  // LoadingScreen above only waited on apps + years + the per-year status
+  // resolver — NOT family / students / emergency-contacts, which this
+  // component fetches itself. Rendering a skeleton here made those
+  // cold-cache fetches flash a gray placeholder right after three polished
+  // spinner screens. `LoadingScreen`'s sessionStorage heartbeat means the
+  // cycling text picks up mid-stream, so the whole chain reads as one
+  // continuous loading screen instead.
   if (loading) {
     return (
-      <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
-        <div className="flex items-center justify-between border-b pb-4">
-          <div className="space-y-2">
-            <Skeleton className="h-3 w-24" />
-            <Skeleton className="h-7 w-64" />
-          </div>
-          <Skeleton className="h-9 w-40" />
-        </div>
-        {Array.from({ length: 4 }).map((_, i) => (
-          <div key={i} className="rounded-lg border p-6 space-y-3">
-            <Skeleton className="h-4 w-32" />
-            <Skeleton className="h-16 w-full" />
-          </div>
-        ))}
+      <div className="flex min-h-[calc(100vh-7.5rem)] items-center justify-center px-4">
+        <LoadingScreen />
       </div>
     );
   }

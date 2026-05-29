@@ -1,6 +1,5 @@
 "use client";
 
-import { Suspense } from "react";
 import { usePathname } from "next/navigation";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { GlobalHeader } from "@/components/global-header";
@@ -16,13 +15,12 @@ import { GlobalFooter } from "@/components/global-footer";
  * a parent context. Everything else gets the standard parent shell:
  * fixed header, bottom-padded main, footer.
  *
- * `GlobalHeader` is wrapped in Suspense because it calls `useSearchParams`
- * (to preserve `?yearId` across logo clicks). In Next.js 16, any
- * `useSearchParams` consumer that's reachable from a statically-prerendered
- * route must sit inside a Suspense boundary, otherwise the whole subtree
- * triggers a CSR-bailout error during build. The lightweight skeleton
- * stand-in keeps the layout's reserved 14px header height intact while
- * the search-params hydrate on the client.
+ * `GlobalHeader` renders directly (no Suspense). It used to sit under a
+ * boundary because it called `useSearchParams` — which forces a CSR
+ * bailout on statically-prerendered routes unless wrapped — and the empty
+ * fallback bar flashed on first paint before the real header hydrated.
+ * The header now reads `?yearId` at click time instead of via the hook,
+ * so it renders in the initial markup with no boundary and no flash.
  */
 export function AppChrome({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -48,13 +46,7 @@ export function AppChrome({ children }: { children: React.ReactNode }) {
           `--removed-body-scroll-bar-size` CSS var; `<main>`
           reserves the 14px slot with `pt-14` so content doesn't
           tuck under the fixed header. */}
-      <Suspense
-        fallback={
-          <header className="fixed inset-x-0 top-0 z-50 h-14 border-b bg-white" />
-        }
-      >
-        <GlobalHeader />
-      </Suspense>
+      <GlobalHeader />
       <main className="pt-14 pb-16 min-h-screen">
         <TooltipProvider>{children}</TooltipProvider>
       </main>
