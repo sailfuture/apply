@@ -73,6 +73,7 @@ import {
 import { FamilyNotesSheet } from "@/components/admin/family-notes-sheet";
 import { BillingCard } from "@/components/admin/billing-card";
 import { RequestRecordsDialog } from "@/components/admin/request-records-dialog";
+import { EmailParentButton } from "@/components/admin/email-parent-button";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { cn } from "@/lib/utils";
 import {
@@ -259,6 +260,7 @@ export default function FamilyRegistrationDetailPage() {
   const {
     family,
     primary,
+    secondary,
     school_year,
     progress,
     students,
@@ -278,6 +280,11 @@ export default function FamilyRegistrationDetailPage() {
     };
   const familyName =
     family?.family_name?.trim() || `Family #${family?.id ?? familyId}`;
+
+  // Subject for the "Email parent" mailto draft. "Registration" marks
+  // the phase (the apply-flow page uses "Application").
+  const emailSubject =
+    "Action Required: Update Your SailFuture Academy Family Registration";
 
   // Per-student billing math now lives on the application row.
   // The page's `students` rows project that math directly so the
@@ -529,6 +536,15 @@ export default function FamilyRegistrationDetailPage() {
                 Family overview
               </Link>
             </Button>
+            {/* Draft an email to the family's parents — primary as To,
+                secondary (if any) Cc'd, subject pre-filled. Family-
+                scoped, so it renders regardless of the selected year. */}
+            <EmailParentButton
+              primaryEmail={primary?.email}
+              secondaryEmail={secondary?.email}
+              subject={emailSubject}
+              className="bg-white"
+            />
             {/* Page-header notes drawer is phase-scoped — hits the
                 dedicated `..._by_registration` Xano query so admin
                 only sees registration-phase comms by default, not

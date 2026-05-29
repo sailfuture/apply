@@ -197,6 +197,9 @@ export async function GET(
       .slice()
       .sort((a, b) => a.id - b.id);
     const primary: XanoParent | null = sortedParents[0] ?? null;
+    // Second parent on file (by id order) — surfaced so the admin
+    // "Email parent" button can Cc them alongside the primary.
+    const secondary: XanoParent | null = sortedParents[1] ?? null;
 
     // Per-student packet rows — the entire `XanoStudentRegistration`
     // shape, plus the joined student bio fields the page uses for the
@@ -374,6 +377,15 @@ export async function GET(
             phone: primary.phone ?? "",
           }
         : null,
+      secondary: secondary
+        ? {
+            id: secondary.id,
+            first_name: secondary.first_name ?? "",
+            last_name: secondary.last_name ?? "",
+            email: secondary.email ?? "",
+            phone: secondary.phone ?? "",
+          }
+        : null,
       school_year: {
         id: schoolYear.id,
         year_name: schoolYear.year_name ?? "",
@@ -437,6 +449,13 @@ export async function GET(
 export interface AdminFamilyRegistrationResponse {
   family: { id: number; family_name: string } | null;
   primary: {
+    id: number;
+    first_name: string;
+    last_name: string;
+    email: string;
+    phone: string;
+  } | null;
+  secondary: {
     id: number;
     first_name: string;
     last_name: string;

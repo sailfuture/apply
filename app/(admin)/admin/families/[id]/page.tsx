@@ -62,6 +62,7 @@ import { Textarea } from "@/components/ui/textarea";
 // `StudentApplicationBlock` no longer uses it.
 import { StatusBadge } from "@/components/admin/status-badge";
 import { FamilyNotesSheet } from "@/components/admin/family-notes-sheet";
+import { EmailParentButton } from "@/components/admin/email-parent-button";
 import { DocumentsToReviewBlock } from "@/components/admin/documents-to-review-block";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { cn } from "@/lib/utils";
@@ -483,6 +484,16 @@ export default function FamilyDetailPage() {
     (p): p is Parent =>
       !!p && typeof p === "object" && typeof (p as { id?: unknown }).id === "number"
   );
+  // Email recipients for the header "Email parent" action. Sort by id
+  // so "primary" matches the registration page's convention (lowest id
+  // = first parent on file); the second parent gets Cc'd when present.
+  const sortedParents = parents.slice().sort((a, b) => a.id - b.id);
+  const emailPrimary = sortedParents[0]?.email ?? "";
+  const emailSecondary = sortedParents[1]?.email ?? "";
+  // "Application" marks the phase (the registration page uses
+  // "Registration").
+  const emailSubject =
+    "Action Required: Update Your SailFuture Academy Family Application";
   const allStudents: Student[] = (family.registration_students_id ?? []).filter(
     (s): s is Student =>
       !!s && typeof s === "object" && typeof (s as { id?: unknown }).id === "number"
@@ -631,6 +642,15 @@ export default function FamilyDetailPage() {
                 yearId={Number(yearId)}
               />
             ) : null}
+            {/* Draft an email to the family's parents — primary as To,
+                secondary (if any) Cc'd, subject pre-filled. Family-
+                scoped, so it renders regardless of the selected year. */}
+            <EmailParentButton
+              primaryEmail={emailPrimary}
+              secondaryEmail={emailSecondary}
+              subject={emailSubject}
+              className="bg-white"
+            />
             {/* Page-header notes drawer is phase-scoped to
                 "application" so registration-phase comms (written
                 from /admin/registrations/[id]) don't leak into the
