@@ -160,6 +160,31 @@ export async function PATCH(
 }
 
 /**
+ * Admin-only DELETE for one `registration_student_registration` packet.
+ * Hard-removes the row — used by the residential-family registration
+ * detail page to delete a specific student's registration packet (foster
+ * placements churn mid-year). The application row + student record are
+ * left intact; this only drops the packet.
+ */
+export async function DELETE(
+  _req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    await requireAdmin();
+    const { id: idParam } = await params;
+    const id = Number(idParam);
+    if (!Number.isFinite(id) || id <= 0) {
+      return NextResponse.json({ error: "Invalid packet id" }, { status: 400 });
+    }
+    await xano.studentRegistration.delete(id);
+    return NextResponse.json({ ok: true });
+  } catch (err) {
+    return handleAdminError(err);
+  }
+}
+
+/**
  * After admin verifies a per-student packet, walk the family's
  * active applications for the same year and check whether every
  * one of them has a confirmed packet. If yes, flip the family's

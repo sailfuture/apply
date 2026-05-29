@@ -116,6 +116,9 @@ interface Student {
 interface FamilyResponse {
   id: number;
   family_name: string;
+  /** Residential / foster-family flag (raw family row). Gates the
+   *  per-student application Delete affordance. */
+  is_residential?: boolean;
   registration_parents_id: Parent[];
   registration_students_id: Student[];
   registration_emergency_contacts_id: number[];
@@ -808,6 +811,7 @@ export default function FamilyDetailPage() {
                       student={student}
                       app={app}
                       yearId={yearId ? Number(yearId) : undefined}
+                      isResidential={family?.is_residential === true}
                       onChanged={() => {
                         refreshFamily();
                         refreshDetail();
@@ -2300,6 +2304,7 @@ function StudentApplicationBlock({
   student,
   app,
   yearId,
+  isResidential,
   onChanged,
 }: {
   student: Student;
@@ -2311,6 +2316,9 @@ function StudentApplicationBlock({
    *  block in family-overview mode (no year selected), where the
    *  enrolled link doesn't make sense and gets omitted. */
   yearId?: number;
+  /** Residential families get a Delete affordance on the application
+   *  card title (hard-deletes the application row). */
+  isResidential?: boolean;
   onChanged: () => void;
 }) {
   // Edit state lives on the block itself so the sub-header (name)
@@ -2326,6 +2334,8 @@ function StudentApplicationBlock({
     gender: student.gender ?? "",
     ethnicity: student.ethnicity ?? "",
   });
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   function enterEdit() {
     setDraft({
@@ -2379,6 +2389,35 @@ function StudentApplicationBlock({
       toast.error(err instanceof Error ? err.message : "Couldn't save.");
     } finally {
       setSaving(false);
+    }
+  }
+
+  /** Hard-delete this student's application for the year. Residential-
+   *  only affordance — drops the application row; the student record +
+   *  any registration packet are left intact. */
+  async function runDelete() {
+    if (!app) return;
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/admin/applications/${app.id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Delete failed (${res.status})`);
+      }
+      toast.success(
+        `${student.first_name} ${student.last_name}'s application deleted.`
+      );
+      setDeleteOpen(false);
+      onChanged();
+    } catch (err) {
+      console.error("[StudentApplicationBlock.runDelete]", err);
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't delete application."
+      );
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -2486,6 +2525,59 @@ function StudentApplicationBlock({
                   <Pencil className="size-3.5 mr-1.5" />
                   Edit
                 </Button>
+                {/* Residential-only hard delete for this student's
+                    application — behind a warning modal. The student
+                    record stays on the family; only the application
+                    (and the year's registration for them) is dropped. */}
+                {isResidential && app ? (
+                  <>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setDeleteOpen(true)}
+                      className="bg-white text-red-600 hover:bg-red-50 hover:text-red-700"
+                    >
+                      <Trash2 className="size-3.5 mr-1.5" />
+                      Delete
+                    </Button>
+                    <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>
+                            Delete {student.first_name} {student.last_name}
+                            &rsquo;s application?
+                          </AlertDialogTitle>
+                          <AlertDialogDescription>
+                            This permanently deletes this student&rsquo;s
+                            application for this year. The student record stays
+                            on the family. This can&rsquo;t be undone.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel disabled={deleting}>
+                            Cancel
+                          </AlertDialogCancel>
+                          <AlertDialogAction
+                            disabled={deleting}
+                            className="bg-red-600 hover:bg-red-700 text-white"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              void runDelete();
+                            }}
+                          >
+                            {deleting ? (
+                              <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                            ) : (
+                              <Trash2 className="size-3.5 mr-1.5" />
+                            )}
+                            Delete application
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  </>
+                ) : null}
               </>
             )}
           </div>

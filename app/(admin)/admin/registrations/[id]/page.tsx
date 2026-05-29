@@ -21,6 +21,7 @@ import {
   Plus,
   RotateCcw,
   SquarePen,
+  Trash2,
   Undo2,
   Users,
   X,
@@ -280,6 +281,10 @@ export default function FamilyRegistrationDetailPage() {
     };
   const familyName =
     family?.family_name?.trim() || `Family #${family?.id ?? familyId}`;
+  // Residential / foster families: hide the Billing section, and keep the
+  // Registration Packet section editable even when verified so admin can
+  // process mid-year additions without un-confirming the whole family.
+  const isResidential = family?.is_residential === true;
 
   // Subject for the "Email parent" mailto draft. "Registration" marks
   // the phase (the apply-flow page uses "Application").
@@ -473,6 +478,7 @@ export default function FamilyRegistrationDetailPage() {
           <RegistrationSideNav
             backHref={backHref}
             sectionStatus={sectionStatus}
+            showBilling={!isResidential}
           />
         </div>
       </aside>
@@ -635,6 +641,7 @@ export default function FamilyRegistrationDetailPage() {
             no subscription has been started yet (cascade runs on
             Confirm Registration; the empty state's button is the
             manual override / retry path). */}
+        {!isResidential ? (
         <section id="section-billing" className="scroll-mt-20">
           <SectionShell
             title="Billing"
@@ -663,6 +670,7 @@ export default function FamilyRegistrationDetailPage() {
             />
           </SectionShell>
         </section>
+        ) : null}
 
         {/* Family Registration Confirmation — the rollup latch for
             the per-section work below. Sits beneath Billing so admin
@@ -771,6 +779,7 @@ export default function FamilyRegistrationDetailPage() {
           <SectionShell
             title="Registration Packet"
             status={sectionStatus.registration.completed ? "complete" : "in_progress"}
+            suppressVerifiedMute={isResidential}
             notes={{
               familyId: Number(family?.id ?? familyId),
               yearId: Number(yearId),
@@ -804,6 +813,7 @@ export default function FamilyRegistrationDetailPage() {
               yearId={Number(yearId)}
               familyId={Number(family?.id ?? familyId)}
               yearName={school_year?.year_name ?? ""}
+              isResidential={isResidential}
               onChanged={refresh}
             />
           </SectionShell>
@@ -910,8 +920,10 @@ export default function FamilyRegistrationDetailPage() {
 function RegistrationSideNav({
   backHref,
   sectionStatus,
+  showBilling,
 }: {
   backHref: string;
+  showBilling: boolean;
   sectionStatus: {
     tuition: { completed: boolean; verified: boolean };
     enrollment: { completed: boolean; verified: boolean };
@@ -1033,7 +1045,9 @@ function RegistrationSideNav({
               Registrations
             </span>
           </Link>
-          {items.map((item) => (
+          {items
+            .filter((item) => showBilling || item.key !== "billing")
+            .map((item) => (
             <a
               key={item.key}
               href={item.href}
@@ -1164,6 +1178,7 @@ function SectionShell({
   notes,
   editHref,
   verify,
+  suppressVerifiedMute,
   children,
 }: {
   title: string;
@@ -1199,6 +1214,11 @@ function SectionShell({
    * application sections).
    */
   verify?: SectionVerifyConfig;
+  /** When true, skip the verified-state mute (body opacity + Edit/Notes
+   *  disable). Used for residential families' Registration Packet section
+   *  so mid-year additions stay editable even after the section is
+   *  verified. The verify footer still reflects the real state. */
+  suppressVerifiedMute?: boolean;
   children: React.ReactNode;
 }) {
   const verified = !!verify?.verified;
@@ -1213,7 +1233,7 @@ function SectionShell({
   // stay at full opacity so the verified-state controls remain
   // clearly readable and clickable. Mirrors the apply-flow
   // SectionShell.
-  const fullyDone = verified;
+  const fullyDone = verified && !suppressVerifiedMute;
   // Parent-completion is still surfaced via the status dot so
   // admin can see in-progress vs done at a glance; reference it
   // here to keep the prop on the API even though we no longer
@@ -2349,6 +2369,7 @@ function RegistrationPacketBlock({
   yearId,
   familyId,
   yearName,
+  isResidential,
   onChanged,
 }: {
   students: AdminFamilyRegistrationStudentRow[];
@@ -2362,6 +2383,9 @@ function RegistrationPacketBlock({
    *  letter prefills the academic year. */
   familyId: number;
   yearName: string;
+  /** When true, the family is residential — show the per-student delete
+   *  affordance on each packet card. */
+  isResidential: boolean;
   onChanged: () => void;
 }) {
   if (students.length === 0) {
@@ -2387,6 +2411,7 @@ function RegistrationPacketBlock({
           yearId={yearId}
           familyId={familyId}
           yearName={yearName}
+          isResidential={isResidential}
           onChanged={onChanged}
         />
       ))}
@@ -2484,6 +2509,7 @@ function StudentPacketBlock({
   yearId,
   familyId,
   yearName,
+  isResidential,
   onChanged,
 }: {
   row: AdminFamilyRegistrationStudentRow;
@@ -2494,11 +2520,16 @@ function StudentPacketBlock({
   /** Family id + year label for the records-request send. */
   familyId: number;
   yearName: string;
+  /** Residential families get a per-student Delete affordance on the
+   *  packet card (hard-deletes the packet). */
+  isResidential: boolean;
   onChanged: () => void;
 }) {
   const [saving, setSaving] = useState(false);
   const [creating, setCreating] = useState(false);
   const [undoOpen, setUndoOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   // Inline edit state for the packet. Lives at the block level so
   // every editable sub-section (Uniform & Activities, Health &
   // Medical, Pickup Permissions) swaps into edit mode together —
@@ -2688,6 +2719,34 @@ function StudentPacketBlock({
     }
   }
 
+  /** Hard-delete this student's registration packet. Residential-only
+   *  affordance — used to clear a mid-year placement's packet. The
+   *  application row + student record (incl. uploaded documents) are
+   *  left intact. */
+  async function runDelete() {
+    if (!packet) return;
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/admin/student-registration/${packet.id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Delete failed (${res.status})`);
+      }
+      toast.success(`${row.student_full_name}'s registration packet deleted.`);
+      setDeleteOpen(false);
+      onChanged();
+    } catch (err) {
+      console.error("[StudentPacketBlock.runDelete]", err);
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't delete packet."
+      );
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   return (
     // Outer wrapper stays at full opacity — the verified-state body
     // fade is applied to the inner body container below so the
@@ -2796,6 +2855,58 @@ function StudentPacketBlock({
                 Edit
               </Button>
             )
+          ) : null}
+          {/* Residential-only hard delete for this student's packet —
+              behind a warning modal. The application row + uploaded
+              documents survive; only the packet is dropped. */}
+          {isResidential && hasPacket ? (
+            <>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setDeleteOpen(true)}
+                className="bg-white text-red-600 hover:bg-red-50 hover:text-red-700"
+              >
+                <Trash2 className="size-3.5 mr-1.5" />
+                Delete
+              </Button>
+              <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>
+                      Delete {row.student_full_name}&rsquo;s registration packet?
+                    </AlertDialogTitle>
+                    <AlertDialogDescription>
+                      This permanently deletes this student&rsquo;s registration
+                      packet (uniform, medical, and pickup info). Uploaded
+                      documents stay on the student record and the application
+                      is not affected. This can&rsquo;t be undone.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel disabled={deleting}>
+                      Cancel
+                    </AlertDialogCancel>
+                    <AlertDialogAction
+                      disabled={deleting}
+                      className="bg-red-600 hover:bg-red-700 text-white"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        void runDelete();
+                      }}
+                    >
+                      {deleting ? (
+                        <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                      ) : (
+                        <Trash2 className="size-3.5 mr-1.5" />
+                      )}
+                      Delete packet
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </>
           ) : null}
         </div>
       </div>

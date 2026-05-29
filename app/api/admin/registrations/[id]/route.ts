@@ -77,6 +77,7 @@ export async function GET(
       emergencyResult,
       paymentResult,
       scholarshipResult,
+      familyRowResult,
     ] = await Promise.allSettled([
       xano.applications.getAdminFamilyDetail(familyId, yearId),
       xano.studentRegistrationProgress.resolve(familyId, yearId),
@@ -100,6 +101,10 @@ export async function GET(
       // reading the per-app `opportunity_scholarship_award_amount`
       // column, which is null for SNAP families on purpose.
       xano.scholarship.getByFamilyAndYear(familyId, yearId),
+      // Direct family-row fetch — the `admin_family_application`
+      // aggregate may omit newer columns, so read `is_residential`
+      // straight off the raw family row to be safe.
+      xano.families.getById(familyId),
     ]);
 
     if (aggResult.status === "rejected") {
@@ -151,6 +156,8 @@ export async function GET(
       scholarshipResult.status === "fulfilled"
         ? scholarshipResult.value
         : null;
+    const familyRow =
+      familyRowResult.status === "fulfilled" ? familyRowResult.value : null;
 
     // Note: the old backfill shim that mirrored `monthly_tuition_payment`
     // and `monthly_transportation_payment` from `registration_families_payment`
@@ -370,6 +377,7 @@ export async function GET(
         ? {
             id: family.id,
             family_name: family.family_name ?? "",
+            is_residential: familyRow?.is_residential ?? false,
           }
         : null,
       primary: primary
@@ -451,7 +459,7 @@ export async function GET(
  * scoped emergency contacts roster.
  */
 export interface AdminFamilyRegistrationResponse {
-  family: { id: number; family_name: string } | null;
+  family: { id: number; family_name: string; is_residential: boolean } | null;
   primary: {
     id: number;
     first_name: string;

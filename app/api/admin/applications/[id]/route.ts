@@ -242,3 +242,29 @@ export async function PATCH(
     return handleAdminError(err);
   }
 }
+
+/**
+ * Admin-only DELETE for one `registration_application` row. Hard-removes
+ * the application — used by the residential-family flow to delete a
+ * specific student's mid-year registration from the application card.
+ * The student record + any registration packet are left intact (the
+ * registration detail page only surfaces packets for active apps, so a
+ * deleted app's packet drops out of view).
+ */
+export async function DELETE(
+  _req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    await requireAdmin();
+    const { id: idParam } = await params;
+    const id = Number(idParam);
+    if (!Number.isFinite(id) || id <= 0) {
+      return NextResponse.json({ error: "Invalid id" }, { status: 400 });
+    }
+    await xano.applications.delete(id);
+    return NextResponse.json({ ok: true });
+  } catch (err) {
+    return handleAdminError(err);
+  }
+}
