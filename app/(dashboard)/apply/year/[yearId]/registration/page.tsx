@@ -60,6 +60,7 @@ import {
   Clock,
   ExternalLink,
   Info,
+  Camera,
 } from "lucide-react";
 import {
   Popover,
@@ -78,6 +79,7 @@ import {
   FileUploadItemMetadata,
   FileUploadItemPreview,
   FileUploadList,
+  FileUploadTrigger,
 } from "@/components/ui/file-upload";
 
 // ---------------------------------------------------------------------------
@@ -643,6 +645,20 @@ function DocumentUpload({
             <p className="text-xs text-muted-foreground">PDF, JPG, or PNG (max 10MB each, up to 5)</p>
           </div>
         </FileUploadDropzone>
+        {/* Touch-only shortcut to snap a photo of a paper document. Hidden on
+            desktop (pointer-coarse) since `capture` only does anything on
+            mobile; the dropzone above still handles file/PDF selection. */}
+        <FileUploadTrigger asChild capture="environment">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="hidden w-full pointer-coarse:flex"
+          >
+            <Camera className="size-4" />
+            Take a photo
+          </Button>
+        </FileUploadTrigger>
         <FileUploadList>
           {pendingFiles.map((f, i) => (
             <FileUploadItem key={i} value={f}>

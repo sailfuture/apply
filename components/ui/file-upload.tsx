@@ -197,6 +197,11 @@ interface FileUploadProps
     },
   ) => Promise<void> | void;
   accept?: string;
+  /** Maps to the native `<input type="file">` `capture` attribute. Set to
+   *  `"environment"` (rear camera) or `"user"` (front camera) to make mobile
+   *  browsers open the camera directly instead of the generic file picker.
+   *  Ignored on desktop. */
+  capture?: boolean | "user" | "environment";
   maxFiles?: number;
   maxSize?: number;
   dir?: Direction;
@@ -220,6 +225,7 @@ function FileUpload(props: FileUploadProps) {
     onFileValidate,
     onUpload,
     accept,
+    capture,
     maxFiles,
     maxSize,
     dir: dirProp,
@@ -663,6 +669,7 @@ function FileUpload(props: FileUploadProps) {
             ref={inputRef}
             tabIndex={-1}
             accept={accept}
+            capture={capture}
             name={name}
             className="sr-only"
             disabled={disabled}
@@ -897,10 +904,17 @@ function FileUploadDropzone(props: FileUploadDropzoneProps) {
 
 interface FileUploadTriggerProps extends React.ComponentProps<"button"> {
   asChild?: boolean;
+  /** When set, temporarily applies the native `capture` attribute to the
+   *  shared file input before opening it, so this trigger launches the device
+   *  camera (mobile) while the sibling dropzone keeps its normal file picker.
+   *  The attribute is removed again once the capture/file dialog closes, so a
+   *  later dropzone click isn't stuck in camera-only mode. Ignored on desktop
+   *  browsers, which don't honor `capture`. */
+  capture?: boolean | "user" | "environment";
 }
 
 function FileUploadTrigger(props: FileUploadTriggerProps) {
-  const { asChild, onClick: onClickProp, ...triggerProps } = props;
+  const { asChild, capture, onClick: onClickProp, ...triggerProps } = props;
 
   const context = useFileUploadContext(TRIGGER_NAME);
 
@@ -914,9 +928,25 @@ function FileUploadTrigger(props: FileUploadTriggerProps) {
 
       if (event.defaultPrevented) return;
 
-      context.inputRef.current?.click();
+      const input = context.inputRef.current;
+      if (!input) return;
+
+      if (capture) {
+        const captureValue = capture === true ? "environment" : capture;
+        input.setAttribute("capture", captureValue);
+        // The OS capture/file dialog blurs the window; once focus returns
+        // (photo taken or cancelled) strip `capture` so the dropzone's next
+        // open shows the normal file picker rather than the camera.
+        window.addEventListener(
+          "focus",
+          () => input.removeAttribute("capture"),
+          { once: true },
+        );
+      }
+
+      input.click();
     },
-    [context.inputRef, propsRef],
+    [context.inputRef, propsRef, capture],
   );
 
   const TriggerPrimitive = asChild ? SlotPrimitive.Slot : "button";

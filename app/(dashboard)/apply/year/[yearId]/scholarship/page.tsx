@@ -38,7 +38,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Trash2, FileUp, X, Loader2, CheckCircle2, Users, Home, Car, ArrowRight, ExternalLink, Plus, HelpCircle } from "lucide-react";
+import { Trash2, FileUp, X, Loader2, CheckCircle2, Users, Home, Car, ArrowRight, ExternalLink, Plus, HelpCircle, Camera } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -64,6 +64,7 @@ import {
   FileUploadItemMetadata,
   FileUploadItemPreview,
   FileUploadList,
+  FileUploadTrigger,
 } from "@/components/ui/file-upload";
 
 interface SchoolYear {
@@ -3803,6 +3804,20 @@ function SingleFileUpload({
             <p className="text-xs text-muted-foreground">PDF, JPG, or PNG (max 10MB)</p>
           </div>
         </FileUploadDropzone>
+        {/* Touch-only shortcut to snap a photo of a paper document. Hidden on
+            desktop (pointer-coarse) since `capture` only does anything on
+            mobile; the dropzone above still handles file/PDF selection. */}
+        <FileUploadTrigger asChild capture="environment">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="hidden w-full pointer-coarse:flex"
+          >
+            <Camera className="size-4" />
+            Take a photo
+          </Button>
+        </FileUploadTrigger>
       </FileUpload>
       {error && <p className="text-xs text-red-600 mt-1">{error}</p>}
     </div>
@@ -3914,6 +3929,20 @@ function MultiFileUpload({
               </p>
             </div>
           </FileUploadDropzone>
+          {/* Touch-only shortcut to snap a photo of a paper document. Hidden on
+              desktop (pointer-coarse) since `capture` only does anything on
+              mobile; the dropzone above still handles file/PDF selection. */}
+          <FileUploadTrigger asChild capture="environment">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="hidden w-full pointer-coarse:flex"
+            >
+              <Camera className="size-4" />
+              Take a photo
+            </Button>
+          </FileUploadTrigger>
         </FileUpload>
 
         {/* In-flight indicator. Neutral white/gray styling — earlier blue
