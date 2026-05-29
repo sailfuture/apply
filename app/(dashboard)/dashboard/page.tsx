@@ -25,6 +25,7 @@ interface YearProgress {
 interface YearPacket {
   registration_school_years_id: number;
   registrationConfirmed?: boolean;
+  registration_students_id?: number;
 }
 
 interface SchoolYear {
@@ -34,6 +35,8 @@ interface SchoolYear {
 
 interface Application {
   registration_school_years_id: number;
+  registration_students_id?: number;
+  is_residential_addition?: boolean;
 }
 
 /** Per-year status for the dashboard year picker.
@@ -137,9 +140,31 @@ export default function EnrolledHomePage() {
           const packets = (packetsRes as YearPacket[] | null) ?? [];
           const applyProgress = applyRes as ApplyProgressForYear | null;
           const submitted = !!progress?.isSubmitted;
+          // Exclude not-yet-confirmed residential / foster mid-year
+          // additions from the "everyone confirmed?" rollup so a fresh
+          // addition can't drop the family out of "enrolled" mode. The
+          // residential marker lives on the application row; match packets
+          // back to it by student id.
+          const residentialAddStudentIds = new Set(
+            ((appsData as Application[] | undefined) ?? [])
+              .filter(
+                (a) =>
+                  a.registration_school_years_id === yid &&
+                  a.is_residential_addition === true
+              )
+              .map((a) => Number(a.registration_students_id))
+          );
+          const countedPackets = packets.filter(
+            (p) =>
+              !(
+                residentialAddStudentIds.has(
+                  Number(p.registration_students_id)
+                ) && p.registrationConfirmed !== true
+              )
+          );
           const allConfirmed =
-            packets.length > 0 &&
-            packets.every((p) => p.registrationConfirmed === true);
+            countedPackets.length > 0 &&
+            countedPackets.every((p) => p.registrationConfirmed === true);
           // Family-level admin latch — see YearProgress comment. Must
           // be checked alongside `submitted` and `allConfirmed` so the
           // year drops out of "enrolled" mode when admin unconfirms

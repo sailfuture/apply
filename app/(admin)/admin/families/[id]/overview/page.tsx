@@ -20,6 +20,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -38,6 +39,7 @@ import {
 } from "@/components/ui/sheet";
 import { EmailNotificationsCard } from "@/components/admin/email-notifications-card";
 import { adminFetcher } from "@/lib/admin-fetcher";
+import { toast } from "sonner";
 import { formatUSPhone } from "@/lib/phone";
 import { cn } from "@/lib/utils";
 import {
@@ -77,7 +79,7 @@ export default function FamilyOverviewPage() {
   const swrKey = Number.isFinite(familyId)
     ? `/api/admin/family-overview/${familyId}`
     : null;
-  const { data, isLoading, error } = useSWR<AdminFamilyOverviewResponse>(
+  const { data, isLoading, error, mutate } = useSWR<AdminFamilyOverviewResponse>(
     swrKey,
     adminFetcher
   );
@@ -86,6 +88,40 @@ export default function FamilyOverviewPage() {
   // open modal with the full record. Stays open until admin closes
   // or selects another parent.
   const [openParent, setOpenParent] = useState<Parent | null>(null);
+
+  // Residential-family toggle — admin-only, family-level setting that
+  // unlocks the parent dashboard's mid-year "Create New Registration"
+  // add flow. Optimistic: flip this page's SWR cache immediately, then
+  // revert to server truth if the PATCH fails.
+  const [savingResidential, setSavingResidential] = useState(false);
+  async function handleToggleResidential(next: boolean) {
+    if (savingResidential) return;
+    setSavingResidential(true);
+    mutate(
+      (cur) =>
+        cur ? { ...cur, family: { ...cur.family, is_residential: next } } : cur,
+      { revalidate: false }
+    );
+    try {
+      const res = await fetch(`/api/admin/families/${familyId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ is_residential: next }),
+      });
+      if (!res.ok) throw new Error(`Failed (${res.status})`);
+      toast.success(
+        next
+          ? "Marked as a residential family."
+          : "Residential family flag removed."
+      );
+    } catch (err) {
+      console.error("Failed to update residential flag:", err);
+      toast.error("Couldn't update the residential setting. Please try again.");
+      mutate(); // revert to server truth
+    } finally {
+      setSavingResidential(false);
+    }
+  }
 
   if (isLoading && !data) {
     return (
@@ -165,6 +201,38 @@ export default function FamilyOverviewPage() {
             : "emergency contacts"}
         </p>
       </div>
+
+      {/* Family settings — residential / foster flag. When on, the
+          parent's enrolled dashboard surfaces a "Create New
+          Registration" affordance so the family can add students
+          mid-year. Family-level (not year-scoped), so it lives on the
+          cross-year overview rather than a per-year workspace. */}
+      <Card className="overflow-hidden gap-0 py-0 bg-white">
+        <CardHeader className="py-3 !pb-3 border-b">
+          <CardTitle className="text-base">Family Settings</CardTitle>
+        </CardHeader>
+        <CardContent className="px-5 py-4 bg-white">
+          <div className="flex items-start justify-between gap-4">
+            <div className="space-y-0.5">
+              <label htmlFor="residential-toggle" className="text-sm font-medium">
+                Residential / Foster Family
+              </label>
+              <p className="text-xs text-muted-foreground max-w-prose">
+                Lets this family add students throughout the year from their
+                dashboard via &ldquo;Create New Registration.&rdquo; Use for
+                foster placements that enroll and unenroll mid-year.
+              </p>
+            </div>
+            <Switch
+              id="residential-toggle"
+              checked={family.is_residential}
+              disabled={savingResidential}
+              onCheckedChange={handleToggleResidential}
+              aria-label="Residential family"
+            />
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Parents — full bio + contact links. Lowest-id-first
           ordering so the primary parent (typically the row that

@@ -109,14 +109,24 @@ export default async function Page() {
       .catch(() => null),
     fetch(packetsUrl, { cache: "no-store" })
       .then(async (res) => {
-        if (!res.ok) return [] as { registrationConfirmed?: boolean }[];
+        type Packet = {
+          registrationConfirmed?: boolean;
+          registration_students_id?: number;
+        };
+        if (!res.ok) return [] as Packet[];
         const items = await res.json();
         return (Array.isArray(items) ? items : []).filter(
           (p: { registration_families_id?: number }) =>
             Number(p.registration_families_id) === familyId
-        ) as { registrationConfirmed?: boolean }[];
+        ) as Packet[];
       })
-      .catch(() => [] as { registrationConfirmed?: boolean }[]),
+      .catch(
+        () =>
+          [] as {
+            registrationConfirmed?: boolean;
+            registration_students_id?: number;
+          }[]
+      ),
   ]);
 
   // Step 5 — derive lifecycle state and pick the final URL. `isAccepted`
@@ -138,9 +148,27 @@ export default async function Page() {
   const isRegistrationConfirmed =
     regProgress?.isRegistrationConfirmed === true;
   const isRegistrationSubmitted = regProgress?.isSubmitted === true;
+  // Residential / foster mid-year additions get their own application +
+  // packet. Until admin confirms that student's packet, exclude it from
+  // the family-level "everyone confirmed?" rollup — otherwise a fresh,
+  // unconfirmed addition would bounce the already-enrolled family out of
+  // their dashboard (this gate requires EVERY packet confirmed). The
+  // marker lives on the application row; packets join back via student id.
+  const residentialAddStudentIds = new Set(
+    yearApps
+      .filter((a) => a.is_residential_addition === true)
+      .map((a) => Number(a.registration_students_id))
+  );
+  const countedPackets = yearPackets.filter(
+    (p) =>
+      !(
+        residentialAddStudentIds.has(Number(p.registration_students_id)) &&
+        p.registrationConfirmed !== true
+      )
+  );
   const allPacketsConfirmed =
-    yearPackets.length > 0 &&
-    yearPackets.every((p) => p.registrationConfirmed === true);
+    countedPackets.length > 0 &&
+    countedPackets.every((p) => p.registrationConfirmed === true);
   const isEnrolled =
     isRegistrationConfirmed && isRegistrationSubmitted && allPacketsConfirmed;
 

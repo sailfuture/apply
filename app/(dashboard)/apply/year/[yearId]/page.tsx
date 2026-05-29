@@ -442,7 +442,7 @@ export default function YearOverviewPage() {
   const { user } = useUser();
   const firstName = user?.firstName ?? "";
 
-  const { steps, registrationSteps, registrationCompletedCount, allRegistrationSectionsComplete, allComplete, loading, stage, schoolYear } =
+  const { steps, registrationSteps, registrationCompletedCount, allRegistrationSectionsComplete, allComplete, loading, stage, schoolYear, yearApps } =
     useApplicationSteps(yearId);
   const { data: students } = useStudents();
   const studentsLoading = students === undefined;
@@ -501,10 +501,35 @@ export default function YearOverviewPage() {
     { revalidateOnFocus: true, refreshInterval: 30000, dedupingInterval: 10000 }
   );
 
+  // Residential / foster mid-year additions get their own application +
+  // packet, accepted independently by admin. Exclude a not-yet-confirmed
+  // addition from the family-level "everyone confirmed?" gate so it can't
+  // bounce an already-enrolled family out of the dashboard. The marker
+  // lives on the application row; packets join back via the student id.
+  const residentialAddStudentIds = useMemo(
+    () =>
+      new Set(
+        (
+          yearApps as {
+            registration_students_id?: number;
+            is_residential_addition?: boolean;
+          }[]
+        )
+          .filter((a) => a.is_residential_addition === true)
+          .map((a) => Number(a.registration_students_id))
+      ),
+    [yearApps]
+  );
+  const countedPackets = (yearPackets ?? []).filter(
+    (p) =>
+      !(
+        residentialAddStudentIds.has(Number(p.registration_students_id)) &&
+        p.registrationConfirmed !== true
+      )
+  );
   const allStudentsConfirmed =
-    !!yearPackets &&
-    yearPackets.length > 0 &&
-    yearPackets.every((p) => p.registrationConfirmed === true);
+    countedPackets.length > 0 &&
+    countedPackets.every((p) => p.registrationConfirmed === true);
 
   // "Enrolled" = family-level admin latch flipped + parent has
   // submitted + every student's packet has been admin-confirmed.
@@ -598,7 +623,10 @@ export default function YearOverviewPage() {
     if (stage !== "accepted" || acceptanceSynced.current || !students) return;
     acceptanceSynced.current = true;
     const unaccepted = (students as { id: number; isAccepted?: boolean }[])
-      .filter((s) => !s.isAccepted);
+      // Don't auto-accept residential / foster mid-year additions — those
+      // are reviewed + accepted per-application by admin, not swept up by
+      // the family-level acceptance sync.
+      .filter((s) => !s.isAccepted && !residentialAddStudentIds.has(s.id));
     for (const student of unaccepted) {
       fetch(`/api/students/${student.id}`, {
         method: "PATCH",
@@ -606,7 +634,7 @@ export default function YearOverviewPage() {
         body: JSON.stringify({ isAccepted: true }),
       }).catch(() => {});
     }
-  }, [stage, students]);
+  }, [stage, students, residentialAddStudentIds]);
 
   // Confetti for the moment a family is freshly accepted — fires only when
   // the family has truly just landed on the AcceptedView with zero

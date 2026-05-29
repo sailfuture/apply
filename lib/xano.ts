@@ -51,6 +51,13 @@ export interface XanoFamily {
    *  single Customer. Optional on the type because legacy rows
    *  pre-date the column. */
   stripe_customer_id?: string | null;
+  /** Residential / foster-family flag. When true, the parent's
+   *  enrolled dashboard surfaces a "Create New Registration"
+   *  affordance so the family can add students mid-year — foster
+   *  placements enroll and unenroll throughout the academic year.
+   *  Admin sets this from the family detail page. Optional because
+   *  legacy rows pre-date the column; treat missing as `false`. */
+  is_residential?: boolean;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -307,6 +314,14 @@ export interface XanoApplication {
    *  flagged optional because legacy rows predate the column and treat
    *  missing/undefined as "active by default" downstream. */
   isActive?: boolean;
+  /** Marks an application created through the residential family's
+   *  mid-year "Create New Registration" flow (foster placements added
+   *  after the family is already enrolled). Kept out of the family-level
+   *  "all students confirmed" enrolled rollups until this student is
+   *  individually confirmed, so a fresh mid-year add never bounces the
+   *  rest of the family out of their enrolled dashboard. Optional
+   *  because legacy rows pre-date the column; treat missing as `false`. */
+  is_residential_addition?: boolean;
   /**
    * Family's annual out-of-pocket toward tuition for this student.
    * The Opportunity Scholarship covers everything between SUFS and

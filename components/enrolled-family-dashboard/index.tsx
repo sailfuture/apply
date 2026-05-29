@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import useSWR, { useSWRConfig } from "swr";
 import { toast } from "sonner";
@@ -40,6 +40,7 @@ import {
 import { EditContactSheet } from "./edit-contact-sheet";
 import { AddParentSheet } from "./add-parent-sheet";
 import { AddEmergencyContactSheet } from "./add-emergency-contact-sheet";
+import { AddResidentialStudentSheet } from "./add-residential-student-sheet";
 import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
 
 type Parent = {
@@ -77,6 +78,12 @@ type Application = {
   registration_students_id: number;
   registration_school_years_id: number;
   current_grade: string;
+  isAccepted?: boolean;
+  isSubmitted?: boolean;
+  /** True for students added mid-year via the residential family's
+   *  "Create New Registration" flow. Tracked separately from the
+   *  confirmed roster until admin accepts them. */
+  is_residential_addition?: boolean;
 };
 
 /** One admin-logged volunteer-hour entry. Mirrors `XanoVolunteerHours`
@@ -257,12 +264,49 @@ export function EnrolledFamilyDashboard({
   const parents: Parent[] = (familyData?.parents ?? []) as Parent[];
   const primary = parents[0] ?? null;
   const secondary = parents[1] ?? null;
+  // Residential / foster families get the mid-year "Create New
+  // Registration" affordance. The flag lives on the family record.
+  const isResidential =
+    (familyData as { is_residential?: boolean } | null | undefined)
+      ?.is_residential === true;
 
-  // Students + grade for this year
+  // Per-student packet confirmation for this year. A residential mid-year
+  // addition stays "pending" until admin confirms its packet — keyed off
+  // the same `registrationConfirmed` signal the enrolled-rollups use, so
+  // the dashboard's pending/enrolled split stays consistent with them.
+  const { data: packetsData } = useSWR<
+    { registration_students_id: number; registrationConfirmed?: boolean }[]
+  >(`/api/student-registration?yearId=${yearId}`, fetcher, {
+    revalidateOnFocus: false,
+    dedupingInterval: 10000,
+  });
+  const confirmedStudentIds = useMemo(() => {
+    const ids = new Set<number>();
+    for (const p of packetsData ?? []) {
+      if (p.registrationConfirmed === true) {
+        ids.add(Number(p.registration_students_id));
+      }
+    }
+    return ids;
+  }, [packetsData]);
+  // A residential addition isn't fully enrolled until its packet is
+  // confirmed; until then it belongs in "Pending Registrations".
+  const isPendingResidentialAdd = useCallback(
+    (a: Application) =>
+      a.is_residential_addition === true &&
+      !confirmedStudentIds.has(a.registration_students_id),
+    [confirmedStudentIds]
+  );
+
+  // Students + grade for this year — the confirmed roster. Excludes
+  // residential mid-year additions whose packet admin hasn't confirmed
+  // yet (those show in their own section below).
   const enrolledStudents = useMemo(() => {
     if (!studentsData || !applicationsData) return [];
     const apps = (applicationsData as Application[]).filter(
-      (a) => a.registration_school_years_id === yearId
+      (a) =>
+        a.registration_school_years_id === yearId &&
+        !isPendingResidentialAdd(a)
     );
     return apps
       .map((app) => {
@@ -273,7 +317,27 @@ export function EnrolledFamilyDashboard({
         return { student, app };
       })
       .filter((x): x is { student: Student; app: Application } => x !== null);
-  }, [studentsData, applicationsData, yearId]);
+  }, [studentsData, applicationsData, yearId, isPendingResidentialAdd]);
+
+  // In-progress mid-year registrations for residential / foster families —
+  // created via "Create New Registration" and not yet confirmed by admin.
+  // Surfaced in their own "Pending Registrations" section so they don't
+  // masquerade as confirmed students in the roster above.
+  const pendingResidentialAdds = useMemo(() => {
+    if (!studentsData || !applicationsData) return [];
+    const apps = (applicationsData as Application[]).filter(
+      (a) => a.registration_school_years_id === yearId && isPendingResidentialAdd(a)
+    );
+    return apps
+      .map((app) => {
+        const student = (studentsData as Student[]).find(
+          (s) => s.id === app.registration_students_id
+        );
+        if (!student) return null;
+        return { student, app };
+      })
+      .filter((x): x is { student: Student; app: Application } => x !== null);
+  }, [studentsData, applicationsData, yearId, isPendingResidentialAdd]);
 
   // Year picker — shows enrolled + re-applying years for the family.
   // The parent page already resolved this list (it had to, in order to
@@ -340,6 +404,7 @@ export function EnrolledFamilyDashboard({
   >(null);
   const [addParentOpen, setAddParentOpen] = useState(false);
   const [addEmergencyOpen, setAddEmergencyOpen] = useState(false);
+  const [addResidentialOpen, setAddResidentialOpen] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<
     | { kind: "parent"; id: number; name: string }
     | { kind: "emergency"; id: number; name: string }
@@ -724,6 +789,92 @@ export function EnrolledFamilyDashboard({
         </div>
       </div>
 
+      {/* Pending mid-year registrations — residential / foster families
+          add students throughout the year. Each addition has its own
+          application that admin reviews + accepts independently of the
+          family's enrolled status, so they're surfaced here rather than
+          mixed into the confirmed roster above. */}
+      {pendingResidentialAdds.length > 0 ? (
+        <div>
+          <h2 className="text-sm font-semibold mb-3">Pending Registrations</h2>
+          <div className="rounded-xl bg-background p-1.5 shadow-sm border">
+            <div className="overflow-hidden rounded-lg border">
+              <Table className="text-sm">
+                <TableBody>
+                  {pendingResidentialAdds.map(({ student, app }) => {
+                    // Three states: incomplete details → "Finish";
+                    // submitted-but-not-accepted → "In review"; accepted
+                    // but packet not yet confirmed → "Complete packet".
+                    const accepted = app.isAccepted === true;
+                    const inReview = !accepted && app.isSubmitted === true;
+                    return (
+                      <TableRow
+                        key={student.id}
+                        className="cursor-pointer transition-colors hover:bg-muted/30"
+                        onClick={() =>
+                          router.push(`/dashboard/add-student/${app.id}`)
+                        }
+                      >
+                        <TableCell className="px-4 py-3">
+                          <div className="flex items-center gap-3">
+                            <Avatar className="size-10 shrink-0">
+                              <AvatarFallback className="bg-muted text-muted-foreground text-sm font-medium">
+                                {student.first_name.charAt(0)}
+                                {student.last_name.charAt(0)}
+                              </AvatarFallback>
+                            </Avatar>
+                            <div className="min-w-0">
+                              <p className="font-medium truncate">
+                                {student.first_name} {student.last_name}
+                              </p>
+                              <p className="text-xs text-muted-foreground mt-0.5">
+                                {accepted
+                                  ? "Accepted — complete the registration packet"
+                                  : inReview
+                                    ? "Submitted — awaiting admissions review"
+                                    : "Registration incomplete"}
+                              </p>
+                            </div>
+                          </div>
+                        </TableCell>
+                        <TableCell className="px-4 py-3 text-right whitespace-nowrap">
+                          {inReview ? (
+                            <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-amber-200">
+                              <Clock className="size-3.5" />
+                              In review
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1.5 text-xs font-medium text-primary">
+                              {accepted ? "Complete packet" : "Finish"}
+                              <ChevronRight className="size-4" />
+                            </span>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Create New Registration — residential / foster families add
+          students mid-year. Opens a sheet that creates the student + a
+          marked application, then routes into the per-student
+          registration flow. */}
+      {isResidential ? (
+        <Button
+          variant="outline"
+          className="w-full bg-white"
+          onClick={() => setAddResidentialOpen(true)}
+        >
+          <Plus className="size-4 mr-1.5" />
+          Create New Registration
+        </Button>
+      ) : null}
+
       {/* Contacts — grouped table with section headers for primary,
           secondary, and emergency contacts. Each row has a pencil edit
           button that opens the shared edit sheet. */}
@@ -874,6 +1025,15 @@ export function EnrolledFamilyDashboard({
       <AddEmergencyContactSheet
         open={addEmergencyOpen}
         onOpenChange={setAddEmergencyOpen}
+      />
+
+      {/* Create New Registration — residential / foster families only.
+          Creates the student + a marked application, then routes to the
+          per-student registration flow. */}
+      <AddResidentialStudentSheet
+        open={addResidentialOpen}
+        onOpenChange={setAddResidentialOpen}
+        yearId={yearId}
       />
 
       {/* Delete confirmation — applies to secondary parents and emergency

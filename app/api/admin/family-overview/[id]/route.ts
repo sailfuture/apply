@@ -175,6 +175,7 @@ export async function GET(
         id: family.id,
         family_name: family.family_name ?? "",
         created_at: family.created_at,
+        is_residential: family.is_residential ?? false,
       },
       parents,
       students: visibleStudents,
@@ -259,6 +260,10 @@ export interface AdminFamilyOverviewResponse {
     id: number;
     family_name: string;
     created_at: number;
+    /** Residential / foster-family flag. Drives the parent dashboard's
+     *  "Create New Registration" mid-year add affordance; toggled by
+     *  admin on the family overview page. */
+    is_residential: boolean;
   };
   parents: XanoParent[];
   students: XanoStudent[];
