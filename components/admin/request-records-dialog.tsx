@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
 /**
@@ -81,7 +82,11 @@ export function RequestRecordsDialog({
   const [fields, setFields] = useState<Fields>(() => seedFields(defaults));
   const [sending, setSending] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [previewLoading, setPreviewLoading] = useState(false);
+  // True from the moment a (re)generation fetch fires until the freshly
+  // built PDF has actually finished loading in the iframe (its onLoad
+  // clears it). Drives the skeleton overlay so the preview never flashes
+  // blank while swapping blob URLs.
+  const [isUpdating, setIsUpdating] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const previewUrlRef = useRef<string | null>(null);
 
@@ -100,8 +105,16 @@ export function RequestRecordsDialog({
   useEffect(() => {
     if (!open) return;
     const controller = new AbortController();
+    // Safety net for the rare case the iframe's onLoad never fires —
+    // clears the skeleton after the PDF has surely rendered. Scoped to
+    // this effect run so a newer update cancels it (in the cleanup)
+    // before it could hide a later, still-loading PDF.
+    let settleGuard: ReturnType<typeof setTimeout> | undefined;
     const handle = setTimeout(async () => {
-      setPreviewLoading(true);
+      // Raise the skeleton now — at fetch time, not on keystroke — so it
+      // doesn't flicker while the user is still typing through the
+      // debounce window (the prior PDF stays visible until they pause).
+      setIsUpdating(true);
       setPreviewError(null);
       try {
         const res = await fetch("/api/admin/records-request", {
@@ -123,18 +136,22 @@ export function RequestRecordsDialog({
         if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
         previewUrlRef.current = url;
         setPreviewUrl(url);
+        // Keep isUpdating true: the old PDF stays under the skeleton
+        // until the iframe's onLoad (or this guard) confirms the new one
+        // is painted — that's what prevents the blank flash on swap.
+        settleGuard = setTimeout(() => setIsUpdating(false), 3000);
       } catch (err) {
         if ((err as Error)?.name === "AbortError") return;
         setPreviewError(
           err instanceof Error ? err.message : "Couldn't render preview."
         );
-      } finally {
-        setPreviewLoading(false);
+        setIsUpdating(false);
       }
     }, 700);
     return () => {
       controller.abort();
       clearTimeout(handle);
+      if (settleGuard) clearTimeout(settleGuard);
     };
   }, [
     open,
@@ -287,30 +304,33 @@ export function RequestRecordsDialog({
           <div className="grid gap-1.5">
             <div className="flex items-center justify-between">
               <Label>Letter preview</Label>
-              {previewLoading ? (
+              {isUpdating ? (
                 <span className="inline-flex items-center text-xs text-muted-foreground">
                   <Loader2 className="size-3 mr-1 animate-spin" />
                   Updating…
                 </span>
               ) : null}
             </div>
-            <div className="h-[420px] overflow-hidden rounded-md border bg-muted/20">
-              {previewError ? (
-                <div className="flex h-full items-center justify-center px-4 text-center text-sm text-muted-foreground">
-                  {previewError}
-                </div>
-              ) : previewUrl ? (
+            <div className="relative h-[420px] overflow-hidden rounded-md border bg-white">
+              {/* The iframe stays mounted across regenerations so the
+                  previously rendered letter stays visible underneath the
+                  skeleton until the new PDF actually paints (onLoad) —
+                  this is what avoids the blank flash on blob-URL swap. */}
+              {previewUrl ? (
                 <iframe
                   src={previewUrl}
                   title="Records request preview"
                   className="h-full w-full"
+                  onLoad={() => setIsUpdating(false)}
                 />
-              ) : (
-                <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-                  <Loader2 className="mr-2 size-4 animate-spin" />
-                  Generating preview…
+              ) : null}
+              {previewError ? (
+                <div className="absolute inset-0 flex items-center justify-center bg-white px-4 text-center text-sm text-muted-foreground">
+                  {previewError}
                 </div>
-              )}
+              ) : isUpdating || !previewUrl ? (
+                <PreviewSkeleton />
+              ) : null}
             </div>
           </div>
         </div>
@@ -334,5 +354,57 @@ export function RequestRecordsDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * Letter-shaped shimmer shown over the preview area while a PDF is
+ * generating. Opaque (bg-white) so it fully hides the iframe behind it,
+ * and roughly mirrors the letter's layout — letterhead, rule, date,
+ * paragraphs, the labeled block, and the requested-records bullets — so
+ * the loading state reads as "a letter is rendering" rather than a
+ * generic spinner.
+ */
+function PreviewSkeleton() {
+  return (
+    <div className="absolute inset-0 overflow-hidden bg-white p-6">
+      <div className="mx-auto flex h-full max-w-md flex-col gap-3">
+        {/* Letterhead — logo + name/address */}
+        <div className="flex items-center gap-3">
+          <Skeleton className="size-10 rounded-md" />
+          <div className="space-y-1.5">
+            <Skeleton className="h-3.5 w-40" />
+            <Skeleton className="h-2.5 w-24" />
+          </div>
+        </div>
+        <Skeleton className="h-px w-full" />
+        {/* Date */}
+        <Skeleton className="h-2.5 w-28" />
+        {/* Opening paragraphs */}
+        <div className="space-y-2 pt-1">
+          <Skeleton className="h-2.5 w-32" />
+          <Skeleton className="h-2.5 w-full" />
+          <Skeleton className="h-2.5 w-full" />
+          <Skeleton className="h-2.5 w-4/5" />
+        </div>
+        <div className="space-y-2">
+          <Skeleton className="h-2.5 w-full" />
+          <Skeleton className="h-2.5 w-11/12" />
+        </div>
+        {/* Labeled block (name / DOB / previous school) */}
+        <div className="space-y-2">
+          <Skeleton className="h-2.5 w-48" />
+          <Skeleton className="h-2.5 w-40" />
+          <Skeleton className="h-2.5 w-56" />
+        </div>
+        {/* Requested-records bullets */}
+        <div className="space-y-2">
+          <Skeleton className="h-2.5 w-44" />
+          <Skeleton className="h-2.5 w-3/4" />
+          <Skeleton className="h-2.5 w-2/3" />
+          <Skeleton className="h-2.5 w-3/5" />
+        </div>
+      </div>
+    </div>
   );
 }
