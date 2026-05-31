@@ -2081,6 +2081,19 @@ export const xano = {
       return res.json() as Promise<XanoStudent>;
     },
 
+    /** Hard-delete a `registration_students` row. Admin-only, used by
+     *  the "Delete student" affordance to fully remove a student (the
+     *  caller deletes the student's own applications + packets first,
+     *  each scoped to this student by id). No soft-delete here — use the
+     *  Unenroll flow (`isArchived`) when the student is leaving but
+     *  history matters. */
+    async delete(id: number): Promise<void> {
+      const res = await fetch(`${getBaseUrl()}/registration_students/${id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+    },
+
     /**
      * PATCH a student via the `2GcBXyoA` admin API group rather than
      * the default group. Used specifically for the per-document

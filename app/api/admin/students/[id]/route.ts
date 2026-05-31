@@ -255,3 +255,115 @@ export async function PATCH(
     return handleAdminError(err);
   }
 }
+
+/**
+ * Admin-only hard DELETE for `registration_students`.
+ *
+ * Fully removes a student and everything that hangs off them so nothing
+ * orphaned is left behind. Used by the "Delete student" affordance on the
+ * registration packet card (test cleanup / mis-added students). This is
+ * the destructive counterpart to Unenroll (`isArchived`) — use Unenroll
+ * when the student is leaving but their history should be preserved.
+ *
+ * Every step is scoped to this ONE student by id — the handler can never
+ * touch a sibling student. Steps are best-effort so one Xano hiccup
+ * doesn't strand the rest; the student-row delete is the authoritative
+ * final step.
+ *   0. Remove any active Stripe subscription items for this student.
+ *   1. Delete this student's `registration_application` rows — filtered
+ *      to `registration_students_id === id`, so it can only match this
+ *      student (and matches nothing rather than the wrong row if the FK
+ *      comes back expanded as an object).
+ *   2. Delete the `registration_student_registration` packets listed in
+ *      this student's own packet-id lineage.
+ *   3. Delete the student row (single delete by primary key).
+ *
+ * We intentionally do NOT rewrite the family's `registration_students_id`
+ * relationship array — that read-modify-write is the only thing that
+ * could affect sibling students, so it's omitted entirely.
+ */
+export async function DELETE(
+  _req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    await requireAdmin();
+    const { id: idParam } = await params;
+    const id = Number(idParam);
+    if (!Number.isFinite(id) || id <= 0) {
+      return NextResponse.json({ error: "Invalid student id" }, { status: 400 });
+    }
+
+    // Read the student first to find its family (to scope the application
+    // cleanup) and its packet-id lineage before removing the row.
+    let familyId: number | null = null;
+    let packetIds: number[] = [];
+    try {
+      const student = await xano.students.getById(id);
+      const fid = Number(student.registration_families_id);
+      familyId = Number.isFinite(fid) && fid > 0 ? fid : null;
+      packetIds = Array.isArray(student.registration_student_registration_id)
+        ? student.registration_student_registration_id.filter(
+            (p): p is number => typeof p === "number"
+          )
+        : [];
+    } catch (err) {
+      console.warn(
+        `[/api/admin/students/${id}] couldn't read student before delete:`,
+        err
+      );
+    }
+
+    // 0. Stripe item cleanup — most test students have none, but a real
+    //    enrolled student could be on the family's subscription.
+    try {
+      await removeStripeItemsForArchivedStudent(id);
+    } catch (err) {
+      console.error(
+        `[/api/admin/students/${id}] Stripe cleanup before delete failed:`,
+        err
+      );
+    }
+
+    // 1. Applications for this student (all years).
+    if (familyId) {
+      try {
+        const apps = (await xano.applications.getByFamilyId(familyId)).filter(
+          (a) => Number(a.registration_students_id) === id
+        );
+        await Promise.allSettled(
+          apps.map((a) => xano.applications.delete(a.id))
+        );
+      } catch (err) {
+        console.error(
+          `[/api/admin/students/${id}] application cascade failed:`,
+          err
+        );
+      }
+    }
+
+    // 2. Registration packets (one per enrolled year).
+    if (packetIds.length > 0) {
+      await Promise.allSettled(
+        packetIds.map((pid) => xano.studentRegistration.delete(pid))
+      );
+    }
+
+    // NOTE: we deliberately do NOT read-modify-write the family's
+    // `registration_students_id` relationship array. That rewrite is the
+    // ONLY operation here that could touch rows other than this student —
+    // a stale or short array could detach (or, if Xano cascades on
+    // relationship removal, delete) sibling students. The single
+    // delete-by-id below is authoritative; Xano drops the dangling
+    // reference on its side, and any leftover id in the array is harmless
+    // (reads join to a now-missing row and skip it).
+
+    // 3. Delete the student row — a single delete by primary key. This is
+    //    the only statement in the whole handler that removes a student.
+    await xano.students.delete(id);
+
+    return NextResponse.json({ ok: true });
+  } catch (err) {
+    return handleAdminError(err);
+  }
+}

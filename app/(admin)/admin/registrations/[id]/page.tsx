@@ -2530,6 +2530,11 @@ function StudentPacketBlock({
   const [undoOpen, setUndoOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [deleteStudentOpen, setDeleteStudentOpen] = useState(false);
+  const [deletingStudent, setDeletingStudent] = useState(false);
+  // Type-to-confirm guard for the hard student delete — the Delete button
+  // stays disabled until this matches the student's name.
+  const [deleteConfirmText, setDeleteConfirmText] = useState("");
   // Inline edit state for the packet. Lives at the block level so
   // every editable sub-section (Uniform & Activities, Health &
   // Medical, Pickup Permissions) swaps into edit mode together —
@@ -2747,6 +2752,32 @@ function StudentPacketBlock({
     }
   }
 
+  /** Hard-delete the whole student (any family). Removes the student row
+   *  plus their applications + packets and unlinks them from the family
+   *  via the cascading DELETE on /api/admin/students/[id]. */
+  async function runDeleteStudent() {
+    setDeletingStudent(true);
+    try {
+      const res = await fetch(`/api/admin/students/${row.student_id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Delete failed (${res.status})`);
+      }
+      toast.success(`${row.student_full_name} deleted.`);
+      setDeleteStudentOpen(false);
+      onChanged();
+    } catch (err) {
+      console.error("[StudentPacketBlock.runDeleteStudent]", err);
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't delete student."
+      );
+    } finally {
+      setDeletingStudent(false);
+    }
+  }
+
   return (
     // Outer wrapper stays at full opacity — the verified-state body
     // fade is applied to the inner body container below so the
@@ -2869,7 +2900,7 @@ function StudentPacketBlock({
                 className="bg-white text-red-600 hover:bg-red-50 hover:text-red-700"
               >
                 <Trash2 className="size-3.5 mr-1.5" />
-                Delete
+                Delete packet
               </Button>
               <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
                 <AlertDialogContent>
@@ -2908,6 +2939,85 @@ function StudentPacketBlock({
               </AlertDialog>
             </>
           ) : null}
+          {/* Hard-delete the whole student (any family) — removes the
+              student, all their applications + packets, and unlinks them
+              from the family. Behind a strong warning modal. */}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setDeleteStudentOpen(true)}
+            className="bg-white text-red-600 hover:bg-red-50 hover:text-red-700"
+          >
+            <Trash2 className="size-3.5 mr-1.5" />
+            Delete student
+          </Button>
+          <AlertDialog
+            open={deleteStudentOpen}
+            onOpenChange={(open) => {
+              if (!open && deletingStudent) return;
+              setDeleteStudentOpen(open);
+              if (!open) setDeleteConfirmText("");
+            }}
+          >
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>
+                  Permanently delete {row.student_full_name}?
+                </AlertDialogTitle>
+                <AlertDialogDescription>
+                  This removes the student record along with ALL of their
+                  applications and registration packets across every year. It
+                  affects only this one student and can&rsquo;t be undone — use
+                  Unenroll instead if the student is leaving the program but you
+                  want to keep their history.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              {/* Type-to-confirm — the Delete button stays disabled until
+                  the typed name matches, so a stray click can't fire the
+                  deletion. */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">
+                  Type{" "}
+                  <span className="font-semibold text-foreground">
+                    {row.student_full_name}
+                  </span>{" "}
+                  to confirm
+                </label>
+                <Input
+                  value={deleteConfirmText}
+                  onChange={(e) => setDeleteConfirmText(e.target.value)}
+                  placeholder={row.student_full_name}
+                  autoComplete="off"
+                  disabled={deletingStudent}
+                />
+              </div>
+              <AlertDialogFooter>
+                <AlertDialogCancel disabled={deletingStudent}>
+                  Cancel
+                </AlertDialogCancel>
+                <AlertDialogAction
+                  disabled={
+                    deletingStudent ||
+                    deleteConfirmText.trim().toLowerCase() !==
+                      row.student_full_name.trim().toLowerCase()
+                  }
+                  className="bg-red-600 hover:bg-red-700 text-white"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    void runDeleteStudent();
+                  }}
+                >
+                  {deletingStudent ? (
+                    <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                  ) : (
+                    <Trash2 className="size-3.5 mr-1.5" />
+                  )}
+                  Delete student
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
       </div>
 
