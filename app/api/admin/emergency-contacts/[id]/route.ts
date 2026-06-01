@@ -60,3 +60,34 @@ export async function PATCH(
     return handleAdminError(err);
   }
 }
+
+/**
+ * Admin-only hard DELETE for a single `registration_emergency_contacts`
+ * row. Backs the trash affordance next to the pencil on the family
+ * registration detail page — admin removes a contact a family no
+ * longer wants on file.
+ *
+ * Hard delete (not a soft flag): emergency contacts are standalone
+ * rows with no downstream dependents, so there's nothing to orphan.
+ * The parent flow can always re-add one.
+ */
+export async function DELETE(
+  _req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    await requireAdmin();
+    const { id: idParam } = await params;
+    const id = Number(idParam);
+    if (!Number.isFinite(id) || id <= 0) {
+      return NextResponse.json(
+        { error: "Invalid emergency contact id" },
+        { status: 400 }
+      );
+    }
+    await xano.emergencyContacts.delete(id);
+    return NextResponse.json({ ok: true });
+  } catch (err) {
+    return handleAdminError(err);
+  }
+}

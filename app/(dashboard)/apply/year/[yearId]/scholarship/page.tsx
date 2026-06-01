@@ -3787,7 +3787,7 @@ function SingleFileUpload({
       <FileUpload
         maxFiles={1}
         maxSize={10 * 1024 * 1024}
-        accept=".pdf,.jpg,.jpeg,.png"
+        accept=".pdf,.jpg,.jpeg,.png,.heic,.heif"
         className="w-full"
         value={files}
         onValueChange={handleFilesChange}
@@ -3801,7 +3801,7 @@ function SingleFileUpload({
           <FileUp className="size-5 text-muted-foreground" />
           <div className="flex-1 text-left">
             <p className="text-sm font-medium">{label}</p>
-            <p className="text-xs text-muted-foreground">PDF, JPG, or PNG (max 10MB)</p>
+            <p className="text-xs text-muted-foreground">PDF, JPG, PNG, or HEIC (max 10MB)</p>
           </div>
         </FileUploadDropzone>
         {/* Touch-only shortcut to snap a photo of a paper document. Hidden on
@@ -3909,7 +3909,7 @@ function MultiFileUpload({
           // capped at 1, which silently dropped extras and looked broken.
           maxFiles={10}
           maxSize={10 * 1024 * 1024}
-          accept=".pdf,.jpg,.jpeg,.png"
+          accept=".pdf,.jpg,.jpeg,.png,.heic,.heif"
           className="w-full"
           multiple
           value={pendingFiles}
@@ -3925,7 +3925,7 @@ function MultiFileUpload({
             <div className="flex-1 text-left">
               <p className="text-sm font-medium">{label}</p>
               <p className="text-xs text-muted-foreground">
-                PDF, JPG, or PNG (max 10MB) · pick multiple at once
+                PDF, JPG, PNG, or HEIC (max 10MB) · pick multiple at once
               </p>
             </div>
           </FileUploadDropzone>

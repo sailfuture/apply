@@ -155,3 +155,92 @@ export async function PATCH(
     return handleAdminError(err);
   }
 }
+
+/**
+ * Remove a single file from a required-document slot.
+ *
+ *   DELETE /api/admin/students/:id/document-file?fieldKey=...&fileIndex=N
+ *
+ * Drops the file at `fileIndex` from the field's array and recomputes
+ * the slot-level `*_admin_confirm` bool with the SAME rule the PATCH
+ * uses (true only when ≥1 file remains AND all are confirmed). Routing
+ * removal through here — instead of a plain array PATCH on
+ * `/api/admin/students/[id]` — is what keeps an emptied slot from
+ * leaving the Students section-verify gate stuck green with no files
+ * on file. Optional documents (iep / ssn_card / passport /
+ * student_state_id) have no slot bool, so those remove via the plain
+ * student PATCH instead.
+ */
+export async function DELETE(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { admin } = await requireAdmin();
+    const { id: idParam } = await params;
+    const studentId = Number(idParam);
+    if (!Number.isFinite(studentId) || studentId <= 0) {
+      return NextResponse.json(
+        { error: "Invalid student id" },
+        { status: 400 }
+      );
+    }
+
+    const fieldKey = req.nextUrl.searchParams.get("fieldKey");
+    const fileIndex = Number(req.nextUrl.searchParams.get("fileIndex"));
+
+    if (typeof fieldKey !== "string" || !VALID_FIELDS.has(fieldKey)) {
+      return NextResponse.json(
+        {
+          error: `fieldKey must be one of: ${Array.from(VALID_FIELDS).join(", ")}`,
+        },
+        { status: 400 }
+      );
+    }
+    if (!Number.isInteger(fileIndex) || fileIndex < 0) {
+      return NextResponse.json(
+        { error: "fileIndex must be a non-negative integer" },
+        { status: 400 }
+      );
+    }
+
+    // Read-modify-write the file array — same pattern as the PATCH.
+    const student = await xano.students.getById(studentId);
+    const rawFiles = (student as unknown as Record<string, unknown>)[fieldKey];
+    const files: FileMetadata[] = Array.isArray(rawFiles)
+      ? (rawFiles.slice() as FileMetadata[])
+      : [];
+    if (fileIndex >= files.length) {
+      return NextResponse.json(
+        {
+          error: `fileIndex ${fileIndex} is out of range (have ${files.length} file${files.length === 1 ? "" : "s"})`,
+        },
+        { status: 400 }
+      );
+    }
+
+    files.splice(fileIndex, 1);
+
+    // Recompute the slot bool exactly as the PATCH does so the verify
+    // gate stays in sync. An emptied slot drops to false.
+    const now = Date.now();
+    const adminName = admin?.name ?? "";
+    const slotConfirmed =
+      files.length > 0 &&
+      files.every((f) => (f as FileMetadata).confirmed === true);
+
+    const { confirmKey, timeKey, adminKey } = FIELD_TO_CONFIRM_KEY[fieldKey];
+    const patch: Record<string, unknown> = {
+      [fieldKey]: files,
+      [confirmKey]: slotConfirmed,
+      [timeKey]: slotConfirmed ? now : null,
+      [adminKey]: slotConfirmed ? adminName : "",
+      last_edited_time: now,
+    };
+
+    const updated = await xano.students.updateOnAdminGroup(studentId, patch);
+    return NextResponse.json(updated);
+  } catch (err) {
+    return handleAdminError(err);
+  }
+}

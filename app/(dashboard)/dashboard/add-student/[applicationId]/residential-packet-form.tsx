@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { convertHeicToJpeg } from "@/lib/heic";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -197,8 +198,9 @@ function DocUpload({
     setError(null);
     try {
       for (const file of Array.from(list)) {
+        const uploadFile = await convertHeicToJpeg(file);
         const fd = new FormData();
-        fd.append("file", file);
+        fd.append("file", uploadFile);
         const res = await fetch("/api/upload", { method: "POST", body: fd });
         if (!res.ok) {
           const body = await res.json().catch(() => null);
@@ -265,11 +267,11 @@ function DocUpload({
                 ? `Add another ${label.toLowerCase()}`
                 : label}
           </p>
-          <p className="text-xs text-muted-foreground">PDF, JPG, or PNG (max 10MB each)</p>
+          <p className="text-xs text-muted-foreground">PDF, JPG, PNG, or HEIC (max 10MB each)</p>
         </div>
         <input
           type="file"
-          accept=".pdf,.jpg,.jpeg,.png"
+          accept=".pdf,.jpg,.jpeg,.png,.heic,.heif"
           className="hidden"
           disabled={uploading}
           onChange={(e) => {

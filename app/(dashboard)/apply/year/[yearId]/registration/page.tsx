@@ -618,7 +618,7 @@ function DocumentUpload({
       <FileUpload
         maxFiles={5}
         maxSize={10 * 1024 * 1024}
-        accept=".pdf,.jpg,.jpeg,.png"
+        accept=".pdf,.jpg,.jpeg,.png,.heic,.heif"
         className="w-full"
         value={pendingFiles}
         onValueChange={handleFilesChange}
@@ -642,7 +642,7 @@ function DocumentUpload({
                   ? `Add another ${label.toLowerCase()}`
                   : label}
             </p>
-            <p className="text-xs text-muted-foreground">PDF, JPG, or PNG (max 10MB each, up to 5)</p>
+            <p className="text-xs text-muted-foreground">PDF, JPG, PNG, or HEIC (max 10MB each, up to 5)</p>
           </div>
         </FileUploadDropzone>
         {/* Touch-only shortcut to snap a photo of a paper document. Hidden on

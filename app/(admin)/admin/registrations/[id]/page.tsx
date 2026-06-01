@@ -3650,6 +3650,36 @@ function EmergencyContactsBlock({
   const [editTarget, setEditTarget] = useState<XanoEmergencyContact | null>(
     null
   );
+  // Same single-instance pattern for delete: `deleteTarget` drives one
+  // shared confirm dialog rather than one AlertDialog per row.
+  const [deleteTarget, setDeleteTarget] = useState<XanoEmergencyContact | null>(
+    null
+  );
+  const [deleting, setDeleting] = useState(false);
+
+  async function runDelete() {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      const res = await fetch(
+        `/api/admin/emergency-contacts/${deleteTarget.id}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Delete failed (${res.status})`);
+      }
+      toast.success("Emergency contact deleted.");
+      setDeleteTarget(null);
+      onChanged();
+    } catch (err) {
+      console.error("[EmergencyContactsBlock.runDelete]", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't delete.");
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   return (
     <div className="rounded-md border bg-muted/10 p-4 space-y-4">
       <div className="flex items-center justify-between gap-3">
@@ -3686,6 +3716,50 @@ function EmergencyContactsBlock({
           }}
         />
       ) : null}
+      {/* Single page-level delete confirm — mirrors the edit dialog's
+          single-instance pattern. `deleteTarget` drives it; confirming
+          hard-deletes the row via the admin emergency-contacts route. */}
+      <AlertDialog
+        open={deleteTarget !== null}
+        onOpenChange={(next) => {
+          if (!next && !deleting) setDeleteTarget(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Delete{" "}
+              {(deleteTarget
+                ? `${deleteTarget.first_name ?? ""} ${deleteTarget.last_name ?? ""}`.trim()
+                : "") || "this emergency contact"}
+              ?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently removes this emergency contact from the
+              family&rsquo;s file. This can&rsquo;t be undone — the family can
+              re-add the contact from their registration if needed.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={deleting}
+              className="bg-red-600 hover:bg-red-700 text-white"
+              onClick={(e) => {
+                e.preventDefault();
+                void runDelete();
+              }}
+            >
+              {deleting ? (
+                <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+              ) : (
+                <Trash2 className="size-3.5 mr-1.5" />
+              )}
+              Delete contact
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       {contacts.length === 0 ? (
         <p className="text-sm text-muted-foreground">
           No emergency contacts on file for this family.
@@ -3707,22 +3781,34 @@ function EmergencyContactsBlock({
                     </span>
                   ) : null}
                 </p>
-                {/* Per-row edit affordance — opens the shared
-                    Dialog in edit mode with this row's values
-                    pre-populated. Pencil icon (no label) keeps the
-                    card compact; the click-target is wide enough
-                    to be easy to hit without a label. */}
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setEditTarget(c)}
-                  className="bg-white shrink-0"
-                  aria-label={`Edit ${c.first_name ?? ""} ${c.last_name ?? ""}`.trim() || "Edit contact"}
-                >
-                  <Pencil className="size-3.5" />
-                  <span className="ml-1.5">Edit</span>
-                </Button>
+                {/* Per-row edit + delete affordances. Edit opens the
+                    shared Dialog with this row's values pre-populated;
+                    Delete sets `deleteTarget`, opening the shared
+                    confirm dialog above. */}
+                <div className="flex shrink-0 items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setEditTarget(c)}
+                    className="bg-white"
+                    aria-label={`Edit ${c.first_name ?? ""} ${c.last_name ?? ""}`.trim() || "Edit contact"}
+                  >
+                    <Pencil className="size-3.5" />
+                    <span className="ml-1.5">Edit</span>
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setDeleteTarget(c)}
+                    className="bg-white text-red-600 hover:bg-red-50 hover:text-red-700"
+                    aria-label={`Delete ${c.first_name ?? ""} ${c.last_name ?? ""}`.trim() || "Delete contact"}
+                  >
+                    <Trash2 className="size-3.5" />
+                    <span className="ml-1.5">Delete</span>
+                  </Button>
+                </div>
               </div>
               <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
                 <DisabledField label="Email" value={c.email} type="email" />
@@ -3992,7 +4078,7 @@ function AdminDocumentUpload({
         <FileUpload
           maxFiles={5}
           maxSize={10 * 1024 * 1024}
-          accept=".pdf,.jpg,.jpeg,.png"
+          accept=".pdf,.jpg,.jpeg,.png,.heic,.heif"
           value={pending}
           onValueChange={handleFilesChange}
           disabled={uploading}
@@ -4048,7 +4134,7 @@ function AdminDocumentUpload({
       <FileUpload
         maxFiles={5}
         maxSize={10 * 1024 * 1024}
-        accept=".pdf,.jpg,.jpeg,.png"
+        accept=".pdf,.jpg,.jpeg,.png,.heic,.heif"
         value={pending}
         onValueChange={handleFilesChange}
         disabled={uploading}
@@ -4068,7 +4154,7 @@ function AdminDocumentUpload({
                   : `Add another ${label.toLowerCase()}`}
             </p>
             <p className="text-xs text-muted-foreground">
-              PDF, JPG, or PNG (max 10MB each, up to 5)
+              PDF, JPG, PNG, or HEIC (max 10MB each, up to 5)
             </p>
           </div>
         </FileUploadDropzone>
@@ -4110,6 +4196,155 @@ function AdminDocumentUpload({
  * un-verifying a single doc is low-stakes — admin can re-verify
  * immediately if it was a mistake.
  */
+/**
+ * Set of document fields that carry a slot-level `*_admin_confirm`
+ * bool. Removal of these must recompute that bool (via the
+ * `/document-file` DELETE) so an emptied slot can't leave the Students
+ * verify gate stuck green. Optional docs aren't in here — they remove
+ * via a plain array PATCH.
+ */
+const SLOT_CONFIRM_DOC_FIELDS = new Set<string>([
+  "birth_certificate",
+  "school_health_form",
+  "transcripts",
+  "immunization_forms",
+]);
+
+/**
+ * Per-file remove affordance for a student's document arrays — a small
+ * X button + confirm dialog. Mirrors the enrolled-detail page's button
+ * of the same name, but picks its write path by field:
+ *
+ *   - Required docs (birth_certificate / school_health_form /
+ *     transcripts / immunization_forms) route through the
+ *     `/document-file` DELETE so the slot-level confirm bool is
+ *     recomputed after the file drops.
+ *   - Optional docs (iep / ssn_card / passport / student_state_id)
+ *     have no slot bool, so removal is a plain array PATCH on the
+ *     student row.
+ */
+function AdminFileRemoveButton({
+  studentId,
+  fieldKey,
+  files,
+  index,
+  fileName,
+  onChanged,
+}: {
+  studentId: number;
+  fieldKey:
+    | "birth_certificate"
+    | "school_health_form"
+    | "transcripts"
+    | "immunization_forms"
+    | "iep"
+    | "ssn_card"
+    | "passport"
+    | "student_state_id";
+  files: Record<string, unknown>[];
+  index: number;
+  /** File name shown in the confirm dialog. Falls back to a generic
+   *  phrase when the metadata didn't include one. */
+  fileName: string | null;
+  onChanged: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  async function runRemove() {
+    setSaving(true);
+    try {
+      let res: Response;
+      if (SLOT_CONFIRM_DOC_FIELDS.has(fieldKey)) {
+        // Required doc — recompute the slot confirm bool on the server.
+        res = await fetch(
+          `/api/admin/students/${studentId}/document-file?fieldKey=${encodeURIComponent(
+            fieldKey
+          )}&fileIndex=${index}`,
+          { method: "DELETE" }
+        );
+      } else {
+        // Optional doc — no slot bool; just persist the filtered array.
+        const next = files.filter((_, i) => i !== index);
+        res = await fetch(`/api/admin/students/${studentId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ [fieldKey]: next }),
+        });
+      }
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Remove failed (${res.status})`);
+      }
+      toast.success("File removed.");
+      setOpen(false);
+      onChanged();
+    } catch (err) {
+      console.error("[AdminFileRemoveButton.runRemove]", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't remove file.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        className="size-6 shrink-0 text-muted-foreground hover:text-red-600 hover:bg-red-50"
+        onClick={() => setOpen(true)}
+        disabled={saving}
+        title="Remove this file"
+        aria-label={fileName ? `Remove ${fileName}` : "Remove this file"}
+      >
+        {saving ? (
+          <Loader2 className="size-3.5 animate-spin" />
+        ) : (
+          <X className="size-3.5" />
+        )}
+      </Button>
+      <AlertDialog
+        open={open}
+        onOpenChange={(next) => {
+          if (!next && !saving) setOpen(next);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove uploaded file?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {fileName
+                ? `This removes "${fileName}" from this student's record. `
+                : "This removes the file from this student's record. "}
+              You can re-upload from the same row if it was a mistake.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={saving}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={saving}
+              className="bg-red-600 hover:bg-red-700 text-white"
+              onClick={(e) => {
+                e.preventDefault();
+                void runRemove();
+              }}
+            >
+              {saving ? (
+                <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+              ) : (
+                <Trash2 className="size-3.5 mr-1.5" />
+              )}
+              Yes, remove
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
+}
+
 function RequiredDocumentsTable({
   row,
   onChanged,
@@ -4393,6 +4628,18 @@ function RequiredDocumentSlotCard({
                           <RotateCcw className="size-3.5" />
                         )}
                       </Button>
+                      <AdminFileRemoveButton
+                        studentId={studentId}
+                        fieldKey={fieldKey}
+                        files={files}
+                        index={idx}
+                        fileName={
+                          typeof (file as { name?: unknown }).name === "string"
+                            ? (file as { name: string }).name
+                            : null
+                        }
+                        onChanged={onChanged}
+                      />
                     </div>
                   </TableCell>
                 </TableRow>
@@ -4569,6 +4816,23 @@ function FilePreviewGroup({
                     {name} · unavailable
                   </span>
                 )}
+                {/* Remove affordance — only when this group carries an
+                    upload (and therefore the studentId / fieldKey /
+                    refresh callback needed to persist the change). */}
+                {upload ? (
+                  <AdminFileRemoveButton
+                    studentId={upload.studentId}
+                    fieldKey={upload.fieldKey}
+                    files={entries}
+                    index={idx}
+                    fileName={
+                      typeof (f as { name?: unknown }).name === "string"
+                        ? (f as { name: string }).name
+                        : null
+                    }
+                    onChanged={upload.onChanged}
+                  />
+                ) : null}
               </div>
             );
           })

@@ -506,7 +506,7 @@ function buildRows({
       emptyHint: "No award letter uploaded yet.",
       upload: {
         onUpload: uploadSnap,
-        accept: ".pdf,.jpg,.jpeg,.png",
+        accept: ".pdf,.jpg,.jpeg,.png,.heic,.heif",
         maxFiles: 5,
       },
       confirmation: {
@@ -620,7 +620,7 @@ function buildRows({
       emptyHint: "No tax return uploaded yet.",
       upload: {
         onUpload: uploadTaxReturn,
-        accept: ".pdf,.jpg,.jpeg,.png",
+        accept: ".pdf,.jpg,.jpeg,.png,.heic,.heif",
         maxFiles: 10,
       },
       confirmation: {
@@ -877,7 +877,7 @@ function buildRows({
           files: slot.files,
           upload: {
             onUpload: uploadSlot,
-            accept: ".pdf,.jpg,.jpeg,.png",
+            accept: ".pdf,.jpg,.jpeg,.png,.heic,.heif",
             maxFiles: 10,
           },
           confirmation: {
@@ -1084,7 +1084,7 @@ function DocRow({
               <FileUpload
                 maxFiles={row.upload.maxFiles ?? 5}
                 maxSize={10 * 1024 * 1024}
-                accept={row.upload.accept ?? ".pdf,.jpg,.jpeg,.png"}
+                accept={row.upload.accept ?? ".pdf,.jpg,.jpeg,.png,.heic,.heif"}
                 value={pending}
                 onValueChange={handleFilesChange}
                 disabled={uploading}

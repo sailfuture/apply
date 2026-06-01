@@ -15,6 +15,7 @@ import {
 } from "radix-ui";
 import * as React from "react";
 import { cn } from "@/lib/utils";
+import { convertHeicToJpeg } from "@/lib/heic";
 import { useAsRef } from "@/hooks/use-as-ref";
 import { useLazyRef } from "@/hooks/use-lazy-ref";
 
@@ -498,7 +499,7 @@ function FileUpload(props: FileUploadProps) {
   );
 
   const onFilesChange = React.useCallback(
-    (originalFiles: File[]) => {
+    async (originalFiles: File[]) => {
       if (disabled) return;
 
       let filesToProcess = [...originalFiles];
@@ -548,17 +549,27 @@ function FileUpload(props: FileUploadProps) {
         }
 
         if (acceptTypes) {
-          const fileType = file.type;
-          const fileExtension = `.${file.name.split(".").pop()}`;
+          // Normalize to lower-case so type matching is case-insensitive.
+          // Phones and cameras routinely emit UPPER-CASE extensions
+          // (`IMG_0001.JPG`, `SCAN.PDF`); the OS file picker shows them,
+          // but without this normalization the in-component check below
+          // rejected them as "File type not accepted" even though `.jpg`
+          // is in `accept` — the root cause of the .jpg upload failures.
+          const fileType = file.type.toLowerCase();
+          const fileExtension = `.${
+            file.name.split(".").pop()?.toLowerCase() ?? ""
+          }`;
 
           if (
-            !acceptTypes.some(
-              (type) =>
+            !acceptTypes.some((rawType) => {
+              const type = rawType.toLowerCase();
+              return (
                 type === fileType ||
                 type === fileExtension ||
                 (type.includes("/*") &&
-                  fileType.startsWith(type.replace("/*", "/"))),
-            )
+                  fileType.startsWith(type.replace("/*", "/")))
+              );
+            })
           ) {
             rejectionMessage = "File type not accepted";
             propsRef.current.onFileReject?.(file, rejectionMessage);
@@ -588,8 +599,32 @@ function FileUpload(props: FileUploadProps) {
         }, 2000);
       }
 
+      // Normalize HEIC/HEIF images to JPEG before they enter the
+      // pipeline so what gets uploaded is universally viewable (iPhones
+      // shoot HEIC, which most browsers can't render). No-op for every
+      // other file type; heic2any lazy-loads on the first HEIC.
+      let processedFiles = acceptedFiles;
       if (acceptedFiles.length > 0) {
-        store.dispatch({ type: "ADD_FILES", files: acceptedFiles });
+        try {
+          processedFiles = await Promise.all(
+            acceptedFiles.map((file) => convertHeicToJpeg(file)),
+          );
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : "Conversion failed";
+          for (const file of acceptedFiles) {
+            propsRef.current.onFileReject?.(file, message);
+          }
+          store.dispatch({ type: "SET_INVALID", invalid: true });
+          setTimeout(() => {
+            store.dispatch({ type: "SET_INVALID", invalid: false });
+          }, 2000);
+          return;
+        }
+      }
+
+      if (processedFiles.length > 0) {
+        store.dispatch({ type: "ADD_FILES", files: processedFiles });
 
         if (isControlled && propsRef.current.onValueChange) {
           const currentFiles = Array.from(store.getState().files.values()).map(
@@ -599,16 +634,16 @@ function FileUpload(props: FileUploadProps) {
         }
 
         if (propsRef.current.onAccept) {
-          propsRef.current.onAccept(acceptedFiles);
+          propsRef.current.onAccept(processedFiles);
         }
 
-        for (const file of acceptedFiles) {
+        for (const file of processedFiles) {
           propsRef.current.onFileAccept?.(file);
         }
 
         if (propsRef.current.onUpload) {
           requestAnimationFrame(() => {
-            onFilesUpload(acceptedFiles);
+            onFilesUpload(processedFiles);
           });
         }
       }

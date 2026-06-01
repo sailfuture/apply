@@ -5,6 +5,7 @@ import { useMemo, useRef, useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import { toast } from "sonner";
 import { useStudents, useApplications, useSchoolYears, mutateStudents } from "@/hooks/use-api";
+import { convertHeicToJpeg } from "@/lib/heic";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import {
@@ -539,8 +540,9 @@ function DocRow({
     if (!file) return;
     setUploading(true);
     try {
+      const uploadFile = await convertHeicToJpeg(file);
       const form = new FormData();
-      form.append("file", file);
+      form.append("file", uploadFile);
       const upRes = await fetch("/api/upload", { method: "POST", body: form });
       if (!upRes.ok) {
         const body = await upRes.json().catch(() => null);
@@ -626,7 +628,7 @@ function DocRow({
           <input
             ref={fileInputRef}
             type="file"
-            accept=".pdf,.jpg,.jpeg,.png"
+            accept=".pdf,.jpg,.jpeg,.png,.heic,.heif"
             className="hidden"
             onChange={handleUpload}
             disabled={uploading}
