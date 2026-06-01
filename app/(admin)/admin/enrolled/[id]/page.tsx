@@ -9,6 +9,7 @@ import {
   ArrowLeft,
   CheckCircle2,
   Circle,
+  Download,
   ExternalLink,
   FileText,
   FileUp,
@@ -317,6 +318,17 @@ export default function EnrolledStudentDetailPage() {
         student={student}
         schoolYear={school_year}
         onChanged={() => mutate()}
+      />
+
+      {/* Liability Waiver — its own card (lifted out of the packet's
+          Other Documents list) so admin can find + download the
+          signed waiver for this school year at a glance. Implicitly
+          year-scoped: the waiver state lives on the same per-year
+          packet the page is already scoped to. */}
+      <LiabilityWaiverCard
+        packet={packet}
+        student={student}
+        schoolYear={school_year}
       />
 
       <TestingCard
@@ -2212,52 +2224,19 @@ function PacketCard({
           onChanged={onChanged}
         />
 
-        {/* Liability waiver + optional documents — separate from
-            the Documents to Review table because the waiver is a
-            per-packet PDF (different shape than student-row file
-            arrays) and the optional documents don't carry an
-            admin-confirm triplet. The four optional categories
-            (IEP, SSN, Passport, State ID) ship a per-category
-            upload affordance so admin can attach files on the
-            family's behalf — useful for paper records being
-            digitized post-acceptance. */}
+        {/* Other (optional) documents — IEP, SSN card, passport,
+            state ID. Separate from the Documents to Review table
+            because they don't carry an admin-confirm triplet. Each
+            category ships a per-category upload affordance so admin
+            can attach files on the family's behalf — useful for
+            paper records being digitized post-acceptance. The signed
+            liability waiver has its own card above, so it no longer
+            appears in this list. */}
         <div className="space-y-3">
           <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
             Other Documents
           </p>
           <ul className="text-sm space-y-1.5">
-            <FileLine
-              label="Liability waiver (signed)"
-              /* Use the admin PandaDoc download proxy instead of the
-                 raw `liability_waiver_pdf_url` stored on the packet —
-                 that URL points at api.pandadoc.com and needs the
-                 API key in the request header, which the admin
-                 browser doesn't have. The proxy fetches server-side
-                 with our key and streams the PDF bytes back. Gate
-                 on `liability_waiver_pandadoc_id` (the source of
-                 truth) AND `status === "completed"` so we don't
-                 render "Open" for half-signed waivers. */
-              url={
-                packet.liability_waiver_pandadoc_id &&
-                packet.liability_waiver_status === "completed"
-                  ? `/api/admin/pandadoc/download?documentId=${packet.liability_waiver_pandadoc_id}`
-                  : undefined
-              }
-              /* Status caption — only render on packets where the
-                 waiver has been kicked off but isn't fully signed
-                 yet, so admin can spot "sent 6 weeks ago, never
-                 returned" rows at a glance. Completed packets show
-                 "Open" — no caption needed in that case. */
-              caption={
-                packet.liability_waiver_status !== "completed" &&
-                packet.liability_waiver_status &&
-                packet.liability_waiver_sent_at
-                  ? `${packet.liability_waiver_status} · sent ${formatNoteTimestamp(
-                      new Date(packet.liability_waiver_sent_at).getTime()
-                    )}`
-                  : undefined
-              }
-            />
             <OptionalDocRow
               label="IEP"
               files={student.iep}
@@ -2346,6 +2325,170 @@ function PacketCard({
           </>
         )}
       </div>
+    </Card>
+  );
+}
+
+/**
+ * Tidy a stored PandaDoc status string for display ("sent" → "Sent",
+ * "document.viewed" → "Viewed"). Mirrors the `formatPdStatus` helper
+ * on the enrolled-list + family-registration pages so the three
+ * surfaces label waiver progress identically.
+ */
+function formatWaiverStatus(status: string): string {
+  const cleaned = status.replace(/^document\./, "").replace(/_/g, " ");
+  if (!cleaned) return status;
+  return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+}
+
+/**
+ * Liability Waiver card — surfaces the per-year signed waiver PDF
+ * with a prominent Download affordance. The waiver is a per-student,
+ * per-year PandaDoc document whose id + status live on the packet
+ * row, so this card is implicitly scoped to the page's `yearId`
+ * (same scope as PacketCard). Three states:
+ *   - Signed (`pandadoc id` + status "completed") → Download + View.
+ *   - In progress (status "sent" / "viewed") → status + sent date,
+ *     no download yet.
+ *   - Not started / no packet → muted explainer.
+ *
+ * Download goes through the admin PandaDoc proxy
+ * (`/api/admin/pandadoc/download`), NOT the raw `liability_waiver_pdf_url`
+ * on the packet — that URL points at api.pandadoc.com and needs our
+ * API key in the request header, which the admin browser doesn't
+ * have. The proxy fetches server-side with the key and streams the
+ * PDF back. The anchor's `download` attribute forces a save (rather
+ * than the proxy's inline preview) and names the file with the
+ * student + year so downloads across students/years don't collide —
+ * the attribute wins over `Content-Disposition: inline` for same-
+ * origin URLs, which this is.
+ */
+function LiabilityWaiverCard({
+  packet,
+  student,
+  schoolYear,
+}: {
+  packet: AdminEnrolledStudentResponse["packet"];
+  student: AdminEnrolledStudentResponse["student"];
+  schoolYear: AdminEnrolledStudentResponse["school_year"];
+}) {
+  const yearName = schoolYear?.year_name ?? "";
+  const yearSuffix = yearName ? ` · ${yearName}` : "";
+
+  const pandadocId = packet?.liability_waiver_pandadoc_id ?? "";
+  const status = packet?.liability_waiver_status ?? "";
+  const sentAt = packet?.liability_waiver_sent_at ?? null;
+  // "completed" + a pandadoc id is the only state with a signed PDF
+  // to download. Same gate the list page + the old Other Documents
+  // row used, so every surface agrees on what "Signed" means.
+  const isSigned = !!pandadocId && status === "completed";
+
+  const downloadUrl = isSigned
+    ? `/api/admin/pandadoc/download?documentId=${pandadocId}`
+    : null;
+  // Filename: liability-waiver-<first>-<last>-<year>.pdf. Slug each
+  // piece so spaces / the year's en-dash don't leak into the saved
+  // name; drop empty pieces so a missing name doesn't leave a "--".
+  const slug = (s: string) =>
+    s
+      .trim()
+      .replace(/[^a-z0-9]+/gi, "-")
+      .replace(/^-+|-+$/g, "");
+  const downloadName =
+    [
+      "liability-waiver",
+      slug(student.first_name),
+      slug(student.last_name),
+      slug(yearName),
+    ]
+      .filter(Boolean)
+      .join("-") + ".pdf";
+
+  return (
+    <Card className="overflow-hidden gap-0 py-0 bg-white">
+      <CardHeader className="py-3 !pb-3 border-b">
+        <div className="flex items-center justify-between gap-3">
+          <CardTitle className="text-base">
+            Liability Waiver{yearSuffix}
+          </CardTitle>
+          {isSigned ? (
+            <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-800">
+              <CheckCircle2 className="size-2.5" />
+              Signed
+            </span>
+          ) : status ? (
+            <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-amber-800">
+              {formatWaiverStatus(status)}
+            </span>
+          ) : (
+            <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+              Not started
+            </span>
+          )}
+        </div>
+      </CardHeader>
+      <CardContent className="py-5 bg-white">
+        {isSigned && downloadUrl ? (
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="flex size-9 shrink-0 items-center justify-center rounded-md border bg-muted/40">
+                <FileText className="size-4 text-muted-foreground" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-medium truncate">
+                  Signed liability waiver{yearName ? ` · ${yearName}` : ""}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Signed and on file for this school year.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <Button asChild variant="outline" size="sm" className="bg-white">
+                <a href={downloadUrl} target="_blank" rel="noopener noreferrer">
+                  View
+                  <ExternalLink className="size-3.5 ml-1.5" />
+                </a>
+              </Button>
+              <Button
+                asChild
+                size="sm"
+                className="bg-blue-600 hover:bg-blue-700 text-white"
+              >
+                <a href={downloadUrl} download={downloadName}>
+                  <Download className="size-3.5 mr-1.5" />
+                  Download PDF
+                </a>
+              </Button>
+            </div>
+          </div>
+        ) : status ? (
+          <div className="flex items-start gap-3">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-md border bg-muted/40">
+              <FileText className="size-4 text-muted-foreground" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-medium">
+                Waiver {formatWaiverStatus(status).toLowerCase()} — not signed
+                yet
+              </p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {sentAt
+                  ? `Sent ${formatNoteTimestamp(new Date(sentAt).getTime())}. `
+                  : ""}
+                The signed PDF will be available to download here once the
+                family completes it.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            {packet
+              ? "The family hasn’t signed the liability waiver for this school year yet."
+              : "No registration packet on file for this student yet, so there’s no liability waiver to download."}
+          </p>
+        )}
+      </CardContent>
     </Card>
   );
 }
@@ -2637,57 +2780,6 @@ function ReadField({
         className="border-input bg-white text-foreground"
       />
     </Field>
-  );
-}
-
-/**
- * Renders one file/url row inside the Documents list. Accepts either
- * a Xano file metadata object (`{ path, url, mime, size }`) or a
- * plain URL string (used for the liability waiver PDF). Empty values
- * collapse to a muted "Not uploaded" line.
- */
-function FileLine({
-  label,
-  file,
-  url,
-  caption,
-}: {
-  label: string;
-  /** Xano file metadata blob — could be object or array (legacy). */
-  file?: Record<string, unknown> | null;
-  /** Direct URL fallback (used by the liability waiver PDF). */
-  url?: string;
-  /** Optional muted caption rendered under the label — used to show
-   *  in-progress status on the waiver row ("sent · 2 weeks ago"). */
-  caption?: string;
-}) {
-  const resolvedUrl = url || resolveFileUrl(file);
-  return (
-    <li className="flex items-center justify-between gap-3 border-t first:border-t-0 py-1.5">
-      <div className="min-w-0">
-        <span className="text-sm text-muted-foreground">{label}</span>
-        {caption ? (
-          <p className="text-[11px] text-muted-foreground/70 mt-0.5">
-            {caption}
-          </p>
-        ) : null}
-      </div>
-      {resolvedUrl ? (
-        <a
-          href={resolvedUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline"
-        >
-          Open
-          <ExternalLink className="size-3" />
-        </a>
-      ) : (
-        <span className="text-xs italic text-muted-foreground/70">
-          Not uploaded
-        </span>
-      )}
-    </li>
   );
 }
 
@@ -3524,7 +3616,7 @@ function AdminDocumentUpload({
         <FileUpload
           maxFiles={5}
           maxSize={10 * 1024 * 1024}
-          accept=".pdf,.jpg,.jpeg,.png"
+          accept=".pdf,.jpg,.jpeg,.png,.heic,.heif"
           value={pending}
           onValueChange={handleFilesChange}
           disabled={uploading}
@@ -3580,7 +3672,7 @@ function AdminDocumentUpload({
       <FileUpload
         maxFiles={5}
         maxSize={10 * 1024 * 1024}
-        accept=".pdf,.jpg,.jpeg,.png"
+        accept=".pdf,.jpg,.jpeg,.png,.heic,.heif"
         value={pending}
         onValueChange={handleFilesChange}
         disabled={uploading}
@@ -3600,7 +3692,7 @@ function AdminDocumentUpload({
                   : `Add another ${label.toLowerCase()}`}
             </p>
             <p className="text-xs text-muted-foreground">
-              PDF, JPG, or PNG (max 10MB each, up to 5)
+              PDF, JPG, PNG, or HEIC (max 10MB each, up to 5)
             </p>
           </div>
         </FileUploadDropzone>
