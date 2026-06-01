@@ -5524,10 +5524,14 @@ function FamilyRegistrationConfirmationCard({
                   confirmation?
                 </AlertDialogTitle>
                 <AlertDialogDescription>
-                  This clears the family-level registration latch.
-                  Per-section verifies and per-student packet
-                  confirmations stay intact — only the rollup audit
-                  is cleared. You can re-confirm at any time.
+                  This clears the family-level confirmation and reopens the
+                  registration for the family: they drop back to the editable
+                  registration flow (out of &ldquo;in review&rdquo;) with the
+                  Registration Packet step reopened to re-edit and re-submit.
+                  Tuition / Enrollment / Volunteer verifies and per-student
+                  packet confirmations stay intact, and students stay enrolled
+                  until you Unenroll them. You can re-confirm once they
+                  re-submit.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>

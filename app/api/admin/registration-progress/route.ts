@@ -318,6 +318,28 @@ export async function PATCH(req: NextRequest) {
           patch.is_registration_admin_confirm_time = now;
           patch.registration_admin_confirmed_admin = adminName;
         }
+      } else {
+        // Un-confirm cascade — reopen the registration for editing. The
+        // mirror of the confirm cascade above: drop the parent out of the
+        // "registration in review" pending view (`isSubmitted=false`) back
+        // to the editable step table, and reopen the Registration Packet
+        // step (`isRegistration=false` + clear the family-level packet
+        // section verify) so the parent re-edits and re-submits it.
+        //
+        // We deliberately DON'T touch the other section completions
+        // (tuition / enrollment / volunteer), the per-student packet
+        // `registrationConfirmed` flags, or the students' `isEnrolled`
+        // flags — undoing the family confirmation is "reopen for edits",
+        // not "unenroll" (the Unenroll modal owns that, with its own
+        // audit). Admin re-verifies the reopened section + re-confirms the
+        // family once the parent re-submits.
+        if (!("isSubmitted" in patch)) patch.isSubmitted = false;
+        if (!("isRegistration" in patch)) patch.isRegistration = false;
+        if (!("is_registration_admin_confirm" in patch)) {
+          patch.is_registration_admin_confirm = false;
+          patch.is_registration_admin_confirm_time = null;
+          patch.registration_admin_confirmed_admin = "";
+        }
       }
     }
 
