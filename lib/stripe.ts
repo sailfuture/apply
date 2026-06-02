@@ -376,6 +376,36 @@ export async function uncancelSubscription(
 }
 
 /**
+ * Hard-cancel a subscription immediately and bill the family for the
+ * current month in full. The "immediate cancel" counterpart to
+ * `cancelSubscriptionAtPeriodEnd` — used by the per-row "Cancel &
+ * invoice" action on the admin Billing list.
+ *
+ *   - `prorate: false` — do NOT credit the unused portion of the
+ *     current month. Tuition is billed in whole months (every other
+ *     billing op here uses `proration_behavior: "none"`), so a family
+ *     leaving mid-month still owes the full month they were already
+ *     invoiced for at the cycle start.
+ *   - `invoice_now: true` — finalize any pending/un-invoiced items
+ *     immediately so the final bill is sent now rather than waiting on
+ *     a billing cycle that won't come (the subscription is ending).
+ *
+ * Canceling fires `customer.subscription.deleted`; the Stripe webhook
+ * clears `stripe_subscription_id` on the family-payment row, so the
+ * family drops off the Billing list on the next refresh. The current
+ * month's already-issued invoice stays open and owed.
+ */
+export async function cancelSubscriptionImmediatelyWithInvoice(
+  subscriptionId: string
+): Promise<Stripe.Subscription> {
+  const stripe = getStripeClient();
+  return stripe.subscriptions.cancel(subscriptionId, {
+    invoice_now: true,
+    prorate: false,
+  });
+}
+
+/**
  * Refund the most recent paid invoice on a Subscription. Refunds the
  * underlying Charge in full; partial refunds are out of scope for the
  * standard admin flow (admin can issue partial refunds via the Stripe

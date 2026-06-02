@@ -3,6 +3,7 @@ import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
 import {
   cancelSubscriptionAtPeriodEnd,
+  cancelSubscriptionImmediatelyWithInvoice,
   getBillingSnapshot,
   refundInvoice,
   uncancelSubscription,
@@ -20,10 +21,16 @@ import { startMonthlyBilling, BillingPreconditionError } from "@/lib/billing";
  *     Stripe each call — no Xano cache.
  *
  *   POST /api/admin/families/:id/billing?yearId=Y
- *     Body: `{ action: "start" | "cancel" | "uncancel" | "refund", ...payload }`
+ *     Body: `{ action: "start" | "cancel" | "cancel_and_invoice" |
+ *       "uncancel" | "refund", ...payload }`
  *     Runs the action and returns a refreshed snapshot. Errors
  *     surface as 4xx for caller-fixable issues, 502 for Stripe
  *     transport.
+ *
+ *     `cancel` ends the subscription at period end (family keeps the
+ *     month they paid for). `cancel_and_invoice` is the immediate
+ *     counterpart used by the per-row action on the Billing list —
+ *     cancels now and bills the current month in full (no proration).
  *
  * The legacy `"update-amount"` action is gone — per-student
  * `monthly_amount` is the source of truth now, and changes to it
@@ -38,7 +45,7 @@ import { startMonthlyBilling, BillingPreconditionError } from "@/lib/billing";
  */
 
 interface BillingActionBody {
-  action: "start" | "cancel" | "uncancel" | "refund";
+  action: "start" | "cancel" | "cancel_and_invoice" | "uncancel" | "refund";
   /** Legacy field kept on the type to tolerate older clients sending
    *  it; the route ignores the value now. */
   monthlyTuition?: number;
@@ -125,6 +132,14 @@ export async function POST(
     switch (body.action) {
       case "cancel":
         await cancelSubscriptionAtPeriodEnd(subscriptionId);
+        break;
+      case "cancel_and_invoice":
+        // Immediate hard cancel + final invoice for the current month
+        // in full (no proration). Stripe fires
+        // `customer.subscription.deleted`; the webhook clears the
+        // family-payment row's `stripe_subscription_id`, so the family
+        // drops off the Billing list on refresh.
+        await cancelSubscriptionImmediatelyWithInvoice(subscriptionId);
         break;
       case "uncancel":
         // Reverse a pending cancellation. Only valid while the

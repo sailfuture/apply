@@ -3,9 +3,27 @@
 import { useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
-import { ChevronRight, CreditCard, ExternalLink, Search } from "lucide-react";
+import { toast } from "sonner";
+import {
+  ChevronRight,
+  CreditCard,
+  ExternalLink,
+  Loader2,
+  Search,
+  XCircle,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   Card,
   CardContent,
@@ -46,12 +64,22 @@ export default function AdminBillingPage() {
   const searchParams = useSearchParams();
   const yearId = searchParams.get("yearId");
 
-  const { data, isLoading, error } = useSWR<BillingRow[]>(
+  const { data, isLoading, error, mutate } = useSWR<BillingRow[]>(
     yearId ? `/api/admin/billing?yearId=${yearId}` : null,
     adminFetcher
   );
 
   const rows = useMemo(() => (Array.isArray(data) ? data : []), [data]);
+
+  // Optimistically drop a family from the list after an immediate
+  // cancel. The Stripe webhook clears the subscription pointer
+  // server-side, but that's async — removing the row locally without
+  // revalidating keeps the canceled family from flickering back in
+  // while the webhook catches up.
+  const handleRowCanceled = (rowId: number) =>
+    void mutate((current) => (current ?? []).filter((r) => r.id !== rowId), {
+      revalidate: false,
+    });
 
   return (
     <div className="p-6 space-y-6">
@@ -105,6 +133,7 @@ export default function AdminBillingPage() {
               `/admin/families/${row.family_id}/billing?yearId=${row.year_id}`
             )
           }
+          onRowCanceled={handleRowCanceled}
         />
       )}
     </div>
@@ -114,9 +143,11 @@ export default function AdminBillingPage() {
 function BillingTable({
   rows,
   onRowClick,
+  onRowCanceled,
 }: {
   rows: BillingRow[];
   onRowClick: (row: BillingRow) => void;
+  onRowCanceled: (rowId: number) => void;
 }) {
   const [search, setSearch] = useState("");
   const visible = useMemo(() => {
@@ -154,25 +185,25 @@ function BillingTable({
         <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[22%]">
+              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[19%]">
                 Family
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[22%]">
+              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[18%]">
                 Primary Contact
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[12%] text-right">
+              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[11%] text-right">
                 Monthly
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[12%] text-right">
+              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[11%] text-right">
                 Year total
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[12%] text-right">
+              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[11%] text-right">
                 Paid
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[14%] text-right">
+              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[12%] text-right">
                 Outstanding
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[6%] text-right" />
+              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[18%] text-right" />
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -220,7 +251,13 @@ function BillingTable({
                     {formatCents(row.outstanding_cents)}
                   </TableCell>
                   <TableCell className="text-right">
-                    <ChevronRight className="size-4 text-muted-foreground inline" />
+                    <div className="flex items-center justify-end gap-2">
+                      <BillingRowCancelButton
+                        row={row}
+                        onCanceled={() => onRowCanceled(row.id)}
+                      />
+                      <ChevronRight className="size-4 text-muted-foreground shrink-0" />
+                    </div>
                   </TableCell>
                 </TableRow>
               ))
@@ -229,6 +266,116 @@ function BillingTable({
         </Table>
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * Per-row "Cancel & invoice" affordance. Immediately cancels the
+ * family's Stripe subscription and bills the current month in full
+ * (no proration) via the `cancel_and_invoice` action. Guarded by a
+ * warning modal since it's immediate and irreversible. `stopPropagation`
+ * keeps clicks from triggering the row's navigate-to-detail handler.
+ */
+function BillingRowCancelButton({
+  row,
+  onCanceled,
+}: {
+  row: BillingRow;
+  onCanceled: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  async function runCancel() {
+    setSaving(true);
+    try {
+      const res = await fetch(
+        `/api/admin/families/${row.family_id}/billing?yearId=${row.year_id}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "cancel_and_invoice" }),
+        }
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error ?? `Cancel failed (${res.status})`);
+      }
+      toast.success(
+        `${row.family_name}'s subscription canceled — final invoice issued.`
+      );
+      setOpen(false);
+      onCanceled();
+    } catch (err) {
+      console.error("[BillingRowCancelButton.runCancel]", err);
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't cancel subscription."
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={saving}
+        className="bg-white text-red-700 hover:text-red-800 hover:bg-red-50 shrink-0"
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen(true);
+        }}
+      >
+        {saving ? (
+          <Loader2 className="size-3.5 mr-1.5 animate-spin" aria-hidden="true" />
+        ) : (
+          <XCircle className="size-3.5 mr-1.5" aria-hidden="true" />
+        )}
+        Cancel &amp; invoice
+      </Button>
+      <AlertDialog open={open} onOpenChange={(o) => !saving && setOpen(o)}>
+        <AlertDialogContent onClick={(e) => e.stopPropagation()}>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Cancel {row.family_name}&rsquo;s subscription and send the final
+              invoice?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This ends {row.family_name}&rsquo;s monthly subscription{" "}
+              <strong>immediately</strong> and bills them for the current month
+              in full — no partial-month proration. Future invoices stop, and
+              any unpaid invoices stay owed. This can&rsquo;t be undone; you
+              would start a new subscription to re-enroll them.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={saving}>Keep active</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={saving}
+              className="bg-red-600 hover:bg-red-700 text-white"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                void runCancel();
+              }}
+            >
+              {saving ? (
+                <Loader2
+                  className="size-3.5 mr-1.5 animate-spin"
+                  aria-hidden="true"
+                />
+              ) : (
+                <XCircle className="size-3.5 mr-1.5" aria-hidden="true" />
+              )}
+              Cancel &amp; invoice
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }
 
