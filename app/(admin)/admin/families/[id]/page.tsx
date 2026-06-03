@@ -17,6 +17,7 @@ import {
   HelpCircle,
   Loader2,
   Pencil,
+  Plus,
   SquarePen,
   Trash2,
   Undo2,
@@ -3046,6 +3047,34 @@ function TestingBlock({
 
 /* ─────────────────────── Scholarship block ─────────────────────── */
 
+/** Editable scalar fields on the scholarship row — every key is a
+ *  `keyof XanoScholarship` the admin PATCH route whitelists. The
+ *  child tables + document slots are intentionally absent (Phase 2 /
+ *  parent flow). */
+type ScholarshipDraft = {
+  household_adults: number;
+  household_children: number;
+  no_contributing_member: boolean;
+  government_benefits: boolean;
+  business_income_monthly: number | null;
+  capital_gains_monthly: number | null;
+  child_support_monthly: number | null;
+  alimony_monthly: number | null;
+  trusts_monthly: number | null;
+  other_income_monthly: number | null;
+  assets_checking: number | null;
+  assets_savings: number | null;
+  assets_retirement_savings: number | null;
+  assets_stocks_bonds_securities: number | null;
+  assets_trusts_inheritance: number | null;
+  assets_business: number | null;
+  debts_credit_cards: number | null;
+  debts_student_loans: number | null;
+  debts_personal_loans: number | null;
+  family_contribution_per_month: number | null;
+  scholarship_advocacy_letter: string;
+};
+
 function ScholarshipBlock({
   scholarship,
   familyId,
@@ -3107,6 +3136,96 @@ function ScholarshipBlock({
   const onFullForm =
     !scholarship.isNotParticipating && !scholarship.isSNAPBenefits;
 
+  // ── Inline editor — admin corrects the family's submitted figures
+  //    (typo fix, paper-application transcription). Scoped to the
+  //    scalar scholarship-row columns; child tables + document
+  //    uploads stay on the parent flow. Persists via the admin-scoped
+  //    PATCH on /api/admin/scholarships/[id]. Locked while the
+  //    Financial Aid section is verified (`pathLocked`) — same audit
+  //    rule as the path selector: Undo the verification to edit, so a
+  //    sign-off never goes stale under changed numbers. ──
+  const seedDraft = (): ScholarshipDraft => ({
+    household_adults: scholarship.household_adults ?? 0,
+    household_children: scholarship.household_children ?? 0,
+    no_contributing_member: scholarship.no_contributing_member ?? false,
+    government_benefits: scholarship.government_benefits ?? false,
+    business_income_monthly: scholarship.business_income_monthly ?? null,
+    capital_gains_monthly: scholarship.capital_gains_monthly ?? null,
+    child_support_monthly: scholarship.child_support_monthly ?? null,
+    alimony_monthly: scholarship.alimony_monthly ?? null,
+    trusts_monthly: scholarship.trusts_monthly ?? null,
+    other_income_monthly: scholarship.other_income_monthly ?? null,
+    assets_checking: scholarship.assets_checking ?? null,
+    assets_savings: scholarship.assets_savings ?? null,
+    assets_retirement_savings: scholarship.assets_retirement_savings ?? null,
+    assets_stocks_bonds_securities:
+      scholarship.assets_stocks_bonds_securities ?? null,
+    assets_trusts_inheritance: scholarship.assets_trusts_inheritance ?? null,
+    assets_business: scholarship.assets_business ?? null,
+    debts_credit_cards: scholarship.debts_credit_cards ?? null,
+    debts_student_loans: scholarship.debts_student_loans ?? null,
+    debts_personal_loans: scholarship.debts_personal_loans ?? null,
+    family_contribution_per_month:
+      scholarship.family_contribution_per_month ?? null,
+    scholarship_advocacy_letter: scholarship.scholarship_advocacy_letter ?? "",
+  });
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [draft, setDraft] = useState<ScholarshipDraft>(seedDraft);
+
+  function enterEdit() {
+    setDraft(seedDraft());
+    setEditing(true);
+  }
+  function patchDraft<K extends keyof ScholarshipDraft>(
+    key: K,
+    value: ScholarshipDraft[K]
+  ) {
+    setDraft((d) => ({ ...d, [key]: value }));
+  }
+
+  async function runSave() {
+    // Diff against the persisted row (normalized through the same
+    // seed) so we PATCH only the columns admin actually changed.
+    const persisted = seedDraft();
+    const patch: Record<string, unknown> = {};
+    (Object.keys(draft) as Array<keyof ScholarshipDraft>).forEach((k) => {
+      const next =
+        k === "scholarship_advocacy_letter"
+          ? (draft[k] as string).trim()
+          : draft[k];
+      if (next !== persisted[k]) patch[k] = next;
+    });
+    if (Object.keys(patch).length === 0) {
+      setEditing(false);
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/admin/scholarships/${scholarship.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Save failed (${res.status})`);
+      }
+      toast.success("Scholarship details saved.");
+      setEditing(false);
+      // Refresh both caches: the page-level family detail (source of
+      // the `scholarship` prop) and this block's composite children
+      // fetch, so the read-mode values reflect the save immediately.
+      onScholarshipChanged?.();
+      void mutateDetails();
+    } catch (err) {
+      console.error("[ScholarshipBlock.runSave]", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't save.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       {/* Path Selector — admin can flip the family between the three
@@ -3144,24 +3263,89 @@ function ScholarshipBlock({
           </span>
         </div>
       ) : null}
+      {/* Inline-edit header — one Edit toggle drives every scalar field
+          group below (Household → Advocacy). Only shown on the full
+          Opportunity Scholarship path, where these fields carry data.
+          While the section is verified the toggle is replaced with a
+          muted hint pointing at the Undo affordance in the footer. */}
+      {onFullForm ? (
+        <div className="flex items-center justify-between gap-3 border-b pb-3">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Financial Details
+          </p>
+          <div className="flex items-center gap-2 shrink-0">
+            {pathLocked ? (
+              <p className="text-[11px] text-muted-foreground italic">
+                Verified — Undo below to edit
+              </p>
+            ) : editing ? (
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setEditing(false)}
+                  disabled={saving}
+                  className="bg-white"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => void runSave()}
+                  disabled={saving}
+                  className="bg-blue-600 hover:bg-blue-700 text-white"
+                >
+                  {saving ? (
+                    <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                  ) : (
+                    <Check className="size-3.5 mr-1.5" />
+                  )}
+                  Save
+                </Button>
+              </>
+            ) : (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={enterEdit}
+                className="bg-white"
+              >
+                <Pencil className="size-3.5 mr-1.5" />
+                Edit
+              </Button>
+            )}
+          </div>
+        </div>
+      ) : null}
       {onFullForm ? (
         <SectionGroup title="Household">
         <div className="grid gap-4 grid-cols-2 sm:grid-cols-4">
-          <DisabledField
+          <EditableCountField
             label="Adults"
-            value={String(scholarship.household_adults ?? 0)}
+            editing={editing}
+            value={editing ? draft.household_adults : scholarship.household_adults ?? 0}
+            onChange={(v) => patchDraft("household_adults", v)}
           />
-          <DisabledField
+          <EditableCountField
             label="Children"
-            value={String(scholarship.household_children ?? 0)}
+            editing={editing}
+            value={editing ? draft.household_children : scholarship.household_children ?? 0}
+            onChange={(v) => patchDraft("household_children", v)}
           />
-          <DisabledField
+          <EditableYesNoField
             label="No contributing members"
-            value={scholarship.no_contributing_member ? "Yes" : "No"}
+            editing={editing}
+            value={editing ? draft.no_contributing_member : scholarship.no_contributing_member ?? false}
+            onChange={(v) => patchDraft("no_contributing_member", v)}
           />
-          <DisabledField
+          <EditableYesNoField
             label="Government benefits"
-            value={scholarship.government_benefits ? "Yes" : "No"}
+            editing={editing}
+            value={editing ? draft.government_benefits : scholarship.government_benefits ?? false}
+            onChange={(v) => patchDraft("government_benefits", v)}
           />
         </div>
       </SectionGroup>
@@ -3170,29 +3354,41 @@ function ScholarshipBlock({
       {onFullForm ? (
       <SectionGroup title="Income (monthly)">
         <div className="grid gap-4 grid-cols-2 sm:grid-cols-3">
-          <DisabledField
+          <EditableCurrencyField
             label="Business"
-            value={formatCurrency(scholarship.business_income_monthly)}
+            editing={editing}
+            value={editing ? draft.business_income_monthly : scholarship.business_income_monthly}
+            onChange={(v) => patchDraft("business_income_monthly", v)}
           />
-          <DisabledField
+          <EditableCurrencyField
             label="Capital gains"
-            value={formatCurrency(scholarship.capital_gains_monthly)}
+            editing={editing}
+            value={editing ? draft.capital_gains_monthly : scholarship.capital_gains_monthly}
+            onChange={(v) => patchDraft("capital_gains_monthly", v)}
           />
-          <DisabledField
+          <EditableCurrencyField
             label="Child support"
-            value={formatCurrency(scholarship.child_support_monthly)}
+            editing={editing}
+            value={editing ? draft.child_support_monthly : scholarship.child_support_monthly}
+            onChange={(v) => patchDraft("child_support_monthly", v)}
           />
-          <DisabledField
+          <EditableCurrencyField
             label="Alimony"
-            value={formatCurrency(scholarship.alimony_monthly)}
+            editing={editing}
+            value={editing ? draft.alimony_monthly : scholarship.alimony_monthly}
+            onChange={(v) => patchDraft("alimony_monthly", v)}
           />
-          <DisabledField
+          <EditableCurrencyField
             label="Trusts"
-            value={formatCurrency(scholarship.trusts_monthly)}
+            editing={editing}
+            value={editing ? draft.trusts_monthly : scholarship.trusts_monthly}
+            onChange={(v) => patchDraft("trusts_monthly", v)}
           />
-          <DisabledField
+          <EditableCurrencyField
             label="Other"
-            value={formatCurrency(scholarship.other_income_monthly)}
+            editing={editing}
+            value={editing ? draft.other_income_monthly : scholarship.other_income_monthly}
+            onChange={(v) => patchDraft("other_income_monthly", v)}
           />
         </div>
       </SectionGroup>
@@ -3201,100 +3397,73 @@ function ScholarshipBlock({
       {onFullForm ? (
       <SectionGroup title="Assets">
         <div className="grid gap-4 grid-cols-2 sm:grid-cols-3">
-          <DisabledField
+          <EditableCurrencyField
             label="Checking"
-            value={formatCurrency(scholarship.assets_checking)}
+            editing={editing}
+            value={editing ? draft.assets_checking : scholarship.assets_checking}
+            onChange={(v) => patchDraft("assets_checking", v)}
           />
-          <DisabledField
+          <EditableCurrencyField
             label="Savings"
-            value={formatCurrency(scholarship.assets_savings)}
+            editing={editing}
+            value={editing ? draft.assets_savings : scholarship.assets_savings}
+            onChange={(v) => patchDraft("assets_savings", v)}
           />
-          <DisabledField
+          <EditableCurrencyField
             label="Retirement"
-            value={formatCurrency(scholarship.assets_retirement_savings)}
+            editing={editing}
+            value={editing ? draft.assets_retirement_savings : scholarship.assets_retirement_savings}
+            onChange={(v) => patchDraft("assets_retirement_savings", v)}
           />
-          <DisabledField
+          <EditableCurrencyField
             label="Securities"
-            value={formatCurrency(scholarship.assets_stocks_bonds_securities)}
+            editing={editing}
+            value={editing ? draft.assets_stocks_bonds_securities : scholarship.assets_stocks_bonds_securities}
+            onChange={(v) => patchDraft("assets_stocks_bonds_securities", v)}
           />
-          <DisabledField
+          <EditableCurrencyField
             label="Trusts / inheritance"
-            value={formatCurrency(scholarship.assets_trusts_inheritance)}
+            editing={editing}
+            value={editing ? draft.assets_trusts_inheritance : scholarship.assets_trusts_inheritance}
+            onChange={(v) => patchDraft("assets_trusts_inheritance", v)}
           />
-          <DisabledField
+          <EditableCurrencyField
             label="Business"
-            value={formatCurrency(scholarship.assets_business)}
+            editing={editing}
+            value={editing ? draft.assets_business : scholarship.assets_business}
+            onChange={(v) => patchDraft("assets_business", v)}
           />
         </div>
       </SectionGroup>
       ) : null}
 
-      {/* Contributing Members — one card per declared member with
-          their bio + the documentation method they chose (W-2 vs
-          pay stubs). The Documents to Review table at the bottom
-          handles the per-file verification workflow; this section
-          shows admin WHO the member is and what they declared
-          before getting into the per-file review below. Always
-          renders (regardless of path) so members entered before
-          the family switched paths still surface. */}
-      <SectionGroup title="Contributing Members">
-        {detailsLoading && !details ? (
-          <Skeleton className="h-12 w-full rounded-md" />
-        ) : members.length === 0 ? (
-          <p className="text-xs italic text-muted-foreground">
-            No contributing members declared.
-          </p>
-        ) : (
-          <div className="space-y-3">
-            {members.map((member, idx) => {
-              const fullName =
-                `${member.first_name ?? ""} ${member.last_name ?? ""}`.trim() ||
-                `Contributing member ${idx + 1}`;
-              // `isW2` + `isPayStubs` are the parent-side toggles on
-              // the contributing-member form — admin sees which
-              // method the family declared so the per-file Documents
-              // to Review table reads in context.
-              const method = member.isW2
-                ? "W-2"
-                : member.isPayStubs
-                  ? "Pay stubs"
-                  : "—";
-              return (
-                <div
-                  key={member.id}
-                  className="rounded-md border bg-muted/10 p-3 space-y-3"
-                >
-                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                    {fullName}
-                  </p>
-                  <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
-                    <DisabledField
-                      label="Address"
-                      value={formatStreetAddress(member)}
-                    />
-                    <DisabledField
-                      label="City / State / Zip"
-                      value={[member.city, member.state, member.zipcode]
-                        .filter(Boolean)
-                        .join(", ")}
-                    />
-                    <DisabledField
-                      label="Estimated annual income"
-                      value={formatCurrency(
-                        member.estimated_annual_income ?? 0
-                      )}
-                    />
-                    <DisabledField
-                      label="Documentation method"
-                      value={method}
-                    />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </SectionGroup>
+      {/* Contributing Members — admin can add / edit / delete on the
+          family's behalf. Their income-document uploads + per-file
+          verification stay in the Documents to Review block below.
+          Always renders (regardless of path) so members entered
+          before a path switch stay visible. */}
+      <MembersEditor
+        scholarshipId={scholarship.id}
+        members={members}
+        loading={detailsLoading && !details}
+        locked={!!pathLocked}
+        onChanged={() => void mutateDetails()}
+      />
+
+      {/* Government Benefits — declared benefit type + monthly amount.
+          Only shown when the family declared government benefits (the
+          Household editor's toggle). Each benefit's award-letter
+          upload + verification lives in the Documents to Review
+          block. */}
+      {scholarship.government_benefits ? (
+        <BenefitsEditor
+          scholarshipId={scholarship.id}
+          benefits={benefits}
+          loading={detailsLoading && !details}
+          locked={!!pathLocked}
+          onChanged={() => void mutateDetails()}
+        />
+      ) : null}
 
       {/* Documents to Review — W-2 / pay-stub uploads per contributing
           member, plus government-benefit award letters when the
@@ -3327,137 +3496,84 @@ function ScholarshipBlock({
         onScholarshipChanged={onScholarshipChanged}
       />
 
-      {/* Purchased Houses — empty array still renders a notice row so
-          admin sees that the section was reviewed and the family
-          declared no homes (rather than a missing section). One row
-          per home: type, full address, total value, outstanding
-          debt. */}
-      <SectionGroup title="Purchased Houses">
-        {homesLoading ? (
-          <Skeleton className="h-12 w-full rounded-md" />
-        ) : homes.length === 0 ? (
-          <p className="text-xs italic text-muted-foreground">
-            No purchased houses declared.
-          </p>
-        ) : (
-          <div className="space-y-3">
-            {homes.map((home, idx) => (
-              <div
-                key={home.id}
-                className="rounded-md border bg-muted/10 p-3 space-y-3"
-              >
-                <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Home {idx + 1}
-                </p>
-                <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
-                  <DisabledField label="Type" value={home.type ?? ""} />
-                  <DisabledField
-                    label="Address"
-                    value={formatStreetAddress(home)}
-                  />
-                  <DisabledField
-                    label="City / State / Zip"
-                    value={[home.city, home.state, home.zipcode]
-                      .filter(Boolean)
-                      .join(", ")}
-                  />
-                  <DisabledField
-                    label="Total value"
-                    value={formatCurrency(home.total_value)}
-                  />
-                  <DisabledField
-                    label="Outstanding debt"
-                    value={formatCurrency(home.outstanding_debt)}
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </SectionGroup>
+      {/* Purchased Houses — admin can add / edit / delete on the
+          family's behalf (paper-application transcription, mid-cycle
+          corrections). Renders read-only once the Financial Aid
+          section is verified (`locked`). Always shown regardless of
+          path so homes entered before a path switch stay visible. */}
+      <HomesEditor
+        scholarshipId={scholarship.id}
+        homes={homes}
+        loading={homesLoading}
+        locked={!!pathLocked}
+        onChanged={() => void mutateDetails()}
+      />
 
-      {/* Purchased Vehicles — same shape as houses but the per-row
-          fields are vehicle metadata (make / model / year). Empty
-          state mirrors the houses block so the section reads as
-          "reviewed and declared none" rather than a gap. */}
-      <SectionGroup title="Purchased Vehicles">
-        {vehiclesLoading ? (
-          <Skeleton className="h-12 w-full rounded-md" />
-        ) : vehicles.length === 0 ? (
-          <p className="text-xs italic text-muted-foreground">
-            No purchased vehicles declared.
-          </p>
-        ) : (
-          <div className="space-y-3">
-            {vehicles.map((vehicle, idx) => (
-              <div
-                key={vehicle.id}
-                className="rounded-md border bg-muted/10 p-3 space-y-3"
-              >
-                <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Vehicle {idx + 1}
-                </p>
-                <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
-                  <DisabledField label="Type" value={vehicle.type ?? ""} />
-                  <DisabledField
-                    label="Make"
-                    value={vehicle.car_make ?? ""}
-                  />
-                  <DisabledField
-                    label="Model"
-                    value={vehicle.car_model ?? ""}
-                  />
-                  <DisabledField
-                    label="Year"
-                    value={vehicle.car_year ?? ""}
-                  />
-                  <DisabledField
-                    label="Total value"
-                    value={formatCurrency(vehicle.total_value)}
-                  />
-                  <DisabledField
-                    label="Remaining debt"
-                    value={formatCurrency(vehicle.remaining_debt)}
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </SectionGroup>
+      {/* Purchased Vehicles — same add / edit / delete affordances as
+          houses; vehicle-specific fields (make / model / year). Locks
+          read-only when the Financial Aid section is verified. */}
+      <VehiclesEditor
+        scholarshipId={scholarship.id}
+        vehicles={vehicles}
+        loading={vehiclesLoading}
+        locked={!!pathLocked}
+        onChanged={() => void mutateDetails()}
+      />
 
       {onFullForm ? (
         <>
           <SectionGroup title="Debts">
             <div className="grid gap-4 grid-cols-3">
-              <DisabledField
+              <EditableCurrencyField
                 label="Credit cards"
-                value={formatCurrency(scholarship.debts_credit_cards)}
+                editing={editing}
+                value={editing ? draft.debts_credit_cards : scholarship.debts_credit_cards}
+                onChange={(v) => patchDraft("debts_credit_cards", v)}
               />
-              <DisabledField
+              <EditableCurrencyField
                 label="Student loans"
-                value={formatCurrency(scholarship.debts_student_loans)}
+                editing={editing}
+                value={editing ? draft.debts_student_loans : scholarship.debts_student_loans}
+                onChange={(v) => patchDraft("debts_student_loans", v)}
               />
-              <DisabledField
+              <EditableCurrencyField
                 label="Personal loans"
-                value={formatCurrency(scholarship.debts_personal_loans)}
+                editing={editing}
+                value={editing ? draft.debts_personal_loans : scholarship.debts_personal_loans}
+                onChange={(v) => patchDraft("debts_personal_loans", v)}
               />
             </div>
           </SectionGroup>
 
           <SectionGroup title="Family contribution">
-            <DisabledField
+            <EditableCurrencyField
               label="Per month"
-              value={formatCurrency(scholarship.family_contribution_per_month)}
+              editing={editing}
+              value={editing ? draft.family_contribution_per_month : scholarship.family_contribution_per_month}
+              onChange={(v) => patchDraft("family_contribution_per_month", v)}
             />
           </SectionGroup>
 
-          {scholarship.scholarship_advocacy_letter ? (
+          {/* Always render in edit mode so admin can add an advocacy
+              letter that isn't on file yet; read mode keeps the prior
+              "only show when present" behavior. */}
+          {editing || scholarship.scholarship_advocacy_letter ? (
             <SectionGroup title="Advocacy letter">
-              <DisabledTextarea
-                label=""
-                value={scholarship.scholarship_advocacy_letter}
-              />
+              {editing ? (
+                <Textarea
+                  value={draft.scholarship_advocacy_letter}
+                  onChange={(e) =>
+                    patchDraft("scholarship_advocacy_letter", e.target.value)
+                  }
+                  placeholder="Why is this family applying for financial aid?"
+                  className="min-h-[120px] bg-white"
+                />
+              ) : (
+                <DisabledTextarea
+                  label=""
+                  value={scholarship.scholarship_advocacy_letter}
+                />
+              )}
             </SectionGroup>
           ) : null}
 
@@ -3466,21 +3582,6 @@ function ScholarshipBlock({
       ) : null}
     </div>
   );
-}
-
-/**
- * Render a Xano address pair as a single street line. The home and
- * vehicle Xano rows surface address_1 + address_2 separately for
- * editing; on read-only summary views we collapse to one line so
- * the admin grid stays at two columns wide.
- */
-function formatStreetAddress(home: {
-  address_1?: string;
-  address_2?: string;
-}): string {
-  const a1 = home.address_1?.trim() ?? "";
-  const a2 = home.address_2?.trim() ?? "";
-  return [a1, a2].filter(Boolean).join(", ");
 }
 
 /* ─────────────────────── Disabled input primitives ─────────────────────── */
@@ -3607,6 +3708,1473 @@ function DisabledTextarea({
         )}
       />
     </Field>
+  );
+}
+
+/* ───────── Editable scholarship-field primitives (admin) ─────────
+ * Each flips between the read-only `DisabledField` / `DisabledTextarea`
+ * (so the block reads identically when not editing) and a real input
+ * while `editing` is true. Used only by `ScholarshipBlock`'s inline
+ * editor so admin can correct the family's submitted figures. */
+
+/** Comma-grouped display for a currency value while admin is typing. */
+function currencyEditDisplay(v: number | null): string {
+  return v === null ? "" : v.toLocaleString("en-US");
+}
+
+/**
+ * Currency cell. Preserves the null-vs-0 distinction the parent flow
+ * relies on: clearing the input back to empty stores `null`
+ * ("untouched"), a typed 0 stores `0`. Read mode renders "$1,234" or
+ * "—" via the shared `formatCurrency`.
+ */
+function EditableCurrencyField({
+  label,
+  value,
+  editing,
+  onChange,
+}: {
+  label: string;
+  value: number | null;
+  editing: boolean;
+  onChange: (v: number | null) => void;
+}) {
+  if (!editing) {
+    return <DisabledField label={label} value={formatCurrency(value)} />;
+  }
+  return (
+    <Field>
+      <FieldLabel className="text-xs">{label}</FieldLabel>
+      <div className="relative">
+        <span className="text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2 text-sm">
+          $
+        </span>
+        <Input
+          className="pl-7 bg-white"
+          inputMode="numeric"
+          value={currencyEditDisplay(value)}
+          onChange={(e) => {
+            const raw = e.target.value.replace(/[^0-9]/g, "");
+            onChange(raw === "" ? null : Number(raw));
+          }}
+        />
+      </div>
+    </Field>
+  );
+}
+
+/** Non-negative integer cell — household counts. Empty input reads
+ *  back as 0 (counts have no meaningful "untouched" state here). */
+function EditableCountField({
+  label,
+  value,
+  editing,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  editing: boolean;
+  onChange: (v: number) => void;
+}) {
+  if (!editing) {
+    return <DisabledField label={label} value={String(value ?? 0)} />;
+  }
+  return (
+    <Field>
+      <FieldLabel className="text-xs">{label}</FieldLabel>
+      <Input
+        className="bg-white"
+        inputMode="numeric"
+        value={String(value ?? 0)}
+        onChange={(e) => {
+          const raw = e.target.value.replace(/[^0-9]/g, "");
+          onChange(raw === "" ? 0 : Number(raw));
+        }}
+      />
+    </Field>
+  );
+}
+
+/** Yes / No cell for the scholarship row's boolean declarations. */
+function EditableYesNoField({
+  label,
+  value,
+  editing,
+  onChange,
+}: {
+  label: string;
+  value: boolean;
+  editing: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  if (!editing) {
+    return <DisabledField label={label} value={value ? "Yes" : "No"} />;
+  }
+  return (
+    <Field>
+      <FieldLabel className="text-xs">{label}</FieldLabel>
+      <Select
+        value={value ? "yes" : "no"}
+        onValueChange={(v) => onChange(v === "yes")}
+      >
+        <SelectTrigger className="bg-white">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="yes">Yes</SelectItem>
+          <SelectItem value="no">No</SelectItem>
+        </SelectContent>
+      </Select>
+    </Field>
+  );
+}
+
+/** Free-text cell — flips between `DisabledField` and a plain input. */
+function EditableTextField({
+  label,
+  value,
+  editing,
+  onChange,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  editing: boolean;
+  onChange: (v: string) => void;
+  placeholder?: string;
+}) {
+  if (!editing) {
+    return <DisabledField label={label} value={value} />;
+  }
+  return (
+    <Field>
+      <FieldLabel className="text-xs">{label}</FieldLabel>
+      <Input
+        className="bg-white"
+        value={value}
+        placeholder={placeholder}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </Field>
+  );
+}
+
+/* ───────── Homes / Vehicles editors (admin) ─────────
+ * Per-row Edit / Save / Cancel + Delete cards plus a section-level Add
+ * button, mirroring the parent flow's home/vehicle list. Reads the
+ * rows the composite scholarship-details fetch already provides; writes
+ * go through the admin-scoped /api/admin/scholarship-homes and
+ * /api/admin/scholarship-vehicles routes, then `onChanged` revalidates
+ * the composite cache so the list reflects the change. `locked` mirrors
+ * the scalar editor: when the Financial Aid section is verified the
+ * Add / Edit / Delete affordances disappear and the cards read-only. */
+
+function HomeCard({
+  home,
+  index,
+  locked,
+  onChanged,
+  onRequestDelete,
+}: {
+  home: XanoScholarshipHome;
+  index: number;
+  locked: boolean;
+  onChanged: () => void;
+  onRequestDelete: (id: number, label: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const seed = () => ({
+    type: home.type ?? "",
+    address_1: home.address_1 ?? "",
+    address_2: home.address_2 ?? "",
+    city: home.city ?? "",
+    state: home.state ?? "",
+    zipcode: home.zipcode ?? "",
+    total_value: (home.total_value ?? null) as number | null,
+    outstanding_debt: (home.outstanding_debt ?? null) as number | null,
+  });
+  const [draft, setDraft] = useState(seed);
+  function enterEdit() {
+    setDraft(seed());
+    setEditing(true);
+  }
+  async function runSave() {
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/admin/scholarship-homes/${home.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: draft.type.trim(),
+          address_1: draft.address_1.trim(),
+          address_2: draft.address_2.trim(),
+          city: draft.city.trim(),
+          state: draft.state.trim(),
+          zipcode: draft.zipcode.trim(),
+          total_value: draft.total_value ?? 0,
+          outstanding_debt: draft.outstanding_debt ?? 0,
+        }),
+      });
+      if (!res.ok) {
+        const b = await res.json().catch(() => null);
+        throw new Error(b?.error ?? `Save failed (${res.status})`);
+      }
+      toast.success("Home saved.");
+      setEditing(false);
+      onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't save.");
+    } finally {
+      setSaving(false);
+    }
+  }
+  const label = home.type?.trim() || `Home ${index + 1}`;
+  return (
+    <div className="rounded-md border bg-muted/10 p-3 space-y-3">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground truncate">
+          {label}
+        </p>
+        {!locked ? (
+          <div className="flex items-center gap-2 shrink-0">
+            {editing ? (
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setEditing(false)}
+                  disabled={saving}
+                  className="bg-white"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => void runSave()}
+                  disabled={saving}
+                  className="bg-blue-600 hover:bg-blue-700 text-white"
+                >
+                  {saving ? (
+                    <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                  ) : (
+                    <Check className="size-3.5 mr-1.5" />
+                  )}
+                  Save
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={enterEdit}
+                  className="bg-white"
+                >
+                  <Pencil className="size-3.5 mr-1.5" />
+                  Edit
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  className="size-8 bg-white text-red-600 hover:text-red-700"
+                  onClick={() => onRequestDelete(home.id, label)}
+                  aria-label="Remove home"
+                  title="Remove home"
+                >
+                  <Trash2 className="size-3.5" />
+                </Button>
+              </>
+            )}
+          </div>
+        ) : null}
+      </div>
+      <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
+        <EditableTextField
+          label="Type"
+          editing={editing}
+          value={editing ? draft.type : home.type ?? ""}
+          onChange={(v) => setDraft((d) => ({ ...d, type: v }))}
+          placeholder="e.g. Primary residence"
+        />
+        <EditableTextField
+          label="Street address"
+          editing={editing}
+          value={editing ? draft.address_1 : home.address_1 ?? ""}
+          onChange={(v) => setDraft((d) => ({ ...d, address_1: v }))}
+        />
+        <EditableTextField
+          label="Apt / suite"
+          editing={editing}
+          value={editing ? draft.address_2 : home.address_2 ?? ""}
+          onChange={(v) => setDraft((d) => ({ ...d, address_2: v }))}
+        />
+        <EditableTextField
+          label="City"
+          editing={editing}
+          value={editing ? draft.city : home.city ?? ""}
+          onChange={(v) => setDraft((d) => ({ ...d, city: v }))}
+        />
+        <EditableTextField
+          label="State"
+          editing={editing}
+          value={editing ? draft.state : home.state ?? ""}
+          onChange={(v) => setDraft((d) => ({ ...d, state: v }))}
+        />
+        <EditableTextField
+          label="Zip"
+          editing={editing}
+          value={editing ? draft.zipcode : home.zipcode ?? ""}
+          onChange={(v) => setDraft((d) => ({ ...d, zipcode: v }))}
+        />
+        <EditableCurrencyField
+          label="Total value"
+          editing={editing}
+          value={editing ? draft.total_value : home.total_value ?? null}
+          onChange={(v) => setDraft((d) => ({ ...d, total_value: v }))}
+        />
+        <EditableCurrencyField
+          label="Outstanding debt"
+          editing={editing}
+          value={editing ? draft.outstanding_debt : home.outstanding_debt ?? null}
+          onChange={(v) => setDraft((d) => ({ ...d, outstanding_debt: v }))}
+        />
+      </div>
+    </div>
+  );
+}
+
+function HomesEditor({
+  scholarshipId,
+  homes,
+  loading,
+  locked,
+  onChanged,
+}: {
+  scholarshipId: number;
+  homes: XanoScholarshipHome[];
+  loading: boolean;
+  locked: boolean;
+  onChanged: () => void;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<{
+    id: number;
+    label: string;
+  } | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  async function addHome() {
+    setAdding(true);
+    try {
+      const res = await fetch(`/api/admin/scholarship-homes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scholarshipId }),
+      });
+      if (!res.ok) {
+        const b = await res.json().catch(() => null);
+        throw new Error(b?.error ?? `Add failed (${res.status})`);
+      }
+      toast.success("Home added.");
+      onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't add home.");
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  async function confirmDelete() {
+    if (!pendingDelete) return;
+    setDeleting(true);
+    try {
+      const res = await fetch(
+        `/api/admin/scholarship-homes/${pendingDelete.id}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok) {
+        const b = await res.json().catch(() => null);
+        throw new Error(b?.error ?? `Delete failed (${res.status})`);
+      }
+      toast.success("Home removed.");
+      setPendingDelete(null);
+      onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't remove home.");
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  return (
+    <SectionGroup
+      title="Purchased Houses"
+      trailing={
+        !locked ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => void addHome()}
+            disabled={adding}
+            className="bg-white"
+          >
+            {adding ? (
+              <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+            ) : (
+              <Plus className="size-3.5 mr-1.5" />
+            )}
+            Add home
+          </Button>
+        ) : null
+      }
+    >
+      {loading ? (
+        <Skeleton className="h-12 w-full rounded-md" />
+      ) : homes.length === 0 ? (
+        <p className="text-xs italic text-muted-foreground">
+          No purchased houses declared.
+        </p>
+      ) : (
+        <div className="space-y-3">
+          {homes.map((h, i) => (
+            <HomeCard
+              key={h.id}
+              home={h}
+              index={i}
+              locked={locked}
+              onChanged={onChanged}
+              onRequestDelete={(id, label) => setPendingDelete({ id, label })}
+            />
+          ))}
+        </div>
+      )}
+      <AlertDialog
+        open={!!pendingDelete}
+        onOpenChange={(o) => {
+          if (!o && !deleting) setPendingDelete(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove this home?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingDelete?.label
+                ? `"${pendingDelete.label}" will be permanently removed from this scholarship.`
+                : "This home will be permanently removed from this scholarship."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                void confirmDelete();
+              }}
+              disabled={deleting}
+              className="bg-red-600 hover:bg-red-700"
+            >
+              {deleting ? (
+                <Loader2 className="size-4 mr-1.5 animate-spin" />
+              ) : (
+                <Trash2 className="size-4 mr-1.5" />
+              )}
+              Remove
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </SectionGroup>
+  );
+}
+
+function VehicleCard({
+  vehicle,
+  index,
+  locked,
+  onChanged,
+  onRequestDelete,
+}: {
+  vehicle: XanoScholarshipVehicle;
+  index: number;
+  locked: boolean;
+  onChanged: () => void;
+  onRequestDelete: (id: number, label: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const seed = () => ({
+    type: vehicle.type ?? "",
+    car_make: vehicle.car_make ?? "",
+    car_model: vehicle.car_model ?? "",
+    car_year: vehicle.car_year ?? "",
+    total_value: (vehicle.total_value ?? null) as number | null,
+    remaining_debt: (vehicle.remaining_debt ?? null) as number | null,
+  });
+  const [draft, setDraft] = useState(seed);
+  function enterEdit() {
+    setDraft(seed());
+    setEditing(true);
+  }
+  async function runSave() {
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/admin/scholarship-vehicles/${vehicle.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: draft.type.trim(),
+          car_make: draft.car_make.trim(),
+          car_model: draft.car_model.trim(),
+          car_year: draft.car_year.trim(),
+          total_value: draft.total_value ?? 0,
+          remaining_debt: draft.remaining_debt ?? 0,
+        }),
+      });
+      if (!res.ok) {
+        const b = await res.json().catch(() => null);
+        throw new Error(b?.error ?? `Save failed (${res.status})`);
+      }
+      toast.success("Vehicle saved.");
+      setEditing(false);
+      onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't save.");
+    } finally {
+      setSaving(false);
+    }
+  }
+  const label =
+    [vehicle.car_year, vehicle.car_make, vehicle.car_model]
+      .filter(Boolean)
+      .join(" ")
+      .trim() ||
+    vehicle.type?.trim() ||
+    `Vehicle ${index + 1}`;
+  return (
+    <div className="rounded-md border bg-muted/10 p-3 space-y-3">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground truncate">
+          {label}
+        </p>
+        {!locked ? (
+          <div className="flex items-center gap-2 shrink-0">
+            {editing ? (
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setEditing(false)}
+                  disabled={saving}
+                  className="bg-white"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => void runSave()}
+                  disabled={saving}
+                  className="bg-blue-600 hover:bg-blue-700 text-white"
+                >
+                  {saving ? (
+                    <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                  ) : (
+                    <Check className="size-3.5 mr-1.5" />
+                  )}
+                  Save
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={enterEdit}
+                  className="bg-white"
+                >
+                  <Pencil className="size-3.5 mr-1.5" />
+                  Edit
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  className="size-8 bg-white text-red-600 hover:text-red-700"
+                  onClick={() => onRequestDelete(vehicle.id, label)}
+                  aria-label="Remove vehicle"
+                  title="Remove vehicle"
+                >
+                  <Trash2 className="size-3.5" />
+                </Button>
+              </>
+            )}
+          </div>
+        ) : null}
+      </div>
+      <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
+        <EditableTextField
+          label="Type"
+          editing={editing}
+          value={editing ? draft.type : vehicle.type ?? ""}
+          onChange={(v) => setDraft((d) => ({ ...d, type: v }))}
+          placeholder="e.g. Car, Truck"
+        />
+        <EditableTextField
+          label="Make"
+          editing={editing}
+          value={editing ? draft.car_make : vehicle.car_make ?? ""}
+          onChange={(v) => setDraft((d) => ({ ...d, car_make: v }))}
+        />
+        <EditableTextField
+          label="Model"
+          editing={editing}
+          value={editing ? draft.car_model : vehicle.car_model ?? ""}
+          onChange={(v) => setDraft((d) => ({ ...d, car_model: v }))}
+        />
+        <EditableTextField
+          label="Year"
+          editing={editing}
+          value={editing ? draft.car_year : vehicle.car_year ?? ""}
+          onChange={(v) => setDraft((d) => ({ ...d, car_year: v }))}
+        />
+        <EditableCurrencyField
+          label="Total value"
+          editing={editing}
+          value={editing ? draft.total_value : vehicle.total_value ?? null}
+          onChange={(v) => setDraft((d) => ({ ...d, total_value: v }))}
+        />
+        <EditableCurrencyField
+          label="Remaining debt"
+          editing={editing}
+          value={editing ? draft.remaining_debt : vehicle.remaining_debt ?? null}
+          onChange={(v) => setDraft((d) => ({ ...d, remaining_debt: v }))}
+        />
+      </div>
+    </div>
+  );
+}
+
+function VehiclesEditor({
+  scholarshipId,
+  vehicles,
+  loading,
+  locked,
+  onChanged,
+}: {
+  scholarshipId: number;
+  vehicles: XanoScholarshipVehicle[];
+  loading: boolean;
+  locked: boolean;
+  onChanged: () => void;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<{
+    id: number;
+    label: string;
+  } | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  async function addVehicle() {
+    setAdding(true);
+    try {
+      const res = await fetch(`/api/admin/scholarship-vehicles`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scholarshipId }),
+      });
+      if (!res.ok) {
+        const b = await res.json().catch(() => null);
+        throw new Error(b?.error ?? `Add failed (${res.status})`);
+      }
+      toast.success("Vehicle added.");
+      onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't add vehicle.");
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  async function confirmDelete() {
+    if (!pendingDelete) return;
+    setDeleting(true);
+    try {
+      const res = await fetch(
+        `/api/admin/scholarship-vehicles/${pendingDelete.id}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok) {
+        const b = await res.json().catch(() => null);
+        throw new Error(b?.error ?? `Delete failed (${res.status})`);
+      }
+      toast.success("Vehicle removed.");
+      setPendingDelete(null);
+      onChanged();
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't remove vehicle."
+      );
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  return (
+    <SectionGroup
+      title="Purchased Vehicles"
+      trailing={
+        !locked ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => void addVehicle()}
+            disabled={adding}
+            className="bg-white"
+          >
+            {adding ? (
+              <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+            ) : (
+              <Plus className="size-3.5 mr-1.5" />
+            )}
+            Add vehicle
+          </Button>
+        ) : null
+      }
+    >
+      {loading ? (
+        <Skeleton className="h-12 w-full rounded-md" />
+      ) : vehicles.length === 0 ? (
+        <p className="text-xs italic text-muted-foreground">
+          No purchased vehicles declared.
+        </p>
+      ) : (
+        <div className="space-y-3">
+          {vehicles.map((v, i) => (
+            <VehicleCard
+              key={v.id}
+              vehicle={v}
+              index={i}
+              locked={locked}
+              onChanged={onChanged}
+              onRequestDelete={(id, label) => setPendingDelete({ id, label })}
+            />
+          ))}
+        </div>
+      )}
+      <AlertDialog
+        open={!!pendingDelete}
+        onOpenChange={(o) => {
+          if (!o && !deleting) setPendingDelete(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove this vehicle?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingDelete?.label
+                ? `"${pendingDelete.label}" will be permanently removed from this scholarship.`
+                : "This vehicle will be permanently removed from this scholarship."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                void confirmDelete();
+              }}
+              disabled={deleting}
+              className="bg-red-600 hover:bg-red-700"
+            >
+              {deleting ? (
+                <Loader2 className="size-4 mr-1.5 animate-spin" />
+              ) : (
+                <Trash2 className="size-4 mr-1.5" />
+              )}
+              Remove
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </SectionGroup>
+  );
+}
+
+/* ───────── Contributing Members editor (admin) ─────────
+ * Bio + declared-income editor. The income-document uploads +
+ * per-file verification stay in the Documents to Review block; this
+ * surface owns who the member is, their declared income, and the
+ * W-2-vs-pay-stub method. Writes go through the admin
+ * /api/admin/contributing-members routes. `locked` mirrors the scalar
+ * editor (read-only once the section is verified). */
+
+function memberMethodLabel(m: {
+  isW2?: boolean;
+  isPayStubs?: boolean;
+}): string {
+  return m.isW2 ? "W-2" : m.isPayStubs ? "Pay stubs" : "—";
+}
+
+function MemberCard({
+  member,
+  index,
+  locked,
+  onChanged,
+  onRequestDelete,
+}: {
+  member: XanoScholarshipContributingMember;
+  index: number;
+  locked: boolean;
+  onChanged: () => void;
+  onRequestDelete: (id: number, label: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const seed = () => ({
+    first_name: member.first_name ?? "",
+    last_name: member.last_name ?? "",
+    address_1: member.address_1 ?? "",
+    address_2: member.address_2 ?? "",
+    city: member.city ?? "",
+    state: member.state ?? "",
+    zipcode: member.zipcode ?? "",
+    estimated_annual_income: (member.estimated_annual_income ?? null) as
+      | number
+      | null,
+    method: (member.isW2
+      ? "w2"
+      : member.isPayStubs
+        ? "paystubs"
+        : "none") as "none" | "w2" | "paystubs",
+  });
+  const [draft, setDraft] = useState(seed);
+  function enterEdit() {
+    setDraft(seed());
+    setEditing(true);
+  }
+  async function runSave() {
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/admin/contributing-members/${member.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          first_name: draft.first_name.trim(),
+          last_name: draft.last_name.trim(),
+          address_1: draft.address_1.trim(),
+          address_2: draft.address_2.trim(),
+          city: draft.city.trim(),
+          state: draft.state.trim(),
+          zipcode: draft.zipcode.trim(),
+          estimated_annual_income: draft.estimated_annual_income ?? 0,
+          isW2: draft.method === "w2",
+          isPayStubs: draft.method === "paystubs",
+        }),
+      });
+      if (!res.ok) {
+        const b = await res.json().catch(() => null);
+        throw new Error(b?.error ?? `Save failed (${res.status})`);
+      }
+      toast.success("Contributing member saved.");
+      setEditing(false);
+      onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't save.");
+    } finally {
+      setSaving(false);
+    }
+  }
+  const label =
+    `${member.first_name ?? ""} ${member.last_name ?? ""}`.trim() ||
+    `Contributing member ${index + 1}`;
+  return (
+    <div className="rounded-md border bg-muted/10 p-3 space-y-3">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground truncate">
+          {label}
+        </p>
+        {!locked ? (
+          <div className="flex items-center gap-2 shrink-0">
+            {editing ? (
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setEditing(false)}
+                  disabled={saving}
+                  className="bg-white"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => void runSave()}
+                  disabled={saving}
+                  className="bg-blue-600 hover:bg-blue-700 text-white"
+                >
+                  {saving ? (
+                    <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                  ) : (
+                    <Check className="size-3.5 mr-1.5" />
+                  )}
+                  Save
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={enterEdit}
+                  className="bg-white"
+                >
+                  <Pencil className="size-3.5 mr-1.5" />
+                  Edit
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  className="size-8 bg-white text-red-600 hover:text-red-700"
+                  onClick={() => onRequestDelete(member.id, label)}
+                  aria-label="Remove contributing member"
+                  title="Remove contributing member"
+                >
+                  <Trash2 className="size-3.5" />
+                </Button>
+              </>
+            )}
+          </div>
+        ) : null}
+      </div>
+      <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
+        <EditableTextField
+          label="First name"
+          editing={editing}
+          value={editing ? draft.first_name : member.first_name ?? ""}
+          onChange={(v) => setDraft((d) => ({ ...d, first_name: v }))}
+        />
+        <EditableTextField
+          label="Last name"
+          editing={editing}
+          value={editing ? draft.last_name : member.last_name ?? ""}
+          onChange={(v) => setDraft((d) => ({ ...d, last_name: v }))}
+        />
+        <EditableTextField
+          label="Street address"
+          editing={editing}
+          value={editing ? draft.address_1 : member.address_1 ?? ""}
+          onChange={(v) => setDraft((d) => ({ ...d, address_1: v }))}
+        />
+        <EditableTextField
+          label="Apt / suite"
+          editing={editing}
+          value={editing ? draft.address_2 : member.address_2 ?? ""}
+          onChange={(v) => setDraft((d) => ({ ...d, address_2: v }))}
+        />
+        <EditableTextField
+          label="City"
+          editing={editing}
+          value={editing ? draft.city : member.city ?? ""}
+          onChange={(v) => setDraft((d) => ({ ...d, city: v }))}
+        />
+        <EditableTextField
+          label="State"
+          editing={editing}
+          value={editing ? draft.state : member.state ?? ""}
+          onChange={(v) => setDraft((d) => ({ ...d, state: v }))}
+        />
+        <EditableTextField
+          label="Zip"
+          editing={editing}
+          value={editing ? draft.zipcode : member.zipcode ?? ""}
+          onChange={(v) => setDraft((d) => ({ ...d, zipcode: v }))}
+        />
+        <EditableCurrencyField
+          label="Estimated annual income"
+          editing={editing}
+          value={
+            editing
+              ? draft.estimated_annual_income
+              : member.estimated_annual_income ?? null
+          }
+          onChange={(v) =>
+            setDraft((d) => ({ ...d, estimated_annual_income: v }))
+          }
+        />
+        {editing ? (
+          <Field>
+            <FieldLabel className="text-xs">Documentation method</FieldLabel>
+            <Select
+              value={draft.method}
+              onValueChange={(v) =>
+                setDraft((d) => ({
+                  ...d,
+                  method: v as "none" | "w2" | "paystubs",
+                }))
+              }
+            >
+              <SelectTrigger className="bg-white">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Not specified</SelectItem>
+                <SelectItem value="w2">W-2</SelectItem>
+                <SelectItem value="paystubs">Pay stubs</SelectItem>
+              </SelectContent>
+            </Select>
+          </Field>
+        ) : (
+          <DisabledField
+            label="Documentation method"
+            value={memberMethodLabel(member)}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function MembersEditor({
+  scholarshipId,
+  members,
+  loading,
+  locked,
+  onChanged,
+}: {
+  scholarshipId: number;
+  members: XanoScholarshipContributingMember[];
+  loading: boolean;
+  locked: boolean;
+  onChanged: () => void;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<{
+    id: number;
+    label: string;
+  } | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  async function addMember() {
+    setAdding(true);
+    try {
+      const res = await fetch(`/api/admin/contributing-members`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scholarshipId }),
+      });
+      if (!res.ok) {
+        const b = await res.json().catch(() => null);
+        throw new Error(b?.error ?? `Add failed (${res.status})`);
+      }
+      toast.success("Contributing member added.");
+      onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't add member.");
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  async function confirmDelete() {
+    if (!pendingDelete) return;
+    setDeleting(true);
+    try {
+      const res = await fetch(
+        `/api/admin/contributing-members/${pendingDelete.id}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok) {
+        const b = await res.json().catch(() => null);
+        throw new Error(b?.error ?? `Delete failed (${res.status})`);
+      }
+      toast.success("Contributing member removed.");
+      setPendingDelete(null);
+      onChanged();
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't remove member."
+      );
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  return (
+    <SectionGroup
+      title="Contributing Members"
+      trailing={
+        !locked ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => void addMember()}
+            disabled={adding}
+            className="bg-white"
+          >
+            {adding ? (
+              <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+            ) : (
+              <Plus className="size-3.5 mr-1.5" />
+            )}
+            Add member
+          </Button>
+        ) : null
+      }
+    >
+      {loading ? (
+        <Skeleton className="h-12 w-full rounded-md" />
+      ) : members.length === 0 ? (
+        <p className="text-xs italic text-muted-foreground">
+          No contributing members declared.
+        </p>
+      ) : (
+        <div className="space-y-3">
+          {members.map((m, i) => (
+            <MemberCard
+              key={m.id}
+              member={m}
+              index={i}
+              locked={locked}
+              onChanged={onChanged}
+              onRequestDelete={(id, label) => setPendingDelete({ id, label })}
+            />
+          ))}
+        </div>
+      )}
+      <AlertDialog
+        open={!!pendingDelete}
+        onOpenChange={(o) => {
+          if (!o && !deleting) setPendingDelete(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove this contributing member?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingDelete?.label
+                ? `"${pendingDelete.label}" and their uploaded income documents will be permanently removed from this scholarship.`
+                : "This member and their uploaded income documents will be permanently removed."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                void confirmDelete();
+              }}
+              disabled={deleting}
+              className="bg-red-600 hover:bg-red-700"
+            >
+              {deleting ? (
+                <Loader2 className="size-4 mr-1.5 animate-spin" />
+              ) : (
+                <Trash2 className="size-4 mr-1.5" />
+              )}
+              Remove
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </SectionGroup>
+  );
+}
+
+/* ───────── Government Benefits editor (admin) ─────────
+ * Declared benefit type + monthly amount. The award-letter uploads +
+ * verification live in the Documents to Review block below. Writes go
+ * through the admin /api/admin/scholarship-benefits routes. */
+
+function BenefitCard({
+  benefit,
+  index,
+  locked,
+  onChanged,
+  onRequestDelete,
+}: {
+  benefit: XanoScholarshipBenefit;
+  index: number;
+  locked: boolean;
+  onChanged: () => void;
+  onRequestDelete: (id: number, label: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const seed = () => ({
+    type: benefit.type ?? "",
+    amount_monthly: (benefit.amount_monthly ?? null) as number | null,
+  });
+  const [draft, setDraft] = useState(seed);
+  function enterEdit() {
+    setDraft(seed());
+    setEditing(true);
+  }
+  async function runSave() {
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/admin/scholarship-benefits/${benefit.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: draft.type.trim(),
+          amount_monthly: draft.amount_monthly ?? 0,
+        }),
+      });
+      if (!res.ok) {
+        const b = await res.json().catch(() => null);
+        throw new Error(b?.error ?? `Save failed (${res.status})`);
+      }
+      toast.success("Benefit saved.");
+      setEditing(false);
+      onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't save.");
+    } finally {
+      setSaving(false);
+    }
+  }
+  const label = benefit.type?.trim() || `Benefit ${index + 1}`;
+  return (
+    <div className="rounded-md border bg-muted/10 p-3 space-y-3">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground truncate">
+          {label}
+        </p>
+        {!locked ? (
+          <div className="flex items-center gap-2 shrink-0">
+            {editing ? (
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setEditing(false)}
+                  disabled={saving}
+                  className="bg-white"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => void runSave()}
+                  disabled={saving}
+                  className="bg-blue-600 hover:bg-blue-700 text-white"
+                >
+                  {saving ? (
+                    <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                  ) : (
+                    <Check className="size-3.5 mr-1.5" />
+                  )}
+                  Save
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={enterEdit}
+                  className="bg-white"
+                >
+                  <Pencil className="size-3.5 mr-1.5" />
+                  Edit
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  className="size-8 bg-white text-red-600 hover:text-red-700"
+                  onClick={() => onRequestDelete(benefit.id, label)}
+                  aria-label="Remove benefit"
+                  title="Remove benefit"
+                >
+                  <Trash2 className="size-3.5" />
+                </Button>
+              </>
+            )}
+          </div>
+        ) : null}
+      </div>
+      <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
+        <EditableTextField
+          label="Benefit type"
+          editing={editing}
+          value={editing ? draft.type : benefit.type ?? ""}
+          onChange={(v) => setDraft((d) => ({ ...d, type: v }))}
+          placeholder="e.g. Social Security, TANF"
+        />
+        <EditableCurrencyField
+          label="Monthly amount"
+          editing={editing}
+          value={editing ? draft.amount_monthly : benefit.amount_monthly ?? null}
+          onChange={(v) => setDraft((d) => ({ ...d, amount_monthly: v }))}
+        />
+      </div>
+    </div>
+  );
+}
+
+function BenefitsEditor({
+  scholarshipId,
+  benefits,
+  loading,
+  locked,
+  onChanged,
+}: {
+  scholarshipId: number;
+  benefits: XanoScholarshipBenefit[];
+  loading: boolean;
+  locked: boolean;
+  onChanged: () => void;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<{
+    id: number;
+    label: string;
+  } | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  async function addBenefit() {
+    setAdding(true);
+    try {
+      const res = await fetch(`/api/admin/scholarship-benefits`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scholarshipId }),
+      });
+      if (!res.ok) {
+        const b = await res.json().catch(() => null);
+        throw new Error(b?.error ?? `Add failed (${res.status})`);
+      }
+      toast.success("Benefit added.");
+      onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't add benefit.");
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  async function confirmDelete() {
+    if (!pendingDelete) return;
+    setDeleting(true);
+    try {
+      const res = await fetch(
+        `/api/admin/scholarship-benefits/${pendingDelete.id}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok) {
+        const b = await res.json().catch(() => null);
+        throw new Error(b?.error ?? `Delete failed (${res.status})`);
+      }
+      toast.success("Benefit removed.");
+      setPendingDelete(null);
+      onChanged();
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't remove benefit."
+      );
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  return (
+    <SectionGroup
+      title="Government Benefits"
+      trailing={
+        !locked ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => void addBenefit()}
+            disabled={adding}
+            className="bg-white"
+          >
+            {adding ? (
+              <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+            ) : (
+              <Plus className="size-3.5 mr-1.5" />
+            )}
+            Add benefit
+          </Button>
+        ) : null
+      }
+    >
+      {loading ? (
+        <Skeleton className="h-12 w-full rounded-md" />
+      ) : benefits.length === 0 ? (
+        <p className="text-xs italic text-muted-foreground">
+          No government benefits declared. Upload each benefit&rsquo;s award
+          letter in the Documents to Review table below after adding it.
+        </p>
+      ) : (
+        <div className="space-y-3">
+          {benefits.map((b, i) => (
+            <BenefitCard
+              key={b.id}
+              benefit={b}
+              index={i}
+              locked={locked}
+              onChanged={onChanged}
+              onRequestDelete={(id, label) => setPendingDelete({ id, label })}
+            />
+          ))}
+        </div>
+      )}
+      <AlertDialog
+        open={!!pendingDelete}
+        onOpenChange={(o) => {
+          if (!o && !deleting) setPendingDelete(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove this benefit?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingDelete?.label
+                ? `"${pendingDelete.label}" and its uploaded documentation will be permanently removed from this scholarship.`
+                : "This benefit and its uploaded documentation will be permanently removed."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                void confirmDelete();
+              }}
+              disabled={deleting}
+              className="bg-red-600 hover:bg-red-700"
+            >
+              {deleting ? (
+                <Loader2 className="size-4 mr-1.5 animate-spin" />
+              ) : (
+                <Trash2 className="size-4 mr-1.5" />
+              )}
+              Remove
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </SectionGroup>
   );
 }
 

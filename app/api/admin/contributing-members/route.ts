@@ -32,3 +32,46 @@ export async function GET(req: NextRequest) {
     return handleAdminError(err);
   }
 }
+
+/**
+ * Create a blank contributing-member row scoped to a scholarship.
+ * Admin fills it in afterward via the per-row PATCH. Mirrors the
+ * parent-side POST (`/api/scholarship/[id]/contributing-members`) —
+ * same blank defaults, file slots default to empty arrays — but
+ * admin-auth'd and scoped by `scholarshipId` in the body rather than
+ * a route param.
+ */
+export async function POST(req: NextRequest) {
+  try {
+    await requireAdmin();
+    const body = await req.json().catch(() => ({}));
+    const scholarshipId = Number(body.scholarshipId);
+    if (!Number.isFinite(scholarshipId) || scholarshipId <= 0) {
+      return NextResponse.json(
+        { error: "scholarshipId is required" },
+        { status: 400 }
+      );
+    }
+    const member = await xano.scholarshipContributingMembers.create({
+      registration_opportunity_scholarship_id: scholarshipId,
+      first_name: body.first_name ?? "",
+      last_name: body.last_name ?? "",
+      address_1: body.address_1 ?? "",
+      address_2: body.address_2 ?? "",
+      city: body.city ?? "",
+      state: body.state ?? "",
+      zipcode: body.zipcode ?? "",
+      estimated_annual_income: body.estimated_annual_income ?? 0,
+      isW2: body.isW2 ?? false,
+      isPayStubs: body.isPayStubs ?? false,
+      w2: [],
+      paystub_1: [],
+      paystub_2: [],
+      paystub_3: [],
+      paystub_4: [],
+    });
+    return NextResponse.json(member, { status: 201 });
+  } catch (err) {
+    return handleAdminError(err);
+  }
+}

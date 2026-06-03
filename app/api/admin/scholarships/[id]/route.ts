@@ -5,10 +5,17 @@ import type { XanoScholarship } from "@/lib/xano";
 
 /**
  * Admin-only PATCH for the per-year `registration_opportunity_scholarship`
- * row. Tightly scoped to the document-confirmation columns the admin
- * Scholarship Determination card writes — admin doesn't edit the
- * parent's submitted financial data through this surface; that
- * happens via the parent flow only.
+ * row. Covers two groups of columns:
+ *
+ *   1. Document-confirmation + path flags the admin Scholarship
+ *      Determination card writes (the booleans below).
+ *   2. The family's scalar financial figures (household counts,
+ *      income, assets, debts, family contribution, advocacy letter)
+ *      so admin can fix a typo or transcribe a paper application on
+ *      the family's behalf from the Financial Aid section of the
+ *      family-detail page. The child tables (contributing members,
+ *      homes, vehicles, benefits) and document uploads are still
+ *      edited through the parent flow.
  *
  * Writable columns (the booleans):
  *   - `is_snap_confirmed` — admin reviewed the SNAP award letter.
@@ -94,6 +101,35 @@ export async function PATCH(
       "snap_benefits",
       "unemployment_letter",
       "tax_return",
+      // ── Scalar financial figures — admin edits these on the
+      //    family's behalf via the inline Edit on the Scholarship
+      //    block (Financial Aid section of the family-detail page).
+      //    Plain pass-through columns: no audit pairing, no cascade,
+      //    so they fall straight through the `key in body` filter
+      //    below. Child tables (members / homes / vehicles /
+      //    benefits) and file uploads remain on the parent flow. ──
+      "household_adults",
+      "household_children",
+      "no_contributing_member",
+      "government_benefits",
+      "business_income_monthly",
+      "capital_gains_monthly",
+      "child_support_monthly",
+      "alimony_monthly",
+      "trusts_monthly",
+      "other_income_monthly",
+      "describe_other_income",
+      "assets_checking",
+      "assets_savings",
+      "assets_retirement_savings",
+      "assets_stocks_bonds_securities",
+      "assets_trusts_inheritance",
+      "assets_business",
+      "debts_credit_cards",
+      "debts_student_loans",
+      "debts_personal_loans",
+      "family_contribution_per_month",
+      "scholarship_advocacy_letter",
     ];
     const patch: Record<string, unknown> = {};
     for (const key of allowed) {

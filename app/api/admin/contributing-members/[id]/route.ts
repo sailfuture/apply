@@ -4,19 +4,27 @@ import { xano } from "@/lib/xano";
 import type { XanoScholarshipContributingMember } from "@/lib/xano";
 
 /**
- * Admin-only PATCH for a single contributing member row.
+ * Admin-only PATCH + DELETE for a single contributing member row.
  *
- * Writable columns are scoped to the verification workflow only — the
- * parent edits everything else through the parent-side scholarship
- * form, so admin write access stays narrowly scoped:
+ * Writable columns fall into three groups:
  *
- *   - `w2_confirm` + `paystub_1_confirm` … `paystub_4_confirm` —
- *     per-file admin acknowledgements ("I reviewed this upload and
- *     it's correct").
- *   - `is_verified` — overall verification flag the Approve gate
- *     reads. The UI gates this on all relevant per-file confirms
- *     being true, but we accept it on its own here so future
- *     surfaces (e.g. a bulk-verify action) can flip it directly.
+ *   1. Verification workflow:
+ *      - `w2_confirm` + `paystub_1_confirm` … `paystub_4_confirm` —
+ *        per-file admin acknowledgements ("I reviewed this upload and
+ *        it's correct").
+ *      - `is_verified` — overall verification flag the Approve gate
+ *        reads. The UI gates this on all relevant per-file confirms
+ *        being true, but we accept it on its own here so future
+ *        surfaces (e.g. a bulk-verify action) can flip it directly.
+ *   2. File slots (`w2`, `paystub_1` … `paystub_4`) — admin uploads
+ *      on the family's behalf from the Documents to Review block.
+ *   3. Declared bio / income (name, address, estimated income, W-2 vs
+ *      pay-stub method) — admin edits these from the Contributing
+ *      Members editor on the family-detail page. Plain pass-through;
+ *      no audit stamping.
+ *
+ * DELETE removes the member row outright (admin removing a member
+ * entered in error or on a now-corrected path).
  *
  * Audit-trail stamping. Each `*_confirm` boolean is paired with two
  * audit columns on Xano (`*_confirm_time`, `*_admin_confirm`). The
@@ -96,6 +104,21 @@ export async function PATCH(
       "paystub_2",
       "paystub_3",
       "paystub_4",
+      // ── Declared bio / income — admin edits on the family's behalf
+      //    from the Contributing Members editor. Plain pass-through,
+      //    no audit columns. `isW2` / `isPayStubs` are the mutually-
+      //    exclusive documentation-method toggles (the client sets
+      //    one true + the other false). ──
+      "first_name",
+      "last_name",
+      "address_1",
+      "address_2",
+      "city",
+      "state",
+      "zipcode",
+      "estimated_annual_income",
+      "isW2",
+      "isPayStubs",
     ];
     const patch: Record<string, unknown> = {};
     for (const key of allowed) {
@@ -129,6 +152,24 @@ export async function PATCH(
       patch
     );
     return NextResponse.json(updated);
+  } catch (err) {
+    return handleAdminError(err);
+  }
+}
+
+export async function DELETE(
+  _req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    await requireAdmin();
+    const { id: idParam } = await params;
+    const id = Number(idParam);
+    if (!Number.isFinite(id)) {
+      return NextResponse.json({ error: "Invalid id" }, { status: 400 });
+    }
+    await xano.scholarshipContributingMembers.delete(id);
+    return NextResponse.json({ success: true });
   } catch (err) {
     return handleAdminError(err);
   }

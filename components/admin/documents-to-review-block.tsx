@@ -668,11 +668,69 @@ function buildRows({
         setSavingSlot(null);
       }
     };
+    // Upload-on-behalf-of-family for the unemployment / termination
+    // letter — mirrors the SNAP + tax-return uploads. Accumulates the
+    // returned metadata onto the scholarship row's `unemployment_letter`
+    // array, then PATCHes via the admin scholarships route (which
+    // whitelists that column).
+    const uploadUnemployment = async (newFiles: File[]) => {
+      if (newFiles.length === 0) return;
+      setSavingSlot(slotKey);
+      try {
+        let acc = toFileArray(scholarship.unemployment_letter);
+        for (const f of newFiles) {
+          const formData = new FormData();
+          formData.append("file", f);
+          const uploadRes = await fetch("/api/upload", {
+            method: "POST",
+            body: formData,
+          });
+          if (!uploadRes.ok) {
+            const body = await uploadRes.json().catch(() => null);
+            throw new Error(
+              body?.error ?? `Upload failed (${uploadRes.status})`
+            );
+          }
+          const metadata = (await uploadRes.json()) as Record<string, unknown>;
+          acc = [...acc, metadata];
+        }
+        const patchRes = await fetch(
+          `/api/admin/scholarships/${scholarship.id}`,
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ unemployment_letter: acc }),
+          }
+        );
+        if (!patchRes.ok) {
+          const body = await patchRes.json().catch(() => null);
+          throw new Error(body?.error ?? `Save failed (${patchRes.status})`);
+        }
+        toast.success(
+          newFiles.length === 1
+            ? "Unemployment letter uploaded."
+            : `${newFiles.length} files uploaded.`
+        );
+        onScholarshipChanged?.();
+      } catch (err) {
+        console.error("Failed to upload unemployment letter:", err);
+        toast.error(
+          err instanceof Error ? err.message : "Couldn't upload file."
+        );
+      } finally {
+        setSavingSlot(null);
+      }
+    };
     rows.push({
       key: slotKey,
       label: "Unemployment / termination letter",
       files: toFileArray(scholarship.unemployment_letter),
       emptyHint: "No unemployment paperwork uploaded yet.",
+      upload: {
+        onUpload: uploadUnemployment,
+        accept: ".pdf,.jpg,.jpeg,.png,.heic,.heif",
+        maxFiles: 10,
+      },
       confirmation: {
         confirmed,
         saving: savingSlot === slotKey,
@@ -932,12 +990,73 @@ function buildRows({
           setSavingSlot(null);
         }
       };
+      // Upload-on-behalf-of-family for this benefit's documentation
+      // (award letter, approval notice). Accumulates onto the row's
+      // `benefit_documentation` array and PATCHes the admin benefits
+      // route (which now whitelists that column). Mirrors the member
+      // file-slot uploads above.
+      const uploadBenefitDoc = async (newFiles: File[]) => {
+        if (newFiles.length === 0) return;
+        setSavingSlot(slotPathKey);
+        try {
+          let acc = toFileArray(b.benefit_documentation);
+          for (const f of newFiles) {
+            const formData = new FormData();
+            formData.append("file", f);
+            const uploadRes = await fetch("/api/upload", {
+              method: "POST",
+              body: formData,
+            });
+            if (!uploadRes.ok) {
+              const body = await uploadRes.json().catch(() => null);
+              throw new Error(
+                body?.error ?? `Upload failed (${uploadRes.status})`
+              );
+            }
+            const metadata = (await uploadRes.json()) as Record<
+              string,
+              unknown
+            >;
+            acc = [...acc, metadata];
+          }
+          const patchRes = await fetch(
+            `/api/admin/scholarship-benefits/${b.id}`,
+            {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ benefit_documentation: acc }),
+            }
+          );
+          if (!patchRes.ok) {
+            const body = await patchRes.json().catch(() => null);
+            throw new Error(body?.error ?? `Save failed (${patchRes.status})`);
+          }
+          toast.success(
+            newFiles.length === 1
+              ? "Benefit documentation uploaded."
+              : `${newFiles.length} files uploaded.`
+          );
+          mutateBenefits();
+        } catch (err) {
+          console.error("Failed to upload benefit documentation:", err);
+          toast.error(
+            err instanceof Error ? err.message : "Couldn't upload file."
+          );
+        } finally {
+          setSavingSlot(null);
+        }
+      };
       rows.push({
         key: slotPathKey,
         label: `${b.type || "Government benefit"}`,
         sublabel: `${monthly}/mo`,
         files: toFileArray(b.benefit_documentation),
         emptyHint: "No documentation uploaded.",
+        upload: {
+          onUpload: uploadBenefitDoc,
+          accept: ".pdf,.jpg,.jpeg,.png,.heic,.heif",
+          maxFiles: 10,
+        },
         confirmation: {
           confirmed,
           saving: savingSlot === slotPathKey,

@@ -31,3 +31,36 @@ export async function GET(req: NextRequest) {
     return handleAdminError(err);
   }
 }
+
+/**
+ * Create a blank benefit row scoped to a scholarship. Admin fills in
+ * type + monthly amount via the per-row PATCH and uploads the award
+ * letter from the Documents to Review block. Mirrors the parent-side
+ * POST (`/api/scholarship/[id]/benefits`) — same blank defaults,
+ * documentation defaults to an empty array — but admin-auth'd and
+ * scoped by `scholarshipId` in the body.
+ */
+export async function POST(req: NextRequest) {
+  try {
+    await requireAdmin();
+    const body = await req.json().catch(() => ({}));
+    const scholarshipId = Number(body.scholarshipId);
+    if (!Number.isFinite(scholarshipId) || scholarshipId <= 0) {
+      return NextResponse.json(
+        { error: "scholarshipId is required" },
+        { status: 400 }
+      );
+    }
+    const benefit = await xano.scholarshipBenefits.create({
+      registration_opportunity_scholarship_id: scholarshipId,
+      type: body.type ?? "",
+      amount_monthly: body.amount_monthly ?? 0,
+      benefit_documentation: Array.isArray(body.benefit_documentation)
+        ? body.benefit_documentation
+        : [],
+    });
+    return NextResponse.json(benefit, { status: 201 });
+  } catch (err) {
+    return handleAdminError(err);
+  }
+}
