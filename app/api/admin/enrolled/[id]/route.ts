@@ -338,6 +338,13 @@ function shapePacket(p: XanoStudentRegistration) {
     liability_waiver_status: p.liability_waiver_status ?? "",
     liability_waiver_sent_at: p.liability_waiver_sent_at ?? null,
     liability_waiver_pdf_url: p.liability_waiver_pdf_url ?? "",
+    // Admin-only placement (grade + crew) and the crew-change audit
+    // pair. Surfaced so the enrolled-detail Placement card can render
+    // the current values + "previously Crew X · changed <date>".
+    grade_level: p.grade_level ?? "",
+    crew_assignment: p.crew_assignment ?? "",
+    previous_crew_assignment: p.previous_crew_assignment ?? "",
+    crew_assignment_change: p.crew_assignment_change ?? null,
   };
 }
 

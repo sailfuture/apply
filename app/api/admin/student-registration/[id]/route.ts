@@ -91,6 +91,13 @@ export async function PATCH(
       // Pickup permissions
       "other_adults_approved_for_pickup",
       "prohibited_adults",
+      // Admin-only placement (not parent-facing). `crew_assignment`
+      // changes auto-stamp the prior crew + change time below; the
+      // audit columns themselves (`previous_crew_assignment`,
+      // `crew_assignment_change`) are deliberately NOT on this
+      // allowlist so the client can't spoof the history.
+      "grade_level",
+      "crew_assignment",
       // Per-student billing math lives on the application row now,
       // not the packet — use `/api/admin/student-registration/by-student`
       // (which writes to the app row + re-prices Stripe) instead of
@@ -111,6 +118,23 @@ export async function PATCH(
       patch.is_registration_admin_confirm_admin = next
         ? admin?.name ?? ""
         : "";
+    }
+
+    // Crew-assignment change tracking. When admin moves a student to
+    // a different crew, snapshot the prior crew + stamp the change
+    // time server-side — same audit philosophy as the
+    // `registrationConfirmed` pair above (kept off the body allowlist
+    // so the history can't be spoofed). Reads the current packet to
+    // get the prior crew; no-op when the crew isn't actually changing
+    // (so editing only `grade_level` never bumps the crew history).
+    if ("crew_assignment" in patch) {
+      const current = await xano.studentRegistration.getById(id);
+      const prevCrew = (current?.crew_assignment ?? "").trim();
+      const nextCrew = String(patch.crew_assignment ?? "").trim();
+      if (current && nextCrew !== prevCrew) {
+        patch.previous_crew_assignment = prevCrew;
+        patch.crew_assignment_change = Date.now();
+      }
     }
 
     if (Object.keys(patch).length === 0) {

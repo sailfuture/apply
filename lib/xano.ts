@@ -1516,6 +1516,21 @@ export interface XanoStudentRegistration {
    *  `is_registration_admin_confirm_admin`. */
   registration_confirmed_admin_time?: number | null;
   is_registration_admin_confirm_admin?: string;
+  /** Admin-only placement fields — set from the enrolled-student
+   *  detail page's Placement card, NOT part of the parent flow.
+   *  Optional because they were added after launch (existing rows
+   *  predate them) and aren't part of the packet `create` defaults.
+   *
+   *  `grade_level` — the student's grade for this year ("8th"–"12th").
+   *  `crew_assignment` — the student's crew ("Crew A"–"Crew E").
+   *  `previous_crew_assignment` + `crew_assignment_change` — audit
+   *  pair stamped server-side by `/api/admin/student-registration/[id]`
+   *  whenever `crew_assignment` changes, so admin can see what the
+   *  prior crew was and when the move happened. */
+  grade_level?: string;
+  crew_assignment?: string;
+  previous_crew_assignment?: string;
+  crew_assignment_change?: number | null;
   /** Last-edited timestamp on the packet row. Bumped whenever any
    *  admin or parent write changes the row; useful for audit /
    *  staleness checks alongside the parallel `last_edited_time` on
@@ -3453,6 +3468,26 @@ export const xano = {
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
       return res.json();
+    },
+
+    /**
+     * Fetch a single packet by its primary key. Used by the admin
+     * PATCH route to read the current `crew_assignment` before a
+     * crew change so it can snapshot the prior crew into the audit
+     * columns server-side. Returns `null` on any error / 404 so the
+     * caller can skip the audit stamping cleanly rather than 500.
+     */
+    async getById(id: number): Promise<XanoStudentRegistration | null> {
+      try {
+        const res = await fetch(
+          `${getBaseUrl()}/registration_student_registration/${id}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) return null;
+        return res.json();
+      } catch {
+        return null;
+      }
     },
 
     async getByStudentId(studentId: number): Promise<XanoStudentRegistration | null> {
