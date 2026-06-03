@@ -1,5 +1,6 @@
 import { xano } from "@/lib/xano";
 import { getResend, getFromAddress, getReplyToAddress } from "./resend";
+import { INTERNAL_CC_EMAILS } from "./recipients";
 import type { EmailContent } from "./templates";
 
 /**
@@ -51,8 +52,10 @@ export interface SendResult {
 }
 
 /** Default CCs every transactional email gets. Internal awareness —
- *  the admissions team needs to see what families received. */
-const DEFAULT_CC = ["dean@sailfuture.org", "admissions@sailfuture.org"];
+ *  the admissions team + dean need to see what families received.
+ *  Shared with the admin "Email parent" mailto draft via
+ *  `INTERNAL_CC_EMAILS` so the two paths stay in sync. */
+const DEFAULT_CC: readonly string[] = INTERNAL_CC_EMAILS;
 
 export async function sendEmail(args: SendArgs): Promise<SendResult> {
   const tag = args.tag;

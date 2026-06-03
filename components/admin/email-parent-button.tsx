@@ -2,6 +2,7 @@
 
 import { Mail } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { INTERNAL_CC_EMAILS } from "@/lib/emails/recipients";
 
 interface EmailParentButtonProps {
   /** Primary parent's email — the `To:` recipient. When blank the
@@ -23,10 +24,13 @@ interface EmailParentButtonProps {
  * Header action that drafts an email to a family's parents.
  *
  * Opens the admin's default mail client via a `mailto:` link with the
- * primary parent as `To`, the secondary parent (if any) as `Cc`, and a
- * pre-filled subject. Nothing is sent automatically — the admin writes
- * the body and sends from their own client. Matches the existing
- * `mailto:` links elsewhere in the admin (inquiries, family overview).
+ * primary parent as `To`, a pre-filled subject, and a `Cc` that always
+ * includes the internal awareness inboxes (admissions@ + dean@, from
+ * `INTERNAL_CC_EMAILS`) plus the secondary parent when present. The
+ * internal CCs mirror the default CC the app's automated Resend sends
+ * already apply, so admin-drafted parent mail has the same internal
+ * visibility. Nothing is sent automatically — the admin writes the
+ * body and sends from their own client.
  */
 export function EmailParentButton({
   primaryEmail,
@@ -36,7 +40,7 @@ export function EmailParentButton({
   className,
 }: EmailParentButtonProps) {
   const to = (primaryEmail ?? "").trim();
-  const cc = (secondaryEmail ?? "").trim();
+  const secondary = (secondaryEmail ?? "").trim();
 
   if (!to) {
     return (
@@ -54,11 +58,29 @@ export function EmailParentButton({
     );
   }
 
+  // CC list for the draft: always the internal awareness inboxes
+  // (admissions + dean), plus the secondary parent when present.
+  // Dedupe case-insensitively and drop the To address so the same
+  // address never lands in both To and Cc.
+  const ccSeen = new Set<string>([to.toLowerCase()]);
+  const ccList: string[] = [];
+  for (const addr of [secondary, ...INTERNAL_CC_EMAILS]) {
+    const cleaned = addr.trim();
+    const key = cleaned.toLowerCase();
+    if (!cleaned || ccSeen.has(key)) continue;
+    ccSeen.add(key);
+    ccList.push(cleaned);
+  }
+
   // Build the query manually so spaces encode as %20 (mailto clients
   // mishandle the `+` that URLSearchParams would emit in the subject).
-  // The `To` address stays raw to match the app's other mailto links.
+  // Each CC address is encoded individually while the commas between
+  // them stay literal — that's mailto's multi-address separator. The
+  // `To` address stays raw to match the app's other mailto links.
   const query = [
-    cc ? `cc=${encodeURIComponent(cc)}` : null,
+    ccList.length
+      ? `cc=${ccList.map((addr) => encodeURIComponent(addr)).join(",")}`
+      : null,
     `subject=${encodeURIComponent(subject)}`,
   ]
     .filter(Boolean)
