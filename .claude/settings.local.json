@@ -9,7 +9,8 @@
       "Bash(find \"C:/Users/hunte/GitHub/apply/app/\\(admin\\)/\" -name \"*.tsx\" -o -name \"*.ts\")",
       "Bash(find \"C:/Users/hunte/GitHub/apply/app/\\(admin\\)/\" -name \"*.tsx\")",
       "Bash(npx tsc:*)",
-      "Bash(find \"C:\\\\Users\\\\hunte\\\\GitHub\\\\apply\\\\app\\\\\\(admin\\)\" -name \"*.tsx\")"
+      "Bash(find \"C:\\\\Users\\\\hunte\\\\GitHub\\\\apply\\\\app\\\\\\(admin\\)\" -name \"*.tsx\")",
+      "Bash(grep -E \"\\\\.\\(tsx|ts\\)$\")"
     ]
   }
 }
