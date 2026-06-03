@@ -24,6 +24,7 @@ import {
 import { cn } from "@/lib/utils";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { formatRelativeShort } from "@/lib/format-note-time";
+import { EnrolledExportDialog } from "@/components/admin/enrolled-export-dialog";
 import type { EnrolledStudentRow } from "@/app/api/admin/enrolled/route";
 
 /**
@@ -252,23 +253,34 @@ export default function EnrolledStudentsPage() {
 
   return (
     <div className="p-6 space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">
-          Enrolled Students
-          {schoolYear?.year_name ? (
-            <span className="ml-2 text-base font-normal text-muted-foreground">
-              &middot; {schoolYear.year_name}
-            </span>
-          ) : null}
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          Currently enrolled students for the selected year, plus
-          any students who were previously enrolled and have since
-          been unenrolled. Students who never finished registration
-          are tracked in the application + registration queues, not
-          here. Click any row to see only that student&rsquo;s
-          details.
-        </p>
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-bold">
+            Enrolled Students
+            {schoolYear?.year_name ? (
+              <span className="ml-2 text-base font-normal text-muted-foreground">
+                &middot; {schoolYear.year_name}
+              </span>
+            ) : null}
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Currently enrolled students for the selected year, plus
+            any students who were previously enrolled and have since
+            been unenrolled. Students who never finished registration
+            are tracked in the application + registration queues, not
+            here. Click any row to see only that student&rsquo;s
+            details.
+          </p>
+        </div>
+        {/* Export to XLSX — opens a modal to pick filename, columns,
+            and which students (enrolled/unenrolled × community/
+            residential). Only shown once a year is selected. */}
+        {yearId ? (
+          <EnrolledExportDialog
+            yearId={Number(yearId)}
+            yearName={schoolYear?.year_name}
+          />
+        ) : null}
       </div>
 
       {error ? (
