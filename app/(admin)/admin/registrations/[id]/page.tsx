@@ -140,8 +140,9 @@ function hasPopulatedEmergencyContact(
  *
  * Sections (in left-nav / page order):
  *   1. Tuition — printed name + signature on file + monthly snapshot
- *   2. Enrollment Agreement — PandaDoc status, inline PDF preview
- *      when signed, printed name input
+ *   2. Enrollment Agreement — PandaDoc status + signed PDF download
+ *      (the signature lives in the PandaDoc PDF; the printed-name /
+ *      signature acknowledgment is shown once, under Tuition)
  *   3. Registration Packet — one sub-card per active student with the
  *      full packet contents (sizes, medical, file uploads, emergency
  *      contacts, liability waiver) + per-student `registrationConfirmed`
@@ -2265,10 +2266,6 @@ function EnrollmentAgreementBlock({
   const pdStatus = progress?.enrollment_agreement_status ?? "";
   const pdSent = progress?.enrollment_agreement_sent;
   const isSigned = !!progress?.is_enrollment_agreement_signed;
-  // Printed name on the enrollment agreement reuses the family-level
-  // `name` field on the progress row; the parent flow writes both
-  // simultaneously when they sign on /enrollment-signing.
-  const printedName = progress?.name ?? "";
 
   return (
     <div className="rounded-md border bg-muted/10 p-4 space-y-5">
@@ -2293,43 +2290,11 @@ function EnrollmentAgreementBlock({
           />
         </div>
       </SectionGroup>
-      <SectionGroup title="Acknowledgement">
-        <div className="grid gap-4 grid-cols-1">
-          <DisabledField
-            label="Printed name"
-            value={printedName}
-            placeholder="—"
-            required={isSigned}
-          />
-          {/* Signature evidence: the enrollment agreement is signed
-              via PandaDoc, so `progress.signature_data` (the legacy
-              "draw or type" field from the retired families_payment
-              table) never gets written for this flow. Showing a
-              "Not signed" placeholder under a Signed envelope was
-              misleading. Once the envelope is completed, the
-              signature lives inside the PandaDoc PDF — surface a
-              clear "captured via PandaDoc" line and rely on the
-              Download PDF button below to expose the actual mark.
-              On not-yet-signed envelopes the legacy preview still
-              renders so any stale signature_data (from older flows)
-              isn't lost. */}
-          {isSigned ? (
-            <div>
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">
-                Signature
-              </p>
-              <p className="text-sm text-muted-foreground">
-                Captured via PandaDoc — see the signed PDF below.
-              </p>
-            </div>
-          ) : (
-            <SignaturePreview
-              label="Signature"
-              signature={progress?.signature_data ?? null}
-            />
-          )}
-        </div>
-      </SectionGroup>
+      {/* Printed-name + signature acknowledgment intentionally NOT
+          shown here — it's the same family-level `progress.name` /
+          `signature_data` rendered under the Tuition card, so showing
+          it again here was a duplicate. The enrollment agreement's
+          actual signature lives in the PandaDoc PDF (download below). */}
       {/* Signed PDF download. Previously rendered an inline
           `<iframe src={pdfUrl}>` preview, but the stored
           `enrollment_agreement_pdf_url` points at
