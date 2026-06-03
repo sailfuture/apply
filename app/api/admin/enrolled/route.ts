@@ -194,6 +194,11 @@ export async function GET(req: NextRequest) {
             `Student #${studentId}`,
           student_dob: student.date_of_birth ?? "",
           student_grade: app.current_grade ?? "",
+          // Admin-assigned grade level from the packet (the placement
+          // field set on the student detail page). The roster groups
+          // students by this. Empty until admin sets it — those rows
+          // fall under the "No grade level set" group.
+          grade_level: packet?.grade_level ?? "",
           family_name:
             family?.family_name?.trim() || `Family #${familyId}`,
           primary_name: primary
@@ -246,6 +251,11 @@ export interface EnrolledStudentRow {
   student_full_name: string;
   student_dob: string;
   student_grade: string;
+  /** Admin-assigned grade level from the registration packet
+   *  ("8th"–"12th"). The enrolled roster groups students by this
+   *  field. Distinct from `student_grade` (the application's incoming
+   *  grade); empty until admin sets it on the student detail page. */
+  grade_level: string;
   family_name: string;
   primary_name: string;
   primary_email: string;

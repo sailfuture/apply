@@ -29,32 +29,36 @@ import type { EnrolledStudentRow } from "@/app/api/admin/enrolled/route";
 
 /**
  * Order grades in the natural school sequence rather than
- * alphabetical. Numeric grades sort lowest-first; non-numeric
- * labels (e.g. "K", "Pre-K") drop to the end alphabetically — they
- * shouldn't appear in the SailFuture cohort but the fallback keeps
- * unexpected values rendering instead of crashing the sort.
+ * alphabetical. Parses a leading integer so the admin grade levels
+ * "8th", "9th", "10th"… sort numerically (8 < 9 < 10 < 11 < 12)
+ * rather than as strings ("10th" before "8th"); bare numeric grades
+ * ("9") still work. Non-numeric labels (e.g. "K", "Pre-K") and the
+ * blank "—" bucket drop to the end so unexpected values keep
+ * rendering instead of crashing the sort.
  */
 function gradeSortKey(grade: string): [number, string] {
   const trimmed = (grade ?? "").trim();
-  if (!trimmed) return [Number.MAX_SAFE_INTEGER, "zz"];
-  const n = Number(trimmed);
+  if (!trimmed || trimmed === "—") return [Number.MAX_SAFE_INTEGER, "zz"];
+  const n = parseInt(trimmed, 10);
   if (Number.isFinite(n)) return [n, ""];
   return [Number.MAX_SAFE_INTEGER - 1, trimmed.toLowerCase()];
 }
 
 /**
- * Group enrolled students by their incoming grade level so admin
- * can scan cohort sizes and per-grade rosters at a glance. Returns
- * an ordered array (not a Map) so React render order is stable —
- * grouped lowest grade → highest, with unknown / blank grades at
- * the bottom under "No grade".
+ * Group enrolled students by their admin-assigned grade level
+ * (the placement field set on the student detail page) so admin can
+ * scan cohort sizes and per-grade rosters at a glance. Returns an
+ * ordered array (not a Map) so React render order is stable —
+ * grouped lowest grade → highest, with students whose grade level
+ * hasn't been set yet collected at the bottom under "No grade level
+ * set".
  */
 function groupByGrade(
   rows: EnrolledStudentRow[]
 ): Array<{ grade: string; rows: EnrolledStudentRow[] }> {
   const buckets = new Map<string, EnrolledStudentRow[]>();
   for (const r of rows) {
-    const key = (r.student_grade ?? "").trim() || "—";
+    const key = (r.grade_level ?? "").trim() || "—";
     const arr = buckets.get(key) ?? [];
     arr.push(r);
     buckets.set(key, arr);
@@ -83,9 +87,11 @@ function groupByGrade(
  * registration packet has been admin-confirmed
  * (`registrationConfirmed=true`) for the selected academic year.
  *
- * Grouped by incoming grade level so admin can scan cohort sizes
- * at a glance. Within each grade, students are ordered by last +
- * first name (class-list style).
+ * Grouped by the admin-assigned grade level (the placement field on
+ * the student detail page) so admin can scan cohort sizes at a
+ * glance. Within each grade, students are ordered by last + first
+ * name (class-list style). Students whose grade level hasn't been
+ * set yet collect under a "No grade level set" group at the bottom.
  *
  * Click into a row to land on the per-student detail page where
  * admin can review only that student's information.
@@ -165,14 +171,14 @@ export default function EnrolledStudentsPage() {
       ),
     },
     {
-      key: "student_grade",
+      key: "grade_level",
       header: "Grade",
       sortable: true,
       searchable: true,
       width: "w-[8%]",
       render: (row) => (
         <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-          {row.student_grade?.trim() || "—"}
+          {row.grade_level?.trim() || "—"}
         </span>
       ),
     },
@@ -396,7 +402,7 @@ function EnrolledRoster({
     const q = search.trim().toLowerCase();
     if (!q) return grouped;
     const filterRow = (r: EnrolledStudentRow) =>
-      `${r.student_full_name} ${r.family_name} ${r.primary_email ?? ""} ${r.primary_name ?? ""} ${r.student_grade}`
+      `${r.student_full_name} ${r.family_name} ${r.primary_email ?? ""} ${r.primary_name ?? ""} ${r.grade_level}`
         .toLowerCase()
         .includes(q);
     return grouped
@@ -475,7 +481,9 @@ function EnrolledRoster({
                       colSpan={colCount}
                       className="py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"
                     >
-                      Grade {group.grade}
+                      {group.grade === "—"
+                        ? "No grade level set"
+                        : `${group.grade} Grade`}
                       <span className="ml-2 normal-case tabular-nums text-muted-foreground/70">
                         ({group.rows.length})
                       </span>
