@@ -169,6 +169,10 @@ function shapeStudent(s: XanoStudent) {
     gender: s.gender ?? "",
     ethnicity: s.ethnicity ?? "",
     photo: s.photo ?? null,
+    /** Student photo — Xano image-column metadata set by the admin
+     *  Student Photo card. Passed through as-is for the card to render
+     *  + replace. Null until an admin uploads one. */
+    student_photo: s.student_photo ?? null,
     /** Last time any admin or parent wrote to this student row.
      *  Surfaced on the enrolled-detail page header so admin can see
      *  data staleness at a glance ("Last edited 3 days ago"). */

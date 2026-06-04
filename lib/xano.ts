@@ -106,6 +106,20 @@ function extractParents(items: any[]): XanoParent[] {
   );
 }
 
+/** Metadata Xano's `/upload/image` returns and an image column stores.
+ *  All fields optional — Xano's exact payload varies by version and we
+ *  only read a couple for display. */
+export interface XanoImageMetadata {
+  path?: string;
+  url?: string;
+  name?: string;
+  type?: string;
+  size?: number;
+  mime?: string;
+  meta?: { width?: number; height?: number; [k: string]: unknown };
+  [k: string]: unknown;
+}
+
 export interface XanoStudent {
   id: number;
   created_at: number;
@@ -115,6 +129,13 @@ export interface XanoStudent {
   gender: string;
   ethnicity: string;
   photo: string | null;
+  /** Student photo — an Xano *image* column populated via the admin
+   *  Student Photo card (client-compressed JPEG, uploaded through
+   *  `/upload/image`). Stores Xano's image metadata object (path / url
+   *  / name / size / mime / meta.width / meta.height). Optional +
+   *  nullable: legacy rows predate the column and it's empty until an
+   *  admin uploads one. Distinct from the legacy string `photo` above. */
+  student_photo?: XanoImageMetadata | null;
   registration_families_id: number;
   registration_school_years_id: number[];
   isArchived: boolean;

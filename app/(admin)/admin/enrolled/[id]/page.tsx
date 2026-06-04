@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, type ChangeEvent } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import useSWR from "swr";
@@ -20,6 +20,7 @@ import {
   Trash2,
   Undo2,
   UserMinus,
+  UserRound,
   Users,
   X,
 } from "lucide-react";
@@ -303,6 +304,11 @@ export default function EnrolledStudentDetailPage() {
         onChanged={() => mutate()}
       />
 
+      {/* Student photo — admin uploads a headshot that's compressed in
+          the browser and stored on the student row's `student_photo`
+          image column. */}
+      <StudentPhotoCard student={student} onChanged={() => mutate()} />
+
       <StudentBioCard
         student={student}
         app={app}
@@ -366,6 +372,166 @@ function BackLink({ href }: { href: string }) {
         Back to enrolled students
       </Link>
     </Button>
+  );
+}
+
+/**
+ * Student Photo card — admin uploads a headshot for the student. The
+ * file is converted from HEIC if needed, compressed + resized in the
+ * browser, uploaded to Xano's image endpoint (`/upload/image`), and
+ * the returned metadata is stored on the student row's `student_photo`
+ * image column. Rendered as a round avatar with Replace / Remove.
+ */
+function StudentPhotoCard({
+  student,
+  onChanged,
+}: {
+  student: AdminEnrolledStudentResponse["student"];
+  onChanged: () => void;
+}) {
+  const [uploading, setUploading] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const photoUrl = resolveFileUrl(student.student_photo ?? null);
+  const busy = uploading || removing;
+
+  async function handleFile(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-picking the same file
+    if (!file) return;
+    setUploading(true);
+    try {
+      // HEIC→JPEG (iPhone photos) first, then compress/resize.
+      const { convertHeicToJpeg } = await import("@/lib/heic");
+      const { compressStudentPhoto } = await import("@/lib/image-compress");
+      const prepared = await compressStudentPhoto(await convertHeicToJpeg(file));
+
+      const fd = new FormData();
+      fd.append("file", prepared);
+      const upRes = await fetch("/api/upload?kind=image", {
+        method: "POST",
+        body: fd,
+      });
+      if (!upRes.ok) {
+        const body = await upRes.json().catch(() => null);
+        throw new Error(body?.error ?? `Upload failed (${upRes.status})`);
+      }
+      const metadata = await upRes.json();
+
+      const patchRes = await fetch(`/api/admin/students/${student.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ student_photo: metadata }),
+      });
+      if (!patchRes.ok) {
+        const body = await patchRes.json().catch(() => null);
+        throw new Error(body?.error ?? `Save failed (${patchRes.status})`);
+      }
+      toast.success("Student photo updated.");
+      onChanged();
+    } catch (err) {
+      console.error("[StudentPhotoCard.handleFile]", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't upload photo.");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function handleRemove() {
+    setRemoving(true);
+    try {
+      const res = await fetch(`/api/admin/students/${student.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ student_photo: null }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error ?? `Remove failed (${res.status})`);
+      }
+      toast.success("Student photo removed.");
+      onChanged();
+    } catch (err) {
+      console.error("[StudentPhotoCard.handleRemove]", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't remove photo.");
+    } finally {
+      setRemoving(false);
+    }
+  }
+
+  return (
+    <Card className="bg-white">
+      <CardHeader>
+        <CardTitle className="text-base">Student Photo</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="flex items-center gap-5">
+          <div className="size-24 shrink-0 overflow-hidden rounded-full border bg-muted">
+            {photoUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={photoUrl}
+                alt="Student headshot"
+                className="size-full object-cover"
+              />
+            ) : (
+              <div className="flex size-full items-center justify-center text-muted-foreground">
+                <UserRound className="size-10" aria-hidden="true" />
+              </div>
+            )}
+          </div>
+          <div className="space-y-2">
+            <input
+              ref={inputRef}
+              type="file"
+              accept=".jpg,.jpeg,.png,.heic,.heif"
+              className="hidden"
+              onChange={handleFile}
+              disabled={busy}
+            />
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="bg-white"
+                disabled={busy}
+                onClick={() => inputRef.current?.click()}
+              >
+                {uploading ? (
+                  <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                ) : (
+                  <FileUp className="size-3.5 mr-1.5" />
+                )}
+                {photoUrl ? "Replace photo" : "Upload photo"}
+              </Button>
+              {photoUrl ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="bg-white text-red-600 hover:bg-red-50 hover:text-red-700"
+                  disabled={busy}
+                  onClick={() => void handleRemove()}
+                >
+                  {removing ? (
+                    <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                  ) : (
+                    <Trash2 className="size-3.5 mr-1.5" />
+                  )}
+                  Remove
+                </Button>
+              ) : null}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              JPG, PNG, or HEIC. Automatically resized + compressed before
+              saving.
+            </p>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
