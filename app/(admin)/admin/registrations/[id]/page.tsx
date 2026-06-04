@@ -4498,16 +4498,23 @@ function RequiredDocumentSlotCard({
         <Table className="text-sm table-fixed">
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              {/* Percentage widths (not px) so that with `table-fixed`
+                  the table can never grow past its container — every
+                  column scales with the card width and the File cell
+                  truncates long names instead of forcing the whole
+                  card into horizontal scroll. Keep these in sync
+                  across all required-doc cards so the columns line up
+                  card-to-card. */}
+              <TableHead className="w-[44%] text-[10px] uppercase tracking-wider text-muted-foreground">
                 File
               </TableHead>
-              <TableHead className="w-[80px] text-[10px] uppercase tracking-wider text-muted-foreground">
+              <TableHead className="w-[12%] text-[10px] uppercase tracking-wider text-muted-foreground">
                 Size
               </TableHead>
-              <TableHead className="w-[160px] text-[10px] uppercase tracking-wider text-muted-foreground">
+              <TableHead className="w-[20%] text-[10px] uppercase tracking-wider text-muted-foreground">
                 Confirmed by
               </TableHead>
-              <TableHead className="w-[180px] text-right text-[10px] uppercase tracking-wider text-muted-foreground">
+              <TableHead className="w-[24%] text-right text-[10px] uppercase tracking-wider text-muted-foreground">
                 Confirmation
               </TableHead>
             </TableRow>
@@ -4682,10 +4689,10 @@ function RequiredDocFileLink({
       : typeof (file as { path?: unknown }).path === "string"
         ? (file as { path: string }).path
         : `File ${fallbackIndex + 1}`;
-  const size = (file as { size?: unknown }).size;
-  const sizeKb =
-    typeof size === "number" ? `${(size / 1024).toFixed(0)} KB` : null;
   const href = fileViewUrl(file);
+  // No inline size suffix here — the table has a dedicated Size
+  // column, so repeating it inline both duplicated the value and ate
+  // into the room the filename needs to truncate.
   return (
     <li className="flex items-center gap-2 text-sm min-w-0">
       <FileText className="size-3.5 shrink-0 text-muted-foreground" />
@@ -4705,11 +4712,6 @@ function RequiredDocFileLink({
           {name}
         </span>
       )}
-      {sizeKb ? (
-        <span className="text-xs text-muted-foreground shrink-0 whitespace-nowrap">
-          · {sizeKb}
-        </span>
-      ) : null}
     </li>
   );
 }

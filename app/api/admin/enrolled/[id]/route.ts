@@ -169,6 +169,10 @@ function shapeStudent(s: XanoStudent) {
     gender: s.gender ?? "",
     ethnicity: s.ethnicity ?? "",
     photo: s.photo ?? null,
+    /** Student photo — Xano image-column metadata set by the admin
+     *  Student Photo card. Passed through as-is for the card to render
+     *  + replace. Null until an admin uploads one. */
+    student_photo: s.student_photo ?? null,
     /** Last time any admin or parent wrote to this student row.
      *  Surfaced on the enrolled-detail page header so admin can see
      *  data staleness at a glance ("Last edited 3 days ago"). */
@@ -338,6 +342,13 @@ function shapePacket(p: XanoStudentRegistration) {
     liability_waiver_status: p.liability_waiver_status ?? "",
     liability_waiver_sent_at: p.liability_waiver_sent_at ?? null,
     liability_waiver_pdf_url: p.liability_waiver_pdf_url ?? "",
+    // Admin-only placement (grade + crew) and the crew-change audit
+    // pair. Surfaced so the enrolled-detail Placement card can render
+    // the current values + "previously Crew X · changed <date>".
+    grade_level: p.grade_level ?? "",
+    crew_assignment: p.crew_assignment ?? "",
+    previous_crew_assignment: p.previous_crew_assignment ?? "",
+    crew_assignment_change: p.crew_assignment_change ?? null,
   };
 }
 

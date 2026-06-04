@@ -115,6 +115,10 @@ export async function PATCH(
       "date_of_birth",
       "gender",
       "ethnicity",
+      // Student photo — Xano image-column metadata object set by the
+      // admin Student Photo card (client-compressed, uploaded via
+      // `/upload/image`). Stored as the metadata blob Xano returns.
+      "student_photo",
       "initial_screening_nwea_math",
       "initial_screening_nwea_reading",
       "initial_screening_nwea_math_date",

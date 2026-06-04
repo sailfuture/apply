@@ -106,6 +106,20 @@ function extractParents(items: any[]): XanoParent[] {
   );
 }
 
+/** Metadata Xano's `/upload/image` returns and an image column stores.
+ *  All fields optional — Xano's exact payload varies by version and we
+ *  only read a couple for display. */
+export interface XanoImageMetadata {
+  path?: string;
+  url?: string;
+  name?: string;
+  type?: string;
+  size?: number;
+  mime?: string;
+  meta?: { width?: number; height?: number; [k: string]: unknown };
+  [k: string]: unknown;
+}
+
 export interface XanoStudent {
   id: number;
   created_at: number;
@@ -115,6 +129,13 @@ export interface XanoStudent {
   gender: string;
   ethnicity: string;
   photo: string | null;
+  /** Student photo — an Xano *image* column populated via the admin
+   *  Student Photo card (client-compressed JPEG, uploaded through
+   *  `/upload/image`). Stores Xano's image metadata object (path / url
+   *  / name / size / mime / meta.width / meta.height). Optional +
+   *  nullable: legacy rows predate the column and it's empty until an
+   *  admin uploads one. Distinct from the legacy string `photo` above. */
+  student_photo?: XanoImageMetadata | null;
   registration_families_id: number;
   registration_school_years_id: number[];
   isArchived: boolean;
@@ -1516,6 +1537,21 @@ export interface XanoStudentRegistration {
    *  `is_registration_admin_confirm_admin`. */
   registration_confirmed_admin_time?: number | null;
   is_registration_admin_confirm_admin?: string;
+  /** Admin-only placement fields — set from the enrolled-student
+   *  detail page's Placement card, NOT part of the parent flow.
+   *  Optional because they were added after launch (existing rows
+   *  predate them) and aren't part of the packet `create` defaults.
+   *
+   *  `grade_level` — the student's grade for this year ("8th"–"12th").
+   *  `crew_assignment` — the student's crew ("Crew A"–"Crew E").
+   *  `previous_crew_assignment` + `crew_assignment_change` — audit
+   *  pair stamped server-side by `/api/admin/student-registration/[id]`
+   *  whenever `crew_assignment` changes, so admin can see what the
+   *  prior crew was and when the move happened. */
+  grade_level?: string;
+  crew_assignment?: string;
+  previous_crew_assignment?: string;
+  crew_assignment_change?: number | null;
   /** Last-edited timestamp on the packet row. Bumped whenever any
    *  admin or parent write changes the row; useful for audit /
    *  staleness checks alongside the parallel `last_edited_time` on
@@ -3453,6 +3489,26 @@ export const xano = {
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
       return res.json();
+    },
+
+    /**
+     * Fetch a single packet by its primary key. Used by the admin
+     * PATCH route to read the current `crew_assignment` before a
+     * crew change so it can snapshot the prior crew into the audit
+     * columns server-side. Returns `null` on any error / 404 so the
+     * caller can skip the audit stamping cleanly rather than 500.
+     */
+    async getById(id: number): Promise<XanoStudentRegistration | null> {
+      try {
+        const res = await fetch(
+          `${getBaseUrl()}/registration_student_registration/${id}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) return null;
+        return res.json();
+      } catch {
+        return null;
+      }
     },
 
     async getByStudentId(studentId: number): Promise<XanoStudentRegistration | null> {

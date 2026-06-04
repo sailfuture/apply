@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, type ChangeEvent } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import useSWR from "swr";
@@ -20,6 +20,7 @@ import {
   Trash2,
   Undo2,
   UserMinus,
+  UserRound,
   Users,
   X,
 } from "lucide-react";
@@ -293,6 +294,21 @@ export default function EnrolledStudentDetailPage() {
         </div>
       </div>
 
+      {/* Placement — admin-only grade + crew assignment. Sits above
+          Student Information because it's the school's internal
+          placement decision (not parent-facing) and is the first
+          thing staff look for on an enrolled student. */}
+      <PlacementCard
+        packet={packet}
+        schoolYear={school_year}
+        onChanged={() => mutate()}
+      />
+
+      {/* Student photo — admin uploads a headshot that's compressed in
+          the browser and stored on the student row's `student_photo`
+          image column. */}
+      <StudentPhotoCard student={student} onChanged={() => mutate()} />
+
       <StudentBioCard
         student={student}
         app={app}
@@ -356,6 +372,352 @@ function BackLink({ href }: { href: string }) {
         Back to enrolled students
       </Link>
     </Button>
+  );
+}
+
+/**
+ * Student Photo card — admin uploads a headshot for the student. The
+ * file is converted from HEIC if needed, compressed + resized in the
+ * browser, uploaded to Xano's image endpoint (`/upload/image`), and
+ * the returned metadata is stored on the student row's `student_photo`
+ * image column. Rendered as a round avatar with Replace / Remove.
+ */
+function StudentPhotoCard({
+  student,
+  onChanged,
+}: {
+  student: AdminEnrolledStudentResponse["student"];
+  onChanged: () => void;
+}) {
+  const [uploading, setUploading] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const photoUrl = resolveFileUrl(student.student_photo ?? null);
+  const busy = uploading || removing;
+
+  async function handleFile(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-picking the same file
+    if (!file) return;
+    setUploading(true);
+    try {
+      // HEIC→JPEG (iPhone photos) first, then compress/resize.
+      const { convertHeicToJpeg } = await import("@/lib/heic");
+      const { compressStudentPhoto } = await import("@/lib/image-compress");
+      const prepared = await compressStudentPhoto(await convertHeicToJpeg(file));
+
+      const fd = new FormData();
+      fd.append("file", prepared);
+      const upRes = await fetch("/api/upload?kind=image", {
+        method: "POST",
+        body: fd,
+      });
+      if (!upRes.ok) {
+        const body = await upRes.json().catch(() => null);
+        throw new Error(body?.error ?? `Upload failed (${upRes.status})`);
+      }
+      const metadata = await upRes.json();
+
+      const patchRes = await fetch(`/api/admin/students/${student.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ student_photo: metadata }),
+      });
+      if (!patchRes.ok) {
+        const body = await patchRes.json().catch(() => null);
+        throw new Error(body?.error ?? `Save failed (${patchRes.status})`);
+      }
+      toast.success("Student photo updated.");
+      onChanged();
+    } catch (err) {
+      console.error("[StudentPhotoCard.handleFile]", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't upload photo.");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function handleRemove() {
+    setRemoving(true);
+    try {
+      const res = await fetch(`/api/admin/students/${student.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ student_photo: null }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error ?? `Remove failed (${res.status})`);
+      }
+      toast.success("Student photo removed.");
+      onChanged();
+    } catch (err) {
+      console.error("[StudentPhotoCard.handleRemove]", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't remove photo.");
+    } finally {
+      setRemoving(false);
+    }
+  }
+
+  return (
+    <Card className="bg-white">
+      <CardHeader>
+        <CardTitle className="text-base">Student Photo</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="flex items-center gap-5">
+          <div className="size-24 shrink-0 overflow-hidden rounded-full border bg-muted">
+            {photoUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={photoUrl}
+                alt="Student headshot"
+                className="size-full object-cover"
+              />
+            ) : (
+              <div className="flex size-full items-center justify-center text-muted-foreground">
+                <UserRound className="size-10" aria-hidden="true" />
+              </div>
+            )}
+          </div>
+          <div className="space-y-2">
+            <input
+              ref={inputRef}
+              type="file"
+              accept=".jpg,.jpeg,.png,.heic,.heif"
+              className="hidden"
+              onChange={handleFile}
+              disabled={busy}
+            />
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="bg-white"
+                disabled={busy}
+                onClick={() => inputRef.current?.click()}
+              >
+                {uploading ? (
+                  <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                ) : (
+                  <FileUp className="size-3.5 mr-1.5" />
+                )}
+                {photoUrl ? "Replace photo" : "Upload photo"}
+              </Button>
+              {photoUrl ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="bg-white text-red-600 hover:bg-red-50 hover:text-red-700"
+                  disabled={busy}
+                  onClick={() => void handleRemove()}
+                >
+                  {removing ? (
+                    <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                  ) : (
+                    <Trash2 className="size-3.5 mr-1.5" />
+                  )}
+                  Remove
+                </Button>
+              ) : null}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              JPG, PNG, or HEIC. Automatically resized + compressed before
+              saving.
+            </p>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Grade band SailFuture Academy serves — 8th through 12th. Stored
+ *  as the short label ("8th"); the field label supplies the "grade"
+ *  context. Used by the admin Placement card's grade select. */
+const PLACEMENT_GRADE_OPTIONS = [
+  "8th",
+  "9th",
+  "10th",
+  "11th",
+  "12th",
+] as const;
+
+/** Crew options for the admin Placement card's crew select. */
+const PLACEMENT_CREW_OPTIONS = [
+  "Crew A",
+  "Crew B",
+  "Crew C",
+  "Crew D",
+  "Crew E",
+] as const;
+
+/**
+ * Placement card — admin-only grade level + crew assignment, shown
+ * above Student Information because it's the school's internal
+ * placement decision and the first thing staff look for. These
+ * columns live on the per-student packet (so they're year-scoped,
+ * like the rest of the packet) and are NOT part of the parent
+ * registration flow — staff set them here post-acceptance.
+ *
+ * Crew changes are tracked: the PATCH route snapshots the prior crew
+ * into `previous_crew_assignment` and stamps `crew_assignment_change`
+ * server-side whenever the crew changes, and read mode surfaces that
+ * as a "Previously Crew A · changed <date>" caption so staff can see
+ * a student's most recent move at a glance. Editing only the grade
+ * never touches the crew history.
+ */
+function PlacementCard({
+  packet,
+  schoolYear,
+  onChanged,
+}: {
+  packet: AdminEnrolledStudentResponse["packet"];
+  schoolYear: AdminEnrolledStudentResponse["school_year"];
+  onChanged: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [draft, setDraft] = useState({
+    grade_level: packet?.grade_level ?? "",
+    crew_assignment: packet?.crew_assignment ?? "",
+  });
+  const yearSuffix = schoolYear?.year_name ? ` · ${schoolYear.year_name}` : "";
+
+  function enterEdit() {
+    setDraft({
+      grade_level: packet?.grade_level ?? "",
+      crew_assignment: packet?.crew_assignment ?? "",
+    });
+    setEditing(true);
+  }
+
+  async function runSave() {
+    if (!packet) return;
+    // Diff-only patch. Server stamps previous_crew_assignment +
+    // crew_assignment_change when crew_assignment changes — the
+    // client only ever sends the new crew, never the audit columns.
+    const patch: Record<string, string> = {};
+    if (draft.grade_level !== (packet.grade_level ?? ""))
+      patch.grade_level = draft.grade_level;
+    if (draft.crew_assignment !== (packet.crew_assignment ?? ""))
+      patch.crew_assignment = draft.crew_assignment;
+    if (Object.keys(patch).length === 0) {
+      setEditing(false);
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/admin/student-registration/${packet.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Save failed (${res.status})`);
+      }
+      toast.success("Placement saved.");
+      setEditing(false);
+      onChanged();
+    } catch (err) {
+      console.error("[PlacementCard.runSave]", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't save.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card className="overflow-hidden gap-0 py-0 bg-white">
+      <CardHeader className="py-3 !pb-3 border-b">
+        <div className="flex items-center justify-between gap-3">
+          <CardTitle className="text-base">
+            Placement{yearSuffix}
+            <span className="ml-2 inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground align-middle">
+              Admin only
+            </span>
+          </CardTitle>
+          {packet ? (
+            <CardEditToggle
+              editing={editing}
+              saving={saving}
+              onEdit={enterEdit}
+              onCancel={() => setEditing(false)}
+              onSave={() => void runSave()}
+            />
+          ) : null}
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4 py-5 bg-white">
+        {!packet ? (
+          <p className="text-sm text-muted-foreground">
+            No registration packet on file for this student yet, so grade
+            and crew placement can&rsquo;t be set. The family hasn&rsquo;t
+            started the post-acceptance flow.
+          </p>
+        ) : (
+          <>
+            <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
+              {editing ? (
+                <>
+                  <EditSelectField
+                    label="Grade level"
+                    value={draft.grade_level}
+                    onChange={(v) =>
+                      setDraft((d) => ({ ...d, grade_level: v }))
+                    }
+                    options={PLACEMENT_GRADE_OPTIONS}
+                    disabled={saving}
+                  />
+                  <EditSelectField
+                    label="Crew assignment"
+                    value={draft.crew_assignment}
+                    onChange={(v) =>
+                      setDraft((d) => ({ ...d, crew_assignment: v }))
+                    }
+                    options={PLACEMENT_CREW_OPTIONS}
+                    disabled={saving}
+                  />
+                </>
+              ) : (
+                <>
+                  <ReadField label="Grade level" value={packet.grade_level} />
+                  <ReadField
+                    label="Crew assignment"
+                    value={packet.crew_assignment}
+                  />
+                </>
+              )}
+            </div>
+            {/* Crew-change history — only when a prior crew + change
+                time are on file. Hidden in edit mode to keep the
+                editor focused on the two selects. */}
+            {!editing &&
+            packet.previous_crew_assignment &&
+            packet.crew_assignment_change ? (
+              <p className="text-xs text-muted-foreground">
+                Previously{" "}
+                <span className="font-medium text-foreground">
+                  {packet.previous_crew_assignment}
+                </span>
+                {" · changed "}
+                <span
+                  title={new Date(
+                    packet.crew_assignment_change
+                  ).toLocaleString()}
+                >
+                  {formatNoteTimestamp(packet.crew_assignment_change)}
+                </span>
+              </p>
+            ) : null}
+          </>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

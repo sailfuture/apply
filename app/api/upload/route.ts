@@ -9,11 +9,20 @@ import { auth } from "@clerk/nextjs/server";
  * where someone configures the api base but forgets to add the upload
  * one. Production envs that already have an explicit override still
  * win.
+ *
+ * `kind: "image"` targets Xano's `/upload/image` endpoint instead —
+ * it validates the upload is an image and returns image metadata
+ * (with `meta.width`/`meta.height`), which is what an Xano *image*
+ * column expects. Image uploads always derive from the API base; the
+ * explicit `XANO_UPLOAD_URL` override is attachment-specific.
  */
-function resolveUploadUrl(): string | null {
+function resolveUploadUrl(kind: "attachment" | "image"): string | null {
+  const apiBase = process.env.XANO_API_BASE_URL?.trim();
+  if (kind === "image") {
+    return apiBase ? `${apiBase.replace(/\/+$/, "")}/upload/image` : null;
+  }
   const explicit = process.env.XANO_UPLOAD_URL?.trim();
   if (explicit) return explicit;
-  const apiBase = process.env.XANO_API_BASE_URL?.trim();
   if (apiBase) return `${apiBase.replace(/\/+$/, "")}/upload/attachment`;
   return null;
 }
@@ -24,7 +33,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const uploadUrl = resolveUploadUrl();
+  // `?kind=image` routes to Xano's image-upload endpoint (used by the
+  // student-photo upload); everything else uploads as an attachment.
+  const kind =
+    req.nextUrl.searchParams.get("kind") === "image" ? "image" : "attachment";
+  const uploadUrl = resolveUploadUrl(kind);
   if (!uploadUrl) {
     return NextResponse.json(
       {
