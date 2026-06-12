@@ -3670,6 +3670,13 @@ const SUFS_TIERS: Array<{
   },
   { key: "fes_ua_ese_4", label: "FES-UA · ESE 4", field: "fes_ua_ese_4" },
   { key: "fes_ua_ese_5", label: "FES-UA · ESE 5", field: "fes_ua_ese_5" },
+  // Escape hatch for awards that don't match a published tier —
+  // admin types the dollar value per student instead of deriving it
+  // from a school-year column. `field: null` means `sufsAmountFor`
+  // returns 0 for this key; the typed amount lives on the
+  // application row's `sufs_amount` (written via `/by-student`),
+  // which is the column every billing/tuition surface reads anyway.
+  { key: "custom", label: "Custom amount", field: null },
 ];
 
 const SUFS_STATUSES = [
@@ -3970,12 +3977,21 @@ function DecisionCard({
   // a family with no SUFS scholarship instead of "$0 awarded."
   const sufsTotal = (() => {
     const sum = activeApps.reduce((acc, a) => {
+      // Prefer the canonical per-student `sufs_amount` (written by
+      // the `/by-student` billing route — and the only home a
+      // "custom" tier's typed amount has), then the legacy
+      // `sufs_award_amount`, then the school-year derivation for
+      // rows that pre-date both columns.
+      const canonical =
+        typeof a.sufs_amount === "number" && a.sufs_amount > 0
+          ? a.sufs_amount
+          : null;
       const explicit =
         typeof a.sufs_award_amount === "number" && a.sufs_award_amount > 0
           ? a.sufs_award_amount
           : null;
       const derived = sufsAmountFor(a.sufs_type ?? "", schoolYear);
-      return acc + (explicit ?? derived);
+      return acc + (canonical ?? explicit ?? derived);
     }, 0);
     return sum > 0 ? sum : null;
   })();
@@ -5999,6 +6015,10 @@ function DecisionStudentRow({
     sufs_award_id: app?.sufs_award_id ? String(app.sufs_award_id) : "",
     opportunity_scholarship_award_amount:
       persistedAward == null ? "" : String(persistedAward),
+    // Editable mirror of the canonical `sufs_amount` — only rendered
+    // (and only committed) when the tier select is on "custom".
+    custom_sufs_amount:
+      app?.sufs_amount == null ? "" : String(app.sufs_amount),
   });
 
   // Re-init the draft only when we navigate to a different student
@@ -6015,6 +6035,8 @@ function DecisionStudentRow({
       sufs_award_id: app?.sufs_award_id ? String(app.sufs_award_id) : "",
       opportunity_scholarship_award_amount:
         persistedAward == null ? "" : String(persistedAward),
+      custom_sufs_amount:
+        app?.sufs_amount == null ? "" : String(app.sufs_amount),
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [app?.id]);
@@ -6216,8 +6238,22 @@ function DecisionStudentRow({
                     // onto the application row's
                     // `sufs_award_amount` — that column is legacy;
                     // packet's `sufs_amount` is canonical now.
-                    const nextAmount = sufsAmountFor(nextType, schoolYear);
                     patchField("sufs_type", { sufs_type: nextType });
+                    if (nextType === "custom") {
+                      // Custom has no derived amount — keep the
+                      // persisted `sufs_amount` as-is and seed the
+                      // editable input with it; the amount only
+                      // changes when admin commits a typed value.
+                      setDraft((d) => ({
+                        ...d,
+                        custom_sufs_amount:
+                          app.sufs_amount == null
+                            ? ""
+                            : String(app.sufs_amount),
+                      }));
+                      return;
+                    }
+                    const nextAmount = sufsAmountFor(nextType, schoolYear);
                     void patchPerStudentBilling({
                       sufsAwardAmount: nextAmount,
                     });
@@ -6254,6 +6290,47 @@ function DecisionStudentRow({
                   // derived amount field so the admin doesn't see a
                   // stale dollar value while the SWR refetch lands.
                   <Skeleton className="h-9 w-full rounded-md" />
+                ) : sufsType === "custom" ? (
+                  // Custom tier → the amount is admin-typed rather
+                  // than derived from the school-year columns. Same
+                  // commit convention as "Remaining Amount Family
+                  // Pays" below: blank = no change, onBlur diffs
+                  // against the persisted `sufs_amount` and writes
+                  // through `/by-student` (which re-derives the
+                  // billing columns + re-prices Stripe when live).
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground pointer-events-none">
+                      $
+                    </span>
+                    <Input
+                      value={draft.custom_sufs_amount}
+                      type="number"
+                      inputMode="decimal"
+                      min={0}
+                      placeholder="0"
+                      disabled={sufsConfirmed}
+                      onChange={(e) =>
+                        setDraft((d) => ({
+                          ...d,
+                          custom_sufs_amount: e.target.value,
+                        }))
+                      }
+                      onBlur={() => {
+                        const raw = draft.custom_sufs_amount;
+                        // Blank input = "no change" rather than an
+                        // implicit $0 — tabbing through shouldn't
+                        // overwrite a persisted award.
+                        if (raw === "" || raw == null) return;
+                        const next = Number(raw);
+                        if (!Number.isFinite(next) || next < 0) return;
+                        if (next === (app.sufs_amount ?? null)) return;
+                        void patchPerStudentBilling({
+                          sufsAwardAmount: next,
+                        });
+                      }}
+                      className="border-input pl-7 tabular-nums"
+                    />
+                  </div>
                 ) : (
                   <Input
                     value={sufsType ? formatCurrencyZero(sufsAmount) : "—"}

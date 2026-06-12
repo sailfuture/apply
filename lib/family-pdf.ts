@@ -650,8 +650,12 @@ export async function exportFamilyPDF({
     );
     cursorY += 14;
   } else {
+    // Prefer the canonical `sufs_amount` (written by the per-student
+    // billing route — also the only home of a "custom" tier's typed
+    // amount), falling back to the legacy `sufs_award_amount` for
+    // rows that pre-date the column.
     const sufsSum = activeApps.reduce(
-      (acc, a) => acc + (a.sufs_award_amount ?? 0),
+      (acc, a) => acc + (a.sufs_amount ?? a.sufs_award_amount ?? 0),
       0
     );
     const oppSum = activeApps.reduce(
@@ -680,7 +684,7 @@ export async function exportFamilyPDF({
           studentNameFor(sid),
           fmtMaybe(a.sufs_type),
           fmtMaybe(a.sufs_status),
-          fmt$(a.sufs_award_amount ?? null),
+          fmt$(a.sufs_amount ?? a.sufs_award_amount ?? null),
           fmt$(a.opportunity_scholarship_award_amount),
           a.confirmed_scholarship ? "Yes" : "No",
         ];
