@@ -3697,6 +3697,25 @@ function sufsAmountFor(
   return typeof v === "number" ? v : 0;
 }
 
+/**
+ * The per-student SUFS dollar amount to show on summary / breakdown
+ * surfaces. Prefers the canonical `sufs_amount` the per-student
+ * billing route writes — the single source of truth, and the only
+ * home of a "Custom amount" tier's typed value — then the legacy
+ * `sufs_award_amount`, then the school-year tier derivation for rows
+ * that pre-date both columns. `sufsAmountFor` alone returns $0 for
+ * "custom" (no school-year column backs that key), which is the bug
+ * this resolves.
+ */
+function resolveSufsAmount(
+  app: XanoApplication,
+  schoolYear: XanoSchoolYear | null
+): number {
+  if (typeof app.sufs_amount === "number") return app.sufs_amount;
+  if (typeof app.sufs_award_amount === "number") return app.sufs_award_amount;
+  return sufsAmountFor(app.sufs_type ?? "", schoolYear);
+}
+
 function formatCurrencyZero(value: number): string {
   return value.toLocaleString("en-US", {
     style: "currency",
@@ -3976,23 +3995,10 @@ function DecisionCard({
   // to 0 → write `null` so the billing surfaces render "N/A" for
   // a family with no SUFS scholarship instead of "$0 awarded."
   const sufsTotal = (() => {
-    const sum = activeApps.reduce((acc, a) => {
-      // Prefer the canonical per-student `sufs_amount` (written by
-      // the `/by-student` billing route — and the only home a
-      // "custom" tier's typed amount has), then the legacy
-      // `sufs_award_amount`, then the school-year derivation for
-      // rows that pre-date both columns.
-      const canonical =
-        typeof a.sufs_amount === "number" && a.sufs_amount > 0
-          ? a.sufs_amount
-          : null;
-      const explicit =
-        typeof a.sufs_award_amount === "number" && a.sufs_award_amount > 0
-          ? a.sufs_award_amount
-          : null;
-      const derived = sufsAmountFor(a.sufs_type ?? "", schoolYear);
-      return acc + (canonical ?? explicit ?? derived);
-    }, 0);
+    const sum = activeApps.reduce(
+      (acc, a) => acc + resolveSufsAmount(a, schoolYear),
+      0
+    );
     return sum > 0 ? sum : null;
   })();
 
@@ -4504,7 +4510,7 @@ function TuitionBreakdownTable({
   if (rows.length === 0) return null;
 
   const lineItems = rows.map(({ student, app }) => {
-    const stepUpAmount = sufsAmountFor(app.sufs_type ?? "", schoolYear);
+    const stepUpAmount = resolveSufsAmount(app, schoolYear);
     const stepUpStatus = app.sufs_status ?? "";
     const stepUpType = app.sufs_type ?? "";
     const familyPaysForTuition = app.remaining_opportunity_amount ?? 0;
@@ -5301,7 +5307,7 @@ function computeFamilyMonthlyTotal({
     }
     // Pre-confirm: full receipt minus SUFS (transport waived per SNAP).
     const sufsTotal = activeApps.reduce(
-      (sum, a) => sum + sufsAmountFor(a.sufs_type, schoolYear),
+      (sum, a) => sum + resolveSufsAmount(a, schoolYear),
       0
     );
     const total =
@@ -5557,7 +5563,7 @@ function ScholarshipReviewBlock({
     );
     const numStudents = snapStudents.length;
     const sufsTotal = snapStudents.reduce(
-      (sum, a) => sum + sufsAmountFor(a.sufs_type, schoolYear),
+      (sum, a) => sum + resolveSufsAmount(a, schoolYear),
       0
     );
     const tuitionTotal = baseTuition * numStudents;
@@ -5986,7 +5992,12 @@ function DecisionStudentRow({
 
   const sufsType = app?.sufs_type ?? "";
   const sufsStatus = app?.sufs_status ?? "";
-  const sufsAmount = sufsAmountFor(sufsType, schoolYear);
+  // Read-only amount display reads the stored `sufs_amount` (the
+  // billed source of truth), not the live tier→school-year
+  // derivation — safer when school-year figures change after a
+  // determination is saved, and the only correct source for "custom".
+  // Falls back to the derivation for legacy rows with no stored value.
+  const sufsAmount = app ? resolveSufsAmount(app, schoolYear) : 0;
   // The "is this student's award confirmed?" state lives on
   // `confirmed_scholarship` now (renamed from `sufs_confirmed`
   // since the button covers SUFS + Opportunity Scholarship). The
@@ -6285,10 +6296,12 @@ function DecisionStudentRow({
 
               <Field>
                 <FieldLabel className="text-xs">SUFS award amount</FieldLabel>
-                {savingField === "sufs_type" ? (
-                  // Tier just changed — show a skeleton on the
-                  // derived amount field so the admin doesn't see a
-                  // stale dollar value while the SWR refetch lands.
+                {savingField === "sufs_type" ||
+                savingField === "per_student_billing" ? (
+                  // Tier (or the per-student amount) is mid-write —
+                  // show a skeleton until the SWR refetch lands the
+                  // new stored `sufs_amount`, so the admin never sees
+                  // the prior value flash through.
                   <Skeleton className="h-9 w-full rounded-md" />
                 ) : sufsType === "custom" ? (
                   // Custom tier → the amount is admin-typed rather

@@ -1919,6 +1919,9 @@ const SUFS_LABELS: Record<string, string> = {
   fes_ua_9_ese_1_3: "FES-UA ESE 1-3 (Grade 9)",
   fes_ua_ese_4: "FES-UA ESE 4",
   fes_ua_ese_5: "FES-UA ESE 5",
+  // Admin-entered per-student amount (no school-year tier column);
+  // the dollar value lives on `sufs_amount`.
+  custom: "Custom amount",
 };
 
 type TuitionBreakdownSchoolYear =
@@ -2016,9 +2019,16 @@ function TuitionBreakdownTable({
 
   const rows = students.map((s) => {
     const sufsField = SUFS_FIELDS[s.sufs_type];
-    const stepUpAmount = sufsField
-      ? (schoolYear[sufsField] as number | undefined) ?? 0
-      : 0;
+    // Prefer the canonical `sufs_amount` (the only home of a "Custom
+    // amount" tier's typed value); the school-year tier derivation is
+    // $0 for "custom". Fall back to the derivation for legacy rows
+    // that pre-date the column.
+    const stepUpAmount =
+      typeof s.sufs_amount === "number"
+        ? s.sufs_amount
+        : sufsField
+          ? (schoolYear[sufsField] as number | undefined) ?? 0
+          : 0;
     // Remaining Tuition Amount comes from the application row's
     // `remaining_opportunity_amount` column — admin's "Remaining
     // Amount Family Pays" input on the Determination card.
