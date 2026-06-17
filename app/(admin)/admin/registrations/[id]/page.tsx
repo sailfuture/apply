@@ -3189,6 +3189,15 @@ function StudentPacketBlock({
                   onChanged,
                 }}
               />
+              <FilePreviewGroup
+                label="Discipline Records"
+                files={row.student_documents.discipline}
+                upload={{
+                  studentId: row.student_id,
+                  fieldKey: "discipline",
+                  onChanged,
+                }}
+              />
             </div>
           </SectionGroup>
 
@@ -4010,7 +4019,8 @@ function AdminDocumentUpload({
     | "iep"
     | "ssn_card"
     | "passport"
-    | "student_state_id";
+    | "student_state_id"
+    | "discipline";
   files: Record<string, unknown>[];
   label: string;
   compact?: boolean;
@@ -4250,7 +4260,8 @@ function AdminFileRemoveButton({
     | "iep"
     | "ssn_card"
     | "passport"
-    | "student_state_id";
+    | "student_state_id"
+    | "discipline";
   files: Record<string, unknown>[];
   index: number;
   /** File name shown in the confirm dialog. Falls back to a generic
@@ -4747,7 +4758,8 @@ function FilePreviewGroup({
       | "iep"
       | "ssn_card"
       | "passport"
-      | "student_state_id";
+      | "student_state_id"
+      | "discipline";
     onChanged: () => void;
   };
 }) {
@@ -5402,6 +5414,164 @@ function RevokeAcceptanceButton({
   );
 }
 
+/* ─────────────────────── Return registration to family ─────────────────────── */
+
+/**
+ * Sends a SUBMITTED-but-not-yet-confirmed registration back to the
+ * family for edits by flipping `isSubmitted=false` and clearing
+ * `submitted_date` on the per-year
+ * `registration_student_registration_progress` row. The parent drops
+ * out of the "registration in review" pending view and back into the
+ * editable registration flow (the post-acceptance step table) so they
+ * can revise their sections and re-submit.
+ *
+ * Fills the lifecycle gap between the two existing footer escape
+ * hatches: Revoke acceptance is too drastic (it unwinds the upstream
+ * acceptance and bounces the family to the apply flow), and Undo only
+ * applies AFTER the family-level registration confirmation has landed.
+ * Between "parent clicked Submit" and "admin clicked Confirm" there was
+ * no way to return the packet for revisions — this is it.
+ *
+ * Mirror of the apply-flow `RejectApplicationButton` ("Return
+ * Application to Family"), which does the same thing one phase earlier
+ * via `/api/admin/family-progress`. Same PATCH route the Confirm /
+ * Undo / Archive actions on this card already use; `isSubmitted` +
+ * `submitted_date` are both on that route's allowlist.
+ *
+ * Section verifies (Tuition / Enrollment / Volunteer / Emergency
+ * Contacts) and per-student packet confirmations are deliberately left
+ * intact — returning for edits is "let them revise + re-submit," not
+ * "throw away the review work already done." Nothing here touches
+ * `isRegistrationConfirmed` (it isn't set yet in this state) or student
+ * enrollment.
+ *
+ * Stays mounted but disabled when the family hasn't submitted yet
+ * (`submitted` prop) so the footer's action surface is stable across
+ * states — admin sees the full vocabulary and the disabled tooltip
+ * explains why it isn't actionable.
+ */
+function ReturnRegistrationButton({
+  familyId,
+  yearId,
+  familyName,
+  submitted,
+  onReturned,
+}: {
+  familyId: number;
+  yearId: number;
+  familyName: string;
+  /** Parent-side submission latch. The button only does anything when
+   *  the family has actually submitted; otherwise it's a disabled
+   *  placeholder so the grid cell stays occupied. */
+  submitted: boolean;
+  onReturned: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  async function runReturn() {
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/admin/registration-progress`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          familyId,
+          yearId,
+          isSubmitted: false,
+          // Clear the submission timestamp too, mirroring the apply-flow
+          // Return (which nulls `submitted_at`). It re-stamps on the
+          // parent's next submit, so the value always reflects the
+          // latest submission rather than a stale earlier one.
+          submitted_date: null,
+        }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Return failed (${res.status})`);
+      }
+      toast.success(
+        `${familyName || "Family"} registration returned — back to the editable registration flow.`
+      );
+      setOpen(false);
+      onReturned();
+    } catch (err) {
+      console.error("[ReturnRegistrationButton.runReturn] failed:", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't return.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const disabled = !submitted;
+
+  return (
+    <>
+      <Button
+        type="button"
+        variant="outline"
+        size="lg"
+        disabled={saving || disabled}
+        title={
+          disabled
+            ? "Family hasn't submitted their registration yet — nothing to return."
+            : "Send this registration back to the family for edits"
+        }
+        onClick={() => setOpen(true)}
+        // Neutral outline (not red) — returning for revisions is a
+        // routine action, matching the apply-flow Return button.
+        className="bg-white w-full"
+      >
+        {saving ? (
+          <Loader2 className="size-4 mr-1.5 animate-spin shrink-0" />
+        ) : (
+          <Undo2 className="size-4 mr-1.5 shrink-0" />
+        )}
+        <span className="truncate">Return to Family</span>
+      </Button>
+
+      <AlertDialog
+        open={open}
+        onOpenChange={(next) => {
+          if (!saving) setOpen(next);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Return {familyName || "family"} registration to the family?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              The family drops out of the &ldquo;registration in
+              review&rdquo; view and back into the editable registration
+              flow so they can make changes and re-submit. Section
+              verifies and per-student packet confirmations you&rsquo;ve
+              already recorded stay intact. You can confirm the family
+              once they re-submit.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={saving}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={saving}
+              className="bg-amber-600 hover:bg-amber-700 text-white"
+              onClick={(e) => {
+                e.preventDefault();
+                void runReturn();
+              }}
+            >
+              {saving ? (
+                <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+              ) : null}
+              Yes, return
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
+}
+
 /* ─────────────────────── Family registration confirmation ─────────────────────── */
 
 /**
@@ -5730,29 +5900,42 @@ function FamilyRegistrationConfirmationCard({
             registrationConfirmed={confirmed}
             onRevoked={onConfirmed}
           />
-          {/* Undo: disabled (gray, tooltip-explained) until the
-              family has been confirmed. Active outline button once
-              there's a confirmation latch to undo. */}
-          <Button
-            type="button"
-            variant="outline"
-            size="lg"
-            onClick={() => setUndoOpen(true)}
-            disabled={saving || !confirmed}
-            title={
-              !confirmed
-                ? "Nothing to undo — registration hasn't been confirmed yet."
-                : undefined
-            }
-            className="bg-white w-full"
-          >
-            {saving && confirmed ? (
-              <Loader2 className="size-4 mr-1.5 animate-spin shrink-0" />
-            ) : (
-              <Undo2 className="size-4 mr-1.5 shrink-0" />
-            )}
-            <span className="truncate">Undo</span>
-          </Button>
+          {/* Middle cell — the "step backward" action, which differs
+              by lifecycle state (the two never apply at once, so they
+              share the one grid cell):
+                - Confirmed → Undo: clears the family-level confirmation.
+                  The route's un-confirm cascade also reopens the
+                  registration for editing.
+                - Submitted but not yet confirmed → Return to Family:
+                  flips `isSubmitted=false` so the parent drops back to
+                  the editable registration flow to revise + re-submit.
+                - Not submitted yet → Return to Family stays mounted but
+                  disabled (nothing to return). */}
+          {confirmed ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="lg"
+              onClick={() => setUndoOpen(true)}
+              disabled={saving}
+              className="bg-white w-full"
+            >
+              {saving ? (
+                <Loader2 className="size-4 mr-1.5 animate-spin shrink-0" />
+              ) : (
+                <Undo2 className="size-4 mr-1.5 shrink-0" />
+              )}
+              <span className="truncate">Undo</span>
+            </Button>
+          ) : (
+            <ReturnRegistrationButton
+              familyId={familyId}
+              yearId={yearId}
+              familyName={familyName}
+              submitted={progress?.isSubmitted === true}
+              onReturned={onConfirmed}
+            />
+          )}
           {/* Last cell flips identity based on confirmation state:
               pre-confirm it's the primary green "Confirm Family
               Registration" action; post-confirm it collapses into

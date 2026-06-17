@@ -168,6 +168,9 @@ function shapeStudent(s: XanoStudent) {
     date_of_birth: s.date_of_birth ?? "",
     gender: s.gender ?? "",
     ethnicity: s.ethnicity ?? "",
+    /** Student's own phone — canonical 10-digit US digits. Evergreen
+     *  on the student row; editable from the Student Information card. */
+    student_phone: s.student_phone ?? "",
     photo: s.photo ?? null,
     /** Student photo — Xano image-column metadata set by the admin
      *  Student Photo card. Passed through as-is for the card to render
@@ -196,6 +199,7 @@ function shapeStudent(s: XanoStudent) {
     immunization_forms: normalizeFileArray(s.immunization_forms),
     passport: normalizeFileArray(s.passport),
     student_state_id: normalizeFileArray(s.student_state_id),
+    discipline: normalizeFileArray(s.discipline),
     /** Unenrollment audit. Lives on the student row (not the
      *  per-year packet) so the audit follows the student across
      *  any re-enrollment attempts in future years. The Unenroll

@@ -293,6 +293,7 @@ export async function GET(
             ),
             passport: normalizeFileArray(student?.passport),
             student_state_id: normalizeFileArray(student?.student_state_id),
+            discipline: normalizeFileArray(student?.discipline),
           },
           // Per-document admin-confirm state. Live on the student
           // row (added against the `2GcBXyoA` admin group). Optional
@@ -538,6 +539,7 @@ export interface AdminFamilyRegistrationStudentRow {
     immunization_forms: Record<string, unknown>[];
     passport: Record<string, unknown>[];
     student_state_id: Record<string, unknown>[];
+    discipline: Record<string, unknown>[];
   };
   /** Per-document admin-confirm state for the four required
    *  documents. The bool is what the UI reads/writes; time + admin

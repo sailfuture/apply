@@ -59,7 +59,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const { first_name, last_name, date_of_birth, gender, ethnicity } =
+  const { first_name, last_name, date_of_birth, gender, ethnicity, student_phone } =
     await req.json();
 
   if (!first_name || !last_name) {
@@ -75,6 +75,7 @@ export async function POST(req: NextRequest) {
     date_of_birth: date_of_birth || null,
     gender: gender || "",
     ethnicity: ethnicity || "",
+    student_phone: student_phone || "",
     photo: null,
     registration_families_id: familyId,
     registration_school_years_id: [],
@@ -92,6 +93,7 @@ export async function POST(req: NextRequest) {
     student_state_id: [],
     iep: [],
     ssn_card: [],
+    discipline: [],
   });
 
   const family = await xano.families.getById(familyId);

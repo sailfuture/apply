@@ -77,6 +77,7 @@ import {
   formatRelativeShort,
 } from "@/lib/format-note-time";
 import { formatUSPhone } from "@/lib/phone";
+import { PhoneInput } from "@/components/ui/phone-input";
 import {
   Table,
   TableBody,
@@ -746,6 +747,7 @@ function StudentBioCard({
     date_of_birth: student.date_of_birth ?? "",
     gender: student.gender ?? "",
     ethnicity: student.ethnicity ?? "",
+    student_phone: student.student_phone ?? "",
     current_grade: app?.current_grade ?? "",
     last_grade_completed: app?.last_grade_completed ?? "",
     current_previous_school: app?.current_previous_school ?? "",
@@ -760,6 +762,7 @@ function StudentBioCard({
       date_of_birth: student.date_of_birth ?? "",
       gender: student.gender ?? "",
       ethnicity: student.ethnicity ?? "",
+      student_phone: student.student_phone ?? "",
       current_grade: app?.current_grade ?? "",
       last_grade_completed: app?.last_grade_completed ?? "",
       current_previous_school: app?.current_previous_school ?? "",
@@ -785,6 +788,8 @@ function StudentBioCard({
       studentPatch.gender = draft.gender;
     if (draft.ethnicity !== (student.ethnicity ?? ""))
       studentPatch.ethnicity = draft.ethnicity;
+    if (draft.student_phone !== (student.student_phone ?? ""))
+      studentPatch.student_phone = draft.student_phone;
     const appPatch: Record<string, string | boolean> = {};
     if (app) {
       if (draft.current_grade !== (app.current_grade ?? ""))
@@ -904,6 +909,16 @@ function StudentBioCard({
                 options={ETHNICITY_OPTIONS}
                 disabled={saving}
               />
+              <Field>
+                <FieldLabel className="text-xs">Student phone</FieldLabel>
+                <PhoneInput
+                  value={draft.student_phone}
+                  onChange={(v) =>
+                    setDraft((d) => ({ ...d, student_phone: v }))
+                  }
+                  disabled={saving}
+                />
+              </Field>
               {app ? (
                 <EditField
                   label="Incoming grade"
@@ -922,6 +937,14 @@ function StudentBioCard({
               <ReadField label="Date of birth" value={student.date_of_birth} />
               <ReadField label="Gender" value={student.gender} />
               <ReadField label="Ethnicity" value={student.ethnicity} />
+              <ReadField
+                label="Student phone"
+                value={
+                  student.student_phone
+                    ? formatUSPhone(student.student_phone)
+                    : ""
+                }
+              />
               <ReadField
                 label="Incoming grade"
                 value={app?.current_grade ?? ""}
@@ -2627,6 +2650,13 @@ function PacketCard({
               fieldKey="student_state_id"
               onChanged={onChanged}
             />
+            <OptionalDocRow
+              label="Discipline Records"
+              files={student.discipline}
+              studentId={student.id}
+              fieldKey="discipline"
+              onChanged={onChanged}
+            />
           </ul>
         </div>
       </CardContent>
@@ -3556,7 +3586,8 @@ function OptionalDocRow({
     | "iep"
     | "ssn_card"
     | "passport"
-    | "student_state_id";
+    | "student_state_id"
+    | "discipline";
   onChanged: () => void;
 }) {
   const entries = Array.isArray(files) ? files : [];
@@ -3747,7 +3778,8 @@ function AdminFileRemoveButton({
     | "iep"
     | "ssn_card"
     | "passport"
-    | "student_state_id";
+    | "student_state_id"
+    | "discipline";
   files: Record<string, unknown>[];
   index: number;
   /** File name shown in the confirm dialog. Falls back to a
@@ -3888,7 +3920,8 @@ function AdminDocumentUpload({
     | "iep"
     | "ssn_card"
     | "passport"
-    | "student_state_id";
+    | "student_state_id"
+    | "discipline";
   files: Record<string, unknown>[];
   /** Used in the dropzone copy ("Upload birth certificate", etc.) */
   label: string;

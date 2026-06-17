@@ -27,6 +27,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Input } from "@/components/ui/input";
 import { PhoneInput } from "@/components/ui/phone-input";
+import { formatUSPhone } from "@/lib/phone";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -101,6 +102,9 @@ interface Student {
   date_of_birth: string;
   gender: string;
   ethnicity: string;
+  /** Student's own phone — canonical 10-digit US digits. Editable from
+   *  the per-student row; optional/legacy-nullable. */
+  student_phone?: string;
   isAccepted: boolean;
   /** Admin-only NWEA initial-screening scores + dates. Live on the
    *  student row so re-enrolling kids keep their score history.
@@ -2333,6 +2337,7 @@ function StudentApplicationBlock({
     date_of_birth: student.date_of_birth ?? "",
     gender: student.gender ?? "",
     ethnicity: student.ethnicity ?? "",
+    student_phone: student.student_phone ?? "",
   });
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -2344,6 +2349,7 @@ function StudentApplicationBlock({
       date_of_birth: student.date_of_birth ?? "",
       gender: student.gender ?? "",
       ethnicity: student.ethnicity ?? "",
+      student_phone: student.student_phone ?? "",
     });
     setEditing(true);
   }
@@ -2366,6 +2372,8 @@ function StudentApplicationBlock({
       patch.gender = draft.gender;
     if (draft.ethnicity !== (student.ethnicity ?? ""))
       patch.ethnicity = draft.ethnicity;
+    if (draft.student_phone !== (student.student_phone ?? ""))
+      patch.student_phone = draft.student_phone;
     if (Object.keys(patch).length === 0) {
       setEditing(false);
       return;
@@ -2647,6 +2655,16 @@ function StudentApplicationBlock({
                 </SelectContent>
               </Select>
             </Field>
+            <Field>
+              <FieldLabel>Student phone</FieldLabel>
+              <PhoneInput
+                value={draft.student_phone}
+                onChange={(v) =>
+                  setDraft((d) => ({ ...d, student_phone: v }))
+                }
+                disabled={saving}
+              />
+            </Field>
           </div>
         ) : (
           <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
@@ -2661,6 +2679,12 @@ function StudentApplicationBlock({
             />
             <DisabledField label="Gender" value={student.gender} required />
             <DisabledField label="Ethnicity" value={student.ethnicity} required />
+            <DisabledField
+              label="Student phone"
+              value={
+                student.student_phone ? formatUSPhone(student.student_phone) : ""
+              }
+            />
           </div>
         )}
       </SectionGroup>

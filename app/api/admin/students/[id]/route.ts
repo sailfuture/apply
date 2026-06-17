@@ -115,6 +115,13 @@ export async function PATCH(
       "date_of_birth",
       "gender",
       "ethnicity",
+      // Student's own phone number (canonical 10-digit US digits).
+      // Same evergreen contact column parents write via
+      // /api/students/[id]; admin can correct it from the student
+      // affordances on the family / enrolled / registration surfaces.
+      // Lives on the default group's CRUD (like the bio fields above),
+      // so it doesn't flip `touchesAdminGroupFields`.
+      "student_phone",
       // Student photo — Xano image-column metadata object set by the
       // admin Student Photo card (client-compressed, uploaded via
       // `/upload/image`). Stored as the metadata blob Xano returns.
@@ -145,6 +152,9 @@ export async function PATCH(
       "ssn_card",
       "passport",
       "student_state_id",
+      // Discipline records — evergreen optional document array, same
+      // shape + default-group CRUD as the other optional docs above.
+      "discipline",
       // Unenrollment audit — flipped by the Unenroll affordance
       // on the enrolled student detail page. Captures the
       // archive flag, free-text reason, effective date, and any

@@ -118,6 +118,8 @@ export async function POST(req: NextRequest) {
     student_state_id: [],
     iep: [],
     ssn_card: [],
+    discipline: [],
+    student_phone: "",
   });
 
   const existingStudentIds = xano.families.getStudentIds(family);

@@ -128,6 +128,11 @@ export interface XanoStudent {
   date_of_birth: string;
   gender: string;
   ethnicity: string;
+  /** Student's own phone number, stored as canonical 10-digit US
+   *  digits (e.g. "8135550123"). Captured on the registration packet
+   *  via the shared `PhoneInput`. Optional contact field — empty
+   *  string when unset, and legacy rows pre-date the column add. */
+  student_phone?: string;
   photo: string | null;
   /** Student photo — an Xano *image* column populated via the admin
    *  Student Photo card (client-compressed JPEG, uploaded through
@@ -186,6 +191,12 @@ export interface XanoStudent {
   student_state_id: Record<string, unknown>[];
   iep: Record<string, unknown>[];
   ssn_card: Record<string, unknown>[];
+  /** Discipline records — evergreen multi-file upload (JSON list of
+   *  Xano file metadata), gathered in the registration packet's
+   *  Optional Documents section. Optional like the other non-required
+   *  document categories; empty until a parent uploads, and legacy
+   *  rows pre-date the column add. */
+  discipline?: Record<string, unknown>[];
 
   /** Admin-only initial-screening NWEA scores + dates. Recorded
    *  after the student completes initial testing at the academy.

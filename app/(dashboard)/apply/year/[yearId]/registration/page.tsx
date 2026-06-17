@@ -119,6 +119,9 @@ interface Student {
   id: number;
   first_name: string;
   last_name: string;
+  /** Student's own phone number — canonical 10-digit US digits.
+   *  Evergreen on `registration_students`; entered on this packet. */
+  student_phone?: string;
   // Document arrays live on `registration_students` (evergreen, per student).
   // Parents can upload multiple files per category.
   birth_certificate?: FileMetadata[];
@@ -129,6 +132,7 @@ interface Student {
   student_state_id?: FileMetadata[];
   iep?: FileMetadata[];
   ssn_card?: FileMetadata[];
+  discipline?: FileMetadata[];
 }
 
 // Keys on the Student object that are document-array fields.
@@ -140,7 +144,8 @@ type StudentDocField =
   | "passport"
   | "student_state_id"
   | "iep"
-  | "ssn_card";
+  | "ssn_card"
+  | "discipline";
 
 interface Application {
   id: number;
@@ -396,6 +401,7 @@ const OPTIONAL_DOCUMENTS: { key: StudentDocField; label: string }[] = [
   { key: "ssn_card", label: "SSN Card" },
   { key: "passport", label: "Passport" },
   { key: "student_state_id", label: "Student State ID" },
+  { key: "discipline", label: "Discipline Records" },
 ];
 
 /** True when the student has at least one valid file uploaded under `field`. */
@@ -752,6 +758,16 @@ export default function RegistrationPage() {
   const [addStudentOpen, setAddStudentOpen] = useState(false);
   const [selectedStudentIds, setSelectedStudentIds] = useState<Set<number>>(new Set());
 
+  // Per-student phone draft, keyed by student id. `student_phone` lives on
+  // the evergreen `registration_students` row (not the per-year packet),
+  // so we hold a local editable copy and persist it on blur + on the
+  // section save. Seeded from each student's saved value once the students
+  // load (effect below); the ref mirror lets the blur handler read the
+  // latest draft without a stale closure.
+  const [studentPhoneDraft, setStudentPhoneDraft] = useState<Record<number, string>>({});
+  const studentPhoneDraftRef = useRef(studentPhoneDraft);
+  studentPhoneDraftRef.current = studentPhoneDraft;
+
   // Invite-a-parent state — same Clerk invitation flow as /family. Sends an
   // email the secondary contact uses to create their own Clerk account and
   // link to this family.
@@ -828,6 +844,25 @@ export default function RegistrationPage() {
     const enrolledIds = new Set(yearApps.map((a) => a.registration_students_id));
     return (studentsData as Student[]).filter((s) => enrolledIds.has(s.id));
   })();
+
+  // Seed the phone drafts from each loaded student's saved value. Runs
+  // when the students SWR data changes; the `=== undefined` guard keeps it
+  // idempotent so a revalidation (or a save round-trip) never clobbers a
+  // value the parent is actively editing.
+  useEffect(() => {
+    if (!studentsData) return;
+    setStudentPhoneDraft((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const s of studentsData as Student[]) {
+        if (next[s.id] === undefined) {
+          next[s.id] = s.student_phone ?? "";
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [studentsData]);
 
   // ---------------------------------------------------------------------------
   // PandaDoc signing for per-student liability waivers
@@ -1334,6 +1369,43 @@ export default function RegistrationPage() {
     );
   }
 
+  // Persist a student's phone to the evergreen `registration_students`
+  // row. Called on blur (and again from `handleSaveAll`); no-ops when the
+  // draft already matches the saved value so blur + section-save don't
+  // double-write. Optimistically patches the students SWR cache so the
+  // value sticks across a revalidation, then confirms with the server copy.
+  async function persistStudentPhone(studentId: number) {
+    const digits = studentPhoneDraftRef.current[studentId] ?? "";
+    const student = enrolledStudents.find((s) => s.id === studentId);
+    if ((student?.student_phone ?? "") === digits) return;
+    swrMutate(
+      "/api/students",
+      (current: Student[] | undefined) =>
+        Array.isArray(current)
+          ? current.map((s) =>
+              s.id === studentId ? { ...s, student_phone: digits } : s
+            )
+          : current,
+      { revalidate: false }
+    );
+    try {
+      const res = await fetch(`/api/students/${studentId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ student_phone: digits }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error ?? `Save failed (${res.status})`);
+      }
+      await mutateStudents();
+    } catch (err) {
+      console.error(`Failed to save phone for student ${studentId}:`, err);
+      toast.error("Failed to save phone number. Please try again.");
+      await mutateStudents();
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Save handler
   // ---------------------------------------------------------------------------
@@ -1437,6 +1509,26 @@ export default function RegistrationPage() {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
+          })
+        );
+      }
+
+      // 4. Student phone — evergreen on `registration_students`. PATCH any
+      //    selected student whose draft differs from the saved value so
+      //    "Complete Section" persists a number the parent typed without
+      //    blurring out of the field first. Idempotent with the on-blur
+      //    save (`persistStudentPhone`): both skip when unchanged.
+      for (const student of enrolledStudents.filter((s) =>
+        selectedStudentIds.has(s.id)
+      )) {
+        const digits = studentPhoneDraftRef.current[student.id];
+        if (digits === undefined) continue;
+        if ((student.student_phone ?? "") === digits) continue;
+        promises.push(
+          fetch(`/api/students/${student.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ student_phone: digits }),
           })
         );
       }
@@ -2125,6 +2217,32 @@ export default function RegistrationPage() {
                       </div>
                     </CardHeader>
                     <CardContent className="space-y-6 py-5 bg-white dark:bg-background">
+                            {/* Student Information — evergreen contact info
+                                on the student record (not the per-year
+                                packet). Optional; persists on blur. */}
+                            <section>
+                              <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
+                                Student Information
+                              </h3>
+                              <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
+                                <Field>
+                                  <FieldLabel className="text-xs">Student Phone</FieldLabel>
+                                  <PhoneInput
+                                    value={studentPhoneDraft[student.id] ?? ""}
+                                    onChange={(d) =>
+                                      setStudentPhoneDraft((prev) => ({
+                                        ...prev,
+                                        [student.id]: d,
+                                      }))
+                                    }
+                                    onValidate={() => void persistStudentPhone(student.id)}
+                                  />
+                                </Field>
+                              </div>
+                            </section>
+
+                            <Separator />
+
                             {/* Uniform & Activities */}
                             <section>
                               <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">

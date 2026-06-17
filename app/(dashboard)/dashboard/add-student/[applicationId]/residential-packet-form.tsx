@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Field, FieldLabel } from "@/components/ui/field";
+import { PhoneInput } from "@/components/ui/phone-input";
 import { Switch } from "@/components/ui/switch";
 import {
   Card,
@@ -54,7 +55,8 @@ type DocField =
   | "iep"
   | "ssn_card"
   | "passport"
-  | "student_state_id";
+  | "student_state_id"
+  | "discipline";
 
 interface Packet {
   id?: number;
@@ -106,6 +108,7 @@ const OPTIONAL_DOCS: { key: DocField; label: string }[] = [
   { key: "ssn_card", label: "SSN Card" },
   { key: "passport", label: "Passport" },
   { key: "student_state_id", label: "Student State ID" },
+  { key: "discipline", label: "Discipline Records" },
 ];
 
 function hasFile(meta: FileMeta | null | undefined): boolean {
@@ -287,6 +290,7 @@ function DocUpload({
 
 interface StudentDocsRow {
   id: number;
+  student_phone?: string;
   birth_certificate?: FileMeta[];
   school_health_form?: FileMeta[];
   transcripts?: FileMeta[];
@@ -295,6 +299,7 @@ interface StudentDocsRow {
   ssn_card?: FileMeta[];
   passport?: FileMeta[];
   student_state_id?: FileMeta[];
+  discipline?: FileMeta[];
 }
 
 export function ResidentialPacketForm({
@@ -323,7 +328,12 @@ export function ResidentialPacketForm({
     ssn_card: [],
     passport: [],
     student_state_id: [],
+    discipline: [],
   });
+  // Student phone lives on the evergreen student row (not the packet),
+  // so it persists independently — on blur + on save, like the docs.
+  const [studentPhone, setStudentPhone] = useState("");
+  const [savedStudentPhone, setSavedStudentPhone] = useState("");
   const [saving, setSaving] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
@@ -340,7 +350,10 @@ export function ResidentialPacketForm({
       ssn_card: row.ssn_card ?? [],
       passport: row.passport ?? [],
       student_state_id: row.student_state_id ?? [],
+      discipline: row.discipline ?? [],
     });
+    setStudentPhone(row.student_phone ?? "");
+    setSavedStudentPhone(row.student_phone ?? "");
   }, []);
 
   useEffect(() => {
@@ -404,6 +417,25 @@ export function ResidentialPacketForm({
     }
   }
 
+  // Persist the student's phone to the evergreen student row. No-ops when
+  // unchanged; called on blur and again from save/submit so a number typed
+  // without blurring still lands.
+  async function persistStudentPhone() {
+    if (studentPhone === savedStudentPhone) return;
+    try {
+      const res = await fetch(`/api/students/${studentId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ student_phone: studentPhone }),
+      });
+      if (!res.ok) throw new Error(`Save failed (${res.status})`);
+      setSavedStudentPhone(studentPhone);
+    } catch (err) {
+      console.error("Failed to save student phone:", err);
+      toast.error("Failed to save phone number. Please try again.");
+    }
+  }
+
   const complete = useMemo(
     () => (packet ? isPacketComplete(packet, docs) : false),
     [packet, docs]
@@ -433,6 +465,7 @@ export function ResidentialPacketForm({
     if (saving || submitting) return;
     setSaving(true);
     try {
+      await persistStudentPhone();
       if (!(await savePacket())) throw new Error("save failed");
       toast.success("Progress saved.");
     } catch {
@@ -451,6 +484,7 @@ export function ResidentialPacketForm({
     }
     setSubmitting(true);
     try {
+      await persistStudentPhone();
       if (!(await savePacket())) throw new Error("save failed");
       toast.success("Registration packet submitted for review.");
       setSubmitted(true);
@@ -511,6 +545,24 @@ export function ResidentialPacketForm({
           enrolled roster.
         </p>
       </div>
+
+      {/* Student Information — evergreen contact info on the student
+          row (persists independently of the packet save). */}
+      <Card className="overflow-hidden gap-0 py-0">
+        <CardHeader className="py-3 !pb-3 border-b">
+          <CardTitle className="text-base">Student Information</CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-4 py-5 sm:grid-cols-3 bg-white dark:bg-background">
+          <Field>
+            <FieldLabel className="text-xs">Student Phone</FieldLabel>
+            <PhoneInput
+              value={studentPhone}
+              onChange={setStudentPhone}
+              onValidate={() => void persistStudentPhone()}
+            />
+          </Field>
+        </CardContent>
+      </Card>
 
       {/* Uniform */}
       <Card className="overflow-hidden gap-0 py-0">
