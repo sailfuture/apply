@@ -769,19 +769,19 @@ export default function YearOverviewPage() {
           <div className="rounded-xl bg-background p-5 shadow-sm border text-center">
             <p className="text-sm font-medium mb-1">Have questions?</p>
             <p className="text-sm text-muted-foreground">
-              Contact us at{" "}
+              Contact Ms. Laura Manke at{" "}
               <a
-                href="mailto:tward@sailfuture.org"
+                href="mailto:admissions@sailfuture.org"
                 className="text-primary underline underline-offset-2"
               >
-                tward@sailfuture.org
+                admissions@sailfuture.org
               </a>{" "}
               or call{" "}
               <a
-                href="tel:+17279001436"
+                href="tel:+18135053539"
                 className="text-primary underline underline-offset-2"
               >
-                (727) 900-1436
+                (813) 505-3539
               </a>
               .
             </p>
@@ -953,19 +953,19 @@ export default function YearOverviewPage() {
           </div>
 
           <p className="text-xs text-muted-foreground text-center mt-6">
-            Questions? Contact us at{" "}
+            Questions? Contact Ms. Laura Manke at{" "}
             <a
-              href="mailto:tward@sailfuture.org"
+              href="mailto:admissions@sailfuture.org"
               className="text-primary underline underline-offset-2"
             >
-              tward@sailfuture.org
+              admissions@sailfuture.org
             </a>{" "}
             or call{" "}
             <a
-              href="tel:+17279001436"
+              href="tel:+18135053539"
               className="text-primary underline underline-offset-2"
             >
-              (727) 900-1436
+              (813) 505-3539
             </a>
             .
           </p>
