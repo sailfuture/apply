@@ -10,8 +10,22 @@ export async function GET(
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { id } = await params;
-  const scholarship = await xano.scholarship.getById(Number(id));
-  return NextResponse.json(scholarship);
+  // Return the WRAPPED shape the parent Financial Aid edit page expects:
+  // `{ opportunity_scholarship, homes, vehicles, contributing_members,
+  // benefits }`. `getById` unwraps to the flat scholarship row (no child
+  // arrays + no `opportunity_scholarship` key), which made the edit
+  // page's hydrate guard bail and render an EMPTY form — parents then
+  // re-entered everything and resubmitted, creating duplicate child rows
+  // (contributing members, etc.). `getByIdWithChildren` returns the
+  // normalized children in one round trip.
+  const full = await xano.scholarship.getByIdWithChildren(Number(id));
+  return NextResponse.json({
+    opportunity_scholarship: full.scholarship,
+    homes: full.homes,
+    vehicles: full.vehicles,
+    contributing_members: full.contributing_members,
+    benefits: full.benefits,
+  });
 }
 
 export async function PATCH(

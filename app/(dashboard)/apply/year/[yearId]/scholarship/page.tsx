@@ -661,10 +661,19 @@ export default function ScholarshipPage() {
             } else if (s.isOpportunityScholarship) {
               setScholarshipChoice("full");
             }
-            const loadedMembers = resp.contributing_members ?? [];
-            const loadedHomes = resp.homes ?? [];
-            const loadedVehicles = resp.vehicles ?? [];
-            const loadedBenefits = resp.benefits ?? [];
+            // Coerce to arrays defensively — a non-array child (e.g. a
+            // single object from a Xano expansion quirk) would otherwise
+            // slip past `?? []` and throw on `.map()`, blanking the page.
+            const loadedMembers = Array.isArray(resp.contributing_members)
+              ? resp.contributing_members
+              : [];
+            const loadedHomes = Array.isArray(resp.homes) ? resp.homes : [];
+            const loadedVehicles = Array.isArray(resp.vehicles)
+              ? resp.vehicles
+              : [];
+            const loadedBenefits = Array.isArray(resp.benefits)
+              ? resp.benefits
+              : [];
             setMembers(loadedMembers);
             setHomes(loadedHomes);
             setVehicles(loadedVehicles);
