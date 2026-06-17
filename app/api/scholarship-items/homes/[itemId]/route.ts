@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { xano } from "@/lib/xano";
+import { denyScholarshipMutation } from "@/lib/scholarship-access";
 
 export async function PATCH(
   req: NextRequest,
@@ -10,8 +11,17 @@ export async function PATCH(
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { itemId } = await params;
+  const id = Number(itemId);
+  // Ownership guard — admin or owning family only (prevents IDOR).
+  const item = await xano.scholarshipHomes.getById(id);
+  if (!item) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  const denied = await denyScholarshipMutation(
+    item.registration_opportunity_scholarship_id
+  );
+  if (denied) return denied;
+
   const body = await req.json();
-  const updated = await xano.scholarshipHomes.update(Number(itemId), body);
+  const updated = await xano.scholarshipHomes.update(id, body);
   return NextResponse.json(updated);
 }
 
@@ -23,6 +33,14 @@ export async function DELETE(
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { itemId } = await params;
-  await xano.scholarshipHomes.delete(Number(itemId));
+  const id = Number(itemId);
+  const item = await xano.scholarshipHomes.getById(id);
+  if (!item) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  const denied = await denyScholarshipMutation(
+    item.registration_opportunity_scholarship_id
+  );
+  if (denied) return denied;
+
+  await xano.scholarshipHomes.delete(id);
   return NextResponse.json({ success: true });
 }

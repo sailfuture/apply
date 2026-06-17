@@ -136,6 +136,18 @@ async function resolveAdminFromClerk(): Promise<AdminUser | null> {
 }
 
 /**
+ * Non-throwing admin check for the *current* Clerk user — returns the
+ * matching `AdminUser` or null. Use in routes that serve both admins and
+ * parents (e.g. the shared scholarship-item ownership guard), where being
+ * an admin grants access but not-being-one isn't itself an error.
+ */
+export async function getCurrentAdmin(): Promise<AdminUser | null> {
+  const { userId } = await auth();
+  if (!userId) return null;
+  return resolveAdminFromClerk();
+}
+
+/**
  * Server-side guard for admin routes. Throws `AdminAuthError` (401 if not
  * signed in, 403 if signed in but not an admin) — call `handleAdminError`
  * in the API route's catch block to convert into a NextResponse.

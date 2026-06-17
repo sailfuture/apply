@@ -2823,6 +2823,15 @@ export const xano = {
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
     },
 
+    /** Single row by id — used by the scholarship-item ownership guard. */
+    async getById(id: number): Promise<XanoScholarshipBenefit | null> {
+      const res = await fetch(`${getBaseUrl()}/registration_opportunity_scholarship_benefits/${id}`, {
+        cache: "no-store",
+      });
+      if (!res.ok) return null;
+      return res.json() as Promise<XanoScholarshipBenefit>;
+    },
+
     async getByScholarshipId(scholarshipId: number): Promise<XanoScholarshipBenefit[]> {
       try {
         const res = await fetch(
@@ -2898,6 +2907,18 @@ export const xano = {
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
     },
 
+    /** Single row by id — used by the ownership guard on the parent +
+     *  admin mutate routes to resolve the row's parent scholarship.
+     *  Returns null on 404 so callers can 404 cleanly. */
+    async getById(id: number): Promise<XanoScholarshipContributingMember | null> {
+      const res = await fetch(`${getBaseUrl()}/registration_opportunity_scholarship_contributing_members/${id}`, {
+        cache: "no-store",
+      });
+      if (!res.ok) return null;
+      const raw = (await res.json()) as Record<string, unknown>;
+      return normalizeContributingMemberPK(raw);
+    },
+
     async getByScholarshipId(scholarshipId: number): Promise<XanoScholarshipContributingMember[]> {
       try {
         const res = await fetch(
@@ -2965,6 +2986,15 @@ export const xano = {
         method: "DELETE",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+    },
+
+    /** Single row by id — used by the scholarship-item ownership guard. */
+    async getById(id: number): Promise<XanoScholarshipHome | null> {
+      const res = await fetch(`${getBaseUrl()}/registration_opportunity_scholarship_home/${id}`, {
+        cache: "no-store",
+      });
+      if (!res.ok) return null;
+      return res.json() as Promise<XanoScholarshipHome>;
     },
 
     async getByScholarshipId(scholarshipId: number): Promise<XanoScholarshipHome[]> {
@@ -3037,6 +3067,15 @@ export const xano = {
         method: "DELETE",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+    },
+
+    /** Single row by id — used by the scholarship-item ownership guard. */
+    async getById(id: number): Promise<XanoScholarshipVehicle | null> {
+      const res = await fetch(`${getBaseUrl()}/registration_opportunity_scholarship_vehicles/${id}`, {
+        cache: "no-store",
+      });
+      if (!res.ok) return null;
+      return res.json() as Promise<XanoScholarshipVehicle>;
     },
 
     async getByScholarshipId(scholarshipId: number): Promise<XanoScholarshipVehicle[]> {

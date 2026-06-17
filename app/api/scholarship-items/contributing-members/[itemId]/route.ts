@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { xano } from "@/lib/xano";
+import { denyScholarshipMutation } from "@/lib/scholarship-access";
 
 export async function PATCH(
   req: NextRequest,
@@ -10,8 +11,19 @@ export async function PATCH(
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { itemId } = await params;
+  const id = Number(itemId);
+  // Ownership guard: resolve the row's parent scholarship and confirm the
+  // caller is an admin or the owning family before mutating (prevents IDOR
+  // via a guessed item id).
+  const item = await xano.scholarshipContributingMembers.getById(id);
+  if (!item) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  const denied = await denyScholarshipMutation(
+    item.registration_opportunity_scholarship_id
+  );
+  if (denied) return denied;
+
   const body = await req.json();
-  const updated = await xano.scholarshipContributingMembers.update(Number(itemId), body);
+  const updated = await xano.scholarshipContributingMembers.update(id, body);
   return NextResponse.json(updated);
 }
 
@@ -23,6 +35,14 @@ export async function DELETE(
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { itemId } = await params;
-  await xano.scholarshipContributingMembers.delete(Number(itemId));
+  const id = Number(itemId);
+  const item = await xano.scholarshipContributingMembers.getById(id);
+  if (!item) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  const denied = await denyScholarshipMutation(
+    item.registration_opportunity_scholarship_id
+  );
+  if (denied) return denied;
+
+  await xano.scholarshipContributingMembers.delete(id);
   return NextResponse.json({ success: true });
 }
