@@ -719,6 +719,13 @@ export interface XanoScholarship {
   tax_document_confirm_admin?: string;
 
   last_edited: number | null;
+  /** Display name of the admin who last edited the parent-entered
+   *  financial data through the admin family-detail Scholarship card.
+   *  Server-stamped (paired with `last_edited`) by the admin
+   *  scholarships PATCH route whenever a data field is in the patch;
+   *  the card renders "Last edited by {name}". Empty/null until an
+   *  admin edits. */
+  last_edited_admin?: string | null;
 
   /* ─────── Admin-only relation expansions ───────
    * The `admin_family_application` Xano query optionally expands a

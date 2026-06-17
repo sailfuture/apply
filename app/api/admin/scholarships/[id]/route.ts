@@ -53,6 +53,36 @@ const CONFIRM_PAIRS = [
   },
 ] as const;
 
+/**
+ * Parent-entered financial data fields the admin inline editor can
+ * correct. Distinct from the confirm flags + document slots above —
+ * writing any of these is a data override, so the route stamps the
+ * `last_edited` + `last_edited_admin` audit pair.
+ */
+const DATA_FIELDS = [
+  "household_adults",
+  "household_children",
+  "no_contributing_member",
+  "government_benefits",
+  "business_income_monthly",
+  "capital_gains_monthly",
+  "child_support_monthly",
+  "alimony_monthly",
+  "trusts_monthly",
+  "other_income_monthly",
+  "describe_other_income",
+  "assets_checking",
+  "assets_savings",
+  "assets_retirement_savings",
+  "assets_stocks_bonds_securities",
+  "assets_trusts_inheritance",
+  "assets_business",
+  "debts_credit_cards",
+  "debts_student_loans",
+  "debts_personal_loans",
+  "family_contribution_per_month",
+] as const satisfies ReadonlyArray<keyof XanoScholarship>;
+
 export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -94,6 +124,11 @@ export async function PATCH(
       "snap_benefits",
       "unemployment_letter",
       "tax_return",
+      // Parent-entered financial data — admin can correct/override it
+      // from the family-detail Scholarship card's inline editor.
+      // Writing any of these stamps the `last_edited` + `last_edited_admin`
+      // audit pair below so the card can show "Last edited by {admin}".
+      ...DATA_FIELDS,
     ];
     const patch: Record<string, unknown> = {};
     for (const key of allowed) {
@@ -144,6 +179,16 @@ export async function PATCH(
           patch[pair.adminKey] = next ? adminTeacherId : 0;
         }
       }
+    }
+
+    // Data-override audit — when admin edits any parent-entered
+    // financial field, stamp the existing `last_edited` timestamp plus
+    // `last_edited_admin` (the admin's display name) so the family-page
+    // Scholarship card can render "Last edited by {name}". Neither column
+    // is in the allowlist, so only the server writes them.
+    if (DATA_FIELDS.some((k) => k in patch)) {
+      patch.last_edited = now;
+      patch.last_edited_admin = adminDisplayName;
     }
 
     const updated = await xano.scholarship.update(id, patch);

@@ -3046,6 +3046,167 @@ function TestingBlock({
 
 /* ─────────────────────── Scholarship block ─────────────────────── */
 
+/**
+ * Delete affordance for an Opportunity Scholarship child row
+ * (contributing member, home, or vehicle). Backs the admin cleanup of
+ * duplicate rows that the (now-fixed) blank-edit-form bug created when
+ * parents re-entered + resubmitted their application. Hits the same
+ * auth-gated single-delete route the parent flow uses; refreshes the
+ * composite scholarship-details cache on success.
+ */
+function ScholarshipChildDeleteButton({
+  kind,
+  itemId,
+  label,
+  onDeleted,
+}: {
+  kind: "contributing-members" | "homes" | "vehicles";
+  itemId: number;
+  label: string;
+  onDeleted: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  async function runDelete() {
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/scholarship-items/${kind}/${itemId}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error ?? `Delete failed (${res.status})`);
+      }
+      toast.success(`${label} removed.`);
+      setOpen(false);
+      onDeleted();
+    } catch (err) {
+      console.error("[ScholarshipChildDeleteButton.runDelete]", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't delete.");
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  return (
+    <>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="bg-white text-red-600 hover:bg-red-50 hover:text-red-700 shrink-0"
+        disabled={deleting}
+        onClick={() => setOpen(true)}
+        aria-label={`Delete ${label}`}
+      >
+        {deleting ? (
+          <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+        ) : (
+          <Trash2 className="size-3.5 mr-1.5" />
+        )}
+        Delete
+      </Button>
+      <AlertDialog open={open} onOpenChange={(o) => !deleting && setOpen(o)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {label}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently removes this entry from the family&rsquo;s
+              Opportunity Scholarship, including any documents uploaded to it.
+              This can&rsquo;t be undone &mdash; use it to clear duplicate rows.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={deleting}
+              className="bg-red-600 hover:bg-red-700 text-white"
+              onClick={(e) => {
+                e.preventDefault();
+                void runDelete();
+              }}
+            >
+              {deleting ? (
+                <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+              ) : (
+                <Trash2 className="size-3.5 mr-1.5" />
+              )}
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
+}
+
+/**
+ * One financial field on the Scholarship block: renders the existing
+ * read-only `DisabledField` out of edit mode, and the matching input
+ * (money with a $ sigil / integer / Yes-No select / free text) in edit
+ * mode. Keeps the block's section layout intact while making each
+ * value editable.
+ */
+function ScholarshipEditableField({
+  label,
+  editing,
+  readValue,
+  draftValue,
+  onChange,
+  kind,
+}: {
+  label: string;
+  editing: boolean;
+  readValue: string;
+  draftValue: string;
+  onChange: (v: string) => void;
+  kind: "money" | "int" | "yesno" | "text";
+}) {
+  if (!editing) return <DisabledField label={label} value={readValue} />;
+  if (kind === "yesno") {
+    return (
+      <Field>
+        <FieldLabel className="text-xs">{label}</FieldLabel>
+        <Select value={draftValue} onValueChange={onChange}>
+          <SelectTrigger className="bg-white">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="Yes">Yes</SelectItem>
+            <SelectItem value="No">No</SelectItem>
+          </SelectContent>
+        </Select>
+      </Field>
+    );
+  }
+  const isMoney = kind === "money";
+  return (
+    <Field>
+      <FieldLabel className="text-xs">{label}</FieldLabel>
+      <div className="relative">
+        {isMoney ? (
+          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground pointer-events-none">
+            $
+          </span>
+        ) : null}
+        <Input
+          value={draftValue}
+          type={kind === "text" ? "text" : "number"}
+          inputMode={kind === "text" ? undefined : "decimal"}
+          min={kind === "text" ? undefined : 0}
+          onChange={(e) => onChange(e.target.value)}
+          className={
+            isMoney
+              ? "border-input bg-white pl-7 tabular-nums"
+              : "border-input bg-white"
+          }
+        />
+      </div>
+    </Field>
+  );
+}
+
 function ScholarshipBlock({
   scholarship,
   familyId,
@@ -3107,6 +3268,118 @@ function ScholarshipBlock({
   const onFullForm =
     !scholarship.isNotParticipating && !scholarship.isSNAPBenefits;
 
+  // ── Inline financial editing (admin can correct parent-entered data) ──
+  const [editing, setEditing] = useState(false);
+  const [savingFinancials, setSavingFinancials] = useState(false);
+  const [draft, setDraft] = useState<Record<string, string>>({});
+  const setField = (key: string, value: string) =>
+    setDraft((d) => ({ ...d, [key]: value }));
+
+  function enterEdit() {
+    const m = (n: number | null | undefined) => (n == null ? "" : String(n));
+    setDraft({
+      household_adults: String(scholarship.household_adults ?? 0),
+      household_children: String(scholarship.household_children ?? 0),
+      no_contributing_member: scholarship.no_contributing_member ? "Yes" : "No",
+      government_benefits: scholarship.government_benefits ? "Yes" : "No",
+      business_income_monthly: m(scholarship.business_income_monthly),
+      capital_gains_monthly: m(scholarship.capital_gains_monthly),
+      child_support_monthly: m(scholarship.child_support_monthly),
+      alimony_monthly: m(scholarship.alimony_monthly),
+      trusts_monthly: m(scholarship.trusts_monthly),
+      other_income_monthly: m(scholarship.other_income_monthly),
+      describe_other_income: scholarship.describe_other_income ?? "",
+      assets_checking: m(scholarship.assets_checking),
+      assets_savings: m(scholarship.assets_savings),
+      assets_retirement_savings: m(scholarship.assets_retirement_savings),
+      assets_stocks_bonds_securities: m(
+        scholarship.assets_stocks_bonds_securities
+      ),
+      assets_trusts_inheritance: m(scholarship.assets_trusts_inheritance),
+      assets_business: m(scholarship.assets_business),
+      debts_credit_cards: m(scholarship.debts_credit_cards),
+      debts_student_loans: m(scholarship.debts_student_loans),
+      debts_personal_loans: m(scholarship.debts_personal_loans),
+      family_contribution_per_month: m(
+        scholarship.family_contribution_per_month
+      ),
+    });
+    setEditing(true);
+  }
+
+  async function saveFinancials() {
+    const patch: Record<string, unknown> = {};
+    // Nullable money fields: blank => null, else a finite number.
+    const MONEY: Array<keyof XanoScholarship> = [
+      "business_income_monthly",
+      "capital_gains_monthly",
+      "child_support_monthly",
+      "alimony_monthly",
+      "trusts_monthly",
+      "other_income_monthly",
+      "assets_checking",
+      "assets_savings",
+      "assets_retirement_savings",
+      "assets_stocks_bonds_securities",
+      "assets_trusts_inheritance",
+      "assets_business",
+      "debts_credit_cards",
+      "debts_student_loans",
+      "debts_personal_loans",
+      "family_contribution_per_month",
+    ];
+    for (const key of MONEY) {
+      const raw = (draft[key] ?? "").trim();
+      const next = raw === "" ? null : Number(raw);
+      if (raw !== "" && !Number.isFinite(next)) continue; // ignore garbage
+      const prev = (scholarship[key] as number | null) ?? null;
+      if (next !== prev) patch[key] = next;
+    }
+    // Integer counts — non-negative whole numbers.
+    for (const key of ["household_adults", "household_children"] as const) {
+      const next = Math.max(0, Math.trunc(Number(draft[key])) || 0);
+      if (next !== (scholarship[key] ?? 0)) patch[key] = next;
+    }
+    // Yes/No booleans.
+    for (const key of ["no_contributing_member", "government_benefits"] as const) {
+      const next = draft[key] === "Yes";
+      if (next !== (scholarship[key] ?? false)) patch[key] = next;
+    }
+    // Free text.
+    if (
+      (draft.describe_other_income ?? "") !==
+      (scholarship.describe_other_income ?? "")
+    ) {
+      patch.describe_other_income = draft.describe_other_income ?? "";
+    }
+
+    if (Object.keys(patch).length === 0) {
+      setEditing(false);
+      return;
+    }
+    setSavingFinancials(true);
+    try {
+      const res = await fetch(`/api/admin/scholarships/${scholarship.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error ?? `Save failed (${res.status})`);
+      }
+      toast.success("Scholarship financials updated.");
+      setEditing(false);
+      await mutateDetails();
+      onScholarshipChanged?.();
+    } catch (err) {
+      console.error("[ScholarshipBlock.saveFinancials]", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't save.");
+    } finally {
+      setSavingFinancials(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       {/* Path Selector — admin can flip the family between the three
@@ -3145,23 +3418,99 @@ function ScholarshipBlock({
         </div>
       ) : null}
       {onFullForm ? (
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <p className="text-xs text-muted-foreground">
+            {scholarship.last_edited_admin ? (
+              <>
+                Last edited by{" "}
+                <span className="font-medium text-foreground">
+                  {scholarship.last_edited_admin}
+                </span>
+                {scholarship.last_edited
+                  ? ` · ${new Date(scholarship.last_edited).toLocaleDateString(
+                      "en-US",
+                      { month: "short", day: "numeric", year: "numeric" }
+                    )}`
+                  : ""}
+              </>
+            ) : (
+              "Correct the family’s submitted financials below if needed."
+            )}
+          </p>
+          {editing ? (
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="bg-white"
+                disabled={savingFinancials}
+                onClick={() => setEditing(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                disabled={savingFinancials}
+                onClick={() => void saveFinancials()}
+              >
+                {savingFinancials ? (
+                  <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                ) : (
+                  <Check className="size-3.5 mr-1.5" />
+                )}
+                Save
+              </Button>
+            </div>
+          ) : (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="bg-white"
+              onClick={enterEdit}
+            >
+              <Pencil className="size-3.5 mr-1.5" />
+              Edit financials
+            </Button>
+          )}
+        </div>
+      ) : null}
+      {onFullForm ? (
         <SectionGroup title="Household">
         <div className="grid gap-4 grid-cols-2 sm:grid-cols-4">
-          <DisabledField
+          <ScholarshipEditableField
             label="Adults"
-            value={String(scholarship.household_adults ?? 0)}
+            editing={editing}
+            kind="int"
+            readValue={String(scholarship.household_adults ?? 0)}
+            draftValue={draft.household_adults ?? ""}
+            onChange={(v) => setField("household_adults", v)}
           />
-          <DisabledField
+          <ScholarshipEditableField
             label="Children"
-            value={String(scholarship.household_children ?? 0)}
+            editing={editing}
+            kind="int"
+            readValue={String(scholarship.household_children ?? 0)}
+            draftValue={draft.household_children ?? ""}
+            onChange={(v) => setField("household_children", v)}
           />
-          <DisabledField
+          <ScholarshipEditableField
             label="No contributing members"
-            value={scholarship.no_contributing_member ? "Yes" : "No"}
+            editing={editing}
+            kind="yesno"
+            readValue={scholarship.no_contributing_member ? "Yes" : "No"}
+            draftValue={draft.no_contributing_member ?? "No"}
+            onChange={(v) => setField("no_contributing_member", v)}
           />
-          <DisabledField
+          <ScholarshipEditableField
             label="Government benefits"
-            value={scholarship.government_benefits ? "Yes" : "No"}
+            editing={editing}
+            kind="yesno"
+            readValue={scholarship.government_benefits ? "Yes" : "No"}
+            draftValue={draft.government_benefits ?? "No"}
+            onChange={(v) => setField("government_benefits", v)}
           />
         </div>
       </SectionGroup>
@@ -3170,60 +3519,122 @@ function ScholarshipBlock({
       {onFullForm ? (
       <SectionGroup title="Income (monthly)">
         <div className="grid gap-4 grid-cols-2 sm:grid-cols-3">
-          <DisabledField
+          <ScholarshipEditableField
             label="Business"
-            value={formatCurrency(scholarship.business_income_monthly)}
+            editing={editing}
+            kind="money"
+            readValue={formatCurrency(scholarship.business_income_monthly)}
+            draftValue={draft.business_income_monthly ?? ""}
+            onChange={(v) => setField("business_income_monthly", v)}
           />
-          <DisabledField
+          <ScholarshipEditableField
             label="Capital gains"
-            value={formatCurrency(scholarship.capital_gains_monthly)}
+            editing={editing}
+            kind="money"
+            readValue={formatCurrency(scholarship.capital_gains_monthly)}
+            draftValue={draft.capital_gains_monthly ?? ""}
+            onChange={(v) => setField("capital_gains_monthly", v)}
           />
-          <DisabledField
+          <ScholarshipEditableField
             label="Child support"
-            value={formatCurrency(scholarship.child_support_monthly)}
+            editing={editing}
+            kind="money"
+            readValue={formatCurrency(scholarship.child_support_monthly)}
+            draftValue={draft.child_support_monthly ?? ""}
+            onChange={(v) => setField("child_support_monthly", v)}
           />
-          <DisabledField
+          <ScholarshipEditableField
             label="Alimony"
-            value={formatCurrency(scholarship.alimony_monthly)}
+            editing={editing}
+            kind="money"
+            readValue={formatCurrency(scholarship.alimony_monthly)}
+            draftValue={draft.alimony_monthly ?? ""}
+            onChange={(v) => setField("alimony_monthly", v)}
           />
-          <DisabledField
+          <ScholarshipEditableField
             label="Trusts"
-            value={formatCurrency(scholarship.trusts_monthly)}
+            editing={editing}
+            kind="money"
+            readValue={formatCurrency(scholarship.trusts_monthly)}
+            draftValue={draft.trusts_monthly ?? ""}
+            onChange={(v) => setField("trusts_monthly", v)}
           />
-          <DisabledField
+          <ScholarshipEditableField
             label="Other"
-            value={formatCurrency(scholarship.other_income_monthly)}
+            editing={editing}
+            kind="money"
+            readValue={formatCurrency(scholarship.other_income_monthly)}
+            draftValue={draft.other_income_monthly ?? ""}
+            onChange={(v) => setField("other_income_monthly", v)}
           />
         </div>
+        {editing || scholarship.describe_other_income ? (
+          <div className="mt-4">
+            <ScholarshipEditableField
+              label="Describe other income"
+              editing={editing}
+              kind="text"
+              readValue={scholarship.describe_other_income || "—"}
+              draftValue={draft.describe_other_income ?? ""}
+              onChange={(v) => setField("describe_other_income", v)}
+            />
+          </div>
+        ) : null}
       </SectionGroup>
       ) : null}
 
       {onFullForm ? (
       <SectionGroup title="Assets">
         <div className="grid gap-4 grid-cols-2 sm:grid-cols-3">
-          <DisabledField
+          <ScholarshipEditableField
             label="Checking"
-            value={formatCurrency(scholarship.assets_checking)}
+            editing={editing}
+            kind="money"
+            readValue={formatCurrency(scholarship.assets_checking)}
+            draftValue={draft.assets_checking ?? ""}
+            onChange={(v) => setField("assets_checking", v)}
           />
-          <DisabledField
+          <ScholarshipEditableField
             label="Savings"
-            value={formatCurrency(scholarship.assets_savings)}
+            editing={editing}
+            kind="money"
+            readValue={formatCurrency(scholarship.assets_savings)}
+            draftValue={draft.assets_savings ?? ""}
+            onChange={(v) => setField("assets_savings", v)}
           />
-          <DisabledField
+          <ScholarshipEditableField
             label="Retirement"
-            value={formatCurrency(scholarship.assets_retirement_savings)}
+            editing={editing}
+            kind="money"
+            readValue={formatCurrency(scholarship.assets_retirement_savings)}
+            draftValue={draft.assets_retirement_savings ?? ""}
+            onChange={(v) => setField("assets_retirement_savings", v)}
           />
-          <DisabledField
+          <ScholarshipEditableField
             label="Securities"
-            value={formatCurrency(scholarship.assets_stocks_bonds_securities)}
+            editing={editing}
+            kind="money"
+            readValue={formatCurrency(
+              scholarship.assets_stocks_bonds_securities
+            )}
+            draftValue={draft.assets_stocks_bonds_securities ?? ""}
+            onChange={(v) => setField("assets_stocks_bonds_securities", v)}
           />
-          <DisabledField
+          <ScholarshipEditableField
             label="Trusts / inheritance"
-            value={formatCurrency(scholarship.assets_trusts_inheritance)}
+            editing={editing}
+            kind="money"
+            readValue={formatCurrency(scholarship.assets_trusts_inheritance)}
+            draftValue={draft.assets_trusts_inheritance ?? ""}
+            onChange={(v) => setField("assets_trusts_inheritance", v)}
           />
-          <DisabledField
+          <ScholarshipEditableField
             label="Business"
-            value={formatCurrency(scholarship.assets_business)}
+            editing={editing}
+            kind="money"
+            readValue={formatCurrency(scholarship.assets_business)}
+            draftValue={draft.assets_business ?? ""}
+            onChange={(v) => setField("assets_business", v)}
           />
         </div>
       </SectionGroup>
@@ -3264,9 +3675,17 @@ function ScholarshipBlock({
                   key={member.id}
                   className="rounded-md border bg-muted/10 p-3 space-y-3"
                 >
-                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                    {fullName}
-                  </p>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                      {fullName}
+                    </p>
+                    <ScholarshipChildDeleteButton
+                      kind="contributing-members"
+                      itemId={member.id}
+                      label={fullName}
+                      onDeleted={() => void mutateDetails()}
+                    />
+                  </div>
                   <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
                     <DisabledField
                       label="Address"
@@ -3346,9 +3765,17 @@ function ScholarshipBlock({
                 key={home.id}
                 className="rounded-md border bg-muted/10 p-3 space-y-3"
               >
-                <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Home {idx + 1}
-                </p>
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    Home {idx + 1}
+                  </p>
+                  <ScholarshipChildDeleteButton
+                    kind="homes"
+                    itemId={home.id}
+                    label={`Home ${idx + 1}`}
+                    onDeleted={() => void mutateDetails()}
+                  />
+                </div>
                 <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
                   <DisabledField label="Type" value={home.type ?? ""} />
                   <DisabledField
@@ -3394,9 +3821,17 @@ function ScholarshipBlock({
                 key={vehicle.id}
                 className="rounded-md border bg-muted/10 p-3 space-y-3"
               >
-                <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Vehicle {idx + 1}
-                </p>
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    Vehicle {idx + 1}
+                  </p>
+                  <ScholarshipChildDeleteButton
+                    kind="vehicles"
+                    itemId={vehicle.id}
+                    label={`Vehicle ${idx + 1}`}
+                    onDeleted={() => void mutateDetails()}
+                  />
+                </div>
                 <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
                   <DisabledField label="Type" value={vehicle.type ?? ""} />
                   <DisabledField
@@ -3430,27 +3865,73 @@ function ScholarshipBlock({
         <>
           <SectionGroup title="Debts">
             <div className="grid gap-4 grid-cols-3">
-              <DisabledField
+              <ScholarshipEditableField
                 label="Credit cards"
-                value={formatCurrency(scholarship.debts_credit_cards)}
+                editing={editing}
+                kind="money"
+                readValue={formatCurrency(scholarship.debts_credit_cards)}
+                draftValue={draft.debts_credit_cards ?? ""}
+                onChange={(v) => setField("debts_credit_cards", v)}
               />
-              <DisabledField
+              <ScholarshipEditableField
                 label="Student loans"
-                value={formatCurrency(scholarship.debts_student_loans)}
+                editing={editing}
+                kind="money"
+                readValue={formatCurrency(scholarship.debts_student_loans)}
+                draftValue={draft.debts_student_loans ?? ""}
+                onChange={(v) => setField("debts_student_loans", v)}
               />
-              <DisabledField
+              <ScholarshipEditableField
                 label="Personal loans"
-                value={formatCurrency(scholarship.debts_personal_loans)}
+                editing={editing}
+                kind="money"
+                readValue={formatCurrency(scholarship.debts_personal_loans)}
+                draftValue={draft.debts_personal_loans ?? ""}
+                onChange={(v) => setField("debts_personal_loans", v)}
               />
             </div>
           </SectionGroup>
 
           <SectionGroup title="Family contribution">
-            <DisabledField
+            <ScholarshipEditableField
               label="Per month"
-              value={formatCurrency(scholarship.family_contribution_per_month)}
+              editing={editing}
+              kind="money"
+              readValue={formatCurrency(
+                scholarship.family_contribution_per_month
+              )}
+              draftValue={draft.family_contribution_per_month ?? ""}
+              onChange={(v) => setField("family_contribution_per_month", v)}
             />
           </SectionGroup>
+
+          {editing ? (
+            <div className="flex items-center justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="bg-white"
+                disabled={savingFinancials}
+                onClick={() => setEditing(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                disabled={savingFinancials}
+                onClick={() => void saveFinancials()}
+              >
+                {savingFinancials ? (
+                  <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                ) : (
+                  <Check className="size-3.5 mr-1.5" />
+                )}
+                Save
+              </Button>
+            </div>
+          ) : null}
 
           {scholarship.scholarship_advocacy_letter ? (
             <SectionGroup title="Advocacy letter">
