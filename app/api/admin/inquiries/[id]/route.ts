@@ -38,14 +38,14 @@ export async function PATCH(
       }
     }
 
-    // 1–5 only — 0 would be silently dropped by Xano's edit endpoint
-    // (it treats 0 as an empty input), so reject it here rather than
-    // letting a "clear rating" appear to succeed.
+    // 0–5 only; 0 clears the rating. Verified against the live
+    // endpoint: integer 0 IS applied (only empty strings / null get
+    // dropped by Xano's conditional field mapping).
     if ("interest_level" in patch) {
       const v = patch.interest_level;
-      if (typeof v !== "number" || !Number.isInteger(v) || v < 1 || v > 5) {
+      if (typeof v !== "number" || !Number.isInteger(v) || v < 0 || v > 5) {
         return NextResponse.json(
-          { error: "interest_level must be an integer from 1 to 5" },
+          { error: "interest_level must be an integer from 0 to 5" },
           { status: 400 }
         );
       }

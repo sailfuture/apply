@@ -111,7 +111,7 @@ interface Inquiry {
    *  status === "not_interested". */
   status_reason?: string | null;
   /** 1–5 star gut-feel interest rating; 0/undefined = not rated.
-   *  Only 1–5 is ever written — see updateInterest. */
+   *  Clicking the current rating clears back to 0. */
   interest_level?: number | null;
   // Computed at parse time
   parent_name: string;
@@ -393,10 +393,10 @@ export default function InquiriesPage() {
     }
   }
 
-  // Set the 1–5 interest rating with an optimistic mutate so the
-  // stars fill in immediately. There's deliberately no way to write
-  // 0 (clear): Xano's edit endpoint treats 0 as an empty input and
-  // drops it, so a "clear" would look successful and then revert.
+  // Set (or clear) the 0–5 interest rating with an optimistic mutate
+  // so the stars fill in immediately. Clicking the current rating
+  // again clears it to 0 — verified that the Xano edit endpoint
+  // applies integer 0 (only empty strings / null get dropped).
   async function updateInterest(row: Inquiry, level: number) {
     setSavingId(row.id);
     const optimistic = (curr: Inquiry[] | undefined) =>
@@ -1226,9 +1226,8 @@ function InquiriesGroup({
 
 /**
  * 1–5 clickable star scale. Filled amber up to `value`; clicking a
- * star writes that value. No clear-to-zero affordance on purpose —
- * Xano's edit endpoint drops 0 as an empty input, so a "clear" would
- * silently fail (see updateInterest).
+ * star writes that value, and clicking the current rating again
+ * clears it back to 0 (unrated).
  */
 function StarRating({
   value,
@@ -1255,8 +1254,9 @@ function StarRating({
           role="radio"
           aria-checked={value === n}
           aria-label={`${n} star${n === 1 ? "" : "s"}`}
+          title={value === n ? "Click again to clear" : undefined}
           disabled={disabled || !onChange}
-          onClick={() => onChange?.(n)}
+          onClick={() => onChange?.(n === value ? 0 : n)}
           className={cn(
             "p-0.5",
             onChange && !disabled
