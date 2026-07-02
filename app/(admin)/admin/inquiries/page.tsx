@@ -112,28 +112,31 @@ interface Inquiry {
 }
 
 /**
- * Render a relative-time string for `last_reach_out` ("3 days ago",
- * "just now"). Inline because the comms log table doesn't need a
- * full date library — anything older than a week falls back to a
- * standard locale date.
+ * Render a fully relative-time string ("3 days ago", "2 weeks ago",
+ * "5 months ago", "just now"). Stays relative all the way up rather
+ * than falling back to a locale date, so the Submitted / Last-contact
+ * columns read as elapsed time at every age. Inline because the table
+ * doesn't need a full date library — the buckets are approximate
+ * (30-day months, 365-day years), which is fine for triage.
  */
 function formatRelative(ts: number | null | undefined): string {
   if (!ts) return "—";
   const diff = Date.now() - ts;
   if (diff < 60_000) return "just now";
-  if (diff < 3_600_000) {
-    const m = Math.floor(diff / 60_000);
-    return `${m} min${m === 1 ? "" : "s"} ago`;
-  }
-  if (diff < 86_400_000) {
-    const h = Math.floor(diff / 3_600_000);
-    return `${h} hour${h === 1 ? "" : "s"} ago`;
-  }
-  if (diff < 7 * 86_400_000) {
-    const d = Math.floor(diff / 86_400_000);
-    return `${d} day${d === 1 ? "" : "s"} ago`;
-  }
-  return new Date(ts).toLocaleDateString();
+  const MIN = 60_000;
+  const HOUR = 3_600_000;
+  const DAY = 86_400_000;
+  const WEEK = 7 * DAY;
+  const MONTH = 30 * DAY;
+  const YEAR = 365 * DAY;
+  const unit = (n: number, label: string) =>
+    `${n} ${label}${n === 1 ? "" : "s"} ago`;
+  if (diff < HOUR) return unit(Math.floor(diff / MIN), "min");
+  if (diff < DAY) return unit(Math.floor(diff / HOUR), "hour");
+  if (diff < WEEK) return unit(Math.floor(diff / DAY), "day");
+  if (diff < MONTH) return unit(Math.floor(diff / WEEK), "week");
+  if (diff < YEAR) return unit(Math.floor(diff / MONTH), "month");
+  return unit(Math.floor(diff / YEAR), "year");
 }
 
 type InquiryFilter =
@@ -506,7 +509,7 @@ export default function InquiriesPage() {
       header: "Email",
       sortable: true,
       searchable: true,
-      width: "w-[18%]",
+      width: "w-[16%]",
       render: (row) =>
         row.primary_email ? (
           <a
@@ -546,14 +549,29 @@ export default function InquiriesPage() {
     {
       key: "hear_about_us",
       header: "Source",
-      width: "w-[8%]",
+      width: "w-[7%]",
       render: (row) => (
         <span className="block truncate">{row.hear_about_us || "—"}</span>
       ),
     },
-    // Submitted + Last contact columns were dropped from the table to
-    // make room — both timestamps still show in the detail Sheet's
-    // header subtitle. Rows stay pre-sorted newest-first regardless.
+    {
+      // When the inquiry was submitted, as relative time ("3 days
+      // ago"). Sorted on the raw timestamp via `accessor` so the
+      // string label doesn't drive ordering — otherwise "2 days ago"
+      // would sort after "2 weeks ago" alphabetically. The list is
+      // already pre-sorted newest-first, and this column lets admin
+      // re-sort oldest-first with a click.
+      key: "created_at",
+      header: "Submitted",
+      sortable: true,
+      width: "w-[9%]",
+      accessor: (row) => row.created_at ?? 0,
+      render: (row) => (
+        <span className="block truncate">{formatRelative(row.created_at)}</span>
+      ),
+    },
+    // Last contact column stays dropped — it still shows in the detail
+    // Sheet's header subtitle.
     {
       // 1–5 gut-feel interest rating, clickable right in the row —
       // rating is a quick triage action, not worth a dialog. Sorts
