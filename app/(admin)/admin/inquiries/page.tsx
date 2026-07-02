@@ -795,9 +795,8 @@ export default function InquiriesPage() {
         <InquiriesGroup
           title="Not Followed Up"
           description="Inquiry submitted — admissions hasn't reached out yet."
-          // Red dot mirrors the Applications page "Not Started" tone:
-          // attention-getting, signals "pick this up next."
-          dotColor="bg-red-500"
+          // Yellow = in-progress / needs attention, but not a dead end.
+          dotColor="bg-yellow-500"
           rows={visibleGroups.notFollowedUp}
           isLoading={
             isLoading && (filter === "all" || filter === "not_followed_up")
@@ -822,8 +821,8 @@ export default function InquiriesPage() {
         <InquiriesGroup
           title="Not Interested"
           description="Family declined — kept here with the reason for reference. Restore anytime."
-          // Gray = out of the pipeline, no action needed.
-          dotColor="bg-gray-400"
+          // Red = out of the pipeline / dead lead.
+          dotColor="bg-red-500"
           rows={visibleGroups.notInterested}
           isLoading={isLoading && filter === "not_interested"}
           error={error}
