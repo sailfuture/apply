@@ -24,7 +24,11 @@ export async function PATCH(
     const { id } = await params;
     const body = await req.json();
 
-    const allowed: Array<keyof XanoInquiry> = ["isFollowedUp"];
+    const allowed: Array<keyof XanoInquiry> = [
+      "isFollowedUp",
+      "status",
+      "status_reason",
+    ];
     const patch: Partial<XanoInquiry> = {};
     for (const key of allowed) {
       if (key in body) {

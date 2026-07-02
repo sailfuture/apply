@@ -1156,6 +1156,18 @@ export interface XanoInquiry {
    *  endpoint; the inquiries PATCH endpoint does NOT expose it on
    *  its allowlist so admins can't hand-edit it. */
   last_reach_out?: number | null;
+  /** Lifecycle bucket for the inquiry. `""`/undefined/`"active"` =
+   *  active pipeline. `"not_interested"` = family declined; these rows
+   *  are filtered off the default inquiries view into their own
+   *  section. Restore writes `"active"` rather than clearing to `""`
+   *  because the Xano edit endpoint's field mapping skips empty
+   *  inputs. */
+  status?: string | null;
+  /** Why the family wasn't interested — set alongside
+   *  `status = "not_interested"`. Not cleared on restore (Xano skips
+   *  empty inputs); consumers must only read it when
+   *  `status === "not_interested"`. */
+  status_reason?: string | null;
 }
 
 /** Lookup table — distinguishes new applicants from returning enrollments. */

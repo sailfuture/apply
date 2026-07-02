@@ -3,7 +3,15 @@
 import { useMemo, useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import { toast } from "sonner";
-import { ChevronRight, Loader2, Mail, Phone, Trash2 } from "lucide-react";
+import {
+  ChevronRight,
+  Loader2,
+  Mail,
+  Phone,
+  Trash2,
+  Undo2,
+  UserX,
+} from "lucide-react";
 import {
   DataTable,
   type ColumnDef,
@@ -38,6 +46,17 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -72,6 +91,16 @@ interface Inquiry {
   /** Server-managed timestamp of the most recent note added — bumped
    *  by the notes POST endpoint when admin logs a communication. */
   last_reach_out?: number | null;
+  /** Lifecycle bucket. ""/undefined/"active" = active pipeline;
+   *  "not_interested" = family declined and the row moves to its own
+   *  section off the default view. "active" (not "") is what restore
+   *  writes because Xano's edit endpoint ignores empty inputs. */
+  status?: string | null;
+  /** Why the family declined — set alongside `status`, shown as the
+   *  Reason column in the Not Interested section. May hold a stale
+   *  value on restored rows (see restoreInquiry); only rendered when
+   *  status === "not_interested". */
+  status_reason?: string | null;
   // Computed at parse time
   parent_name: string;
   student_name: string;
@@ -103,13 +132,36 @@ function formatRelative(ts: number | null | undefined): string {
   return new Date(ts).toLocaleDateString();
 }
 
-type InquiryFilter = "all" | "not_followed_up" | "followed_up";
+type InquiryFilter =
+  | "all"
+  | "not_followed_up"
+  | "followed_up"
+  | "not_interested";
 
 const FILTER_LABEL: Record<InquiryFilter, string> = {
-  all: "All inquiries",
+  // "All active" deliberately excludes not-interested rows — the whole
+  // point of the status is to get declined families off the working
+  // list. They're reachable through the "Not interested" option below.
+  all: "All active",
   not_followed_up: "Not followed up",
   followed_up: "Followed up",
+  not_interested: "Not interested",
 };
+
+/**
+ * Preset reasons for the "mark not interested" dialog. Stored verbatim
+ * into `status_reason` (a plain string column in Xano) so reporting can
+ * group on the exact label. "Other" swaps in a free-text input.
+ */
+const NOT_INTERESTED_REASONS = [
+  "Tuition / cost",
+  "Chose another school",
+  "Distance / transportation",
+  "Program not the right fit",
+  "Timing — may apply later",
+  "Stopped responding",
+  "Other",
+] as const;
 
 /**
  * Format a phone number stored as `number` in Xano. We see three shapes
@@ -158,6 +210,12 @@ export default function InquiriesPage() {
   // the parent / student name in its confirmation copy.
   const [pendingDelete, setPendingDelete] = useState<Inquiry | null>(null);
   const [deleting, setDeleting] = useState(false);
+  // Row queued for the "mark not interested" dialog, plus the reason
+  // picker's state. `reasonChoice` holds the preset label; when it's
+  // "Other" the free-text `customReason` becomes the stored reason.
+  const [markingRow, setMarkingRow] = useState<Inquiry | null>(null);
+  const [reasonChoice, setReasonChoice] = useState<string>("");
+  const [customReason, setCustomReason] = useState("");
 
   const rows: Inquiry[] = useMemo(
     () =>
@@ -179,29 +237,41 @@ export default function InquiriesPage() {
   const groups = useMemo(() => {
     const followedUp: Inquiry[] = [];
     const notFollowedUp: Inquiry[] = [];
+    const notInterested: Inquiry[] = [];
     for (const r of rows) {
-      if (r.isFollowedUp) followedUp.push(r);
+      // Not-interested wins over the follow-up split — a declined
+      // family leaves the working pipeline regardless of whether we
+      // had already reached out.
+      if (r.status === "not_interested") notInterested.push(r);
+      else if (r.isFollowedUp) followedUp.push(r);
       else notFollowedUp.push(r);
     }
-    return { followedUp, notFollowedUp };
+    return { followedUp, notFollowedUp, notInterested };
   }, [rows]);
 
   const visibleGroups = useMemo(() => {
-    if (filter === "all") return groups;
+    if (filter === "all") {
+      // Default view: active pipeline only. Declined families stay
+      // hidden until admin explicitly picks the "Not interested"
+      // filter.
+      return { ...groups, notInterested: [] as Inquiry[] };
+    }
     return {
       followedUp: filter === "followed_up" ? groups.followedUp : [],
       notFollowedUp: filter === "not_followed_up" ? groups.notFollowedUp : [],
+      notInterested: filter === "not_interested" ? groups.notInterested : [],
     };
   }, [filter, groups]);
 
   const counts = useMemo(
     () =>
       ({
-        all: rows.length,
+        all: groups.followedUp.length + groups.notFollowedUp.length,
         followed_up: groups.followedUp.length,
         not_followed_up: groups.notFollowedUp.length,
+        not_interested: groups.notInterested.length,
       }) satisfies Record<InquiryFilter, number>,
-    [rows, groups]
+    [groups]
   );
 
   // Hard-delete the inquiry row. Optimistically removes it from the
@@ -271,9 +341,89 @@ export default function InquiriesPage() {
     }
   }
 
-  // Shared column definitions across both sections — same widths so
+  // Patch the inquiry's status fields with an optimistic mutate so the
+  // row moves between sections immediately. Only the keys present in
+  // `patch` are sent: Xano's edit endpoint ignores empty-string/null
+  // inputs (its field mapping is conditional on "not empty"), so a
+  // status can never be cleared back to "" — "active" is the sentinel
+  // for leaving the not-interested bucket. Returns whether the save
+  // landed so callers can gate their success toast.
+  async function updateStatus(
+    row: Inquiry,
+    patch: { status: string; status_reason?: string }
+  ): Promise<boolean> {
+    setSavingId(row.id);
+    const optimistic = (curr: Inquiry[] | undefined) =>
+      (curr ?? []).map((r) => (r.id === row.id ? { ...r, ...patch } : r));
+    try {
+      mutate(optimistic, { revalidate: false });
+      // The Sheet keeps its own snapshot of the row — patch it too so
+      // the status section reflects the change while it's open.
+      setActive((curr) =>
+        curr && curr.id === row.id ? { ...curr, ...patch } : curr
+      );
+      const res = await fetch(`/api/admin/inquiries/${row.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) throw new Error(`Save failed (${res.status})`);
+      globalMutate("/api/admin/inquiries");
+      return true;
+    } catch (err) {
+      console.error("Failed to update inquiry status:", err);
+      toast.error("Couldn't update inquiry status.");
+      // Revert by re-fetching authoritative data.
+      mutate();
+      return false;
+    } finally {
+      setSavingId(null);
+    }
+  }
+
+  // Reset the reason picker every open — stale selections from the
+  // last family shouldn't leak into a new one.
+  function openNotInterestedDialog(row: Inquiry) {
+    setReasonChoice("");
+    setCustomReason("");
+    setMarkingRow(row);
+  }
+
+  async function confirmNotInterested() {
+    if (!markingRow) return;
+    const reason =
+      reasonChoice === "Other" ? customReason.trim() : reasonChoice;
+    if (!reason) return;
+    const row = markingRow;
+    setMarkingRow(null);
+    const ok = await updateStatus(row, {
+      status: "not_interested",
+      status_reason: reason,
+    });
+    if (ok) {
+      toast.success(
+        `${row.parent_name || "Inquiry"} moved to Not Interested.`
+      );
+    }
+  }
+
+  async function restoreInquiry(row: Inquiry) {
+    // "active" sentinel, not "" — Xano's edit endpoint drops empty
+    // inputs, so an empty status would never save. The old
+    // status_reason intentionally stays on the row as history; nothing
+    // renders it while the inquiry is active, and re-marking forces a
+    // fresh reason that overwrites it.
+    const ok = await updateStatus(row, { status: "active" });
+    if (ok) {
+      toast.success(`${row.parent_name || "Inquiry"} restored to active.`);
+    }
+  }
+
+  // Shared column definitions across all sections — same widths so
   // headers line up vertically the same way the Applications page does.
-  const columns: ColumnDef<Inquiry>[] = [
+  // The active / not-interested sections append their own status +
+  // action columns below.
+  const baseColumns: ColumnDef<Inquiry>[] = [
     {
       key: "parent_name",
       header: "Parent",
@@ -397,29 +547,11 @@ export default function InquiriesPage() {
         </span>
       ),
     },
-    {
-      key: "isFollowedUp",
-      header: "Followed up",
-      sortable: true,
-      width: "w-[110px]",
-      align: "center",
-      // Switch sits inside a click-stopping wrapper because the parent
-      // row registers an onRowClick to open the detail Sheet — we don't
-      // want toggling follow-up to also open the Sheet.
-      render: (row) => (
-        <div
-          onClick={(e) => e.stopPropagation()}
-          className="inline-flex items-center justify-center"
-        >
-          <Switch
-            checked={!!row.isFollowedUp}
-            disabled={savingId === row.id}
-            onCheckedChange={(v) => toggleFollowedUp(row, v)}
-            aria-label={`Mark ${row.parent_name} followed up`}
-          />
-        </div>
-      ),
-    },
+  ];
+
+  // Trailing action columns shared by every section: delete + the
+  // row-open chevron.
+  const trailingColumns: ColumnDef<Inquiry>[] = [
     {
       // Delete column — small trash icon button with a stopPropagation
       // wrapper so clicking it doesn't also open the detail Sheet.
@@ -463,6 +595,115 @@ export default function InquiriesPage() {
     },
   ];
 
+  // Columns for the two active sections: follow-up switch plus a
+  // "mark not interested" action.
+  const activeColumns: ColumnDef<Inquiry>[] = [
+    ...baseColumns,
+    {
+      key: "isFollowedUp",
+      header: "Followed up",
+      sortable: true,
+      width: "w-[110px]",
+      align: "center",
+      // Switch sits inside a click-stopping wrapper because the parent
+      // row registers an onRowClick to open the detail Sheet — we don't
+      // want toggling follow-up to also open the Sheet.
+      render: (row) => (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="inline-flex items-center justify-center"
+        >
+          <Switch
+            checked={!!row.isFollowedUp}
+            disabled={savingId === row.id}
+            onCheckedChange={(v) => toggleFollowedUp(row, v)}
+            aria-label={`Mark ${row.parent_name} followed up`}
+          />
+        </div>
+      ),
+    },
+    {
+      // "Not interested" action — opens the reason dialog rather than
+      // saving immediately so a status never lands without its reason.
+      key: "mark_not_interested",
+      header: "",
+      width: "w-[40px]",
+      align: "right",
+      render: (row) => (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="inline-flex items-center justify-center"
+        >
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-7 text-muted-foreground hover:text-amber-700 hover:bg-amber-50"
+            disabled={savingId === row.id}
+            onClick={() => openNotInterestedDialog(row)}
+            aria-label={`Mark ${row.parent_name || row.student_name || "this family"} not interested`}
+            title="Mark not interested"
+          >
+            <UserX className="size-3.5" />
+          </Button>
+        </div>
+      ),
+    },
+    ...trailingColumns,
+  ];
+
+  // Columns for the Not Interested section: the follow-up switch is
+  // replaced by the logged reason, and the row action becomes
+  // "restore to active".
+  const notInterestedColumns: ColumnDef<Inquiry>[] = [
+    ...baseColumns,
+    {
+      key: "status_reason",
+      header: "Reason",
+      sortable: true,
+      width: "w-[130px]",
+      render: (row) => (
+        <Badge
+          variant="secondary"
+          className="max-w-full truncate font-normal"
+          title={row.status_reason || undefined}
+        >
+          {row.status_reason || "No reason logged"}
+        </Badge>
+      ),
+    },
+    {
+      key: "restore",
+      header: "",
+      width: "w-[40px]",
+      align: "right",
+      render: (row) => (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="inline-flex items-center justify-center"
+        >
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-7 text-muted-foreground hover:text-green-700 hover:bg-green-50"
+            disabled={savingId === row.id}
+            onClick={() => void restoreInquiry(row)}
+            aria-label={`Restore inquiry from ${row.parent_name || row.student_name || "this family"} to active`}
+            title="Restore to active"
+          >
+            {savingId === row.id ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <Undo2 className="size-3.5" />
+            )}
+          </Button>
+        </div>
+      ),
+    },
+    ...trailingColumns,
+  ];
+
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between gap-4">
@@ -470,8 +711,9 @@ export default function InquiriesPage() {
           <h1 className="text-2xl font-bold">Inquiries</h1>
           <p className="text-sm text-muted-foreground">
             Inquiry submissions from prospective families. Click a row to
-            read the parent&rsquo;s notes about the student, or flip the
-            follow-up switch when admissions has reached out.
+            read the parent&rsquo;s notes about the student, flip the
+            follow-up switch when admissions has reached out, or mark a
+            family not interested to move them off the active list.
           </p>
         </div>
         <Select
@@ -482,7 +724,14 @@ export default function InquiriesPage() {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {(["all", "not_followed_up", "followed_up"] as const).map((f) => (
+            {(
+              [
+                "all",
+                "not_followed_up",
+                "followed_up",
+                "not_interested",
+              ] as const
+            ).map((f) => (
               <SelectItem key={f} value={f}>
                 {FILTER_LABEL[f]} ({counts[f]})
               </SelectItem>
@@ -506,9 +755,11 @@ export default function InquiriesPage() {
           // attention-getting, signals "pick this up next."
           dotColor="bg-red-500"
           rows={visibleGroups.notFollowedUp}
-          isLoading={isLoading && filter !== "followed_up"}
+          isLoading={
+            isLoading && (filter === "all" || filter === "not_followed_up")
+          }
           error={error}
-          columns={columns}
+          columns={activeColumns}
           onRowClick={(row) => setActive(row)}
         />
         <InquiriesGroup
@@ -517,9 +768,22 @@ export default function InquiriesPage() {
           // Green = parity with Submitted on Applications page.
           dotColor="bg-green-500"
           rows={visibleGroups.followedUp}
-          isLoading={isLoading && filter !== "not_followed_up"}
+          isLoading={
+            isLoading && (filter === "all" || filter === "followed_up")
+          }
           error={error}
-          columns={columns}
+          columns={activeColumns}
+          onRowClick={(row) => setActive(row)}
+        />
+        <InquiriesGroup
+          title="Not Interested"
+          description="Family declined — kept here with the reason for reference. Restore anytime."
+          // Gray = out of the pipeline, no action needed.
+          dotColor="bg-gray-400"
+          rows={visibleGroups.notInterested}
+          isLoading={isLoading && filter === "not_interested"}
+          error={error}
+          columns={notInterestedColumns}
           onRowClick={(row) => setActive(row)}
         />
       </div>
@@ -571,6 +835,51 @@ export default function InquiriesPage() {
                       {active.isFollowedUp ? "Yes" : "Not yet"}
                     </span>
                   </div>
+                </DetailRow>
+
+                <DetailRow label="Status">
+                  {active.status === "not_interested" ? (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge
+                        variant="secondary"
+                        className="font-normal"
+                        title={active.status_reason || undefined}
+                      >
+                        Not interested
+                        {active.status_reason
+                          ? ` — ${active.status_reason}`
+                          : ""}
+                      </Badge>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-7 text-xs"
+                        disabled={savingId === active.id}
+                        onClick={() => void restoreInquiry(active)}
+                      >
+                        <Undo2 className="size-3 mr-1" />
+                        Restore to active
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant="outline" className="font-normal">
+                        Active
+                      </Badge>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-7 text-xs text-muted-foreground"
+                        disabled={savingId === active.id}
+                        onClick={() => openNotInterestedDialog(active)}
+                      >
+                        <UserX className="size-3 mr-1" />
+                        Mark not interested
+                      </Button>
+                    </div>
+                  )}
                 </DetailRow>
 
                 <div className="grid grid-cols-1 gap-5">
@@ -655,6 +964,92 @@ export default function InquiriesPage() {
           ) : null}
         </SheetContent>
       </Sheet>
+
+      {/* "Mark not interested" dialog — forces a reason to be picked
+          (or typed, via "Other") before the status saves, so the Not
+          Interested section always explains itself. */}
+      <Dialog
+        open={!!markingRow}
+        onOpenChange={(open) => {
+          if (!open) setMarkingRow(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Mark as not interested</DialogTitle>
+            <DialogDescription>
+              {markingRow ? (
+                <>
+                  Move the inquiry from{" "}
+                  <span className="font-medium">
+                    {markingRow.parent_name ||
+                      markingRow.student_name ||
+                      "this family"}
+                  </span>{" "}
+                  off the active list. It stays available under the
+                  &ldquo;Not interested&rdquo; filter and can be restored
+                  anytime.
+                </>
+              ) : (
+                ""
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="not-interested-reason">Reason</Label>
+              <Select value={reasonChoice} onValueChange={setReasonChoice}>
+                <SelectTrigger
+                  id="not-interested-reason"
+                  className="w-full"
+                >
+                  <SelectValue placeholder="Why wasn't the family interested?" />
+                </SelectTrigger>
+                <SelectContent>
+                  {NOT_INTERESTED_REASONS.map((r) => (
+                    <SelectItem key={r} value={r}>
+                      {r}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            {reasonChoice === "Other" ? (
+              <div className="space-y-2">
+                <Label htmlFor="not-interested-custom">Reason details</Label>
+                <Input
+                  id="not-interested-custom"
+                  value={customReason}
+                  onChange={(e) => setCustomReason(e.target.value)}
+                  placeholder="Short reason…"
+                  maxLength={120}
+                  autoFocus
+                />
+              </div>
+            ) : null}
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setMarkingRow(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={
+                !reasonChoice ||
+                (reasonChoice === "Other" && !customReason.trim())
+              }
+              onClick={() => void confirmNotInterested()}
+            >
+              <UserX className="size-3.5 mr-1.5" />
+              Mark not interested
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Delete confirmation. Hard delete — there's no soft-delete
           flag on `registration_inquiry`, and pre-application inquiries
