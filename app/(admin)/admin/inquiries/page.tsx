@@ -4,7 +4,6 @@ import { useMemo, useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import { toast } from "sonner";
 import {
-  ChevronRight,
   Loader2,
   Mail,
   Phone,
@@ -574,30 +573,27 @@ export default function InquiriesPage() {
     },
   ];
 
-  const chevronColumn: ColumnDef<Inquiry> = {
-    key: "id",
-    header: "",
-    width: "w-[36px]",
-    align: "right",
-    render: () => (
-      <ChevronRight className="size-4 text-muted-foreground inline" />
-    ),
-  };
-
   // Inline row action buttons (with title tooltips). Dropping the
   // Submitted / Last contact columns freed enough width to put these
   // back in the row where they're one click instead of two.
+  //
+  // Cell anatomy note: the wrapper divs are `flex` (block-level), NOT
+  // `inline-flex` — the DataTable puts `truncate` on every cell, and
+  // inline-level content that overflows gets replaced with a literal
+  // "…" that renders as stray dots next to the icons. Block children
+  // are immune to text-overflow. Width is 48px so the 28px button +
+  // 16px cell padding fit without overflowing at all.
   const markNotInterestedColumn: ColumnDef<Inquiry> = {
     // X button — opens the reason dialog rather than saving
     // immediately so a status never lands without its reason.
     key: "mark_not_interested",
     header: "",
-    width: "w-[40px]",
+    width: "w-[48px]",
     align: "right",
     render: (row) => (
       <div
         onClick={(e) => e.stopPropagation()}
-        className="inline-flex items-center justify-center"
+        className="flex items-center justify-end"
       >
         <Button
           type="button"
@@ -620,12 +616,12 @@ export default function InquiriesPage() {
     // pipeline.
     key: "restore",
     header: "",
-    width: "w-[40px]",
+    width: "w-[48px]",
     align: "right",
     render: (row) => (
       <div
         onClick={(e) => e.stopPropagation()}
-        className="inline-flex items-center justify-center"
+        className="flex items-center justify-end"
       >
         <Button
           type="button"
@@ -652,12 +648,12 @@ export default function InquiriesPage() {
     // modal catches the click before anything destructive lands.
     key: "delete",
     header: "",
-    width: "w-[40px]",
+    width: "w-[48px]",
     align: "right",
     render: (row) => (
       <div
         onClick={(e) => e.stopPropagation()}
-        className="inline-flex items-center justify-center"
+        className="flex items-center justify-end"
       >
         <Button
           type="button"
@@ -708,7 +704,6 @@ export default function InquiriesPage() {
     },
     markNotInterestedColumn,
     deleteColumn,
-    chevronColumn,
   ];
 
   // Columns for the Not Interested section: the follow-up switch is
@@ -733,7 +728,6 @@ export default function InquiriesPage() {
     },
     restoreColumn,
     deleteColumn,
-    chevronColumn,
   ];
 
   return (
