@@ -42,6 +42,11 @@ interface DataTableProps<T> {
   pageSize?: number;
   searchPlaceholder?: string;
   onRowClick?: (row: T) => void;
+  /** Optional per-row class (e.g. a background tint for rows that
+   *  need to stand out). When it returns a value, it fully owns the
+   *  row's background + hover; rows it skips fall back to the default
+   *  hover treatment. */
+  rowClassName?: (row: T) => string | undefined;
 }
 
 export function DataTable<T extends Record<string, unknown>>({
@@ -51,6 +56,7 @@ export function DataTable<T extends Record<string, unknown>>({
   pageSize = 20,
   searchPlaceholder = "Search...",
   onRowClick,
+  rowClassName,
 }: DataTableProps<T>) {
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<string | null>(null);
@@ -186,7 +192,12 @@ export function DataTable<T extends Record<string, unknown>>({
               paged.map((row, i) => (
                 <TableRow
                   key={i}
-                  className={onRowClick ? "cursor-pointer hover:bg-muted/50" : ""}
+                  className={cn(
+                    onRowClick && "cursor-pointer",
+                    // A custom row class owns the background + hover;
+                    // otherwise fall back to the default hover tint.
+                    rowClassName?.(row) ?? "hover:bg-muted/50"
+                  )}
                   onClick={() => onRowClick?.(row)}
                 >
                   {columns.map((col) => (

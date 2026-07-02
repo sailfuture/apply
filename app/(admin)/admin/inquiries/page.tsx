@@ -504,27 +504,11 @@ export default function InquiriesPage() {
       sortable: true,
       searchable: true,
       width: "w-[12%]",
-      // Block-level flex wrapper (not inline) so the td's truncate
-      // can't paint a stray "…" — same trap as the action buttons.
+      // The "likely applied" auto-suggest hint is now a blue row tint
+      // (see rowTint) rather than a per-cell icon.
       render: (row) => (
-        <span className="flex min-w-0 items-center gap-1.5">
-          <span className="truncate font-medium">
-            {row.parent_name || "—"}
-          </span>
-          {row.hasParentAccount && row.status !== "converted" ? (
-            // Auto-suggest hint: this inquiry's email matches a
-            // registered parent account, so the family likely
-            // applied. Admin confirms via the ✓ button.
-            <span
-              className="shrink-0 inline-flex"
-              title="A parent account with this email exists — likely applied. Confirm with the ✓ button."
-            >
-              <UserCheck
-                className="size-3.5 text-blue-600"
-                aria-label="Likely applied — parent account exists with this email"
-              />
-            </span>
-          ) : null}
+        <span className="block truncate font-medium">
+          {row.parent_name || "—"}
         </span>
       ),
     },
@@ -717,6 +701,16 @@ export default function InquiriesPage() {
   const rowName = (row: Inquiry) =>
     row.parent_name || row.student_name || "this family";
 
+  // Auto-suggest hint: tint the whole row light blue when the
+  // inquiry's email matches a registered parent account (so the
+  // family likely applied). Skipped once the row is already marked
+  // converted — the tint would be redundant there. Suggestion only;
+  // admin still confirms with the ✓ button.
+  const rowTint = (row: Inquiry) =>
+    row.hasParentAccount && row.status !== "converted"
+      ? "bg-blue-50 hover:bg-blue-100"
+      : undefined;
+
   // One shared column set across all three sections so the columns
   // line up vertically when the section tables stack. Buttons that
   // don't apply to a row's status are disabled, not removed.
@@ -870,6 +864,7 @@ export default function InquiriesPage() {
           }
           error={error}
           columns={columns}
+          rowClassName={rowTint}
           onRowClick={(row) => setActive(row)}
         />
         <InquiriesGroup
@@ -883,6 +878,7 @@ export default function InquiriesPage() {
           }
           error={error}
           columns={columns}
+          rowClassName={rowTint}
           onRowClick={(row) => setActive(row)}
         />
         <InquiriesGroup
@@ -894,6 +890,7 @@ export default function InquiriesPage() {
           isLoading={isLoading && (filter === "all" || filter === "converted")}
           error={error}
           columns={columns}
+          rowClassName={rowTint}
           onRowClick={(row) => setActive(row)}
         />
         <InquiriesGroup
@@ -905,6 +902,7 @@ export default function InquiriesPage() {
           isLoading={isLoading && filter === "not_interested"}
           error={error}
           columns={columns}
+          rowClassName={rowTint}
           onRowClick={(row) => setActive(row)}
         />
       </div>
@@ -1297,6 +1295,7 @@ function InquiriesGroup({
   columns,
   dotColor,
   onRowClick,
+  rowClassName,
 }: {
   title: string;
   description: string;
@@ -1306,6 +1305,7 @@ function InquiriesGroup({
   columns: ColumnDef<Inquiry>[];
   dotColor: string;
   onRowClick: (row: Inquiry) => void;
+  rowClassName?: (row: Inquiry) => string | undefined;
 }) {
   if (!isLoading && !error && rows.length === 0) return null;
   return (
@@ -1335,6 +1335,7 @@ function InquiriesGroup({
           isLoading={isLoading}
           searchPlaceholder={`Search ${title.toLowerCase()}…`}
           onRowClick={onRowClick}
+          rowClassName={rowClassName}
         />
       </CardContent>
     </Card>
