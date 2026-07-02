@@ -7,6 +7,7 @@ import {
   ChevronRight,
   Loader2,
   Mail,
+  MoreHorizontal,
   Phone,
   Trash2,
   Undo2,
@@ -54,6 +55,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -429,7 +437,7 @@ export default function InquiriesPage() {
       header: "Parent",
       sortable: true,
       searchable: true,
-      width: "w-[15%]",
+      width: "w-[13%]",
       render: (row) => (
         <span className="block truncate font-medium">
           {row.parent_name || "—"}
@@ -441,7 +449,7 @@ export default function InquiriesPage() {
       header: "Student",
       sortable: true,
       searchable: true,
-      width: "w-[13%]",
+      width: "w-[12%]",
       render: (row) => (
         <span className="block truncate font-medium">
           {row.student_name || "—"}
@@ -452,7 +460,7 @@ export default function InquiriesPage() {
       key: "current_grade",
       header: "Grade",
       sortable: true,
-      width: "w-[8%]",
+      width: "w-[7%]",
       render: (row) => (
         <span className="block truncate">
           {row.current_grade || "—"}
@@ -467,7 +475,7 @@ export default function InquiriesPage() {
       header: "Email",
       sortable: true,
       searchable: true,
-      width: "w-[17%]",
+      width: "w-[16%]",
       render: (row) =>
         row.primary_email ? (
           <a
@@ -504,7 +512,7 @@ export default function InquiriesPage() {
     {
       key: "hear_about_us",
       header: "Source",
-      width: "w-[8%]",
+      width: "w-[7%]",
       render: (row) => (
         <span className="block truncate">{row.hear_about_us || "—"}</span>
       ),
@@ -519,7 +527,7 @@ export default function InquiriesPage() {
       key: "created_at",
       header: "Submitted",
       sortable: true,
-      width: "w-[9%]",
+      width: "w-[8%]",
       render: (row) => (
         <span className="block truncate">
           {formatRelative(row.created_at)}
@@ -534,7 +542,7 @@ export default function InquiriesPage() {
       key: "last_reach_out",
       header: "Last contact",
       sortable: true,
-      width: "w-[12%]",
+      width: "w-[10%]",
       accessor: (row) => row.last_reach_out ?? 0,
       render: (row) => (
         <span
@@ -549,54 +557,89 @@ export default function InquiriesPage() {
     },
   ];
 
-  // Trailing action columns shared by every section: delete + the
-  // row-open chevron.
-  const trailingColumns: ColumnDef<Inquiry>[] = [
-    {
-      // Delete column — small trash icon button with a stopPropagation
-      // wrapper so clicking it doesn't also open the detail Sheet.
-      // Routes through `pendingDelete` so the confirmation modal
-      // catches the click before anything destructive lands.
-      key: "delete",
-      header: "",
-      width: "w-[40px]",
-      align: "right",
-      render: (row) => (
-        <div
-          onClick={(e) => e.stopPropagation()}
-          className="inline-flex items-center justify-center"
-        >
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="size-7 text-muted-foreground hover:text-red-600 hover:bg-red-50"
-            disabled={deleting && pendingDelete?.id === row.id}
-            onClick={() => setPendingDelete(row)}
-            aria-label={`Delete inquiry from ${row.parent_name || row.student_name || "this family"}`}
-          >
-            {deleting && pendingDelete?.id === row.id ? (
-              <Loader2 className="size-3.5 animate-spin" />
-            ) : (
-              <Trash2 className="size-3.5" />
-            )}
-          </Button>
-        </div>
-      ),
-    },
-    {
-      key: "id",
-      header: "",
-      width: "w-[40px]",
-      align: "right",
-      render: () => (
-        <ChevronRight className="size-4 text-muted-foreground inline" />
-      ),
-    },
-  ];
+  const chevronColumn: ColumnDef<Inquiry> = {
+    key: "id",
+    header: "",
+    width: "w-[36px]",
+    align: "right",
+    render: () => (
+      <ChevronRight className="size-4 text-muted-foreground inline" />
+    ),
+  };
 
-  // Columns for the two active sections: follow-up switch plus a
-  // "mark not interested" action.
+  // Single "⋯" actions menu per row instead of a strip of icon
+  // buttons. Three separate 40px icon columns over-committed the
+  // fixed-layout table's width — the squeezed cells got ellipsized
+  // into a literal "…" — and unlabeled icons were hard to discover
+  // anyway. The menu items are labeled and the destructive delete
+  // still routes through the confirmation modal via `pendingDelete`.
+  function rowActionsColumn(
+    kind: "active" | "not_interested"
+  ): ColumnDef<Inquiry> {
+    return {
+      key: "actions",
+      header: "",
+      width: "w-[44px]",
+      align: "right",
+      render: (row) => {
+        const busy =
+          savingId === row.id || (deleting && pendingDelete?.id === row.id);
+        return (
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="inline-flex items-center justify-center"
+          >
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="size-7 text-muted-foreground"
+                  disabled={busy}
+                  aria-label={`Actions for ${row.parent_name || row.student_name || "this inquiry"}`}
+                >
+                  {busy ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    <MoreHorizontal className="size-4" />
+                  )}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {kind === "active" ? (
+                  <DropdownMenuItem
+                    onSelect={() => openNotInterestedDialog(row)}
+                  >
+                    <UserX />
+                    Mark not interested
+                  </DropdownMenuItem>
+                ) : (
+                  <DropdownMenuItem
+                    onSelect={() => void restoreInquiry(row)}
+                  >
+                    <Undo2 />
+                    Restore to active
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  variant="destructive"
+                  onSelect={() => setPendingDelete(row)}
+                >
+                  <Trash2 />
+                  Delete inquiry
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        );
+      },
+    };
+  }
+
+  // Columns for the two active sections: follow-up switch plus the
+  // row actions menu.
   const activeColumns: ColumnDef<Inquiry>[] = [
     ...baseColumns,
     {
@@ -622,39 +665,13 @@ export default function InquiriesPage() {
         </div>
       ),
     },
-    {
-      // "Not interested" action — opens the reason dialog rather than
-      // saving immediately so a status never lands without its reason.
-      key: "mark_not_interested",
-      header: "",
-      width: "w-[40px]",
-      align: "right",
-      render: (row) => (
-        <div
-          onClick={(e) => e.stopPropagation()}
-          className="inline-flex items-center justify-center"
-        >
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="size-7 text-muted-foreground hover:text-amber-700 hover:bg-amber-50"
-            disabled={savingId === row.id}
-            onClick={() => openNotInterestedDialog(row)}
-            aria-label={`Mark ${row.parent_name || row.student_name || "this family"} not interested`}
-            title="Mark not interested"
-          >
-            <UserX className="size-3.5" />
-          </Button>
-        </div>
-      ),
-    },
-    ...trailingColumns,
+    rowActionsColumn("active"),
+    chevronColumn,
   ];
 
   // Columns for the Not Interested section: the follow-up switch is
-  // replaced by the logged reason, and the row action becomes
-  // "restore to active".
+  // replaced by the logged reason, and the menu offers "restore"
+  // instead of "mark not interested".
   const notInterestedColumns: ColumnDef<Inquiry>[] = [
     ...baseColumns,
     {
@@ -672,36 +689,8 @@ export default function InquiriesPage() {
         </Badge>
       ),
     },
-    {
-      key: "restore",
-      header: "",
-      width: "w-[40px]",
-      align: "right",
-      render: (row) => (
-        <div
-          onClick={(e) => e.stopPropagation()}
-          className="inline-flex items-center justify-center"
-        >
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="size-7 text-muted-foreground hover:text-green-700 hover:bg-green-50"
-            disabled={savingId === row.id}
-            onClick={() => void restoreInquiry(row)}
-            aria-label={`Restore inquiry from ${row.parent_name || row.student_name || "this family"} to active`}
-            title="Restore to active"
-          >
-            {savingId === row.id ? (
-              <Loader2 className="size-3.5 animate-spin" />
-            ) : (
-              <Undo2 className="size-3.5" />
-            )}
-          </Button>
-        </div>
-      ),
-    },
-    ...trailingColumns,
+    rowActionsColumn("not_interested"),
+    chevronColumn,
   ];
 
   return (
