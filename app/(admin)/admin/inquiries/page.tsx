@@ -119,31 +119,36 @@ interface Inquiry {
 }
 
 /**
- * Render a fully relative-time string ("3 days ago", "2 weeks ago",
- * "5 months ago", "just now"). Stays relative all the way up rather
- * than falling back to a locale date, so the Submitted / Last-contact
- * columns read as elapsed time at every age. Inline because the table
- * doesn't need a full date library — the buckets are approximate
- * (30-day months, 365-day years), which is fine for triage.
+ * Render a fully relative-time string. Default style is verbose
+ * ("3 days ago", "2 weeks ago") for the detail Sheet; `compact`
+ * yields dense table-cell forms ("3d", "2w", "5mo", "now"). Stays
+ * relative all the way up rather than falling back to a locale date.
+ * Inline because the table doesn't need a full date library — the
+ * buckets are approximate (30-day months, 365-day years), which is
+ * fine for triage.
  */
-function formatRelative(ts: number | null | undefined): string {
+function formatRelative(
+  ts: number | null | undefined,
+  opts?: { compact?: boolean }
+): string {
   if (!ts) return "—";
+  const compact = opts?.compact ?? false;
   const diff = Date.now() - ts;
-  if (diff < 60_000) return "just now";
+  if (diff < 60_000) return compact ? "now" : "just now";
   const MIN = 60_000;
   const HOUR = 3_600_000;
   const DAY = 86_400_000;
   const WEEK = 7 * DAY;
   const MONTH = 30 * DAY;
   const YEAR = 365 * DAY;
-  const unit = (n: number, label: string) =>
-    `${n} ${label}${n === 1 ? "" : "s"} ago`;
-  if (diff < HOUR) return unit(Math.floor(diff / MIN), "min");
-  if (diff < DAY) return unit(Math.floor(diff / HOUR), "hour");
-  if (diff < WEEK) return unit(Math.floor(diff / DAY), "day");
-  if (diff < MONTH) return unit(Math.floor(diff / WEEK), "week");
-  if (diff < YEAR) return unit(Math.floor(diff / MONTH), "month");
-  return unit(Math.floor(diff / YEAR), "year");
+  const unit = (n: number, label: string, short: string) =>
+    compact ? `${n}${short}` : `${n} ${label}${n === 1 ? "" : "s"} ago`;
+  if (diff < HOUR) return unit(Math.floor(diff / MIN), "min", "m");
+  if (diff < DAY) return unit(Math.floor(diff / HOUR), "hour", "h");
+  if (diff < WEEK) return unit(Math.floor(diff / DAY), "day", "d");
+  if (diff < MONTH) return unit(Math.floor(diff / WEEK), "week", "w");
+  if (diff < YEAR) return unit(Math.floor(diff / MONTH), "month", "mo");
+  return unit(Math.floor(diff / YEAR), "year", "y");
 }
 
 type InquiryFilter =
@@ -609,10 +614,21 @@ export default function InquiriesPage() {
       key: "created_at",
       header: "Submitted",
       sortable: true,
-      width: "w-[9%]",
+      width: "w-[7%]",
       accessor: (row) => row.created_at ?? 0,
       render: (row) => (
-        <span className="block truncate">{formatRelative(row.created_at)}</span>
+        <span
+          className="block truncate"
+          // Compact form ("2w") saves column width; the exact
+          // submission datetime is one hover away.
+          title={
+            row.created_at
+              ? new Date(row.created_at).toLocaleString()
+              : undefined
+          }
+        >
+          {formatRelative(row.created_at, { compact: true })}
+        </span>
       ),
     },
     // Last contact column stays dropped — it still shows in the detail
