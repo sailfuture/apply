@@ -503,7 +503,7 @@ export default function InquiriesPage() {
       header: "Parent",
       sortable: true,
       searchable: true,
-      width: "w-[13%]",
+      width: "w-[12%]",
       // Block-level flex wrapper (not inline) so the td's truncate
       // can't paint a stray "…" — same trap as the action buttons.
       render: (row) => (
@@ -533,7 +533,7 @@ export default function InquiriesPage() {
       header: "Student",
       sortable: true,
       searchable: true,
-      width: "w-[13%]",
+      width: "w-[12%]",
       render: (row) => (
         <span className="block truncate font-medium">
           {row.student_name || "—"}
@@ -544,7 +544,7 @@ export default function InquiriesPage() {
       key: "current_grade",
       header: "Grade",
       sortable: true,
-      width: "w-[7%]",
+      width: "w-[6%]",
       render: (row) => (
         <span className="block truncate">
           {row.current_grade || "—"}
@@ -559,7 +559,7 @@ export default function InquiriesPage() {
       header: "Email",
       sortable: true,
       searchable: true,
-      width: "w-[15%]",
+      width: "w-[14%]",
       render: (row) =>
         row.primary_email ? (
           <a
@@ -580,7 +580,7 @@ export default function InquiriesPage() {
     {
       key: "primary_phone",
       header: "Phone",
-      width: "w-[12%]",
+      width: "w-[11%]",
       render: (row) => {
         const formatted = formatPhone(row.primary_phone);
         if (!formatted) return "—";
@@ -599,7 +599,7 @@ export default function InquiriesPage() {
     {
       key: "hear_about_us",
       header: "Source",
-      width: "w-[7%]",
+      width: "w-[6%]",
       render: (row) => (
         <span className="block truncate">{row.hear_about_us || "—"}</span>
       ),
@@ -614,7 +614,7 @@ export default function InquiriesPage() {
       key: "created_at",
       header: "Submitted",
       sortable: true,
-      width: "w-[7%]",
+      width: "w-[6%]",
       accessor: (row) => row.created_at ?? 0,
       render: (row) => (
         <span
@@ -640,160 +640,98 @@ export default function InquiriesPage() {
       key: "interest_level",
       header: "Interest",
       sortable: true,
-      width: "w-[110px]",
+      // 5 stars (20px each) + gaps need ~108px of content; 132px
+      // leaves room inside the cell padding so the fifth star isn't
+      // clipped. Block-level wrapper so the cell's `truncate` can't
+      // ellipsize the row of stars.
+      width: "w-[132px]",
       accessor: (row) => row.interest_level ?? 0,
       render: (row) => (
-        <StarRating
-          value={row.interest_level ?? 0}
-          disabled={savingId === row.id}
-          onChange={(v) => void updateInterest(row, v)}
-        />
+        <div className="flex items-center">
+          <StarRating
+            value={row.interest_level ?? 0}
+            disabled={savingId === row.id}
+            onChange={(v) => void updateInterest(row, v)}
+          />
+        </div>
       ),
     },
   ];
 
-  // Inline row action buttons (with title tooltips). Dropping the
-  // Submitted / Last contact columns freed enough width to put these
-  // back in the row where they're one click instead of two.
-  //
-  // Cell anatomy note: the wrapper divs are `flex` (block-level), NOT
-  // `inline-flex` — the DataTable puts `truncate` on every cell, and
-  // inline-level content that overflows gets replaced with a literal
-  // "…" that renders as stray dots next to the icons. Block children
-  // are immune to text-overflow. Width is 48px so the 28px button +
-  // 16px cell padding fit without overflowing at all.
-  const markConvertedColumn: ColumnDef<Inquiry> = {
-    // Check button — one-click "family applied" win, no dialog.
-    key: "mark_converted",
-    header: "",
-    width: "w-[48px]",
-    align: "right",
-    render: (row) => (
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="flex items-center justify-end"
-      >
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="size-7 text-muted-foreground hover:text-blue-700 hover:bg-blue-50"
-          disabled={savingId === row.id}
-          onClick={() => void markConverted(row)}
-          aria-label={`Mark ${row.parent_name || row.student_name || "this family"} converted to application`}
-          title="Mark converted (family applied)"
-        >
-          <Check className="size-3.5" />
-        </Button>
-      </div>
-    ),
-  };
+  // Row-status helpers. Terminal = converted or not-interested; those
+  // rows have left the working pipeline.
+  const isConverted = (row: Inquiry) => row.status === "converted";
+  const isNotInterested = (row: Inquiry) => row.status === "not_interested";
+  const isTerminal = (row: Inquiry) => isConverted(row) || isNotInterested(row);
 
-  const markNotInterestedColumn: ColumnDef<Inquiry> = {
-    // X button — opens the reason dialog rather than saving
-    // immediately so a status never lands without its reason.
-    key: "mark_not_interested",
-    header: "",
-    width: "w-[48px]",
-    align: "right",
-    render: (row) => (
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="flex items-center justify-end"
-      >
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="size-7 text-muted-foreground hover:text-amber-700 hover:bg-amber-50"
-          disabled={savingId === row.id}
-          onClick={() => openNotInterestedDialog(row)}
-          aria-label={`Mark ${row.parent_name || row.student_name || "this family"} not interested`}
-          title="Mark not interested"
-        >
-          <X className="size-3.5" />
-        </Button>
-      </div>
-    ),
-  };
+  // Icon action button used in the trailing columns. Cell wrapper is
+  // `flex` (block-level), NOT `inline-flex` — the DataTable puts
+  // `truncate` on every cell, and inline content that overflows gets
+  // replaced with a literal "…" that renders as stray dots beside the
+  // icon. `disabled` buttons stay in place (grayed) rather than being
+  // removed, so every section's columns line up.
+  function actionButton(opts: {
+    key: string;
+    icon: React.ReactNode;
+    hoverClass: string;
+    title: string;
+    ariaLabel: (row: Inquiry) => string;
+    disabled: (row: Inquiry) => boolean;
+    spinning?: (row: Inquiry) => boolean;
+    onClick: (row: Inquiry) => void;
+  }): ColumnDef<Inquiry> {
+    return {
+      key: opts.key,
+      header: "",
+      width: "w-[44px]",
+      align: "right",
+      render: (row) => {
+        const spinning = opts.spinning?.(row) ?? false;
+        return (
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="flex items-center justify-end"
+          >
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className={cn("size-7 text-muted-foreground", opts.hoverClass)}
+              disabled={opts.disabled(row) || spinning}
+              onClick={() => opts.onClick(row)}
+              aria-label={opts.ariaLabel(row)}
+              title={opts.title}
+            >
+              {spinning ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                opts.icon
+              )}
+            </Button>
+          </div>
+        );
+      },
+    };
+  }
 
-  const restoreColumn: ColumnDef<Inquiry> = {
-    // Undo button — puts a declined family back in the active
-    // pipeline.
-    key: "restore",
-    header: "",
-    width: "w-[48px]",
-    align: "right",
-    render: (row) => (
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="flex items-center justify-end"
-      >
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="size-7 text-muted-foreground hover:text-green-700 hover:bg-green-50"
-          disabled={savingId === row.id}
-          onClick={() => void restoreInquiry(row)}
-          aria-label={`Restore inquiry from ${row.parent_name || row.student_name || "this family"} to active`}
-          title="Restore to active"
-        >
-          {savingId === row.id ? (
-            <Loader2 className="size-3.5 animate-spin" />
-          ) : (
-            <Undo2 className="size-3.5" />
-          )}
-        </Button>
-      </div>
-    ),
-  };
+  const rowName = (row: Inquiry) =>
+    row.parent_name || row.student_name || "this family";
 
-  const deleteColumn: ColumnDef<Inquiry> = {
-    // Trash button routes through `pendingDelete` so the confirmation
-    // modal catches the click before anything destructive lands.
-    key: "delete",
-    header: "",
-    width: "w-[48px]",
-    align: "right",
-    render: (row) => (
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="flex items-center justify-end"
-      >
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="size-7 text-muted-foreground hover:text-red-600 hover:bg-red-50"
-          disabled={deleting && pendingDelete?.id === row.id}
-          onClick={() => setPendingDelete(row)}
-          aria-label={`Delete inquiry from ${row.parent_name || row.student_name || "this family"}`}
-          title="Delete inquiry"
-        >
-          {deleting && pendingDelete?.id === row.id ? (
-            <Loader2 className="size-3.5 animate-spin" />
-          ) : (
-            <Trash2 className="size-3.5" />
-          )}
-        </Button>
-      </div>
-    ),
-  };
-
-  // Columns for the two active sections: follow-up switch plus the
-  // check (converted), X (not interested), and delete buttons.
-  const activeColumns: ColumnDef<Inquiry>[] = [
+  // One shared column set across all three sections so the columns
+  // line up vertically when the section tables stack. Buttons that
+  // don't apply to a row's status are disabled, not removed.
+  const columns: ColumnDef<Inquiry>[] = [
     ...baseColumns,
     {
       key: "isFollowedUp",
       header: "Followed up",
       sortable: true,
-      width: "w-[110px]",
+      width: "w-[92px]",
       align: "center",
       // Switch sits inside a click-stopping wrapper because the parent
-      // row registers an onRowClick to open the detail Sheet — we don't
-      // want toggling follow-up to also open the Sheet.
+      // row registers an onRowClick to open the detail Sheet. Disabled
+      // once the inquiry reaches a terminal status — follow-up is moot
+      // for converted / declined families — but kept visible.
       render: (row) => (
         <div
           onClick={(e) => e.stopPropagation()}
@@ -801,48 +739,77 @@ export default function InquiriesPage() {
         >
           <Switch
             checked={!!row.isFollowedUp}
-            disabled={savingId === row.id}
+            disabled={savingId === row.id || isTerminal(row)}
             onCheckedChange={(v) => toggleFollowedUp(row, v)}
             aria-label={`Mark ${row.parent_name} followed up`}
           />
         </div>
       ),
     },
-    markConvertedColumn,
-    markNotInterestedColumn,
-    deleteColumn,
-  ];
-
-  // Columns for the Converted section: no switch or status actions —
-  // just restore (in case of a mis-click) and delete.
-  const convertedColumns: ColumnDef<Inquiry>[] = [
-    ...baseColumns,
-    restoreColumn,
-    deleteColumn,
-  ];
-
-  // Columns for the Not Interested section: the follow-up switch is
-  // replaced by the logged reason, and the action becomes "restore"
-  // instead of "mark not interested".
-  const notInterestedColumns: ColumnDef<Inquiry>[] = [
-    ...baseColumns,
     {
+      // Reason column — only populated for not-interested rows, but
+      // present in every section so the trailing columns stay aligned.
       key: "status_reason",
       header: "Reason",
       sortable: true,
-      width: "w-[130px]",
-      render: (row) => (
-        <Badge
-          variant="secondary"
-          className="max-w-full truncate font-normal"
-          title={row.status_reason || undefined}
-        >
-          {row.status_reason || "No reason logged"}
-        </Badge>
-      ),
+      width: "w-[120px]",
+      render: (row) =>
+        isNotInterested(row) ? (
+          <Badge
+            variant="secondary"
+            className="max-w-full truncate font-normal"
+            title={row.status_reason || undefined}
+          >
+            {row.status_reason || "No reason logged"}
+          </Badge>
+        ) : (
+          <span className="text-muted-foreground/40">—</span>
+        ),
     },
-    restoreColumn,
-    deleteColumn,
+    actionButton({
+      key: "mark_converted",
+      icon: <Check className="size-3.5" />,
+      hoverClass: "hover:text-blue-700 hover:bg-blue-50",
+      title: "Mark converted (family applied)",
+      ariaLabel: (row) => `Mark ${rowName(row)} converted to application`,
+      // Disabled once already converted.
+      disabled: (row) => isConverted(row),
+      spinning: (row) => savingId === row.id && !isConverted(row),
+      onClick: (row) => void markConverted(row),
+    }),
+    actionButton({
+      key: "mark_not_interested",
+      icon: <X className="size-3.5" />,
+      hoverClass: "hover:text-amber-700 hover:bg-amber-50",
+      title: "Mark not interested",
+      ariaLabel: (row) => `Mark ${rowName(row)} not interested`,
+      // Opens the reason dialog; disabled once already not-interested.
+      disabled: (row) => isNotInterested(row) || savingId === row.id,
+      onClick: (row) => openNotInterestedDialog(row),
+    }),
+    actionButton({
+      key: "restore",
+      icon: <Undo2 className="size-3.5" />,
+      hoverClass: "hover:text-green-700 hover:bg-green-50",
+      title: "Restore to active",
+      ariaLabel: (row) => `Restore inquiry from ${rowName(row)} to active`,
+      // Only meaningful for terminal rows — nothing to restore while
+      // the inquiry is still active.
+      disabled: (row) => !isTerminal(row),
+      spinning: (row) => savingId === row.id && isTerminal(row),
+      onClick: (row) => void restoreInquiry(row),
+    }),
+    actionButton({
+      key: "delete",
+      icon: <Trash2 className="size-3.5" />,
+      hoverClass: "hover:text-red-600 hover:bg-red-50",
+      title: "Delete inquiry",
+      ariaLabel: (row) => `Delete inquiry from ${rowName(row)}`,
+      // Routes through the confirmation modal via `pendingDelete`.
+      disabled: () => false,
+      spinning: (row) => deleting && pendingDelete?.id === row.id,
+      onClick: (row) => setPendingDelete(row),
+    }),
   ];
 
   return (
@@ -902,7 +869,7 @@ export default function InquiriesPage() {
             isLoading && (filter === "all" || filter === "not_followed_up")
           }
           error={error}
-          columns={activeColumns}
+          columns={columns}
           onRowClick={(row) => setActive(row)}
         />
         <InquiriesGroup
@@ -915,7 +882,7 @@ export default function InquiriesPage() {
             isLoading && (filter === "all" || filter === "followed_up")
           }
           error={error}
-          columns={activeColumns}
+          columns={columns}
           onRowClick={(row) => setActive(row)}
         />
         <InquiriesGroup
@@ -926,7 +893,7 @@ export default function InquiriesPage() {
           rows={visibleGroups.converted}
           isLoading={isLoading && (filter === "all" || filter === "converted")}
           error={error}
-          columns={convertedColumns}
+          columns={columns}
           onRowClick={(row) => setActive(row)}
         />
         <InquiriesGroup
@@ -937,7 +904,7 @@ export default function InquiriesPage() {
           rows={visibleGroups.notInterested}
           isLoading={isLoading && filter === "not_interested"}
           error={error}
-          columns={notInterestedColumns}
+          columns={columns}
           onRowClick={(row) => setActive(row)}
         />
       </div>
@@ -975,7 +942,7 @@ export default function InquiriesPage() {
                   <div className="flex items-center gap-2">
                     <Switch
                       checked={!!active.isFollowedUp}
-                      disabled={savingId === active.id}
+                      disabled={savingId === active.id || isTerminal(active)}
                       onCheckedChange={(v) => {
                         // Sheet keeps its own snapshot of the row — flip
                         // it locally too so the toggle reflects the
