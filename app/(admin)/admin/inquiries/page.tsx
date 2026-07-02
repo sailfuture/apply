@@ -4,12 +4,14 @@ import { useMemo, useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import { toast } from "sonner";
 import {
+  Check,
   Loader2,
   Mail,
   Phone,
   Star,
   Trash2,
   Undo2,
+  UserCheck,
   UserX,
   X,
 } from "lucide-react";
@@ -105,6 +107,11 @@ interface Inquiry {
   /** 1–5 star gut-feel interest rating; 0/undefined = not rated.
    *  Clicking the current rating clears back to 0. */
   interest_level?: number | null;
+  /** Computed by the admin inquiries API route (not a Xano column):
+   *  true when this inquiry's email matches a registered parent
+   *  account. Rendered as an "applied?" hint badge — suggestion only;
+   *  admin confirms by marking the inquiry converted. */
+  hasParentAccount?: boolean;
   // Computed at parse time
   parent_name: string;
   student_name: string;
@@ -143,15 +150,18 @@ type InquiryFilter =
   | "all"
   | "not_followed_up"
   | "followed_up"
+  | "converted"
   | "not_interested";
 
 const FILTER_LABEL: Record<InquiryFilter, string> = {
-  // "All active" deliberately excludes not-interested rows — the whole
-  // point of the status is to get declined families off the working
-  // list. They're reachable through the "Not interested" option below.
-  all: "All active",
+  // "All" shows the working pipeline plus the Converted wins, but
+  // deliberately excludes not-interested rows — the whole point of
+  // that status is to get declined families off the list. They're
+  // reachable through the "Not interested" option below.
+  all: "All",
   not_followed_up: "Not followed up",
   followed_up: "Followed up",
+  converted: "Converted",
   not_interested: "Not interested",
 };
 
@@ -244,28 +254,31 @@ export default function InquiriesPage() {
   const groups = useMemo(() => {
     const followedUp: Inquiry[] = [];
     const notFollowedUp: Inquiry[] = [];
+    const converted: Inquiry[] = [];
     const notInterested: Inquiry[] = [];
     for (const r of rows) {
-      // Not-interested wins over the follow-up split — a declined
-      // family leaves the working pipeline regardless of whether we
-      // had already reached out.
+      // Terminal statuses win over the follow-up split — a converted
+      // or declined family leaves the working pipeline regardless of
+      // whether we had already reached out.
       if (r.status === "not_interested") notInterested.push(r);
+      else if (r.status === "converted") converted.push(r);
       else if (r.isFollowedUp) followedUp.push(r);
       else notFollowedUp.push(r);
     }
-    return { followedUp, notFollowedUp, notInterested };
+    return { followedUp, notFollowedUp, converted, notInterested };
   }, [rows]);
 
   const visibleGroups = useMemo(() => {
     if (filter === "all") {
-      // Default view: active pipeline only. Declined families stay
-      // hidden until admin explicitly picks the "Not interested"
-      // filter.
+      // Default view: the working pipeline plus the Converted wins.
+      // Declined families stay hidden until admin explicitly picks
+      // the "Not interested" filter.
       return { ...groups, notInterested: [] as Inquiry[] };
     }
     return {
       followedUp: filter === "followed_up" ? groups.followedUp : [],
       notFollowedUp: filter === "not_followed_up" ? groups.notFollowedUp : [],
+      converted: filter === "converted" ? groups.converted : [],
       notInterested: filter === "not_interested" ? groups.notInterested : [],
     };
   }, [filter, groups]);
@@ -273,9 +286,13 @@ export default function InquiriesPage() {
   const counts = useMemo(
     () =>
       ({
-        all: groups.followedUp.length + groups.notFollowedUp.length,
+        all:
+          groups.followedUp.length +
+          groups.notFollowedUp.length +
+          groups.converted.length,
         followed_up: groups.followedUp.length,
         not_followed_up: groups.notFollowedUp.length,
+        converted: groups.converted.length,
         not_interested: groups.notInterested.length,
       }) satisfies Record<InquiryFilter, number>,
     [groups]
@@ -461,6 +478,16 @@ export default function InquiriesPage() {
     }
   }
 
+  // One-click win: the family applied, so the inquiry graduates into
+  // the Converted section. No dialog — unlike "not interested" there's
+  // no reason to capture, and it's reversible via restore.
+  async function markConverted(row: Inquiry) {
+    const ok = await updateStatus(row, { status: "converted" });
+    if (ok) {
+      toast.success(`${row.parent_name || "Inquiry"} marked as converted.`);
+    }
+  }
+
   // Shared column definitions across all sections — same widths so
   // headers line up vertically the same way the Applications page does.
   // The active / not-interested sections append their own status +
@@ -471,10 +498,28 @@ export default function InquiriesPage() {
       header: "Parent",
       sortable: true,
       searchable: true,
-      width: "w-[14%]",
+      width: "w-[13%]",
+      // Block-level flex wrapper (not inline) so the td's truncate
+      // can't paint a stray "…" — same trap as the action buttons.
       render: (row) => (
-        <span className="block truncate font-medium">
-          {row.parent_name || "—"}
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className="truncate font-medium">
+            {row.parent_name || "—"}
+          </span>
+          {row.hasParentAccount && row.status !== "converted" ? (
+            // Auto-suggest hint: this inquiry's email matches a
+            // registered parent account, so the family likely
+            // applied. Admin confirms via the ✓ button.
+            <span
+              className="shrink-0 inline-flex"
+              title="A parent account with this email exists — likely applied. Confirm with the ✓ button."
+            >
+              <UserCheck
+                className="size-3.5 text-blue-600"
+                aria-label="Likely applied — parent account exists with this email"
+              />
+            </span>
+          ) : null}
         </span>
       ),
     },
@@ -509,7 +554,7 @@ export default function InquiriesPage() {
       header: "Email",
       sortable: true,
       searchable: true,
-      width: "w-[16%]",
+      width: "w-[15%]",
       render: (row) =>
         row.primary_email ? (
           <a
@@ -530,7 +575,7 @@ export default function InquiriesPage() {
     {
       key: "primary_phone",
       header: "Phone",
-      width: "w-[13%]",
+      width: "w-[12%]",
       render: (row) => {
         const formatted = formatPhone(row.primary_phone);
         if (!formatted) return "—";
@@ -601,6 +646,33 @@ export default function InquiriesPage() {
   // "…" that renders as stray dots next to the icons. Block children
   // are immune to text-overflow. Width is 48px so the 28px button +
   // 16px cell padding fit without overflowing at all.
+  const markConvertedColumn: ColumnDef<Inquiry> = {
+    // Check button — one-click "family applied" win, no dialog.
+    key: "mark_converted",
+    header: "",
+    width: "w-[48px]",
+    align: "right",
+    render: (row) => (
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="flex items-center justify-end"
+      >
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="size-7 text-muted-foreground hover:text-blue-700 hover:bg-blue-50"
+          disabled={savingId === row.id}
+          onClick={() => void markConverted(row)}
+          aria-label={`Mark ${row.parent_name || row.student_name || "this family"} converted to application`}
+          title="Mark converted (family applied)"
+        >
+          <Check className="size-3.5" />
+        </Button>
+      </div>
+    ),
+  };
+
   const markNotInterestedColumn: ColumnDef<Inquiry> = {
     // X button — opens the reason dialog rather than saving
     // immediately so a status never lands without its reason.
@@ -694,7 +766,7 @@ export default function InquiriesPage() {
   };
 
   // Columns for the two active sections: follow-up switch plus the
-  // X (not interested) and delete buttons.
+  // check (converted), X (not interested), and delete buttons.
   const activeColumns: ColumnDef<Inquiry>[] = [
     ...baseColumns,
     {
@@ -720,7 +792,16 @@ export default function InquiriesPage() {
         </div>
       ),
     },
+    markConvertedColumn,
     markNotInterestedColumn,
+    deleteColumn,
+  ];
+
+  // Columns for the Converted section: no switch or status actions —
+  // just restore (in case of a mis-click) and delete.
+  const convertedColumns: ColumnDef<Inquiry>[] = [
+    ...baseColumns,
+    restoreColumn,
     deleteColumn,
   ];
 
@@ -756,8 +837,10 @@ export default function InquiriesPage() {
           <p className="text-sm text-muted-foreground">
             Inquiry submissions from prospective families. Click a row to
             read the parent&rsquo;s notes about the student, flip the
-            follow-up switch when admissions has reached out, or mark a
-            family not interested to move them off the active list.
+            follow-up switch when admissions has reached out, then close
+            the loop with ✓ (converted to application) or ✕ (not
+            interested). A blue person icon next to a parent means an
+            account with that email already exists — likely converted.
           </p>
         </div>
         <Select
@@ -773,6 +856,7 @@ export default function InquiriesPage() {
                 "all",
                 "not_followed_up",
                 "followed_up",
+                "converted",
                 "not_interested",
               ] as const
             ).map((f) => (
@@ -816,6 +900,17 @@ export default function InquiriesPage() {
           }
           error={error}
           columns={activeColumns}
+          onRowClick={(row) => setActive(row)}
+        />
+        <InquiriesGroup
+          title="Converted"
+          description="Inquiry turned into an application — the family applied."
+          // Blue = a win, distinct from green's "in-progress contact".
+          dotColor="bg-blue-500"
+          rows={visibleGroups.converted}
+          isLoading={isLoading && (filter === "all" || filter === "converted")}
+          error={error}
+          columns={convertedColumns}
           onRowClick={(row) => setActive(row)}
         />
         <InquiriesGroup
@@ -920,22 +1015,63 @@ export default function InquiriesPage() {
                         Restore to active
                       </Button>
                     </div>
-                  ) : (
+                  ) : active.status === "converted" ? (
                     <div className="flex flex-wrap items-center gap-2">
-                      <Badge variant="outline" className="font-normal">
-                        Active
+                      <Badge
+                        variant="secondary"
+                        className="border-blue-200 bg-blue-50 font-normal text-blue-700"
+                      >
+                        <Check className="size-3 mr-0.5" />
+                        Converted
                       </Badge>
                       <Button
                         type="button"
                         variant="outline"
                         size="sm"
-                        className="h-7 text-xs text-muted-foreground"
+                        className="h-7 text-xs"
                         disabled={savingId === active.id}
-                        onClick={() => openNotInterestedDialog(active)}
+                        onClick={() => void restoreInquiry(active)}
                       >
-                        <UserX className="size-3 mr-1" />
-                        Mark not interested
+                        <Undo2 className="size-3 mr-1" />
+                        Restore to active
                       </Button>
+                    </div>
+                  ) : (
+                    <div className="space-y-1.5">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge variant="outline" className="font-normal">
+                          Active
+                        </Badge>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-7 text-xs text-muted-foreground"
+                          disabled={savingId === active.id}
+                          onClick={() => void markConverted(active)}
+                        >
+                          <Check className="size-3 mr-1" />
+                          Mark converted
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-7 text-xs text-muted-foreground"
+                          disabled={savingId === active.id}
+                          onClick={() => openNotInterestedDialog(active)}
+                        >
+                          <UserX className="size-3 mr-1" />
+                          Mark not interested
+                        </Button>
+                      </div>
+                      {active.hasParentAccount ? (
+                        <p className="flex items-center gap-1 text-xs text-blue-700">
+                          <UserCheck className="size-3 shrink-0" />
+                          A parent account with this email exists — this
+                          family likely applied.
+                        </p>
+                      ) : null}
                     </div>
                   )}
                 </DetailRow>

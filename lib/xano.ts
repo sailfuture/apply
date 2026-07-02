@@ -1157,11 +1157,11 @@ export interface XanoInquiry {
    *  its allowlist so admins can't hand-edit it. */
   last_reach_out?: number | null;
   /** Lifecycle bucket for the inquiry. `""`/undefined/`"active"` =
-   *  active pipeline. `"not_interested"` = family declined; these rows
-   *  are filtered off the default inquiries view into their own
-   *  section. Restore writes `"active"` rather than clearing to `""`
-   *  because the Xano edit endpoint's field mapping skips empty
-   *  inputs. */
+   *  active pipeline. `"converted"` = family applied (the win bucket).
+   *  `"not_interested"` = family declined; these rows are filtered off
+   *  the default inquiries view into their own section. Restore writes
+   *  `"active"` rather than clearing to `""` because the Xano edit
+   *  endpoint's field mapping skips empty inputs. */
   status?: string | null;
   /** Why the family wasn't interested — set alongside
    *  `status = "not_interested"`. Not cleared on restore (Xano skips
