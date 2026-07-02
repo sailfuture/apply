@@ -28,12 +28,26 @@ export async function PATCH(
       "isFollowedUp",
       "status",
       "status_reason",
+      "interest_level",
     ];
     const patch: Partial<XanoInquiry> = {};
     for (const key of allowed) {
       if (key in body) {
         // We've already narrowed the key to a known XanoInquiry field.
         (patch as Record<string, unknown>)[key as string] = body[key];
+      }
+    }
+
+    // 1–5 only — 0 would be silently dropped by Xano's edit endpoint
+    // (it treats 0 as an empty input), so reject it here rather than
+    // letting a "clear rating" appear to succeed.
+    if ("interest_level" in patch) {
+      const v = patch.interest_level;
+      if (typeof v !== "number" || !Number.isInteger(v) || v < 1 || v > 5) {
+        return NextResponse.json(
+          { error: "interest_level must be an integer from 1 to 5" },
+          { status: 400 }
+        );
       }
     }
 

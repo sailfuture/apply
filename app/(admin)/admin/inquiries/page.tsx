@@ -9,6 +9,7 @@ import {
   Mail,
   MoreHorizontal,
   Phone,
+  Star,
   Trash2,
   Undo2,
   UserX,
@@ -109,6 +110,9 @@ interface Inquiry {
    *  value on restored rows (see restoreInquiry); only rendered when
    *  status === "not_interested". */
   status_reason?: string | null;
+  /** 1–5 star gut-feel interest rating; 0/undefined = not rated.
+   *  Only 1–5 is ever written — see updateInterest. */
+  interest_level?: number | null;
   // Computed at parse time
   parent_name: string;
   student_name: string;
@@ -389,6 +393,41 @@ export default function InquiriesPage() {
     }
   }
 
+  // Set the 1–5 interest rating with an optimistic mutate so the
+  // stars fill in immediately. There's deliberately no way to write
+  // 0 (clear): Xano's edit endpoint treats 0 as an empty input and
+  // drops it, so a "clear" would look successful and then revert.
+  async function updateInterest(row: Inquiry, level: number) {
+    setSavingId(row.id);
+    const optimistic = (curr: Inquiry[] | undefined) =>
+      (curr ?? []).map((r) =>
+        r.id === row.id ? { ...r, interest_level: level } : r
+      );
+    try {
+      mutate(optimistic, { revalidate: false });
+      // Keep the Sheet's snapshot in sync if it's open on this row.
+      setActive((curr) =>
+        curr && curr.id === row.id
+          ? { ...curr, interest_level: level }
+          : curr
+      );
+      const res = await fetch(`/api/admin/inquiries/${row.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ interest_level: level }),
+      });
+      if (!res.ok) throw new Error(`Save failed (${res.status})`);
+      globalMutate("/api/admin/inquiries");
+    } catch (err) {
+      console.error("Failed to save interest rating:", err);
+      toast.error("Couldn't save interest rating.");
+      // Revert by re-fetching authoritative data.
+      mutate();
+    } finally {
+      setSavingId(null);
+    }
+  }
+
   // Reset the reason picker every open — stale selections from the
   // last family shouldn't leak into a new one.
   function openNotInterestedDialog(row: Inquiry) {
@@ -437,7 +476,7 @@ export default function InquiriesPage() {
       header: "Parent",
       sortable: true,
       searchable: true,
-      width: "w-[13%]",
+      width: "w-[12%]",
       render: (row) => (
         <span className="block truncate font-medium">
           {row.parent_name || "—"}
@@ -449,7 +488,7 @@ export default function InquiriesPage() {
       header: "Student",
       sortable: true,
       searchable: true,
-      width: "w-[12%]",
+      width: "w-[11%]",
       render: (row) => (
         <span className="block truncate font-medium">
           {row.student_name || "—"}
@@ -475,7 +514,7 @@ export default function InquiriesPage() {
       header: "Email",
       sortable: true,
       searchable: true,
-      width: "w-[16%]",
+      width: "w-[14%]",
       render: (row) =>
         row.primary_email ? (
           <a
@@ -493,7 +532,7 @@ export default function InquiriesPage() {
     {
       key: "primary_phone",
       header: "Phone",
-      width: "w-[11%]",
+      width: "w-[10%]",
       render: (row) => {
         const formatted = formatPhone(row.primary_phone);
         if (!formatted) return "—";
@@ -512,7 +551,7 @@ export default function InquiriesPage() {
     {
       key: "hear_about_us",
       header: "Source",
-      width: "w-[7%]",
+      width: "w-[6%]",
       render: (row) => (
         <span className="block truncate">{row.hear_about_us || "—"}</span>
       ),
@@ -542,7 +581,7 @@ export default function InquiriesPage() {
       key: "last_reach_out",
       header: "Last contact",
       sortable: true,
-      width: "w-[10%]",
+      width: "w-[9%]",
       accessor: (row) => row.last_reach_out ?? 0,
       render: (row) => (
         <span
@@ -553,6 +592,23 @@ export default function InquiriesPage() {
         >
           {formatRelative(row.last_reach_out)}
         </span>
+      ),
+    },
+    {
+      // 1–5 gut-feel interest rating, clickable right in the row —
+      // rating is a quick triage action, not worth a dialog. Sorts
+      // on the numeric value so the hottest leads bubble to the top.
+      key: "interest_level",
+      header: "Interest",
+      sortable: true,
+      width: "w-[110px]",
+      accessor: (row) => row.interest_level ?? 0,
+      render: (row) => (
+        <StarRating
+          value={row.interest_level ?? 0}
+          disabled={savingId === row.id}
+          onChange={(v) => void updateInterest(row, v)}
+        />
       ),
     },
   ];
@@ -822,6 +878,21 @@ export default function InquiriesPage() {
                     />
                     <span className="text-xs text-muted-foreground">
                       {active.isFollowedUp ? "Yes" : "Not yet"}
+                    </span>
+                  </div>
+                </DetailRow>
+
+                <DetailRow label="Interest level">
+                  <div className="flex items-center gap-2">
+                    <StarRating
+                      value={active.interest_level ?? 0}
+                      disabled={savingId === active.id}
+                      onChange={(v) => void updateInterest(active, v)}
+                    />
+                    <span className="text-xs text-muted-foreground">
+                      {active.interest_level
+                        ? `${active.interest_level}/5`
+                        : "Not rated"}
                     </span>
                   </div>
                 </DetailRow>
@@ -1150,6 +1221,60 @@ function InquiriesGroup({
         />
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * 1–5 clickable star scale. Filled amber up to `value`; clicking a
+ * star writes that value. No clear-to-zero affordance on purpose —
+ * Xano's edit endpoint drops 0 as an empty input, so a "clear" would
+ * silently fail (see updateInterest).
+ */
+function StarRating({
+  value,
+  onChange,
+  disabled,
+  className,
+}: {
+  value: number;
+  onChange?: (v: number) => void;
+  disabled?: boolean;
+  className?: string;
+}) {
+  return (
+    <div
+      onClick={(e) => e.stopPropagation()}
+      className={cn("inline-flex items-center gap-0.5", className)}
+      role="radiogroup"
+      aria-label="Interest level"
+    >
+      {[1, 2, 3, 4, 5].map((n) => (
+        <button
+          key={n}
+          type="button"
+          role="radio"
+          aria-checked={value === n}
+          aria-label={`${n} star${n === 1 ? "" : "s"}`}
+          disabled={disabled || !onChange}
+          onClick={() => onChange?.(n)}
+          className={cn(
+            "p-0.5",
+            onChange && !disabled
+              ? "cursor-pointer transition-transform hover:scale-110"
+              : "cursor-default"
+          )}
+        >
+          <Star
+            className={cn(
+              "size-4",
+              n <= value
+                ? "fill-amber-400 text-amber-400"
+                : "text-muted-foreground/30"
+            )}
+          />
+        </button>
+      ))}
+    </div>
   );
 }
 

@@ -1168,6 +1168,11 @@ export interface XanoInquiry {
    *  empty inputs); consumers must only read it when
    *  `status === "not_interested"`. */
   status_reason?: string | null;
+  /** Admin's 1–5 gut-feel star rating of how interested the family
+   *  seems. 0/undefined = not yet rated. The app only ever writes
+   *  1–5: Xano's edit endpoint treats 0 as an empty input and would
+   *  drop it, so there is deliberately no "clear rating" action. */
+  interest_level?: number | null;
 }
 
 /** Lookup table — distinguishes new applicants from returning enrollments. */
