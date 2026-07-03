@@ -122,6 +122,14 @@ export default function ApplicationsPage() {
       else if (f === "in_progress") inProgress.push(r);
       else notStarted.push(r);
     }
+    // Order Accepted by submission date, earliest first — a FIFO
+    // queue so admin works through approved families in the order
+    // they applied. Nulls (shouldn't happen: accept implies submit)
+    // sort last. This is only the default order; the Submitted
+    // column header still re-sorts on click.
+    accepted.sort(
+      (a, b) => (a.submitted_at ?? Infinity) - (b.submitted_at ?? Infinity)
+    );
     return { accepted, submitted, inProgress, notStarted, archived };
   }, [all]);
 
