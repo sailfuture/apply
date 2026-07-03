@@ -80,10 +80,17 @@ export function useApplicationSteps(yearId: number) {
 
   const schoolYear = useMemo(() => {
     if (!yearsData) return null;
+    // `/api/school-years` returns the full Xano row; this cast only
+    // names the fields consumers actually read. `application_deadline`
+    // drives the AcceptedView banner's registration-deadline sentence.
     return (
-      (yearsData as { id: number; year_name: string }[]).find(
-        (y) => y.id === yearId
-      ) ?? null
+      (
+        yearsData as {
+          id: number;
+          year_name: string;
+          application_deadline?: string | null;
+        }[]
+      ).find((y) => y.id === yearId) ?? null
     );
   }, [yearsData, yearId]);
 

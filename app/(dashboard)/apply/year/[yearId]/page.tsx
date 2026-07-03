@@ -258,7 +258,24 @@ function RegistrationPendingView({
 }
 
 /* ── Accepted Stage View ── */
-function AcceptedView({ firstName, yearId, yearName, registrationSteps }: { firstName: string; yearId: number; yearName: string; registrationSteps: { number: number; title: string; description: string; status: StepStatus; href: string }[]; allSectionsComplete: boolean }) {
+
+/** Long-form date for the registration-deadline sentence
+ *  ("June 1, 2026"). The column stores a bare `YYYY-MM-DD`; parse
+ *  with a local-midnight suffix so the day doesn't shift a day back
+ *  in US timezones (bare ISO dates parse as UTC). Returns null when
+ *  no deadline is set so the banner can skip the sentence. */
+function formatDeadline(d: string | null | undefined): string | null {
+  if (!d) return null;
+  const parsed = new Date(`${d}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return d;
+  return parsed.toLocaleDateString("en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function AcceptedView({ firstName, yearId, yearName, applicationDeadline, registrationSteps }: { firstName: string; yearId: number; yearName: string; applicationDeadline: string | null; registrationSteps: { number: number; title: string; description: string; status: StepStatus; href: string }[]; allSectionsComplete: boolean }) {
   const router = useRouter();
   const [submitOpen, setSubmitOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -303,7 +320,21 @@ function AcceptedView({ firstName, yearId, yearName, registrationSteps }: { firs
             On behalf of everyone at SailFuture Academy, <span className="font-semibold text-foreground">we are thrilled to congratulate you on your acceptance to SailFuture Academy and warmly welcome you to the {yearName} academic year!</span>
           </p>
           <p className="text-muted-foreground text-sm mt-3 max-w-lg mx-auto">
-            We are excited to embark on this educational journey with you and your family and present a new and unique opportunity for growth, discovery, and adventure that goes far beyond the traditional boundaries of education. To secure your spot, all new students must complete the student registration form as soon as possible. <span className="font-semibold text-foreground">The deadline for registration is June 1st, 2026.</span> If the new student registration form is not completed by the deadline, your spot will be opened to our current waitlist.
+            We are excited to embark on this educational journey with you and your family and present a new and unique opportunity for growth, discovery, and adventure that goes far beyond the traditional boundaries of education. To secure your spot, all new students must complete the student registration form as soon as possible.
+            {/* Deadline comes from the school-year row's
+                `application_deadline` (admin-editable on the year detail
+                page) — previously hard-coded "June 1st, 2026". When no
+                deadline is set, the sentence pair is omitted entirely so
+                we never show a stale or dangling date. */}
+            {formatDeadline(applicationDeadline) ? (
+              <>
+                {" "}
+                <span className="font-semibold text-foreground">
+                  The deadline for registration is {formatDeadline(applicationDeadline)}.
+                </span>{" "}
+                If the new student registration form is not completed by the deadline, your spot will be opened to our current waitlist.
+              </>
+            ) : null}
           </p>
         </div>
 
@@ -900,7 +931,7 @@ export default function YearOverviewPage() {
 
   /* Stage 3: Accepted — registration steps in progress. */
   if (stage === "accepted") {
-    return <AcceptedView firstName={firstName} yearId={yearId} yearName={schoolYear?.year_name ?? "upcoming"} registrationSteps={registrationSteps} allSectionsComplete={allRegistrationSectionsComplete} />;
+    return <AcceptedView firstName={firstName} yearId={yearId} yearName={schoolYear?.year_name ?? "upcoming"} applicationDeadline={schoolYear?.application_deadline ?? null} registrationSteps={registrationSteps} allSectionsComplete={allRegistrationSectionsComplete} />;
   }
 
   /* ────────── Post-submit: Application is in review ──────────
