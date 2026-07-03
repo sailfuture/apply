@@ -102,16 +102,16 @@ export function GlobalHeader() {
     // mid-page — exactly the bug users reported.
     //
     // Fixed positioning sidesteps the scroll-lock entirely since
-    // it's anchored to the viewport, not to body flow. We use
-    // `react-remove-scroll`'s own CSS var
-    // (`--removed-body-scroll-bar-size`) to compensate for the
-    // scrollbar width that disappears when scroll is locked —
-    // without this, the fixed header would extend over the now-
-    // empty scrollbar gutter on the right.
-    <header
-      className="fixed inset-x-0 top-0 z-50 border-b bg-white"
-      style={{ paddingRight: "var(--removed-body-scroll-bar-size, 0px)" }}
-    >
+    // it's anchored to the viewport, not to body flow.
+    //
+    // NOTE: no `--removed-body-scroll-bar-size` compensation here.
+    // globals.css forces `html { overflow-y: scroll; scrollbar-gutter:
+    // stable }`, so the scrollbar never actually disappears during the
+    // scroll lock — but react-remove-scroll still measures a gap and
+    // sets the var, so consuming it double-compensated and shifted the
+    // whole bar left by the scrollbar width every time a dropdown
+    // opened.
+    <header className="fixed inset-x-0 top-0 z-50 border-b bg-white">
       <div className="mx-auto flex h-14 items-center justify-between px-4 lg:px-6">
         {/* Left: Logo (clickable) + Title + Family name */}
         <div className="flex items-center gap-3">

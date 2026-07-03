@@ -258,7 +258,7 @@ function RegistrationPendingView({
 }
 
 /* ── Accepted Stage View ── */
-function AcceptedView({ firstName, yearId, registrationSteps }: { firstName: string; yearId: number; registrationSteps: { number: number; title: string; description: string; status: StepStatus; href: string }[]; allSectionsComplete: boolean }) {
+function AcceptedView({ firstName, yearId, yearName, registrationSteps }: { firstName: string; yearId: number; yearName: string; registrationSteps: { number: number; title: string; description: string; status: StepStatus; href: string }[]; allSectionsComplete: boolean }) {
   const router = useRouter();
   const [submitOpen, setSubmitOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -298,7 +298,9 @@ function AcceptedView({ firstName, yearId, registrationSteps }: { firstName: str
             Congratulations{firstName ? `, ${firstName}` : ""} &mdash; your student has been accepted! Welcome to the SailFuture Academy.
           </h1>
           <p className="text-muted-foreground text-sm mt-3 max-w-lg mx-auto">
-            On behalf of everyone at SailFuture Academy, <span className="font-semibold text-foreground">we are thrilled to congratulate you on your acceptance to SailFuture Academy and warmly welcome you to the 2025&ndash;2026 academic year!</span>
+            {/* Year name comes from the school-year row, not hard-coded —
+                this banner survives rollovers (2026-2027 and beyond). */}
+            On behalf of everyone at SailFuture Academy, <span className="font-semibold text-foreground">we are thrilled to congratulate you on your acceptance to SailFuture Academy and warmly welcome you to the {yearName} academic year!</span>
           </p>
           <p className="text-muted-foreground text-sm mt-3 max-w-lg mx-auto">
             We are excited to embark on this educational journey with you and your family and present a new and unique opportunity for growth, discovery, and adventure that goes far beyond the traditional boundaries of education. To secure your spot, all new students must complete the student registration form as soon as possible. <span className="font-semibold text-foreground">The deadline for registration is June 1st, 2026.</span> If the new student registration form is not completed by the deadline, your spot will be opened to our current waitlist.
@@ -898,7 +900,7 @@ export default function YearOverviewPage() {
 
   /* Stage 3: Accepted — registration steps in progress. */
   if (stage === "accepted") {
-    return <AcceptedView firstName={firstName} yearId={yearId} registrationSteps={registrationSteps} allSectionsComplete={allRegistrationSectionsComplete} />;
+    return <AcceptedView firstName={firstName} yearId={yearId} yearName={schoolYear?.year_name ?? "upcoming"} registrationSteps={registrationSteps} allSectionsComplete={allRegistrationSectionsComplete} />;
   }
 
   /* ────────── Post-submit: Application is in review ──────────

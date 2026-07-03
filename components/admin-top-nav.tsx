@@ -72,15 +72,17 @@ export function AdminTopNav({ admin }: { admin: AdminUser | null }) {
     // scrolling ancestor loses its scroll context, so a previously-
     // sticky header drops away from the top of the viewport mid-page
     // the moment a Select opens. Fixed positioning is anchored to the
-    // viewport directly so it stays put. We compensate for the
-    // scrollbar width that disappears during the scroll lock via
-    // `--removed-body-scroll-bar-size` so the bar doesn't extend
-    // over the now-empty scrollbar gutter. Layout adds `pt-14` to
+    // viewport directly so it stays put. Layout adds `pt-14` to
     // `<main>` so content doesn't tuck under the fixed header.
-    <header
-      className="fixed inset-x-0 top-0 z-50 border-b bg-white"
-      style={{ paddingRight: "var(--removed-body-scroll-bar-size, 0px)" }}
-    >
+    //
+    // NOTE: no `--removed-body-scroll-bar-size` compensation here.
+    // globals.css forces `html { overflow-y: scroll; scrollbar-gutter:
+    // stable }`, so the scrollbar never actually disappears during the
+    // scroll lock — but react-remove-scroll still measures a gap and
+    // sets the var, so consuming it double-compensated and shifted the
+    // whole bar left by the scrollbar width every time a dropdown
+    // opened.
+    <header className="fixed inset-x-0 top-0 z-50 border-b bg-white">
       {/* Inner container is constrained to the same max-width as the page
           content (`max-w-7xl` on the layout's `<main>`), so the bar's
           contents line up vertically with everything below it instead of
