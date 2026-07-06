@@ -1175,6 +1175,39 @@ export interface XanoInquiry {
   interest_level?: number | null;
 }
 
+/** One summer-camp registration/inquiry row (`registration_summer_camp`).
+ *  Separate program from the school-year pipeline — no links to
+ *  families/students tables; parents fill a standalone public form.
+ *  `isNotAttending` is the archive flag: true = family backed out /
+ *  won't attend, and the admin list groups those rows separately. */
+export interface XanoSummerCampInquiry {
+  id: number;
+  created_at: number;
+  isNotAttending: boolean;
+  student_first_name: string;
+  student_last_name: string;
+  gender: string;
+  ethnicity: string;
+  swim_level: string;
+  transportation: string;
+  bus_stop: string;
+  current_school: string;
+  last_grade_completed: string;
+  describe_your_student_and_behavior: string;
+  allergies: string;
+  dietary_restrictions: string;
+  health_conditions: string;
+  hearing_or_visual_impairments: string;
+  additional_health_information: string;
+  carry_epi_pen: boolean;
+  preferred_hospital: string;
+  primary_parent_first_name: string;
+  primary_parent_last_name: string;
+  primary_parent_relationship: string;
+  primary_phone: string;
+  primary_email: string;
+}
+
 /** Lookup table — distinguishes new applicants from returning enrollments. */
 export interface XanoRegistrationType {
   id: number;
@@ -4641,6 +4674,16 @@ export const xano = {
           `Xano error ${res.status}: ${await res.text().catch(() => "")}`
         );
       }
+    },
+  },
+
+  summerCamp: {
+    async getAll(): Promise<XanoSummerCampInquiry[]> {
+      const res = await fetch(`${getBaseUrl()}/registration_summer_camp`, {
+        cache: "no-store",
+      });
+      if (!res.ok) return [];
+      return res.json();
     },
   },
 
