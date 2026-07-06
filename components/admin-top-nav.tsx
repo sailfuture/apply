@@ -31,7 +31,8 @@ const NAV_ITEMS: NavItem[] = [
   { title: "Dashboard", href: "/admin", matchExact: true },
   { title: "Inquiries", href: "/admin/inquiries" },
   // Summer camp registrations — separate program from the school-year
-  // pipeline; read-only list grouped by the isNotAttending flag.
+  // pipeline; grouped by the isNotAttending flag with an attendance
+  // toggle and XLSX export.
   { title: "Summer Camp", href: "/admin/summer-camp" },
   // Applications now folds in re-applications (with a `flow_type` pill
   // on each row), so the standalone Re-Applications nav item is gone.

@@ -2,10 +2,10 @@ import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { NextResponse } from "next/server";
 import { xano } from "@/lib/xano";
 
-/** Admin list of summer-camp registrations. Read-only for now — the
- *  page groups rows by the `isNotAttending` archive flag and shows
- *  full student detail in a sheet; there are no admin write actions
- *  on this surface yet. */
+/** Admin list of summer-camp registrations. The page groups rows by
+ *  the `isNotAttending` archive flag and shows full student detail in
+ *  a sheet; the only write action is the attendance toggle on the
+ *  sibling `[id]` PATCH route. */
 export async function GET() {
   try {
     await requireAdmin();

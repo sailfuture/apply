@@ -2,7 +2,8 @@
 
 import { useMemo, useState } from "react";
 import useSWR from "swr";
-import { Bus, Car, Mail, Phone } from "lucide-react";
+import { toast } from "sonner";
+import { Bus, Car, Download, Loader2, Mail, Phone, Undo2, X } from "lucide-react";
 import {
   DataTable,
   type ColumnDef,
@@ -21,8 +22,10 @@ import {
   SheetDescription,
 } from "@/components/ui/sheet";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { formatUSPhone, digitsOnly } from "@/lib/phone";
+import { exportSummerCampXlsx } from "@/lib/summer-camp-export";
 import { cn } from "@/lib/utils";
 
 /**
@@ -86,11 +89,15 @@ function formatRelativeCompact(ts: number | null | undefined): string {
 }
 
 export default function SummerCampPage() {
-  const { data, isLoading, error } = useSWR<SummerCampRow[]>(
+  const { data, isLoading, error, mutate } = useSWR<SummerCampRow[]>(
     "/api/admin/summer-camp",
     adminFetcher
   );
   const [active, setActive] = useState<SummerCampRow | null>(null);
+  // Per-row pending state for the attendance toggle so the button
+  // spins while the PATCH is in flight.
+  const [savingId, setSavingId] = useState<number | null>(null);
+  const [exporting, setExporting] = useState(false);
 
   const rows: SummerCampRow[] = useMemo(
     () =>
@@ -117,6 +124,58 @@ export default function SummerCampPage() {
     }
     return { attending, notAttending };
   }, [rows]);
+
+  // Flip the attendance flag with an optimistic mutate so the row
+  // jumps between sections immediately; reverts via re-fetch on
+  // failure.
+  async function setAttendance(row: SummerCampRow, isNotAttending: boolean) {
+    setSavingId(row.id);
+    try {
+      mutate(
+        (curr) =>
+          (curr ?? []).map((r) =>
+            r.id === row.id ? { ...r, isNotAttending } : r
+          ),
+        { revalidate: false }
+      );
+      // Keep the Sheet's snapshot in sync if it's open on this row.
+      setActive((curr) =>
+        curr && curr.id === row.id ? { ...curr, isNotAttending } : curr
+      );
+      const res = await fetch(`/api/admin/summer-camp/${row.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isNotAttending }),
+      });
+      if (!res.ok) throw new Error(`Save failed (${res.status})`);
+      toast.success(
+        isNotAttending
+          ? `${row.student_name || "Student"} marked not attending.`
+          : `${row.student_name || "Student"} marked attending.`
+      );
+      mutate();
+    } catch (err) {
+      console.error("Failed to update attendance:", err);
+      toast.error("Couldn't update attendance.");
+      // Revert by re-fetching authoritative data.
+      mutate();
+    } finally {
+      setSavingId(null);
+    }
+  }
+
+  async function handleExport() {
+    if (exporting || rows.length === 0) return;
+    setExporting(true);
+    try {
+      await exportSummerCampXlsx(rows);
+    } catch (err) {
+      console.error("Failed to export summer camp roster:", err);
+      toast.error("Couldn't export the roster.");
+    } finally {
+      setExporting(false);
+    }
+  }
 
   // Shared columns for both sections so they line up vertically when
   // stacked (same lesson as the inquiries page: identical column sets,
@@ -247,16 +306,80 @@ export default function SummerCampPage() {
         </span>
       ),
     },
+    {
+      // Single toggle action so both sections keep identical columns:
+      // attending rows get an X ("mark not attending"), archived rows
+      // get an undo ("mark attending"). Block-level flex wrapper so
+      // the cell's truncate can't paint stray ellipsis dots.
+      key: "attendance",
+      header: "",
+      width: "w-[48px]",
+      align: "right",
+      render: (row) => (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="flex items-center justify-end"
+        >
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className={cn(
+              "size-7 text-muted-foreground",
+              row.isNotAttending
+                ? "hover:text-green-700 hover:bg-green-50"
+                : "hover:text-red-600 hover:bg-red-50"
+            )}
+            disabled={savingId === row.id}
+            onClick={() => void setAttendance(row, !row.isNotAttending)}
+            aria-label={
+              row.isNotAttending
+                ? `Mark ${row.student_name || "student"} attending`
+                : `Mark ${row.student_name || "student"} not attending`
+            }
+            title={
+              row.isNotAttending ? "Mark attending" : "Mark not attending"
+            }
+          >
+            {savingId === row.id ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : row.isNotAttending ? (
+              <Undo2 className="size-3.5" />
+            ) : (
+              <X className="size-3.5" />
+            )}
+          </Button>
+        </div>
+      ),
+    },
   ];
 
   return (
     <div className="p-6 space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Summer Camp</h1>
-        <p className="text-sm text-muted-foreground">
-          Summer camp registrations. Click a row to see the full student
-          detail — health notes, transportation, and parent contact.
-        </p>
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold">Summer Camp</h1>
+          <p className="text-sm text-muted-foreground">
+            Summer camp registrations. Click a row to see the full student
+            detail — health notes, transportation, and parent contact. Use
+            ✕ to mark a student not attending (undo from the archived
+            section).
+          </p>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          className="shrink-0 bg-white"
+          disabled={exporting || rows.length === 0}
+          onClick={() => void handleExport()}
+        >
+          {exporting ? (
+            <Loader2 className="size-4 mr-1.5 animate-spin" />
+          ) : (
+            <Download className="size-4 mr-1.5" />
+          )}
+          Export XLSX
+        </Button>
       </div>
 
       {error ? (
@@ -473,6 +596,9 @@ function SummerCampGroup({
           columns={columns}
           data={rows}
           isLoading={isLoading}
+          // Camp roster is small (~40 rows) — show everything in one
+          // scroll instead of paginating.
+          pageSize={1000}
           searchPlaceholder={`Search ${title.toLowerCase()}…`}
           onRowClick={onRowClick}
         />

@@ -47,6 +47,19 @@ body[style*="padding-right"] {
   padding-right: 0 !important;
 }
 
+/* While a Radix scroll lock is active (Sheet / Dialog / Select open)
+   the page can't scroll anyway — paint the window scrollbar fully
+   transparent so an open Sheet doesn't show a "double scrollbar"
+   (its own scroller right next to the window's). `scrollbar-color`
+   only recolors the existing scrollbar — its geometry is untouched,
+   so the layout doesn't shift when the lock engages/releases (the
+   very bug the html rules above exist to prevent). Supported in
+   Chrome 121+/Edge/Firefox; Safari ships overlay scrollbars and
+   never had the problem. */
+html:has(body[data-scroll-locked]) {
+  scrollbar-color: transparent transparent;
+}
+
 /* Ensure form inputs and file uploads have white backgrounds.
    Scoped away from Clerk-rendered UI (.cl-rootBox) so its OTP / phone inputs
    keep their own theme — otherwise white-on-white text appears in code fields. */

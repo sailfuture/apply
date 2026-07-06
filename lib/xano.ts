@@ -4685,6 +4685,22 @@ export const xano = {
       if (!res.ok) return [];
       return res.json();
     },
+
+    async update(
+      id: number,
+      patch: Partial<XanoSummerCampInquiry>
+    ): Promise<XanoSummerCampInquiry> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_summer_camp/${id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch),
+        }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
   },
 
   inquiries: {
