@@ -94,6 +94,15 @@ interface Inquiry {
   /** Server-managed timestamp of the most recent note added — bumped
    *  by the notes POST endpoint when admin logs a communication. */
   last_reach_out?: number | null;
+  /** Body of the most recent note logged on this inquiry, computed by
+   *  the admin inquiries API route (not a Xano column). Rendered as a
+   *  truncated one-line preview in the "Last note" column; null when
+   *  no note has been logged yet. */
+  last_note?: string | null;
+  /** Creation timestamp of that most-recent note — drives the "Last
+   *  note" column's sort (by recency) even though the cell shows the
+   *  body text. */
+  last_note_at?: number | null;
   /** Lifecycle bucket. ""/undefined/"active" = active pipeline;
    *  "not_interested" = family declined and the row moves to its own
    *  section off the default view. "active" (not "") is what restore
@@ -159,10 +168,11 @@ type InquiryFilter =
   | "not_interested";
 
 const FILTER_LABEL: Record<InquiryFilter, string> = {
-  // "All" shows the working pipeline plus the Converted wins, but
-  // deliberately excludes not-interested rows — the whole point of
-  // that status is to get declined families off the list. They're
-  // reachable through the "Not interested" option below.
+  // "All" shows every section — the working pipeline, the Converted
+  // wins, and declined families in their own section at the bottom —
+  // so admin can find and restore a not-interested row without
+  // switching filters. The dedicated "Not interested" option below
+  // still isolates just those rows.
   all: "All",
   not_followed_up: "Not followed up",
   followed_up: "Followed up",
@@ -275,10 +285,10 @@ export default function InquiriesPage() {
 
   const visibleGroups = useMemo(() => {
     if (filter === "all") {
-      // Default view: the working pipeline plus the Converted wins.
-      // Declined families stay hidden until admin explicitly picks
-      // the "Not interested" filter.
-      return { ...groups, notInterested: [] as Inquiry[] };
+      // Default view shows every section, declined families included —
+      // they render in their own section at the bottom so admin can
+      // spot and restore them without switching filters.
+      return groups;
     }
     return {
       followedUp: filter === "followed_up" ? groups.followedUp : [],
@@ -294,7 +304,8 @@ export default function InquiriesPage() {
         all:
           groups.followedUp.length +
           groups.notFollowedUp.length +
-          groups.converted.length,
+          groups.converted.length +
+          groups.notInterested.length,
         followed_up: groups.followedUp.length,
         not_followed_up: groups.notFollowedUp.length,
         converted: groups.converted.length,
@@ -741,21 +752,24 @@ export default function InquiriesPage() {
       ),
     },
     {
-      // Reason column — only populated for not-interested rows, but
-      // present in every section so the trailing columns stay aligned.
-      key: "status_reason",
-      header: "Reason",
+      // Last note — a truncated one-line preview of the most recent
+      // note logged on the inquiry, across every section (the decline
+      // reason for not-interested rows still lives on the detail
+      // Sheet). Full text on hover; sorts on the note's timestamp so
+      // admin can surface the most- or least-recently touched families.
+      key: "last_note",
+      header: "Last note",
       sortable: true,
-      width: "w-[120px]",
+      width: "w-[200px]",
+      accessor: (row) => row.last_note_at ?? 0,
       render: (row) =>
-        isNotInterested(row) ? (
-          <Badge
-            variant="secondary"
-            className="max-w-full truncate font-normal"
-            title={row.status_reason || undefined}
+        row.last_note ? (
+          <span
+            className="block truncate text-muted-foreground"
+            title={row.last_note}
           >
-            {row.status_reason || "No reason logged"}
-          </Badge>
+            {row.last_note}
+          </span>
         ) : (
           <span className="text-muted-foreground/40">—</span>
         ),
@@ -895,11 +909,13 @@ export default function InquiriesPage() {
         />
         <InquiriesGroup
           title="Not Interested"
-          description="Family declined — kept here with the reason for reference. Restore anytime."
+          description="Family declined — restore anytime with ↩, or open a row to see the decline reason."
           // Red = out of the pipeline / dead lead.
           dotColor="bg-red-500"
           rows={visibleGroups.notInterested}
-          isLoading={isLoading && filter === "not_interested"}
+          isLoading={
+            isLoading && (filter === "all" || filter === "not_interested")
+          }
           error={error}
           columns={columns}
           rowClassName={rowTint}

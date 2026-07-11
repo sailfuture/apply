@@ -4039,6 +4039,34 @@ export const xano = {
       }
     },
 
+    /** Every inquiry-scoped note across all inquiries, in one fetch.
+     *  Powers the inquiries dashboard's "Last note" column — grouping
+     *  the most-recent note per inquiry happens on the server so the
+     *  table needs one round-trip, not one per row. Filters the shared
+     *  notes table down to rows that carry an inquiry FK so family
+     *  comms never bleed in. Mirrors the unfiltered-getAll assumption
+     *  the rest of this file relies on (see `parents.getAll`): the Xano
+     *  "Get all records" endpoint returns the full array. */
+    async getAllInquiryNotes(): Promise<XanoAdminNote[]> {
+      try {
+        const res = await fetch(
+          `${getBaseUrl()}/registration_admin_notes`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) return [];
+        const items: XanoAdminNote[] = await res.json();
+        return Array.isArray(items)
+          ? items.filter(
+              (n) =>
+                n.registration_inquiry_id != null &&
+                n.registration_inquiry_id !== 0
+            )
+          : [];
+      } catch {
+        return [];
+      }
+    },
+
     async create(
       data: Omit<XanoAdminNote, "id" | "created_at" | "last_edited"> & {
         last_edited?: number | null;
