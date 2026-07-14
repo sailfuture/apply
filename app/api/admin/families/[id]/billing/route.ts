@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
-import { xano } from "@/lib/xano";
+import { xano, activeStripeSubscriptionId } from "@/lib/xano";
 import {
   cancelSubscriptionAtPeriodEnd,
   getBillingSnapshot,
@@ -8,6 +8,7 @@ import {
   uncancelSubscription,
 } from "@/lib/stripe";
 import { startMonthlyBilling, BillingPreconditionError } from "@/lib/billing";
+import { sendBillingAlert } from "@/lib/billing-alerts";
 
 /**
  * Admin billing endpoint — one route, action-dispatched.
@@ -52,8 +53,15 @@ export async function GET(
 ) {
   try {
     await requireAdmin();
-    const familyId = await resolveFamilyId(params);
-    const yearId = resolveYearId(req);
+    const { id } = await params;
+    const familyId = Number(id);
+    if (!Number.isFinite(familyId)) {
+      return NextResponse.json({ error: "Invalid family id" }, { status: 400 });
+    }
+    const yearId = Number(req.nextUrl.searchParams.get("yearId"));
+    if (!Number.isFinite(yearId) || yearId <= 0) {
+      return NextResponse.json({ error: "yearId is required" }, { status: 400 });
+    }
     // Fetch the family's Stripe customer id in parallel with the
     // subscription lookup. Returned on the snapshot so the admin
     // Billing card can deep-link "View in Stripe" to the customer
@@ -88,8 +96,15 @@ export async function POST(
 ) {
   try {
     await requireAdmin();
-    const familyId = await resolveFamilyId(params);
-    const yearId = resolveYearId(req);
+    const { id } = await params;
+    const familyId = Number(id);
+    if (!Number.isFinite(familyId)) {
+      return NextResponse.json({ error: "Invalid family id" }, { status: 400 });
+    }
+    const yearId = Number(req.nextUrl.searchParams.get("yearId"));
+    if (!Number.isFinite(yearId) || yearId <= 0) {
+      return NextResponse.json({ error: "yearId is required" }, { status: 400 });
+    }
 
     const body = (await req.json().catch(() => null)) as BillingActionBody | null;
     if (!body?.action) {
@@ -142,7 +157,45 @@ export async function POST(
             { status: 400 }
           );
         }
-        await refundInvoice(body.invoiceId);
+        // Ownership guard rides along: refundInvoice refuses any
+        // invoice that doesn't belong to THIS family's subscription,
+        // so a stale/mistyped id can't refund another family's
+        // payment.
+        const refund = await refundInvoice(body.invoiceId, {
+          expectedSubscriptionId: subscriptionId,
+        });
+        // Reflect the refund in the payment-transactions mirror so
+        // paid/outstanding totals don't overstate forever (Stripe
+        // doesn't change the invoice's `paid` status on refund, so
+        // no webhook event corrects the row). Best-effort with an
+        // alert — the refund itself already succeeded.
+        try {
+          const row = await xano.paymentTransactions.findByStripeIdStrict(
+            body.invoiceId
+          );
+          if (row) {
+            await xano.paymentTransactions.update(row.id, {
+              amount_paid_cents: Math.max(
+                (row.amount_paid_cents ?? 0) - (refund.amount ?? 0),
+                0
+              ),
+              last_synced_at: Date.now(),
+            });
+          }
+        } catch (err) {
+          console.error(
+            `[/api/admin/families/${familyId}/billing] refund succeeded but mirror update failed for invoice ${body.invoiceId}:`,
+            err
+          );
+          await sendBillingAlert(
+            `Refund not reflected in billing mirror (family #${familyId})`,
+            [
+              `Invoice ${body.invoiceId} was refunded ($${((refund.amount ?? 0) / 100).toFixed(2)}) but the local mirror update failed — the family's "paid to date" will overstate until corrected.`,
+              `Adjust the transaction row's amount_paid_cents in Xano directly. (Do NOT rely on the backfill here — Stripe's invoice amount_paid doesn't subtract refunds, so a re-sync re-overstates it.)`,
+              `Error: ${err instanceof Error ? err.message : String(err)}`,
+            ]
+          );
+        }
         break;
       }
       default:
@@ -163,30 +216,10 @@ export async function POST(
 
 /* ─────────────────────── helpers ─────────────────────── */
 
-async function resolveFamilyId(
-  params: Promise<{ id: string }>
-): Promise<number> {
-  const { id } = await params;
-  const familyId = Number(id);
-  if (!Number.isFinite(familyId)) {
-    throw new Response(JSON.stringify({ error: "Invalid family id" }), {
-      status: 400,
-    });
-  }
-  return familyId;
-}
-
-function resolveYearId(req: NextRequest): number {
-  const yearIdParam = req.nextUrl.searchParams.get("yearId");
-  const yearId = Number(yearIdParam);
-  if (!Number.isFinite(yearId) || yearId <= 0) {
-    throw new Response(
-      JSON.stringify({ error: "yearId is required" }),
-      { status: 400 }
-    );
-  }
-  return yearId;
-}
+// NOTE: family/year validation is inlined in each handler now — the
+// previous helpers threw a raw `Response`, which `handleAdminError`
+// doesn't recognize, so every validation failure surfaced as a 500
+// "Internal error" instead of its 400.
 
 async function resolveSubscriptionId(
   familyId: number,
@@ -196,5 +229,9 @@ async function resolveSubscriptionId(
     familyId,
     yearId
   );
-  return payment?.stripe_subscription_id ?? null;
+  // Sentinel-aware: a `canceled:<id>` marker means no live
+  // subscription — the GET renders the "Start Monthly Billing" empty
+  // state and the cancel/uncancel/refund actions 404 instead of
+  // operating on a dead subscription.
+  return activeStripeSubscriptionId(payment?.stripe_subscription_id);
 }

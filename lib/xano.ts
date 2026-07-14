@@ -3336,22 +3336,42 @@ export const xano = {
 
     async getByFamilyAndYear(familyId: number, yearId: number): Promise<XanoFamilyPayment | null> {
       try {
-        const res = await fetch(
-          `${getBaseUrl()}/registration_families_payment?registration_families_id=${familyId}&registration_school_years_id=${yearId}`,
-          { cache: "no-store" }
-        );
-        if (!res.ok) return null;
-        const results = await res.json();
-        const items = Array.isArray(results) ? results : [results];
-        const match = (items as Record<string, unknown>[]).find(
-          (p) =>
-            p.registration_families_id === familyId &&
-            p.registration_school_years_id === yearId
-        );
-        return match ? normalizeFamilyPaymentPK(match) : null;
+        return await this.getByFamilyAndYearStrict(familyId, yearId);
       } catch {
         return null;
       }
+    },
+
+    /**
+     * Throwing variant of `getByFamilyAndYear` — a transport/Xano
+     * failure THROWS instead of coercing to null. Billing-critical
+     * callers must use this: `startMonthlyBilling` treats null as
+     * "no subscription exists yet" and CREATES one, so a swallowed
+     * transient error on the loose variant would double-subscribe
+     * (and double-bill) the family. Null still means genuinely
+     * not-found.
+     */
+    async getByFamilyAndYearStrict(
+      familyId: number,
+      yearId: number
+    ): Promise<XanoFamilyPayment | null> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_families_payment?registration_families_id=${familyId}&registration_school_years_id=${yearId}`,
+        { cache: "no-store" }
+      );
+      if (!res.ok) {
+        throw new Error(
+          `Xano error ${res.status} loading family payment (family=${familyId}, year=${yearId}): ${await res.text()}`
+        );
+      }
+      const results = await res.json();
+      const items = Array.isArray(results) ? results : [results];
+      const match = (items as Record<string, unknown>[]).find(
+        (p) =>
+          p.registration_families_id === familyId &&
+          p.registration_school_years_id === yearId
+      );
+      return match ? normalizeFamilyPaymentPK(match) : null;
     },
 
     async create(data: Omit<XanoFamilyPayment, "id" | "created_at">): Promise<XanoFamilyPayment> {
@@ -3410,20 +3430,38 @@ export const xano = {
       stripeInvoiceId: string
     ): Promise<XanoPaymentTransaction | null> {
       try {
-        const res = await fetch(
-          `${getBaseUrl()}/registration_payment_transactions?stripe_invoice_id=${encodeURIComponent(stripeInvoiceId)}`,
-          { cache: "no-store" }
-        );
-        if (!res.ok) return null;
-        const results = await res.json();
-        const items = Array.isArray(results) ? results : [results];
-        const match = (items as XanoPaymentTransaction[]).find(
-          (r) => r.stripe_invoice_id === stripeInvoiceId
-        );
-        return match ?? null;
+        return await this.findByStripeIdStrict(stripeInvoiceId);
       } catch {
         return null;
       }
+    },
+
+    /**
+     * Throwing variant of `findByStripeId` — transport/Xano failures
+     * THROW instead of coercing to null. The webhook upsert must use
+     * this: null there means "invoice never mirrored → CREATE", so a
+     * swallowed transient error would insert a duplicate mirror row
+     * for the same invoice. Throwing lets the webhook 500 so Stripe
+     * retries the event instead.
+     */
+    async findByStripeIdStrict(
+      stripeInvoiceId: string
+    ): Promise<XanoPaymentTransaction | null> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_payment_transactions?stripe_invoice_id=${encodeURIComponent(stripeInvoiceId)}`,
+        { cache: "no-store" }
+      );
+      if (!res.ok) {
+        throw new Error(
+          `Xano error ${res.status} looking up payment transaction ${stripeInvoiceId}: ${await res.text()}`
+        );
+      }
+      const results = await res.json();
+      const items = Array.isArray(results) ? results : [results];
+      const match = (items as XanoPaymentTransaction[]).find(
+        (r) => r.stripe_invoice_id === stripeInvoiceId
+      );
+      return match ?? null;
     },
 
     /**
@@ -4918,3 +4956,55 @@ export const xano = {
     },
   },
 };
+
+/**
+ * Prefix sentinel for a canceled subscription id on
+ * `registration_families_payment.stripe_subscription_id`.
+ *
+ * Why a sentinel and not null: Xano's edit endpoints IGNORE null/empty
+ * inputs (field mapping is conditional on "not empty"), so writing
+ * `stripe_subscription_id: null` after a cancellation silently no-ops
+ * and the stale live-looking id blocks the family from ever being
+ * re-billed. The webhook writes `canceled:<old id>` instead — a real
+ * write that also preserves the history of which subscription ended.
+ */
+export const STRIPE_SUB_CANCELED_PREFIX = "canceled:";
+
+/**
+ * Normalize a stored `stripe_subscription_id` into "the live
+ * subscription id, or null". Returns null for empty values AND for
+ * the `canceled:` sentinel above. EVERY consumer that asks "does this
+ * family have a subscription?" must go through this helper — reading
+ * the raw column treats a canceled sentinel as a live subscription.
+ */
+export function activeStripeSubscriptionId(
+  value: string | null | undefined
+): string | null {
+  if (!value) return null;
+  if (value.startsWith(STRIPE_SUB_CANCELED_PREFIX)) return null;
+  return value;
+}
+
+/**
+ * Prefix sentinel for a removed per-student SubscriptionItem handle on
+ * `registration_student_registration.stripe_subscription_item_id`.
+ * Same Xano constraint as the subscription-id sentinel above: PATCHing
+ * null/empty silently no-ops, so "clearing" the handle with null left
+ * the stale item id in place — which made the billing reconcile treat
+ * the student as already-billing and skip them forever. Write
+ * `removed:<old id>` instead and read through
+ * `liveStripeSubscriptionItemId`.
+ */
+export const STRIPE_ITEM_REMOVED_PREFIX = "removed:";
+
+/** Normalize a stored `stripe_subscription_item_id` into "the live
+ *  item id, or null". Null for empty values and the `removed:`
+ *  sentinel. Every consumer that asks "is this student on the
+ *  subscription?" must read through this. */
+export function liveStripeSubscriptionItemId(
+  value: string | null | undefined
+): string | null {
+  if (!value) return null;
+  if (value.startsWith(STRIPE_ITEM_REMOVED_PREFIX)) return null;
+  return value;
+}

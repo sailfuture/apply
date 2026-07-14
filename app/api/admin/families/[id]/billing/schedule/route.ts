@@ -5,6 +5,13 @@ import {
   fetchActiveFamilyApplications,
   sumFamilyBillingTotals,
 } from "@/lib/per-student-billing";
+import {
+  parseAnchorDate,
+  buildMonthSlots,
+  monthKey,
+  indexTransactionsByMonth,
+  stripeStatusToUi,
+} from "@/lib/billing-schedule";
 
 /**
  * Per-family 12-month billing schedule for the admin billing
@@ -87,20 +94,12 @@ export async function GET(
     const anchor = parseAnchorDate(billingStartDate);
     const slots = buildMonthSlots(anchor);
 
-    // Match each slot to its invoice by period_start month. Stripe
-    // billing periods may not start on the 1st (depends on
-    // trial_end behavior), so we match by year+month rather than
-    // exact day. One invoice per slot under normal operation; if
-    // Stripe ever issues two invoices in the same month (manual
-    // out-of-cycle invoice), we pick the most recent one.
-    const txByMonthKey = new Map<string, (typeof transactions)[number]>();
-    for (const t of transactions) {
-      const k = monthKey(new Date(t.period_start));
-      const existing = txByMonthKey.get(k);
-      if (!existing || (t.period_start ?? 0) > (existing.period_start ?? 0)) {
-        txByMonthKey.set(k, t);
-      }
-    }
+    // Match each slot to its invoice by billing-cycle month via the
+    // shared helper (period_end — see lib/billing-schedule.ts for why
+    // period_start put every invoice one month early). One invoice
+    // per slot under normal operation; two invoices in one month
+    // (manual out-of-cycle) → the most recent wins.
+    const txByMonthKey = indexTransactionsByMonth(transactions);
 
     const enrichedSlots = slots.map((slot) => {
       const k = monthKey(new Date(slot.periodStart));
@@ -189,95 +188,5 @@ export interface ScheduleSlot {
   } | null;
 }
 
-/* ─────────────────────── helpers ─────────────────────── */
-
-function parseAnchorDate(billingStartDate: string | null): Date {
-  if (billingStartDate) {
-    // Treat as UTC midnight to match the convention in
-    // createInvoiceSubscription. Date.parse interprets "YYYY-MM-DD"
-    // as UTC midnight per the spec.
-    const ms = Date.parse(`${billingStartDate}T00:00:00Z`);
-    if (Number.isFinite(ms)) return new Date(ms);
-  }
-  // Fallback: first day of the current calendar month at UTC midnight.
-  const now = new Date();
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-}
-
-function buildMonthSlots(anchor: Date): Array<{
-  slotIndex: number;
-  periodStart: number;
-  periodEndExclusive: number;
-  monthLabel: string;
-}> {
-  const out: Array<{
-    slotIndex: number;
-    periodStart: number;
-    periodEndExclusive: number;
-    monthLabel: string;
-  }> = [];
-  for (let i = 0; i < 12; i += 1) {
-    const start = new Date(
-      Date.UTC(
-        anchor.getUTCFullYear(),
-        anchor.getUTCMonth() + i,
-        anchor.getUTCDate()
-      )
-    );
-    const end = new Date(
-      Date.UTC(
-        anchor.getUTCFullYear(),
-        anchor.getUTCMonth() + i + 1,
-        anchor.getUTCDate()
-      )
-    );
-    const label = start.toLocaleDateString("en-US", {
-      month: "long",
-      year: "numeric",
-      timeZone: "UTC",
-    });
-    out.push({
-      slotIndex: i,
-      periodStart: start.getTime(),
-      periodEndExclusive: end.getTime(),
-      monthLabel: label,
-    });
-  }
-  return out;
-}
-
-function monthKey(d: Date): string {
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-}
-
-/**
- * Map Stripe's invoice status to the friendlier UI label.
- *   - `paid` → `paid`
- *   - `open` (with a recent failed payment attempt) is still `open`
- *     in Stripe; we surface `failed` only when the invoice is in
- *     `uncollectible` (Stripe's terminal failure state). For
- *     in-flight failures, the open status with a non-zero
- *     `attempt_count` is what the per-invoice details view will
- *     surface.
- *   - `uncollectible` → `failed`
- *   - `void` → `void`
- *   - `draft` is treated as `open` — drafts shouldn't appear in our
- *     mirror under normal operation (we only mirror post-finalize),
- *     but if one slipped through we surface it as pending.
- */
-function stripeStatusToUi(
-  status: string
-): "open" | "paid" | "failed" | "void" {
-  switch (status) {
-    case "paid":
-      return "paid";
-    case "void":
-      return "void";
-    case "uncollectible":
-      return "failed";
-    case "open":
-    case "draft":
-    default:
-      return "open";
-  }
-}
+// Slot/mapping helpers live in lib/billing-schedule.ts, shared with
+// the parent schedule route so the two surfaces can't drift.

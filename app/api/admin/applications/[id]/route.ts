@@ -1,7 +1,14 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
 import { sendNotAcceptedEmail } from "@/lib/emails/triggers";
+import {
+  findPacketForApplication,
+  removeStripeItemForApplication,
+  syncStripeForApplication,
+} from "@/lib/per-student-billing";
+import { reconcileFamilySubscriptionItems } from "@/lib/billing";
+import { sendBillingAlert } from "@/lib/billing-alerts";
 
 /**
  * Admin GET / PATCH for a single `registration_application` row.
@@ -171,18 +178,35 @@ export async function PATCH(
       );
     }
 
+    // Billing-column sanity: `monthly_amount` feeds Stripe directly
+    // (cents = round(×100)), so a negative or non-finite value must
+    // never land on the row.
+    if ("monthly_amount" in patch) {
+      const m = patch.monthly_amount;
+      const valid =
+        m === null || (typeof m === "number" && Number.isFinite(m) && m >= 0);
+      if (!valid) {
+        return NextResponse.json(
+          { error: "monthly_amount must be a non-negative number" },
+          { status: 400 }
+        );
+      }
+    }
+
     // Snapshot pre-patch state for the denial-email transition guard
-    // below AND the acceptance cascade. Loaded when the patch touches
-    // either `isDenied` or `isAccepted`. Best-effort: if the read
-    // fails the guards are skipped — better to silently miss one
-    // notification than fail the admin's PATCH.
+    // below, the acceptance cascade, AND the isActive billing
+    // cascades. Best-effort: if the read fails the guards are skipped
+    // — better to silently miss one notification than fail the
+    // admin's PATCH.
     let priorIsDenied: boolean | undefined;
     let priorIsAccepted: boolean | undefined;
-    if ("isDenied" in patch || "isAccepted" in patch) {
+    let priorIsActive: boolean | undefined;
+    if ("isDenied" in patch || "isAccepted" in patch || "isActive" in patch) {
       try {
         const prior = await xano.applications.getById(id);
         priorIsDenied = prior.isDenied;
         priorIsAccepted = prior.isAccepted;
+        priorIsActive = prior.isActive !== false;
       } catch (err) {
         console.warn(
           `[/api/admin/applications/${id}] couldn't read prior state — skipping transition guards:`,
@@ -237,6 +261,83 @@ export async function PATCH(
       });
     }
 
+    // Billing cascades — keep Stripe in lockstep with the row the
+    // admin just edited. Each is alert-on-failure rather than
+    // fail-the-PATCH (the Xano write already landed); the alert is
+    // what keeps a Stripe hiccup from becoming silent drift between
+    // what admin sees and what the family is billed.
+    const familyIdNum = Number(updated.registration_families_id);
+    const yearIdNum = Number(updated.registration_school_years_id);
+
+    // Deactivated (isActive true → false): take the student's item off
+    // the live subscription — every in-app total drops them, so Stripe
+    // must too or the family gets over-billed invisibly.
+    if (patch.isActive === false && priorIsActive === true) {
+      try {
+        await removeStripeItemForApplication(updated);
+      } catch (err) {
+        console.error(
+          `[/api/admin/applications/${id}] Stripe item removal after deactivate failed:`,
+          err
+        );
+        await sendBillingAlert(
+          `Stripe item NOT removed after application deactivate (family #${familyIdNum})`,
+          [
+            `Application #${id} (student #${updated.registration_students_id}, family #${familyIdNum}, year #${yearIdNum}) was deactivated, but removing the student's Stripe subscription item failed.`,
+            `Stripe is still billing this student. Remove the item from the family's subscription in the Stripe Dashboard, or re-toggle the application to retry.`,
+            `Error: ${err instanceof Error ? err.message : String(err)}`,
+          ]
+        );
+      }
+    }
+
+    // Reactivated (false → true): put them back on the subscription.
+    // Runs via `after()` so the response stays fast but serverless
+    // can't freeze the instance before the reconcile finishes.
+    if (patch.isActive === true && priorIsActive === false) {
+      after(async () => {
+        try {
+          await reconcileFamilySubscriptionItems(familyIdNum, yearIdNum);
+        } catch (err) {
+          console.error(
+            `[/api/admin/applications/${id}] reconcile after reactivate failed:`,
+            err
+          );
+          await sendBillingAlert(
+            `Student NOT re-added to billing after reactivate (family #${familyIdNum})`,
+            [
+              `Application #${id} was reactivated but the billing reconcile failed — the student may not be billed.`,
+              `Open the family's admin billing card and click "Start Monthly Billing" to reconcile.`,
+              `Error: ${err instanceof Error ? err.message : String(err)}`,
+            ]
+          );
+        }
+      });
+    }
+
+    // Re-price: a raw `monthly_amount` edit through this allowlist
+    // must reach the live Stripe item, or every view shows the new
+    // number while Stripe keeps invoicing the old one.
+    if ("monthly_amount" in patch && updated.isActive !== false) {
+      try {
+        const packet = await findPacketForApplication(updated);
+        await syncStripeForApplication(updated, packet);
+      } catch (err) {
+        console.error(
+          `[/api/admin/applications/${id}] Stripe re-price after monthly_amount edit failed:`,
+          err
+        );
+        await sendBillingAlert(
+          `Stripe re-price failed for family #${familyIdNum}`,
+          [
+            `Application #${id} (student #${updated.registration_students_id}) had monthly_amount changed to ${String(updated.monthly_amount)}, but the Stripe re-price failed — the family is still being invoiced at the OLD amount.`,
+            `Retry by re-saving the amount, or update the subscription item in the Stripe Dashboard.`,
+            `Error: ${err instanceof Error ? err.message : String(err)}`,
+          ]
+        );
+      }
+    }
+
     return NextResponse.json(updated);
   } catch (err) {
     return handleAdminError(err);
@@ -262,6 +363,37 @@ export async function DELETE(
     if (!Number.isFinite(id) || id <= 0) {
       return NextResponse.json({ error: "Invalid id" }, { status: 400 });
     }
+
+    // Billing cleanup BEFORE the row is destroyed, and BLOCKING: the
+    // application row is what ties the student to their live Stripe
+    // item — delete it first and a failed cleanup becomes permanent
+    // silent over-billing with no local handle left to fix it. If the
+    // student is on a live subscription and Stripe can't drop the
+    // item right now, refuse the delete so admin can retry.
+    let app;
+    try {
+      app = await xano.applications.getById(id);
+    } catch {
+      app = null; // row already gone → nothing to clean up
+    }
+    if (app) {
+      try {
+        await removeStripeItemForApplication(app);
+      } catch (err) {
+        console.error(
+          `[/api/admin/applications/${id}] refusing delete — Stripe item cleanup failed:`,
+          err
+        );
+        return NextResponse.json(
+          {
+            error:
+              "This student is on the family's live billing subscription and removing their Stripe line failed. Nothing was deleted — try again, or remove the item in the Stripe Dashboard first.",
+          },
+          { status: 502 }
+        );
+      }
+    }
+
     await xano.applications.delete(id);
     return NextResponse.json({ ok: true });
   } catch (err) {

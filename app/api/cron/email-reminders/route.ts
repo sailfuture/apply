@@ -9,6 +9,8 @@ import {
   sendBillingUpcomingSms,
   sendOutstandingTuitionSms,
 } from "@/lib/sms/triggers";
+import { activeStripeSubscriptionId } from "@/lib/xano";
+import { sendBillingAlert } from "@/lib/billing-alerts";
 
 /**
  * Daily cron sweep that drives the three time-based reminder emails:
@@ -230,6 +232,61 @@ export async function GET(req: NextRequest) {
           if (res.ok) result.billingUpcoming.sent += 1;
           else result.billingUpcoming.failed += 1;
         }
+      }
+
+      // Drift detection — a family with a LIVE subscription but ZERO
+      // mirrored invoices well past billing start means either the
+      // Stripe webhook is broken/misconfigured (mirror silently dead:
+      // no schedules, no reminders, no outstanding tracking) or the
+      // subscription itself isn't generating invoices. Both are the
+      // "family silently not billed / not tracked" worst case, so
+      // surface them daily until fixed.
+      try {
+        const billingStartMs = year.billing_start_date
+          ? Date.parse(`${year.billing_start_date}T00:00:00Z`)
+          : NaN;
+        const graceMs = 7 * ONE_DAY_MS;
+        if (Number.isFinite(billingStartMs)) {
+          const payments = await xano.familyPayments.getAllByYear(year.id);
+          const familiesWithInvoices = new Set(
+            txns.map((t) => t.registration_families_id)
+          );
+          const silent = payments.filter((p) => {
+            const live = activeStripeSubscriptionId(p.stripe_subscription_id);
+            if (!live) return false;
+            if (familiesWithInvoices.has(p.registration_families_id)) {
+              return false;
+            }
+            // Grace: billing anchor AND the subscription's payment row
+            // must both be comfortably in the past — a just-started
+            // family legitimately has no invoices yet.
+            const startedMs = Math.max(
+              billingStartMs,
+              Number(p.created_at) || 0
+            );
+            return Date.now() > startedMs + graceMs;
+          });
+          if (silent.length > 0) {
+            await sendBillingAlert(
+              `${silent.length} live subscription(s) with no mirrored invoices (${year.year_name})`,
+              [
+                `These families have a live Stripe subscription for ${year.year_name} but ZERO invoices in the billing mirror, more than a week past billing start:`,
+                ...silent.map(
+                  (p) =>
+                    `  - family #${p.registration_families_id} (subscription ${activeStripeSubscriptionId(p.stripe_subscription_id)})`
+                ),
+                ``,
+                `Most likely cause: the Stripe webhook isn't reaching /api/webhooks/stripe (check the endpoint + STRIPE_WEBHOOK_SECRET in the Stripe Dashboard), or the subscription isn't generating invoices.`,
+                `Run POST /api/admin/billing/backfill?yearId=${year.id} after fixing the webhook to recover missed invoices.`,
+              ]
+            );
+          }
+        }
+      } catch (err) {
+        console.error(
+          `[cron/email-reminders] billing drift check failed for year ${year.id}:`,
+          err
+        );
       }
     }
 

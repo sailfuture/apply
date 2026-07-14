@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
+import { sendBillingAlert } from "@/lib/billing-alerts";
 import {
   derivePacketBillingValues,
   syncStripeForApplication,
@@ -147,8 +148,11 @@ export async function POST(req: NextRequest) {
     // Re-price the Stripe SubscriptionItem when billing is live.
     // The packet carries `stripe_subscription_item_id`; we fetch it
     // and pair with the just-updated application's
-    // `monthly_amount`. Best-effort — Stripe failure logs but
-    // doesn't fail the Xano write.
+    // `monthly_amount`. The Xano write above already landed, so a
+    // Stripe failure doesn't fail the request — but it CANNOT pass
+    // silently either: until the re-price lands, every admin/parent
+    // surface shows the new amount while Stripe keeps invoicing the
+    // old one. Alert staff so the drift gets fixed.
     try {
       const yearPackets = await xano.studentRegistration.getByYear(yearId);
       const packet =
@@ -160,6 +164,14 @@ export async function POST(req: NextRequest) {
       console.error(
         "[/api/admin/student-registration/by-student] Stripe re-price failed:",
         err
+      );
+      await sendBillingAlert(
+        `Stripe re-price failed for student #${studentId}`,
+        [
+          `Tuition for student #${studentId} (year #${yearId}) was updated to $${billingValues.monthly_amount}/mo in the app, but the Stripe re-price failed — the family is still being invoiced at the OLD amount.`,
+          `Re-save the amount on the Scholarship Determination card to retry, or update the subscription item in the Stripe Dashboard.`,
+          `Error: ${err instanceof Error ? err.message : String(err)}`,
+        ]
       );
     }
 

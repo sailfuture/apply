@@ -1,10 +1,17 @@
 import { auth, currentUser } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
-import { xano } from "@/lib/xano";
+import { xano, activeStripeSubscriptionId } from "@/lib/xano";
 import {
   fetchActiveFamilyApplications,
   sumFamilyBillingTotals,
 } from "@/lib/per-student-billing";
+import {
+  parseAnchorDate,
+  buildMonthSlots,
+  monthKey,
+  indexTransactionsByMonth,
+  stripeStatusToUi,
+} from "@/lib/billing-schedule";
 
 /**
  * Parent-side billing schedule. Same shape as the admin schedule
@@ -66,14 +73,10 @@ export async function GET(req: NextRequest) {
   const anchor = parseAnchorDate(billingStartDate);
   const slots = buildMonthSlots(anchor);
 
-  const txByMonthKey = new Map<string, (typeof transactions)[number]>();
-  for (const t of transactions) {
-    const k = monthKey(new Date(t.period_start));
-    const existing = txByMonthKey.get(k);
-    if (!existing || (t.period_start ?? 0) > (existing.period_start ?? 0)) {
-      txByMonthKey.set(k, t);
-    }
-  }
+  // Shared helper maps each invoice to its billing-cycle month
+  // (period_end — see lib/billing-schedule.ts for why period_start
+  // put every invoice one month early).
+  const txByMonthKey = indexTransactionsByMonth(transactions);
 
   const enrichedSlots = slots.map((slot) => {
     const k = monthKey(new Date(slot.periodStart));
@@ -115,10 +118,12 @@ export async function GET(req: NextRequest) {
     return acc;
   }, 0);
 
-  /** True when the family has a Stripe subscription on file for the
-   *  year — drives the "Manage billing" / "Set up autopay" button
-   *  visibility. Without a subscription the portal would 404. */
-  const hasBilling = !!payment?.stripe_subscription_id;
+  /** True when the family has a LIVE Stripe subscription on file for
+   *  the year — sentinel-aware, so a canceled subscription doesn't
+   *  keep showing billing controls that would 404. */
+  const hasBilling = !!activeStripeSubscriptionId(
+    payment?.stripe_subscription_id
+  );
 
   return NextResponse.json({
     monthlyAmountCents,
@@ -159,76 +164,5 @@ export interface ParentScheduleSlot {
   } | null;
 }
 
-/* ─────────────────────── helpers ─────────────────────── */
-
-function parseAnchorDate(billingStartDate: string | null): Date {
-  if (billingStartDate) {
-    const ms = Date.parse(`${billingStartDate}T00:00:00Z`);
-    if (Number.isFinite(ms)) return new Date(ms);
-  }
-  const now = new Date();
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-}
-
-function buildMonthSlots(anchor: Date): Array<{
-  slotIndex: number;
-  periodStart: number;
-  periodEndExclusive: number;
-  monthLabel: string;
-}> {
-  const out: Array<{
-    slotIndex: number;
-    periodStart: number;
-    periodEndExclusive: number;
-    monthLabel: string;
-  }> = [];
-  for (let i = 0; i < 12; i += 1) {
-    const start = new Date(
-      Date.UTC(
-        anchor.getUTCFullYear(),
-        anchor.getUTCMonth() + i,
-        anchor.getUTCDate()
-      )
-    );
-    const end = new Date(
-      Date.UTC(
-        anchor.getUTCFullYear(),
-        anchor.getUTCMonth() + i + 1,
-        anchor.getUTCDate()
-      )
-    );
-    const label = start.toLocaleDateString("en-US", {
-      month: "long",
-      year: "numeric",
-      timeZone: "UTC",
-    });
-    out.push({
-      slotIndex: i,
-      periodStart: start.getTime(),
-      periodEndExclusive: end.getTime(),
-      monthLabel: label,
-    });
-  }
-  return out;
-}
-
-function monthKey(d: Date): string {
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-}
-
-function stripeStatusToUi(
-  status: string
-): "open" | "paid" | "failed" | "void" {
-  switch (status) {
-    case "paid":
-      return "paid";
-    case "void":
-      return "void";
-    case "uncollectible":
-      return "failed";
-    case "open":
-    case "draft":
-    default:
-      return "open";
-  }
-}
+// Slot/mapping helpers live in lib/billing-schedule.ts, shared with
+// the admin schedule route so the two surfaces can't drift.

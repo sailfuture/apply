@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import type Stripe from "stripe";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
-import { xano } from "@/lib/xano";
+import { xano, STRIPE_SUB_CANCELED_PREFIX } from "@/lib/xano";
 import type { XanoPaymentTransaction } from "@/lib/xano";
 import { getStripeClient } from "@/lib/stripe";
 
@@ -42,14 +42,28 @@ export async function POST(req: NextRequest) {
     }
 
     const payments = await xano.familyPayments.getAllByYear(yearId);
-    const subs = payments.filter((p) => !!p.stripe_subscription_id);
+    // Include canceled (`canceled:<id>` sentinel) subscriptions too —
+    // their historical invoices are exactly what a backfill exists to
+    // recover — by unwrapping the sentinel back to the raw Stripe id.
+    const subs = payments
+      .map((p) => ({
+        payment: p,
+        subscriptionId: p.stripe_subscription_id?.startsWith(
+          STRIPE_SUB_CANCELED_PREFIX
+        )
+          ? p.stripe_subscription_id.slice(STRIPE_SUB_CANCELED_PREFIX.length)
+          : (p.stripe_subscription_id ?? null),
+      }))
+      .filter(
+        (s): s is { payment: (typeof payments)[number]; subscriptionId: string } =>
+          !!s.subscriptionId
+      );
 
     const stripe = getStripeClient();
     let upsertedInvoices = 0;
     const errors: Array<{ subscriptionId: string; message: string }> = [];
 
-    for (const payment of subs) {
-      const subscriptionId = payment.stripe_subscription_id!;
+    for (const { payment, subscriptionId } of subs) {
       try {
         const invoices = await listAllInvoicesForSubscription(
           stripe,
@@ -174,7 +188,12 @@ async function upsertInvoiceRow({
     last_synced_at: now,
   };
 
-  const existing = await xano.paymentTransactions.findByStripeId(invoice.id);
+  // Strict lookup — a transient Xano failure must throw (collected in
+  // the per-subscription error list) rather than coerce to null,
+  // which would create a duplicate mirror row for this invoice.
+  const existing = await xano.paymentTransactions.findByStripeIdStrict(
+    invoice.id
+  );
   if (existing) {
     await xano.paymentTransactions.update(existing.id, payload);
   } else {

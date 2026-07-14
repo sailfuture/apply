@@ -1,5 +1,8 @@
 import {
   xano,
+  activeStripeSubscriptionId,
+  liveStripeSubscriptionItemId,
+  STRIPE_ITEM_REMOVED_PREFIX,
   type XanoApplication,
   type XanoStudentRegistration,
 } from "@/lib/xano";
@@ -7,6 +10,7 @@ import {
   removeStudentItemFromSubscription,
   updateStudentItemAmount,
 } from "@/lib/stripe";
+import { sendBillingAlert } from "@/lib/billing-alerts";
 
 /**
  * Last-resort fallback for the per-student annual fee when the
@@ -154,12 +158,20 @@ export async function syncStripeForApplication(
   app: XanoApplication,
   packet: XanoStudentRegistration | null
 ): Promise<void> {
-  const subscriptionItemId = packet?.stripe_subscription_item_id;
+  const subscriptionItemId = liveStripeSubscriptionItemId(
+    packet?.stripe_subscription_item_id
+  );
   const monthlyAmount = app.monthly_amount;
+  // $0 IS a valid re-price (full-scholarship student staying on the
+  // invoice at no charge) — the old `<= 0` guard silently kept Stripe
+  // billing the previous amount forever when admin zeroed a student
+  // out. Only skip when there's no live item or the value is
+  // genuinely unusable (missing / negative / NaN).
   if (
     !subscriptionItemId ||
     typeof monthlyAmount !== "number" ||
-    monthlyAmount <= 0
+    !Number.isFinite(monthlyAmount) ||
+    monthlyAmount < 0
   ) {
     return;
   }
@@ -224,16 +236,16 @@ export async function removeStripeItemsForArchivedStudent(
 ): Promise<void> {
   if (!Number.isInteger(studentId) || studentId <= 0) return;
   const packets = await xano.studentRegistration.getAllByStudentId(studentId);
-  const liveItems = packets.filter(
-    (p) =>
-      typeof p.stripe_subscription_item_id === "string" &&
-      p.stripe_subscription_item_id.length > 0
+  const liveItems = packets.filter((p) =>
+    Boolean(liveStripeSubscriptionItemId(p.stripe_subscription_item_id))
   );
   if (liveItems.length === 0) return;
 
   await Promise.allSettled(
     liveItems.map(async (packet) => {
-      const itemId = packet.stripe_subscription_item_id!;
+      const itemId = liveStripeSubscriptionItemId(
+        packet.stripe_subscription_item_id
+      )!;
       const yearId = Number(packet.registration_school_years_id);
       // Find the family for this packet via its embedded student
       // (Xano often pre-joins) or a fallback `students.getById` hop.
@@ -246,16 +258,28 @@ export async function removeStripeItemsForArchivedStudent(
       if (!familyId || !yearId) return;
 
       try {
-        const payment = await xano.familyPayments.getByFamilyAndYear(
+        // STRICT lookup — the loose variant coerces a transient Xano
+        // failure into null, which the old code read as "no
+        // subscription" and used to justify nulling the packet's item
+        // handle while the Stripe item stayed LIVE. That both kept
+        // billing the archived student forever AND destroyed the only
+        // local pointer that could ever remove the item. A lookup
+        // failure now lands in the catch: handle preserved, retryable.
+        const payment = await xano.familyPayments.getByFamilyAndYearStrict(
           familyId,
           yearId
         );
-        const subscriptionId = payment?.stripe_subscription_id ?? null;
+        const subscriptionId = activeStripeSubscriptionId(
+          payment?.stripe_subscription_id
+        );
         if (!subscriptionId) {
-          // No active subscription on file. Just clear the stale
-          // packet handle and move on.
+          // Genuinely no live subscription (row read OK): the parent
+          // subscription is gone/canceled, so its items died with it.
+          // Mark the handle removed — the `removed:` sentinel, NOT
+          // null, because Xano PATCH silently drops null/empty inputs
+          // and the stale id would read as "still billing" forever.
           await xano.studentRegistration.update(packet.id, {
-            stripe_subscription_item_id: null,
+            stripe_subscription_item_id: `${STRIPE_ITEM_REMOVED_PREFIX}${itemId}`,
           });
           return;
         }
@@ -264,16 +288,82 @@ export async function removeStripeItemsForArchivedStudent(
           subscriptionItemId: itemId,
         });
         await xano.studentRegistration.update(packet.id, {
-          stripe_subscription_item_id: null,
+          stripe_subscription_item_id: `${STRIPE_ITEM_REMOVED_PREFIX}${itemId}`,
         });
       } catch (err) {
         console.error(
-          `[removeStripeItemsForArchivedStudent] failed to remove item ${itemId} for packet ${packet.id} (student ${studentId}, year ${yearId}):`,
+          `[removeStripeItemsForArchivedStudent] failed to remove item ${itemId} for packet ${packet.id} (student ${studentId}, year ${yearId}) — handle preserved for retry:`,
           err
+        );
+        // An archived student whose Stripe line couldn't be removed is
+        // silent over-billing until a human intervenes — alert, don't
+        // just log.
+        await sendBillingAlert(
+          `Archived student's Stripe line NOT removed (student #${studentId})`,
+          [
+            `Student #${studentId} was archived, but removing their subscription item ${itemId} (year #${yearId}) failed — Stripe is still billing the family for them.`,
+            `Re-archive to retry, or remove the item from the family's subscription in the Stripe Dashboard.`,
+            `Error: ${err instanceof Error ? err.message : String(err)}`,
+          ]
         );
       }
     })
   );
+}
+
+/**
+ * Take ONE application's student off the family's live subscription —
+ * the billing counterpart to deleting or deactivating an application
+ * row. Without this, the app row disappears from every in-app total
+ * while the Stripe SubscriptionItem keeps invoicing the family for a
+ * student who's no longer registered (silent over-billing, forever).
+ *
+ * Unlike the archive cascade this THROWS on failure — the caller is
+ * about to destroy the application row, and proceeding after a failed
+ * removal would leave the live item unrecoverable. Callers should
+ * abort their delete/deactivate and surface the error so admin can
+ * retry.
+ *
+ * No-ops cleanly when there's nothing to remove (no packet, no item
+ * handle, or no live subscription).
+ */
+export async function removeStripeItemForApplication(
+  app: XanoApplication
+): Promise<{ removed: boolean }> {
+  const packet = await findPacketForApplication(app);
+  const itemId = liveStripeSubscriptionItemId(
+    packet?.stripe_subscription_item_id
+  );
+  if (!packet || !itemId) return { removed: false };
+
+  const familyId = Number(app.registration_families_id);
+  const yearId = Number(app.registration_school_years_id);
+  if (!familyId || !yearId) return { removed: false };
+
+  const payment = await xano.familyPayments.getByFamilyAndYearStrict(
+    familyId,
+    yearId
+  );
+  const subscriptionId = activeStripeSubscriptionId(
+    payment?.stripe_subscription_id
+  );
+  if (!subscriptionId) {
+    // No live subscription — the item died with it. Mark the handle
+    // removed (sentinel, not null — Xano drops null writes).
+    await xano.studentRegistration.update(packet.id, {
+      stripe_subscription_item_id: `${STRIPE_ITEM_REMOVED_PREFIX}${itemId}`,
+    });
+    return { removed: false };
+  }
+
+  await removeStudentItemFromSubscription({
+    subscriptionId,
+    subscriptionItemId: itemId,
+  });
+  await xano.studentRegistration.update(packet.id, {
+    stripe_subscription_item_id: `${STRIPE_ITEM_REMOVED_PREFIX}${itemId}`,
+  });
+  return { removed: true };
 }
 
 /**

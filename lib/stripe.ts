@@ -138,11 +138,17 @@ export async function getOrCreateCustomer({
       }
       // Customer was deleted in Stripe — fall through to recreate.
     } catch (err) {
-      // Retrieve can fail if the id is bogus or for a different account
-      // (e.g. switched from test → live). Log and recreate.
+      // ONLY recreate when Stripe says the id genuinely doesn't exist
+      // (bogus id, or test→live account switch). Transient failures
+      // (network blip, 429, 5xx) must rethrow — treating them as
+      // "customer gone" would mint a duplicate Customer, splitting
+      // the family's billing history across two records.
+      const code = (err as { code?: string; statusCode?: number }) ?? {};
+      const isMissing =
+        code.code === "resource_missing" || code.statusCode === 404;
+      if (!isMissing) throw err;
       console.warn(
-        `[stripe] customers.retrieve(${customerId}) failed, will create a new Customer:`,
-        err instanceof Error ? err.message : err
+        `[stripe] customer ${customerId} no longer exists (resource_missing) — creating a new Customer.`
       );
     }
   }
@@ -376,34 +382,62 @@ export async function uncancelSubscription(
 }
 
 /**
- * Refund the most recent paid invoice on a Subscription. Refunds the
- * underlying Charge in full; partial refunds are out of scope for the
- * standard admin flow (admin can issue partial refunds via the Stripe
+ * Refund a paid invoice in full. Partial refunds are out of scope for
+ * the standard admin flow (admin can issue those via the Stripe
  * Dashboard directly).
+ *
+ * Payment resolution: on current API versions the invoice's payment
+ * lives in the `payments` list (`invoice.payments.data[].payment`),
+ * NOT the removed top-level `payment_intent` field — we expand the
+ * list and refund the successful payment's PaymentIntent (or bare
+ * Charge for out-of-band payments).
+ *
+ * `expectedSubscriptionId` is the ownership guard: the admin route
+ * passes the family's own subscription id, and we refuse to refund an
+ * invoice that belongs to any other subscription — otherwise a stale
+ * or mistyped invoice id would silently refund ANOTHER family's
+ * payment in full.
  */
 export async function refundInvoice(
-  invoiceId: string
+  invoiceId: string,
+  opts?: { expectedSubscriptionId?: string }
 ): Promise<Stripe.Refund> {
   const stripe = getStripeClient();
-  const invoice = await stripe.invoices.retrieve(invoiceId);
-  const paymentIntentField = (
-    invoice as Stripe.Invoice & {
-      payment_intent?: string | { id: string };
-    }
-  ).payment_intent;
-  const paymentIntentId =
-    typeof paymentIntentField === "string"
-      ? paymentIntentField
-      : paymentIntentField?.id ?? null;
-  if (!paymentIntentId) {
-    throw new Error(
-      `Invoice ${invoiceId} has no payment_intent — nothing to refund.`
-    );
-  }
-  return stripe.refunds.create({
-    payment_intent: paymentIntentId,
-    reason: "requested_by_customer",
+  const invoice = await stripe.invoices.retrieve(invoiceId, {
+    expand: ["payments"],
   });
+
+  if (opts?.expectedSubscriptionId) {
+    const owner = extractInvoiceSubscriptionId(invoice);
+    if (owner !== opts.expectedSubscriptionId) {
+      throw new Error(
+        `Invoice ${invoiceId} belongs to subscription ${owner ?? "none"}, not this family's subscription — refusing to refund.`
+      );
+    }
+  }
+
+  const payments = invoice.payments?.data ?? [];
+  // Only a SUCCEEDED payment is refundable — falling back to an
+  // arbitrary first payment could target a canceled/failed attempt
+  // and either error confusingly or refund the wrong object.
+  const successful = payments.find((p) => p.status === "paid");
+  const paymentIntentId = idOrObjectId(successful?.payment?.payment_intent);
+  if (paymentIntentId) {
+    return stripe.refunds.create({
+      payment_intent: paymentIntentId,
+      reason: "requested_by_customer",
+    });
+  }
+  const chargeId = idOrObjectId(successful?.payment?.charge);
+  if (chargeId) {
+    return stripe.refunds.create({
+      charge: chargeId,
+      reason: "requested_by_customer",
+    });
+  }
+  throw new Error(
+    `Invoice ${invoiceId} has no refundable payment on record — nothing to refund.`
+  );
 }
 
 /* ─────────────────────── Per-student subscription items ───────── */
@@ -447,6 +481,16 @@ interface CreatePerStudentSubscriptionInput {
   yearId: number;
   /** Defaults to 15 (SailFuture's standard net-15 terms). */
   daysUntilDue?: number;
+  /** Stripe idempotency-key base. When set, every `prices.create` and
+   *  the `subscriptions.create` carry deterministic idempotency keys
+   *  derived from it — so two concurrent "Start Monthly Billing"
+   *  clicks (double-click, two admins, retry-after-timeout) hit the
+   *  same keys and Stripe returns the SAME objects instead of
+   *  creating a second live subscription that double-bills the
+   *  family. Caller derives the base from (family, year, prior
+   *  subscription state) so a legitimate restart after a cancel gets
+   *  fresh keys. */
+  idempotencyKeyBase?: string;
 }
 
 /** Result of the per-student subscription create. The `items` array
@@ -501,16 +545,29 @@ export async function createSubscriptionWithStudentItems(
 ): Promise<PerStudentSubscriptionResult> {
   const stripe = getStripeClient();
 
-  // Same trial-end derivation as the legacy single-item flow —
-  // mirrored exactly so the two paths behave the same on dates.
-  const billingAnchorUnix = (() => {
-    if (!input.billingStartDate) return null;
+  // First-invoice anchoring. Three regimes:
+  //   - start date > 48h out  → `trial_end` (proven path; Stripe
+  //     requires trial_end comfortably in the future)
+  //   - start date in the future but ≤ 48h → `billing_cycle_anchor` +
+  //     no proration. The old behavior silently DROPPED the anchor
+  //     here, invoicing the family immediately (up to 2 days early)
+  //     and anchoring all 12 invoices to the wrong day of month.
+  //   - start date passed / missing / unparsable → invoice now.
+  const { trialEndUnix, cycleAnchorUnix } = (() => {
+    if (!input.billingStartDate) {
+      return { trialEndUnix: null, cycleAnchorUnix: null };
+    }
     const ms = Date.parse(`${input.billingStartDate}T00:00:00Z`);
-    if (!Number.isFinite(ms)) return null;
+    if (!Number.isFinite(ms)) {
+      return { trialEndUnix: null, cycleAnchorUnix: null };
+    }
     const unix = Math.floor(ms / 1000);
     const nowUnix = Math.floor(Date.now() / 1000);
-    if (unix <= nowUnix + 48 * 60 * 60) return null;
-    return unix;
+    if (unix <= nowUnix) return { trialEndUnix: null, cycleAnchorUnix: null };
+    if (unix <= nowUnix + 48 * 60 * 60) {
+      return { trialEndUnix: null, cycleAnchorUnix: unix };
+    }
+    return { trialEndUnix: unix, cycleAnchorUnix: null };
   })();
 
   if (input.students.length === 0) {
@@ -530,25 +587,32 @@ export async function createSubscriptionWithStudentItems(
     priceId: string;
   }> = [];
   for (const s of input.students) {
-    const price = await stripe.prices.create({
-      currency: "usd",
-      unit_amount: s.monthlyCents,
-      product_data: {
-        name: `${s.studentName} — Monthly Tuition & Fees`,
+    const price = await stripe.prices.create(
+      {
+        currency: "usd",
+        unit_amount: s.monthlyCents,
+        product_data: {
+          name: `${s.studentName} — Monthly Tuition & Fees`,
+          metadata: {
+            family_id: String(input.familyId),
+            year_id: String(input.yearId),
+            student_id: String(s.studentId),
+          },
+        },
+        recurring: { interval: "month" },
+        nickname: `${input.familyName} — ${s.studentName} — ${input.yearName}`,
         metadata: {
           family_id: String(input.familyId),
           year_id: String(input.yearId),
           student_id: String(s.studentId),
         },
       },
-      recurring: { interval: "month" },
-      nickname: `${input.familyName} — ${s.studentName} — ${input.yearName}`,
-      metadata: {
-        family_id: String(input.familyId),
-        year_id: String(input.yearId),
-        student_id: String(s.studentId),
-      },
-    });
+      input.idempotencyKeyBase
+        ? {
+            idempotencyKey: `${input.idempotencyKeyBase}:price:s${s.studentId}:c${s.monthlyCents}`,
+          }
+        : undefined
+    );
     studentPrices.push({
       studentId: s.studentId,
       studentName: s.studentName,
@@ -557,24 +621,35 @@ export async function createSubscriptionWithStudentItems(
     });
   }
 
-  const subscription = await stripe.subscriptions.create({
-    customer: input.customerId,
-    collection_method: "send_invoice",
-    days_until_due: input.daysUntilDue ?? 15,
-    items: studentPrices.map((s) => ({
-      price: s.priceId,
-      quantity: 1,
+  const subscription = await stripe.subscriptions.create(
+    {
+      customer: input.customerId,
+      collection_method: "send_invoice",
+      days_until_due: input.daysUntilDue ?? 15,
+      items: studentPrices.map((s) => ({
+        price: s.priceId,
+        quantity: 1,
+        metadata: {
+          student_id: String(s.studentId),
+        },
+      })),
+      ...(trialEndUnix ? { trial_end: trialEndUnix } : {}),
+      ...(cycleAnchorUnix
+        ? {
+            billing_cycle_anchor: cycleAnchorUnix,
+            proration_behavior: "none" as const,
+          }
+        : {}),
       metadata: {
-        student_id: String(s.studentId),
+        family_id: String(input.familyId),
+        year_id: String(input.yearId),
       },
-    })),
-    ...(billingAnchorUnix ? { trial_end: billingAnchorUnix } : {}),
-    metadata: {
-      family_id: String(input.familyId),
-      year_id: String(input.yearId),
+      description: `SailFuture Academy monthly tuition · family ${input.familyId} · year ${input.yearId}`,
     },
-    description: `SailFuture Academy monthly tuition · family ${input.familyId} · year ${input.yearId}`,
-  });
+    input.idempotencyKeyBase
+      ? { idempotencyKey: `${input.idempotencyKeyBase}:sub` }
+      : undefined
+  );
 
   // Zip the created SubscriptionItems back onto the studentPrices
   // by matching on the metadata.student_id stamp we just set —
@@ -644,35 +719,53 @@ export async function addStudentItemToSubscription(
 ): Promise<AddStudentItemResult> {
   const stripe = getStripeClient();
 
-  const price = await stripe.prices.create({
-    currency: "usd",
-    unit_amount: input.monthlyCents,
-    product_data: {
-      name: `${input.studentName} — Monthly Tuition & Fees`,
+  // Deterministic idempotency keys so two concurrent reconciles (the
+  // Start button + an un-archive cascade racing, or two admins) get
+  // the SAME item back from Stripe instead of double-adding — and
+  // double-billing — the student. The hour bucket bounds the dedupe
+  // window: retries/races within the hour collapse, while a genuine
+  // remove-then-re-add days later gets fresh keys. (A re-add within
+  // the same hour of a removal can hand back the deleted item's id —
+  // rare admin flip-flop; the reconcile's stale-handle healing
+  // converges it on the next pass.)
+  const hourBucket = Math.floor(Date.now() / 3_600_000);
+  const keyBase = `additem:${input.subscriptionId}:s${input.studentId}:c${input.monthlyCents}:h${hourBucket}`;
+
+  const price = await stripe.prices.create(
+    {
+      currency: "usd",
+      unit_amount: input.monthlyCents,
+      product_data: {
+        name: `${input.studentName} — Monthly Tuition & Fees`,
+        metadata: {
+          family_id: String(input.familyId),
+          year_id: String(input.yearId),
+          student_id: String(input.studentId),
+        },
+      },
+      recurring: { interval: "month" },
+      nickname: `${input.familyName} — ${input.studentName} — ${input.yearName}`,
       metadata: {
         family_id: String(input.familyId),
         year_id: String(input.yearId),
         student_id: String(input.studentId),
       },
     },
-    recurring: { interval: "month" },
-    nickname: `${input.familyName} — ${input.studentName} — ${input.yearName}`,
-    metadata: {
-      family_id: String(input.familyId),
-      year_id: String(input.yearId),
-      student_id: String(input.studentId),
-    },
-  });
+    { idempotencyKey: `${keyBase}:price` }
+  );
 
-  const item = await stripe.subscriptionItems.create({
-    subscription: input.subscriptionId,
-    price: price.id,
-    quantity: 1,
-    proration_behavior: "none",
-    metadata: {
-      student_id: String(input.studentId),
+  const item = await stripe.subscriptionItems.create(
+    {
+      subscription: input.subscriptionId,
+      price: price.id,
+      quantity: 1,
+      proration_behavior: "none",
+      metadata: {
+        student_id: String(input.studentId),
+      },
     },
-  });
+    { idempotencyKey: `${keyBase}:item` }
+  );
 
   return { subscriptionItemId: item.id, priceId: price.id };
 }
@@ -788,39 +881,126 @@ export async function removeStudentItemFromSubscription({
   subscriptionItemId: string;
 }): Promise<RemoveStudentItemResult> {
   const stripe = getStripeClient();
+  const isMissing = (err: unknown): boolean => {
+    const code = (err as { code?: string; statusCode?: number }) ?? {};
+    return code.code === "resource_missing" || code.statusCode === 404;
+  };
 
-  // Check sibling count BEFORE deletion — if the item we're about
-  // to remove is the only one, we'll cancel the subscription right
-  // after the delete. Doing the count first avoids a race where a
-  // concurrent admin adds another student between our delete and
-  // our cancel-check.
-  const subscriptionBefore = await stripe.subscriptions.retrieve(
-    subscriptionId
-  );
-  const wasLastItem =
-    subscriptionBefore.items.data.length === 1 &&
-    subscriptionBefore.items.data[0]?.id === subscriptionItemId;
-
-  await stripe.subscriptionItems.del(subscriptionItemId, {
-    proration_behavior: "none",
-  });
-
-  if (!wasLastItem) {
+  // Check sibling state BEFORE deciding how to remove. Two reasons:
+  //   1. Stripe REFUSES to delete the last item on a subscription
+  //      (invalid_request_error: a subscription must keep ≥1 item) —
+  //      for the last student the only valid move is to cancel the
+  //      subscription itself; the item retires with it. Deleting
+  //      first and cancelling after (the old order) made the cancel
+  //      branch unreachable and single-student families un-removable.
+  //   2. If the item is ALREADY gone (removed via the Dashboard or a
+  //      prior partly-failed attempt), that's success, not an error —
+  //      treating 404 as fatal wedged the delete/archive flows
+  //      permanently.
+  let subscriptionBefore: Stripe.Subscription;
+  try {
+    subscriptionBefore = await stripe.subscriptions.retrieve(subscriptionId);
+  } catch (err) {
+    if (isMissing(err)) {
+      // Subscription itself no longer exists — the item is gone with
+      // it. Nothing to remove or cancel.
+      return { subscriptionCancelled: false, subscription: null };
+    }
+    throw err;
+  }
+  if (["canceled", "incomplete_expired"].includes(subscriptionBefore.status)) {
+    // Dead subscription — items died with it.
     return { subscriptionCancelled: false, subscription: null };
   }
 
-  // Last item just left — cancel the parent subscription at period
-  // end so the family doesn't get billed $0 next cycle. We deliberately
-  // pick `cancel_at_period_end` (not immediate cancel) so the
-  // family still has access through the cycle they already paid
-  // for, matching the rest of the cancel-paths in this file.
-  const cancelled = await stripe.subscriptions.update(subscriptionId, {
-    cancel_at_period_end: true,
-  });
-  return { subscriptionCancelled: true, subscription: cancelled };
+  const liveItemIds = subscriptionBefore.items.data.map((i) => i.id);
+  if (!liveItemIds.includes(subscriptionItemId)) {
+    // Already removed (Dashboard cleanup, earlier retry) — success.
+    return { subscriptionCancelled: false, subscription: null };
+  }
+
+  const isLastItem =
+    liveItemIds.length === 1 && liveItemIds[0] === subscriptionItemId;
+
+  if (isLastItem) {
+    // Last student leaving — cancel the subscription at period end
+    // (family keeps access through the cycle they already paid for;
+    // matches the other cancel paths in this file). Do NOT attempt
+    // the item delete: Stripe rejects deleting the only item.
+    const cancelled = await stripe.subscriptions.update(subscriptionId, {
+      cancel_at_period_end: true,
+    });
+    return { subscriptionCancelled: true, subscription: cancelled };
+  }
+
+  try {
+    await stripe.subscriptionItems.del(subscriptionItemId, {
+      proration_behavior: "none",
+    });
+  } catch (err) {
+    // Raced with another remover — already gone counts as done.
+    if (!isMissing(err)) throw err;
+  }
+  return { subscriptionCancelled: false, subscription: null };
 }
 
 /* ─────────────────────── Webhook helpers ─────────────────────── */
+
+/** Normalize Stripe's `string | { id } | null | undefined` expandable
+ *  fields to a plain id. */
+function idOrObjectId(
+  value: string | { id: string } | null | undefined
+): string | null {
+  if (!value) return null;
+  return typeof value === "string" ? value : value.id;
+}
+
+/**
+ * The subscription that generated an invoice, across API versions.
+ *
+ * Basil (2025-03) moved the invoice→subscription link from the
+ * top-level `invoice.subscription` field to
+ * `invoice.parent.subscription_details.subscription`. The webhook
+ * endpoint's configured API version decides which shape events carry,
+ * so we read the NEW location first and fall back to the legacy field
+ * — reading only the legacy field silently classifies every modern
+ * invoice event as "not a subscription invoice" and kills the mirror.
+ */
+export function extractInvoiceSubscriptionId(
+  invoice: Stripe.Invoice
+): string | null {
+  const fromParent = idOrObjectId(
+    invoice.parent?.subscription_details?.subscription ?? null
+  );
+  if (fromParent) return fromParent;
+  const legacy = (
+    invoice as Stripe.Invoice & {
+      subscription?: string | { id: string } | null;
+    }
+  ).subscription;
+  return idOrObjectId(legacy);
+}
+
+/**
+ * The subscription metadata snapshot on an invoice, across API
+ * versions — new `parent.subscription_details.metadata` first, legacy
+ * top-level `subscription_details.metadata` fallback. Carries our
+ * `family_id` / `year_id` stamps.
+ */
+export function extractInvoiceSubscriptionMetadata(
+  invoice: Stripe.Invoice
+): Record<string, string | undefined> | null {
+  const fromParent = invoice.parent?.subscription_details?.metadata;
+  if (fromParent && Object.keys(fromParent).length > 0) return fromParent;
+  const legacy = (
+    invoice as Stripe.Invoice & {
+      subscription_details?: {
+        metadata?: Record<string, string | undefined> | null;
+      } | null;
+    }
+  ).subscription_details;
+  return legacy?.metadata ?? null;
+}
 
 /** Verify an incoming webhook signature using Stripe's helper. Throws
  *  if the signature doesn't match — the route handler should catch

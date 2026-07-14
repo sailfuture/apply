@@ -1,8 +1,10 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
 import type { XanoStudent } from "@/lib/xano";
 import { removeStripeItemsForArchivedStudent } from "@/lib/per-student-billing";
+import { reconcileFamilySubscriptionItems } from "@/lib/billing";
+import { sendBillingAlert } from "@/lib/billing-alerts";
 
 /**
  * Document-confirm pairs — each entry maps the confirm bool to its
@@ -255,12 +257,60 @@ export async function PATCH(
     // parent subscription, Stripe cancels it at period end via the
     // helper. Best-effort — failures log but don't fail the admin's
     // archive (the student row already flipped).
+    // Both billing cascades run via `after()` — they must not delay
+    // the admin's PATCH response, but a bare detached promise isn't
+    // guaranteed to finish on serverless (the instance can freeze
+    // right after the response); `after()` keeps the invocation
+    // alive until the work completes.
     if (patch.isArchived === true && priorIsArchived !== true) {
-      removeStripeItemsForArchivedStudent(id).catch((err) => {
-        console.error(
-          `[/api/admin/students/${id}] Stripe item cleanup failed:`,
-          err
-        );
+      after(async () => {
+        try {
+          await removeStripeItemsForArchivedStudent(id);
+        } catch (err) {
+          console.error(
+            `[/api/admin/students/${id}] Stripe item cleanup failed:`,
+            err
+          );
+        }
+      });
+    }
+
+    // Un-archive (true → false): a re-enrolled student belongs back on
+    // the family's live subscription. Reconcile every year they have a
+    // packet for — no other code path re-adds their Stripe item, so
+    // skipping this leaves the student silently unbilled forever.
+    // Alert on failure: a Stripe hiccup can't fail the admin's
+    // un-archive, but it also can't pass silently.
+    if (patch.isArchived === false && priorIsArchived === true) {
+      after(async () => {
+        try {
+          const familyId = Number(updated.registration_families_id);
+          if (!familyId) return;
+          const packets = await xano.studentRegistration.getAllByStudentId(id);
+          const yearIds = [
+            ...new Set(
+              packets
+                .map((p) => Number(p.registration_school_years_id))
+                .filter((y) => Number.isFinite(y) && y > 0)
+            ),
+          ];
+          for (const yearId of yearIds) {
+            await reconcileFamilySubscriptionItems(familyId, yearId);
+          }
+        } catch (err) {
+          console.error(
+            `[/api/admin/students/${id}] billing reconcile after un-archive failed:`,
+            err
+          );
+          await sendBillingAlert(
+            `Un-archived student may be missing from billing (student #${id})`,
+            [
+              `Student #${id} was un-archived but the billing reconcile failed — they may not have been re-added to the family's subscription.`,
+              `Open the family's admin billing card and click "Start Monthly Billing" to reconcile.`,
+              `Error: ${err instanceof Error ? err.message : String(err)}`,
+            ]
+          );
+        }
       });
     }
 

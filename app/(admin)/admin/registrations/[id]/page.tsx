@@ -100,6 +100,16 @@ import type {
   XanoStudentRegistration,
   XanoStudentRegistrationProgress,
 } from "@/lib/xano";
+
+/** Client-side mirror of `activeStripeSubscriptionId` from lib/xano —
+ *  inlined (2 lines) rather than value-imported so this "use client"
+ *  page doesn't pull the whole server data-layer module into the
+ *  browser bundle. A `canceled:<id>` sentinel is NOT a live
+ *  subscription. Keep in sync with STRIPE_SUB_CANCELED_PREFIX. */
+function liveSubscriptionId(v: string | null | undefined): string | null {
+  if (!v || v.startsWith("canceled:")) return null;
+  return v;
+}
 import { sumFamilyBillingTotals } from "@/lib/per-student-billing";
 
 const xanoBase =
@@ -407,11 +417,12 @@ export default function FamilyRegistrationDetailPage() {
       completed: progress?.isRegistrationConfirmed === true,
       verified: null as boolean | null,
     },
-    // Billing — green once a Stripe subscription has been created
-    // for the (family, year). Admin-only row; `stripe_subscription_id`
-    // on the family-payment row is the authoritative signal.
+    // Billing — green once a LIVE Stripe subscription exists for the
+    // (family, year). Sentinel-aware: a `canceled:<id>` marker on the
+    // family-payment row means billing ended and the row should read
+    // as not-started again.
     billing: {
-      completed: !!familyPayment?.stripe_subscription_id,
+      completed: !!liveSubscriptionId(familyPayment?.stripe_subscription_id),
       verified: null as boolean | null,
     },
   };
@@ -646,7 +657,7 @@ export default function FamilyRegistrationDetailPage() {
           <SectionShell
             title="Billing"
             status={
-              familyPayment?.stripe_subscription_id
+              liveSubscriptionId(familyPayment?.stripe_subscription_id)
                 ? "complete"
                 : "in_progress"
             }
