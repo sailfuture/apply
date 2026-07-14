@@ -1,7 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
-import { xano } from "@/lib/xano";
+import { xano, type XanoSmsMessage } from "@/lib/xano";
 import { sendSms, getFamilyRecipient } from "@/lib/sms/send";
+
+/** One row in the global inbox's conversation list — the latest text
+ *  per family plus a needs-reply flag. */
+export interface SmsConversation {
+  familyId: number;
+  familyName: string;
+  lastBody: string;
+  lastAt: number;
+  lastDirection: string;
+  messageCount: number;
+  /** True when the most recent message is inbound (family texted, no
+   *  reply yet) — drives the unread dot in the inbox. */
+  needsReply: boolean;
+}
 
 /**
  * Admin SMS messages.
@@ -20,8 +34,41 @@ export async function GET(req: NextRequest) {
     const familyIdParam = req.nextUrl.searchParams.get("familyId");
 
     if (!familyIdParam) {
-      const messages = await xano.smsMessages.getAll();
-      return NextResponse.json({ messages });
+      // Global inbox feed — group the flat message log into one
+      // conversation per family, keyed on the newest message.
+      const [messages, families] = await Promise.all([
+        xano.smsMessages.getAll(),
+        xano.families.getAll().catch(() => []),
+      ]);
+      const nameById = new Map(families.map((f) => [f.id, f.family_name]));
+      const byFamily = new Map<
+        number,
+        { last: XanoSmsMessage; count: number }
+      >();
+      for (const m of messages) {
+        const fid = m.registration_families_id;
+        if (!fid) continue;
+        const existing = byFamily.get(fid);
+        if (!existing) {
+          byFamily.set(fid, { last: m, count: 1 });
+        } else {
+          existing.count += 1;
+          if (m.created_at > existing.last.created_at) existing.last = m;
+        }
+      }
+      const conversations: SmsConversation[] = [...byFamily.entries()]
+        .map(([familyId, { last, count }]) => ({
+          familyId,
+          familyName:
+            (nameById.get(familyId) || "").trim() || `Family #${familyId}`,
+          lastBody: last.body,
+          lastAt: last.created_at,
+          lastDirection: last.direction,
+          messageCount: count,
+          needsReply: last.direction === "inbound",
+        }))
+        .sort((a, b) => b.lastAt - a.lastAt);
+      return NextResponse.json({ conversations });
     }
 
     const familyId = Number(familyIdParam);
@@ -45,7 +92,13 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const { admin } = await requireAdmin();
-    const body = await req.json();
+    const body = await req.json().catch(() => null);
+    if (!body || typeof body !== "object") {
+      return NextResponse.json(
+        { error: "Invalid JSON body" },
+        { status: 400 }
+      );
+    }
 
     const familyId = Number(body?.familyId);
     if (!Number.isFinite(familyId)) {

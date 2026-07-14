@@ -39,6 +39,8 @@ const NAV_ITEMS: NavItem[] = [
   { title: "Applications", href: "/admin/applications" },
   { title: "Registrations", href: "/admin/registrations" },
   { title: "Enrolled", href: "/admin/enrolled" },
+  // Two-way SMS inbox + filtered group messaging.
+  { title: "Messages", href: "/admin/messages" },
   // Billing — shows every family with a Stripe subscription on file
   // for the selected year, with quick filters for past-due families.
   // Each row drills into the family registration detail page's

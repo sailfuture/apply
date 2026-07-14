@@ -50,9 +50,26 @@ export interface SendSmsResult {
 }
 
 /**
+ * Account-holder pick from a family's parent rows: the Clerk-linked
+ * parent (owns the login) first, else the lowest-id parent — the same
+ * "primary" convention the email layer uses. ONE shared rule for every
+ * SMS surface (per-family sends, triggers, group blasts) so they all
+ * target the same phone.
+ */
+export function pickAccountHolderParent(
+  parents: XanoParent[]
+): XanoParent | null {
+  if (!parents.length) return null;
+  return (
+    parents.find((p) => p.clerk_user_id) ??
+    [...parents].sort((a, b) => a.id - b.id)[0]
+  );
+}
+
+/**
  * The account-holder parent for a family — the "primary account phone"
- * the texts target. Prefers the parent linked to a Clerk user (the one
- * who owns the login); falls back to the first parent on the family.
+ * the texts target. Loads the family's parent rows and applies
+ * `pickAccountHolderParent`.
  */
 export async function resolvePrimaryParent(
   familyId: number
@@ -67,8 +84,7 @@ export async function resolvePrimaryParent(
         ids.map((id) => xano.parents.getById(id).catch(() => null))
       )
     ).filter((p): p is XanoParent => p != null);
-    if (!parents.length) return null;
-    return parents.find((p) => p.clerk_user_id) ?? parents[0];
+    return pickAccountHolderParent(parents);
   } catch {
     return null;
   }
