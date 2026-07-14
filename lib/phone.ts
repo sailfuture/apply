@@ -150,3 +150,18 @@ export function formatPhoneInputProgress(raw: string): string {
   if (d.length < 7) return `(${d.slice(0, 3)}) ${d.slice(3)}`;
   return `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
 }
+
+/**
+ * Convert any US phone input to E.164 (`+1XXXXXXXXXX`) for Twilio.
+ *
+ * Storage is bare 10-digit (Clerk sync strips non-digits), but the
+ * Twilio API requires E.164. Returns `null` when the value isn't a
+ * valid US number — Twilio would reject it anyway, so callers should
+ * skip the send and log the reason rather than fire a doomed request.
+ */
+export function toE164(raw: string | number | null | undefined): string | null {
+  if (raw === null || raw === undefined) return null;
+  const { valid, digits } = validateUSPhone(String(raw));
+  if (!valid || digits.length !== 10) return null;
+  return `+1${digits}`;
+}

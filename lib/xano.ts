@@ -31,6 +31,17 @@ export interface XanoParent {
   city: string;
   state: string;
   zipcode: string;
+  /** Timestamp (unix ms) when this parent opted out of SMS — set when
+   *  they text STOP (Twilio also filters at the carrier level) or when
+   *  admin opts them out by hand. Null/absent = still reachable; every
+   *  outbound send checks this first. */
+  sms_opted_out_at?: number | null;
+  /** Provenance of the SMS consent on file — e.g. "implied_active"
+   *  (already-enrolled family, service messages) or
+   *  "registration_checkbox" (explicit opt-in captured at
+   *  registration). Informational; the opt-out timestamp is what
+   *  actually gates sends. */
+  sms_consent_source?: string | null;
 }
 
 export interface XanoFamily {
@@ -1132,6 +1143,51 @@ export interface XanoAdminNote {
   last_edited: number | null;
 }
 
+/**
+ * One SMS in a family's text thread (`sms_messages`). Both outbound
+ * (staff-typed, automated triggers, group blasts) and inbound (family
+ * replies) live here, distinguished by `direction`. Mirrors the
+ * shape/access pattern of `XanoAdminNote` but adds the Twilio delivery
+ * fields (sid, status, error) so the thread can show real send state.
+ */
+export interface XanoSmsMessage {
+  id: number;
+  created_at: number;
+  /** Family this text belongs to. */
+  registration_families_id: number;
+  /** Optional student/year context — set when a trigger text is about
+   *  a specific student or year; null for general/manual/group texts. */
+  registration_students_id?: number | null;
+  registration_school_years_id?: number | null;
+  /** `"outbound"` (we sent it) | `"inbound"` (family replied). */
+  direction: string;
+  /** E.164 numbers. For outbound, `to_number` is the family; for
+   *  inbound, `from_number` is the family and `to_number` is us. */
+  to_number: string;
+  from_number: string;
+  body: string;
+  /** Twilio delivery status. Outbound:
+   *  queued|sent|delivered|undelivered|failed (updated by the status
+   *  callback). Inbound: "received". */
+  status: string;
+  /** Twilio Message SID (`SMxx…`) — natural key the status-callback
+   *  webhook matches on to update `status`. Null until Twilio accepts
+   *  the send. */
+  twilio_message_sid?: string | null;
+  /** What produced this text: "manual" (staff-typed), a trigger key
+   *  ("application_received", "accepted", …), or "group:<slug>". Null
+   *  for inbound. */
+  template?: string | null;
+  /** Twilio error code when status is failed/undelivered. */
+  error_code?: string | null;
+  /** Staff member who sent a manual or group text (denormalized).
+   *  Null for automated triggers and inbound. */
+  author_email?: string | null;
+  author_name?: string | null;
+  /** Billed SMS segment count (160 GSM-7 chars each), from Twilio. */
+  segments?: number | null;
+}
+
 export interface XanoInquiry {
   id: number;
   created_at: number;
@@ -1991,6 +2047,27 @@ export const xano = {
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
       return res.json();
+    },
+
+    /** Find the parent whose stored phone matches a raw inbound number
+     *  (any format). Used by the Twilio webhook to resolve a texter →
+     *  parent → family. Compares on the bare 10-digit form since
+     *  storage strips non-digits while Twilio sends E.164. Returns null
+     *  on no match / bad input rather than throwing — the webhook still
+     *  logs the inbound text even when it can't attribute it. */
+    async findByPhone(rawPhone: string): Promise<XanoParent | null> {
+      const norm = (s: string) => {
+        const d = (s ?? "").replace(/\D/g, "");
+        return d.length === 11 && d.startsWith("1") ? d.slice(1) : d;
+      };
+      const target = norm(rawPhone);
+      if (target.length !== 10) return null;
+      try {
+        const all = await this.getAll();
+        return all.find((p) => norm(p.phone ?? "") === target) ?? null;
+      } catch {
+        return null;
+      }
     },
 
     async getById(id: number): Promise<XanoParent> {
@@ -4099,6 +4176,87 @@ export const xano = {
         method: "DELETE",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+    },
+  },
+
+  smsMessages: {
+    /** A family's full text thread, oldest-first (chat order). */
+    async getByFamilyId(familyId: number): Promise<XanoSmsMessage[]> {
+      try {
+        const res = await fetch(
+          `${getBaseUrl()}/sms_messages?registration_families_id=${familyId}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) return [];
+        const items: XanoSmsMessage[] = await res.json();
+        return Array.isArray(items)
+          ? items
+              .filter((m) => m.registration_families_id === familyId)
+              .sort((a, b) => a.created_at - b.created_at)
+          : [];
+      } catch {
+        return [];
+      }
+    },
+
+    /** Every SMS across all families, newest-first — powers the global
+     *  inbox's conversation list (Phase 3). */
+    async getAll(): Promise<XanoSmsMessage[]> {
+      try {
+        const res = await fetch(`${getBaseUrl()}/sms_messages`, {
+          cache: "no-store",
+        });
+        if (!res.ok) return [];
+        const items: XanoSmsMessage[] = await res.json();
+        return Array.isArray(items)
+          ? items.slice().sort((a, b) => b.created_at - a.created_at)
+          : [];
+      } catch {
+        return [];
+      }
+    },
+
+    /** Look up a logged message by its Twilio SID — the status-callback
+     *  webhook uses this to update delivery state on the right row. */
+    async findByMessageSid(sid: string): Promise<XanoSmsMessage | null> {
+      try {
+        const res = await fetch(
+          `${getBaseUrl()}/sms_messages?twilio_message_sid=${encodeURIComponent(sid)}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) return null;
+        const items: XanoSmsMessage[] = await res.json();
+        return Array.isArray(items)
+          ? items.find((m) => m.twilio_message_sid === sid) ?? null
+          : null;
+      } catch {
+        return null;
+      }
+    },
+
+    async create(
+      data: Omit<XanoSmsMessage, "id" | "created_at">
+    ): Promise<XanoSmsMessage> {
+      const res = await fetch(`${getBaseUrl()}/sms_messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async update(
+      id: number,
+      data: Partial<Omit<XanoSmsMessage, "id" | "created_at">>
+    ): Promise<XanoSmsMessage> {
+      const res = await fetch(`${getBaseUrl()}/sms_messages/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
     },
   },
 

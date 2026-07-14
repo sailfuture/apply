@@ -63,6 +63,7 @@ import { Textarea } from "@/components/ui/textarea";
 // `StudentApplicationBlock` no longer uses it.
 import { StatusBadge } from "@/components/admin/status-badge";
 import { FamilyNotesSheet } from "@/components/admin/family-notes-sheet";
+import { FamilyMessagesSheet } from "@/components/admin/family-messages-sheet";
 import { EmailParentButton } from "@/components/admin/email-parent-button";
 import { DocumentsToReviewBlock } from "@/components/admin/documents-to-review-block";
 import { adminFetcher } from "@/lib/admin-fetcher";
@@ -669,6 +670,10 @@ export default function FamilyDetailPage() {
               familyId={family.id}
               defaultYearId={yearId ? Number(yearId) : null}
               phase="application"
+            />
+            <FamilyMessagesSheet
+              familyId={family.id}
+              defaultYearId={yearId ? Number(yearId) : null}
             />
           </div>
         </div>
