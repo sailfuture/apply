@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
-import { xano } from "@/lib/xano";
+import { xano, activeStripeSubscriptionId } from "@/lib/xano";
+import { parseAnchorDate, buildMonthSlots } from "@/lib/billing-schedule";
 
 /**
  * Admin Billing list — one row per family with a Stripe subscription
@@ -49,6 +50,9 @@ export async function GET(req: NextRequest) {
       parentsResult,
       transactionsResult,
       appsResult,
+      studentsResult,
+      progressResult,
+      yearResult,
     ] = await Promise.allSettled([
       xano.familyPayments.getAllByYear(yearId),
       xano.families.getAll(),
@@ -58,6 +62,20 @@ export async function GET(req: NextRequest) {
       // now — fetch every application so we can sum per-family
       // below. Source of truth for billing math.
       xano.applications.getAll(),
+      // Students, for the archived filter: an archived (unenrolled)
+      // student's application must not count toward the family's
+      // monthly/year totals — Stripe stopped billing them at archive
+      // time, and this list (plus its XLSX export) must agree with
+      // what Stripe actually invoices.
+      xano.students.getAll(),
+      // Registration progress, for the "billing not started" section:
+      // a confirmed family with no live subscription is billing work
+      // waiting to happen — previously invisible on this page.
+      xano.studentRegistrationProgress.getByYear(yearId),
+      // Year row for the billing anchor — drives the derived status
+      // pill (scheduled vs no-invoices) and the next-invoice
+      // projection.
+      xano.schoolYears.getById(yearId),
     ]);
 
     if (paymentsResult.status === "rejected") {
@@ -104,14 +122,40 @@ export async function GET(req: NextRequest) {
     const yearApps = (
       appsResult.status === "fulfilled" ? appsResult.value : []
     ).filter((a) => Number(a.registration_school_years_id) === yearId);
+    const archivedStudentIds = new Set(
+      (studentsResult.status === "fulfilled" ? studentsResult.value : [])
+        .filter((s) => s.isArchived === true)
+        .map((s) => s.id)
+    );
+    const progresses =
+      progressResult.status === "fulfilled" ? progressResult.value : [];
+    const year = yearResult.status === "fulfilled" ? yearResult.value : null;
+    if (progressResult.status === "rejected") {
+      console.error(
+        "[/api/admin/billing] failed to load registration progress:",
+        progressResult.reason
+      );
+    }
+    if (yearResult.status === "rejected") {
+      console.error(
+        "[/api/admin/billing] failed to load school year:",
+        yearResult.reason
+      );
+    }
 
     // Per-family monthly total derived from per-student
     // `monthly_amount` sums (now on the application row). Only
-    // active applications contribute — soft-deleted apps shouldn't
-    // bill.
+    // active applications for non-archived students contribute —
+    // soft-deleted apps and unenrolled students shouldn't bill, and
+    // the archive cascade already removed their Stripe items, so
+    // counting them here would overstate every total on this list
+    // and the XLSX export.
     const monthlyByFamily = new Map<number, number>();
     for (const app of yearApps) {
       if (app.isActive === false) continue;
+      if (archivedStudentIds.has(Number(app.registration_students_id))) {
+        continue;
+      }
       const fid = Number(app.registration_families_id);
       if (!fid) continue;
       const amount =
@@ -128,9 +172,15 @@ export async function GET(req: NextRequest) {
     // open/uncollectible only — past-due and future-generated
     // invoices count, but voided invoices don't because Stripe
     // never collects on them.
+    const now = Date.now();
     const aggByFamily = new Map<
       number,
-      { paidCents: number; outstandingCents: number; invoicesIssued: number }
+      {
+        paidCents: number;
+        outstandingCents: number;
+        invoicesIssued: number;
+        hasPastDue: boolean;
+      }
     >();
     for (const t of transactions) {
       const fid = Number(t.registration_families_id);
@@ -138,17 +188,39 @@ export async function GET(req: NextRequest) {
         paidCents: 0,
         outstandingCents: 0,
         invoicesIssued: 0,
+        hasPastDue: false,
       };
       bucket.paidCents += t.amount_paid_cents ?? 0;
       if (t.status === "open" || t.status === "uncollectible") {
-        bucket.outstandingCents += Math.max(
+        const balance = Math.max(
           (t.amount_due_cents ?? 0) - (t.amount_paid_cents ?? 0),
           0
         );
+        bucket.outstandingCents += balance;
+        // Past due = an unpaid balance whose due date has passed —
+        // drives the red status pill on the list.
+        if (balance > 0 && t.due_date != null && t.due_date < now) {
+          bucket.hasPastDue = true;
+        }
       }
       bucket.invoicesIssued += 1;
       aggByFamily.set(fid, bucket);
     }
+
+    // Billing-anchor projections. `nextInvoiceAt` = the next cycle
+    // boundary after today within the year's 12-month window — an
+    // ESTIMATE derived from the anchor (Stripe owns the real dates),
+    // shown so admin can see when the next invoice will land and,
+    // for "Scheduled" subscriptions, when billing kicks in.
+    const billingStartDate = year?.billing_start_date ?? null;
+    const billingStartMs = billingStartDate
+      ? Date.parse(`${billingStartDate}T00:00:00Z`)
+      : NaN;
+    const slots = billingStartDate
+      ? buildMonthSlots(parseAnchorDate(billingStartDate))
+      : [];
+    const nextInvoiceAt =
+      slots.find((s) => s.periodStart > now)?.periodStart ?? null;
 
     const familyById = new Map(families.map((f) => [f.id, f]));
     // Primary parent per family — lowest id wins, matching the
@@ -163,7 +235,9 @@ export async function GET(req: NextRequest) {
     }
 
     const rows: BillingRow[] = payments
-      .filter((p) => !!p.stripe_subscription_id)
+      // Sentinel-aware: a `canceled:<id>` marker is NOT a live
+      // subscription — those families belong off the paying list.
+      .filter((p) => !!activeStripeSubscriptionId(p.stripe_subscription_id))
       .map((p) => {
         const familyId = Number(p.registration_families_id);
         const family = familyById.get(familyId) ?? null;
@@ -175,7 +249,27 @@ export async function GET(req: NextRequest) {
           paidCents: 0,
           outstandingCents: 0,
           invoicesIssued: 0,
+          hasPastDue: false,
         };
+        // Derived subscription state, mirror-only (no per-family
+        // Stripe call):
+        //   past_due    — unpaid invoice past its due date
+        //   active      — invoices flowing normally
+        //   scheduled   — live subscription, no invoices yet, and
+        //                 we're before (or within a week after) the
+        //                 billing anchor: first invoice is upcoming
+        //   no_invoices — live subscription, zero invoices, well past
+        //                 the anchor. Something's wrong (webhook dead
+        //                 or the subscription isn't generating) — the
+        //                 daily cron alert fires on the same signal.
+        const status: BillingRowStatus = agg.hasPastDue
+          ? "past_due"
+          : agg.invoicesIssued > 0
+            ? "active"
+            : !Number.isFinite(billingStartMs) ||
+                now < billingStartMs + 7 * 24 * 60 * 60 * 1000
+              ? "scheduled"
+              : "no_invoices";
         return {
           id: p.id,
           family_id: familyId,
@@ -191,15 +285,93 @@ export async function GET(req: NextRequest) {
           paid_cents: agg.paidCents,
           outstanding_cents: agg.outstandingCents,
           invoices_issued: agg.invoicesIssued,
-          stripe_subscription_id: p.stripe_subscription_id ?? null,
+          stripe_subscription_id: activeStripeSubscriptionId(
+            p.stripe_subscription_id
+          ),
+          status,
+          next_invoice_at: nextInvoiceAt,
         };
       });
 
     rows.sort((a, b) => a.family_name.localeCompare(b.family_name));
-    return NextResponse.json(rows);
+
+    // "Billing not started" — families whose registration is
+    // confirmed (the precondition `startMonthlyBilling` enforces) but
+    // who have NO live subscription for the year. These are the
+    // pending setups that were previously invisible on every billing
+    // surface: the list above only shows subscriptions that exist.
+    const liveSubFamilies = new Set(rows.map((r) => r.family_id));
+    const notStarted: NotStartedRow[] = progresses
+      .filter(
+        (p) =>
+          p.isRegistrationConfirmed === true &&
+          p.isArchived !== true &&
+          !liveSubFamilies.has(Number(p.registration_families_id))
+      )
+      .map((p) => {
+        const fid = Number(p.registration_families_id);
+        const family = familyById.get(fid) ?? null;
+        const primary = primaryByFamily.get(fid) ?? null;
+        const monthly = monthlyByFamily.get(fid);
+        return {
+          family_id: fid,
+          year_id: yearId,
+          family_name: family?.family_name?.trim() || `Family #${fid}`,
+          primary_name: primary
+            ? `${primary.first_name ?? ""} ${primary.last_name ?? ""}`.trim()
+            : "",
+          primary_email: primary?.email ?? "",
+          monthly_tuition: monthly && monthly > 0 ? monthly : null,
+        };
+      })
+      // De-dupe defensively (progress rows should be unique per
+      // family, but duplicates exist in the wild — see the reconcile
+      // work in lib/billing.ts).
+      .filter(
+        (row, i, arr) =>
+          arr.findIndex((r) => r.family_id === row.family_id) === i
+      )
+      .sort((a, b) => a.family_name.localeCompare(b.family_name));
+
+    return NextResponse.json({
+      rows,
+      notStarted,
+      billingStartDate,
+      nextInvoiceAt,
+    } satisfies BillingListResponse);
   } catch (err) {
     return handleAdminError(err);
   }
+}
+
+/** Derived, mirror-only subscription state for the list pill. */
+export type BillingRowStatus =
+  | "scheduled"
+  | "active"
+  | "past_due"
+  | "no_invoices";
+
+/** A confirmed family with no live subscription — billing work
+ *  waiting for the "Start Monthly Billing" click. */
+export interface NotStartedRow {
+  family_id: number;
+  year_id: number;
+  family_name: string;
+  primary_name: string;
+  primary_email: string;
+  /** Σ active students' monthly_amount, or null when tuition isn't
+   *  set yet (family isn't startable until it is). */
+  monthly_tuition: number | null;
+}
+
+export interface BillingListResponse {
+  rows: BillingRow[];
+  notStarted: NotStartedRow[];
+  /** The year's billing anchor (YYYY-MM-DD), null when unset. */
+  billingStartDate: string | null;
+  /** Next projected cycle boundary after today (unix ms), null when
+   *  the anchor is unset or the 12-month window has ended. */
+  nextInvoiceAt: number | null;
 }
 
 export interface BillingRow {
@@ -224,4 +396,10 @@ export interface BillingRow {
    *  list UI when admin scans for who's behind on invoicing. */
   invoices_issued: number;
   stripe_subscription_id: string | null;
+  /** Derived, mirror-only state — see `BillingRowStatus`. */
+  status: BillingRowStatus;
+  /** Next projected invoice date (unix ms) from the year's billing
+   *  anchor; an estimate (Stripe owns the real cycle), null when the
+   *  anchor is unset or the year's window has ended. */
+  next_invoice_at: number | null;
 }

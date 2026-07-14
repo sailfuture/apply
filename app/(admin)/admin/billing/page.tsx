@@ -30,7 +30,12 @@ import {
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { adminFetcher } from "@/lib/admin-fetcher";
-import type { BillingRow } from "@/app/api/admin/billing/route";
+import type {
+  BillingListResponse,
+  BillingRow,
+  BillingRowStatus,
+  NotStartedRow,
+} from "@/app/api/admin/billing/route";
 import { exportBillingXlsx } from "@/lib/billing-export";
 
 /**
@@ -53,12 +58,24 @@ export default function AdminBillingPage() {
   const searchParams = useSearchParams();
   const yearId = searchParams.get("yearId");
 
-  const { data, isLoading, error } = useSWR<BillingRow[]>(
+  const { data, isLoading, error } = useSWR<BillingListResponse>(
     yearId ? `/api/admin/billing?yearId=${yearId}` : null,
     adminFetcher
   );
 
-  const rows = useMemo(() => (Array.isArray(data) ? data : []), [data]);
+  const rows = useMemo(() => data?.rows ?? [], [data]);
+  const notStarted = useMemo(() => data?.notStarted ?? [], [data]);
+
+  // Status counts for the summary strip.
+  const statusCounts = useMemo(() => {
+    const counts = { active: 0, scheduled: 0, past_due: 0, no_invoices: 0 };
+    for (const r of rows) counts[r.status] += 1;
+    return counts;
+  }, [rows]);
+  const totalMonthly = useMemo(
+    () => rows.reduce((acc, r) => acc + (r.monthly_tuition ?? 0), 0),
+    [rows]
+  );
 
   // Client-side .xlsx export of the whole paying-families list for the
   // year (not the search-filtered subset) — `exceljs` is lazy-loaded
@@ -131,19 +148,227 @@ export default function AdminBillingPage() {
         </div>
       ) : isLoading && !data ? (
         <BillingListSkeleton />
-      ) : rows.length === 0 ? (
+      ) : rows.length === 0 && notStarted.length === 0 ? (
         <BillingEmptyState />
       ) : (
-        <BillingTable
-          rows={rows}
-          onRowClick={(row) =>
-            router.push(
-              `/admin/families/${row.family_id}/billing?yearId=${row.year_id}`
-            )
-          }
-        />
+        <>
+          {/* Summary strip — one glance at the health of the year's
+              billing: how many subscriptions are in each state, how
+              many confirmed families still need billing started, and
+              the program-wide monthly total. */}
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <SummaryChip
+              label="Active"
+              count={statusCounts.active}
+              className="border-emerald-200 bg-emerald-50 text-emerald-700"
+            />
+            <SummaryChip
+              label="Scheduled"
+              count={statusCounts.scheduled}
+              className="border-blue-200 bg-blue-50 text-blue-700"
+            />
+            <SummaryChip
+              label="Past due"
+              count={statusCounts.past_due}
+              className="border-red-200 bg-red-50 text-red-700"
+            />
+            <SummaryChip
+              label="No invoices"
+              count={statusCounts.no_invoices}
+              className="border-amber-200 bg-amber-50 text-amber-700"
+            />
+            <SummaryChip
+              label="Not started"
+              count={notStarted.length}
+              className="border-amber-300 bg-amber-100 text-amber-800"
+            />
+            <span className="ml-auto rounded-full border bg-white px-2.5 py-1 tabular-nums text-muted-foreground">
+              Total monthly: {formatMonthly(totalMonthly || null)}
+            </span>
+          </div>
+
+          {/* Pending setups first — these are actionable (a confirmed
+              family isn't being billed until someone clicks Start),
+              so they outrank the already-running list. Hidden when
+              empty. */}
+          {notStarted.length > 0 ? (
+            <NotStartedTable
+              rows={notStarted}
+              onRowClick={(row) =>
+                router.push(
+                  `/admin/families/${row.family_id}/billing?yearId=${row.year_id}`
+                )
+              }
+            />
+          ) : null}
+
+          {rows.length > 0 ? (
+            <BillingTable
+              rows={rows}
+              onRowClick={(row) =>
+                router.push(
+                  `/admin/families/${row.family_id}/billing?yearId=${row.year_id}`
+                )
+              }
+            />
+          ) : null}
+        </>
       )}
     </div>
+  );
+}
+
+function SummaryChip({
+  label,
+  count,
+  className,
+}: {
+  label: string;
+  count: number;
+  className: string;
+}) {
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-medium",
+        // Zero-count chips fade back so the non-zero states pop.
+        count === 0 && "opacity-45",
+        className
+      )}
+    >
+      {label}
+      <span className="tabular-nums">{count}</span>
+    </span>
+  );
+}
+
+/** Status pill for one billing row — colors match the summary chips. */
+function StatusPill({ status }: { status: BillingRowStatus }) {
+  const config: Record<
+    BillingRowStatus,
+    { label: string; className: string; title?: string }
+  > = {
+    active: {
+      label: "Active",
+      className: "border-emerald-200 bg-emerald-50 text-emerald-700",
+    },
+    scheduled: {
+      label: "Scheduled",
+      className: "border-blue-200 bg-blue-50 text-blue-700",
+      title: "Subscription is live; the first invoice lands on the billing start date.",
+    },
+    past_due: {
+      label: "Past due",
+      className: "border-red-200 bg-red-50 text-red-700",
+      title: "An unpaid invoice is past its due date.",
+    },
+    no_invoices: {
+      label: "No invoices",
+      className: "border-amber-200 bg-amber-50 text-amber-700",
+      title:
+        "Live subscription but no invoices recorded well past billing start — check the Stripe webhook or run the backfill.",
+    },
+  };
+  const c = config[status];
+  return (
+    <span
+      title={c.title}
+      className={cn(
+        "inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium",
+        c.className
+      )}
+    >
+      {c.label}
+    </span>
+  );
+}
+
+/**
+ * Confirmed families with no live subscription — billing work waiting
+ * for the Start click. Row click lands on the family's billing card
+ * where the "Start Monthly Billing" button lives.
+ */
+function NotStartedTable({
+  rows,
+  onRowClick,
+}: {
+  rows: NotStartedRow[];
+  onRowClick: (row: NotStartedRow) => void;
+}) {
+  return (
+    <Card className="overflow-hidden border-amber-200 bg-white py-0 gap-0">
+      <CardHeader className="py-4 border-b border-amber-200 bg-amber-50/50">
+        <div className="flex items-baseline gap-3">
+          <CardTitle className="text-sm font-semibold uppercase tracking-wider text-amber-800">
+            Billing not started
+          </CardTitle>
+          <span className="text-xs tabular-nums text-amber-800/70">
+            ({rows.length})
+          </span>
+          <p className="text-xs text-amber-800/70">
+            Registration confirmed, but no subscription exists yet — these
+            families aren&rsquo;t being billed. Click one to start billing.
+          </p>
+        </div>
+      </CardHeader>
+      <CardContent className="p-4 bg-white">
+        <Table>
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[30%]">
+                Family
+              </TableHead>
+              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[34%]">
+                Primary Contact
+              </TableHead>
+              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[18%] text-right">
+                Monthly (once started)
+              </TableHead>
+              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[14%]">
+                Readiness
+              </TableHead>
+              <TableHead className="w-[4%]" />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((row) => (
+              <TableRow
+                key={row.family_id}
+                onClick={() => onRowClick(row)}
+                className="cursor-pointer"
+              >
+                <TableCell className="text-sm font-medium">
+                  {row.family_name}
+                </TableCell>
+                <TableCell className="text-sm">
+                  <span className="block truncate">
+                    {row.primary_email || row.primary_name || "—"}
+                  </span>
+                </TableCell>
+                <TableCell className="text-sm text-right tabular-nums">
+                  {formatMonthly(row.monthly_tuition)}
+                </TableCell>
+                <TableCell className="text-xs">
+                  {row.monthly_tuition != null ? (
+                    <span className="text-emerald-700">Ready to start</span>
+                  ) : (
+                    <span
+                      className="text-amber-700"
+                      title="Set each student's tuition on the Scholarship Determination card first."
+                    >
+                      Tuition not set
+                    </span>
+                  )}
+                </TableCell>
+                <TableCell className="text-right">
+                  <ChevronRight className="size-4 text-muted-foreground inline" />
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -190,32 +415,38 @@ function BillingTable({
         <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[22%]">
+              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[16%]">
                 Family
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[22%]">
+              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[16%]">
                 Primary Contact
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[12%] text-right">
+              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[10%]">
+                Status
+              </TableHead>
+              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[10%] text-right">
                 Monthly
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[12%] text-right">
+              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[10%] text-right">
                 Year total
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[12%] text-right">
+              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[10%] text-right">
                 Paid
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[14%] text-right">
+              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[12%] text-right">
                 Outstanding
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[6%] text-right" />
+              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[12%] text-right">
+                Next invoice
+              </TableHead>
+              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[4%] text-right" />
             </TableRow>
           </TableHeader>
           <TableBody>
             {visible.length === 0 ? (
               <TableRow className="hover:bg-transparent">
                 <TableCell
-                  colSpan={7}
+                  colSpan={9}
                   className="py-8 text-center text-sm italic text-muted-foreground"
                 >
                   No families match &ldquo;{search}&rdquo;.
@@ -236,6 +467,9 @@ function BillingTable({
                       {row.primary_email || row.primary_name || "—"}
                     </span>
                   </TableCell>
+                  <TableCell>
+                    <StatusPill status={row.status} />
+                  </TableCell>
                   <TableCell className="text-sm text-right tabular-nums">
                     {formatMonthly(row.monthly_tuition)}
                   </TableCell>
@@ -254,6 +488,12 @@ function BillingTable({
                     )}
                   >
                     {formatCents(row.outstanding_cents)}
+                  </TableCell>
+                  <TableCell
+                    className="text-sm text-right tabular-nums text-muted-foreground"
+                    title="Projected from the year's billing anchor — Stripe owns the exact cycle date."
+                  >
+                    {formatUpcoming(row.next_invoice_at)}
                   </TableCell>
                   <TableCell className="text-right">
                     <ChevronRight className="size-4 text-muted-foreground inline" />
@@ -311,6 +551,18 @@ function formatMonthly(dollars: number | null): string {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
+}
+
+/** Short date for the projected next-invoice column ("Aug 1, 2026").
+ *  Null (no anchor set / year window over) becomes em-dash. */
+function formatUpcoming(ts: number | null): string {
+  if (!ts) return "—";
+  return new Date(ts).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  });
 }
 
 /** Format a cents value (paid_cents, outstanding_cents) for display.

@@ -23,10 +23,22 @@ interface Col {
   value: (r: BillingRow) => string | number | null;
 }
 
+const STATUS_LABEL: Record<string, string> = {
+  active: "Active",
+  scheduled: "Scheduled",
+  past_due: "Past due",
+  no_invoices: "No invoices",
+};
+
 const COLUMNS: Col[] = [
   { label: "Family", width: 28, value: (r) => r.family_name },
   { label: "Primary Contact", width: 24, value: (r) => r.primary_name || "" },
   { label: "Email", width: 30, value: (r) => r.primary_email || "" },
+  {
+    label: "Status",
+    width: 12,
+    value: (r) => STATUS_LABEL[r.status] ?? r.status,
+  },
   {
     label: "Monthly Payment",
     width: 16,
@@ -52,6 +64,19 @@ const COLUMNS: Col[] = [
     value: (r) => r.outstanding_cents / 100,
   },
   { label: "Invoices Issued", width: 14, value: (r) => r.invoices_issued },
+  {
+    label: "Next Invoice (est.)",
+    width: 16,
+    value: (r) =>
+      r.next_invoice_at
+        ? new Date(r.next_invoice_at).toLocaleDateString("en-US", {
+            month: "short",
+            day: "numeric",
+            year: "numeric",
+            timeZone: "UTC",
+          })
+        : "",
+  },
 ];
 
 const MONEY_FMT = '"$"#,##0.00';
