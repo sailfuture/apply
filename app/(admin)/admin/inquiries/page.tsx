@@ -539,7 +539,7 @@ export default function InquiriesPage() {
       key: "current_grade",
       header: "Grade",
       sortable: true,
-      width: "w-[6%]",
+      width: "w-[7%]",
       render: (row) => (
         <span className="block truncate">
           {row.current_grade || "—"}
@@ -554,7 +554,7 @@ export default function InquiriesPage() {
       header: "Email",
       sortable: true,
       searchable: true,
-      width: "w-[14%]",
+      width: "w-[13%]",
       render: (row) =>
         row.primary_email ? (
           <a
@@ -594,7 +594,7 @@ export default function InquiriesPage() {
     {
       key: "hear_about_us",
       header: "Source",
-      width: "w-[6%]",
+      width: "w-[7%]",
       render: (row) => (
         <span className="block truncate">{row.hear_about_us || "—"}</span>
       ),
@@ -607,9 +607,9 @@ export default function InquiriesPage() {
       // already pre-sorted newest-first, and this column lets admin
       // re-sort oldest-first with a click.
       key: "created_at",
-      header: "Submitted",
+      header: "Added",
       sortable: true,
-      width: "w-[6%]",
+      width: "w-[7%]",
       accessor: (row) => row.created_at ?? 0,
       render: (row) => (
         <span
@@ -729,9 +729,9 @@ export default function InquiriesPage() {
     ...baseColumns,
     {
       key: "isFollowedUp",
-      header: "Followed up",
+      header: "Follow-up",
       sortable: true,
-      width: "w-[92px]",
+      width: "w-[112px]",
       align: "center",
       // Switch sits inside a click-stopping wrapper because the parent
       // row registers an onRowClick to open the detail Sheet. Disabled
@@ -951,7 +951,12 @@ export default function InquiriesPage() {
                     : ""}
                 </SheetDescription>
               </SheetHeader>
-              <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
+              {/* `overflow-x-hidden` is a hard backstop: with only
+                  `overflow-y-auto`, the browser promotes overflow-x to
+                  `auto`, so any over-wide child (a long note/reason,
+                  an unbroken email) would add a horizontal scrollbar.
+                  Content wraps, so nothing legitimate gets clipped. */}
+              <div className="flex-1 overflow-y-auto overflow-x-hidden px-6 py-5 space-y-6 min-w-0">
                 <DetailRow label="Followed up">
                   <div className="flex items-center gap-2">
                     <Switch
@@ -989,28 +994,32 @@ export default function InquiriesPage() {
 
                 <DetailRow label="Status">
                   {active.status === "not_interested" ? (
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge
-                        variant="secondary"
-                        className="font-normal"
-                        title={active.status_reason || undefined}
-                      >
-                        Not interested
-                        {active.status_reason
-                          ? ` — ${active.status_reason}`
-                          : ""}
-                      </Badge>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-7 text-xs"
-                        disabled={savingId === active.id}
-                        onClick={() => void restoreInquiry(active)}
-                      >
-                        <Undo2 className="size-3 mr-1" />
-                        Restore to active
-                      </Button>
+                    // Reason lives on its own wrapping line, NOT inside
+                    // the badge — the Badge is `whitespace-nowrap w-fit
+                    // shrink-0`, so a long free-text reason there would
+                    // force the whole Sheet to scroll horizontally.
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge variant="secondary" className="font-normal">
+                          Not interested
+                        </Badge>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-7 text-xs"
+                          disabled={savingId === active.id}
+                          onClick={() => void restoreInquiry(active)}
+                        >
+                          <Undo2 className="size-3 mr-1" />
+                          Restore to active
+                        </Button>
+                      </div>
+                      {active.status_reason ? (
+                        <p className="text-xs text-muted-foreground break-words">
+                          Reason: {active.status_reason}
+                        </p>
+                      ) : null}
                     </div>
                   ) : active.status === "converted" ? (
                     <div className="flex flex-wrap items-center gap-2">
@@ -1081,7 +1090,7 @@ export default function InquiriesPage() {
                     {active.primary_email ? (
                       <a
                         href={`mailto:${active.primary_email}`}
-                        className="text-primary underline-offset-2 hover:underline"
+                        className="text-primary underline-offset-2 hover:underline break-all"
                       >
                         {active.primary_email}
                       </a>
@@ -1112,7 +1121,7 @@ export default function InquiriesPage() {
                   </DetailRow>
                   <DetailRow label="About the student">
                     {active.about_student ? (
-                      <p className="whitespace-pre-wrap">
+                      <p className="whitespace-pre-wrap break-words">
                         {active.about_student}
                       </p>
                     ) : (

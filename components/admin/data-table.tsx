@@ -155,12 +155,22 @@ export function DataTable<T extends Record<string, unknown>>({
                   )}
                 >
                   {col.sortable ? (
+                    // `flex w-full min-w-0` bounds the button to the
+                    // (fixed) cell width so the label span can actually
+                    // truncate — an `inline-flex` button sizes to its
+                    // content and spills long headers into the next
+                    // cell. `justify-*` keeps the label aligned with the
+                    // body cells below it; the chevron never shrinks.
                     <button
                       type="button"
-                      className="inline-flex items-center gap-1 hover:text-foreground truncate"
+                      className={cn(
+                        "flex w-full min-w-0 items-center gap-1 hover:text-foreground",
+                        col.align === "right" && "justify-end",
+                        col.align === "center" && "justify-center"
+                      )}
                       onClick={() => toggleSort(col.key)}
                     >
-                      <span className="truncate">{col.header}</span>
+                      <span className="min-w-0 truncate">{col.header}</span>
                       {sortKey === col.key ? (
                         sortDir === "asc" ? (
                           <ChevronUp className="size-3.5 shrink-0" />
@@ -172,7 +182,7 @@ export function DataTable<T extends Record<string, unknown>>({
                       )}
                     </button>
                   ) : (
-                    <span className="truncate">{col.header}</span>
+                    <span className="block truncate">{col.header}</span>
                   )}
                 </TableHead>
               ))}
