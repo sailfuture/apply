@@ -3,7 +3,13 @@
 import { useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
-import { ChevronRight, CreditCard, ExternalLink, Search } from "lucide-react";
+import {
+  ChevronRight,
+  CreditCard,
+  Download,
+  ExternalLink,
+  Search,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -25,6 +31,7 @@ import {
 import { cn } from "@/lib/utils";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import type { BillingRow } from "@/app/api/admin/billing/route";
+import { exportBillingXlsx } from "@/lib/billing-export";
 
 /**
  * Admin Billing list — every family with a Stripe subscription on
@@ -53,6 +60,22 @@ export default function AdminBillingPage() {
 
   const rows = useMemo(() => (Array.isArray(data) ? data : []), [data]);
 
+  // Client-side .xlsx export of the whole paying-families list for the
+  // year (not the search-filtered subset) — `exceljs` is lazy-loaded
+  // inside the helper so it only ships on demand.
+  const [exporting, setExporting] = useState(false);
+  async function handleExport() {
+    if (rows.length === 0 || exporting) return;
+    setExporting(true);
+    try {
+      await exportBillingXlsx(rows);
+    } catch (err) {
+      console.error("Billing export failed:", err);
+    } finally {
+      setExporting(false);
+    }
+  }
+
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -70,16 +93,29 @@ export default function AdminBillingPage() {
             SailFuture account. Useful for cross-checking against the
             local mirror, refunds we issued out-of-band, or
             invoice-level edits that Stripe is the authority on. */}
-        <Button asChild variant="outline" size="sm" className="bg-white shrink-0">
-          <a
-            href={STRIPE_INVOICES_DASHBOARD_URL}
-            target="_blank"
-            rel="noreferrer"
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="bg-white"
+            disabled={rows.length === 0 || exporting}
+            onClick={handleExport}
           >
-            <ExternalLink className="size-3.5 mr-1.5" aria-hidden="true" />
-            View invoices in Stripe
-          </a>
-        </Button>
+            <Download className="size-3.5 mr-1.5" aria-hidden="true" />
+            {exporting ? "Exporting…" : "Export"}
+          </Button>
+          <Button asChild variant="outline" size="sm" className="bg-white">
+            <a
+              href={STRIPE_INVOICES_DASHBOARD_URL}
+              target="_blank"
+              rel="noreferrer"
+            >
+              <ExternalLink className="size-3.5 mr-1.5" aria-hidden="true" />
+              View invoices in Stripe
+            </a>
+          </Button>
+        </div>
       </div>
 
       {error ? (
