@@ -2,6 +2,7 @@ import { auth, currentUser } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
 import { xano } from "@/lib/xano";
 import { sendApplicationReceivedEmail } from "@/lib/emails/triggers";
+import { sendApplicationReceivedSms } from "@/lib/sms/triggers";
 
 /**
  * Read-or-create the progress row for the current Clerk user's family + a
@@ -187,6 +188,12 @@ export async function PATCH(req: NextRequest) {
     sendApplicationReceivedEmail(familyId, yearId).catch((err) => {
       console.error(
         `[/api/family-progress] sendApplicationReceivedEmail failed for family=${familyId} year=${yearId}:`,
+        err
+      );
+    });
+    sendApplicationReceivedSms(familyId, yearId).catch((err) => {
+      console.error(
+        `[/api/family-progress] sendApplicationReceivedSms failed for family=${familyId} year=${yearId}:`,
         err
       );
     });

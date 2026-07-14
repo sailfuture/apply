@@ -3,6 +3,7 @@ import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
 import type { XanoStudentRegistrationProgress } from "@/lib/xano";
 import { sendEnrolledEmail } from "@/lib/emails/triggers";
+import { sendEnrolledSms } from "@/lib/sms/triggers";
 
 /**
  * Admin-only PATCH for the per-year `registration_student_registration_progress`
@@ -405,6 +406,12 @@ export async function PATCH(req: NextRequest) {
         sendEnrolledEmail(familyId, yearId).catch((err) => {
           console.error(
             `[/api/admin/registration-progress] sendEnrolledEmail failed for family=${familyId} year=${yearId}:`,
+            err
+          );
+        });
+        sendEnrolledSms(familyId, yearId).catch((err) => {
+          console.error(
+            `[/api/admin/registration-progress] sendEnrolledSms failed for family=${familyId} year=${yearId}:`,
             err
           );
         });

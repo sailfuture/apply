@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { xano } from "@/lib/xano";
 import type { XanoStudentRegistrationProgress } from "@/lib/xano";
 import { sendRegistrationReceivedEmail } from "@/lib/emails/triggers";
+import { sendRegistrationReceivedSms } from "@/lib/sms/triggers";
 
 /**
  * Read-or-create the registration progress row for the current Clerk user's
@@ -184,6 +185,12 @@ export async function PATCH(req: NextRequest) {
     sendRegistrationReceivedEmail(familyId, yearId).catch((err) => {
       console.error(
         `[/api/student-registration-progress] sendRegistrationReceivedEmail failed for family=${familyId} year=${yearId}:`,
+        err
+      );
+    });
+    sendRegistrationReceivedSms(familyId, yearId).catch((err) => {
+      console.error(
+        `[/api/student-registration-progress] sendRegistrationReceivedSms failed for family=${familyId} year=${yearId}:`,
         err
       );
     });

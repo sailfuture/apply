@@ -3,6 +3,7 @@ import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
 import type { XanoFamilyApplicationProgress } from "@/lib/xano";
 import { sendAcceptanceEmail } from "@/lib/emails/triggers";
+import { sendAcceptanceSms } from "@/lib/sms/triggers";
 
 /**
  * Admin GET — resolves the per-year progress row for a family. Mirrors
@@ -299,6 +300,12 @@ export async function PATCH(req: NextRequest) {
       sendAcceptanceEmail(familyId, yearId).catch((err) => {
         console.error(
           `[/api/admin/family-progress] sendAcceptanceEmail failed for family=${familyId} year=${yearId}:`,
+          err
+        );
+      });
+      sendAcceptanceSms(familyId, yearId).catch((err) => {
+        console.error(
+          `[/api/admin/family-progress] sendAcceptanceSms failed for family=${familyId} year=${yearId}:`,
           err
         );
       });

@@ -5,6 +5,10 @@ import {
   sendEnrollmentReminderEmail,
   sendBackToSchoolEmail,
 } from "@/lib/emails/triggers";
+import {
+  sendBillingUpcomingSms,
+  sendOutstandingTuitionSms,
+} from "@/lib/sms/triggers";
 
 /**
  * Daily cron sweep that drives the three time-based reminder emails:
@@ -70,6 +74,11 @@ const BACK_TO_SCHOOL_START_MONTH_INDEX = 7; // August (0-indexed)
 const BACK_TO_SCHOOL_START_DAY = 10;
 const BACK_TO_SCHOOL_END_DAY = 17;
 
+/** Lead time for the "monthly billing upcoming" SMS — fire when an open
+ *  invoice's due date is within this many days. Past that (due date in
+ *  the past) it becomes the "outstanding tuition" reminder instead. */
+const BILLING_UPCOMING_LEAD_DAYS = 3;
+
 export async function GET(req: NextRequest) {
   const authHeader = req.headers.get("authorization") ?? "";
   const expected = process.env.CRON_SECRET
@@ -84,6 +93,8 @@ export async function GET(req: NextRequest) {
     draft: { eligible: 0, sent: 0, failed: 0 },
     enrollment: { eligible: 0, sent: 0, failed: 0 },
     backToSchool: { eligible: 0, sent: 0, failed: 0 },
+    billingUpcoming: { eligible: 0, sent: 0, failed: 0 },
+    outstanding: { eligible: 0, sent: 0, failed: 0 },
   };
 
   try {
@@ -174,6 +185,50 @@ export async function GET(req: NextRequest) {
           } else {
             result.backToSchool.failed += 1;
           }
+        }
+      }
+
+      // Billing SMS — reminders driven off the invoice mirror
+      // (`registration_payment_transactions`). For each still-open
+      // invoice with a balance: fire "upcoming" when the due date is
+      // within the lead window, or "outstanding" once it's past due.
+      // Both dedupe per-invoice via the SMS log (see lib/sms/triggers),
+      // so a daily run only texts each invoice once per state. No-ops
+      // safely when Twilio isn't configured.
+      const billingFallbackUrl =
+        process.env.NEXT_PUBLIC_APP_URL ??
+        "https://apply.sailfutureacademy.org";
+      const txns = await xano.paymentTransactions.getAllByYear(year.id);
+      for (const tx of txns) {
+        const outstanding =
+          Number(tx.amount_due_cents) - Number(tx.amount_paid_cents);
+        const isOpen =
+          (tx.status === "open" || tx.status === "uncollectible") &&
+          outstanding > 0;
+        if (!isOpen) continue;
+
+        const input = {
+          familyId: tx.registration_families_id,
+          yearId: year.id,
+          invoiceId: tx.stripe_invoice_id,
+          amountCents: outstanding,
+          dueDate: tx.due_date,
+          payUrl: tx.hosted_invoice_url ?? billingFallbackUrl,
+        };
+
+        if (tx.due_date != null && tx.due_date < Date.now()) {
+          result.outstanding.eligible += 1;
+          const res = await sendOutstandingTuitionSms(input);
+          if (res.ok) result.outstanding.sent += 1;
+          else result.outstanding.failed += 1;
+        } else if (
+          tx.due_date != null &&
+          tx.due_date <= Date.now() + BILLING_UPCOMING_LEAD_DAYS * ONE_DAY_MS
+        ) {
+          result.billingUpcoming.eligible += 1;
+          const res = await sendBillingUpcomingSms(input);
+          if (res.ok) result.billingUpcoming.sent += 1;
+          else result.billingUpcoming.failed += 1;
         }
       }
     }

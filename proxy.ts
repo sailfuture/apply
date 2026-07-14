@@ -4,7 +4,13 @@ import { NextResponse } from "next/server";
 const isPublicRoute = createRouteMatcher([
   "/sign-in(.*)",
   "/sign-up(.*)",
+  // Machine-to-machine endpoints that authenticate themselves and can't
+  // present a Clerk session: inbound webhooks (Twilio/Stripe signature
+  // checks) and Vercel Cron (its own `CRON_SECRET` bearer). Without this
+  // exemption the blanket `/api/*` 401 below blocks the cron before its
+  // own auth runs, so the reminder sweep never executes in production.
   "/api/webhooks(.*)",
+  "/api/cron(.*)",
 ]);
 
 /**
