@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { validateRequest } from "twilio";
 import { xano } from "@/lib/xano";
 import { getTwilioAuthToken } from "@/lib/twilio";
+import { sendEmail } from "@/lib/emails/send";
+import { smsReplyReceived } from "@/lib/emails/templates";
 
 /**
  * Twilio inbound webhook — one endpoint for two POST shapes Twilio
@@ -118,11 +120,53 @@ export async function POST(req: NextRequest) {
         `[twilio webhook] inbound from unrecognized number ${from}`
       );
     }
+
+    // Staff notification email — resolved to parent + family +
+    // student(s) so the admissions inbox sees WHO texted, not just a
+    // number. Sent for every inbound message (including STOP, flagged
+    // as an opt-out, and unrecognized numbers, flagged unattributed).
+    // `sendEmail` is internally guarded and never throws; a failed
+    // notification must not fail the webhook (Twilio would retry and
+    // double-log the message).
+    const students = family
+      ? await xano.students.getByFamilyId(family.id).catch(() => [])
+      : [];
+    const appBase = (
+      process.env.NEXT_PUBLIC_APP_URL ?? "https://apply.sailfutureacademy.org"
+    ).replace(/\/$/, "");
+    await sendEmail({
+      to: [process.env.SMS_ALERTS_EMAIL ?? "admissions@sailfuture.org"],
+      content: smsReplyReceived({
+        parent_name: parent
+          ? `${parent.first_name} ${parent.last_name}`.trim()
+          : null,
+        family_name: family?.family_name ?? null,
+        student_names: joinNames(
+          students.map((s) => `${s.first_name} ${s.last_name}`.trim())
+        ),
+        from_number: from,
+        message_body: body,
+        message_sid: messageSid || null,
+        inbox_url: `${appBase}/admin/messages`,
+        opted_out: isStop,
+      }),
+      tag: "sms-reply-received",
+      familyId: family?.id,
+    });
   } catch (err) {
     console.error("[twilio webhook] inbound handling failed:", err);
   }
 
   return twimlOk();
+}
+
+/** "A" / "A and B" / "A, B, and C"; null for an empty list. */
+function joinNames(names: string[]): string | null {
+  const list = names.filter(Boolean);
+  if (list.length === 0) return null;
+  if (list.length === 1) return list[0];
+  if (list.length === 2) return `${list[0]} and ${list[1]}`;
+  return `${list.slice(0, -1).join(", ")}, and ${list[list.length - 1]}`;
 }
 
 /** The public URL Twilio signed against. Prefer the configured app URL

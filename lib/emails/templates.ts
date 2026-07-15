@@ -448,6 +448,119 @@ export function backToSchool(ctx: BaseContext): EmailContent {
   return { subject, html, text };
 }
 
+/* ───────────────────── Inbound SMS notification ───────────────────── */
+/* Staff-facing: a family texted our number. Sent by the Twilio inbound
+ * webhook to the admissions inbox (dean@ CC'd via the default CC list)
+ * with the sender resolved to a parent + family + student(s) so staff
+ * know who's texting without a phone-number lookup. Replaces the
+ * unattributed number-only email the Twilio-side forwarder produced. */
+
+export interface SmsReplyReceivedContext {
+  /** Full parent name ("Steven Petros"), or null when the sender's
+   *  number didn't match any parent on file. */
+  parent_name: string | null;
+  /** Family display name ("Petros Family"), null when unattributed. */
+  family_name: string | null;
+  /** Joined full names of the family's (non-archived) students —
+   *  "Steven Petros III" / "Steven Petros III and Jane Petros". Null
+   *  when unattributed or the family has no students. */
+  student_names: string | null;
+  /** Sender's number as Twilio delivered it (E.164). */
+  from_number: string;
+  /** The text they sent, verbatim. */
+  message_body: string;
+  /** Twilio message SID for console lookups. */
+  message_sid: string | null;
+  /** Deep link to the admin two-way inbox. */
+  inbox_url: string;
+  /** True when the message was a STOP-family opt-out keyword. */
+  opted_out: boolean;
+}
+
+export function smsReplyReceived(ctx: SmsReplyReceivedContext): EmailContent {
+  const who = ctx.parent_name
+    ? ctx.family_name
+      ? `${ctx.parent_name} (${ctx.family_name})`
+      : ctx.parent_name
+    : ctx.from_number;
+  const subject = ctx.opted_out
+    ? `SMS opt-out from ${who}`
+    : `New text from ${who}`;
+  const preheader = ctx.message_body.slice(0, 120);
+
+  const row = (label: string, value: string, muted = false) =>
+    `<tr>
+      <td style="padding:6px 12px 6px 0;font-size:14px;color:#6b7280;white-space:nowrap;vertical-align:top;">${escapeHtml(label)}</td>
+      <td style="padding:6px 0;font-size:14px;color:${muted ? "#9ca3af" : "#111827"};word-break:break-word;">${escapeHtml(value)}</td>
+    </tr>`;
+
+  const detailRows = [
+    row("Parent", ctx.parent_name ?? "Not recognized"),
+    ctx.student_names ? row("Student", ctx.student_names) : "",
+    ctx.family_name ? row("Family", ctx.family_name) : "",
+    row("Phone", ctx.from_number),
+    ctx.message_sid ? row("Message ID", ctx.message_sid, true) : "",
+  ].join("");
+
+  const optOutNote = ctx.opted_out
+    ? p(
+        `This was an opt-out keyword — the parent will no longer receive texts until they reply START.`
+      )
+    : "";
+
+  const unrecognizedNote = !ctx.parent_name
+    ? p(
+        `This number doesn't match any parent on file, so the message couldn't be attributed to a family.`
+      )
+    : "";
+
+  const html = layout({
+    preheader,
+    body:
+      `<h2 style="margin:0 0 16px;font-size:18px;">${escapeHtml(
+        ctx.opted_out ? "SMS opt-out received" : "New SMS reply received"
+      )}</h2>` +
+      `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 16px;">${detailRows}</table>` +
+      `<div style="background:#f4f4f5;border-radius:8px;padding:14px 16px;margin:0 0 16px;font-size:15px;line-height:1.6;white-space:pre-wrap;word-break:break-word;">${escapeHtml(
+        ctx.message_body
+      )}</div>` +
+      optOutNote +
+      unrecognizedNote +
+      p(`Reply from the messages inbox, or text them directly at ${ctx.from_number}.`),
+    buttonHref: ctx.inbox_url,
+    buttonLabel: "Open messages inbox",
+  });
+
+  const text = [
+    ctx.opted_out ? "SMS opt-out received" : "New SMS reply received",
+    "",
+    `Parent: ${ctx.parent_name ?? "Not recognized"}`,
+    ...(ctx.student_names ? [`Student: ${ctx.student_names}`] : []),
+    ...(ctx.family_name ? [`Family: ${ctx.family_name}`] : []),
+    `Phone: ${ctx.from_number}`,
+    ...(ctx.message_sid ? [`Message ID: ${ctx.message_sid}`] : []),
+    "",
+    "Message:",
+    ctx.message_body,
+    "",
+    ...(ctx.opted_out
+      ? [
+          "This was an opt-out keyword — the parent will no longer receive texts until they reply START.",
+          "",
+        ]
+      : []),
+    ...(!ctx.parent_name
+      ? [
+          "This number doesn't match any parent on file, so the message couldn't be attributed to a family.",
+          "",
+        ]
+      : []),
+    `Reply from the messages inbox (${ctx.inbox_url}), or text them directly at ${ctx.from_number}.`,
+  ].join("\n");
+
+  return { subject, html, text };
+}
+
 /* ───────────────────────── Records request ───────────────────────── */
 /* Admin-initiated request to a student's previous school to transfer
  * their academic records. Unlike the templates above, this goes to an

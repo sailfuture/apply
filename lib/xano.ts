@@ -4322,7 +4322,15 @@ export const xano = {
     },
 
     async create(
-      data: Omit<XanoSmsMessage, "id" | "created_at">
+      // `created_at` is optionally accepted for the Twilio backfill
+      // sync, which preserves the original send time on imported
+      // rows. It only sticks if the Xano `POST /sms_messages`
+      // endpoint exposes `created_at` as an input — otherwise Xano
+      // ignores the field and stamps "now" (harmless: the sync
+      // inserts oldest-first so thread order survives).
+      data: Omit<XanoSmsMessage, "id" | "created_at"> & {
+        created_at?: number;
+      }
     ): Promise<XanoSmsMessage> {
       const res = await fetch(`${getBaseUrl()}/sms_messages`, {
         method: "POST",

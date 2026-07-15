@@ -1,12 +1,14 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
+import { toast } from "sonner";
 import { Loader2, MessageSquareText } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { FamilyMessageThread } from "@/components/admin/family-message-thread";
 import { GroupMessageDialog } from "@/components/admin/group-message-dialog";
+import { NewMessageDialog } from "@/components/admin/new-message-dialog";
 import type { SmsConversation } from "@/app/api/admin/messages/route";
 
 /**
@@ -21,8 +23,44 @@ export default function AdminMessagesPage() {
     conversations: SmsConversation[];
   }>("/api/admin/messages", adminFetcher, { refreshInterval: 20_000 });
   const conversations = useMemo(() => data?.conversations ?? [], [data]);
-  const [selected, setSelected] = useState<number | null>(null);
-  const active = conversations.find((c) => c.familyId === selected) ?? null;
+  // Selection carries the name too (not just the id) so a family picked
+  // from the "New message" dialog — who has NO conversation row yet —
+  // can still render a thread header. Once the first text sends, the
+  // refreshed conversation list takes over as the name source.
+  const [selected, setSelected] = useState<{
+    id: number;
+    name: string;
+  } | null>(null);
+  const active = selected
+    ? (conversations.find((c) => c.familyId === selected.id) ?? {
+        familyId: selected.id,
+        familyName: selected.name,
+      })
+    : null;
+
+  // Reconcile against Twilio's own log once per visit — texts sent
+  // outside the app (Twilio console, legacy forwarder) and inbound
+  // messages the webhook missed get backfilled into the inbox.
+  // Idempotent server-side (SID-keyed), so the only cost of firing on
+  // every mount is the Twilio list call.
+  const syncedRef = useRef(false);
+  useEffect(() => {
+    if (syncedRef.current) return;
+    syncedRef.current = true;
+    fetch("/api/admin/messages/sync", { method: "POST" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((result) => {
+        if (result?.imported > 0) {
+          toast.success(
+            `Imported ${result.imported} text${result.imported === 1 ? "" : "s"} from Twilio.`
+          );
+          void mutate();
+        }
+      })
+      .catch(() => {
+        // Best-effort — the inbox still renders whatever is logged.
+      });
+  }, [mutate]);
 
   return (
     <div className="flex h-[calc(100dvh-3.5rem)] flex-col gap-4 p-6">
@@ -34,7 +72,10 @@ export default function AdminMessagesPage() {
             send a filtered group message.
           </p>
         </div>
-        <GroupMessageDialog onSent={() => mutate()} />
+        <div className="flex shrink-0 items-center gap-2">
+          <NewMessageDialog onPick={(family) => setSelected(family)} />
+          <GroupMessageDialog onSent={() => mutate()} />
+        </div>
       </div>
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 md:grid-cols-[320px_1fr]">
@@ -69,8 +110,9 @@ export default function AdminMessagesPage() {
             </div>
           ) : conversations.length === 0 ? (
             <div className="p-6 text-center text-sm text-muted-foreground">
-              No conversations yet. Text a family from their record, or start
-              a group message.
+              No conversations yet. Use{" "}
+              <span className="font-medium text-foreground">New message</span>{" "}
+              to text a family, or start a group message.
             </div>
           ) : (
             <ul className="divide-y">
@@ -78,10 +120,12 @@ export default function AdminMessagesPage() {
                 <li key={c.familyId}>
                   <button
                     type="button"
-                    onClick={() => setSelected(c.familyId)}
+                    onClick={() =>
+                      setSelected({ id: c.familyId, name: c.familyName })
+                    }
                     className={cn(
                       "w-full px-4 py-3 text-left transition-colors hover:bg-muted/50",
-                      selected === c.familyId && "bg-muted"
+                      selected?.id === c.familyId && "bg-muted"
                     )}
                   >
                     <div className="flex items-center justify-between gap-2">
