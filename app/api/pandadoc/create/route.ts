@@ -1,5 +1,6 @@
 import { auth, currentUser } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
+import type { User } from "@clerk/nextjs/server";
 import { xano } from "@/lib/xano";
 import {
   createDocumentFromTemplate,
@@ -7,10 +8,33 @@ import {
   createSigningSession,
   getDocumentStatus,
   getDocumentDetails,
+  getDocumentDownloadUrl,
   getTemplateId,
   getTemplateRole,
   waitForDocumentStatus,
 } from "@/lib/pandadoc";
+
+// The create chain does real PandaDoc work (create-from-template →
+// wait-for-draft → send → session). Give the function room so a slow
+// template can't be killed mid-flight and orphan an envelope.
+export const maxDuration = 60;
+
+type DocType = "liability_waiver" | "enrollment_agreement";
+
+interface CreateResult {
+  status: number;
+  body: Record<string, unknown>;
+}
+
+/**
+ * In-flight guard per (family, type, application). Two tabs open on
+ * the auto-initiating waiver/enrollment page, a refresh mid-create, or
+ * a retry after a slow response would otherwise each mint a NEW
+ * PandaDoc envelope (the doc id is only persisted at the end of the
+ * chain). Collapsing concurrent calls onto one promise means at most
+ * one envelope is created per burst.
+ */
+const inFlight = new Map<string, Promise<CreateResult>>();
 
 export async function POST(req: NextRequest) {
   const { userId } = await auth();
@@ -25,21 +49,16 @@ export async function POST(req: NextRequest) {
 
   const familyId = Number(user.publicMetadata.registration_families_id);
   if (!familyId) {
-    return NextResponse.json(
-      { error: "No family found" },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "No family found" }, { status: 400 });
   }
 
-  const { type, applicationId } = await req.json();
-
+  const { type, applicationId, yearId } = await req.json();
   if (!type || !["liability_waiver", "enrollment_agreement"].includes(type)) {
     return NextResponse.json(
       { error: "type must be 'liability_waiver' or 'enrollment_agreement'" },
       { status: 400 }
     );
   }
-
   if (!applicationId) {
     return NextResponse.json(
       { error: "applicationId is required" },
@@ -47,107 +66,125 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Ownership check: look up the application inside the family's own app
-  // list rather than fetching it directly. This avoids flaky 404s caused by
-  // Xano returning `registration_families_id` as an expanded relation
-  // object (vs. a scalar id) — which breaks a raw `Number(...)` compare.
-  const familyApps = await xano.applications.getByFamilyId(familyId);
-  const application = familyApps.find(
-    (a) => Number(a.id) === Number(applicationId)
+  const key = `${familyId}:${type}:${applicationId}`;
+  let run = inFlight.get(key);
+  if (!run) {
+    run = doCreate(
+      user,
+      familyId,
+      type as DocType,
+      Number(applicationId),
+      Number(yearId) || null
+    )
+      .catch((err): CreateResult => {
+        console.error("PandaDoc create error:", err);
+        return {
+          status: 500,
+          body: {
+            error:
+              err instanceof Error ? err.message : "Failed to create document",
+          },
+        };
+      })
+      .finally(() => inFlight.delete(key));
+    inFlight.set(key, run);
+  }
+  const result = await run;
+  return NextResponse.json(result.body, { status: result.status });
+}
+
+async function doCreate(
+  user: User,
+  familyId: number,
+  type: DocType,
+  applicationId: number,
+  yearId: number | null
+): Promise<CreateResult> {
+  // Ownership check. When the client passes the year (it always has
+  // `app.registration_school_years_id`), this resolves via the
+  // server-side-filtered by-family query instead of downloading the
+  // whole applications table; falls back to the unfiltered list on a
+  // miss so a legacy row can't lock the parent out.
+  const application = await xano.applications.findOwnedApp(
+    familyId,
+    applicationId,
+    yearId
   );
   if (!application) {
-    return NextResponse.json(
-      { error: "Application not found for this family" },
-      { status: 404 }
-    );
+    return {
+      status: 404,
+      body: { error: "Application not found for this family" },
+    };
   }
 
-  // Resolve whichever record this doc type lives on so the field
-  // lookups + writes below target the right table:
-  //   - waiver → per-student `registration_student_registration`
-  //     (the packet). Resolved-or-created so the parent can sign a
-  //     waiver before they've started filling out the rest of the
-  //     packet.
-  //   - enrollment agreement → family-level
-  //     `registration_student_registration_progress` row.
-  const packetRow =
+  // These three lookups only depend on `application`, so run them
+  // together instead of the previous four-deep waterfall:
+  //   - the target row this doc type lives on (packet for the waiver,
+  //     family progress row for the agreement) — resolved-or-created
+  //   - the family (for the doc name + tokens)
+  //   - the student (for the doc name + fields)
+  const [targetRow, family, student] = await Promise.all([
     type === "liability_waiver"
-      ? await xano.studentRegistration.resolve(
+      ? xano.studentRegistration.resolve(
           application.registration_students_id,
           application.registration_school_years_id
         )
-      : null;
-  const progressRow =
-    type === "enrollment_agreement"
-      ? await xano.studentRegistrationProgress.resolve(
+      : xano.studentRegistrationProgress.resolve(
           familyId,
           application.registration_school_years_id
-        )
-      : null;
+        ),
+    xano.families.getById(familyId),
+    xano.students.getById(application.registration_students_id),
+  ]);
+  const packetRow = type === "liability_waiver" ? targetRow : null;
+  const progressRow = type === "enrollment_agreement" ? targetRow : null;
 
-  const pandadocIdField = type === "liability_waiver"
-    ? "liability_waiver_pandadoc_id"
-    : "enrollment_agreement_pandadoc_id";
+  const pandadocIdField =
+    type === "liability_waiver"
+      ? "liability_waiver_pandadoc_id"
+      : "enrollment_agreement_pandadoc_id";
+  const existingDocId = (targetRow as unknown as Record<string, unknown>)[
+    pandadocIdField
+  ] as string | null;
 
-  const sourceRecord = (packetRow ?? progressRow ?? application) as unknown as Record<
-    string,
-    unknown
-  >;
-  const existingDocId = sourceRecord[pandadocIdField] as string | null;
-  // `existingStatus` used to early-return 409 here for completed docs,
-  // but that's wrong when admin has deleted the PandaDoc envelope —
-  // the local row still says "completed" while PandaDoc no longer has
-  // anything. The resume-or-recreate path below handles both cases:
-  // a still-valid completed doc lets the user resume the signing
-  // session (PandaDoc returns a no-op for completed envelopes); a
-  // deleted/expired doc throws, which falls through to clearing the
-  // stale metadata + creating a fresh envelope.
-
-  // The signing identity AND the `parent.*` tokens/fields all come
-  // from whichever parent is currently logged into Clerk. The
-  // document represents the act of THIS parent signing — using a
-  // different name on the doc body than on the signature recipient
-  // would create a legal/auditing mismatch (and was confusing in
-  // practice when the lowest-id parent on file diverged from the
-  // person actually clicking Sign). Either parent on the family can
-  // sign; whoever does signs as themselves.
-  const family = await xano.families.getById(familyId);
   const recipientEmail = user.emailAddresses[0]?.emailAddress ?? "";
   const recipientFirstName = user.firstName ?? "";
   const recipientLastName = user.lastName ?? "";
-  const docParentFirstName = recipientFirstName;
-  const docParentLastName = recipientLastName;
-  const docParentEmail = recipientEmail;
 
-  // Resolve the student record + canonical doc name early so the
-  // resume validation below can compare the existing envelope's
-  // stored name against what we'd generate now. Catches the case
-  // where the envelope was created against a different student on
-  // the family OR with the old (pre-family-name) naming scheme —
-  // both should force a fresh-create rather than resuming a doc
-  // with the wrong title.
-  //
-  // Naming convention:
-  //   - liability_waiver → per-student doc, named after the student
-  //   - enrollment_agreement → family-level doc, named after the
-  //     family (NOT a specific student — the agreement covers the
-  //     whole household, and naming it after one student was
-  //     misleading on multi-student families AND broke when the
-  //     application's `registration_students_id` pointed at a
-  //     different student than admin intended)
-  const student = await xano.students.getById(
-    application.registration_students_id
-  );
   const expectedDocName =
     type === "liability_waiver"
       ? `Liability Waiver – ${student.first_name} ${student.last_name}`
       : `Enrollment Agreement – ${family.family_name}`;
 
-  // Helper — wipes the stale Xano metadata so the fresh-create path
-  // below writes onto a clean row. Used whenever the existing
-  // PandaDoc envelope is unusable (deleted in admin dashboard,
-  // voided, etc.). Best-effort: the fresh-create write below
-  // overwrites the id + status either way.
+  // Sync a locally-known row to "completed" — used when PandaDoc says
+  // the envelope is already signed but our row hasn't caught up. This
+  // is the load-bearing fix for the "signed signature silently wiped"
+  // bug: the old code treated a completed doc as non-resumable and
+  // fell through to wipe + recreate, destroying the signature record.
+  const syncCompleted = async (docId: string) => {
+    const pdfUrl = getDocumentDownloadUrl(docId);
+    if (type === "enrollment_agreement" && progressRow) {
+      await xano.studentRegistrationProgress
+        .update(progressRow.id, {
+          enrollment_agreement_status: "completed",
+          enrollment_agreement_pdf_url: pdfUrl,
+          is_enrollment_agreement_signed: true,
+          isEnrollment: true,
+        })
+        .catch(() => {});
+    } else if (type === "liability_waiver" && packetRow) {
+      await xano.studentRegistration
+        .update(packetRow.id, {
+          liability_waiver_status: "completed",
+          liability_waiver_pdf_url: pdfUrl,
+        })
+        .catch(() => {});
+    }
+  };
+
+  // Wipe stale metadata so the fresh-create path writes onto a clean
+  // row. ONLY called when the envelope is genuinely unusable (deleted,
+  // voided, declined) — never for a completed doc.
   const wipeStaleMetadata = async () => {
     if (type === "enrollment_agreement" && progressRow) {
       await xano.studentRegistrationProgress
@@ -173,217 +210,172 @@ export async function POST(req: NextRequest) {
   };
 
   if (existingDocId) {
-    // Check the doc's actual status on PandaDoc BEFORE attempting to
-    // resume — `createSigningSession` doesn't reliably throw for
-    // every unusable state. PandaDoc returns a valid session for
-    // some statuses (e.g. trashed-but-not-purged documents,
-    // documents marked for deletion but still queryable) which then
-    // hands the parent a broken signing UI. Driving the decision off
-    // `document.status` lets us recover cleanly:
-    //   - draft / sent / viewed → resumable, hand the parent a
-    //     session for the in-flight envelope
-    //   - anything else (completed, declined, voided, expired,
-    //     etc.) OR a thrown error (deleted / not found) → wipe local
-    //     metadata, fall through to creating a fresh envelope
     const RESUMABLE_STATUSES = new Set([
       "document.draft",
       "document.sent",
       "document.viewed",
       "document.waiting_approval",
     ]);
-    let canResume = false;
     try {
       const existing = await getDocumentStatus(existingDocId);
+
+      // SIGNED-BUT-UNSYNCED: the parent completed the doc but a poll
+      // tick never landed to sync our row (they closed the tab). Never
+      // recreate — sync the completion and tell the client it's done.
+      if (existing.status === "document.completed") {
+        await syncCompleted(existingDocId);
+        return {
+          status: 200,
+          body: { documentId: existingDocId, completed: true },
+        };
+      }
+
       if (RESUMABLE_STATUSES.has(existing.status)) {
-        // Status alone isn't enough — also verify (a) the envelope's
-        // stored TITLE matches what we'd generate now, and (b) the
-        // recipient matches the Clerk user currently signing.
-        //
-        // Title-mismatch case: envelope created when this route
-        // named enrollment agreements after the first student on
-        // the family (e.g. "Enrollment Agreement – Michael Long")
-        // before we switched to naming them after the family. The
-        // recipient may now be correct, but the title still reads
-        // as the wrong student.
-        //
-        // Recipient-mismatch case: envelope created when this route
-        // used the family's primary parent on file for the
-        // recipient name. A different parent (the Clerk-signer)
-        // now picks up the session — email may be on the recipient
-        // list but the first/last name is wrong.
-        //
-        // Either condition forces a fresh-create instead of handing
-        // the parent a stale doc.
         const normalize = (s: string | undefined) =>
           (s ?? "").trim().toLowerCase();
         const titleMatches =
           normalize(existing.name) === normalize(expectedDocName);
-        if (!titleMatches) {
-          canResume = false;
-        } else {
+        let canResume = titleMatches;
+        if (titleMatches) {
           try {
             const details = await getDocumentDetails(existingDocId);
             const recipient = details.recipients?.[0];
-            const recipientFirst = normalize(recipient?.first_name);
-            const recipientLast = normalize(recipient?.last_name);
-            const recipientEmailNormalized = normalize(recipient?.email);
-            const signerFirst = normalize(recipientFirstName);
-            const signerLast = normalize(recipientLastName);
-            const signerEmailNormalized = normalize(recipientEmail);
             const nameMatches =
-              recipientFirst === signerFirst &&
-              recipientLast === signerLast;
+              normalize(recipient?.first_name) ===
+                normalize(recipientFirstName) &&
+              normalize(recipient?.last_name) === normalize(recipientLastName);
+            const signerEmail = normalize(recipientEmail);
+            const recipientEmailNorm = normalize(recipient?.email);
             const emailMatches =
-              !signerEmailNormalized ||
-              !recipientEmailNormalized ||
-              recipientEmailNormalized === signerEmailNormalized;
+              !signerEmail ||
+              !recipientEmailNorm ||
+              recipientEmailNorm === signerEmail;
             canResume = nameMatches && emailMatches;
           } catch {
-            // If we can't fetch details (transient), prefer fresh-
-            // create over resuming a doc we can't verify. Safer to
-            // err on the side of a clean envelope than to hand the
-            // parent a stale doc.
+            // Can't verify → prefer a fresh envelope over a stale one.
             canResume = false;
           }
         }
-      }
-    } catch {
-      // 404 / network / etc. — doc is gone. Fall through to wipe +
-      // create.
-      canResume = false;
-    }
-
-    if (canResume) {
-      try {
-        const sessionId = await createSigningSession(existingDocId, recipientEmail);
-        return NextResponse.json({
-          documentId: existingDocId,
-          sessionId,
-          resumed: true,
-        });
-      } catch {
-        // Resume failed even though the status check said resumable.
-        // Treat as a deletion — wipe + create fresh below.
+        if (canResume) {
+          try {
+            const sessionId = await createSigningSession(
+              existingDocId,
+              recipientEmail
+            );
+            return {
+              status: 200,
+              body: { documentId: existingDocId, sessionId, resumed: true },
+            };
+          } catch {
+            // Resume failed despite a resumable status — treat as gone.
+            await wipeStaleMetadata();
+          }
+        } else {
+          await wipeStaleMetadata();
+        }
+      } else {
+        // Declined / voided / expired — unusable, recreate.
         await wipeStaleMetadata();
       }
-    } else {
-      // Status was non-resumable (or doc gone). Clear the stale
-      // metadata before falling through so the fresh-create write
-      // lands on a clean row.
+    } catch {
+      // 404 / network — the envelope is gone. Wipe + recreate.
       await wipeStaleMetadata();
     }
   }
 
-  try {
-    // `student` + `expectedDocName` were resolved earlier (before
-    // the resume validation) so we could compare an existing
-    // envelope's title against what we'd generate now. Reuse them
-    // here instead of re-fetching.
-    const templateId = getTemplateId(type);
+  // ── Fresh create ──────────────────────────────────────────────────
+  const templateId = getTemplateId(type);
+  const doc = await createDocumentFromTemplate({
+    templateId,
+    name: expectedDocName,
+    recipientEmail,
+    recipientFirstName,
+    recipientLastName,
+    role: getTemplateRole(type),
+    // Echoed on every webhook event — lets /api/webhooks/pandadoc map
+    // a completion straight to the owning Xano row.
+    metadata: {
+      family_id: String(familyId),
+      year_id: String(application.registration_school_years_id),
+      student_id: String(application.registration_students_id),
+      doc_type: type,
+    },
+    tokens: {
+      "family.name": family.family_name,
+      "student.first_name": student.first_name,
+      "student.last_name": student.last_name,
+      "student.full_name": `${student.first_name} ${student.last_name}`,
+      "parent.first_name": recipientFirstName,
+      "parent.last_name": recipientLastName,
+      "parent.email": recipientEmail,
+    },
+    fields: {
+      parent_first_name: recipientFirstName,
+      parent_last_name: recipientLastName,
+      parent_full_name: `${recipientFirstName} ${recipientLastName}`.trim(),
+      parent_name: `${recipientFirstName} ${recipientLastName}`.trim(),
+      parent_email: recipientEmail,
+      "parent.first_name": recipientFirstName,
+      "parent.last_name": recipientLastName,
+      "parent.full_name": `${recipientFirstName} ${recipientLastName}`.trim(),
+      "parent.email": recipientEmail,
+      student_first_name: student.first_name,
+      student_last_name: student.last_name,
+      student_full_name: `${student.first_name} ${student.last_name}`,
+      student_name: `${student.first_name} ${student.last_name}`,
+      "student.first_name": student.first_name,
+      "student.last_name": student.last_name,
+      "student.full_name": `${student.first_name} ${student.last_name}`,
+      participant_name: `${student.first_name} ${student.last_name}`,
+      participant_first_name: student.first_name,
+      participant_last_name: student.last_name,
+      "Participant Name": `${student.first_name} ${student.last_name}`,
+      family_name: family.family_name,
+      "family.name": family.family_name,
+    },
+  });
 
-    const doc = await createDocumentFromTemplate({
-      templateId,
-      name: expectedDocName,
-      recipientEmail,
-      recipientFirstName,
-      recipientLastName,
-      // Per-template role name resolved from the env so admin can
-      // adjust the role per template without code changes. Default
-      // is "Parent" — override with PANDADOC_LIABILITY_ROLE or
-      // PANDADOC_ENROLLMENT_ROLE if the template uses a different
-      // role name (e.g. "Recipient", "Signer").
-      role: getTemplateRole(type),
-      tokens: {
-        "family.name": family.family_name,
-        "student.first_name": student.first_name,
-        "student.last_name": student.last_name,
-        "student.full_name": `${student.first_name} ${student.last_name}`,
-        // `parent.*` tokens match the signing identity (the Clerk
-        // user). The document represents the act of THIS parent
-        // signing — keep the doc body's name in sync with the
-        // signature recipient so the legal/audit trail stays
-        // coherent.
-        "parent.first_name": docParentFirstName,
-        "parent.last_name": docParentLastName,
-        "parent.email": docParentEmail,
-      },
-      // Pre-fill the interactive form fields on the template so the
-      // signer doesn't have to retype their own name / email / their
-      // student's name. PandaDoc fields are keyed by the template
-      // field's `name` attribute — we send a comprehensive set of
-      // common naming conventions (snake_case + dotted variants +
-      // capitalized "Participant Name") so the same code works
-      // regardless of how the template author named their fields.
-      // Fields whose names don't match anything in the template are
-      // silently ignored by PandaDoc, so this is safe to over-send.
-      fields: {
-        // Parent identity — pulled from the Clerk-logged-in user
-        // (the actual signer). Mirrors the token semantics above.
-        parent_first_name: docParentFirstName,
-        parent_last_name: docParentLastName,
-        parent_full_name: `${docParentFirstName} ${docParentLastName}`.trim(),
-        parent_name: `${docParentFirstName} ${docParentLastName}`.trim(),
-        parent_email: docParentEmail,
-        "parent.first_name": docParentFirstName,
-        "parent.last_name": docParentLastName,
-        "parent.full_name": `${docParentFirstName} ${docParentLastName}`.trim(),
-        "parent.email": docParentEmail,
-        // Student identity — for liability waivers especially, the
-        // template's "Participant Name" field should match this
-        // student. The waiver is per-student per-year; the create
-        // route resolves `student` from `application.registration_students_id`
-        // up above, so this is always the right student.
-        student_first_name: student.first_name,
-        student_last_name: student.last_name,
-        student_full_name: `${student.first_name} ${student.last_name}`,
-        student_name: `${student.first_name} ${student.last_name}`,
-        "student.first_name": student.first_name,
-        "student.last_name": student.last_name,
-        "student.full_name": `${student.first_name} ${student.last_name}`,
-        participant_name: `${student.first_name} ${student.last_name}`,
-        participant_first_name: student.first_name,
-        participant_last_name: student.last_name,
-        "Participant Name": `${student.first_name} ${student.last_name}`,
-        // Family-level name (e.g. "Thompson Family") for any field
-        // that surfaces the household identity.
-        family_name: family.family_name,
-        "family.name": family.family_name,
-      },
-    });
-
-    await waitForDocumentStatus(doc.id, "document.draft");
-
-    await sendDocument(doc.id);
-
-    await waitForDocumentStatus(doc.id, "document.sent");
-
-    const sessionId = await createSigningSession(doc.id, recipientEmail);
-
-    // Target table depends on doc type:
-    //   - waiver → per-student `registration_student_registration`
-    //     packet (resolved/created above)
-    //   - enrollment agreement → family-level `..._progress` row
-    //     (absorbed from the retired families_payment table)
-    if (type === "enrollment_agreement" && progressRow) {
-      await xano.studentRegistrationProgress.update(progressRow.id, {
+  // Persist the doc id IMMEDIATELY (status "draft"), before the
+  // wait/send/session chain. If the function times out or a later step
+  // throws, the id is already on the row — the next visit resumes this
+  // envelope instead of orphaning it and creating another.
+  if (type === "enrollment_agreement" && progressRow) {
+    await xano.studentRegistrationProgress
+      .update(progressRow.id, {
         enrollment_agreement_pandadoc_id: doc.id,
-        enrollment_agreement_status: "sent",
-        enrollment_agreement_sent: new Date().toISOString(),
-      });
-    } else if (type === "liability_waiver" && packetRow) {
-      await xano.studentRegistration.update(packetRow.id, {
+        enrollment_agreement_status: "draft",
+      })
+      .catch((err) =>
+        console.error("[pandadoc/create] early id persist failed:", err)
+      );
+  } else if (type === "liability_waiver" && packetRow) {
+    await xano.studentRegistration
+      .update(packetRow.id, {
         liability_waiver_pandadoc_id: doc.id,
-        liability_waiver_status: "sent",
-        liability_waiver_sent_at: new Date().toISOString(),
-      });
-    }
-
-    return NextResponse.json({ documentId: doc.id, sessionId });
-  } catch (err) {
-    console.error("PandaDoc create error:", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Failed to create document" },
-      { status: 500 }
-    );
+        liability_waiver_status: "draft",
+      })
+      .catch((err) =>
+        console.error("[pandadoc/create] early id persist failed:", err)
+      );
   }
+
+  await waitForDocumentStatus(doc.id, "document.draft");
+  await sendDocument(doc.id);
+  await waitForDocumentStatus(doc.id, "document.sent");
+  const sessionId = await createSigningSession(doc.id, recipientEmail);
+
+  // Bump status → "sent" now that the envelope is actually out.
+  if (type === "enrollment_agreement" && progressRow) {
+    await xano.studentRegistrationProgress.update(progressRow.id, {
+      enrollment_agreement_status: "sent",
+      enrollment_agreement_sent: new Date().toISOString(),
+    });
+  } else if (type === "liability_waiver" && packetRow) {
+    await xano.studentRegistration.update(packetRow.id, {
+      liability_waiver_status: "sent",
+      liability_waiver_sent_at: new Date().toISOString(),
+    });
+  }
+
+  return { status: 200, body: { documentId: doc.id, sessionId } };
 }

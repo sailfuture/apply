@@ -106,11 +106,11 @@ export default function EnrollmentSigningPage() {
     if (verifyOnMountRef.current) return;
     if (loading || !isCompleted) return;
     const docId = regProgress?.enrollment_agreement_pandadoc_id;
-    const appId = applications[0]?.id;
-    if (!docId || !appId) return;
+    const app = applications[0];
+    if (!docId || !app) return;
     verifyOnMountRef.current = true;
     fetch(
-      `/api/pandadoc/status?documentId=${docId}&applicationId=${appId}&type=enrollment_agreement`
+      `/api/pandadoc/status?documentId=${docId}&applicationId=${app.id}&type=enrollment_agreement&yearId=${app.registration_school_years_id}`
     )
       .then(() => refreshRegProgress())
       .catch(() => {});
@@ -119,9 +119,9 @@ export default function EnrollmentSigningPage() {
   const pdfUrl = useMemo(() => {
     const docId = regProgress?.enrollment_agreement_pandadoc_id;
     if (!isCompleted || !docId) return null;
-    const appId = applications[0]?.id;
-    if (!appId) return null;
-    return `/api/pandadoc/download?documentId=${docId}&applicationId=${appId}`;
+    const app = applications[0];
+    if (!app) return null;
+    return `/api/pandadoc/download?documentId=${docId}&applicationId=${app.id}&yearId=${app.registration_school_years_id}`;
   }, [isCompleted, regProgress, applications]);
 
   async function handleSign() {
@@ -136,7 +136,11 @@ export default function EnrollmentSigningPage() {
       const res = await fetch("/api/pandadoc/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "enrollment_agreement", applicationId: app.id }),
+        body: JSON.stringify({
+          type: "enrollment_agreement",
+          applicationId: app.id,
+          yearId: app.registration_school_years_id,
+        }),
       });
 
       if (!res.ok) {
@@ -148,7 +152,21 @@ export default function EnrollmentSigningPage() {
         return;
       }
 
-      const { documentId, sessionId } = await res.json();
+      const data = await res.json();
+      // Already signed on PandaDoc but our row hadn't caught up (parent
+      // closed the tab before a poll synced it). The create route synced
+      // it server-side — DON'T open a signing session (that would re-sign
+      // a completed doc); mirror the completion and render the PDF.
+      if (data.completed) {
+        await patchRegProgress({
+          enrollment_agreement_status: "completed",
+          is_enrollment_agreement_signed: true,
+          isEnrollment: true,
+        });
+        return;
+      }
+
+      const { documentId, sessionId } = data;
 
       // Mirror the server's write optimistically so the SWR cache reflects
       // that a document is now "sent" without a round-trip.
@@ -172,11 +190,12 @@ export default function EnrollmentSigningPage() {
     let delay = 3000;
     const maxDelay = 30000;
     const appId = applications[0]?.id ?? 0;
+    const yearId = applications[0]?.registration_school_years_id ?? 0;
 
     async function poll() {
       try {
         const res = await fetch(
-          `/api/pandadoc/status?documentId=${documentId}&applicationId=${appId}&type=enrollment_agreement`
+          `/api/pandadoc/status?documentId=${documentId}&applicationId=${appId}&type=enrollment_agreement&yearId=${yearId}`
         );
         if (!res.ok) {
           delay = Math.min(delay * 1.5, maxDelay);

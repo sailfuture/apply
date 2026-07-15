@@ -27,6 +27,9 @@ export async function GET(req: NextRequest) {
     | "liability_waiver"
     | "enrollment_agreement"
     | null;
+  // Optional — when present, the ownership lookup below uses the
+  // server-side-filtered by-family query instead of a full-table scan.
+  const yearId = Number(req.nextUrl.searchParams.get("yearId")) || null;
 
   if (!documentId) {
     return NextResponse.json(
@@ -81,10 +84,14 @@ export async function GET(req: NextRequest) {
       (normalizedStatus === "completed" || normalizedStatus === "viewed")
     ) {
       const appId = Number(applicationId);
-      // Ownership check via family's own app list — same pattern as the
-      // other PandaDoc routes, avoids flaky 404s from relation-vs-scalar.
-      const familyApps = await xano.applications.getByFamilyId(familyId);
-      const application = familyApps.find((a) => Number(a.id) === appId);
+      // Ownership check — same pattern as the other PandaDoc routes.
+      // Prefers the server-side-filtered by-family query when a
+      // `yearId` is supplied, falling back to the full family list.
+      const application = await xano.applications.findOwnedApp(
+        familyId,
+        appId,
+        yearId
+      );
 
       if (application) {
         if (type === "liability_waiver") {
@@ -97,6 +104,21 @@ export async function GET(req: NextRequest) {
             application.registration_students_id,
             application.registration_school_years_id
           );
+          // INTEGRITY GUARD: only sync when the polled `documentId` is
+          // EXACTLY the envelope stored on this slot. The create route
+          // persists the id before the client ever polls, so a
+          // legitimate poll always matches; requiring an exact match
+          // (rather than "matches OR slot is empty") also stops a
+          // parent from marking a slot "completed" by polling with an
+          // unrelated completed doc's id against a not-yet-started
+          // slot.
+          if (packetRow.liability_waiver_pandadoc_id !== documentId) {
+            return NextResponse.json({
+              documentId,
+              status: normalizedStatus,
+              name: doc.name,
+            });
+          }
           const wantCompleted = normalizedStatus === "completed";
           const hasUrl = !!packetRow.liability_waiver_pdf_url;
           const statusChanged =
@@ -139,6 +161,15 @@ export async function GET(req: NextRequest) {
             familyId,
             application.registration_school_years_id
           );
+          // INTEGRITY GUARD (see the waiver branch): only sync when the
+          // polled documentId is EXACTLY the envelope stored on this slot.
+          if (progressRow.enrollment_agreement_pandadoc_id !== documentId) {
+            return NextResponse.json({
+              documentId,
+              status: normalizedStatus,
+              name: doc.name,
+            });
+          }
           const wantCompleted = normalizedStatus === "completed";
           const isLatched =
             progressRow.is_enrollment_agreement_signed === true ||

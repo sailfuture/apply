@@ -5,6 +5,7 @@ import { mutateApplications } from "@/hooks/use-api";
 interface Application {
   id: number;
   registration_students_id: number;
+  registration_school_years_id: number;
   enrollment_agreement_pandadoc_id: string | null;
   enrollment_agreement_status: string | null;
   enrollment_agreement_pdf_url: string | null;
@@ -71,6 +72,15 @@ export function usePandaDocSigning(
   } | null>(null);
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
   const signingInstanceRef = useRef<{ destroy: () => void } | null>(null);
+  const overlayTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Warm the embed chunk on mount so the dynamic `import("pandadoc-
+  // signing")` in the init effect resolves instantly once a session is
+  // ready — takes ~50-300ms off the critical path between the create
+  // call returning and the iframe starting to load.
+  useEffect(() => {
+    void import("pandadoc-signing").catch(() => {});
+  }, []);
 
   // Reset `docLoaded` every time a new signing session starts so the
   // overlay re-engages for the next sign attempt (the iframe needs
@@ -97,12 +107,14 @@ export function usePandaDocSigning(
     let cancelled = false;
 
     const init = async () => {
-      // Wait for Dialog to render the wrapper div
+      // Wait for the Dialog to render the wrapper div. It mounts
+      // within a frame or two of `signingSession` being set, so poll
+      // fast (short ticks) rather than the old 100ms × 20 = up-to-2s.
       let wrapper: HTMLElement | null = null;
-      for (let i = 0; i < 20; i++) {
+      for (let i = 0; i < 40; i++) {
         wrapper = document.getElementById("pandadoc-signing-wrapper");
         if (wrapper) break;
-        await new Promise((r) => setTimeout(r, 100));
+        await new Promise((r) => setTimeout(r, 25));
       }
       if (!wrapper || cancelled) return;
 
@@ -120,23 +132,45 @@ export function usePandaDocSigning(
         debugMode: true,
       });
 
+      // Any TERMINAL embed event must drop the blocking overlay — a
+      // failure that leaves the overlay up traps the parent behind an
+      // undismissable "Preparing…" screen forever. The vendor emits
+      // several failure events besides `document.exception`; subscribe
+      // to all of them.
+      const dismissWithError = (label: string) => (payload: unknown) => {
+        setDocLoaded(true);
+        console.error(`PandaDoc signing ${label}:`, payload);
+        toast.error(
+          "There was a problem loading the document. Please close and try again."
+        );
+      };
+
       signing
         .on("document.loaded", () => {
-          // Flip the overlay off — the iframe has the doc rendered
-          // and is ready for the signer to interact with it.
+          // Iframe has the doc rendered and interactive — drop overlay.
           setDocLoaded(true);
         })
         .on("document.completed", () => {
           onRefresh();
         })
-        .on("document.exception", (payload: unknown) => {
-          // Drop the overlay anyway on exception so the user isn't
-          // staring at a perpetual loader if the embed errors out.
-          setDocLoaded(true);
-          console.error("PandaDoc signing exception:", payload);
-        });
+        .on("document.exception", dismissWithError("exception"))
+        .on("document.loading.error", dismissWithError("loading error"))
+        .on("document.not.found", dismissWithError("not found"))
+        .on(
+          "document.attempts.limit.exceeded",
+          dismissWithError("attempts limit exceeded")
+        );
 
       signingInstanceRef.current = signing;
+
+      // Safety net: if NO terminal event ever fires (session expired
+      // before the iframe could report, network stall), don't strand
+      // the parent behind the overlay indefinitely — drop it after a
+      // generous window so they can retry.
+      const overlayTimeout = setTimeout(() => {
+        if (!cancelled) setDocLoaded(true);
+      }, 25_000);
+      overlayTimeoutRef.current = overlayTimeout;
 
       await signing.open({ sessionId: signingSession.sessionId });
     };
@@ -145,6 +179,10 @@ export function usePandaDocSigning(
 
     return () => {
       cancelled = true;
+      if (overlayTimeoutRef.current) {
+        clearTimeout(overlayTimeoutRef.current);
+        overlayTimeoutRef.current = null;
+      }
       if (signingInstanceRef.current) {
         signingInstanceRef.current.destroy();
         signingInstanceRef.current = null;
@@ -196,7 +234,7 @@ export function usePandaDocSigning(
         : app.enrollment_agreement_pandadoc_id;
     if (!docId) return;
     window.open(
-      `/api/pandadoc/download?documentId=${docId}&applicationId=${app.id}`,
+      `/api/pandadoc/download?documentId=${docId}&applicationId=${app.id}&yearId=${app.registration_school_years_id}`,
       "_blank"
     );
   }
@@ -211,7 +249,7 @@ export function usePandaDocSigning(
     if (!docId) return;
     setPdfViewerDoc({
       type,
-      url: `/api/pandadoc/download?documentId=${docId}&applicationId=${app.id}`,
+      url: `/api/pandadoc/download?documentId=${docId}&applicationId=${app.id}&yearId=${app.registration_school_years_id}`,
     });
   }
 
@@ -228,7 +266,11 @@ export function usePandaDocSigning(
         const res = await fetch("/api/pandadoc/create", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ type, applicationId: app.id }),
+          body: JSON.stringify({
+            type,
+            applicationId: app.id,
+            yearId: app.registration_school_years_id,
+          }),
         });
 
         if (!res.ok) {
@@ -239,14 +281,26 @@ export function usePandaDocSigning(
           return;
         }
 
-        const { documentId, sessionId } = await res.json();
+        const data = await res.json();
+        // The envelope is already signed on PandaDoc but our row hadn't
+        // caught up (the parent closed the tab before a poll synced
+        // it). The create route just synced it server-side — DON'T open
+        // a signing session (that would re-sign a completed doc); just
+        // refresh so the page renders the signed PDF.
+        if (data.completed) {
+          await onRefresh();
+          await mutateApplications();
+          return;
+        }
+
+        const { documentId, sessionId } = data;
         setSigningSession({
           sessionId,
           documentId,
           type,
           applicationId: app.id,
         });
-        startPolling(documentId, type, app.id);
+        startPolling(documentId, type, app.id, app.registration_school_years_id);
       } catch {
         toast.error("Failed to initiate signing. Please try again.");
       } finally {
@@ -291,17 +345,24 @@ export function usePandaDocSigning(
   function startPolling(
     documentId: string,
     type: "liability_waiver" | "enrollment_agreement",
-    applicationId: number
+    applicationId: number,
+    yearId: number
   ) {
     if (pollingRef.current) clearTimeout(pollingRef.current);
 
     let delay = 3000;
     const maxDelay = 30000;
+    // Track the last status we acted on so we only fire the (heavy,
+    // 5-endpoint) SWR revalidation when the status ACTUALLY changes —
+    // not on every tick while the doc merely sits in "viewed" for the
+    // whole time the parent reads it. That storm was ~100+ redundant
+    // requests per signing session.
+    let lastStatus: string | null = null;
 
     async function poll() {
       try {
         const res = await fetch(
-          `/api/pandadoc/status?documentId=${documentId}&applicationId=${applicationId}&type=${type}`
+          `/api/pandadoc/status?documentId=${documentId}&applicationId=${applicationId}&type=${type}&yearId=${yearId}`
         );
         if (!res.ok) {
           delay = Math.min(delay * 1.5, maxDelay);
@@ -328,13 +389,20 @@ export function usePandaDocSigning(
           return;
         }
 
-        if (data.status === "completed" || data.status === "viewed") {
+        // Only revalidate when the status transitions — a steady
+        // "viewed" while the parent reads shouldn't re-fetch anything.
+        const statusChanged = data.status !== lastStatus;
+        lastStatus = data.status;
+        if (
+          statusChanged &&
+          (data.status === "completed" || data.status === "viewed")
+        ) {
           await onRefresh();
           await mutateApplications();
-          if (data.status === "completed") {
-            pollingRef.current = null;
-            return;
-          }
+        }
+        if (data.status === "completed") {
+          pollingRef.current = null;
+          return;
         }
 
         delay = Math.min(delay * 1.2, maxDelay);

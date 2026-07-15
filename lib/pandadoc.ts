@@ -40,6 +40,11 @@ interface CreateDocumentParams {
    *  field's pre-filled value is editable by the signer in the
    *  signing UI, whereas tokens are baked into the doc text. */
   fields?: Record<string, string>;
+  /** Document metadata echoed back on every webhook event for this
+   *  document. We stamp family/year/student/type so the webhook can
+   *  map a status change straight to the owning Xano row without a
+   *  lookup. */
+  metadata?: Record<string, string>;
 }
 
 interface PandaDocDocument {
@@ -91,6 +96,10 @@ export async function createDocumentFromTemplate(
     );
   }
 
+  if (params.metadata && Object.keys(params.metadata).length > 0) {
+    body.metadata = params.metadata;
+  }
+
   const res = await fetch(`${PANDADOC_API_BASE}/documents`, {
     method: "POST",
     headers: headers(),
@@ -121,20 +130,37 @@ export async function sendDocument(documentId: string): Promise<void> {
   }
 }
 
+/**
+ * Poll until a document reaches `targetStatus`. Checks BEFORE the
+ * first sleep (the transition is often already done by the time we
+ * ask) and uses a short interval that ramps up: uploaded→draft
+ * usually lands in 1-3s, so a fixed 2s step wasted up to 2s per call.
+ * Default budget ≈ 25s total (well inside the route's maxDuration).
+ */
 export async function waitForDocumentStatus(
   documentId: string,
   targetStatus: string,
-  maxAttempts = 15,
-  intervalMs = 2000,
+  opts: { initialMs?: number; maxMs?: number; timeoutMs?: number } = {}
 ): Promise<PandaDocDocument> {
-  for (let i = 0; i < maxAttempts; i++) {
+  const initialMs = opts.initialMs ?? 400;
+  const maxMs = opts.maxMs ?? 1500;
+  const timeoutMs = opts.timeoutMs ?? 25_000;
+  const start = Date.now();
+  let interval = initialMs;
+  // First check happens immediately (no leading sleep).
+  for (;;) {
     const doc = await getDocumentStatus(documentId);
     if (doc.status === targetStatus) return doc;
-    await new Promise((r) => setTimeout(r, intervalMs));
+    if (Date.now() - start >= timeoutMs) {
+      throw new Error(
+        `Document ${documentId} did not reach status "${targetStatus}" within ${Math.round(
+          timeoutMs / 1000
+        )}s (last status: ${doc.status})`
+      );
+    }
+    await new Promise((r) => setTimeout(r, interval));
+    interval = Math.min(Math.round(interval * 1.5), maxMs);
   }
-  throw new Error(
-    `Document ${documentId} did not reach status "${targetStatus}" after ${maxAttempts} attempts`
-  );
 }
 
 export async function getDocumentStatus(
@@ -209,7 +235,11 @@ export async function createSigningSession(
     {
       method: "POST",
       headers: headers(),
-      body: JSON.stringify({ recipient: recipientEmail, lifetime: 900 }),
+      // 1-hour lifetime (was 15 min). A parent who reads carefully
+      // through a long waiver used to have their session expire
+      // mid-signature with no recovery path; an hour comfortably
+      // covers a slow read.
+      body: JSON.stringify({ recipient: recipientEmail, lifetime: 3600 }),
     }
   );
 

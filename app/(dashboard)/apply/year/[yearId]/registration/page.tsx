@@ -882,7 +882,11 @@ export default function RegistrationPage() {
         const res = await fetch("/api/pandadoc/create", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ type: "liability_waiver", applicationId: app.id }),
+          body: JSON.stringify({
+          type: "liability_waiver",
+          applicationId: app.id,
+          yearId: app.registration_school_years_id,
+        }),
         });
         if (!res.ok) {
           const body = await res.json().catch(() => null);
@@ -906,7 +910,11 @@ export default function RegistrationPage() {
       const res = await fetch("/api/pandadoc/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "liability_waiver", applicationId: app.id }),
+        body: JSON.stringify({
+          type: "liability_waiver",
+          applicationId: app.id,
+          yearId: app.registration_school_years_id,
+        }),
       });
 
       if (!res.ok) {
@@ -952,7 +960,7 @@ export default function RegistrationPage() {
       try {
         const app = yearApps.find((a) => a.registration_students_id === studentId);
         const res = await fetch(
-          `/api/pandadoc/status?documentId=${documentId}&applicationId=${app?.id ?? 0}&type=liability_waiver`
+          `/api/pandadoc/status?documentId=${documentId}&applicationId=${app?.id ?? 0}&type=liability_waiver&yearId=${app?.registration_school_years_id ?? 0}`
         );
         if (!res.ok) {
           delay = Math.min(delay * 1.5, maxDelay);
@@ -2618,7 +2626,7 @@ export default function RegistrationPage() {
                                     );
                                     const downloadUrl =
                                       docId && app
-                                        ? `/api/pandadoc/download?documentId=${docId}&applicationId=${app.id}`
+                                        ? `/api/pandadoc/download?documentId=${docId}&applicationId=${app.id}&yearId=${app.registration_school_years_id}`
                                         : null;
                                     return (
                                       <div className="flex items-center justify-between gap-3">

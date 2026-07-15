@@ -93,9 +93,9 @@ export default function AgreementPage() {
 
   const pdfUrl = useMemo(() => {
     if (!isCompleted || applications.length === 0) return null;
-    const app = applications[0] as unknown as { id: number; enrollment_agreement_pandadoc_id?: string | null };
+    const app = applications[0] as unknown as { id: number; registration_school_years_id: number; enrollment_agreement_pandadoc_id?: string | null };
     if (!app.enrollment_agreement_pandadoc_id) return null;
-    return `/api/pandadoc/download?documentId=${app.enrollment_agreement_pandadoc_id}&applicationId=${app.id}`;
+    return `/api/pandadoc/download?documentId=${app.enrollment_agreement_pandadoc_id}&applicationId=${app.id}&yearId=${app.registration_school_years_id}`;
   }, [isCompleted, applications]);
 
   if (loading) {

@@ -21,6 +21,9 @@ export async function GET(req: NextRequest) {
 
   const documentId = req.nextUrl.searchParams.get("documentId");
   const applicationId = req.nextUrl.searchParams.get("applicationId");
+  // Optional — when present, the ownership lookup uses the
+  // server-side-filtered by-family query instead of a full-table scan.
+  const yearId = Number(req.nextUrl.searchParams.get("yearId")) || null;
 
   if (!documentId || !applicationId) {
     return NextResponse.json(
@@ -29,11 +32,12 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  // Ownership check via family's own apps — robust to Xano returning the
-  // relation as an expanded object rather than a scalar id.
-  const familyApps = await xano.applications.getByFamilyId(familyId);
-  const application = familyApps.find(
-    (a) => Number(a.id) === Number(applicationId)
+  // Ownership check — resolves via the server-side-filtered by-family
+  // query when a `yearId` is supplied, else the full family list.
+  const application = await xano.applications.findOwnedApp(
+    familyId,
+    Number(applicationId),
+    yearId
   );
   if (!application) {
     return NextResponse.json(
@@ -134,6 +138,13 @@ export async function GET(req: NextRequest) {
       headers: {
         "Content-Type": "application/pdf",
         "Content-Disposition": `inline; filename="${documentId}.pdf"`,
+        // A signed/completed document is immutable — re-signing mints a
+        // NEW document id, so this (id-addressed) PDF never changes.
+        // Cache it privately so revisits render from cache instead of
+        // re-buffering megabytes through the proxy every time. Only
+        // reached after the signed-status gate above, so we never cache
+        // a pre-signature copy.
+        "Cache-Control": "private, max-age=3600, immutable",
       },
     });
   } catch (err) {

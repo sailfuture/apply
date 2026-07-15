@@ -123,6 +123,11 @@ export default function WaiverPage() {
 
   useEffect(() => {
     if (loading || autoInitRef.current) return;
+    // Wait for packets to load before deciding — waiver state
+    // (including the "already completed" flag) lives on the packet,
+    // so auto-initiating before packets arrive would fire a needless
+    // create call on every revisit of an already-signed waiver.
+    if (packetsData === undefined) return;
     if (applications.length === 0) return;
     // Auto-initiate signing if not completed and not already in a signing session
     if (!isCompleted && !signing.signingLoading && !signing.signingSession) {
@@ -133,20 +138,21 @@ export default function WaiverPage() {
       autoInitRef.current = true;
       signing.handleSign("liability_waiver");
     }
-  }, [loading, applications.length, isCompleted, signing]);
+  }, [loading, packetsData, applications.length, isCompleted, signing]);
 
   const pdfUrl = useMemo(() => {
     if (!isCompleted || applications.length === 0) return null;
     const app = applications[0] as unknown as {
       id: number;
       registration_students_id: number;
+      registration_school_years_id: number;
     };
     // Waiver pandadoc id lives on the per-student packet now.
     const packet = packets.find(
       (p) => p.registration_students_id === app.registration_students_id
     );
     if (!packet?.liability_waiver_pandadoc_id) return null;
-    return `/api/pandadoc/download?documentId=${packet.liability_waiver_pandadoc_id}&applicationId=${app.id}`;
+    return `/api/pandadoc/download?documentId=${packet.liability_waiver_pandadoc_id}&applicationId=${app.id}&yearId=${app.registration_school_years_id}`;
   }, [isCompleted, applications, packets]);
 
   if (loading) {

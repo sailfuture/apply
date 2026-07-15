@@ -2504,6 +2504,55 @@ export const xano = {
       }
     },
 
+    /**
+     * Lean, server-side-filtered application list for a family + year
+     * — the FAST path that avoids `getByFamilyId`'s full-table
+     * download. Hits the same `registration_application_by_family`
+     * custom query as `getActiveByFamilyAndYearWithDetails` (whose
+     * filter inputs Xano actually applies, unlike the auto-CRUD
+     * `?registration_families_id=` input on the default group, which
+     * Xano silently ignores), and narrows the return to the base
+     * `XanoApplication` shape for callers that only need the row
+     * (ownership checks), not the joined student/family/year details.
+     *
+     * NOTE: the underlying query is `isActive=true`-only and may drop
+     * legacy null-`isActive` rows, so an ownership check that misses
+     * here MUST fall back to `getByFamilyId` — `findOwnedApp` does
+     * exactly that.
+     */
+    async getByFamilyAndYear(
+      familyId: number,
+      yearId: number
+    ): Promise<XanoApplication[]> {
+      return this.getActiveByFamilyAndYearWithDetails(familyId, yearId);
+    },
+
+    /**
+     * Resolve the single application `appId` that belongs to
+     * `familyId` — the ownership gate for the PandaDoc routes. When a
+     * `yearId` is known it tries the server-side-filtered
+     * `getByFamilyAndYear` first (fast — no full-table download) and
+     * only falls back to the unfiltered `getByFamilyId` on a miss.
+     * The fallback is load-bearing: it covers both the active-only
+     * year query dropping a legacy row and callers that pass no year,
+     * so switching to the fast path can never lock a parent out of a
+     * document they legitimately own. Returns `null` when the app
+     * isn't the family's — callers map that to a 404.
+     */
+    async findOwnedApp(
+      familyId: number,
+      appId: number,
+      yearId?: number | null
+    ): Promise<XanoApplication | null> {
+      if (yearId) {
+        const scoped = await this.getByFamilyAndYear(familyId, yearId);
+        const hit = scoped.find((a) => Number(a.id) === appId);
+        if (hit) return hit;
+      }
+      const all = await this.getByFamilyId(familyId);
+      return all.find((a) => Number(a.id) === appId) ?? null;
+    },
+
     async getByStudentAndYear(studentId: number, schoolYearId: number): Promise<XanoApplication | null> {
       try {
         const res = await fetch(
