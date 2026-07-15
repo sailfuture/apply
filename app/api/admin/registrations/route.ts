@@ -175,6 +175,17 @@ export async function GET(req: NextRequest) {
       return familyAccepted || legacyStudentAccepted;
     });
 
+    // A document counts as "submitted" when its upload slot has at
+    // least one file. Xano hands back multi-file slots as arrays but
+    // legacy/empty slots can arrive as bare objects — mirror the
+    // tolerant coercion the Documents-to-Review block uses.
+    const hasFiles = (v: unknown): boolean => {
+      if (!v) return false;
+      if (Array.isArray(v)) return v.length > 0;
+      if (typeof v === "object") return Object.keys(v).length > 0;
+      return false;
+    };
+
     const rows: RegistrationStudentRow[] = acceptedApps.map((app) => {
       const studentId = Number(app.registration_students_id);
       const familyId = Number(app.registration_families_id);
@@ -231,6 +242,23 @@ export async function GET(req: NextRequest) {
           progress?.enrollment_agreement_status ?? "",
         is_enrollment_agreement_signed:
           !!progress?.is_enrollment_agreement_signed,
+        // Per-student required-document states — submitted (parent
+        // uploaded at least one file into the slot) and approved
+        // (admin flipped the doc-confirm on the student detail
+        // route). Drives the Documents dots column on the list.
+        doc_immunization_submitted: hasFiles(student?.immunization_forms),
+        doc_immunization_approved:
+          student?.immunization_admin_confirm === true,
+        doc_birth_certificate_submitted: hasFiles(student?.birth_certificate),
+        doc_birth_certificate_approved:
+          student?.birth_certificate_admin_confirm === true,
+        doc_school_health_form_submitted: hasFiles(
+          student?.school_health_form
+        ),
+        doc_school_health_form_approved:
+          student?.school_health_form_admin_confirm === true,
+        doc_transcripts_submitted: hasFiles(student?.transcripts),
+        doc_transcripts_approved: student?.transcripts_admin_confirm === true,
       };
     });
 
@@ -285,4 +313,15 @@ export interface RegistrationStudentRow {
   last_edited: number | null;
   enrollment_agreement_status: string;
   is_enrollment_agreement_signed: boolean;
+  /** Required-document states for this student — submitted = a file
+   *  exists in the upload slot; approved = admin confirmed it (the
+   *  doc-confirm pairs on `/api/admin/students/[id]`). */
+  doc_immunization_submitted: boolean;
+  doc_immunization_approved: boolean;
+  doc_birth_certificate_submitted: boolean;
+  doc_birth_certificate_approved: boolean;
+  doc_school_health_form_submitted: boolean;
+  doc_school_health_form_approved: boolean;
+  doc_transcripts_submitted: boolean;
+  doc_transcripts_approved: boolean;
 }

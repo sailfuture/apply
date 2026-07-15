@@ -56,6 +56,35 @@ interface RegStudentRow {
   last_edited: number | null;
   enrollment_agreement_status: string;
   is_enrollment_agreement_signed: boolean;
+  /** Per-student required-document states from the API — submitted =
+   *  file uploaded into the slot, approved = admin doc-confirm. */
+  doc_immunization_submitted: boolean;
+  doc_immunization_approved: boolean;
+  doc_birth_certificate_submitted: boolean;
+  doc_birth_certificate_approved: boolean;
+  doc_school_health_form_submitted: boolean;
+  doc_school_health_form_approved: boolean;
+  doc_transcripts_submitted: boolean;
+  doc_transcripts_approved: boolean;
+}
+
+/**
+ * The four required documents, in display order — one dot each in the
+ * Documents column. Keys match the `doc_<key>_submitted/approved`
+ * fields on the API row.
+ */
+const DOC_DEFS = [
+  { key: "immunization", label: "Immunization forms" },
+  { key: "birth_certificate", label: "Birth certificate" },
+  { key: "school_health_form", label: "School health form" },
+  { key: "transcripts", label: "Transcripts" },
+] as const;
+type DocKey = (typeof DOC_DEFS)[number]["key"];
+
+/** Per-family tally for one document across its students. */
+interface DocCount {
+  submitted: number;
+  approved: number;
 }
 
 /**
@@ -95,6 +124,13 @@ interface RegFamilyRow {
   last_edited: number | null;
   enrollment_agreement_status: string;
   is_enrollment_agreement_signed: boolean;
+  /** Documents are per-STUDENT, so the family row carries a tally per
+   *  document ("2/2 submitted, 1/2 approved") that the Documents dots
+   *  render from. */
+  doc_counts: Record<DocKey, DocCount>;
+  /** Σ approved across all four documents and all students — the
+   *  Documents column's sort key (most-reviewed families first). */
+  docs_approved_total: number;
   /** Index signature so the row matches `DataTable`'s
    *  `<T extends Record<string, unknown>>` constraint without a cast.
    *  Mirrors the pattern used on the Applications + Enrolled pages. */
@@ -137,6 +173,27 @@ function deriveFilter(row: RegFamilyRow): ProgressFilter {
  * deterministic order before grouping.
  */
 function aggregateByFamily(rows: RegStudentRow[]): RegFamilyRow[] {
+  // Documents are per-student; each student row contributes 0/1 to
+  // the family's per-document submitted/approved tallies.
+  const docCountsFor = (r: RegStudentRow): Record<DocKey, DocCount> => ({
+    immunization: {
+      submitted: r.doc_immunization_submitted ? 1 : 0,
+      approved: r.doc_immunization_approved ? 1 : 0,
+    },
+    birth_certificate: {
+      submitted: r.doc_birth_certificate_submitted ? 1 : 0,
+      approved: r.doc_birth_certificate_approved ? 1 : 0,
+    },
+    school_health_form: {
+      submitted: r.doc_school_health_form_submitted ? 1 : 0,
+      approved: r.doc_school_health_form_approved ? 1 : 0,
+    },
+    transcripts: {
+      submitted: r.doc_transcripts_submitted ? 1 : 0,
+      approved: r.doc_transcripts_approved ? 1 : 0,
+    },
+  });
+
   const byFamily = new Map<number, RegFamilyRow>();
   for (const r of rows) {
     const existing = byFamily.get(r.family_id);
@@ -148,6 +205,12 @@ function aggregateByFamily(rows: RegStudentRow[]): RegFamilyRow[] {
       ]
         .filter(Boolean)
         .join(", ");
+      const add = docCountsFor(r);
+      for (const d of DOC_DEFS) {
+        existing.doc_counts[d.key].submitted += add[d.key].submitted;
+        existing.doc_counts[d.key].approved += add[d.key].approved;
+        existing.docs_approved_total += add[d.key].approved;
+      }
       continue;
     }
     byFamily.set(r.family_id, {
@@ -171,6 +234,13 @@ function aggregateByFamily(rows: RegStudentRow[]): RegFamilyRow[] {
       last_edited: r.last_edited,
       enrollment_agreement_status: r.enrollment_agreement_status,
       is_enrollment_agreement_signed: r.is_enrollment_agreement_signed,
+      doc_counts: docCountsFor(r),
+      docs_approved_total: [
+        r.doc_immunization_approved,
+        r.doc_birth_certificate_approved,
+        r.doc_school_health_form_approved,
+        r.doc_transcripts_approved,
+      ].filter(Boolean).length,
     });
   }
   return Array.from(byFamily.values()).sort((a, b) =>
@@ -247,7 +317,7 @@ export default function RegistrationsPage() {
       header: "Family",
       sortable: true,
       searchable: true,
-      width: "w-[22%]",
+      width: "w-[20%]",
       render: (row) => (
         <span className="block truncate font-medium">{row.family_name}</span>
       ),
@@ -257,7 +327,7 @@ export default function RegistrationsPage() {
       header: "Students",
       sortable: true,
       searchable: true,
-      width: "w-[28%]",
+      width: "w-[22%]",
       render: (row) => (
         <span className="inline-flex items-center gap-2 min-w-0 max-w-full">
           <span className="text-xs tabular-nums text-muted-foreground shrink-0">
@@ -274,7 +344,7 @@ export default function RegistrationsPage() {
       header: "Primary Contact",
       sortable: true,
       searchable: true,
-      width: "w-[22%]",
+      width: "w-[18%]",
       render: (row) => (
         <span className="block truncate">
           {row.primary_email || row.primary_name || "—"}
@@ -294,6 +364,19 @@ export default function RegistrationsPage() {
           <SectionDots row={row} />
         </span>
       ),
+    },
+    {
+      // Four required-document dots — per-student states rolled up to
+      // the family: gray = not submitted, amber = uploaded and
+      // waiting on review (outline = only some students so far),
+      // green check = approved by admin. Sorts by total approvals so
+      // the most-reviewed families cluster.
+      key: "docs_approved_total",
+      header: "Documents",
+      sortable: true,
+      width: "w-[12%]",
+      accessor: (row) => row.docs_approved_total,
+      render: (row) => <DocumentDots row={row} />,
     },
     {
       key: "enrollment_agreement_status",
@@ -572,6 +655,73 @@ function RegistrationsGroup({
  * matches the Applications page section pills; everything else stays
  * monochrome.
  */
+/**
+ * Four required-document dots — same visual language as the packet
+ * SectionDots, one dot per document, rolled up across the family's
+ * students. Per document (n students):
+ *
+ *   - green check   — approved for every student (admin doc-confirm)
+ *   - amber filled  — submitted for every student, awaiting review
+ *   - amber outline — submitted for SOME students (multi-student
+ *                     families mid-upload)
+ *   - gray empty    — nothing uploaded yet
+ *
+ * Hover any dot for the exact counts.
+ */
+function DocumentDots({ row }: { row: RegFamilyRow }) {
+  const n = row.student_count;
+  return (
+    <span className="inline-flex items-center gap-1">
+      {DOC_DEFS.map((d) => {
+        const c = row.doc_counts[d.key];
+        const title = `${d.label} — ${c.submitted}/${n} submitted · ${c.approved}/${n} approved`;
+        if (n > 0 && c.approved === n) {
+          return (
+            <CheckCircle2
+              key={d.key}
+              className="size-3 text-green-600"
+              aria-label={`${d.label} approved`}
+            >
+              <title>{title}</title>
+            </CheckCircle2>
+          );
+        }
+        if (n > 0 && c.submitted === n) {
+          return (
+            <Circle
+              key={d.key}
+              className="size-3 fill-amber-400 text-amber-400"
+              aria-label={`${d.label} submitted, awaiting review`}
+            >
+              <title>{title}</title>
+            </Circle>
+          );
+        }
+        if (c.submitted > 0) {
+          return (
+            <Circle
+              key={d.key}
+              className="size-3 text-amber-400"
+              aria-label={`${d.label} partially submitted`}
+            >
+              <title>{title}</title>
+            </Circle>
+          );
+        }
+        return (
+          <Circle
+            key={d.key}
+            className="size-3 text-muted-foreground/40"
+            aria-label={`${d.label} not submitted`}
+          >
+            <title>{title}</title>
+          </Circle>
+        );
+      })}
+    </span>
+  );
+}
+
 function SectionDots({ row }: { row: RegFamilyRow }) {
   const sections = [
     { key: "tuition", complete: row.isTuition, label: "Tuition" },
