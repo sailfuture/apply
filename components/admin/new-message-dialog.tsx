@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import {
   Command,
   CommandEmpty,
+  CommandGroup,
   CommandInput,
   CommandItem,
   CommandList,
@@ -20,46 +21,89 @@ import {
 } from "@/components/ui/dialog";
 import { adminFetcher } from "@/lib/admin-fetcher";
 
+type ContactType = "family" | "inquiry" | "camp";
+
+interface PickedContact {
+  type: ContactType;
+  id: number;
+  name: string;
+}
+
 /** The slice of `/api/admin/families` rows the picker needs. */
 interface FamilyRow {
   id: number;
   family_name: string;
   primary_name: string;
-  primary_email: string;
+}
+
+/** The slice of `/api/admin/inquiries` rows the picker needs. */
+interface InquiryRow {
+  id: number;
+  primary_first_name: string;
+  primary_last_name: string;
+  student_first_name: string;
+  student_last_name: string;
+}
+
+/** The slice of `/api/admin/summer-camp` rows the picker needs. */
+interface CampRow {
+  id: number;
+  primary_parent_first_name: string;
+  primary_parent_last_name: string;
+  student_first_name: string;
+  student_last_name: string;
 }
 
 /**
- * "New message" — searchable family picker for the global SMS inbox.
- * The inbox's conversation list only shows families with message
- * history, so without this there was no way to START a thread from the
- * messages page (staff had to go find the family's record). Picking a
- * family opens its (possibly empty) thread in the inbox's right pane;
- * the thread composer handles the first send, opt-out state, and
- * missing-phone state, so this component only needs to resolve
- * "which family?".
+ * "New message" — searchable contact picker for the global SMS inbox,
+ * spanning all three textable record types: applying/enrolled
+ * families, prospective-family inquiries, and summer-camp parents.
+ * Picking one opens its (possibly empty) thread in the inbox's right
+ * pane; the thread composer handles the first send, opt-out state, and
+ * missing-phone state, so this component only resolves "who?".
  */
 export function NewMessageDialog({
   onPick,
 }: {
-  /** Open this family's thread in the host inbox. */
-  onPick: (family: { id: number; name: string }) => void;
+  /** Open this contact's thread in the host inbox. */
+  onPick: (contact: PickedContact) => void;
 }) {
   const [open, setOpen] = useState(false);
 
-  // Fetch only while the dialog is open — the families list is
+  // Fetch only while the dialog is open — the contact lists are
   // irrelevant to the inbox until staff reach for the picker.
-  const { data, isLoading } = useSWR(
+  const { data: familiesData, isLoading: loadingFamilies } = useSWR(
     open ? "/api/admin/families" : null,
     adminFetcher
   );
-  const families = useMemo<FamilyRow[]>(
-    () => (Array.isArray(data) ? (data as FamilyRow[]) : []),
-    [data]
+  const { data: inquiriesData, isLoading: loadingInquiries } = useSWR(
+    open ? "/api/admin/inquiries" : null,
+    adminFetcher
+  );
+  const { data: campData, isLoading: loadingCamp } = useSWR(
+    open ? "/api/admin/summer-camp" : null,
+    adminFetcher
   );
 
-  function pick(f: FamilyRow) {
+  const families = useMemo<FamilyRow[]>(
+    () => (Array.isArray(familiesData) ? (familiesData as FamilyRow[]) : []),
+    [familiesData]
+  );
+  const inquiries = useMemo<InquiryRow[]>(
+    () =>
+      Array.isArray(inquiriesData) ? (inquiriesData as InquiryRow[]) : [],
+    [inquiriesData]
+  );
+  const campRows = useMemo<CampRow[]>(
+    () => (Array.isArray(campData) ? (campData as CampRow[]) : []),
+    [campData]
+  );
+
+  const loading = loadingFamilies || loadingInquiries || loadingCamp;
+
+  function pick(contact: PickedContact) {
     setOpen(false);
-    onPick({ id: f.id, name: f.family_name });
+    onPick(contact);
   }
 
   return (
@@ -73,38 +117,99 @@ export function NewMessageDialog({
           <DialogHeader className="px-4 pt-4">
             <DialogTitle>New message</DialogTitle>
             <DialogDescription>
-              Pick a family to open their text thread.
+              Pick a family, inquiry, or camp parent to open their text
+              thread.
             </DialogDescription>
           </DialogHeader>
-          {/* cmdk filters items by their `value`; family + parent name
-              in the value means staff can search by either. */}
+          {/* cmdk filters items by their `value`; parent + student +
+              record names in the value means staff can search by any. */}
           <Command className="border-t">
-            <CommandInput placeholder="Search by family or parent name…" />
+            <CommandInput placeholder="Search by family, parent, or student name…" />
             <CommandList className="max-h-72">
-              {isLoading ? (
+              {loading ? (
                 <div className="flex justify-center py-6">
                   <Loader2 className="size-4 animate-spin text-muted-foreground" />
                 </div>
               ) : (
                 <>
-                  <CommandEmpty>No families found.</CommandEmpty>
-                  {families.map((f) => (
-                    <CommandItem
-                      key={f.id}
-                      value={`${f.family_name} ${f.primary_name} ${f.id}`}
-                      onSelect={() => pick(f)}
-                      className="flex flex-col items-start gap-0.5 px-4 py-2"
-                    >
-                      <span className="text-sm font-medium">
-                        {f.family_name}
-                      </span>
-                      {f.primary_name ? (
-                        <span className="text-xs text-muted-foreground">
-                          {f.primary_name}
+                  <CommandEmpty>No contacts found.</CommandEmpty>
+                  <CommandGroup heading="Families">
+                    {families.map((f) => (
+                      <CommandItem
+                        key={`family-${f.id}`}
+                        value={`family ${f.family_name} ${f.primary_name} ${f.id}`}
+                        onSelect={() =>
+                          pick({
+                            type: "family",
+                            id: f.id,
+                            name: f.family_name,
+                          })
+                        }
+                        className="flex flex-col items-start gap-0.5 px-4 py-2"
+                      >
+                        <span className="text-sm font-medium">
+                          {f.family_name}
                         </span>
-                      ) : null}
-                    </CommandItem>
-                  ))}
+                        {f.primary_name ? (
+                          <span className="text-xs text-muted-foreground">
+                            {f.primary_name}
+                          </span>
+                        ) : null}
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                  <CommandGroup heading="Inquiries">
+                    {inquiries.map((i) => {
+                      const name =
+                        `${i.primary_first_name ?? ""} ${i.primary_last_name ?? ""}`.trim() ||
+                        `Inquiry #${i.id}`;
+                      const student =
+                        `${i.student_first_name ?? ""} ${i.student_last_name ?? ""}`.trim();
+                      return (
+                        <CommandItem
+                          key={`inquiry-${i.id}`}
+                          value={`inquiry ${name} ${student} ${i.id}`}
+                          onSelect={() =>
+                            pick({ type: "inquiry", id: i.id, name })
+                          }
+                          className="flex flex-col items-start gap-0.5 px-4 py-2"
+                        >
+                          <span className="text-sm font-medium">{name}</span>
+                          {student ? (
+                            <span className="text-xs text-muted-foreground">
+                              Student: {student}
+                            </span>
+                          ) : null}
+                        </CommandItem>
+                      );
+                    })}
+                  </CommandGroup>
+                  <CommandGroup heading="Summer camp">
+                    {campRows.map((c) => {
+                      const name =
+                        `${c.primary_parent_first_name ?? ""} ${c.primary_parent_last_name ?? ""}`.trim() ||
+                        `Camp #${c.id}`;
+                      const student =
+                        `${c.student_first_name ?? ""} ${c.student_last_name ?? ""}`.trim();
+                      return (
+                        <CommandItem
+                          key={`camp-${c.id}`}
+                          value={`camp ${name} ${student} ${c.id}`}
+                          onSelect={() =>
+                            pick({ type: "camp", id: c.id, name })
+                          }
+                          className="flex flex-col items-start gap-0.5 px-4 py-2"
+                        >
+                          <span className="text-sm font-medium">{name}</span>
+                          {student ? (
+                            <span className="text-xs text-muted-foreground">
+                              Student: {student}
+                            </span>
+                          ) : null}
+                        </CommandItem>
+                      );
+                    })}
+                  </CommandGroup>
                 </>
               )}
             </CommandList>

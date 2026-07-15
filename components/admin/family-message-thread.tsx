@@ -48,25 +48,45 @@ export const messagesFetcher = async (
   return res.json();
 };
 
+export type ThreadContactType = "family" | "inquiry" | "camp";
+
+export function contactMessagesKey(
+  type: ThreadContactType,
+  id: number
+): string {
+  return `/api/admin/messages?contactType=${type}&contactId=${id}`;
+}
+
+/** Legacy key helper — family threads only. Delegates to
+ *  `contactMessagesKey` so older callers (the family-record drawer)
+ *  share the same SWR cache entry as the generic path. */
 export function messagesKey(familyId: number): string {
-  return `/api/admin/messages?familyId=${familyId}`;
+  return contactMessagesKey("family", familyId);
 }
 
 /**
- * The two-way SMS thread + composer for one family. Self-fetches via
- * SWR (keyed on the family) and fills its parent's height — so it drops
- * into both the per-family drawer (`FamilyMessagesSheet`) and the
- * global inbox's right pane. The parent supplies a height-constrained
- * flex container; this renders `[scrollable thread][pinned composer]`.
+ * The two-way SMS thread + composer for one contact — a family, an
+ * inquiry, or a summer-camp parent. Self-fetches via SWR (keyed on the
+ * contact) and fills its parent's height — so it drops into both the
+ * per-family drawer (`FamilyMessagesSheet`) and the global inbox's
+ * right pane. The parent supplies a height-constrained flex container;
+ * this renders `[scrollable thread][pinned composer]`.
+ *
+ * Pass either `contact` (any type) or the legacy `familyId` prop.
  */
 export function FamilyMessageThread({
   familyId,
+  contact,
   defaultStudentId,
   defaultYearId,
   onSent,
   className,
 }: {
-  familyId: number;
+  /** Legacy family-thread prop — equivalent to
+   *  `contact: { type: "family", id: familyId }`. */
+  familyId?: number;
+  /** Generic contact — takes precedence over `familyId`. */
+  contact?: { type: ThreadContactType; id: number };
   defaultStudentId?: number | null;
   defaultYearId?: number | null;
   /** Fired after a successful send — lets a host (e.g. the inbox)
@@ -77,13 +97,16 @@ export function FamilyMessageThread({
    *  since this renders inside different flex containers. */
   className?: string;
 }) {
+  const contactType = contact?.type ?? "family";
+  const contactId = contact?.id ?? familyId ?? 0;
+
   // Poll while mounted — inbound replies arrive via the Twilio webhook
   // writing to Xano, so without a refresh interval an open thread would
   // never show them (the inbox's conversation list polls separately and
   // would flag a reply the open thread can't display). Focus
   // revalidation stays on (SWR default) so alt-tabbing back is instant.
   const { data, isLoading, mutate } = useSWR<MessagesResponse>(
-    messagesKey(familyId),
+    contactId ? contactMessagesKey(contactType, contactId) : null,
     messagesFetcher,
     { refreshInterval: 15_000 }
   );
@@ -106,7 +129,8 @@ export function FamilyMessageThread({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          familyId,
+          contactType,
+          contactId,
           body: text,
           studentId: defaultStudentId ?? null,
           yearId: defaultYearId ?? null,
@@ -184,14 +208,14 @@ export function FamilyMessageThread({
               <Ban />
             </MarkerIcon>
             <MarkerContent>
-              This family opted out of texts (replied STOP). You can&rsquo;t
+              This contact opted out of text messages. You can&rsquo;t
               message them until they opt back in.
             </MarkerContent>
           </Marker>
         ) : !recipient?.e164 ? (
           <Marker className="text-muted-foreground">
             <MarkerContent>
-              No valid mobile number on file for this family.
+              No valid mobile number on file for this contact.
             </MarkerContent>
           </Marker>
         ) : null}
@@ -208,7 +232,7 @@ export function FamilyMessageThread({
           disabled={!canSend || sending}
           placeholder={
             canSend
-              ? `Text ${recipient?.name || "the family"}…`
+              ? `Text ${recipient?.name || "this contact"}…`
               : "Messaging unavailable"
           }
         />

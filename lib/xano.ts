@@ -1153,8 +1153,18 @@ export interface XanoAdminNote {
 export interface XanoSmsMessage {
   id: number;
   created_at: number;
-  /** Family this text belongs to. */
-  registration_families_id: number;
+  /** Family this text belongs to — null when the message is attributed
+   *  to an inquiry or summer-camp contact instead. Exactly one of the
+   *  three contact FKs is set per row (see
+   *  `contactMessageKeys` in `lib/sms/contacts.ts`). */
+  registration_families_id: number | null;
+  /** Inquiry contact (`registration_inquiry`) this text belongs to.
+   *  Requires the nullable `registration_inquiry_id` column on the
+   *  Xano `sms_messages` table + the input on its Add Record endpoint. */
+  registration_inquiry_id?: number | null;
+  /** Summer-camp contact (`registration_summer_camp`) this text
+   *  belongs to. Same Xano column/input requirement as above. */
+  registration_summer_camp_id?: number | null;
   /** Optional student/year context — set when a trigger text is about
    *  a specific student or year; null for general/manual/group texts. */
   registration_students_id?: number | null;
@@ -4269,16 +4279,39 @@ export const xano = {
   smsMessages: {
     /** A family's full text thread, oldest-first (chat order). */
     async getByFamilyId(familyId: number): Promise<XanoSmsMessage[]> {
+      return this.getByContact("family", familyId);
+    },
+
+    /**
+     * One contact's full text thread, oldest-first — generic across
+     * the three contact types (family / inquiry / summer-camp), each
+     * keyed by its own FK column on `sms_messages`. Threads are never
+     * year-filtered: one continuous history per contact across
+     * academic years.
+     */
+    async getByContact(
+      type: "family" | "inquiry" | "camp",
+      id: number
+    ): Promise<XanoSmsMessage[]> {
+      const column =
+        type === "family"
+          ? "registration_families_id"
+          : type === "inquiry"
+            ? "registration_inquiry_id"
+            : "registration_summer_camp_id";
       try {
         const res = await fetch(
-          `${getBaseUrl()}/sms_messages?registration_families_id=${familyId}`,
+          `${getBaseUrl()}/sms_messages?${column}=${id}`,
           { cache: "no-store" }
         );
         if (!res.ok) return [];
         const items: XanoSmsMessage[] = await res.json();
+        // Client-side filter is load-bearing (same reason as every
+        // other accessor here: Xano query inputs that aren't wired
+        // return the whole table).
         return Array.isArray(items)
           ? items
-              .filter((m) => m.registration_families_id === familyId)
+              .filter((m) => m[column] === id)
               .sort((a, b) => a.created_at - b.created_at)
           : [];
       } catch {

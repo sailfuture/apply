@@ -1,5 +1,10 @@
-import { xano, type XanoFamily, type XanoParent } from "@/lib/xano";
+import { xano } from "@/lib/xano";
 import { getTwilioClient, isTwilioConfigured } from "@/lib/twilio";
+import {
+  buildSmsDirectory,
+  contactMessageKeys,
+  normPhone,
+} from "@/lib/sms/contacts";
 
 /**
  * Reconcile the app's `sms_messages` log against Twilio's OWN message
@@ -16,12 +21,13 @@ import { getTwilioClient, isTwilioConfigured } from "@/lib/twilio";
  * inbound webhook), and inserts them so the thread history is
  * complete.
  *
- * Attribution is by the counterparty number (the family side of the
- * text: `to` for outbound, `from` for inbound) matched against parent
- * phone numbers. Numbers that match no parent are counted and
- * reported, not written — `sms_messages` is family-keyed, so an
- * unattributable text has no thread to land on (e.g. a text to an
- * inquiry-only contact who has no family record yet).
+ * Attribution is by the counterparty number (the contact side of the
+ * text: `to` for outbound, `from` for inbound) matched against the
+ * unified contact directory — family parents, summer-camp parents,
+ * and inquiries, with family > camp > inquiry priority. Numbers that
+ * match no contact at all are counted and reported, not written —
+ * `sms_messages` is contact-keyed, so an unattributable text has no
+ * thread to land on.
  *
  * Safe to run repeatedly: the Twilio SID is the natural key, so
  * re-running imports nothing new. Never throws — callers (admin
@@ -39,17 +45,11 @@ export interface SmsSyncResult {
   imported: number;
   /** Already present (SID match) — the common case on re-runs. */
   alreadyLogged: number;
-  /** Messages whose counterparty number matched no parent on file. */
+  /** Messages whose counterparty number matched no contact on file
+   *  (no family parent, no summer-camp parent, no inquiry). */
   unmatched: number;
   /** Distinct unmatched numbers (up to 10) for the admin to inspect. */
   unmatchedNumbers: string[];
-}
-
-/** Bare 10-digit form — the same normalization the inbound webhook and
- *  `parents.findByPhone` use, so all three attribute identically. */
-function normPhone(raw: string | null | undefined): string {
-  const d = (raw ?? "").replace(/\D/g, "");
-  return d.length === 11 && d.startsWith("1") ? d.slice(1) : d;
 }
 
 export async function syncMessagesFromTwilio({
@@ -69,36 +69,20 @@ export async function syncMessagesFromTwilio({
 
   try {
     // One round trip each: Twilio's log for the window, our existing
-    // rows (for SID dedupe), and the parent/family tables (for the
-    // phone → family map).
-    const [twilioMessages, existing, parents, families] = await Promise.all([
+    // rows (for SID dedupe), and the unified phone → contact directory
+    // (families + summer-camp parents + inquiries).
+    const [twilioMessages, existing, directory] = await Promise.all([
       getTwilioClient().messages.list({
         dateSentAfter: new Date(Date.now() - days * 86_400_000),
         limit: 1000,
       }),
       xano.smsMessages.getAll(),
-      xano.parents.getAll().catch(() => [] as XanoParent[]),
-      xano.families.getAll().catch(() => [] as XanoFamily[]),
+      buildSmsDirectory(),
     ]);
 
     const knownSids = new Set(
       existing.map((m) => m.twilio_message_sid).filter(Boolean)
     );
-
-    // phone → family. Built family-first (not parent-first) so a
-    // parent row that exists but isn't attached to any family can't
-    // claim a number.
-    const parentById = new Map(parents.map((p) => [p.id, p]));
-    const familyByPhone = new Map<string, XanoFamily>();
-    for (const family of families) {
-      for (const pid of xano.families.getParentIds(family)) {
-        const parent = parentById.get(pid);
-        const key = normPhone(parent?.phone);
-        if (key.length === 10 && !familyByPhone.has(key)) {
-          familyByPhone.set(key, family);
-        }
-      }
-    }
 
     base.scanned = twilioMessages.length;
     const unmatchedSet = new Set<string>();
@@ -117,15 +101,15 @@ export async function syncMessagesFromTwilio({
       }
       const inbound = msg.direction === "inbound";
       const counterparty = inbound ? msg.from : msg.to;
-      const family = familyByPhone.get(normPhone(counterparty));
-      if (!family) {
+      const contact = directory.get(normPhone(counterparty));
+      if (!contact) {
         base.unmatched += 1;
         if (counterparty) unmatchedSet.add(counterparty);
         continue;
       }
 
       await xano.smsMessages.create({
-        registration_families_id: family.id,
+        ...contactMessageKeys(contact),
         registration_students_id: null,
         registration_school_years_id: null,
         direction: inbound ? "inbound" : "outbound",

@@ -110,7 +110,14 @@ export async function POST(req: NextRequest) {
     try {
       const priorMessages = await xano.smsMessages.getAll();
       for (const m of priorMessages) {
-        if (m.template === template && m.status !== "failed") {
+        // Group blasts are family-only, so a resume row always carries
+        // the family FK — but the column is nullable now (inquiry/camp
+        // messages), hence the guard.
+        if (
+          m.template === template &&
+          m.status !== "failed" &&
+          m.registration_families_id
+        ) {
           alreadySent.add(m.registration_families_id);
         }
       }

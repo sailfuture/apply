@@ -23,18 +23,23 @@ export default function AdminMessagesPage() {
     conversations: SmsConversation[];
   }>("/api/admin/messages", adminFetcher, { refreshInterval: 20_000 });
   const conversations = useMemo(() => data?.conversations ?? [], [data]);
-  // Selection carries the name too (not just the id) so a family picked
-  // from the "New message" dialog — who has NO conversation row yet —
-  // can still render a thread header. Once the first text sends, the
-  // refreshed conversation list takes over as the name source.
+  // Selection carries the name too (not just type+id) so a contact
+  // picked from the "New message" dialog — who has NO conversation row
+  // yet — can still render a thread header. Once the first text sends,
+  // the refreshed conversation list takes over as the name source.
   const [selected, setSelected] = useState<{
+    type: SmsConversation["contactType"];
     id: number;
     name: string;
   } | null>(null);
   const active = selected
-    ? (conversations.find((c) => c.familyId === selected.id) ?? {
-        familyId: selected.id,
-        familyName: selected.name,
+    ? (conversations.find(
+        (c) =>
+          c.contactType === selected.type && c.contactId === selected.id
+      ) ?? {
+        contactType: selected.type,
+        contactId: selected.id,
+        name: selected.name,
       })
     : null;
 
@@ -73,7 +78,7 @@ export default function AdminMessagesPage() {
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <NewMessageDialog onPick={(family) => setSelected(family)} />
+          <NewMessageDialog onPick={(contact) => setSelected(contact)} />
           <GroupMessageDialog onSent={() => mutate()} />
         </div>
       </div>
@@ -112,25 +117,35 @@ export default function AdminMessagesPage() {
             <div className="p-6 text-center text-sm text-muted-foreground">
               No conversations yet. Use{" "}
               <span className="font-medium text-foreground">New message</span>{" "}
-              to text a family, or start a group message.
+              to text a family, inquiry, or camp parent — or start a group
+              message.
             </div>
           ) : (
             <ul className="divide-y">
               {conversations.map((c) => (
-                <li key={c.familyId}>
+                <li key={`${c.contactType}:${c.contactId}`}>
                   <button
                     type="button"
                     onClick={() =>
-                      setSelected({ id: c.familyId, name: c.familyName })
+                      setSelected({
+                        type: c.contactType,
+                        id: c.contactId,
+                        name: c.name,
+                      })
                     }
                     className={cn(
                       "w-full px-4 py-3 text-left transition-colors hover:bg-muted/50",
-                      selected?.id === c.familyId && "bg-muted"
+                      selected?.type === c.contactType &&
+                        selected?.id === c.contactId &&
+                        "bg-muted"
                     )}
                   >
                     <div className="flex items-center justify-between gap-2">
-                      <span className="truncate text-sm font-medium">
-                        {c.familyName}
+                      <span className="flex min-w-0 items-center gap-1.5">
+                        <span className="truncate text-sm font-medium">
+                          {c.name}
+                        </span>
+                        <ContactBadge type={c.contactType} />
                       </span>
                       <span className="shrink-0 text-[10px] text-muted-foreground tabular-nums">
                         {relTime(c.lastAt)}
@@ -172,7 +187,10 @@ export default function AdminMessagesPage() {
           {active ? (
             <>
               <div className="flex items-center justify-between gap-2 border-b px-4 py-3">
-                <p className="text-sm font-semibold">{active.familyName}</p>
+                <p className="flex min-w-0 items-center gap-1.5 text-sm font-semibold">
+                  <span className="truncate">{active.name}</span>
+                  <ContactBadge type={active.contactType} />
+                </p>
                 {/* Quick way back to the list on mobile, where the list
                     is hidden while a thread is open. */}
                 <button
@@ -184,9 +202,9 @@ export default function AdminMessagesPage() {
                 </button>
               </div>
               <FamilyMessageThread
-                key={active.familyId}
+                key={`${active.contactType}:${active.contactId}`}
                 className="flex-1 min-h-0"
-                familyId={active.familyId}
+                contact={{ type: active.contactType, id: active.contactId }}
                 onSent={() => mutate()}
               />
             </>
@@ -201,6 +219,22 @@ export default function AdminMessagesPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+/** Tiny type chip beside a conversation name. Families are the
+ *  default relationship, so they carry no badge — only inquiry and
+ *  summer-camp contacts are flagged. */
+function ContactBadge({
+  type,
+}: {
+  type: SmsConversation["contactType"];
+}) {
+  if (type === "family") return null;
+  return (
+    <span className="shrink-0 rounded-full border px-1.5 py-px text-[10px] font-medium text-muted-foreground">
+      {type === "inquiry" ? "Inquiry" : "Camp"}
+    </span>
   );
 }
 

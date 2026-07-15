@@ -457,14 +457,19 @@ export function backToSchool(ctx: BaseContext): EmailContent {
 
 export interface SmsReplyReceivedContext {
   /** Full parent name ("Steven Petros"), or null when the sender's
-   *  number didn't match any parent on file. */
+   *  number didn't match any contact on file. */
   parent_name: string | null;
-  /** Family display name ("Petros Family"), null when unattributed. */
+  /** Family display name ("Petros Family"), null when the sender is
+   *  an inquiry/camp contact or unattributed. */
   family_name: string | null;
   /** Joined full names of the family's (non-archived) students —
-   *  "Steven Petros III" / "Steven Petros III and Jane Petros". Null
-   *  when unattributed or the family has no students. */
+   *  "Steven Petros III" / "Steven Petros III and Jane Petros" — or
+   *  the inquiry/camp row's student. Null when unattributed. */
   student_names: string | null;
+  /** Which record type the number matched: an applying/enrolled
+   *  family, a prospective-family inquiry, or a summer-camp parent.
+   *  Null when unattributed. */
+  contact_type: "family" | "inquiry" | "camp" | null;
   /** Sender's number as Twilio delivered it (E.164). */
   from_number: string;
   /** The text they sent, verbatim. */
@@ -477,10 +482,24 @@ export interface SmsReplyReceivedContext {
   opted_out: boolean;
 }
 
+const CONTACT_TYPE_LABEL: Record<string, string> = {
+  family: "Family",
+  inquiry: "Inquiry",
+  camp: "Summer camp",
+};
+
 export function smsReplyReceived(ctx: SmsReplyReceivedContext): EmailContent {
+  // Subject context: the family name for families ("Steven Petros
+  // (Petros Family)"), the record type for inquiry/camp contacts
+  // ("John Smith (inquiry)").
+  const whoContext =
+    ctx.family_name ??
+    (ctx.contact_type && ctx.contact_type !== "family"
+      ? CONTACT_TYPE_LABEL[ctx.contact_type].toLowerCase()
+      : null);
   const who = ctx.parent_name
-    ? ctx.family_name
-      ? `${ctx.parent_name} (${ctx.family_name})`
+    ? whoContext
+      ? `${ctx.parent_name} (${whoContext})`
       : ctx.parent_name
     : ctx.from_number;
   const subject = ctx.opted_out
@@ -498,6 +517,9 @@ export function smsReplyReceived(ctx: SmsReplyReceivedContext): EmailContent {
     row("Parent", ctx.parent_name ?? "Not recognized"),
     ctx.student_names ? row("Student", ctx.student_names) : "",
     ctx.family_name ? row("Family", ctx.family_name) : "",
+    ctx.contact_type
+      ? row("Type", CONTACT_TYPE_LABEL[ctx.contact_type] ?? ctx.contact_type)
+      : "",
     row("Phone", ctx.from_number),
     ctx.message_sid ? row("Message ID", ctx.message_sid, true) : "",
   ].join("");
@@ -510,7 +532,7 @@ export function smsReplyReceived(ctx: SmsReplyReceivedContext): EmailContent {
 
   const unrecognizedNote = !ctx.parent_name
     ? p(
-        `This number doesn't match any parent on file, so the message couldn't be attributed to a family.`
+        `This number doesn't match any family, inquiry, or summer-camp contact on file, so the message couldn't be attributed.`
       )
     : "";
 
@@ -537,6 +559,9 @@ export function smsReplyReceived(ctx: SmsReplyReceivedContext): EmailContent {
     `Parent: ${ctx.parent_name ?? "Not recognized"}`,
     ...(ctx.student_names ? [`Student: ${ctx.student_names}`] : []),
     ...(ctx.family_name ? [`Family: ${ctx.family_name}`] : []),
+    ...(ctx.contact_type
+      ? [`Type: ${CONTACT_TYPE_LABEL[ctx.contact_type] ?? ctx.contact_type}`]
+      : []),
     `Phone: ${ctx.from_number}`,
     ...(ctx.message_sid ? [`Message ID: ${ctx.message_sid}`] : []),
     "",
@@ -551,7 +576,7 @@ export function smsReplyReceived(ctx: SmsReplyReceivedContext): EmailContent {
       : []),
     ...(!ctx.parent_name
       ? [
-          "This number doesn't match any parent on file, so the message couldn't be attributed to a family.",
+          "This number doesn't match any family, inquiry, or summer-camp contact on file, so the message couldn't be attributed.",
           "",
         ]
       : []),

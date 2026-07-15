@@ -4,6 +4,10 @@ import { xano } from "@/lib/xano";
 import { getTwilioAuthToken } from "@/lib/twilio";
 import { sendEmail } from "@/lib/emails/send";
 import { smsReplyReceived } from "@/lib/emails/templates";
+import {
+  contactMessageKeys,
+  findSmsContactByPhone,
+} from "@/lib/sms/contacts";
 
 /**
  * Twilio inbound webhook — one endpoint for two POST shapes Twilio
@@ -75,29 +79,38 @@ export async function POST(req: NextRequest) {
   const isStart = ["START", "UNSTOP", "YES"].includes(keyword);
 
   try {
-    const parent = await xano.parents.findByPhone(from);
-    const family = parent
-      ? await xano.families.findByParentId(parent.id).catch(() => null)
-      : null;
+    // Resolve the texter across ALL contact types — applying/enrolled
+    // families (via parent phones), summer-camp parents, and
+    // inquiries — with family > camp > inquiry priority on collisions.
+    const contact = await findSmsContactByPhone(from);
 
-    // Opt-out / opt-in bookkeeping (mirrors Twilio's carrier-level state
-    // so our own sends + the UI honor it).
-    if (parent && (isStop || isStart)) {
-      await xano.parents
-        .update(parent.id, {
-          sms_opted_out_at: isStop ? Date.now() : null,
-        })
-        .catch((err) =>
-          console.error("[twilio webhook] opt-out update failed:", err)
-        );
+    // Opt-out / opt-in bookkeeping (mirrors Twilio's carrier-level
+    // state so our own sends + the UI honor it). Families track it on
+    // the parent row; inquiries on the form's consent flag; camp rows
+    // have no column (Twilio's carrier-level block still applies).
+    if (contact && (isStop || isStart)) {
+      if (contact.type === "family" && contact.parentId) {
+        await xano.parents
+          .update(contact.parentId, {
+            sms_opted_out_at: isStop ? Date.now() : null,
+          })
+          .catch((err) =>
+            console.error("[twilio webhook] opt-out update failed:", err)
+          );
+      } else if (contact.type === "inquiry") {
+        await xano.inquiries
+          .update(contact.id, { messaging_opt_in: !isStop })
+          .catch((err) =>
+            console.error("[twilio webhook] inquiry opt-out failed:", err)
+          );
+      }
     }
 
-    // Log the inbound text on the family thread (when we can attribute
-    // the sender to a family).
-    if (family) {
+    // Log the inbound text on the contact's thread (when attributable).
+    if (contact) {
       await xano.smsMessages
         .create({
-          registration_families_id: family.id,
+          ...contactMessageKeys(contact),
           registration_students_id: null,
           registration_school_years_id: null,
           direction: "inbound",
@@ -121,29 +134,33 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Staff notification email — resolved to parent + family +
-    // student(s) so the admissions inbox sees WHO texted, not just a
-    // number. Sent for every inbound message (including STOP, flagged
-    // as an opt-out, and unrecognized numbers, flagged unattributed).
-    // `sendEmail` is internally guarded and never throws; a failed
-    // notification must not fail the webhook (Twilio would retry and
-    // double-log the message).
-    const students = family
-      ? await xano.students.getByFamilyId(family.id).catch(() => [])
-      : [];
+    // Staff notification email — resolved to the contact (parent name,
+    // family/inquiry/camp context, student names) so the admissions
+    // inbox sees WHO texted, not just a number. Sent for every inbound
+    // message (including STOP, flagged as an opt-out, and unrecognized
+    // numbers, flagged unattributed). `sendEmail` is internally guarded
+    // and never throws; a failed notification must not fail the webhook
+    // (Twilio would retry and double-log the message).
+    const students =
+      contact?.type === "family"
+        ? await xano.students.getByFamilyId(contact.id).catch(() => [])
+        : [];
+    const studentNames =
+      contact?.type === "family"
+        ? joinNames(
+            students.map((s) => `${s.first_name} ${s.last_name}`.trim())
+          )
+        : (contact?.studentNames ?? null);
     const appBase = (
       process.env.NEXT_PUBLIC_APP_URL ?? "https://apply.sailfutureacademy.org"
     ).replace(/\/$/, "");
     await sendEmail({
       to: [process.env.SMS_ALERTS_EMAIL ?? "admissions@sailfuture.org"],
       content: smsReplyReceived({
-        parent_name: parent
-          ? `${parent.first_name} ${parent.last_name}`.trim()
-          : null,
-        family_name: family?.family_name ?? null,
-        student_names: joinNames(
-          students.map((s) => `${s.first_name} ${s.last_name}`.trim())
-        ),
+        parent_name: contact?.personName ?? null,
+        family_name: contact?.type === "family" ? contact.name : null,
+        student_names: studentNames,
+        contact_type: contact?.type ?? null,
         from_number: from,
         message_body: body,
         message_sid: messageSid || null,
@@ -151,7 +168,7 @@ export async function POST(req: NextRequest) {
         opted_out: isStop,
       }),
       tag: "sms-reply-received",
-      familyId: family?.id,
+      familyId: contact?.type === "family" ? contact.id : undefined,
     });
   } catch (err) {
     console.error("[twilio webhook] inbound handling failed:", err);
