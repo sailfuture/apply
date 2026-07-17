@@ -5,6 +5,13 @@ import Link from "next/link";
 import Image from "next/image";
 import { usePathname, useSearchParams } from "next/navigation";
 import { UserButton } from "@clerk/nextjs";
+import { ChevronDown } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { YearSelector } from "@/components/admin/year-selector";
 import { cn } from "@/lib/utils";
 
@@ -15,7 +22,7 @@ interface AdminUser {
   role: string;
 }
 
-interface NavItem {
+interface NavLeaf {
   title: string;
   href: string;
   /** Path matcher used to decide active state. Defaults to `startsWith(href)`,
@@ -24,16 +31,25 @@ interface NavItem {
   matchExact?: boolean;
 }
 
+/** Either a plain link or a labeled dropdown of links. */
+type NavItem = NavLeaf | { title: string; children: NavLeaf[] };
+
 // Pipeline intentionally hidden from the nav — file still exists at
 // /admin/pipeline but we're not surfacing it while we focus on the
 // daily-job applications + inquiries + records flow.
 const NAV_ITEMS: NavItem[] = [
   { title: "Dashboard", href: "/admin", matchExact: true },
-  { title: "Inquiries", href: "/admin/inquiries" },
-  // Summer camp registrations — separate program from the school-year
-  // pipeline; grouped by the isNotAttending flag with an attendance
-  // toggle and XLSX export.
-  { title: "Summer Camp", href: "/admin/summer-camp" },
+  // Recruitment — the pre-application funnel: prospective-family
+  // inquiries, the standalone summer-camp program, and campus-visit
+  // liability waivers signed on the marketing site.
+  {
+    title: "Recruitment",
+    children: [
+      { title: "Inquiries", href: "/admin/inquiries" },
+      { title: "Summer Camp", href: "/admin/summer-camp" },
+      { title: "Campus Visits", href: "/admin/campus-visits" },
+    ],
+  },
   // Applications now folds in re-applications (with a `flow_type` pill
   // on each row), so the standalone Re-Applications nav item is gone.
   { title: "Applications", href: "/admin/applications" },
@@ -113,6 +129,56 @@ export function AdminTopNav({ admin }: { admin: AdminUser | null }) {
             so nothing ever gets clipped without a way to reach it. */}
         <nav className="flex flex-1 items-center gap-0.5 overflow-x-auto">
           {NAV_ITEMS.map((item) => {
+            // Shared pill styling — active link: bold + filled pill so
+            // the user's current page is unmistakable. Inactive links
+            // stay medium-weight so the bar reads as a calm row rather
+            // than competing for attention.
+            const pill = (active: boolean) =>
+              cn(
+                "inline-flex items-center whitespace-nowrap rounded-md px-3 py-1.5 text-sm transition-colors",
+                active
+                  ? "bg-muted text-foreground font-bold"
+                  : "font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+              );
+
+            if ("children" in item) {
+              // Dropdown group — lights up when ANY child route is
+              // the current page.
+              const groupActive = item.children.some((c) =>
+                c.matchExact ? pathname === c.href : pathname.startsWith(c.href)
+              );
+              return (
+                <DropdownMenu key={item.title}>
+                  <DropdownMenuTrigger
+                    className={cn(pill(groupActive), "gap-1 outline-none")}
+                  >
+                    {item.title}
+                    <ChevronDown className="size-3.5 opacity-60" />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start">
+                    {item.children.map((child) => {
+                      const childActive = child.matchExact
+                        ? pathname === child.href
+                        : pathname.startsWith(child.href);
+                      return (
+                        <DropdownMenuItem key={child.href} asChild>
+                          <Link
+                            href={buildHref(child.href)}
+                            className={cn(
+                              "w-full cursor-pointer",
+                              childActive && "font-semibold"
+                            )}
+                          >
+                            {child.title}
+                          </Link>
+                        </DropdownMenuItem>
+                      );
+                    })}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              );
+            }
+
             const active = item.matchExact
               ? pathname === item.href
               : pathname.startsWith(item.href);
@@ -120,16 +186,7 @@ export function AdminTopNav({ admin }: { admin: AdminUser | null }) {
               <Link
                 key={item.href}
                 href={buildHref(item.href)}
-                className={cn(
-                  "inline-flex items-center whitespace-nowrap rounded-md px-3 py-1.5 text-sm transition-colors",
-                  // Active link: bold + filled pill so the user's
-                  // current page is unmistakable. Inactive links
-                  // stay medium-weight so the bar reads as a calm
-                  // row rather than competing for attention.
-                  active
-                    ? "bg-muted text-foreground font-bold"
-                    : "font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground"
-                )}
+                className={pill(active)}
               >
                 {item.title}
               </Link>

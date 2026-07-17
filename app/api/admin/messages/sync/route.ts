@@ -21,7 +21,12 @@ export async function POST() {
   try {
     await requireAdmin();
     const result = await syncMessagesFromTwilio({ days: 30 });
-    return NextResponse.json(result, { status: result.ok ? 200 : 502 });
+    // `not_configured` (Twilio env vars absent) is an expected state —
+    // the sync is simply a no-op, so answer 200 rather than painting a
+    // red 502 in the console on every messages-page load. Only a real
+    // sync failure (Twilio API error, Xano write failure) is a 502.
+    const ok = result.ok || result.skipped === "not_configured";
+    return NextResponse.json(result, { status: ok ? 200 : 502 });
   } catch (err) {
     return handleAdminError(err);
   }

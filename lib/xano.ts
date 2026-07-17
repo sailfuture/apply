@@ -1274,6 +1274,31 @@ export interface XanoSummerCampInquiry {
   primary_email: string;
 }
 
+/** One campus-visit liability waiver signed on the marketing site
+ *  (`website_liability_waiver`). Public form — visitors sign before a
+ *  campus tour; no links to families/students. `signature_image` is
+ *  Xano file metadata (path under /vault). The table has NO school-year
+ *  column: the academic year is derived from the signing date by the
+ *  campus-visits admin route. */
+export interface XanoWebsiteLiabilityWaiver {
+  id: number;
+  created_at: number;
+  parent_name: string;
+  parent_email: string;
+  parent_phone: string;
+  student_name: string;
+  student_grade: string;
+  student_school: string;
+  signature_image: { url?: string; path?: string } | null;
+  /** ISO date (`YYYY-MM-DD`) the signer picked, when the form captured
+   *  one. `signed_at` (epoch ms) is the authoritative timestamp. */
+  signed_date: string | null;
+  marketing_opt_in: boolean;
+  signed_ip: string;
+  user_agent: string;
+  signed_at: number | null;
+}
+
 /** Lookup table — distinguishes new applicants from returning enrollments. */
 export interface XanoRegistrationType {
   id: number;
@@ -4987,6 +5012,24 @@ export const xano = {
         throw new Error(
           `Xano error ${res.status}: ${await res.text().catch(() => "")}`
         );
+      }
+    },
+  },
+
+  websiteWaivers: {
+    /** Campus-visit liability waivers signed on the marketing site
+     *  (`website_liability_waiver` — public form, no auth). Fail-soft
+     *  like the other read accessors. */
+    async getAll(): Promise<XanoWebsiteLiabilityWaiver[]> {
+      try {
+        const res = await fetch(`${getBaseUrl()}/website_liability_waiver`, {
+          cache: "no-store",
+        });
+        if (!res.ok) return [];
+        const items: XanoWebsiteLiabilityWaiver[] = await res.json();
+        return Array.isArray(items) ? items : [];
+      } catch {
+        return [];
       }
     },
   },

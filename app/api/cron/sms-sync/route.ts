@@ -25,8 +25,11 @@ export async function GET(req: NextRequest) {
   }
 
   const result = await syncMessagesFromTwilio({ days: 7 });
-  if (!result.ok) {
+  // Not-configured = expected no-op (Twilio env absent), not a failure
+  // worth flagging to Vercel Cron's error reporting.
+  const ok = result.ok || result.skipped === "not_configured";
+  if (!ok) {
     console.error("[cron/sms-sync] sync failed:", result);
   }
-  return NextResponse.json(result, { status: result.ok ? 200 : 502 });
+  return NextResponse.json(result, { status: ok ? 200 : 502 });
 }
