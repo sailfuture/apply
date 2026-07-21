@@ -28,6 +28,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { BillingCard } from "@/components/admin/billing-card";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { cn } from "@/lib/utils";
 import type {
@@ -112,7 +113,15 @@ export default function FamilyBillingPage() {
       <BackLink href={backHref} />
 
       <div className="space-y-1">
-        <h1 className="text-2xl font-semibold">Billing schedule</h1>
+        {/* Family name bullet-joined into the primary title so admin
+            always knows whose schedule they're looking at — this page
+            is reached from both the Billing list and the registration
+            detail page, and the table itself carries no family label. */}
+        <h1 className="text-2xl font-semibold">
+          Billing schedule
+          <span className="text-muted-foreground font-normal"> · </span>
+          {data.familyName}
+        </h1>
         <p className="text-sm text-muted-foreground">
           12-month invoice schedule for the year. Stripe issues one
           invoice per month starting on the billing start date — paid
@@ -120,6 +129,26 @@ export default function FamilyBillingPage() {
           haven&rsquo;t generated an invoice yet.
         </p>
       </div>
+
+      {/* Subscription state + lifecycle actions — the same BillingCard
+          the registration detail page renders, so Start Monthly
+          Billing (no subscription yet) or Cancel / Undo-cancel /
+          Refund (live subscription) are available right here without
+          bouncing back to the registration page. The card fetches its
+          own live-Stripe snapshot; `showScheduleLink=false` because
+          its schedule deep-link would point at this very page. */}
+      <BillingCard
+        familyId={familyId}
+        yearId={yearId}
+        currentMonthlyTuition={
+          data.monthlyAmountCents != null
+            ? data.monthlyAmountCents / 100
+            : null
+        }
+        billingStartDate={data.billingStartDate}
+        registrationConfirmed={data.registrationConfirmed}
+        showScheduleLink={false}
+      />
 
       <SummaryCard data={data} />
       <ScheduleCard slots={data.slots} familyId={familyId} />

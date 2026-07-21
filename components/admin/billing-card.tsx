@@ -16,15 +16,6 @@ import {
   XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -150,6 +141,11 @@ interface Props {
    *  The server-side `startMonthlyBilling` helper enforces the same
    *  gate so a direct API call can't bypass the UI. */
   registrationConfirmed: boolean;
+  /** Hide the "View payment schedule" deep link. The card is also
+   *  rendered ON the payment-schedule page itself, where that button
+   *  would just link to the page you're already on. Defaults to
+   *  showing it (the registration detail page's original behavior). */
+  showScheduleLink?: boolean;
 }
 
 type BillingAction = "start" | "cancel" | "uncancel" | "refund";
@@ -160,6 +156,7 @@ export function BillingCard({
   currentMonthlyTuition,
   billingStartDate,
   registrationConfirmed,
+  showScheduleLink = true,
 }: Props) {
   const endpoint = `/api/admin/families/${familyId}/billing?yearId=${yearId}`;
   const { data, error, isLoading, mutate } = useSWR<BillingSnapshot>(
@@ -347,12 +344,14 @@ export function BillingCard({
               View invoices in Stripe
             </a>
           </Button>
-          <Button asChild variant="outline" className="bg-white">
-            <Link href={paymentScheduleHref}>
-              <Calendar className="size-3.5 mr-1.5" aria-hidden="true" />
-              View payment schedule
-            </Link>
-          </Button>
+          {showScheduleLink ? (
+            <Button asChild variant="outline" className="bg-white">
+              <Link href={paymentScheduleHref}>
+                <Calendar className="size-3.5 mr-1.5" aria-hidden="true" />
+                View payment schedule
+              </Link>
+            </Button>
+          ) : null}
         </div>
         {blockReason ? (
           <p className="text-xs text-muted-foreground">{blockReason}</p>
@@ -417,12 +416,14 @@ export function BillingCard({
           `monthly_amount` is edited on the Scholarship Determination
           card; see the file docblock.) */}
       <div className="flex flex-wrap items-center gap-2">
-        <Button asChild variant="outline" size="sm" className="bg-white">
-          <Link href={paymentScheduleHref}>
-            <Calendar className="size-3.5 mr-1.5" aria-hidden="true" />
-            View payment schedule
-          </Link>
-        </Button>
+        {showScheduleLink ? (
+          <Button asChild variant="outline" size="sm" className="bg-white">
+            <Link href={paymentScheduleHref}>
+              <Calendar className="size-3.5 mr-1.5" aria-hidden="true" />
+              View payment schedule
+            </Link>
+          </Button>
+        ) : null}
         <Button asChild variant="outline" size="sm" className="bg-white">
           <a href={stripeDashboardUrl} target="_blank" rel="noreferrer">
             <ExternalLink className="size-3.5 mr-1.5" aria-hidden="true" />

@@ -71,11 +71,23 @@ export async function GET(
       );
     }
 
-    const [year, transactions, activeApps] = await Promise.all([
-      xano.schoolYears.getById(yearId),
-      xano.paymentTransactions.getByFamilyAndYear(familyId, yearId),
-      fetchActiveFamilyApplications(familyId, yearId),
-    ]);
+    const [year, transactions, activeApps, family, progress] =
+      await Promise.all([
+        xano.schoolYears.getById(yearId),
+        xano.paymentTransactions.getByFamilyAndYear(familyId, yearId),
+        fetchActiveFamilyApplications(familyId, yearId),
+        // Family label for the page title. `getById` throws on a Xano
+        // error — degrade to null so a lookup hiccup doesn't 500 the
+        // whole schedule (the page falls back to "Family #id").
+        xano.families.getById(familyId).catch(() => null),
+        // Registration-confirmation latch — the BillingCard on the
+        // schedule page gates Start Monthly Billing on it, same as
+        // the registration detail page.
+        xano.studentRegistrationProgress.getByFamilyAndYear(
+          familyId,
+          yearId
+        ),
+      ]);
 
     // Family monthly total is derived from per-student
     // `monthly_amount` on each active application row — the
@@ -146,6 +158,8 @@ export async function GET(
     }, 0);
 
     return NextResponse.json({
+      familyName: family?.family_name?.trim() || `Family #${familyId}`,
+      registrationConfirmed: progress?.isRegistrationConfirmed === true,
       monthlyAmountCents,
       billingStartDate,
       yearTotalCents,
@@ -159,6 +173,13 @@ export async function GET(
 }
 
 export interface ScheduleResponse {
+  /** Display label for the page title — the family's name, falling
+   *  back to "Family #id" when the family row can't be loaded. */
+  familyName: string;
+  /** Family-level `isRegistrationConfirmed` for the year — gates the
+   *  BillingCard's Start Monthly Billing button on this page exactly
+   *  like the registration detail page. */
+  registrationConfirmed: boolean;
   monthlyAmountCents: number | null;
   billingStartDate: string | null;
   yearTotalCents: number | null;
