@@ -18,10 +18,25 @@ import type { XanoStudentRegistration } from "@/lib/xano";
  * pending-confirmation view legitimately reads it.
  */
 export const SUFS_ADMIN_FIELDS = [
-  "sufs_enrolled",
-  "sufs_enrolled_notes",
-  "sufs_enrolled_time",
-  "sufs_enrolled_by",
+  "sufs_enrollment_request_sent",
+  "sufs_enrollment_request_notes",
+  "sufs_enrollment_request_time",
+  "sufs_enrollment_request_by",
+  "sufs_parent_enrollment_confirmation",
+  "sufs_parent_enrollment_request_time",
+  "sufs_parent_enrollment_request_by",
+  "sufs_q1_payment",
+  "sufs_q1_payment_confirmed",
+  "sufs_q1_payment_confirmed_by",
+  "sufs_q2_payment",
+  "sufs_q2_payment_confirmed",
+  "sufs_q2_payment_confirmed_by",
+  "sufs_q3_payment",
+  "sufs_q3_payment_confirmed",
+  "sufs_q3_payment_confirmed_by",
+  "sufs_q4_payment",
+  "sufs_q4_payment_confirmed",
+  "sufs_q4_payment_confirmed_by",
 ] as const;
 
 /**

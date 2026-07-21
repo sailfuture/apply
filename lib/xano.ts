@@ -1643,26 +1643,47 @@ export interface XanoStudentRegistration {
   // because it's billing infrastructure (the Stripe-side link),
   // not billing math.
 
-  /** Admin latch: this student has been enrolled on the Step Up For
-   *  Students portal. Purely an operational reconciliation flag —
-   *  does NOT feed billing math (that reads `sufs_amount` on the
-   *  application row). Toggled from the SUFS page checkbox via
-   *  `/api/admin/student-registration/[id]`. Optional because rows
-   *  predating the column won't carry it — treat `undefined` as
-   *  "not enrolled". */
-  sufs_enrolled?: boolean;
-  /** Free-text SUFS reconciliation note shown on the SUFS page (e.g.
-   *  "portal shows different DOB", "waiting on award letter").
-   *  Admin-only. Cleared via a single-space sentinel because Xano's
-   *  edit endpoint drops empty-string inputs. */
-  sufs_enrolled_notes?: string;
-  /** Audit: `Date.now()` when `sufs_enrolled` was last flipped true,
-   *  null when un-enrolled. Stamped server-side by the admin PATCH
-   *  route, never client-writable. */
-  sufs_enrolled_time?: number | null;
-  /** Audit: display name of the admin who last marked the student
-   *  enrolled; "" when un-enrolled. Stamped server-side. */
-  sufs_enrolled_by?: string;
+  // ── Step Up For Students reconciliation (admin-only, the
+  //    /admin/sufs page). Three-stage pipeline per student:
+  //      1. `sufs_enrollment_request_sent`      — admin sent the
+  //         enrollment request on the Step Up portal.
+  //      2. `sufs_parent_enrollment_confirmation` — parent completed
+  //         their side of the enrollment (admin-verified).
+  //      3. `sufs_q1..q4_payment`               — quarterly Step Up
+  //         payment confirmations.
+  //    None of these feed billing math (that reads `sufs_amount` on
+  //    the application row). Every audit pair (`*_time` / `*_by`,
+  //    `*_confirmed` / `*_confirmed_by`) is stamped server-side by
+  //    `/api/admin/student-registration/[id]` — never client-
+  //    writable. All optional because rows predate the columns;
+  //    treat `undefined` as false/empty. Notes are cleared via a
+  //    single-space sentinel because Xano's edit endpoint drops
+  //    empty-string inputs.
+  sufs_enrollment_request_sent?: boolean;
+  sufs_enrollment_request_notes?: string;
+  sufs_enrollment_request_time?: number | null;
+  sufs_enrollment_request_by?: string;
+  sufs_parent_enrollment_confirmation?: boolean;
+  /** Audit pair for `sufs_parent_enrollment_confirmation` — the Xano
+   *  column names say "request" but they stamp the CONFIRMATION
+   *  flip (who marked it, when). */
+  sufs_parent_enrollment_request_time?: number | null;
+  sufs_parent_enrollment_request_by?: string;
+  sufs_q1_payment?: boolean;
+  /** `sufs_qN_payment_confirmed` is the ms TIMESTAMP of the payment
+   *  confirmation (null when unpaid); `_confirmed_by` is the admin
+   *  display name. */
+  sufs_q1_payment_confirmed?: number | null;
+  sufs_q1_payment_confirmed_by?: string;
+  sufs_q2_payment?: boolean;
+  sufs_q2_payment_confirmed?: number | null;
+  sufs_q2_payment_confirmed_by?: string;
+  sufs_q3_payment?: boolean;
+  sufs_q3_payment_confirmed?: number | null;
+  sufs_q3_payment_confirmed_by?: string;
+  sufs_q4_payment?: boolean;
+  sufs_q4_payment_confirmed?: number | null;
+  sufs_q4_payment_confirmed_by?: string;
 
   /** New Enrollment vs Re-Enrollment — admin-set, drives which forms/templates
    *  get used for this year's registration. */

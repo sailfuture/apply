@@ -30,9 +30,9 @@ export async function PATCH(
   // fetched row rides along in the body. This route forwards the body
   // to Xano unfiltered, so without stripping them a routine parent
   // save would silently overwrite admin state — e.g. a stale
-  // `sufs_enrolled: false` resetting the enrolled latch an admin just
-  // set on the SUFS page, or a stale `registrationConfirmed`
-  // un-confirming a packet. Booleans are the real hazard: Xano applies
+  // `sufs_enrollment_request_sent: false` resetting a request an
+  // admin just sent on the SUFS page, or a stale
+  // `registrationConfirmed` un-confirming a packet. Booleans are the real hazard: Xano applies
   // them (only empty strings / null are dropped). The admin routes
   // (`/api/admin/student-registration/[id]`, `/admin/sufs`) are the
   // sole legitimate writers of these — strip them here at the choke

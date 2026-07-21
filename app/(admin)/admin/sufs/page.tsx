@@ -28,7 +28,7 @@ import { cn } from "@/lib/utils";
 import type { SufsStudentRow } from "@/app/api/admin/sufs/route";
 
 /**
- * Row shape driving the table. `SufsStudentRow` from the API plus the
+ * Row shape driving the tables. `SufsStudentRow` from the API plus the
  * index signature `DataTable`'s `<T extends Record<string, unknown>>`
  * constraint needs — same pattern the Registrations page uses.
  */
@@ -55,13 +55,42 @@ const SUFS_LABELS: Record<string, string> = {
   custom: "Custom amount",
 };
 
-type EnrolledFilter = "all" | "not_enrolled" | "enrolled";
+/**
+ * Three-stage pipeline per student, derived from the two bools:
+ *   - not_sent   — admin hasn't sent the Step Up enrollment request
+ *   - pending    — request sent, waiting on the parent to complete it
+ *   - confirmed  — parent completed enrollment; quarterly payments
+ *                  are now trackable
+ * Confirmation wins over request-sent so an inconsistent row (confirmed
+ * but request flag off) still lands in the most-progressed bucket.
+ */
+type SufsStatus = "not_sent" | "pending" | "confirmed";
 
-const FILTER_LABEL: Record<EnrolledFilter, string> = {
+function rowStatus(r: SufsStudentRow): SufsStatus {
+  if (r.sufs_parent_enrollment_confirmation) return "confirmed";
+  if (r.sufs_enrollment_request_sent) return "pending";
+  return "not_sent";
+}
+
+type StatusFilter = "all" | SufsStatus;
+
+const FILTER_LABEL: Record<StatusFilter, string> = {
   all: "All students",
-  not_enrolled: "Not enrolled",
-  enrolled: "Enrolled",
+  not_sent: "Request not sent",
+  pending: "Parent pending",
+  confirmed: "Confirmed",
 };
+
+const QUARTERS = [1, 2, 3, 4] as const;
+type Quarter = (typeof QUARTERS)[number];
+
+/** Typed access into the flat per-quarter columns. */
+const qPaid = (r: SufsRow, q: Quarter) =>
+  r[`sufs_q${q}_payment`] === true;
+const qTime = (r: SufsRow, q: Quarter) =>
+  (r[`sufs_q${q}_payment_confirmed`] as number | null | undefined) ?? null;
+const qBy = (r: SufsRow, q: Quarter) =>
+  (r[`sufs_q${q}_payment_confirmed_by`] as string | undefined) ?? "";
 
 const money = (n: number | null) =>
   typeof n === "number"
@@ -81,6 +110,13 @@ function fmtDate(ms: number | null | undefined): string {
   return `${d.getFullYear()}-${mm}-${dd}`;
 }
 
+/** ms timestamp → compact "7/21/26" for tight table cells. */
+function fmtShort(ms: number | null | undefined): string {
+  if (!ms || !Number.isFinite(ms)) return "";
+  const d = new Date(ms);
+  return `${d.getMonth() + 1}/${d.getDate()}/${String(d.getFullYear()).slice(2)}`;
+}
+
 /** RFC-4180 cell escaping — quote when the value holds a comma, quote,
  *  or newline; double any embedded quotes. */
 function csvCell(v: string | number | null | undefined): string {
@@ -88,6 +124,12 @@ function csvCell(v: string | number | null | undefined): string {
   const s = String(v);
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
+
+const STATUS_CSV_LABEL: Record<SufsStatus, string> = {
+  not_sent: "Request Not Sent",
+  pending: "Parent Pending",
+  confirmed: "Confirmed",
+};
 
 /**
  * Build the SUFS CSV from the full year dataset (not the filtered
@@ -106,10 +148,17 @@ function buildSufsCsv(rows: SufsRow[]): string {
     "Award Type",
     "Award Status",
     "SUFS Amount",
-    "Enrolled",
-    "Enrolled Date",
-    "Enrolled By",
+    "Enrollment Status",
+    "Request Sent Date",
+    "Request Sent By",
+    "Parent Confirmed Date",
+    "Parent Confirmed By",
     "Note",
+    ...QUARTERS.flatMap((q) => [
+      `Q${q} Paid`,
+      `Q${q} Confirmed Date`,
+      `Q${q} Confirmed By`,
+    ]),
   ];
   const lines = [headers.map(csvCell).join(",")];
   for (const r of rows) {
@@ -123,14 +172,19 @@ function buildSufsCsv(rows: SufsRow[]): string {
         r.sufs_type ? SUFS_LABELS[r.sufs_type] ?? r.sufs_type : "",
         r.sufs_status,
         r.sufs_amount ?? "",
-        r.sufs_enrolled ? "Yes" : "No",
-        // Gated on the latch, matching the on-screen tooltip: after an
-        // un-enroll, Xano drops the null/"" audit clears, so the stored
-        // time/name linger — printing them for a "No" row would falsely
-        // imply an active enrollment.
-        r.sufs_enrolled ? fmtDate(r.sufs_enrolled_time) : "",
-        r.sufs_enrolled ? r.sufs_enrolled_by : "",
-        r.sufs_enrolled_notes,
+        STATUS_CSV_LABEL[rowStatus(r)],
+        // Audit stamps gated on their bools upstream in the API, so
+        // these are already clean for un-ticked rows.
+        fmtDate(r.sufs_enrollment_request_time),
+        r.sufs_enrollment_request_by,
+        fmtDate(r.sufs_parent_enrollment_request_time),
+        r.sufs_parent_enrollment_request_by,
+        r.sufs_enrollment_request_notes,
+        ...QUARTERS.flatMap((q) => [
+          qPaid(r, q) ? "Yes" : "No",
+          fmtDate(qTime(r, q)),
+          qBy(r, q),
+        ]),
       ]
         .map(csvCell)
         .join(",")
@@ -155,24 +209,29 @@ function downloadTextFile(filename: string, text: string, mime: string) {
 }
 
 /**
- * Admin SUFS page — the Step Up For Students reconciliation list.
+ * Admin Step Up for Students Confirmation page.
  *
  * One row per student whose family registration is confirmed for the
- * selected year. Admin works this against the Step Up portal: check
- * the award ID and tier, enroll the student over there, then tick the
- * Enrolled box here. The note column is scratch space for whatever
- * blocked a given student.
+ * selected year, split into the three pipeline tables:
  *
- * Deliberately has no row-click navigation — the row carries two
- * interactive controls (a checkbox and a text input) and DataTable
- * fires `onRowClick` from the `<tr>` without stopping propagation, so
- * a row-level handler would hijack every note edit. The student name
- * is an explicit link instead.
+ *   - red    — enrollment request not sent yet (admin's queue)
+ *   - yellow — request sent, waiting on the parent
+ *   - green  — parent confirmed; track Q1–Q4 payment confirmations
+ *
+ * Grouping is computed CLIENT-side from the SWR cache, so an
+ * optimistic checkbox flip moves the row between tables instantly —
+ * the server deliberately returns name-sorted rows with no status
+ * ordering (see the route). The post-save revalidation then lands the
+ * server's audit stamps without visibly reshuffling anything.
+ *
+ * Deliberately no row-click navigation — rows carry interactive
+ * controls and DataTable's `onRowClick` fires from the `<tr>` without
+ * stopping propagation. The student name is an explicit link instead.
  */
 export default function SufsPage() {
   const searchParams = useSearchParams();
   const yearId = searchParams.get("yearId");
-  const [filter, setFilter] = useState<EnrolledFilter>("all");
+  const [filter, setFilter] = useState<StatusFilter>("all");
   const [savingId, setSavingId] = useState<number | null>(null);
 
   const key = yearId ? `/api/admin/sufs?yearId=${yearId}` : null;
@@ -186,32 +245,51 @@ export default function SufsPage() {
     [data]
   );
 
-  const counts = useMemo(() => {
-    const enrolled = all.filter((r) => r.sufs_enrolled).length;
-    return {
-      all: all.length,
-      enrolled,
-      not_enrolled: all.length - enrolled,
-    } satisfies Record<EnrolledFilter, number>;
+  const groups = useMemo(() => {
+    const notSent: SufsRow[] = [];
+    const pending: SufsRow[] = [];
+    const confirmed: SufsRow[] = [];
+    for (const r of all) {
+      const s = rowStatus(r);
+      if (s === "confirmed") confirmed.push(r);
+      else if (s === "pending") pending.push(r);
+      else notSent.push(r);
+    }
+    return { notSent, pending, confirmed };
   }, [all]);
 
-  const rows = useMemo(() => {
-    if (filter === "enrolled") return all.filter((r) => r.sufs_enrolled);
-    if (filter === "not_enrolled") return all.filter((r) => !r.sufs_enrolled);
-    return all;
-  }, [all, filter]);
+  const counts = useMemo(
+    () =>
+      ({
+        all: all.length,
+        not_sent: groups.notSent.length,
+        pending: groups.pending.length,
+        confirmed: groups.confirmed.length,
+      }) satisfies Record<StatusFilter, number>,
+    [all, groups]
+  );
+
+  const visibleGroups = useMemo(() => {
+    if (filter === "all") return groups;
+    return {
+      notSent: filter === "not_sent" ? groups.notSent : [],
+      pending: filter === "pending" ? groups.pending : [],
+      confirmed: filter === "confirmed" ? groups.confirmed : [],
+    };
+  }, [filter, groups]);
 
   /**
    * PATCH one student's registration packet and optimistically fold the
-   * change into the cached list. Mirrors the Inquiries page's
-   * `updateStatus` — optimistic `mutate` with `revalidate: false`, then
-   * a full refetch to reconcile (and to snap back on failure).
-   *
-   * Targets the packet (`registration_student_registration`), where the
-   * SUFS enrolled flag + note live — not the application row. A row with
-   * no `packet_id` can't be written; callers guard on it first.
+   * change into the cached list. The optimistic patch may carry audit
+   * stamps (time = now) purely for instant display — the admin route
+   * allowlists only the bools/note from the body and re-stamps the
+   * audit pairs itself, and the background revalidation replaces the
+   * optimistic values with the server's.
    */
-  async function patchRow(row: SufsRow, patch: Partial<SufsStudentRow>) {
+  async function patchRow(
+    row: SufsRow,
+    patch: Partial<SufsStudentRow> & Record<string, unknown>
+  ) {
     if (row.packet_id == null) {
       toast.error(
         `${row.student_full_name} has no registration packet to update.`
@@ -232,8 +310,9 @@ export default function SufsPage() {
         }
       );
       if (!res.ok) throw new Error(`Save failed (${res.status})`);
-      // Reconcile with the server (e.g. the note sentinel round-trip)
-      // rather than leaving the optimistic value in place.
+      // Background reconcile — lands the server's audit stamps (and
+      // the note sentinel round-trip). Grouping is derived
+      // client-side from the same data, so this never reshuffles rows.
       mutate();
       return true;
     } catch (err) {
@@ -246,16 +325,276 @@ export default function SufsPage() {
     }
   }
 
-  async function toggleEnrolled(row: SufsRow, next: boolean) {
-    const ok = await patchRow(row, { sufs_enrolled: next });
-    if (ok) {
-      toast.success(
-        next
-          ? `${row.student_full_name} marked enrolled in Step Up.`
-          : `${row.student_full_name} unmarked.`
-      );
-    }
+  function toggleRequestSent(row: SufsRow, next: boolean) {
+    // The time stamp rides along purely for optimistic display — the
+    // admin route ignores it (not allowlisted) and stamps its own,
+    // including the admin's name, which lands on revalidation.
+    void patchRow(row, {
+      sufs_enrollment_request_sent: next,
+      sufs_enrollment_request_time: next ? Date.now() : null,
+      sufs_enrollment_request_by: "",
+    });
   }
+
+  function toggleParentConfirmed(row: SufsRow, next: boolean) {
+    void patchRow(row, {
+      sufs_parent_enrollment_confirmation: next,
+      sufs_parent_enrollment_request_time: next ? Date.now() : null,
+      sufs_parent_enrollment_request_by: "",
+    });
+  }
+
+  function toggleQuarter(row: SufsRow, q: Quarter, next: boolean) {
+    void patchRow(row, {
+      [`sufs_q${q}_payment`]: next,
+      [`sufs_q${q}_payment_confirmed`]: next ? Date.now() : null,
+      [`sufs_q${q}_payment_confirmed_by`]: "",
+    });
+  }
+
+  // ── Column factories (widths vary per table) ──────────────────────
+
+  const studentCol = (w: string): ColumnDef<SufsRow> => ({
+    key: "student_full_name",
+    header: "Student",
+    sortable: true,
+    searchable: true,
+    width: w,
+    render: (row) => (
+      <Link
+        href={`/admin/registrations/${row.family_id}?yearId=${row.year_id}`}
+        className="block min-w-0 hover:underline"
+      >
+        <span className="block truncate font-medium">
+          {row.student_full_name}
+        </span>
+        {/* Family · incoming grade, dot-separated. */}
+        <span className="block truncate text-xs text-muted-foreground">
+          {row.family_name}
+          {row.student_grade ? ` · Grade ${row.student_grade}` : ""}
+        </span>
+      </Link>
+    ),
+  });
+
+  const awardIdCol = (w: string): ColumnDef<SufsRow> => ({
+    key: "sufs_award_id",
+    header: "Award ID",
+    sortable: true,
+    searchable: true,
+    width: w,
+    accessor: (row) => row.sufs_award_id ?? "",
+    render: (row) =>
+      row.sufs_award_id ? (
+        <span className="tabular-nums">{row.sufs_award_id}</span>
+      ) : (
+        // A confirmed registration with no award ID is actionable —
+        // the parent never filled it in and it can't be reconciled
+        // against the portal without it.
+        <span className="text-xs font-medium text-amber-700">Missing</span>
+      ),
+  });
+
+  const awardTypeCol = (w: string): ColumnDef<SufsRow> => ({
+    key: "sufs_type",
+    header: "Award Type",
+    sortable: true,
+    searchable: true,
+    width: w,
+    accessor: (row) => SUFS_LABELS[row.sufs_type] ?? row.sufs_type,
+    render: (row) => {
+      if (!row.sufs_type) {
+        return (
+          <span className="text-xs text-muted-foreground">Not on SUFS</span>
+        );
+      }
+      return (
+        <span className="block min-w-0">
+          <span className="block truncate">
+            {SUFS_LABELS[row.sufs_type] ?? row.sufs_type}
+          </span>
+          <span className="block truncate text-xs text-muted-foreground">
+            {money(row.sufs_amount)}
+            {row.sufs_status ? ` · ${row.sufs_status}` : ""}
+          </span>
+        </span>
+      );
+    },
+  });
+
+  const noteCol = (w: string): ColumnDef<SufsRow> => ({
+    key: "sufs_enrollment_request_notes",
+    header: "Note",
+    searchable: true,
+    width: w,
+    render: (row) => (
+      // `key` on the row id is load-bearing: DataTable keys its rows
+      // by array index, and rows shift indices when a checkbox moves
+      // one between the status tables. Keying by id remounts a
+      // NoteCell whose slot changed identity so a draft can never
+      // commit onto the wrong student.
+      <NoteCell
+        key={row.id}
+        row={row}
+        disabled={savingId === row.id || row.packet_id == null}
+        onSave={(note) => {
+          if (note === row.sufs_enrollment_request_notes) return;
+          void patchRow(row, { sufs_enrollment_request_notes: note });
+        }}
+      />
+    ),
+  });
+
+  const requestSentCol = (w: string): ColumnDef<SufsRow> => ({
+    key: "sufs_enrollment_request_sent",
+    header: "Request Sent",
+    sortable: true,
+    align: "center",
+    width: w,
+    accessor: (row) => (row.sufs_enrollment_request_sent ? 1 : 0),
+    render: (row) => {
+      const sent = row.sufs_enrollment_request_sent;
+      const title = sent
+        ? `Sent${
+            row.sufs_enrollment_request_by
+              ? ` by ${row.sufs_enrollment_request_by}`
+              : ""
+          }${
+            row.sufs_enrollment_request_time
+              ? ` · ${fmtDate(row.sufs_enrollment_request_time)}`
+              : ""
+          }`
+        : row.packet_id == null
+          ? "No registration packet on file for this student yet"
+          : "Mark once the Step Up enrollment request has been sent";
+      return (
+        <span
+          className="inline-flex flex-col items-center gap-0.5"
+          title={title}
+        >
+          <Checkbox
+            checked={sent}
+            disabled={savingId === row.id || row.packet_id == null}
+            onCheckedChange={(v) => toggleRequestSent(row, v === true)}
+            aria-label={`Mark enrollment request sent for ${row.student_full_name}`}
+          />
+          {sent && row.sufs_enrollment_request_time ? (
+            <span className="text-[10px] tabular-nums text-muted-foreground">
+              {fmtShort(row.sufs_enrollment_request_time)}
+            </span>
+          ) : null}
+        </span>
+      );
+    },
+  });
+
+  const parentConfirmedCol = (w: string): ColumnDef<SufsRow> => ({
+    key: "sufs_parent_enrollment_confirmation",
+    header: "Parent Confirmed",
+    sortable: true,
+    align: "center",
+    width: w,
+    accessor: (row) => (row.sufs_parent_enrollment_confirmation ? 1 : 0),
+    render: (row) => {
+      const confirmed = row.sufs_parent_enrollment_confirmation;
+      const title = confirmed
+        ? `Marked${
+            row.sufs_parent_enrollment_request_by
+              ? ` by ${row.sufs_parent_enrollment_request_by}`
+              : ""
+          }${
+            row.sufs_parent_enrollment_request_time
+              ? ` · ${fmtDate(row.sufs_parent_enrollment_request_time)}`
+              : ""
+          }`
+        : "Mark once the parent has completed the Step Up enrollment";
+      return (
+        <span
+          className="inline-flex flex-col items-center gap-0.5"
+          title={title}
+        >
+          <Checkbox
+            checked={confirmed}
+            disabled={savingId === row.id || row.packet_id == null}
+            onCheckedChange={(v) => toggleParentConfirmed(row, v === true)}
+            aria-label={`Mark parent enrollment confirmed for ${row.student_full_name}`}
+          />
+          {confirmed && row.sufs_parent_enrollment_request_time ? (
+            <span className="text-[10px] tabular-nums text-muted-foreground">
+              {fmtShort(row.sufs_parent_enrollment_request_time)}
+            </span>
+          ) : null}
+        </span>
+      );
+    },
+  });
+
+  const quarterCol = (q: Quarter, w: string): ColumnDef<SufsRow> => ({
+    key: `sufs_q${q}_payment`,
+    header: `Q${q}`,
+    sortable: true,
+    align: "center",
+    width: w,
+    accessor: (row) => (qPaid(row, q) ? 1 : 0),
+    render: (row) => {
+      const paid = qPaid(row, q);
+      const time = qTime(row, q);
+      const by = qBy(row, q);
+      const title = paid
+        ? `Q${q} payment confirmed${by ? ` by ${by}` : ""}${
+            time ? ` · ${fmtDate(time)}` : ""
+          }`
+        : `Mark the Q${q} Step Up payment confirmed`;
+      return (
+        <span
+          className="inline-flex flex-col items-center gap-0.5 min-w-0"
+          title={title}
+        >
+          <Checkbox
+            checked={paid}
+            disabled={savingId === row.id || row.packet_id == null}
+            onCheckedChange={(v) => toggleQuarter(row, q, v === true)}
+            aria-label={`Mark Q${q} payment confirmed for ${row.student_full_name}`}
+          />
+          {paid && time ? (
+            <span className="block max-w-full truncate text-[10px] tabular-nums text-muted-foreground">
+              {fmtShort(time)}
+              {by ? ` · ${by}` : ""}
+            </span>
+          ) : null}
+        </span>
+      );
+    },
+  });
+
+  // Per-group column sets. Widths total 100% within each table; the
+  // three tables carry different actions so their columns don't need
+  // to line up across groups.
+  const notSentColumns: ColumnDef<SufsRow>[] = [
+    studentCol("w-[26%]"),
+    awardIdCol("w-[14%]"),
+    awardTypeCol("w-[18%]"),
+    noteCol("w-[28%]"),
+    requestSentCol("w-[14%]"),
+  ];
+  const pendingColumns: ColumnDef<SufsRow>[] = [
+    studentCol("w-[23%]"),
+    awardIdCol("w-[12%]"),
+    awardTypeCol("w-[16%]"),
+    noteCol("w-[23%]"),
+    requestSentCol("w-[13%]"),
+    parentConfirmedCol("w-[13%]"),
+  ];
+  const confirmedColumns: ColumnDef<SufsRow>[] = [
+    studentCol("w-[22%]"),
+    awardTypeCol("w-[14%]"),
+    noteCol("w-[16%]"),
+    parentConfirmedCol("w-[12%]"),
+    quarterCol(1, "w-[9%]"),
+    quarterCol(2, "w-[9%]"),
+    quarterCol(3, "w-[9%]"),
+    quarterCol(4, "w-[9%]"),
+  ];
 
   // Export the FULL year dataset (`all`), not the filtered view — a
   // CSV export is expected to be the complete list regardless of which
@@ -277,144 +616,20 @@ export default function SufsPage() {
     );
   }
 
-  const columns: ColumnDef<SufsRow>[] = [
-    {
-      key: "student_full_name",
-      header: "Student",
-      sortable: true,
-      searchable: true,
-      width: "w-[24%]",
-      render: (row) => (
-        <Link
-          href={`/admin/registrations/${row.family_id}?yearId=${row.year_id}`}
-          className="block min-w-0 hover:underline"
-        >
-          <span className="block truncate font-medium">
-            {row.student_full_name}
-          </span>
-          <span className="block truncate text-xs text-muted-foreground">
-            {row.family_name}
-            {row.student_grade ? ` · Grade ${row.student_grade}` : ""}
-          </span>
-        </Link>
-      ),
-    },
-    {
-      key: "sufs_award_id",
-      header: "Award ID",
-      sortable: true,
-      searchable: true,
-      width: "w-[13%]",
-      accessor: (row) => row.sufs_award_id ?? "",
-      render: (row) =>
-        row.sufs_award_id ? (
-          <span className="tabular-nums">{row.sufs_award_id}</span>
-        ) : (
-          // A confirmed registration with no award ID is actionable —
-          // the parent never filled it in and it can't be reconciled
-          // against the portal without it.
-          <span className="text-xs font-medium text-amber-700">Missing</span>
-        ),
-    },
-    {
-      key: "sufs_type",
-      header: "Award Type",
-      sortable: true,
-      searchable: true,
-      width: "w-[18%]",
-      accessor: (row) => SUFS_LABELS[row.sufs_type] ?? row.sufs_type,
-      render: (row) => {
-        if (!row.sufs_type) {
-          return (
-            <span className="text-xs text-muted-foreground">
-              Not on SUFS
-            </span>
-          );
-        }
-        return (
-          <span className="block min-w-0">
-            <span className="block truncate">
-              {SUFS_LABELS[row.sufs_type] ?? row.sufs_type}
-            </span>
-            <span className="block truncate text-xs text-muted-foreground">
-              {money(row.sufs_amount)}
-              {row.sufs_status ? ` · ${row.sufs_status}` : ""}
-            </span>
-          </span>
-        );
-      },
-    },
-    {
-      key: "sufs_enrolled_notes",
-      header: "Note",
-      searchable: true,
-      width: "w-[27%]",
-      render: (row) => (
-        // `key` on the student id is load-bearing: DataTable keys its
-        // rows by array index, and this list re-sorts after every
-        // enroll toggle (not-enrolled float to the top). Without a
-        // stable key, React would reuse the NoteCell instance sitting
-        // at a given index and feed it a *different* student's row —
-        // so an in-flight note edit could commit onto the wrong
-        // student. Keying by id makes the cell follow its student
-        // across reorders (focus + draft included).
-        <NoteCell
-          key={row.id}
-          row={row}
-          disabled={savingId === row.id || row.packet_id == null}
-          onSave={(note) => {
-            if (note === row.sufs_enrolled_notes) return;
-            void patchRow(row, { sufs_enrolled_notes: note });
-          }}
-        />
-      ),
-    },
-    {
-      key: "sufs_enrolled",
-      header: "Enrolled",
-      sortable: true,
-      align: "center",
-      width: "w-[10%]",
-      accessor: (row) => (row.sufs_enrolled ? 1 : 0),
-      render: (row) => {
-        const enrolledTitle =
-          row.sufs_enrolled && row.sufs_enrolled_by
-            ? `Marked by ${row.sufs_enrolled_by}${
-                row.sufs_enrolled_time
-                  ? ` · ${fmtDate(row.sufs_enrolled_time)}`
-                  : ""
-              }`
-            : row.packet_id == null
-              ? "No registration packet on file for this student yet"
-              : "Mark once this student is enrolled in the Step Up portal";
-        return (
-          <span
-            className="inline-flex items-center justify-center"
-            title={enrolledTitle}
-          >
-            <Checkbox
-              checked={row.sufs_enrolled}
-              disabled={savingId === row.id || row.packet_id == null}
-              onCheckedChange={(v) => void toggleEnrolled(row, v === true)}
-              aria-label={`Mark ${row.student_full_name} enrolled in Step Up`}
-            />
-          </span>
-        );
-      },
-    },
-  ];
-
   const showEmptyState = !!yearId && !isLoading && !error && all.length === 0;
 
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold">SUFS</h1>
+          <h1 className="text-2xl font-bold">
+            Step Up for Students Confirmation
+          </h1>
           <p className="text-sm text-muted-foreground">
             Every student with a confirmed registration for the selected
-            year, with their Step Up For Students award. Tick a student
-            off once they&rsquo;ve been enrolled in the Step Up portal.
+            year. Send the Step Up enrollment request, mark when the
+            parent completes it, then track quarterly payment
+            confirmations.
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -429,17 +644,19 @@ export default function SufsPage() {
           </Button>
           <Select
             value={filter}
-            onValueChange={(v) => setFilter(v as EnrolledFilter)}
+            onValueChange={(v) => setFilter(v as StatusFilter)}
           >
-            <SelectTrigger className="w-[200px] bg-white">
+            <SelectTrigger className="w-[210px] bg-white">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {(["all", "not_enrolled", "enrolled"] as const).map((f) => (
-                <SelectItem key={f} value={f}>
-                  {FILTER_LABEL[f]} ({counts[f]})
-                </SelectItem>
-              ))}
+              {(["all", "not_sent", "pending", "confirmed"] as const).map(
+                (f) => (
+                  <SelectItem key={f} value={f}>
+                    {FILTER_LABEL[f]} ({counts[f]})
+                  </SelectItem>
+                )
+              )}
             </SelectContent>
           </Select>
         </div>
@@ -459,43 +676,85 @@ export default function SufsPage() {
       ) : showEmptyState ? (
         <SufsEmptyState />
       ) : (
-        <Card className="overflow-hidden bg-white py-0 gap-0">
-          <CardHeader className="py-4 border-b bg-white">
-            <div className="flex items-baseline gap-3">
-              {/* Green once every student is enrolled on the portal,
-                  amber while there's still work outstanding — same
-                  dot language as the Registrations group headers. */}
-              <span
-                className={cn(
-                  "size-2.5 shrink-0 self-center rounded-full",
-                  counts.not_enrolled === 0 && counts.all > 0
-                    ? "bg-green-500"
-                    : "bg-amber-500"
-                )}
-                aria-hidden
-              />
-              <CardTitle className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-                Completed Registrations
-              </CardTitle>
-              <span className="text-xs tabular-nums text-muted-foreground">
-                ({counts.enrolled}/{counts.all} enrolled)
-              </span>
-              <p className="text-xs text-muted-foreground">
-                Registration confirmed — ready to enroll in Step Up.
-              </p>
-            </div>
-          </CardHeader>
-          <CardContent className="p-4 bg-white">
-            <DataTable<SufsRow>
-              columns={columns}
-              data={rows}
-              isLoading={isLoading}
-              searchPlaceholder="Search students, award IDs, notes…"
-            />
-          </CardContent>
-        </Card>
+        <div className="space-y-8">
+          <SufsGroup
+            title="Enrollment Request Not Sent"
+            description="Registration confirmed — the Step Up enrollment request hasn't been sent yet."
+            dotColor="bg-red-500"
+            rows={visibleGroups.notSent}
+            isLoading={isLoading && filter !== "pending" && filter !== "confirmed"}
+            columns={notSentColumns}
+          />
+          <SufsGroup
+            title="Awaiting Parent Confirmation"
+            description="Request sent — waiting on the parent to complete enrollment in the Step Up portal."
+            dotColor="bg-amber-500"
+            rows={visibleGroups.pending}
+            isLoading={isLoading && filter !== "not_sent" && filter !== "confirmed"}
+            columns={pendingColumns}
+          />
+          <SufsGroup
+            title="Enrollment Confirmed"
+            description="Parent completed Step Up enrollment. Tick off each quarterly payment as it's confirmed."
+            dotColor="bg-green-500"
+            rows={visibleGroups.confirmed}
+            isLoading={isLoading && filter !== "not_sent" && filter !== "pending"}
+            columns={confirmedColumns}
+          />
+        </div>
       )}
     </div>
+  );
+}
+
+function SufsGroup({
+  title,
+  description,
+  rows,
+  isLoading,
+  columns,
+  dotColor,
+}: {
+  title: string;
+  description: string;
+  rows: SufsRow[];
+  isLoading: boolean;
+  columns: ColumnDef<SufsRow>[];
+  /** Tailwind bg-... class for the status dot before the title —
+   *  red / amber / green mirror the Registrations page's group
+   *  headers so the pipeline reads with the same color language. */
+  dotColor: string;
+}) {
+  if (!isLoading && rows.length === 0) return null;
+  return (
+    <Card className="overflow-hidden bg-white py-0 gap-0">
+      <CardHeader className="py-4 border-b bg-white">
+        <div className="flex items-baseline gap-3">
+          <span
+            className={cn(
+              "size-2.5 shrink-0 self-center rounded-full",
+              dotColor
+            )}
+            aria-hidden
+          />
+          <CardTitle className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+            {title}
+          </CardTitle>
+          <span className="text-xs tabular-nums text-muted-foreground">
+            ({rows.length})
+          </span>
+          <p className="text-xs text-muted-foreground">{description}</p>
+        </div>
+      </CardHeader>
+      <CardContent className="p-4 bg-white">
+        <DataTable<SufsRow>
+          columns={columns}
+          data={rows}
+          isLoading={isLoading}
+          searchPlaceholder={`Search ${title.toLowerCase()}…`}
+        />
+      </CardContent>
+    </Card>
   );
 }
 
@@ -530,9 +789,9 @@ function SufsEmptyState() {
  * commits on blur (or Enter) — the same cheap blur-PATCH convention
  * the parent-facing SUFS award-ID input uses. Escape reverts.
  *
- * `key`ed on the persisted value by the caller's row identity, so a
- * successful save that changes the server value doesn't fight the
- * draft: we only re-sync from props when not focused.
+ * The caller keys this on the row id so DataTable's index-keyed rows
+ * can't hand a live draft to a different student; we only re-sync from
+ * props when not focused.
  */
 function NoteCell({
   row,
@@ -543,7 +802,7 @@ function NoteCell({
   disabled: boolean;
   onSave: (note: string) => void;
 }) {
-  const [draft, setDraft] = useState(row.sufs_enrolled_notes);
+  const [draft, setDraft] = useState(row.sufs_enrollment_request_notes);
   const [focused, setFocused] = useState(false);
   // Escape sets this so the synchronous blur it triggers skips the
   // commit. `HTMLElement.blur()` dispatches `onBlur` before React
@@ -554,7 +813,7 @@ function NoteCell({
 
   // Re-sync from the server value whenever the field isn't being
   // edited — covers revalidation landing a note edited elsewhere.
-  const value = focused ? draft : row.sufs_enrolled_notes;
+  const value = focused ? draft : row.sufs_enrollment_request_notes;
 
   return (
     <Input
@@ -563,7 +822,7 @@ function NoteCell({
       placeholder="Add a note…"
       className="h-8 border-transparent bg-transparent px-2 text-sm shadow-none hover:border-input focus-visible:border-input"
       onFocus={() => {
-        setDraft(row.sufs_enrolled_notes);
+        setDraft(row.sufs_enrollment_request_notes);
         setFocused(true);
       }}
       onChange={(e) => setDraft(e.target.value)}
@@ -580,7 +839,7 @@ function NoteCell({
           e.currentTarget.blur();
         } else if (e.key === "Escape") {
           skipSaveRef.current = true;
-          setDraft(row.sufs_enrolled_notes);
+          setDraft(row.sufs_enrollment_request_notes);
           setFocused(false);
           e.currentTarget.blur();
         }

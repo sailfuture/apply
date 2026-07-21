@@ -199,38 +199,85 @@ export async function GET(req: NextRequest) {
         // tier here, so custom amounts print correctly.
         sufs_amount:
           typeof app.sufs_amount === "number" ? app.sufs_amount : null,
-        // From the packet. `undefined` on rows predating the column
-        // reads as not-enrolled.
-        sufs_enrolled: packet?.sufs_enrolled === true,
+        // Pipeline state from the packet. `undefined` on rows
+        // predating the columns reads as false. Every audit stamp is
+        // gated on its bool: un-ticking writes null/"" clears that
+        // Xano's edit endpoint drops, so the stored stamp lingers —
+        // suppressing it here keeps every consumer (table tooltips,
+        // CSV export) from showing stale audit data.
+        sufs_enrollment_request_sent:
+          packet?.sufs_enrollment_request_sent === true,
         // Trimmed because a cleared note is stored as a single space —
         // Xano drops empty-string inputs, so "" can't round-trip. See
         // the sentinel write in `/api/admin/student-registration/[id]`.
-        sufs_enrolled_notes: (packet?.sufs_enrolled_notes ?? "").trim(),
-        // Audit — stamped server-side when the enrolled box is ticked.
-        // Gated on the latch: un-enrolling writes null/"" clears that
-        // Xano's edit endpoint drops, so the stored stamp lingers on
-        // un-enrolled rows. Suppress it here so every consumer (table
-        // tooltip, CSV export) sees audit data only while enrolled.
-        sufs_enrolled_time:
-          packet?.sufs_enrolled === true
-            ? (packet?.sufs_enrolled_time ?? null)
+        sufs_enrollment_request_notes: (
+          packet?.sufs_enrollment_request_notes ?? ""
+        ).trim(),
+        sufs_enrollment_request_time:
+          packet?.sufs_enrollment_request_sent === true
+            ? (packet?.sufs_enrollment_request_time ?? null)
             : null,
-        sufs_enrolled_by:
-          packet?.sufs_enrolled === true
-            ? (packet?.sufs_enrolled_by ?? "").trim()
+        sufs_enrollment_request_by:
+          packet?.sufs_enrollment_request_sent === true
+            ? (packet?.sufs_enrollment_request_by ?? "").trim()
+            : "",
+        sufs_parent_enrollment_confirmation:
+          packet?.sufs_parent_enrollment_confirmation === true,
+        sufs_parent_enrollment_request_time:
+          packet?.sufs_parent_enrollment_confirmation === true
+            ? (packet?.sufs_parent_enrollment_request_time ?? null)
+            : null,
+        sufs_parent_enrollment_request_by:
+          packet?.sufs_parent_enrollment_confirmation === true
+            ? (packet?.sufs_parent_enrollment_request_by ?? "").trim()
+            : "",
+        sufs_q1_payment: packet?.sufs_q1_payment === true,
+        sufs_q1_payment_confirmed:
+          packet?.sufs_q1_payment === true
+            ? (packet?.sufs_q1_payment_confirmed ?? null)
+            : null,
+        sufs_q1_payment_confirmed_by:
+          packet?.sufs_q1_payment === true
+            ? (packet?.sufs_q1_payment_confirmed_by ?? "").trim()
+            : "",
+        sufs_q2_payment: packet?.sufs_q2_payment === true,
+        sufs_q2_payment_confirmed:
+          packet?.sufs_q2_payment === true
+            ? (packet?.sufs_q2_payment_confirmed ?? null)
+            : null,
+        sufs_q2_payment_confirmed_by:
+          packet?.sufs_q2_payment === true
+            ? (packet?.sufs_q2_payment_confirmed_by ?? "").trim()
+            : "",
+        sufs_q3_payment: packet?.sufs_q3_payment === true,
+        sufs_q3_payment_confirmed:
+          packet?.sufs_q3_payment === true
+            ? (packet?.sufs_q3_payment_confirmed ?? null)
+            : null,
+        sufs_q3_payment_confirmed_by:
+          packet?.sufs_q3_payment === true
+            ? (packet?.sufs_q3_payment_confirmed_by ?? "").trim()
+            : "",
+        sufs_q4_payment: packet?.sufs_q4_payment === true,
+        sufs_q4_payment_confirmed:
+          packet?.sufs_q4_payment === true
+            ? (packet?.sufs_q4_payment_confirmed ?? null)
+            : null,
+        sufs_q4_payment_confirmed_by:
+          packet?.sufs_q4_payment === true
+            ? (packet?.sufs_q4_payment_confirmed_by ?? "").trim()
             : "",
       };
     });
 
     rows.sort((a, b) => {
-      // Outstanding work first — students not yet enrolled on the
-      // portal float to the top, since that's the whole job of this
-      // page. Then alphabetical by last name, then first, so the list
-      // is stable across refetches (award IDs and notes change, names
-      // don't).
-      if (a.sufs_enrolled !== b.sufs_enrolled) {
-        return a.sufs_enrolled ? 1 : -1;
-      }
+      // Alphabetical by last name, then first — deliberately NOT by
+      // pipeline status. The client groups rows into the three status
+      // tables itself (from the same cached data its optimistic
+      // updates mutate), so ticking a checkbox moves the row between
+      // groups instantly instead of waiting on this route's slow
+      // multi-table refetch. A status-dependent server order would
+      // fight that by reshuffling rows when the refetch lands.
       const last = (a.student_last_name ?? "").localeCompare(
         b.student_last_name ?? ""
       );
@@ -274,13 +321,32 @@ export interface SufsStudentRow {
   sufs_status: string;
   /** Stored award dollars for this student. */
   sufs_amount: number | null;
-  /** Admin latch (on the packet): student has been enrolled on the
-   *  Step Up portal. */
-  sufs_enrolled: boolean;
+  // ── Pipeline stage 1: enrollment request sent on the Step Up
+  //    portal (admin action). Field names match the Xano columns so
+  //    the page's PATCH bodies and optimistic cache folds can reuse
+  //    them verbatim.
+  sufs_enrollment_request_sent: boolean;
   /** Free-text reconciliation note (on the packet). */
-  sufs_enrolled_notes: string;
-  /** Audit: ms timestamp the student was marked enrolled, or null. */
-  sufs_enrolled_time: number | null;
-  /** Audit: display name of the admin who marked them enrolled, or "". */
-  sufs_enrolled_by: string;
+  sufs_enrollment_request_notes: string;
+  sufs_enrollment_request_time: number | null;
+  sufs_enrollment_request_by: string;
+  // ── Stage 2: parent completed their enrollment confirmation
+  //    (admin-verified). Audit columns named `..._request_*` on Xano.
+  sufs_parent_enrollment_confirmation: boolean;
+  sufs_parent_enrollment_request_time: number | null;
+  sufs_parent_enrollment_request_by: string;
+  // ── Stage 3: quarterly payment confirmations. `_confirmed` is the
+  //    ms timestamp, `_confirmed_by` the admin display name.
+  sufs_q1_payment: boolean;
+  sufs_q1_payment_confirmed: number | null;
+  sufs_q1_payment_confirmed_by: string;
+  sufs_q2_payment: boolean;
+  sufs_q2_payment_confirmed: number | null;
+  sufs_q2_payment_confirmed_by: string;
+  sufs_q3_payment: boolean;
+  sufs_q3_payment_confirmed: number | null;
+  sufs_q3_payment_confirmed_by: string;
+  sufs_q4_payment: boolean;
+  sufs_q4_payment_confirmed: number | null;
+  sufs_q4_payment_confirmed_by: string;
 }

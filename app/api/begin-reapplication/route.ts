@@ -197,15 +197,31 @@ export async function POST(req: NextRequest) {
       liability_waiver_sent_at: null,
       liability_waiver_pdf_url: "",
       registrationConfirmed: false,
-      // SUFS portal enrollment is a per-year action — last year's
-      // enrolled latch (+ note and audit stamp) must not carry into
-      // the new year's packet, or the student would show as already
-      // enrolled on the /admin/sufs reconciliation list and get
-      // skipped on the Step Up portal.
-      sufs_enrolled: false,
-      sufs_enrolled_notes: "",
-      sufs_enrolled_time: null,
-      sufs_enrolled_by: "",
+      // SUFS enrollment is a per-year action — last year's pipeline
+      // state (request sent / parent confirmed / quarterly payments,
+      // plus notes and audit stamps) must not carry into the new
+      // year's packet, or the student would show as already handled
+      // on the /admin/sufs reconciliation list and get skipped on
+      // the Step Up portal.
+      sufs_enrollment_request_sent: false,
+      sufs_enrollment_request_notes: "",
+      sufs_enrollment_request_time: null,
+      sufs_enrollment_request_by: "",
+      sufs_parent_enrollment_confirmation: false,
+      sufs_parent_enrollment_request_time: null,
+      sufs_parent_enrollment_request_by: "",
+      sufs_q1_payment: false,
+      sufs_q1_payment_confirmed: null,
+      sufs_q1_payment_confirmed_by: "",
+      sufs_q2_payment: false,
+      sufs_q2_payment_confirmed: null,
+      sufs_q2_payment_confirmed_by: "",
+      sufs_q3_payment: false,
+      sufs_q3_payment_confirmed: null,
+      sufs_q3_payment_confirmed_by: "",
+      sufs_q4_payment: false,
+      sufs_q4_payment_confirmed: null,
+      sufs_q4_payment_confirmed_by: "",
     });
 
     // Append the new packet ID to the student's lineage list. Best-effort

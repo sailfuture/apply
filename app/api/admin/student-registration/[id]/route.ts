@@ -102,12 +102,19 @@ export async function PATCH(
       // not the packet — use `/api/admin/student-registration/by-student`
       // (which writes to the app row + re-prices Stripe) instead of
       // PATCHing those columns here.
-      // SUFS portal-enrollment reconciliation (the /admin/sufs page):
-      // the Enrolled checkbox + its free-text note. `sufs_enrolled` is
-      // coerced to a real boolean and `sufs_enrolled_notes` gets the
-      // empty-string sentinel treatment below.
-      "sufs_enrolled",
-      "sufs_enrolled_notes",
+      // SUFS reconciliation (the /admin/sufs page) — the three-stage
+      // pipeline bools + the free-text note. Each bool is coerced to
+      // a real boolean and auto-stamps its audit pair below; the note
+      // gets the empty-string sentinel treatment. The audit columns
+      // themselves (`*_time` / `*_by` / `*_confirmed*`) are
+      // deliberately NOT listed — the route owns them.
+      "sufs_enrollment_request_sent",
+      "sufs_enrollment_request_notes",
+      "sufs_parent_enrollment_confirmation",
+      "sufs_q1_payment",
+      "sufs_q2_payment",
+      "sufs_q3_payment",
+      "sufs_q4_payment",
     ];
     const patch: Record<string, unknown> = {};
     for (const key of ALLOWED) {
@@ -143,27 +150,49 @@ export async function PATCH(
       }
     }
 
-    // Coerce the SUFS enrolled latch to a real boolean and auto-stamp
-    // its audit pair — same treatment as `registrationConfirmed`
-    // above. Enrolled → time = now, by = admin display name;
-    // un-enrolled → time = null, by = "". The audit columns are kept
-    // off the ALLOWED allowlist so the client can't spoof them.
-    if ("sufs_enrolled" in patch) {
-      const next = patch.sufs_enrolled === true;
-      patch.sufs_enrolled = next;
-      patch.sufs_enrolled_time = next ? Date.now() : null;
-      patch.sufs_enrolled_by = next ? admin?.name ?? "" : "";
+    // SUFS pipeline bools — coerce each to a real boolean and
+    // auto-stamp its audit pair, same treatment as
+    // `registrationConfirmed` above. On → time = now, by = admin
+    // display name; off → time = null, by = "". (Xano drops the
+    // null/"" clears, so read paths gate the stamps on the bool.)
+    if ("sufs_enrollment_request_sent" in patch) {
+      const next = patch.sufs_enrollment_request_sent === true;
+      patch.sufs_enrollment_request_sent = next;
+      patch.sufs_enrollment_request_time = next ? Date.now() : null;
+      patch.sufs_enrollment_request_by = next ? admin?.name ?? "" : "";
+    }
+    if ("sufs_parent_enrollment_confirmation" in patch) {
+      const next = patch.sufs_parent_enrollment_confirmation === true;
+      patch.sufs_parent_enrollment_confirmation = next;
+      // Xano's audit columns for the confirmation flip are named
+      // `..._request_time/by` — see the note on the type.
+      patch.sufs_parent_enrollment_request_time = next ? Date.now() : null;
+      patch.sufs_parent_enrollment_request_by = next ? admin?.name ?? "" : "";
+    }
+    // Quarterly payment confirmations — `sufs_qN_payment_confirmed`
+    // is the confirmation TIMESTAMP (not a bool), `_confirmed_by` the
+    // admin name.
+    for (const q of [1, 2, 3, 4]) {
+      const key = `sufs_q${q}_payment`;
+      if (key in patch) {
+        const next = patch[key] === true;
+        patch[key] = next;
+        patch[`sufs_q${q}_payment_confirmed`] = next ? Date.now() : null;
+        patch[`sufs_q${q}_payment_confirmed_by`] = next
+          ? admin?.name ?? ""
+          : "";
+      }
     }
 
     // Xano's edit endpoint DROPS empty-string inputs (booleans and
-    // integer 0 apply fine). So PATCHing `sufs_enrolled_notes: ""` to
-    // clear a note would silently no-op and the stale note would
-    // reappear on the next refetch. Persist a single space as the
-    // "cleared" sentinel; `/api/admin/sufs` trims it back to "" on
-    // read, so the round-trip is invisible to the client.
-    if ("sufs_enrolled_notes" in patch) {
-      const note = String(patch.sufs_enrolled_notes ?? "").trim();
-      patch.sufs_enrolled_notes = note === "" ? " " : note;
+    // integer 0 apply fine). So PATCHing the note to "" to clear it
+    // would silently no-op and the stale note would reappear on the
+    // next refetch. Persist a single space as the "cleared" sentinel;
+    // `/api/admin/sufs` trims it back to "" on read, so the
+    // round-trip is invisible to the client.
+    if ("sufs_enrollment_request_notes" in patch) {
+      const note = String(patch.sufs_enrollment_request_notes ?? "").trim();
+      patch.sufs_enrollment_request_notes = note === "" ? " " : note;
     }
 
     if (Object.keys(patch).length === 0) {
