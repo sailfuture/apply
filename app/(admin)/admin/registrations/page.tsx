@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
-import { CheckCircle2, Circle, ChevronRight, Inbox } from "lucide-react";
+import { CheckCircle2, Circle, ChevronRight, Eye, Inbox } from "lucide-react";
 import { DataTable, type ColumnDef } from "@/components/admin/data-table";
 import {
   Card,
@@ -74,10 +74,10 @@ interface RegStudentRow {
  * fields on the API row.
  */
 const DOC_DEFS = [
-  { key: "immunization", label: "Immunization forms" },
   { key: "birth_certificate", label: "Birth certificate" },
   { key: "school_health_form", label: "School health form" },
   { key: "transcripts", label: "Transcripts" },
+  { key: "immunization", label: "Immunization forms" },
 ] as const;
 type DocKey = (typeof DOC_DEFS)[number]["key"];
 
@@ -367,8 +367,8 @@ export default function RegistrationsPage() {
     },
     {
       // Four required-document dots — per-student states rolled up to
-      // the family: gray = not submitted, amber = uploaded and
-      // waiting on review (outline = only some students so far),
+      // the family: gray = not submitted, blue eye = uploaded and
+      // waiting on review (faded = only some students so far),
       // green check = approved by admin. Sorts by total approvals so
       // the most-reviewed families cluster.
       key: "docs_approved_total",
@@ -660,11 +660,13 @@ function RegistrationsGroup({
  * SectionDots, one dot per document, rolled up across the family's
  * students. Per document (n students):
  *
- *   - green check   — approved for every student (admin doc-confirm)
- *   - amber filled  — submitted for every student, awaiting review
- *   - amber outline — submitted for SOME students (multi-student
- *                     families mid-upload)
- *   - gray empty    — nothing uploaded yet
+ *   - green check — approved for every student (admin doc-confirm)
+ *   - blue eye    — submitted for every student, awaiting admin
+ *                   review ("look at this")
+ *   - faded eye   — submitted for SOME students (multi-student
+ *                   families mid-upload), lighter blue so a full
+ *                   review queue reads stronger than a partial one
+ *   - gray empty  — nothing uploaded yet
  *
  * Hover any dot for the exact counts.
  */
@@ -688,24 +690,24 @@ function DocumentDots({ row }: { row: RegFamilyRow }) {
         }
         if (n > 0 && c.submitted === n) {
           return (
-            <Circle
+            <Eye
               key={d.key}
-              className="size-3 fill-amber-400 text-amber-400"
+              className="size-3 text-blue-600"
               aria-label={`${d.label} submitted, awaiting review`}
             >
               <title>{title}</title>
-            </Circle>
+            </Eye>
           );
         }
         if (c.submitted > 0) {
           return (
-            <Circle
+            <Eye
               key={d.key}
-              className="size-3 text-amber-400"
+              className="size-3 text-blue-400/70"
               aria-label={`${d.label} partially submitted`}
             >
               <title>{title}</title>
-            </Circle>
+            </Eye>
           );
         }
         return (

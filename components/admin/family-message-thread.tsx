@@ -223,7 +223,13 @@ export function FamilyMessageThread({
           value={body}
           onChange={(e) => setBody(e.target.value)}
           onKeyDown={(e) => {
-            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+            // Shift+Enter (and Cmd/Ctrl+Enter) sends; a bare Enter
+            // keeps inserting a newline so multi-line texts stay easy
+            // to compose.
+            if (
+              e.key === "Enter" &&
+              (e.shiftKey || e.metaKey || e.ctrlKey)
+            ) {
               e.preventDefault();
               void send();
             }
