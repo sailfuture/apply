@@ -29,12 +29,14 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { BillingCard } from "@/components/admin/billing-card";
+import { TuitionBreakdownTable } from "@/components/admin/tuition-breakdown-table";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { cn } from "@/lib/utils";
 import type {
   ScheduleResponse,
   ScheduleSlot,
 } from "@/app/api/admin/families/[id]/billing/schedule/route";
+import type { AdminFamilyRegistrationResponse } from "@/app/api/admin/registrations/[id]/route";
 
 /**
  * Per-family billing detail page — 12-month schedule view backed
@@ -66,6 +68,20 @@ export default function FamilyBillingPage() {
       : null;
   const { data, isLoading, error } = useSWR<ScheduleResponse>(
     swrKey,
+    adminFetcher
+  );
+
+  // Same payload the registration detail page renders from — reused
+  // here for the signed enrollment-agreement PDF (pandadoc id +
+  // signed flag live on the family progress row) and the per-student
+  // tuition breakdown receipt. Loaded independently of the schedule
+  // so a slow Stripe-mirror query doesn't hold either card hostage.
+  const regKey =
+    Number.isFinite(familyId) && yearId
+      ? `/api/admin/registrations/${familyId}?yearId=${yearId}`
+      : null;
+  const { data: regData } = useSWR<AdminFamilyRegistrationResponse>(
+    regKey,
     adminFetcher
   );
 
@@ -152,7 +168,97 @@ export default function FamilyBillingPage() {
 
       <SummaryCard data={data} />
       <ScheduleCard slots={data.slots} familyId={familyId} />
+
+      {/* Signed enrollment agreement (PandaDoc) — inline preview +
+          download so admin can check what the family actually signed
+          without leaving the billing view. */}
+      <EnrollmentAgreementCard progress={regData?.progress ?? null} />
+
+      {/* Per-student tuition receipt — the exact same table the
+          registration detail page renders under its Tuition card
+          (shared component), so the billing math admin sees here
+          always matches what the family signed for. */}
+      {regData && regData.students.length > 0 ? (
+        <Card className="overflow-hidden gap-0 py-0 bg-white">
+          <CardHeader className="py-3 !pb-3 border-b">
+            <CardTitle className="text-base">Tuition breakdown</CardTitle>
+          </CardHeader>
+          <CardContent className="px-4 py-4 bg-white">
+            <TuitionBreakdownTable
+              students={regData.students}
+              schoolYear={regData.school_year}
+              scholarship={regData.scholarship}
+            />
+          </CardContent>
+        </Card>
+      ) : null}
     </div>
+  );
+}
+
+/**
+ * Signed enrollment agreement card. The PandaDoc document id lives on
+ * the family's registration-progress row; the stored
+ * `enrollment_agreement_pdf_url` needs the PandaDoc API key, so both
+ * the inline preview and the download link go through the
+ * `/api/admin/pandadoc/download` proxy (which streams the bytes with
+ * `Content-Disposition: inline`).
+ *
+ * Renders nothing until the registration payload has loaded; renders
+ * a status-only body when the agreement isn't signed yet.
+ */
+function EnrollmentAgreementCard({
+  progress,
+}: {
+  progress: AdminFamilyRegistrationResponse["progress"];
+}) {
+  if (!progress) return null;
+  const pdId = progress.enrollment_agreement_pandadoc_id ?? "";
+  const isSigned =
+    progress.is_enrollment_agreement_signed === true && !!pdId;
+  const status = progress.enrollment_agreement_status ?? "";
+  const proxyHref = `/api/admin/pandadoc/download?documentId=${pdId}`;
+
+  return (
+    <Card className="overflow-hidden gap-0 py-0 bg-white">
+      <CardHeader className="py-3 !pb-3 border-b">
+        <div className="flex items-center justify-between gap-3">
+          <CardTitle className="text-base">Enrollment agreement</CardTitle>
+          {isSigned ? (
+            <Button asChild variant="outline" size="sm" className="bg-white">
+              <a
+                href={proxyHref}
+                target="_blank"
+                rel="noreferrer"
+                download={`enrollment-agreement-${pdId}.pdf`}
+              >
+                <FileText className="size-3.5 mr-1.5" />
+                Download PDF
+              </a>
+            </Button>
+          ) : null}
+        </div>
+      </CardHeader>
+      <CardContent className="px-4 py-4 bg-white">
+        {isSigned ? (
+          // Inline preview — the proxy serves the PDF with an
+          // `inline` disposition, so the browser's viewer renders it
+          // straight into the iframe. `title` for screen readers.
+          <iframe
+            src={proxyHref}
+            title="Signed enrollment agreement PDF"
+            className="h-[560px] w-full rounded-md border bg-muted/20"
+            loading="lazy"
+          />
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            {status
+              ? `Agreement not signed yet — PandaDoc status: ${status}.`
+              : "The enrollment agreement hasn't been sent yet."}
+          </p>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
