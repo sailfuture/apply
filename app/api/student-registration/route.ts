@@ -1,6 +1,7 @@
 import { auth, currentUser } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
 import { xano } from "@/lib/xano";
+import { redactAdminSufs } from "@/lib/student-registration-redact";
 
 export async function GET(req: NextRequest) {
   const { userId } = await auth();
@@ -18,7 +19,7 @@ export async function GET(req: NextRequest) {
 
   if (studentId) {
     const reg = await xano.studentRegistration.getByStudentId(Number(studentId));
-    return NextResponse.json(reg, { status: 200 });
+    return NextResponse.json(redactAdminSufs(reg), { status: 200 });
   }
 
   const students = await xano.students.getByFamilyId(familyId);
@@ -35,10 +36,12 @@ export async function GET(req: NextRequest) {
       students.map((s) => xano.studentRegistration.getByStudentId(s.id))
     );
     return NextResponse.json(
-      packets.filter(
-        (p): p is NonNullable<typeof p> =>
-          !!p && Number(p.registration_school_years_id) === yearId
-      ),
+      packets
+        .filter(
+          (p): p is NonNullable<typeof p> =>
+            !!p && Number(p.registration_school_years_id) === yearId
+        )
+        .map(redactAdminSufs),
       { status: 200 }
     );
   }
@@ -49,7 +52,7 @@ export async function GET(req: NextRequest) {
   );
 
   return NextResponse.json(
-    registrations.filter(Boolean),
+    registrations.filter(Boolean).map(redactAdminSufs),
     { status: 200 }
   );
 }
@@ -171,5 +174,8 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  return NextResponse.json(registration, { status: 201 });
+  // Xano's create echoes the full row (SUFS columns at their defaults)
+  // — redact for symmetry with the GET/PATCH responses so no parent
+  // path ever carries the admin-only fields.
+  return NextResponse.json(redactAdminSufs(registration), { status: 201 });
 }

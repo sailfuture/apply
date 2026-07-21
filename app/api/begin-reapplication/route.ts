@@ -197,6 +197,15 @@ export async function POST(req: NextRequest) {
       liability_waiver_sent_at: null,
       liability_waiver_pdf_url: "",
       registrationConfirmed: false,
+      // SUFS portal enrollment is a per-year action — last year's
+      // enrolled latch (+ note and audit stamp) must not carry into
+      // the new year's packet, or the student would show as already
+      // enrolled on the /admin/sufs reconciliation list and get
+      // skipped on the Step Up portal.
+      sufs_enrolled: false,
+      sufs_enrolled_notes: "",
+      sufs_enrolled_time: null,
+      sufs_enrolled_by: "",
     });
 
     // Append the new packet ID to the student's lineage list. Best-effort

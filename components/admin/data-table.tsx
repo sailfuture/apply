@@ -97,7 +97,16 @@ export function DataTable<T extends Record<string, unknown>>({
   }, [filtered, sortKey, sortDir, columns]);
 
   const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
-  const paged = sorted.slice(page * pageSize, (page + 1) * pageSize);
+
+  // Clamp the page into range at render time rather than storing it —
+  // when the row set shrinks under the current page (an external filter
+  // like the SUFS/Registrations Select, or a search, cuts the data down
+  // while the user is on a later page) an unclamped `page` would slice
+  // past the end (empty table) and the pager hides once `totalPages`
+  // drops to 1, stranding the user. Deriving avoids a setState-in-effect
+  // cascade and never persists an invalid page.
+  const safePage = Math.min(page, totalPages - 1);
+  const paged = sorted.slice(safePage * pageSize, (safePage + 1) * pageSize);
 
   function toggleSort(key: string) {
     if (sortKey === key) {
@@ -235,23 +244,24 @@ export function DataTable<T extends Record<string, unknown>>({
       {totalPages > 1 && (
         <div className="flex items-center justify-between">
           <span className="text-sm text-muted-foreground">
-            Showing {page * pageSize + 1}–
-            {Math.min((page + 1) * pageSize, sorted.length)} of {sorted.length}
+            Showing {safePage * pageSize + 1}–
+            {Math.min((safePage + 1) * pageSize, sorted.length)} of{" "}
+            {sorted.length}
           </span>
           <div className="flex gap-2">
             <Button
               variant="outline"
               size="sm"
-              disabled={page === 0}
-              onClick={() => setPage((p) => p - 1)}
+              disabled={safePage === 0}
+              onClick={() => setPage(safePage - 1)}
             >
               Previous
             </Button>
             <Button
               variant="outline"
               size="sm"
-              disabled={page >= totalPages - 1}
-              onClick={() => setPage((p) => p + 1)}
+              disabled={safePage >= totalPages - 1}
+              onClick={() => setPage(safePage + 1)}
             >
               Next
             </Button>

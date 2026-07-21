@@ -54,6 +54,10 @@ const NAV_ITEMS: NavItem[] = [
   // on each row), so the standalone Re-Applications nav item is gone.
   { title: "Applications", href: "/admin/applications" },
   { title: "Registrations", href: "/admin/registrations" },
+  // Step Up For Students reconciliation — confirmed registrations
+  // with their award ID + tier, ticked off as each student is
+  // enrolled in the Step Up portal.
+  { title: "SUFS", href: "/admin/sufs" },
   { title: "Enrolled", href: "/admin/enrolled" },
   // Two-way SMS inbox + filtered group messaging.
   { title: "Messages", href: "/admin/messages" },

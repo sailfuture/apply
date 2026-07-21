@@ -102,6 +102,12 @@ export async function PATCH(
       // not the packet — use `/api/admin/student-registration/by-student`
       // (which writes to the app row + re-prices Stripe) instead of
       // PATCHing those columns here.
+      // SUFS portal-enrollment reconciliation (the /admin/sufs page):
+      // the Enrolled checkbox + its free-text note. `sufs_enrolled` is
+      // coerced to a real boolean and `sufs_enrolled_notes` gets the
+      // empty-string sentinel treatment below.
+      "sufs_enrolled",
+      "sufs_enrolled_notes",
     ];
     const patch: Record<string, unknown> = {};
     for (const key of ALLOWED) {
@@ -135,6 +141,29 @@ export async function PATCH(
         patch.previous_crew_assignment = prevCrew;
         patch.crew_assignment_change = Date.now();
       }
+    }
+
+    // Coerce the SUFS enrolled latch to a real boolean and auto-stamp
+    // its audit pair — same treatment as `registrationConfirmed`
+    // above. Enrolled → time = now, by = admin display name;
+    // un-enrolled → time = null, by = "". The audit columns are kept
+    // off the ALLOWED allowlist so the client can't spoof them.
+    if ("sufs_enrolled" in patch) {
+      const next = patch.sufs_enrolled === true;
+      patch.sufs_enrolled = next;
+      patch.sufs_enrolled_time = next ? Date.now() : null;
+      patch.sufs_enrolled_by = next ? admin?.name ?? "" : "";
+    }
+
+    // Xano's edit endpoint DROPS empty-string inputs (booleans and
+    // integer 0 apply fine). So PATCHing `sufs_enrolled_notes: ""` to
+    // clear a note would silently no-op and the stale note would
+    // reappear on the next refetch. Persist a single space as the
+    // "cleared" sentinel; `/api/admin/sufs` trims it back to "" on
+    // read, so the round-trip is invisible to the client.
+    if ("sufs_enrolled_notes" in patch) {
+      const note = String(patch.sufs_enrolled_notes ?? "").trim();
+      patch.sufs_enrolled_notes = note === "" ? " " : note;
     }
 
     if (Object.keys(patch).length === 0) {

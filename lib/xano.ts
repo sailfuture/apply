@@ -1643,6 +1643,27 @@ export interface XanoStudentRegistration {
   // because it's billing infrastructure (the Stripe-side link),
   // not billing math.
 
+  /** Admin latch: this student has been enrolled on the Step Up For
+   *  Students portal. Purely an operational reconciliation flag —
+   *  does NOT feed billing math (that reads `sufs_amount` on the
+   *  application row). Toggled from the SUFS page checkbox via
+   *  `/api/admin/student-registration/[id]`. Optional because rows
+   *  predating the column won't carry it — treat `undefined` as
+   *  "not enrolled". */
+  sufs_enrolled?: boolean;
+  /** Free-text SUFS reconciliation note shown on the SUFS page (e.g.
+   *  "portal shows different DOB", "waiting on award letter").
+   *  Admin-only. Cleared via a single-space sentinel because Xano's
+   *  edit endpoint drops empty-string inputs. */
+  sufs_enrolled_notes?: string;
+  /** Audit: `Date.now()` when `sufs_enrolled` was last flipped true,
+   *  null when un-enrolled. Stamped server-side by the admin PATCH
+   *  route, never client-writable. */
+  sufs_enrolled_time?: number | null;
+  /** Audit: display name of the admin who last marked the student
+   *  enrolled; "" when un-enrolled. Stamped server-side. */
+  sufs_enrolled_by?: string;
+
   /** New Enrollment vs Re-Enrollment — admin-set, drives which forms/templates
    *  get used for this year's registration. */
   registration_type_id: number;

@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
-import { CheckCircle2, Circle, ChevronRight, Eye, Inbox } from "lucide-react";
+import { CheckCircle2, Circle, ChevronRight, Inbox } from "lucide-react";
 import { DataTable, type ColumnDef } from "@/components/admin/data-table";
 import {
   Card,
@@ -367,8 +367,8 @@ export default function RegistrationsPage() {
     },
     {
       // Four required-document dots — per-student states rolled up to
-      // the family: gray = not submitted, blue eye = uploaded and
-      // waiting on review (faded = only some students so far),
+      // the family: gray ring = not submitted, blue ring = uploaded
+      // and waiting on review (faded = only some students so far),
       // green check = approved by admin. Sorts by total approvals so
       // the most-reviewed families cluster.
       key: "docs_approved_total",
@@ -661,12 +661,12 @@ function RegistrationsGroup({
  * students. Per document (n students):
  *
  *   - green check — approved for every student (admin doc-confirm)
- *   - blue eye    — submitted for every student, awaiting admin
- *                   review ("look at this")
- *   - faded eye   — submitted for SOME students (multi-student
+ *   - blue ring   — submitted for every student, awaiting admin
+ *                   review
+ *   - faded ring  — submitted for SOME students (multi-student
  *                   families mid-upload), lighter blue so a full
  *                   review queue reads stronger than a partial one
- *   - gray empty  — nothing uploaded yet
+ *   - gray ring   — nothing uploaded yet
  *
  * Hover any dot for the exact counts.
  */
@@ -690,24 +690,24 @@ function DocumentDots({ row }: { row: RegFamilyRow }) {
         }
         if (n > 0 && c.submitted === n) {
           return (
-            <Eye
+            <Circle
               key={d.key}
               className="size-3 text-blue-600"
               aria-label={`${d.label} submitted, awaiting review`}
             >
               <title>{title}</title>
-            </Eye>
+            </Circle>
           );
         }
         if (c.submitted > 0) {
           return (
-            <Eye
+            <Circle
               key={d.key}
               className="size-3 text-blue-400/70"
               aria-label={`${d.label} partially submitted`}
             >
               <title>{title}</title>
-            </Eye>
+            </Circle>
           );
         }
         return (
