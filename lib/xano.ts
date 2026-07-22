@@ -924,16 +924,17 @@ export interface XanoBusStop {
 }
 
 /**
- * Enriched family record returned by `/registration_families_all_details`.
- * Mirrors `XanoFamily` but with the FK arrays already expanded:
+ * Enriched family record — `XanoFamily` with the FK arrays already
+ * expanded:
  *   - `registration_students_id` → array of full application rows
  *     (one row per student per academic year for that family)
  *   - `registration_parents_id` → array of full parent rows
  *
- * Xano's relationship expansion can insert empty `[]` items where an FK
- * didn't resolve. Always run results through `cleanFamilyAllDetails` (or
- * use `xano.families.getAllDetails()`, which does it for you) before
- * touching the arrays — the cleaner narrows them to the object shape.
+ * COMPOSED by `xano.families.getAllDetails()` from three plain table
+ * reads (families + parents + applications). It used to come from a
+ * dedicated `/registration_families_all_details` Xano query, but that
+ * endpoint was removed from the workspace and every consumer broke —
+ * the shape lives on, the custom query does not.
  */
 export interface XanoFamilyAllDetails {
   id: number;
@@ -947,38 +948,6 @@ export interface XanoFamilyAllDetails {
   registration_emergency_contacts_id: number[];
   // `isAccepted` / `isSubmitted` were dropped from `registration_families`
   // — they live on `family_application_progress` per academic year now.
-}
-
-/**
- * Strip Xano's empty-array artifacts from the expanded relationship arrays.
- * Xano inserts `[]` in place of unresolved FKs; we narrow to actual row
- * objects so downstream code can iterate without type guards.
- */
-function cleanFamilyAllDetails(raw: unknown): XanoFamilyAllDetails {
-  const r = raw as Partial<XanoFamilyAllDetails> & {
-    registration_students_id?: unknown[];
-    registration_parents_id?: unknown[];
-  };
-  const isObj = (v: unknown): v is Record<string, unknown> =>
-    v !== null && typeof v === "object" && !Array.isArray(v);
-  return {
-    id: Number(r.id ?? 0),
-    created_at: Number(r.created_at ?? 0),
-    family_name: typeof r.family_name === "string" ? r.family_name : "",
-    registration_students_id: Array.isArray(r.registration_students_id)
-      ? (r.registration_students_id.filter(isObj) as XanoApplication[])
-      : [],
-    registration_parents_id: Array.isArray(r.registration_parents_id)
-      ? (r.registration_parents_id.filter(isObj) as XanoParent[])
-      : [],
-    registration_emergency_contacts_id: Array.isArray(
-      r.registration_emergency_contacts_id
-    )
-      ? (r.registration_emergency_contacts_id.filter(
-          (v): v is number => typeof v === "number"
-        ) as number[])
-      : [],
-  };
 }
 
 /**
@@ -2242,14 +2211,46 @@ export const xano = {
      * downstream code can iterate without type guards.
      */
     async getAllDetails(): Promise<XanoFamilyAllDetails[]> {
-      const res = await fetch(
-        `${getBaseUrl()}/registration_families_all_details`,
-        { cache: "no-store" }
-      );
-      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
-      const raw = await res.json();
-      if (!Array.isArray(raw)) return [];
-      return raw.map(cleanFamilyAllDetails);
+      // COMPOSED from three plain table reads — NOT a dedicated Xano
+      // query. This used to hit `/registration_families_all_details`,
+      // but that custom endpoint no longer exists on the workspace
+      // (404), which silently broke every consumer: the admin
+      // families list 500'd, and the group-SMS audience + send saw
+      // zero families (their catch() turned the throw into an empty
+      // list). Joining `registration_families` + `registration_parents`
+      // + `registration_application` in code reproduces the exact
+      // same shape from endpoints that are load-bearing everywhere
+      // else, so this can't silently regress again if a custom Xano
+      // query is renamed or deleted.
+      const [families, parents, apps] = await Promise.all([
+        this.getAll(),
+        xano.parents.getAll(),
+        xano.applications.getAll(),
+      ]);
+      const parentById = new Map(parents.map((p) => [p.id, p]));
+      const appsByFamily = new Map<number, XanoApplication[]>();
+      for (const a of apps) {
+        const fid = Number(a.registration_families_id);
+        if (!Number.isFinite(fid) || fid <= 0) continue;
+        const list = appsByFamily.get(fid) ?? [];
+        list.push(a);
+        appsByFamily.set(fid, list);
+      }
+      return families.map((fam) => ({
+        id: fam.id,
+        created_at: fam.created_at,
+        family_name: fam.family_name ?? "",
+        registration_students_id: appsByFamily.get(fam.id) ?? [],
+        // Full parent rows in the family's own FK order — preserves
+        // the "index 0 = primary" convention consumers rely on.
+        registration_parents_id: extractIds(fam.registration_parents_id)
+          .map((id) => parentById.get(id))
+          .filter((p): p is XanoParent => p != null),
+        registration_emergency_contacts_id: extractIds(
+          (fam as { registration_emergency_contacts_id?: unknown[] })
+            .registration_emergency_contacts_id ?? []
+        ),
+      }));
     },
 
     async getById(id: number): Promise<XanoFamily> {
