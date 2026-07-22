@@ -66,6 +66,36 @@ const STAGE_BADGE: Record<GroupStage, { label: string; className: string }> = {
 
 const GRADES = [8, 9, 10, 11, 12] as const;
 
+/** Stage filter chips — one per rung of the ladder, so "everyone at
+ *  camp" or "all enrolled families" is chip + select-all-shown. */
+const STAGE_FILTERS: Array<{ value: GroupStage; label: string }> = [
+  { value: "enrolled", label: "Enrolled" },
+  { value: "registration", label: "Registration" },
+  { value: "application", label: "Applying" },
+  { value: "inquiry", label: "Inquiries" },
+  { value: "camp", label: "Camp" },
+];
+
+/**
+ * Stage vocabulary the search box understands — typing "enrolled",
+ * "applicants", or "camp" narrows to that stage even though no
+ * contact is literally NAMED that. Matched by prefix, and only for
+ * queries of 3+ characters so short name fragments ("en", "ca")
+ * don't accidentally flood the list with a whole stage.
+ */
+const STAGE_SEARCH_ALIASES: Record<GroupStage, string[]> = {
+  enrolled: ["enrolled", "enrollment"],
+  registration: ["registration", "registering", "registered"],
+  application: ["application", "applications", "applying", "applicant", "applicants"],
+  inquiry: ["inquiry", "inquiries"],
+  camp: ["camp", "campers", "summer"],
+};
+
+function matchesStageAlias(stage: GroupStage, q: string): boolean {
+  if (q.length < 3) return false;
+  return STAGE_SEARCH_ALIASES[stage].some((a) => a.startsWith(q));
+}
+
 /**
  * Group SMS composer — audience built by hand instead of coarse stage
  * filters. The full contact directory for the year loads once
@@ -90,6 +120,7 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
 
   const [yearId, setYearId] = useState<string>("");
   const [search, setSearch] = useState("");
+  const [stageFilter, setStageFilter] = useState<GroupStage[]>([]);
   const [gradeFilter, setGradeFilter] = useState<number[]>([]);
   const [onlyOutstanding, setOnlyOutstanding] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -138,6 +169,9 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return contacts.filter((c) => {
+      if (stageFilter.length > 0 && !stageFilter.includes(c.stage)) {
+        return false;
+      }
       if (
         gradeFilter.length > 0 &&
         !c.grades.some((g) => gradeFilter.includes(g))
@@ -149,10 +183,13 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
       return (
         c.name.toLowerCase().includes(q) ||
         c.personName.toLowerCase().includes(q) ||
-        c.students.toLowerCase().includes(q)
+        c.students.toLowerCase().includes(q) ||
+        // Stage words work in search too — "enrolled", "applicants",
+        // "camp"… narrow to that stage.
+        matchesStageAlias(c.stage, q)
       );
     });
-  }, [contacts, search, gradeFilter, onlyOutstanding]);
+  }, [contacts, search, stageFilter, gradeFilter, onlyOutstanding]);
 
   const selectedContacts = useMemo(
     () =>
@@ -270,6 +307,41 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
               </div>
             </div>
 
+            {/* Stage narrowing chips — camp / inquiries / applying /
+                registration / enrolled. Pair with "Select all shown"
+                for one-click "text everyone at this stage" blasts.
+                Empty = every stage. */}
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                Stage
+              </span>
+              {STAGE_FILTERS.map((s) => {
+                const on = stageFilter.includes(s.value);
+                return (
+                  <button
+                    key={s.value}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() =>
+                      setStageFilter((prev) =>
+                        prev.includes(s.value)
+                          ? prev.filter((x) => x !== s.value)
+                          : [...prev, s.value]
+                      )
+                    }
+                    className={cn(
+                      "rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors",
+                      on
+                        ? "border-foreground bg-foreground text-background"
+                        : "border-border bg-white text-muted-foreground hover:border-foreground/40 hover:text-foreground"
+                    )}
+                  >
+                    {s.label}
+                  </button>
+                );
+              })}
+            </div>
+
             {/* Grade + balance narrowing chips */}
             <div className="flex flex-wrap items-center gap-1.5">
               <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
@@ -341,7 +413,9 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
                         <label
                           className={cn(
                             "flex cursor-pointer items-start gap-3 px-3 py-2 hover:bg-muted/40",
-                            !c.sendable && "cursor-not-allowed opacity-60"
+                            // Unsendable rows fade hard — they're
+                            // context, not candidates.
+                            !c.sendable && "cursor-not-allowed opacity-40"
                           )}
                         >
                           <Checkbox
@@ -356,31 +430,27 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
                               <span className="truncate text-sm font-medium">
                                 {c.name}
                               </span>
-                              <span
-                                className={cn(
-                                  "shrink-0 rounded-full border px-1.5 py-px text-[10px] font-medium uppercase tracking-wide",
-                                  badge.className
-                                )}
-                              >
-                                {badge.label}
-                              </span>
                               {c.outstanding ? (
                                 <span className="shrink-0 rounded-full border border-red-200 bg-red-50 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-red-700">
                                   Balance
                                 </span>
                               ) : null}
                             </span>
+                            {/* Person · students · stage — the stage
+                                reads as part of the detail line
+                                (dot-separated) rather than a badge. */}
                             <span className="block truncate text-xs text-muted-foreground">
                               {[
                                 c.personName,
                                 c.students ? c.students : null,
+                                badge.label,
                               ]
                                 .filter(Boolean)
                                 .join(" · ") || "—"}
                             </span>
                           </span>
                           {!c.sendable ? (
-                            <span className="shrink-0 self-center text-[11px] text-muted-foreground">
+                            <span className="shrink-0 self-center text-[10px] text-muted-foreground/60">
                               {c.optedOut ? "Opted out" : "No number"}
                             </span>
                           ) : null}
