@@ -15,6 +15,9 @@ export interface VolunteerFamily {
   id: number;
   name: string;
   enrolled: boolean;
+  /** The family's students for the year, first names dot-joined
+   *  ("Jorden · Mia") — shown in the family pickers. */
+  students: string;
 }
 
 /** Calendar event joined with its day's date (events pin to a
@@ -55,16 +58,25 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const [entriesR, familiesR, daysR, eventsR, fapR, srpR, appsR] =
-      await Promise.allSettled([
-        xano.volunteerHours.getAll(),
-        xano.families.getAll(),
-        xano.schoolCalendar.getByYear(yearId),
-        xano.schoolCalendarEvents.getAll(),
-        xano.familyApplicationProgress.getByYear(yearId),
-        xano.studentRegistrationProgress.getByYear(yearId),
-        xano.applications.getAll(),
-      ]);
+    const [
+      entriesR,
+      familiesR,
+      daysR,
+      eventsR,
+      fapR,
+      srpR,
+      appsR,
+      studentsR,
+    ] = await Promise.allSettled([
+      xano.volunteerHours.getAll(),
+      xano.families.getAll(),
+      xano.schoolCalendar.getByYear(yearId),
+      xano.schoolCalendarEvents.getAll(),
+      xano.familyApplicationProgress.getByYear(yearId),
+      xano.studentRegistrationProgress.getByYear(yearId),
+      xano.applications.getAll(),
+      xano.students.getAll(),
+    ]);
     const val = <T,>(r: PromiseSettledResult<T[]>): T[] =>
       r.status === "fulfilled" ? r.value : [];
     for (const [label, r] of [
@@ -94,11 +106,33 @@ export async function GET(req: NextRequest) {
       srp: val(srpR),
       apps: val(appsR),
     });
+
+    // Per-family student first names for the year — same application
+    // join the group-audience route uses (year-scoped, inactive apps
+    // skipped, deduped per student).
+    const studentFirst = new Map(
+      val(studentsR).map((s) => [s.id, (s.first_name ?? "").trim()])
+    );
+    const familyStudents = new Map<number, string[]>();
+    for (const a of val(appsR)) {
+      if (Number(a.registration_school_years_id) !== yearId) continue;
+      if (a.isActive === false) continue;
+      const fid = Number(a.registration_families_id);
+      const sid = Number(a.registration_students_id);
+      if (!fid || !sid) continue;
+      const name = studentFirst.get(sid) || "";
+      if (!name) continue;
+      const list = familyStudents.get(fid) ?? [];
+      if (!list.includes(name)) list.push(name);
+      familyStudents.set(fid, list);
+    }
+
     const families: VolunteerFamily[] = val(familiesR)
       .map((f) => ({
         id: f.id,
         name: f.family_name?.trim() || `Family #${f.id}`,
         enrolled: stageSets.enrolled.has(f.id),
+        students: (familyStudents.get(f.id) ?? []).join(" · "),
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
 

@@ -71,23 +71,22 @@ const NAV_ITEMS: NavItem[] = [
       { title: "SUFS", href: "/admin/sufs" },
     ],
   },
-  // Parent Engagement — the two-way SMS inbox + group messaging, and
-  // the family volunteer-hours program.
+  // Parent Engagement — the two-way SMS inbox + group messaging, the
+  // school calendar (events + reminders), and the family
+  // volunteer-hours program.
   {
     title: "Parent Engagement",
     children: [
       { title: "Messages", href: "/admin/messages" },
+      { title: "Calendar", href: "/admin/school-calendar" },
       { title: "Volunteer Hours", href: "/admin/volunteer-hours" },
     ],
   },
   // Settings — year-scoped configuration (tuition, fees, SUFS award
-  // amounts, billing start date) and the day-by-day school calendar.
+  // amounts, billing start date).
   {
     title: "Settings",
-    children: [
-      { title: "School Years", href: "/admin/school-years" },
-      { title: "Calendar", href: "/admin/school-calendar" },
-    ],
+    children: [{ title: "School Years", href: "/admin/school-years" }],
   },
 ];
 

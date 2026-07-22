@@ -5,6 +5,8 @@ import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { toast } from "sonner";
 import {
+  Bell,
+  CalendarDays,
   ChevronLeft,
   ChevronRight,
   Clock,
@@ -26,6 +28,7 @@ import {
   parseDate,
   timeInputToMs,
 } from "@/components/admin/event-upsert-dialog";
+import { EventReminderDialog } from "@/components/admin/event-reminder-dialog";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -244,6 +247,12 @@ export default function SchoolCalendarPage() {
   const [eventsOpen, setEventsOpen] = useState(false);
   const [termFilter, setTermFilter] = useState<number | "all">("all");
   const [termsOpen, setTermsOpen] = useState(false);
+  /** Event picked for an SMS reminder (from the day sheet or the
+   *  events sheet) — the event plus its day's date. */
+  const [remindTarget, setRemindTarget] = useState<{
+    event: XanoSchoolCalendarEvent;
+    date: string;
+  } | null>(null);
 
   /** Term chip click — filter (agenda) and jump the month view to the
    *  term's first month. */
@@ -499,11 +508,14 @@ export default function SchoolCalendarPage() {
           }
           onClose={() => setSelectedDayId(null)}
           onChanged={() => void mutate()}
+          onRemind={(event) =>
+            setRemindTarget({ event, date: selectedDay.date })
+          }
         />
       ) : null}
 
       {/* All-events stream — right-hand sheet; clicking a row opens
-          that day's editor sheet on top. */}
+          a details modal with prev/next navigation. */}
       {eventsOpen ? (
         <EventsSheet
           days={days}
@@ -511,7 +523,18 @@ export default function SchoolCalendarPage() {
           terms={terms}
           termLabel={termLabel}
           onClose={() => setEventsOpen(false)}
-          onOpenDay={(dayId) => setSelectedDayId(dayId)}
+          onChanged={() => void mutate()}
+          onRemind={(event, date) => setRemindTarget({ event, date })}
+        />
+      ) : null}
+
+      {/* Event SMS reminder (shared with the Volunteer Hours page) */}
+      {remindTarget ? (
+        <EventReminderDialog
+          key={remindTarget.event.id}
+          yearId={Number(yearId) || 0}
+          event={{ ...remindTarget.event, date: remindTarget.date }}
+          onDone={() => setRemindTarget(null)}
         />
       ) : null}
 
@@ -607,14 +630,16 @@ function EventsSheet({
   terms,
   termLabel,
   onClose,
-  onOpenDay,
+  onChanged,
+  onRemind,
 }: {
   days: XanoSchoolCalendarDay[];
   events: XanoSchoolCalendarEvent[];
   terms: XanoAcademicTerm[];
   termLabel: Map<number, string>;
   onClose: () => void;
-  onOpenDay: (dayId: number) => void;
+  onChanged: () => void;
+  onRemind: (event: XanoSchoolCalendarEvent, date: string) => void;
 }) {
   const [filter, setFilter] = useState<number | "all">("all");
 
@@ -648,7 +673,25 @@ function EventsSheet({
     return out;
   }, [days, events, filter]);
 
+  /** Flattened display-ordered rows — the detail modal's prev/next
+   *  arrows walk this list. */
+  const flat = useMemo(
+    () => groups.flatMap((g) => g.items.map((e) => ({ e, day: g.day }))),
+    [groups]
+  );
+  const idxById = useMemo(
+    () => new Map(flat.map((r, i) => [r.e.id, i])),
+    [flat]
+  );
+  const [detailIdx, setDetailIdx] = useState<number | null>(null);
+  const detail = detailIdx !== null ? (flat[detailIdx] ?? null) : null;
+  const [editTarget, setEditTarget] = useState<{
+    event: XanoSchoolCalendarEvent;
+    date: string;
+  } | null>(null);
+
   return (
+    <>
     <Sheet open onOpenChange={(o) => !o && onClose()}>
       <SheetContent
         side="right"
@@ -657,8 +700,8 @@ function EventsSheet({
         <SheetHeader className="border-b px-4 py-3">
           <SheetTitle className="text-base">Events</SheetTitle>
           <SheetDescription className="text-xs">
-            Every event on this year&rsquo;s calendar. Click one to open
-            its day.
+            Every event on this year&rsquo;s calendar. Click one for its
+            details.
           </SheetDescription>
         </SheetHeader>
         {terms.length > 0 ? (
@@ -694,7 +737,9 @@ function EventsSheet({
                       <li key={e.id}>
                         <button
                           type="button"
-                          onClick={() => onOpenDay(g.day.id)}
+                          onClick={() =>
+                            setDetailIdx(idxById.get(e.id) ?? null)
+                          }
                           className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-muted/40"
                         >
                           <span
@@ -751,6 +796,168 @@ function EventsSheet({
         </div>
       </SheetContent>
     </Sheet>
+
+    {/* Event details modal — ← → (buttons or arrow keys) walk the
+        filtered list without leaving the modal. */}
+    {detail ? (
+      <Dialog open onOpenChange={(o) => !o && setDetailIdx(null)}>
+        <DialogContent
+          className="sm:max-w-md"
+          onKeyDown={(ev) => {
+            if (ev.key === "ArrowLeft" && detailIdx !== null && detailIdx > 0) {
+              setDetailIdx(detailIdx - 1);
+            }
+            if (
+              ev.key === "ArrowRight" &&
+              detailIdx !== null &&
+              detailIdx < flat.length - 1
+            ) {
+              setDetailIdx(detailIdx + 1);
+            }
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 pr-6">
+              <span
+                className={cn(
+                  "size-2.5 shrink-0 rounded-full",
+                  eventColor(detail.e.color)?.dot ?? "bg-slate-300"
+                )}
+                aria-hidden
+              />
+              <span className="min-w-0 truncate">{detail.e.title}</span>
+            </DialogTitle>
+            <DialogDescription>
+              {termLabel.get(detail.day.terms_id) ?? "—"} · event{" "}
+              {(detailIdx ?? 0) + 1} of {flat.length}
+            </DialogDescription>
+          </DialogHeader>
+          {/* Keyed by event so arrow navigation fades the body in. */}
+          <div
+            key={detail.e.id}
+            className="animate-in fade-in-0 space-y-2 duration-150"
+          >
+            <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+              <CalendarDays className="size-3.5 shrink-0" />
+              {fmtMedDate(detail.day.date)}
+            </p>
+            <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+              <Clock className="size-3.5 shrink-0" />
+              {detail.e.start_time
+                ? `${fmtTime(detail.e.start_time)}${
+                    detail.e.end_time
+                      ? ` – ${fmtTime(detail.e.end_time)}`
+                      : ""
+                  }`
+                : "All day"}
+            </p>
+            {detail.e.location ? (
+              <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                <MapPin className="size-3.5 shrink-0" />
+                <span className="truncate">{detail.e.location}</span>
+              </p>
+            ) : null}
+            {detail.e.description ? (
+              <p className="whitespace-pre-wrap text-sm text-muted-foreground">
+                {detail.e.description}
+              </p>
+            ) : null}
+            {eventColor(detail.e.color) ||
+            detail.e.mandatory ||
+            detail.e.parent_volunteer_hours ? (
+              <p className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                {(() => {
+                  const c = eventColor(detail.e.color);
+                  return c ? (
+                    <span
+                      className={cn(
+                        "rounded-full px-2 py-0.5 text-[10px] font-medium",
+                        c.chip
+                      )}
+                    >
+                      {c.label}
+                    </span>
+                  ) : null;
+                })()}
+                {detail.e.mandatory ? (
+                  <span className="rounded-full border border-red-200 bg-red-50 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-red-700">
+                    Mandatory
+                  </span>
+                ) : null}
+                {detail.e.parent_volunteer_hours ? (
+                  <span className="rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-emerald-700">
+                    {detail.e.volunteer_hour_total || 0} vol hrs
+                  </span>
+                ) : null}
+              </p>
+            ) : null}
+          </div>
+          <DialogFooter className="flex-row items-center justify-between border-t pt-3 sm:justify-between">
+            <div className="flex items-center gap-1">
+              <Button
+                variant="outline"
+                size="sm"
+                className="size-8 bg-white p-0"
+                disabled={detailIdx === null || detailIdx <= 0}
+                onClick={() =>
+                  detailIdx !== null && setDetailIdx(detailIdx - 1)
+                }
+                aria-label="Previous event"
+              >
+                <ChevronLeft className="size-4" />
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="size-8 bg-white p-0"
+                disabled={
+                  detailIdx === null || detailIdx >= flat.length - 1
+                }
+                onClick={() =>
+                  detailIdx !== null && setDetailIdx(detailIdx + 1)
+                }
+                aria-label="Next event"
+              >
+                <ChevronRight className="size-4" />
+              </Button>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="bg-white"
+                onClick={() => onRemind(detail.e, detail.day.date)}
+              >
+                <Bell className="size-3.5 mr-1" />
+                Remind
+              </Button>
+              <Button
+                size="sm"
+                onClick={() =>
+                  setEditTarget({ event: detail.e, date: detail.day.date })
+                }
+              >
+                <Pencil className="size-3.5 mr-1" />
+                Edit
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    ) : null}
+
+    {/* Edit from the details modal — shared upsert dialog. */}
+    {editTarget ? (
+      <EventUpsertDialog
+        days={days}
+        existing={editTarget}
+        onDone={(saved) => {
+          setEditTarget(null);
+          if (saved) onChanged();
+        }}
+      />
+    ) : null}
+    </>
   );
 }
 
@@ -996,6 +1203,7 @@ function DaySheet({
   seasonName,
   onClose,
   onChanged,
+  onRemind,
 }: {
   day: XanoSchoolCalendarDay;
   events: XanoSchoolCalendarEvent[];
@@ -1003,6 +1211,8 @@ function DaySheet({
   seasonName: string;
   onClose: () => void;
   onChanged: () => void;
+  /** Opens the SMS reminder dialog for one of this day's events. */
+  onRemind: (event: XanoSchoolCalendarEvent) => void;
 }) {
   const [type, setType] = useState(day.type);
   // Trimmed — a cleared rotation stores the " " sentinel (Xano edits
@@ -1297,25 +1507,36 @@ function DaySheet({
                       </div>
 
                       {/* Actions — pinned to the card's bottom edge */}
-                      <div className="mt-3 flex items-center justify-end gap-2 border-t pt-3">
+                      <div className="mt-3 flex items-center justify-between gap-2 border-t pt-3">
                         <Button
                           variant="outline"
                           size="sm"
                           className="bg-white"
-                          onClick={() => setEditingId(e.id)}
+                          onClick={() => onRemind(e)}
                         >
-                          <Pencil className="size-3.5 mr-1" />
-                          Edit
+                          <Bell className="size-3.5 mr-1" />
+                          Remind
                         </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="bg-white text-red-600 hover:bg-red-50 hover:text-red-700"
-                          onClick={() => setDeleteTarget(e)}
-                        >
-                          <Trash2 className="size-3.5 mr-1" />
-                          Delete
-                        </Button>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="bg-white"
+                            onClick={() => setEditingId(e.id)}
+                          >
+                            <Pencil className="size-3.5 mr-1" />
+                            Edit
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="bg-white text-red-600 hover:bg-red-50 hover:text-red-700"
+                            onClick={() => setDeleteTarget(e)}
+                          >
+                            <Trash2 className="size-3.5 mr-1" />
+                            Delete
+                          </Button>
+                        </div>
                       </div>
                     </li>
                   );
