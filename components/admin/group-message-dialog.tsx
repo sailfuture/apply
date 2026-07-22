@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
 import { toast } from "sonner";
-import { Loader2, Search, Send, Users } from "lucide-react";
+import { Link2, Loader2, Search, Send, UserRound, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -34,6 +34,11 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import type {
@@ -107,6 +112,17 @@ function matchesStageAlias(stage: GroupStage, q: string): boolean {
 }
 
 /**
+ * Per-recipient personalization token. SMS has no rich formatting
+ * (bold/italics don't exist in the protocol), so "robust" composing
+ * means links + personalization: the server replaces this token with
+ * each recipient's first name at send time ("there" when the record
+ *  has no name). Kept in one regex so the dialog's preview note and
+ * the server's replacement can't drift.
+ */
+export const FIRST_NAME_TOKEN = "{{first_name}}";
+const FIRST_NAME_RE = /\{\{\s*first_name\s*\}\}/i;
+
+/**
  * Group SMS composer — audience built by hand instead of coarse stage
  * filters. The full contact directory for the year loads once
  * (`/api/admin/messages/group/audience`), deduped so a household only
@@ -139,6 +155,41 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
   // Send is two-step: the footer button opens this confirm, which
   // restates who + what before anything actually fires.
   const [confirmOpen, setConfirmOpen] = useState(false);
+  // Composer toolbar state — link inserter popover + cursor-aware
+  // insertion into the textarea.
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [linkUrl, setLinkUrl] = useState("");
+
+  /** Insert a snippet at the textarea cursor (or append), keeping
+   *  focus so composing flows on. */
+  function insertAtCursor(snippet: string) {
+    const el = textareaRef.current;
+    setBody((prev) => {
+      if (!el) return prev + snippet;
+      const start = el.selectionStart ?? prev.length;
+      const end = el.selectionEnd ?? prev.length;
+      const next = prev.slice(0, start) + snippet + prev.slice(end);
+      // Restore the caret after React re-renders the value.
+      requestAnimationFrame(() => {
+        el.focus();
+        const pos = start + snippet.length;
+        el.setSelectionRange(pos, pos);
+      });
+      return next;
+    });
+  }
+
+  function insertLink() {
+    const url = linkUrl.trim();
+    if (!url) return;
+    const withScheme = /^https?:\/\//i.test(url) ? url : `https://${url}`;
+    insertAtCursor(
+      (body.length > 0 && !body.endsWith(" ") ? " " : "") + withScheme + " "
+    );
+    setLinkUrl("");
+    setLinkOpen(false);
+  }
   // Idempotency key for the blast — minted per compose session so a
   // retry after a timeout resumes the SAME blast server-side (contacts
   // already texted are skipped) instead of double-texting.
@@ -248,6 +299,22 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
       .join(" · ");
   }, [selectedContacts]);
 
+  const yearName =
+    years.find((y) => String(y.id) === yearId)?.year_name ?? "";
+  const hasNameToken = FIRST_NAME_RE.test(body);
+  // Example fill for the confirm's personalization note — the first
+  // selected recipient's first name makes the token concrete.
+  const exampleFirstName =
+    selectedContacts[0]?.personName.split(" ")[0] || "there";
+
+  /** Closing the composer resets the search box so the next open
+   *  starts from the full list (selection + draft persist on purpose
+   *  — an accidental dismiss shouldn't destroy a half-built blast). */
+  function handleOpenChange(o: boolean) {
+    setOpen(o);
+    if (!o) setSearch("");
+  }
+
   async function send() {
     if (!canSend) return;
     setSending(true);
@@ -290,7 +357,7 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
         New group message
       </Button>
 
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog open={open} onOpenChange={handleOpenChange}>
         {/* Large fixed-size panel (Slack-settings style) — the dialog
             claims most of the viewport and the recipient list flexes
             to absorb the height, so filtering/searching never resizes
@@ -512,15 +579,97 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
             </div>
 
             <div className="space-y-1.5">
-              <Label>Message</Label>
+              {/* SMS is plain text — no bold/italics exist in the
+                  protocol — so the toolbar offers what texts CAN do:
+                  links (clickable on phones) and per-recipient
+                  personalization. */}
+              <div className="flex items-center justify-between gap-2">
+                <Label>Message</Label>
+                <div className="flex items-center gap-1.5">
+                  <Popover open={linkOpen} onOpenChange={setLinkOpen}>
+                    <PopoverTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-7 bg-white px-2 text-xs"
+                      >
+                        <Link2 className="size-3.5 mr-1" />
+                        Link
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent
+                      align="end"
+                      className="w-80 space-y-2 p-3"
+                    >
+                      <p className="text-xs text-muted-foreground">
+                        URLs send as plain text and are tappable on the
+                        family&rsquo;s phone.
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <Input
+                          value={linkUrl}
+                          onChange={(e) => setLinkUrl(e.target.value)}
+                          placeholder="sailfuture.org/…"
+                          className="h-8"
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              insertLink();
+                            }
+                          }}
+                        />
+                        <Button
+                          type="button"
+                          size="sm"
+                          className="h-8"
+                          onClick={insertLink}
+                          disabled={!linkUrl.trim()}
+                        >
+                          Insert
+                        </Button>
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 bg-white px-2 text-xs"
+                    title={`Inserts ${FIRST_NAME_TOKEN} — replaced with each recipient's first name at send time`}
+                    onClick={() => insertAtCursor(FIRST_NAME_TOKEN)}
+                  >
+                    <UserRound className="size-3.5 mr-1" />
+                    First name
+                  </Button>
+                </div>
+              </div>
               <Textarea
+                ref={textareaRef}
                 value={body}
                 onChange={(e) => setBody(e.target.value)}
+                onKeyDown={(e) => {
+                  // Shift+Enter (or Cmd/Ctrl+Enter) submits — same
+                  // convention as the thread + activity composers.
+                  // Lands on the confirm step, never a direct send.
+                  if (
+                    e.key === "Enter" &&
+                    (e.shiftKey || e.metaKey || e.ctrlKey)
+                  ) {
+                    e.preventDefault();
+                    if (canSend) setConfirmOpen(true);
+                  }
+                }}
                 rows={4}
                 placeholder="Type the text every selected contact will receive…"
               />
-              <div className="flex items-center justify-end text-[11px] text-muted-foreground">
-                <span className="tabular-nums">
+              <div className="flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
+                <span>
+                  {hasNameToken
+                    ? `${FIRST_NAME_TOKEN} fills in per recipient (e.g. "${exampleFirstName}").`
+                    : ""}
+                </span>
+                <span className="shrink-0 tabular-nums">
                   {body.length} chars{segments ? ` · ${segments} seg` : ""}
                 </span>
               </div>
@@ -531,7 +680,11 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
             <Button variant="outline" onClick={() => setOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={() => setConfirmOpen(true)} disabled={!canSend}>
+            <Button
+              onClick={() => setConfirmOpen(true)}
+              disabled={!canSend}
+              title="Shift+Enter in the message box also opens this"
+            >
               {sending ? (
                 <>
                   <Loader2 className="size-3.5 mr-1.5 animate-spin" />
@@ -541,6 +694,9 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
                 <>
                   <Send className="size-3.5 mr-1.5" />
                   {sendCount > 0 ? `Send to ${sendCount}` : "Send"}
+                  <kbd className="ml-2 rounded border border-current/30 px-1 py-px font-sans text-[10px] font-normal opacity-70">
+                    Shift ⏎
+                  </kbd>
                 </>
               )}
             </Button>
@@ -555,22 +711,56 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
         open={confirmOpen}
         onOpenChange={(o) => !sending && setConfirmOpen(o)}
       >
-        <AlertDialogContent>
+        <AlertDialogContent className="sm:max-w-lg">
           <AlertDialogHeader>
             <AlertDialogTitle>
               Send this text to {sendCount}{" "}
               {sendCount === 1 ? "contact" : "contacts"}?
             </AlertDialogTitle>
             <AlertDialogDescription>
-              {stageBreakdown || "No recipients selected"}
-              {segments > 1 ? ` · ${segments} SMS segments each` : ""}.
-              Each contact receives it as an individual text on their own
-              thread — this can&rsquo;t be unsent.
+              {yearName ? `${yearName} · ` : ""}
+              {stageBreakdown || "No recipients selected"}. Each contact
+              receives it as an individual text on their own thread —
+              this can&rsquo;t be unsent.
             </AlertDialogDescription>
           </AlertDialogHeader>
+          {/* Exactly who — every selected recipient, scrollable. */}
+          <div className="max-h-36 overflow-y-auto rounded-md border">
+            <ul className="divide-y">
+              {selectedContacts.map((c) => (
+                <li
+                  key={c.key}
+                  className="flex items-center justify-between gap-3 px-3 py-1.5 text-xs"
+                >
+                  <span className="min-w-0 truncate">
+                    <span className="font-medium">{c.name}</span>
+                    {c.personName && c.personName !== c.name ? (
+                      <span className="text-muted-foreground">
+                        {" "}
+                        · {c.personName}
+                      </span>
+                    ) : null}
+                  </span>
+                  <span className="shrink-0 text-muted-foreground">
+                    {STAGE_BADGE[c.stage].label}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+          {/* Exactly what — the message verbatim. */}
           <div className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md border bg-muted/20 px-3 py-2 text-sm">
             {body.trim()}
           </div>
+          <p className="text-[11px] text-muted-foreground">
+            {body.trim().length} chars ·{" "}
+            {segments === 1 ? "1 SMS segment" : `${segments} SMS segments`} per
+            recipient
+            {hasNameToken
+              ? ` · ${FIRST_NAME_TOKEN} fills in each recipient's first name (e.g. "${exampleFirstName}")`
+              : ""}
+            .
+          </p>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={sending}>
               Keep editing

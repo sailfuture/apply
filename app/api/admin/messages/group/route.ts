@@ -32,6 +32,18 @@ export const maxDuration = 300;
 
 const CONTACT_TYPES: SmsContactType[] = ["family", "inquiry", "camp"];
 const BLAST_ID_RE = /^[\w-]{6,64}$/;
+
+/**
+ * `{{first_name}}` personalization — replaced per recipient at send
+ * time with their first name ("there" when the record has none), so
+ * one composed blast still reads like a personal text. Keep the
+ * pattern in sync with FIRST_NAME_RE in the compose dialog.
+ */
+const FIRST_NAME_TOKEN_RE = /\{\{\s*first_name\s*\}\}/gi;
+function personalize(body: string, firstName: string): string {
+  const name = firstName.trim() || "there";
+  return body.replace(FIRST_NAME_TOKEN_RE, name);
+}
 /** Sanity ceiling — one blast is a school's worth of families, not a
  *  marketing list. */
 const MAX_RECIPIENTS = 500;
@@ -138,6 +150,8 @@ export async function POST(req: NextRequest) {
     interface Target {
       ref: ContactRef;
       send: SendSmsInput;
+      /** Recipient's first name for `{{first_name}}` personalization. */
+      firstName: string;
       sendable: boolean;
       optedOut: boolean;
       hasPhone: boolean;
@@ -162,6 +176,7 @@ export async function POST(req: NextRequest) {
             to: e164,
             author: { email: admin.email, name: admin.name },
           },
+          firstName: parent?.first_name ?? "",
           sendable: Boolean(e164) && !optedOut,
           optedOut,
           hasPhone: Boolean(e164),
@@ -179,6 +194,7 @@ export async function POST(req: NextRequest) {
             body: text,
             author: { email: admin.email, name: admin.name },
           },
+          firstName: row?.primary_first_name ?? "",
           sendable: Boolean(row) && Boolean(e164) && !optedOut,
           optedOut,
           hasPhone: Boolean(e164),
@@ -194,6 +210,7 @@ export async function POST(req: NextRequest) {
           body: text,
           author: { email: admin.email, name: admin.name },
         },
+        firstName: row?.primary_parent_first_name ?? "",
         sendable: Boolean(row) && Boolean(e164),
         optedOut: false,
         hasPhone: Boolean(e164),
@@ -237,9 +254,11 @@ export async function POST(req: NextRequest) {
       const batch = toSend.slice(i, i + CONCURRENCY);
       const results = await Promise.all(
         batch.map((t) =>
-          sendSms({ ...t.send, template }).catch(
-            () => ({ ok: false as const })
-          )
+          sendSms({
+            ...t.send,
+            template,
+            body: personalize(text, t.firstName),
+          }).catch(() => ({ ok: false as const }))
         )
       );
       for (const res of results) {
