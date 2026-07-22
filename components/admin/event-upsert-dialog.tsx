@@ -2,16 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Check, ChevronsUpDown, Clock, Loader2 } from "lucide-react";
+import { Loader2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from "@/components/ui/command";
 import {
   Dialog,
   DialogContent,
@@ -23,10 +15,12 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
@@ -37,10 +31,10 @@ import type {
 
 /**
  * Shared school-calendar event machinery — the create/edit dialog plus
- * the field widgets (searchable time combobox, etiquette color picker,
- * Places-backed location input) and their helpers. Used by the
- * Settings calendar page and the Volunteer Hours page so both surfaces
- * write events identically.
+ * the field widgets (segmented HH:MM + AM/PM time picker after
+ * time.openstatus.dev, etiquette color picker, Places-backed location
+ * input) and their helpers. Used by the calendar page and the
+ * Volunteer Hours page so both surfaces write events identically.
  */
 
 /** "YYYY-MM-DD" → local Date (avoids the UTC-midnight off-by-one that
@@ -105,65 +99,140 @@ export function eventColor(color: string | null | undefined) {
   return EVENT_COLORS.find((c) => c.value === slug) ?? null;
 }
 
-/** 15-minute options for the time dropdowns — "HH:MM" 24h values with
- *  12-hour labels, like the pickers in calendar apps. */
-export const TIME_OPTIONS: Array<{ value: string; label: string }> = (() => {
-  const out: Array<{ value: string; label: string }> = [];
-  for (let h = 0; h < 24; h++) {
-    for (let m = 0; m < 60; m += 15) {
-      out.push({
-        value: `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`,
-        label: timeLabel12(h, m),
-      });
+/* ── Segmented time picker (after time.openstatus.dev) ────────────── */
+
+type TimePeriod = "AM" | "PM";
+type TimeSegmentKind = "hour12" | "minute";
+
+/** "HH:MM" (24h) → parts, null for "" / malformed. */
+function parseHHMM(v: string): { h24: number; m: number } | null {
+  const m = v.match(/^(\d{2}):(\d{2})$/);
+  if (!m) return null;
+  const h24 = Number(m[1]);
+  const min = Number(m[2]);
+  if (h24 > 23 || min > 59) return null;
+  return { h24, m: min };
+}
+
+function convert12To24(h12: number, period: TimePeriod): number {
+  if (period === "PM") return h12 === 12 ? 12 : h12 + 12;
+  return h12 === 12 ? 0 : h12;
+}
+
+/** Clamp a typed two-digit segment (no wrap — OpenStatus behavior). */
+function clampSegment(kind: TimeSegmentKind, raw: string): string {
+  const n = parseInt(raw, 10);
+  if (Number.isNaN(n)) return kind === "hour12" ? "01" : "00";
+  const min = kind === "hour12" ? 1 : 0;
+  const max = kind === "hour12" ? 12 : 59;
+  return String(Math.min(max, Math.max(min, n))).padStart(2, "0");
+}
+
+/** Arrow-key stepping wraps (12 → 1, 59 → 0). */
+function stepSegment(
+  kind: TimeSegmentKind,
+  cur: number,
+  step: number
+): string {
+  const min = kind === "hour12" ? 1 : 0;
+  const max = kind === "hour12" ? 12 : 59;
+  let v = cur + step;
+  if (v > max) v = min;
+  if (v < min) v = max;
+  return String(v).padStart(2, "0");
+}
+
+/**
+ * One two-digit segment of the time picker. Keyboard-driven like the
+ * OpenStatus picker: digits type through (first digit fills "0X" and
+ * arms a 2s window, a second digit completes "XY" and hops to the
+ * next segment), ↑/↓ step with wrap, ←/→ move between segments. The
+ * caret is hidden — the whole box acts as one value.
+ */
+function TimeSegmentInput({
+  ref,
+  kind,
+  value,
+  ariaLabel,
+  onCommit,
+  onLeftFocus,
+  onRightFocus,
+}: {
+  ref?: React.Ref<HTMLInputElement>;
+  kind: TimeSegmentKind;
+  /** Padded 2-digit display value, "" when no time is set. */
+  value: string;
+  ariaLabel: string;
+  onCommit: (padded: string) => void;
+  onLeftFocus?: () => void;
+  onRightFocus?: () => void;
+}) {
+  const [armed, setArmed] = useState(false);
+  const [prevKey, setPrevKey] = useState("0");
+  useEffect(() => {
+    if (!armed) return;
+    const t = setTimeout(() => setArmed(false), 2000);
+    return () => clearTimeout(t);
+  }, [armed]);
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Tab") return;
+    e.preventDefault();
+    if (e.key === "ArrowRight") onRightFocus?.();
+    if (e.key === "ArrowLeft") onLeftFocus?.();
+    if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+      const step = e.key === "ArrowUp" ? 1 : -1;
+      const cur = value
+        ? parseInt(value, 10)
+        : kind === "hour12"
+          ? 12
+          : 0;
+      onCommit(stepSegment(kind, cur, step));
+      if (armed) setArmed(false);
+    }
+    if (e.key >= "0" && e.key <= "9") {
+      let next: string;
+      if (!armed) {
+        next = "0" + e.key;
+      } else if (
+        kind === "hour12" &&
+        value.slice(1, 2) === "1" &&
+        prevKey === "0"
+      ) {
+        // "0" then "9" reads as 09, not 19-clamped-to-12.
+        next = "0" + e.key;
+      } else {
+        next = value.slice(1, 2) + e.key;
+      }
+      if (kind === "hour12") setPrevKey(e.key);
+      onCommit(clampSegment(kind, next));
+      if (armed) onRightFocus?.();
+      setArmed((p) => !p);
     }
   }
-  return out;
-})();
 
-export function timeLabel12(h: number, m: number): string {
-  const hour12 = h % 12 === 0 ? 12 : h % 12;
-  return `${hour12}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
-}
-
-/** "HH:MM" → 12-hour label, for values off the 15-minute grid. */
-export function labelForTimeValue(v: string): string {
-  const found = TIME_OPTIONS.find((o) => o.value === v);
-  if (found) return found.label;
-  const [h, m] = v.split(":").map(Number);
-  return timeLabel12(h ?? 0, m ?? 0);
-}
-
-/**
- * Loose time parsing for the combobox — accepts "8", "8:05", "815",
- * "8:05p", "8 pm", "14:30"… Bare hours with no AM/PM read as 24-hour
- * (8 → 8:00 AM, 14 → 2:00 PM). Returns null when it isn't a time.
- */
-export function parseTimeInput(
-  raw: string
-): { value: string; label: string } | null {
-  const s = raw.trim().toLowerCase().replace(/\./g, "");
-  if (!s) return null;
-  const m = s.match(/^(\d{1,2})(?::?(\d{2}))?\s*(a|am|p|pm)?$/);
-  if (!m) return null;
-  let h = Number(m[1]);
-  const min = m[2] ? Number(m[2]) : 0;
-  const mer = m[3];
-  if (min > 59) return null;
-  if (mer) {
-    if (h < 1 || h > 12) return null;
-    if ((mer === "p" || mer === "pm") && h !== 12) h += 12;
-    if ((mer === "a" || mer === "am") && h === 12) h = 0;
-  } else if (h > 23) {
-    return null;
-  }
-  const value = `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
-  return { value, label: timeLabel12(h, min) };
+  return (
+    <Input
+      ref={ref}
+      type="tel"
+      inputMode="numeric"
+      aria-label={ariaLabel}
+      value={value || "--"}
+      onChange={(e) => e.preventDefault()}
+      onKeyDown={handleKeyDown}
+      className={cn(
+        "w-[44px] bg-white text-center font-mono tabular-nums caret-transparent focus:bg-accent focus:text-accent-foreground",
+        !value && "text-muted-foreground"
+      )}
+    />
+  );
 }
 
 /**
- * Searchable time combobox — type to filter the 15-minute grid, or
- * type any exact time ("8:05", "8:05p", "14:30") and pick the parsed
- * "Use …" row it offers. "No time" clears.
+ * Segmented HH : MM + AM/PM time picker, after time.openstatus.dev
+ * (no seconds). Type digits, use ↑/↓ to step, ←/→ to move between
+ * segments; the X clears back to "no time". Value stays the same
+ * "HH:MM" 24-hour string ("" = unset) the event forms already use.
  */
 export function TimeSelect({
   value,
@@ -174,98 +243,85 @@ export function TimeSelect({
   onChange: (v: string) => void;
   ariaLabel: string;
 }) {
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
+  const hourRef = useRef<HTMLInputElement>(null);
+  const minuteRef = useRef<HTMLInputElement>(null);
+  const periodRef = useRef<HTMLButtonElement>(null);
 
-  // Free-typed time that isn't one of the grid rows — offered as its
-  // own "Use 8:05 AM" item (value = the raw query so cmdk's filter
-  // always keeps it visible).
-  const parsed = parseTimeInput(query);
-  const offParsed =
-    parsed && !TIME_OPTIONS.some((o) => o.value === parsed.value)
-      ? parsed
-      : null;
+  const parts = parseHHMM(value);
+  const period: TimePeriod = parts && parts.h24 >= 12 ? "PM" : "AM";
+  const hourDisplay = parts
+    ? String(parts.h24 % 12 === 0 ? 12 : parts.h24 % 12).padStart(2, "0")
+    : "";
+  const minuteDisplay = parts ? String(parts.m).padStart(2, "0") : "";
+  // Editing a segment with no time set starts from 12:00 AM.
+  const base = parts ?? { h24: 0, m: 0 };
 
-  function pick(v: string) {
-    onChange(v);
-    setOpen(false);
-    setQuery("");
+  function commit(h24: number, m: number) {
+    onChange(
+      `${String(h24).padStart(2, "0")}:${String(m).padStart(2, "0")}`
+    );
   }
 
   return (
-    <Popover
-      open={open}
-      onOpenChange={(o) => {
-        setOpen(o);
-        if (!o) setQuery("");
-      }}
-    >
-      <PopoverTrigger asChild>
-        <Button
-          variant="outline"
-          role="combobox"
-          aria-expanded={open}
-          aria-label={ariaLabel}
-          className="w-full justify-between bg-white px-3 font-normal"
+    <div className="flex items-center gap-1" role="group" aria-label={ariaLabel}>
+      <TimeSegmentInput
+        ref={hourRef}
+        kind="hour12"
+        value={hourDisplay}
+        ariaLabel={`${ariaLabel} — hours`}
+        onCommit={(padded) =>
+          commit(
+            convert12To24(parseInt(padded, 10), parts ? period : "AM"),
+            base.m
+          )
+        }
+        onRightFocus={() => minuteRef.current?.focus()}
+      />
+      <span className="text-sm text-muted-foreground">:</span>
+      <TimeSegmentInput
+        ref={minuteRef}
+        kind="minute"
+        value={minuteDisplay}
+        ariaLabel={`${ariaLabel} — minutes`}
+        onCommit={(padded) => commit(base.h24, parseInt(padded, 10))}
+        onLeftFocus={() => hourRef.current?.focus()}
+        onRightFocus={() => periodRef.current?.focus()}
+      />
+      <Select
+        value={parts ? period : ""}
+        onValueChange={(p) => {
+          const h12 = base.h24 % 12 === 0 ? 12 : base.h24 % 12;
+          commit(convert12To24(h12, p as TimePeriod), base.m);
+        }}
+      >
+        <SelectTrigger
+          ref={periodRef}
+          className="w-[64px] bg-white"
+          aria-label={`${ariaLabel} — AM or PM`}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowLeft") minuteRef.current?.focus();
+          }}
         >
-          <span
-            className={cn(
-              "flex min-w-0 items-center gap-1.5",
-              !value && "text-muted-foreground"
-            )}
-          >
-            <Clock className="size-3.5 shrink-0 text-muted-foreground" />
-            <span className="truncate">
-              {value ? labelForTimeValue(value) : "No time"}
-            </span>
-          </span>
-          <ChevronsUpDown className="size-3.5 shrink-0 opacity-50" />
+          <SelectValue placeholder="--" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="AM">AM</SelectItem>
+          <SelectItem value="PM">PM</SelectItem>
+        </SelectContent>
+      </Select>
+      {value ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="size-8 shrink-0 p-0 text-muted-foreground hover:text-foreground"
+          onClick={() => onChange("")}
+          aria-label={`Clear ${ariaLabel.toLowerCase()}`}
+        >
+          <X className="size-3.5" />
         </Button>
-      </PopoverTrigger>
-      <PopoverContent className="w-[220px] p-0" align="start">
-        <Command>
-          <CommandInput
-            placeholder="Type a time…"
-            value={query}
-            onValueChange={setQuery}
-          />
-          <CommandList className="max-h-56">
-            <CommandEmpty>No matching time.</CommandEmpty>
-            {offParsed ? (
-              <CommandGroup>
-                <CommandItem
-                  value={query}
-                  onSelect={() => pick(offParsed.value)}
-                >
-                  Use {offParsed.label}
-                </CommandItem>
-              </CommandGroup>
-            ) : null}
-            <CommandGroup>
-              <CommandItem
-                value="no time clear none"
-                onSelect={() => pick("")}
-              >
-                No time
-                {!value ? <Check className="ml-auto size-3.5" /> : null}
-              </CommandItem>
-              {TIME_OPTIONS.map((o) => (
-                <CommandItem
-                  key={o.value}
-                  value={o.label}
-                  onSelect={() => pick(o.value)}
-                >
-                  {o.label}
-                  {value === o.value ? (
-                    <Check className="ml-auto size-3.5" />
-                  ) : null}
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          </CommandList>
-        </Command>
-      </PopoverContent>
-    </Popover>
+      ) : null}
+    </div>
   );
 }
 
@@ -566,7 +622,8 @@ export function EventUpsertDialog({
 
   return (
     <Dialog open onOpenChange={(o) => !saving && !o && onDone(false)}>
-      <DialogContent className="sm:max-w-md">
+      {/* lg (not md) so the side-by-side segmented time pickers fit. */}
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>
             {existing ? "Edit event" : "Create event"}
