@@ -24,6 +24,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import type {
@@ -126,6 +136,9 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [body, setBody] = useState("");
   const [sending, setSending] = useState(false);
+  // Send is two-step: the footer button opens this confirm, which
+  // restates who + what before anything actually fires.
+  const [confirmOpen, setConfirmOpen] = useState(false);
   // Idempotency key for the blast — minted per compose session so a
   // retry after a timeout resumes the SAME blast server-side (contacts
   // already texted are skipped) instead of double-texting.
@@ -222,6 +235,18 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
   const sendCount = selectedContacts.length;
   const canSend =
     Boolean(yearId) && body.trim().length > 0 && sendCount > 0 && !sending;
+
+  // "9 Enrolled · 3 Applying · 2 Camp" — restated in the confirm so a
+  // mis-built audience is visible before anything sends.
+  const stageBreakdown = useMemo(() => {
+    const counts = new Map<GroupStage, number>();
+    for (const c of selectedContacts) {
+      counts.set(c.stage, (counts.get(c.stage) ?? 0) + 1);
+    }
+    return STAGE_FILTERS.filter((s) => counts.has(s.value))
+      .map((s) => `${counts.get(s.value)} ${s.label}`)
+      .join(" · ");
+  }, [selectedContacts]);
 
   async function send() {
     if (!canSend) return;
@@ -506,7 +531,7 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
             <Button variant="outline" onClick={() => setOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={() => void send()} disabled={!canSend}>
+            <Button onClick={() => setConfirmOpen(true)} disabled={!canSend}>
               {sending ? (
                 <>
                   <Loader2 className="size-3.5 mr-1.5 animate-spin" />
@@ -522,6 +547,53 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Final confirmation — a group text can't be unsent, so restate
+          exactly who (count + stage breakdown) and what (the message,
+          verbatim) before firing. */}
+      <AlertDialog
+        open={confirmOpen}
+        onOpenChange={(o) => !sending && setConfirmOpen(o)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Send this text to {sendCount}{" "}
+              {sendCount === 1 ? "contact" : "contacts"}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {stageBreakdown || "No recipients selected"}
+              {segments > 1 ? ` · ${segments} SMS segments each` : ""}.
+              Each contact receives it as an individual text on their own
+              thread — this can&rsquo;t be unsent.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md border bg-muted/20 px-3 py-2 text-sm">
+            {body.trim()}
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={sending}>
+              Keep editing
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={sending || !canSend}
+              onClick={(e) => {
+                e.preventDefault();
+                void send().then(() => setConfirmOpen(false));
+              }}
+            >
+              {sending ? (
+                <>
+                  <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                  Sending
+                </>
+              ) : (
+                `Send to ${sendCount}`
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }
