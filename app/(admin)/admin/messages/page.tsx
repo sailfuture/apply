@@ -1,15 +1,31 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { toast } from "sonner";
-import { Loader2, MessageSquareText } from "lucide-react";
+import { Loader2, MessageSquareText, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { FamilyMessageThread } from "@/components/admin/family-message-thread";
 import { GroupMessageDialog } from "@/components/admin/group-message-dialog";
 import { NewMessageDialog } from "@/components/admin/new-message-dialog";
-import type { SmsConversation } from "@/app/api/admin/messages/route";
+import type {
+  ConversationStage,
+  SmsConversation,
+} from "@/app/api/admin/messages/route";
+
+/** Inbox filter chips — the same pipeline vocabulary as the group
+ *  composer. "All" includes families with no activity for the year. */
+const STAGE_FILTERS: Array<{ value: ConversationStage | "all"; label: string }> =
+  [
+    { value: "all", label: "All" },
+    { value: "enrolled", label: "Enrolled" },
+    { value: "registration", label: "Registration" },
+    { value: "application", label: "Applying" },
+    { value: "inquiry", label: "Inquiries" },
+    { value: "camp", label: "Camp" },
+  ];
 
 /**
  * Global SMS inbox — two panes: every family conversation on the left
@@ -19,10 +35,29 @@ import type { SmsConversation } from "@/app/api/admin/messages/route";
  * once; each send still lands on that family's thread.
  */
 export default function AdminMessagesPage() {
+  // yearId scopes the family STAGE annotations only — threads and the
+  // conversation list itself are never year-filtered.
+  const searchParams = useSearchParams();
+  const yearId = searchParams.get("yearId");
   const { data, error, isLoading, mutate } = useSWR<{
     conversations: SmsConversation[];
-  }>("/api/admin/messages", adminFetcher, { refreshInterval: 20_000 });
+  }>(
+    yearId ? `/api/admin/messages?yearId=${yearId}` : "/api/admin/messages",
+    adminFetcher,
+    { refreshInterval: 20_000 }
+  );
   const conversations = useMemo(() => data?.conversations ?? [], [data]);
+
+  const [stageFilter, setStageFilter] = useState<ConversationStage | "all">(
+    "all"
+  );
+  const filtered = useMemo(
+    () =>
+      stageFilter === "all"
+        ? conversations
+        : conversations.filter((c) => c.stage === stageFilter),
+    [conversations, stageFilter]
+  );
   // Selection carries the name too (not just type+id) so a contact
   // picked from the "New message" dialog — who has NO conversation row
   // yet — can still render a thread header. Once the first text sends,
@@ -46,26 +81,43 @@ export default function AdminMessagesPage() {
   // Reconcile against Twilio's own log once per visit — texts sent
   // outside the app (Twilio console, legacy forwarder) and inbound
   // messages the webhook missed get backfilled into the inbox.
-  // Idempotent server-side (SID-keyed), so the only cost of firing on
-  // every mount is the Twilio list call.
+  // Idempotent server-side (SID-keyed). DEFERRED a few seconds so the
+  // first conversation-list fetch isn't racing the (slow, Twilio-
+  // round-tripping) sync for serverless capacity — the inbox paints
+  // from the log immediately, and the sync tops it up afterward.
   const syncedRef = useRef(false);
   useEffect(() => {
     if (syncedRef.current) return;
     syncedRef.current = true;
-    fetch("/api/admin/messages/sync", { method: "POST" })
-      .then((res) => (res.ok ? res.json() : null))
-      .then((result) => {
-        if (result?.imported > 0) {
-          toast.success(
-            `Imported ${result.imported} text${result.imported === 1 ? "" : "s"} from Twilio.`
-          );
-          void mutate();
-        }
-      })
-      .catch(() => {
-        // Best-effort — the inbox still renders whatever is logged.
-      });
+    const timer = setTimeout(() => {
+      fetch("/api/admin/messages/sync", { method: "POST" })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((result) => {
+          if (result?.imported > 0) {
+            toast.success(
+              `Imported ${result.imported} text${result.imported === 1 ? "" : "s"} from Twilio.`
+            );
+            void mutate();
+          }
+        })
+        .catch(() => {
+          // Best-effort — the inbox still renders whatever is logged.
+        });
+    }, 4000);
+    return () => clearTimeout(timer);
   }, [mutate]);
+
+  // Render the list incrementally — newest conversations first (the
+  // API sorts), a page at a time so a season's worth of contacts
+  // doesn't render hundreds of rows on first paint. Filter changes
+  // reset to the first page.
+  const PAGE = 30;
+  const [visibleCount, setVisibleCount] = useState(PAGE);
+  const visibleConversations = filtered.slice(0, visibleCount);
+  function changeStageFilter(v: ConversationStage | "all") {
+    setStageFilter(v);
+    setVisibleCount(PAGE);
+  }
 
   return (
     <div className="flex h-[calc(100dvh-3.5rem)] flex-col gap-4 p-6">
@@ -81,6 +133,30 @@ export default function AdminMessagesPage() {
           <NewMessageDialog onPick={(contact) => setSelected(contact)} />
           <GroupMessageDialog onSent={() => mutate()} />
         </div>
+      </div>
+
+      {/* Stage filter chips — same pipeline vocabulary as the group
+          composer; single-select, All by default. */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        {STAGE_FILTERS.map((f) => {
+          const on = stageFilter === f.value;
+          return (
+            <button
+              key={f.value}
+              type="button"
+              aria-pressed={on}
+              onClick={() => changeStageFilter(f.value)}
+              className={cn(
+                "rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors",
+                on
+                  ? "border-foreground bg-foreground text-background"
+                  : "border-border bg-white text-muted-foreground hover:border-foreground/40 hover:text-foreground"
+              )}
+            >
+              {f.label}
+            </button>
+          );
+        })}
       </div>
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 md:grid-cols-[320px_1fr]">
@@ -120,9 +196,13 @@ export default function AdminMessagesPage() {
               to text a family, inquiry, or camp parent — or start a group
               message.
             </div>
+          ) : filtered.length === 0 ? (
+            <div className="p-6 text-center text-sm text-muted-foreground">
+              No conversations match this filter.
+            </div>
           ) : (
             <ul className="divide-y">
-              {conversations.map((c) => (
+              {visibleConversations.map((c) => (
                 <li key={`${c.contactType}:${c.contactId}`}>
                   <button
                     type="button"
@@ -158,6 +238,14 @@ export default function AdminMessagesPage() {
                           aria-label="Needs reply"
                         />
                       ) : null}
+                      {/* Group-blast preview reads differently from a
+                          personal text — icon + "Group:" prefix. */}
+                      {c.lastIsGroup ? (
+                        <Users
+                          className="size-3 shrink-0 text-muted-foreground"
+                          aria-label="Group message"
+                        />
+                      ) : null}
                       <span
                         className={cn(
                           "truncate text-xs",
@@ -166,13 +254,28 @@ export default function AdminMessagesPage() {
                             : "text-muted-foreground"
                         )}
                       >
-                        {c.lastDirection === "outbound" ? "You: " : ""}
+                        {c.lastIsGroup
+                          ? "Group: "
+                          : c.lastDirection === "outbound"
+                            ? "You: "
+                            : ""}
                         {c.lastBody}
                       </span>
                     </div>
                   </button>
                 </li>
               ))}
+              {filtered.length > visibleCount ? (
+                <li>
+                  <button
+                    type="button"
+                    onClick={() => setVisibleCount((n) => n + PAGE)}
+                    className="w-full px-4 py-3 text-center text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+                  >
+                    Show more ({filtered.length - visibleCount} older)
+                  </button>
+                </li>
+              ) : null}
             </ul>
           )}
         </div>

@@ -299,8 +299,6 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
       .join(" · ");
   }, [selectedContacts]);
 
-  const yearName =
-    years.find((y) => String(y.id) === yearId)?.year_name ?? "";
   const hasNameToken = FIRST_NAME_RE.test(body);
   // Example fill for the confirm's personalization note — the first
   // selected recipient's first name makes the token concrete.
@@ -711,56 +709,23 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
         open={confirmOpen}
         onOpenChange={(o) => !sending && setConfirmOpen(o)}
       >
-        <AlertDialogContent className="sm:max-w-lg">
+        <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
               Send this text to {sendCount}{" "}
               {sendCount === 1 ? "contact" : "contacts"}?
             </AlertDialogTitle>
+            {/* Deliberately lean — the audience and message are right
+                behind this modal in the composer; the confirm just
+                restates the count + mix and warns it can't be unsent. */}
             <AlertDialogDescription>
-              {yearName ? `${yearName} · ` : ""}
-              {stageBreakdown || "No recipients selected"}. Each contact
-              receives it as an individual text on their own thread —
-              this can&rsquo;t be unsent.
+              {stageBreakdown || "No recipients selected"}
+              {hasNameToken
+                ? ` · ${FIRST_NAME_TOKEN} fills in per recipient`
+                : ""}
+              . This can&rsquo;t be unsent.
             </AlertDialogDescription>
           </AlertDialogHeader>
-          {/* Exactly who — every selected recipient, scrollable. */}
-          <div className="max-h-36 overflow-y-auto rounded-md border">
-            <ul className="divide-y">
-              {selectedContacts.map((c) => (
-                <li
-                  key={c.key}
-                  className="flex items-center justify-between gap-3 px-3 py-1.5 text-xs"
-                >
-                  <span className="min-w-0 truncate">
-                    <span className="font-medium">{c.name}</span>
-                    {c.personName && c.personName !== c.name ? (
-                      <span className="text-muted-foreground">
-                        {" "}
-                        · {c.personName}
-                      </span>
-                    ) : null}
-                  </span>
-                  <span className="shrink-0 text-muted-foreground">
-                    {STAGE_BADGE[c.stage].label}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </div>
-          {/* Exactly what — the message verbatim. */}
-          <div className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md border bg-muted/20 px-3 py-2 text-sm">
-            {body.trim()}
-          </div>
-          <p className="text-[11px] text-muted-foreground">
-            {body.trim().length} chars ·{" "}
-            {segments === 1 ? "1 SMS segment" : `${segments} SMS segments`} per
-            recipient
-            {hasNameToken
-              ? ` · ${FIRST_NAME_TOKEN} fills in each recipient's first name (e.g. "${exampleFirstName}")`
-              : ""}
-            .
-          </p>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={sending}>
               Keep editing

@@ -117,12 +117,16 @@ export function NewMessageDialog({
         New message
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="p-0 sm:max-w-md">
+        {/* Large fixed-frame panel matching the group-message composer
+            — the dialog claims most of the viewport and the result
+            list flexes to fill it, so filtering changes what scrolls,
+            never the frame. */}
+        <DialogContent className="flex h-[85vh] max-h-[820px] flex-col gap-0 p-0 sm:max-w-4xl">
           {/* `pr-14` clears the dialog's absolutely-positioned close
               button (top-4 right-4) — with the content's default
               padding stripped (`p-0`), the description would otherwise
               run underneath the X. */}
-          <DialogHeader className="px-4 pt-4 pr-14">
+          <DialogHeader className="shrink-0 px-4 pt-4 pb-3 pr-14">
             <DialogTitle>New message</DialogTitle>
             <DialogDescription>
               Pick a family, inquiry, or camp parent to open their text
@@ -131,12 +135,9 @@ export function NewMessageDialog({
           </DialogHeader>
           {/* cmdk filters items by their `value`; parent + student +
               record names in the value means staff can search by any. */}
-          <Command className="border-t">
+          <Command className="min-h-0 flex-1 border-t">
             <CommandInput placeholder="Search by family, parent, or student name…" />
-            {/* Fixed height (not max-h) so the dialog doesn't grow and
-                shrink as typing filters the result count — the list
-                scrolls inside a stable frame instead. */}
-            <CommandList className="h-72 max-h-72">
+            <CommandList className="h-full max-h-none flex-1">
               {loading ? (
                 <div className="flex h-full items-center justify-center">
                   <Loader2 className="size-4 animate-spin text-muted-foreground" />

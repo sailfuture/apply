@@ -3,6 +3,7 @@ import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
 import { toE164 } from "@/lib/phone";
 import { normPhone, pickAccountHolderParent } from "@/lib/sms/contacts";
+import { computeFamilyStageSets } from "@/lib/sms/stages";
 
 /**
  * Group-message audience directory — every textable contact for the
@@ -56,52 +57,13 @@ export async function GET(req: NextRequest) {
         xano.paymentTransactions.getAllByYear(yearId).catch(() => []),
       ]);
 
-    // ── Family stage sets (mirrors the retired lib/sms/audience.ts
-    //    bucketing, including the merged-flags + all-denied rules) ──
-    const enrolled = new Set<number>();
-    for (const r of srp) {
-      if (r.isArchived === true) continue;
-      if (r.isRegistrationConfirmed === true) {
-        enrolled.add(r.registration_families_id);
-      }
-    }
-
-    const applyFlags = new Map<
-      number,
-      { submitted: boolean; accepted: boolean }
-    >();
-    for (const p of fap) {
-      if (p.is_archived === true) continue;
-      const fid = p.registration_families_id;
-      const f = applyFlags.get(fid) ?? { submitted: false, accepted: false };
-      f.submitted = f.submitted || p.isSubmitted === true;
-      f.accepted = f.accepted || p.isAccepted === true;
-      applyFlags.set(fid, f);
-    }
-
-    const deniedFamilies = new Set<number>();
-    {
-      const byFamily = new Map<number, { total: number; denied: number }>();
-      for (const a of apps) {
-        if (Number(a.registration_school_years_id) !== yearId) continue;
-        if (a.isActive === false) continue;
-        const fid = Number(a.registration_families_id);
-        if (!fid) continue;
-        const b = byFamily.get(fid) ?? { total: 0, denied: 0 };
-        b.total += 1;
-        if (a.isDenied === true) b.denied += 1;
-        byFamily.set(fid, b);
-      }
-      for (const [fid, b] of byFamily) {
-        if (b.total > 0 && b.denied === b.total) deniedFamilies.add(fid);
-      }
-    }
-
+    // ── Family stage sets — shared bucketing (also powers the inbox
+    //    stage filter) so the two surfaces can't disagree. ──
+    const stageSets = computeFamilyStageSets({ yearId, fap, srp, apps });
     const familyStage = (fid: number): GroupStage | null => {
-      if (enrolled.has(fid)) return "enrolled";
-      const f = applyFlags.get(fid);
-      if (f?.accepted) return "registration";
-      if (f?.submitted && !deniedFamilies.has(fid)) return "application";
+      if (stageSets.enrolled.has(fid)) return "enrolled";
+      if (stageSets.registration.has(fid)) return "registration";
+      if (stageSets.application.has(fid)) return "application";
       return null; // no year activity (or all-denied) — not listed
     };
 

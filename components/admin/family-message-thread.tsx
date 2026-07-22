@@ -284,15 +284,16 @@ const STATUS_LABEL: Record<string, string> = {
 
 /**
  * Outbound bubble variant: red for a failed/undelivered send, a subtle
- * primary tint for automated trigger texts (so they read distinctly
- * from a staff-typed reply), and the strong primary for manual + group
- * messages. Inbound always renders `secondary`.
+ * primary tint for automated trigger texts AND group blasts (so both
+ * read distinctly from a staff-typed 1:1 reply), and the strong
+ * primary only for manual messages. Inbound always renders
+ * `secondary`.
  */
 function outboundVariant(
   m: XanoSmsMessage
 ): "default" | "tinted" | "destructive" {
   if (m.status === "failed" || m.status === "undelivered") return "destructive";
-  if (m.template && m.template !== "manual" && !m.template.startsWith("group")) {
+  if (m.template && m.template !== "manual") {
     return "tinted";
   }
   return "default";
@@ -307,8 +308,9 @@ function MessageRow({
 }) {
   const outbound = msg.direction === "outbound";
   const align = outbound ? "end" : "start";
+  const isGroup = Boolean(msg.template?.startsWith("group"));
   const automated = Boolean(
-    msg.template && msg.template !== "manual" && !msg.template.startsWith("group")
+    msg.template && msg.template !== "manual" && !isGroup
   );
   const sender = outbound
     ? msg.author_name || (automated ? "SailFuture (automated)" : "SailFuture")
@@ -318,7 +320,10 @@ function MessageRow({
   return (
     <Message align={align}>
       <MessageContent>
-        <MessageHeader>{sender}</MessageHeader>
+        <MessageHeader>
+          {sender}
+          {isGroup ? " · Group text" : ""}
+        </MessageHeader>
         <Bubble variant={outbound ? outboundVariant(msg) : "secondary"}>
           <BubbleContent className="whitespace-pre-wrap">
             {msg.body}

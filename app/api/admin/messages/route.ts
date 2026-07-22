@@ -6,19 +6,37 @@ import {
   getContactRecipient,
   type SmsContactType,
 } from "@/lib/sms/contacts";
+import { computeFamilyStageSets } from "@/lib/sms/stages";
+
+/** Where a conversation's contact sits in the pipeline — the inbox's
+ *  filter chips. Family stages come from the shared bucketing in
+ *  lib/sms/stages.ts (scoped to the `?yearId=` the inbox passes);
+ *  "none" = a family with no activity for that year. */
+export type ConversationStage =
+  | "enrolled"
+  | "registration"
+  | "application"
+  | "inquiry"
+  | "camp"
+  | "none";
 
 /** One row in the global inbox's conversation list — the latest text
  *  per contact plus a needs-reply flag. A contact is a family, an
  *  inquiry, or a summer-camp parent; threads are one continuous
- *  history per contact, never split by academic year. */
+ *  history per contact, never split by academic year (the stage
+ *  annotation is year-scoped display context, not a thread filter). */
 export interface SmsConversation {
   contactType: SmsContactType;
   contactId: number;
   /** Display name — family name, or the inquiry/camp parent's name. */
   name: string;
+  stage: ConversationStage;
   lastBody: string;
   lastAt: number;
   lastDirection: string;
+  /** True when the latest message was part of a group blast
+   *  (template `group:…`) — the list renders those distinctly. */
+  lastIsGroup: boolean;
   messageCount: number;
   /** True when the most recent message is inbound (contact texted, no
    *  reply yet) — drives the unread dot in the inbox. */
@@ -80,13 +98,41 @@ export async function GET(req: NextRequest) {
 
     if (!contact) {
       // Global inbox feed — group the flat message log into one
-      // conversation per contact, keyed on the newest message.
-      const [messages, families, inquiries, campRows] = await Promise.all([
-        xano.smsMessages.getAll(),
-        xano.families.getAll().catch(() => []),
-        xano.inquiries.getAll().catch(() => []),
-        xano.summerCamp.getAll().catch(() => []),
-      ]);
+      // conversation per contact, keyed on the newest message. When
+      // the page passes its `?yearId=`, family conversations also get
+      // a pipeline-stage annotation for the filter chips (extra
+      // fetches only run in that case).
+      const yearIdParam = req.nextUrl.searchParams.get("yearId");
+      const yearId = Number(yearIdParam);
+      const withStages = Number.isFinite(yearId) && yearId > 0;
+      const [messages, families, inquiries, campRows, fap, srp, apps] =
+        await Promise.all([
+          xano.smsMessages.getAll(),
+          xano.families.getAll().catch(() => []),
+          xano.inquiries.getAll().catch(() => []),
+          xano.summerCamp.getAll().catch(() => []),
+          withStages
+            ? xano.familyApplicationProgress.getByYear(yearId).catch(() => [])
+            : Promise.resolve([]),
+          withStages
+            ? xano.studentRegistrationProgress
+                .getByYear(yearId)
+                .catch(() => [])
+            : Promise.resolve([]),
+          withStages
+            ? xano.applications.getAll().catch(() => [])
+            : Promise.resolve([]),
+        ]);
+      const stageSets = withStages
+        ? computeFamilyStageSets({ yearId, fap, srp, apps })
+        : null;
+      const familyStage = (id: number): ConversationStage => {
+        if (!stageSets) return "none";
+        if (stageSets.enrolled.has(id)) return "enrolled";
+        if (stageSets.registration.has(id)) return "registration";
+        if (stageSets.application.has(id)) return "application";
+        return "none";
+      };
       const familyName = new Map(
         families.map((f) => [f.id, f.family_name])
       );
@@ -143,9 +189,18 @@ export async function GET(req: NextRequest) {
           contactType: type,
           contactId: id,
           name: nameFor(type, id),
+          stage:
+            type === "inquiry"
+              ? ("inquiry" as const)
+              : type === "camp"
+                ? ("camp" as const)
+                : familyStage(id),
           lastBody: last.body,
           lastAt: last.created_at,
           lastDirection: last.direction,
+          lastIsGroup:
+            typeof last.template === "string" &&
+            last.template.startsWith("group"),
           messageCount: count,
           needsReply: last.direction === "inbound",
         }))
