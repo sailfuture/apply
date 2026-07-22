@@ -575,14 +575,13 @@ export default function FamilyRegistrationDetailPage() {
               defaultYearId={Number(yearId)}
               phase="registration"
             />
-            {/* Full account activity stream — notes + texts + system
-                milestones (application, registration, SUFS, billing)
-                in one timeline. Complements the phase-scoped notes
-                drawer; opens with the App & Reg pill preselected. */}
+            {/* Full account activity stream — notes + texts + emails
+                + system milestones (application, registration, SUFS,
+                billing) in one timeline. Complements the phase-scoped
+                notes drawer. */}
             <ActivityLogSheet
               familyId={Number(family?.id ?? familyId)}
               yearId={Number(yearId)}
-              defaultFilter="appreg"
             />
           </div>
         </div>

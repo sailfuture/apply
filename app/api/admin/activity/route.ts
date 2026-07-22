@@ -182,6 +182,9 @@ export async function GET(req: NextRequest) {
         body: e.subject,
         author: "SailFuture (automated)",
         status: e.status,
+        // Lets the sheet's "View email" fetch the exact sent content
+        // from Resend via /api/admin/email-preview.
+        resendId: e.resend_id ?? undefined,
       });
     }
 
@@ -543,6 +546,8 @@ export interface ActivityEvent {
   direction?: "inbound" | "outbound";
   /** Texts: Twilio delivery status. Emails: sent | failed. */
   status?: string;
+  /** Emails only — Resend message id for the full-content preview. */
+  resendId?: string;
   /** Set when the event is about one student. */
   studentName?: string;
   /** Notes only — raw category bucket. */

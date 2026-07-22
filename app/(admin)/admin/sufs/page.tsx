@@ -715,7 +715,6 @@ export default function SufsPage() {
           onOpenChange={(o) => {
             if (!o) setActivityRow(null);
           }}
-          defaultFilter="sufs"
           noteSection="sufs"
           noteStudentId={activityRow.student_id}
           contextLabel={activityRow.student_full_name}

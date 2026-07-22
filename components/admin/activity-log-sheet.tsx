@@ -5,6 +5,7 @@ import useSWR from "swr";
 import { toast } from "sonner";
 import {
   Activity,
+  Ban,
   CircleCheck,
   Loader2,
   NotebookPen,
@@ -19,6 +20,13 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Select,
   SelectContent,
@@ -43,31 +51,37 @@ import {
   MessageScrollerViewport,
 } from "@/components/ui/message-scroller";
 import { adminFetcher } from "@/lib/admin-fetcher";
-import { cn } from "@/lib/utils";
+import {
+  messagesFetcher,
+  messagesKey,
+  type MessagesResponse,
+} from "@/components/admin/family-message-thread";
 import type {
   ActivityEvent,
   ActivityResponse,
 } from "@/app/api/admin/activity/route";
+import type { EmailPreviewResponse } from "@/app/api/admin/email-preview/route";
 
 /**
- * Unified account activity sheet — one chronological stream per
+ * Unified account activity sheet — ONE chronological stream per
  * (family, year) merging admin notes / logged calls, real SMS
- * threads, and system milestones derived from the audit stamps the
- * app already writes (submissions, verifies, SUFS pipeline, invoices,
- * crew changes…). Backed by `/api/admin/activity`; no dedicated event
- * table.
+ * threads, automated Resend emails, and system milestones derived
+ * from the audit stamps the app already writes (submissions,
+ * verifies, SUFS pipeline, invoices, crew changes…). Backed by
+ * `/api/admin/activity`; no dedicated event table. Deliberately no
+ * filter pills — everything reads top-to-bottom as one timeline.
  *
  * Rendered with the same messenger primitives as the SMS inbox:
- * notes and texts are chat bubbles, system events are compact
- * timeline markers between them.
+ * notes, texts, and emails are chat bubbles; system events are
+ * compact timeline markers between them. Email bubbles carry a
+ * "View full email" affordance that pulls the exact sent HTML back
+ * from Resend (via `/api/admin/email-preview`) into a dialog.
  *
- * Filter pills narrow the stream (All / App & Reg / SUFS /
- * Enrollment / Texts / Notes) — the full stream is always loaded, so
- * admin can widen the view from any surface. The composer logs a
- * note (or a call / email / in-person conversation via the category
- * select) through the existing `/api/admin/notes` endpoint, tagged
- * with this sheet's `noteSection` + optional student so scoped
- * surfaces (e.g. the SUFS page) can filter their own comms later.
+ * The composer logs a note (or a call / email / in-person
+ * conversation via the category select) through the existing
+ * `/api/admin/notes` endpoint, tagged with this sheet's
+ * `noteSection` + optional student so scoped surfaces (e.g. the SUFS
+ * page) can keep filtering their own comms elsewhere.
  *
  * Two usage modes:
  *   - uncontrolled: renders its own trigger button (inline or
@@ -79,50 +93,19 @@ import type {
  * mounting many triggers costs nothing.
  */
 
-type FilterKey =
-  | "all"
-  | "appreg"
-  | "sufs"
-  | "enrollment"
-  | "sms"
-  | "email"
-  | "note";
-
-const FILTERS: Array<{ key: FilterKey; label: string }> = [
-  { key: "all", label: "All" },
-  { key: "appreg", label: "App & Reg" },
-  { key: "sufs", label: "SUFS" },
-  { key: "enrollment", label: "Enrollment" },
-  { key: "sms", label: "Texts" },
-  { key: "email", label: "Emails" },
-  { key: "note", label: "Notes" },
-];
-
-function matchesFilter(e: ActivityEvent, f: FilterKey): boolean {
-  switch (f) {
-    case "all":
-      return true;
-    case "appreg":
-      return e.scope === "application" || e.scope === "registration";
-    case "sufs":
-      return e.scope === "sufs";
-    case "enrollment":
-      return e.scope === "enrollment";
-    case "sms":
-      return e.kind === "sms";
-    case "email":
-      return e.kind === "email";
-    case "note":
-      return e.kind === "note";
-  }
-}
-
-/** Composer category → the notes API's `category` bucket. */
+/**
+ * Composer modes. The first four log a note through the notes API
+ * (`category` bucket); "text" SENDS a real SMS through the same
+ * endpoint the Messages sheet uses — the sent text then shows up in
+ * the stream like any other, since the activity feed reads
+ * `sms_messages`.
+ */
 const COMPOSE_CATEGORIES = [
   { key: "other", label: "Note" },
   { key: "phone", label: "Call" },
   { key: "email", label: "Email" },
   { key: "in-person", label: "In person" },
+  { key: "text", label: "Text (SMS)" },
 ] as const;
 
 interface Props {
@@ -135,8 +118,6 @@ interface Props {
   /** Uncontrolled trigger style. */
   variant?: "inline" | "floating";
   triggerLabel?: string;
-  /** Pill preselected when the sheet opens. */
-  defaultFilter?: FilterKey;
   /** `section` tag written on notes composed here (e.g. "sufs") —
    *  lets scoped note surfaces keep filtering by section. */
   noteSection?: string;
@@ -155,7 +136,6 @@ export function ActivityLogSheet({
   onOpenChange,
   variant = "inline",
   triggerLabel,
-  defaultFilter = "all",
   noteSection,
   noteStudentId,
   contextLabel,
@@ -169,8 +149,6 @@ export function ActivityLogSheet({
     onOpenChange?.(v);
   };
 
-  const [filter, setFilter] = useState<FilterKey>(defaultFilter);
-
   // Lazy: no fetch until the sheet is opened; poll while open so
   // inbound texts and other admins' actions drift in.
   const key =
@@ -183,51 +161,101 @@ export function ActivityLogSheet({
     { refreshInterval: 30_000 }
   );
 
-  const filtered = useMemo(
-    () => (data?.events ?? []).filter((e) => matchesFilter(e, filter)),
-    [data, filter]
+  // Recipient state for the Text compose mode — same endpoint (and
+  // same SWR cache entry) the Messages sheet uses, so opt-out and
+  // phone-number state can't disagree between the two surfaces.
+  // Fetched lazily with the sheet.
+  const { data: msgData, mutate: mutateMessages } = useSWR<MessagesResponse>(
+    open && familyId ? messagesKey(familyId) : null,
+    messagesFetcher
   );
+  const recipient = msgData?.recipient ?? null;
+  const recipientLoaded = msgData !== undefined;
+
+  // Email whose full sent content is being previewed (Resend id +
+  // the subject for the dialog title while it loads).
+  const [previewEmail, setPreviewEmail] = useState<{
+    resendId: string;
+    subject: string;
+  } | null>(null);
 
   const [body, setBody] = useState("");
   const [category, setCategory] =
     useState<(typeof COMPOSE_CATEGORIES)[number]["key"]>("other");
   const [saving, setSaving] = useState(false);
 
-  async function logNote() {
+  const textMode = category === "text";
+  const canText = Boolean(recipient?.e164) && !recipient?.optedOut;
+  const segments = body.length === 0 ? 0 : Math.ceil(body.length / 160);
+  const composerBlocked = textMode && (!recipientLoaded || !canText);
+
+  async function submit() {
     const text = body.trim();
     if (!text || saving) return;
+    if (textMode && !canText) return;
     setSaving(true);
     try {
-      const res = await fetch("/api/admin/notes", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          registration_families_id: familyId,
-          registration_school_years_id: yearId,
-          registration_students_id: noteStudentId ?? null,
-          body: text,
-          category,
-          section: noteSection ?? null,
-        }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => null);
-        throw new Error(err?.error ?? `Save failed (${res.status})`);
+      if (textMode) {
+        // Real SMS — same endpoint as the Messages sheet, carrying
+        // this sheet's student/year context on the message row.
+        const res = await fetch("/api/admin/messages", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contactType: "family",
+            contactId: familyId,
+            body: text,
+            studentId: noteStudentId ?? null,
+            yearId,
+          }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => null);
+          throw new Error(err?.error ?? `Send failed (${res.status})`);
+        }
+        setBody("");
+        // Refresh both caches: the stream (shows the outbound text)
+        // and the shared messages cache (Messages sheet badge/thread).
+        await Promise.all([mutate(), mutateMessages()]);
+        toast.success("Text sent.");
+      } else {
+        const res = await fetch("/api/admin/notes", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            registration_families_id: familyId,
+            registration_school_years_id: yearId,
+            registration_students_id: noteStudentId ?? null,
+            body: text,
+            category,
+            section: noteSection ?? null,
+          }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => null);
+          throw new Error(err?.error ?? `Save failed (${res.status})`);
+        }
+        setBody("");
+        await mutate();
+        toast.success(
+          category === "other" ? "Note added." : "Logged to the timeline."
+        );
       }
-      setBody("");
-      await mutate();
-      toast.success(
-        category === "other" ? "Note added." : "Logged to the timeline."
-      );
     } catch (err) {
-      console.error("Failed to log activity note:", err);
-      toast.error(err instanceof Error ? err.message : "Couldn't save note.");
+      console.error("Failed to submit from activity composer:", err);
+      toast.error(
+        err instanceof Error
+          ? err.message
+          : textMode
+            ? "Couldn't send text."
+            : "Couldn't save note."
+      );
     } finally {
       setSaving(false);
     }
   }
 
-  const items = useMemo(() => buildItems(filtered), [filtered]);
+  const items = useMemo(() => buildItems(data?.events ?? []), [data]);
 
   return (
     <>
@@ -273,27 +301,9 @@ export function ActivityLogSheet({
             </SheetTitle>
             <SheetDescription className="text-xs">
               {contextLabel
-                ? `${contextLabel} — notes, texts, and account milestones in one stream.`
-                : "Notes, texts, and account milestones in one stream."}
+                ? `${contextLabel} — notes, texts, emails, and account milestones in one stream.`
+                : "Notes, texts, emails, and account milestones in one stream."}
             </SheetDescription>
-            {/* Filter pills */}
-            <div className="flex flex-wrap gap-1.5 pt-1">
-              {FILTERS.map((f) => (
-                <button
-                  key={f.key}
-                  type="button"
-                  onClick={() => setFilter(f.key)}
-                  className={cn(
-                    "rounded-full border px-2.5 py-0.5 text-[11px] font-medium transition-colors",
-                    filter === f.key
-                      ? "border-foreground bg-foreground text-background"
-                      : "bg-white text-muted-foreground hover:text-foreground"
-                  )}
-                >
-                  {f.label}
-                </button>
-              ))}
-            </div>
           </SheetHeader>
 
           <div className="min-h-0 flex-1">
@@ -304,10 +314,8 @@ export function ActivityLogSheet({
             ) : items.length === 0 ? (
               <div className="flex h-full items-center justify-center px-8 text-center">
                 <p className="text-sm text-muted-foreground">
-                  Nothing here yet
-                  {filter !== "all" ? " for this filter" : ""}. Notes you
-                  add below and account milestones will build the
-                  timeline.
+                  Nothing here yet. Notes you add below and account
+                  milestones will build the timeline.
                 </p>
               </div>
             ) : (
@@ -338,7 +346,12 @@ export function ActivityLogSheet({
                             messageId={item.id}
                             scrollAnchor={item.event.kind === "note"}
                           >
-                            <BubbleRow event={item.event} />
+                            <BubbleRow
+                              event={item.event}
+                              onPreviewEmail={(resendId, subject) =>
+                                setPreviewEmail({ resendId, subject })
+                              }
+                            />
                           </MessageScrollerItem>
                         )
                       )}
@@ -350,10 +363,10 @@ export function ActivityLogSheet({
             )}
           </div>
 
-          {/* Composer — logs notes/calls/emails onto the timeline via
-              the existing notes API. Texting stays in the Messages
-              sheet (it needs recipient/opt-out state); texts still
-              show here read-only. */}
+          {/* Composer — notes/calls/emails log to the timeline via
+              the notes API; Text (SMS) mode sends a REAL text through
+              the same endpoint as the Messages sheet, then the
+              outbound message appears in the stream like any other. */}
           <div className="space-y-2 border-t bg-muted/20 px-4 py-3">
             <div className="flex items-center gap-2">
               <NotebookPen className="size-3.5 text-muted-foreground" />
@@ -380,6 +393,23 @@ export function ActivityLogSheet({
                 </span>
               ) : null}
             </div>
+            {textMode && recipientLoaded && recipient?.optedOut ? (
+              <Marker className="text-amber-600">
+                <MarkerIcon>
+                  <Ban />
+                </MarkerIcon>
+                <MarkerContent>
+                  This contact opted out of text messages. You can&rsquo;t
+                  text them until they opt back in.
+                </MarkerContent>
+              </Marker>
+            ) : textMode && recipientLoaded && !recipient?.e164 ? (
+              <Marker className="text-muted-foreground">
+                <MarkerContent>
+                  No valid mobile number on file for this family.
+                </MarkerContent>
+              </Marker>
+            ) : null}
             <Textarea
               value={body}
               onChange={(e) => setBody(e.target.value)}
@@ -389,31 +419,45 @@ export function ActivityLogSheet({
                   (e.shiftKey || e.metaKey || e.ctrlKey)
                 ) {
                   e.preventDefault();
-                  void logNote();
+                  void submit();
                 }
               }}
               rows={2}
+              disabled={composerBlocked || saving}
               placeholder={
-                category === "phone"
-                  ? "Log the call — who you spoke to, what was said…"
-                  : "Add a note to the timeline…"
+                textMode
+                  ? recipientLoaded
+                    ? canText
+                      ? `Text ${recipient?.name || "this family"}…`
+                      : "Texting unavailable"
+                    : "Checking number on file…"
+                  : category === "phone"
+                    ? "Log the call — who you spoke to, what was said…"
+                    : "Add a note to the timeline…"
               }
             />
-            <div className="flex items-center justify-end">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] text-muted-foreground tabular-nums">
+                {textMode && segments > 0
+                  ? `${body.length} chars · ${segments} segment${
+                      segments === 1 ? "" : "s"
+                    }`
+                  : ""}
+              </span>
               <Button
                 size="sm"
-                onClick={() => void logNote()}
-                disabled={saving || !body.trim()}
+                onClick={() => void submit()}
+                disabled={saving || !body.trim() || composerBlocked}
               >
                 {saving ? (
                   <>
                     <Loader2 className="size-3.5 animate-spin mr-1.5" />
-                    Saving
+                    {textMode ? "Sending" : "Saving"}
                   </>
                 ) : (
                   <>
                     <Send className="size-3.5 mr-1.5" />
-                    Log
+                    {textMode ? "Send text" : "Log"}
                   </>
                 )}
               </Button>
@@ -421,7 +465,77 @@ export function ActivityLogSheet({
           </div>
         </SheetContent>
       </Sheet>
+
+      <EmailPreviewDialog
+        preview={previewEmail}
+        onClose={() => setPreviewEmail(null)}
+      />
     </>
+  );
+}
+
+/* ── Email preview ────────────────────────────────────────────────── */
+
+/**
+ * Full-content view of a sent email, fetched from Resend by message
+ * id (our audit table only stores the subject). Rendered inside a
+ * sandboxed iframe via `srcDoc` — no scripts, no outside navigation —
+ * so template HTML displays exactly as the family received it
+ * without executing anything.
+ */
+function EmailPreviewDialog({
+  preview,
+  onClose,
+}: {
+  preview: { resendId: string; subject: string } | null;
+  onClose: () => void;
+}) {
+  const { data, error, isLoading } = useSWR<EmailPreviewResponse>(
+    preview ? `/api/admin/email-preview?id=${preview.resendId}` : null,
+    adminFetcher
+  );
+
+  return (
+    <Dialog open={preview !== null} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-3xl">
+        <DialogHeader>
+          <DialogTitle className="text-base">
+            {data?.subject || preview?.subject || "Email"}
+          </DialogTitle>
+          <DialogDescription className="text-xs">
+            {data
+              ? `From ${data.from} · To ${data.to}${
+                  data.cc ? ` · Cc ${data.cc}` : ""
+                }`
+              : "Retrieving the sent email from Resend…"}
+          </DialogDescription>
+        </DialogHeader>
+        {isLoading ? (
+          <div className="flex h-[50vh] items-center justify-center">
+            <Loader2 className="size-5 animate-spin text-muted-foreground" />
+          </div>
+        ) : error || !data ? (
+          <div className="flex h-[30vh] items-center justify-center px-8 text-center">
+            <p className="text-sm text-muted-foreground">
+              {error instanceof Error
+                ? error.message
+                : "Couldn't retrieve this email from Resend."}
+            </p>
+          </div>
+        ) : data.html ? (
+          <iframe
+            title="Sent email preview"
+            srcDoc={data.html}
+            sandbox=""
+            className="h-[60vh] w-full rounded-md border bg-white"
+          />
+        ) : (
+          <pre className="h-[60vh] w-full overflow-auto rounded-md border bg-muted/20 p-4 text-sm whitespace-pre-wrap">
+            {data.text || "This email has no stored content."}
+          </pre>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -447,9 +561,16 @@ function SystemRow({ event }: { event: ActivityEvent }) {
 
 /** Note, text, or automated email — a chat bubble. Admin-authored
  *  content (notes, outbound texts, our emails) aligns right; inbound
- *  texts align left. Emails render the SUBJECT as the bubble body
- *  (the audit row doesn't store the full html). */
-function BubbleRow({ event }: { event: ActivityEvent }) {
+ *  texts align left. Emails render the SUBJECT as the bubble body,
+ *  with a "View full email" affordance that opens the Resend-backed
+ *  preview dialog. */
+function BubbleRow({
+  event,
+  onPreviewEmail,
+}: {
+  event: ActivityEvent;
+  onPreviewEmail: (resendId: string, subject: string) => void;
+}) {
   const isNote = event.kind === "note";
   const isEmail = event.kind === "email";
   const failed =
@@ -494,6 +615,20 @@ function BubbleRow({ event }: { event: ActivityEvent }) {
             <span className="text-destructive">Failed&nbsp;·&nbsp;</span>
           ) : null}
           {timeLabel(event.ts)}
+          {isEmail && event.resendId ? (
+            <>
+              &nbsp;·&nbsp;
+              <button
+                type="button"
+                className="underline underline-offset-2 hover:text-foreground"
+                onClick={() =>
+                  onPreviewEmail(event.resendId as string, event.body)
+                }
+              >
+                View full email
+              </button>
+            </>
+          ) : null}
         </MessageFooter>
       </MessageContent>
     </Message>
