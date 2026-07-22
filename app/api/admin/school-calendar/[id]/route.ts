@@ -57,7 +57,7 @@ export async function PATCH(
       patch.type = t;
     }
     if ("work_type" in body) {
-      const w = String(body.work_type ?? "");
+      const w = String(body.work_type ?? "").trim();
       if (!WORK_TYPES.includes(w)) {
         return NextResponse.json(
           {
@@ -66,7 +66,11 @@ export async function PATCH(
           { status: 400 }
         );
       }
-      patch.work_type = w;
+      // Single-space sentinel when clearing to "None" — Xano's edit
+      // endpoints silently DROP empty-string inputs, so `""` would
+      // leave the old rotation in place (the "saved but didn't stick"
+      // bug). Readers trim before comparing.
+      patch.work_type = w || " ";
     }
     for (const f of BOOL_FIELDS) {
       if (f in body) patch[f] = body[f] === true;

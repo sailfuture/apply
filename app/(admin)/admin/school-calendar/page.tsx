@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import {
   ChevronLeft,
   ChevronRight,
+  Clock,
   List,
   Loader2,
   MapPin,
@@ -202,6 +203,16 @@ export default function SchoolCalendarPage() {
     return m;
   }, [days, terms]);
 
+  /** seasons_id → ordinal badge ("S1"…) + full name, in table order —
+   *  shown on day cells for days assigned to a season. */
+  const seasonBadge = useMemo(() => {
+    const m = new Map<number, { code: string; name: string }>();
+    seasons.forEach((s, i) =>
+      m.set(s.id, { code: `S${i + 1}`, name: s.name })
+    );
+    return m;
+  }, [seasons]);
+
   const months = useMemo(() => {
     const seen: string[] = [];
     for (const d of days) {
@@ -328,7 +339,7 @@ export default function SchoolCalendarPage() {
           <div className="mr-2 hidden items-center gap-3 text-[11px] text-muted-foreground xl:flex">
             <LegendSwatch className="bg-white border" label="School" />
             <LegendSwatch className="bg-muted/60" label="Weekend" />
-            <LegendSwatch className="bg-amber-100" label="Break" />
+            <LegendSwatch className="bg-sky-100" label="Break" />
             <span className="inline-flex items-center gap-1">
               <span className="size-2 rounded-full bg-rose-500" />
               Holiday
@@ -338,6 +349,12 @@ export default function SchoolCalendarPage() {
             </span>
             <span className="rounded-full bg-orange-100 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-orange-700">
               Intern
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <span className="rounded-full bg-teal-100 px-1.5 py-px text-[9px] font-semibold text-teal-700">
+                S1
+              </span>
+              Season
             </span>
           </div>
           <Button
@@ -447,6 +464,11 @@ export default function SchoolCalendarPage() {
                       ? (termLabel.get(cell.day.terms_id) ?? "")
                       : ""
                   }
+                  season={
+                    cell.day && cell.day.seasons_id > 0
+                      ? (seasonBadge.get(cell.day.seasons_id) ?? null)
+                      : null
+                  }
                   isToday={cell.date === todayIso}
                   dimmed={
                     activeTermRange !== null &&
@@ -470,6 +492,11 @@ export default function SchoolCalendarPage() {
           day={selectedDay}
           events={eventsByDay.get(selectedDay.id) ?? []}
           termLabel={termLabel.get(selectedDay.terms_id) ?? ""}
+          seasonName={
+            selectedDay.seasons_id > 0
+              ? (seasonBadge.get(selectedDay.seasons_id)?.name ?? "")
+              : ""
+          }
           onClose={() => setSelectedDayId(null)}
           onChanged={() => void mutate()}
         />
@@ -625,7 +652,7 @@ function EventsSheet({
     <Sheet open onOpenChange={(o) => !o && onClose()}>
       <SheetContent
         side="right"
-        className="flex w-full flex-col gap-0 p-0 sm:max-w-xl"
+        className="flex w-full flex-col gap-0 p-0 sm:max-w-2xl"
       >
         <SheetHeader className="border-b px-4 py-3">
           <SheetTitle className="text-base">Events</SheetTitle>
@@ -676,7 +703,9 @@ function EventsSheet({
                               c ? c.dot : "bg-slate-300"
                             )}
                           />
-                          <span className="w-28 shrink-0 text-xs tabular-nums text-muted-foreground">
+                          {/* Fixed-width, nowrap time so ranges never
+                              break onto a second line. */}
+                          <span className="w-40 shrink-0 whitespace-nowrap text-xs tabular-nums text-muted-foreground">
                             {e.start_time
                               ? `${fmtTime(e.start_time)}${
                                   e.end_time
@@ -685,23 +714,23 @@ function EventsSheet({
                                 }`
                               : "All day"}
                           </span>
-                          <span className="min-w-0 flex-1">
-                            <span className="block truncate text-sm font-medium">
-                              {e.title}
-                              {e.mandatory ? (
-                                <span className="ml-1.5 rounded-full border border-red-200 bg-red-50 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-red-700 align-middle">
-                                  Mandatory
-                                </span>
-                              ) : null}
-                              {e.parent_volunteer_hours ? (
-                                <span className="ml-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-emerald-700 align-middle">
-                                  {e.volunteer_hour_total || 0} vol hrs
-                                </span>
-                              ) : null}
-                            </span>
+                          {/* Title · location on ONE truncating line. */}
+                          <span className="min-w-0 flex-1 truncate text-sm">
+                            <span className="font-medium">{e.title}</span>
+                            {e.mandatory ? (
+                              <span className="ml-1.5 rounded-full border border-red-200 bg-red-50 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-red-700 align-middle">
+                                Mandatory
+                              </span>
+                            ) : null}
+                            {e.parent_volunteer_hours ? (
+                              <span className="ml-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-emerald-700 align-middle">
+                                {e.volunteer_hour_total || 0} vol hrs
+                              </span>
+                            ) : null}
                             {e.location ? (
-                              <span className="block truncate text-xs text-muted-foreground">
-                                <MapPin className="mr-0.5 inline size-3" />
+                              <span className="text-muted-foreground">
+                                {" "}
+                                · <MapPin className="inline size-3" />{" "}
                                 {e.location}
                               </span>
                             ) : null}
@@ -745,6 +774,7 @@ function DayCell({
   day,
   events,
   termLabel,
+  season,
   isToday,
   dimmed,
   className,
@@ -754,6 +784,9 @@ function DayCell({
   day: XanoSchoolCalendarDay | null;
   events: XanoSchoolCalendarEvent[];
   termLabel: string;
+  /** Ordinal season badge ("S1") + full name when the day is assigned
+   *  to a season. */
+  season: { code: string; name: string } | null;
   isToday: boolean;
   /** True when a term filter is active and this day falls outside its
    *  date range — the cell fades so the term's span pops. */
@@ -777,6 +810,9 @@ function DayCell({
   }
   const isBreak = day.type === "Break" || day.break;
   const isWeekend = day.type === "Weekend";
+  // Trim — clearing the rotation stores the " " sentinel (Xano edits
+  // drop empty strings), which must read as "none".
+  const workType = (day.work_type ?? "").trim();
   const boundaries: string[] = [];
   if (day.first_day_term) boundaries.push(`${termLabel || "Term"} starts`);
   if (day.last_day_term) boundaries.push(`${termLabel || "Term"} ends`);
@@ -796,7 +832,8 @@ function DayCell({
       type="button"
       onClick={onOpen}
       title={[
-        `${day.day_of_week} · ${day.type}${day.work_type ? ` · ${day.work_type}` : ""}`,
+        `${day.day_of_week} · ${day.type}${workType ? ` · ${workType}` : ""}`,
+        season ? season.name : "",
         day.holiday ? "Holiday" : "",
         ...boundaries,
         ...events.map((e) =>
@@ -808,7 +845,7 @@ function DayCell({
       className={cn(
         "flex h-full min-h-0 flex-col gap-1 overflow-hidden p-1.5 text-left text-xs transition-colors",
         isBreak
-          ? "bg-amber-100/60 hover:bg-amber-100"
+          ? "bg-sky-100/60 hover:bg-sky-100"
           : isWeekend
             ? "bg-muted/50 text-muted-foreground hover:bg-muted/70"
             : "bg-white hover:bg-muted/40",
@@ -833,11 +870,19 @@ function DayCell({
               aria-label="Holiday"
             />
           ) : null}
-          {day.work_type === "Externship" ? (
+          {season ? (
+            <span
+              title={season.name}
+              className="rounded-full bg-teal-100 px-1 py-px text-[9px] font-semibold text-teal-700"
+            >
+              {season.code}
+            </span>
+          ) : null}
+          {workType === "Externship" ? (
             <span className="rounded-full bg-indigo-100 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-indigo-700">
               Extern
             </span>
-          ) : day.work_type === "Internship" ? (
+          ) : workType === "Internship" ? (
             <span className="rounded-full bg-orange-100 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-orange-700">
               Intern
             </span>
@@ -948,17 +993,21 @@ function DaySheet({
   day,
   events,
   termLabel,
+  seasonName,
   onClose,
   onChanged,
 }: {
   day: XanoSchoolCalendarDay;
   events: XanoSchoolCalendarEvent[];
   termLabel: string;
+  seasonName: string;
   onClose: () => void;
   onChanged: () => void;
 }) {
   const [type, setType] = useState(day.type);
-  const [workType, setWorkType] = useState(day.work_type);
+  // Trimmed — a cleared rotation stores the " " sentinel (Xano edits
+  // drop empty strings), which the Select must read as "None".
+  const [workType, setWorkType] = useState((day.work_type ?? "").trim());
   const [holiday, setHoliday] = useState(day.holiday === true);
   const [isBreak, setIsBreak] = useState(day.break === true);
   const [firstTerm, setFirstTerm] = useState(day.first_day_term === true);
@@ -979,7 +1028,7 @@ function DaySheet({
 
   const dirty =
     type !== day.type ||
-    workType !== day.work_type ||
+    workType !== (day.work_type ?? "").trim() ||
     holiday !== (day.holiday === true) ||
     isBreak !== (day.break === true) ||
     firstTerm !== (day.first_day_term === true) ||
@@ -1077,7 +1126,8 @@ function DaySheet({
           <SheetHeader className="border-b px-4 py-3">
             <SheetTitle className="text-base">{dateLabel}</SheetTitle>
             <SheetDescription className="text-xs">
-              {termLabel || "—"} · {day.day_of_week}
+              {termLabel || "—"}
+              {seasonName ? ` · ${seasonName}` : ""} · {day.day_of_week}
             </SheetDescription>
           </SheetHeader>
 
@@ -1175,87 +1225,101 @@ function DaySheet({
                 </p>
               ) : null}
 
-              <ul className="space-y-2">
-                {events.map((e) => (
-                  <li
-                    key={e.id}
-                    className="rounded-md border bg-muted/10 px-3 py-2"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium">
+              <ul className="space-y-3">
+                {events.map((e) => {
+                  const c = eventColor(e.color);
+                  return (
+                    <li
+                      key={e.id}
+                      className="animate-in fade-in-0 slide-in-from-top-1 rounded-lg border bg-white p-4 duration-200"
+                    >
+                      {/* Header: dot · title · type chip */}
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={cn(
+                            "size-2.5 shrink-0 rounded-full",
+                            c ? c.dot : "bg-slate-300"
+                          )}
+                          aria-hidden
+                        />
+                        <p className="min-w-0 flex-1 truncate text-sm font-semibold">
+                          {e.title}
+                        </p>
+                        {c ? (
                           <span
                             className={cn(
-                              "mr-1.5 inline-block size-2 rounded-full align-middle",
-                              eventColor(e.color)?.dot ?? "bg-slate-300"
+                              "shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium",
+                              c.chip
                             )}
-                            aria-hidden
-                          />
-                          {e.title}
-                          {e.mandatory ? (
-                            <span className="ml-1.5 rounded-full border border-red-200 bg-red-50 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-red-700 align-middle">
-                              Mandatory
-                            </span>
-                          ) : null}
-                          {e.parent_volunteer_hours ? (
-                            <span className="ml-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-emerald-700 align-middle">
-                              {e.volunteer_hour_total || 0} vol hrs
-                            </span>
-                          ) : null}
+                          >
+                            {c.label}
+                          </span>
+                        ) : null}
+                      </div>
+
+                      {/* Details */}
+                      <div className="mt-2.5 space-y-1.5">
+                        <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                          <Clock className="size-3.5 shrink-0" />
+                          {e.start_time
+                            ? `${fmtTime(e.start_time)}${
+                                e.end_time
+                                  ? ` – ${fmtTime(e.end_time)}`
+                                  : ""
+                              }`
+                            : "All day"}
                         </p>
-                        <p className="truncate text-xs text-muted-foreground">
-                          {[
-                            e.start_time
-                              ? `${fmtTime(e.start_time)}${
-                                  e.end_time
-                                    ? ` – ${fmtTime(e.end_time)}`
-                                    : ""
-                                }`
-                              : "All day",
-                            e.location ? (
-                              <span key="loc">
-                                <MapPin className="mr-0.5 inline size-3" />
-                                {e.location}
-                              </span>
-                            ) : null,
-                          ]
-                            .filter(Boolean)
-                            .map((part, i) => (
-                              <span key={i}>
-                                {i > 0 ? " · " : ""}
-                                {part}
-                              </span>
-                            ))}
-                        </p>
+                        {e.location ? (
+                          <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                            <MapPin className="size-3.5 shrink-0" />
+                            <span className="truncate">{e.location}</span>
+                          </p>
+                        ) : null}
                         {e.description ? (
-                          <p className="mt-1 whitespace-pre-wrap text-xs text-muted-foreground">
+                          <p className="whitespace-pre-wrap text-sm text-muted-foreground">
                             {e.description}
                           </p>
                         ) : null}
+                        {e.mandatory || e.parent_volunteer_hours ? (
+                          <p className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                            {e.mandatory ? (
+                              <span className="rounded-full border border-red-200 bg-red-50 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-red-700">
+                                Mandatory
+                              </span>
+                            ) : null}
+                            {e.parent_volunteer_hours ? (
+                              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-emerald-700">
+                                {e.volunteer_hour_total || 0} vol hrs
+                              </span>
+                            ) : null}
+                          </p>
+                        ) : null}
                       </div>
-                      <div className="flex shrink-0 items-center gap-1">
+
+                      {/* Actions — pinned to the card's bottom edge */}
+                      <div className="mt-3 flex items-center justify-end gap-2 border-t pt-3">
                         <Button
-                          variant="ghost"
+                          variant="outline"
                           size="sm"
-                          className="size-7 p-0"
+                          className="bg-white"
                           onClick={() => setEditingId(e.id)}
-                          aria-label={`Edit ${e.title}`}
                         >
-                          <Pencil className="size-3.5" />
+                          <Pencil className="size-3.5 mr-1" />
+                          Edit
                         </Button>
                         <Button
-                          variant="ghost"
+                          variant="outline"
                           size="sm"
-                          className="size-7 p-0 text-red-600 hover:text-red-700"
+                          className="bg-white text-red-600 hover:bg-red-50 hover:text-red-700"
                           onClick={() => setDeleteTarget(e)}
-                          aria-label={`Delete ${e.title}`}
                         >
-                          <Trash2 className="size-3.5" />
+                          <Trash2 className="size-3.5 mr-1" />
+                          Delete
                         </Button>
                       </div>
-                    </div>
-                  </li>
-                ))}
+                    </li>
+                  );
+                })}
               </ul>
 
               {editingId !== null ? (
@@ -1402,7 +1466,7 @@ function EventForm({
   }
 
   return (
-    <div className="space-y-3 rounded-md border bg-white p-3">
+    <div className="animate-in fade-in-0 slide-in-from-top-1 space-y-3 rounded-md border bg-white p-3 duration-200">
       <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
         {existing ? "Edit event" : "New event"}
       </p>

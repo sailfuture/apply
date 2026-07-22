@@ -59,7 +59,6 @@ const NAV_ITEMS: NavItem[] = [
       { title: "Applications", href: "/admin/applications" },
       { title: "Registrations", href: "/admin/registrations" },
       { title: "Enrolled", href: "/admin/enrolled" },
-      { title: "Volunteer Hours", href: "/admin/volunteer-hours" },
     ],
   },
   // Finance — Stripe billing (per-family subscriptions, past-due
@@ -72,8 +71,15 @@ const NAV_ITEMS: NavItem[] = [
       { title: "SUFS", href: "/admin/sufs" },
     ],
   },
-  // Two-way SMS inbox + group messaging.
-  { title: "Messages", href: "/admin/messages" },
+  // Parent Engagement — the two-way SMS inbox + group messaging, and
+  // the family volunteer-hours program.
+  {
+    title: "Parent Engagement",
+    children: [
+      { title: "Messages", href: "/admin/messages" },
+      { title: "Volunteer Hours", href: "/admin/volunteer-hours" },
+    ],
+  },
   // Settings — year-scoped configuration (tuition, fees, SUFS award
   // amounts, billing start date) and the day-by-day school calendar.
   {

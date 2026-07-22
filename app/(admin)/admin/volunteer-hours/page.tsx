@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { toast } from "sonner";
 import {
+  Bell,
   Check,
   ChevronRight,
   Loader2,
@@ -75,6 +76,8 @@ import type {
   VolunteerEvent,
   VolunteerFamily,
 } from "@/app/api/admin/volunteer-hours/route";
+import type { GroupContact } from "@/app/api/admin/messages/group/audience/route";
+import { Textarea } from "@/components/ui/textarea";
 import type { XanoVolunteerHours } from "@/lib/xano";
 
 /** Annual goal — in lockstep with the parent dashboard's constant so
@@ -219,6 +222,10 @@ export default function AdminVolunteerHoursPage() {
   const [eventEdit, setEventEdit] = useState<
     { event: VolunteerEvent } | "new" | null
   >(null);
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [remindEvent, setRemindEvent] = useState<VolunteerEvent | null>(
+    null
+  );
   const [deleteTarget, setDeleteTarget] =
     useState<XanoVolunteerHours | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -290,14 +297,26 @@ export default function AdminVolunteerHoursPage() {
             credit families for parent events.
           </p>
         </div>
-        <Button
-          size="sm"
-          disabled={days.length === 0}
-          onClick={() => setEventEdit("new")}
-        >
-          <Plus className="size-4 mr-1" />
-          New event
-        </Button>
+        <div className="flex shrink-0 items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="bg-white"
+            disabled={families.length === 0}
+            onClick={() => setBulkOpen(true)}
+          >
+            <Plus className="size-3.5 mr-1" />
+            Add hours
+          </Button>
+          <Button
+            size="sm"
+            disabled={days.length === 0}
+            onClick={() => setEventEdit("new")}
+          >
+            <Plus className="size-4 mr-1" />
+            New event
+          </Button>
+        </div>
       </div>
 
       {error ? (
@@ -538,7 +557,7 @@ export default function AdminVolunteerHoursPage() {
                     <TableHead className="text-right">
                       Families credited
                     </TableHead>
-                    <TableHead className="w-44">
+                    <TableHead className="w-56">
                       <span className="sr-only">Actions</span>
                     </TableHead>
                   </TableRow>
@@ -598,6 +617,15 @@ export default function AdminVolunteerHoursPage() {
                               >
                                 <Users className="size-3.5 mr-1" />
                                 Attendees
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-7 bg-white px-2"
+                                onClick={() => setRemindEvent(ev)}
+                              >
+                                <Bell className="size-3.5 mr-1" />
+                                Remind
                               </Button>
                               <Button
                                 variant="ghost"
@@ -674,6 +702,29 @@ export default function AdminVolunteerHoursPage() {
             setAttendeesEvent(null);
             if (changed) void mutate();
           }}
+        />
+      ) : null}
+
+      {/* ── Bulk hours for many families ── */}
+      {bulkOpen ? (
+        <BulkHoursDialog
+          yearId={yearId}
+          families={families}
+          events={events}
+          onDone={(saved) => {
+            setBulkOpen(false);
+            if (saved) void mutate();
+          }}
+        />
+      ) : null}
+
+      {/* ── Event reminder text ── */}
+      {remindEvent ? (
+        <EventReminderDialog
+          key={remindEvent.id}
+          yearId={yearId}
+          event={remindEvent}
+          onDone={() => setRemindEvent(null)}
         />
       ) : null}
 
@@ -1235,9 +1286,31 @@ function AttendeesDialog({
 
           {/* Add families */}
           <div className="space-y-2">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Add families
-            </h3>
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Add families
+              </h3>
+              <div className="flex items-center gap-3 text-xs">
+                <button
+                  type="button"
+                  className="font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                  onClick={() =>
+                    setSelected(new Set(candidates.map((f) => f.id)))
+                  }
+                >
+                  Select all shown
+                </button>
+                {selected.size > 0 ? (
+                  <button
+                    type="button"
+                    className="font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                    onClick={() => setSelected(new Set())}
+                  >
+                    Clear
+                  </button>
+                ) : null}
+              </div>
+            </div>
             <div className="flex items-center gap-2">
               <Input
                 value={query}
@@ -1325,5 +1398,573 @@ function AttendeesDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/* ── Bulk hours dialog ────────────────────────────────────────────── */
+
+/**
+ * Log the same hours for MANY families at once without an event
+ * context — search + select-all over enrolled families, one date +
+ * hours amount, optional event link (which prefills date and credit).
+ */
+function BulkHoursDialog({
+  yearId,
+  families,
+  events,
+  onDone,
+}: {
+  yearId: number;
+  families: VolunteerFamily[];
+  events: VolunteerEvent[];
+  onDone: (saved: boolean) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [date, setDate] = useState("");
+  const [hours, setHours] = useState("");
+  const [eventId, setEventId] = useState("0");
+  const [approved, setApproved] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  const candidates = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return families
+      .filter((f) => f.enrolled)
+      .filter((f) => !q || f.name.toLowerCase().includes(q));
+  }, [families, query]);
+
+  function toggle(id: number) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function pickEvent(v: string) {
+    setEventId(v);
+    const ev = events.find((e) => e.id === Number(v));
+    if (ev) {
+      if (!date) setDate(ev.date);
+      if (!hours && ev.volunteer_hour_total) {
+        setHours(String(ev.volunteer_hour_total));
+      }
+    }
+  }
+
+  const hoursNum = Number(hours);
+  const valid =
+    selected.size > 0 &&
+    /^\d{4}-\d{2}-\d{2}$/.test(date) &&
+    Number.isFinite(hoursNum) &&
+    hoursNum > 0;
+
+  async function save() {
+    if (!valid || saving) return;
+    setSaving(true);
+    try {
+      const res = await fetch("/api/admin/volunteer-hours", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          yearId,
+          familyIds: [...selected],
+          hours: hoursNum,
+          entryDate: date,
+          eventId: Number(eventId) || 0,
+          approved,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        throw new Error(err?.error ?? `Save failed (${res.status})`);
+      }
+      toast.success(
+        `Logged ${formatHours(hoursNum)} hours for ${selected.size} famil${selected.size === 1 ? "y" : "ies"}.`
+      );
+      onDone(true);
+    } catch (err) {
+      console.error("Failed to bulk-add hours:", err);
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't add hours."
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => !saving && !o && onDone(false)}>
+      <DialogContent className="flex max-h-[85vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-lg">
+        <DialogHeader className="border-b px-5 py-4 pr-12">
+          <DialogTitle>Add hours for multiple families</DialogTitle>
+          <DialogDescription>
+            One entry per selected family — same date and hours for
+            everyone.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
+          <div className="space-y-1.5">
+            <Label className="text-xs">Linked event (optional)</Label>
+            <Select value={eventId} onValueChange={pickEvent}>
+              <SelectTrigger className="w-full bg-white">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="max-h-64">
+                <SelectItem value="0">No event — manual entry</SelectItem>
+                {events.map((ev) => (
+                  <SelectItem key={ev.id} value={String(ev.id)}>
+                    {fmtDate(ev.date)} · {ev.title}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs">Date</Label>
+              <Input
+                type="date"
+                value={date}
+                onChange={(e) => setDate(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Hours each</Label>
+              <Input
+                type="number"
+                min="0"
+                step="0.5"
+                value={hours}
+                onChange={(e) => setHours(e.target.value)}
+                placeholder="2"
+              />
+            </div>
+          </div>
+          <div className="flex items-center justify-between gap-2">
+            <Label htmlFor="bulk-approved" className="text-xs font-normal">
+              Approved (counts toward the {HOURS_GOAL}-hour goal)
+            </Label>
+            <Switch
+              id="bulk-approved"
+              size="sm"
+              checked={approved}
+              onCheckedChange={setApproved}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Families ({selected.size} selected)
+              </h3>
+              <div className="flex items-center gap-3 text-xs">
+                <button
+                  type="button"
+                  className="font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                  onClick={() =>
+                    setSelected(new Set(candidates.map((f) => f.id)))
+                  }
+                >
+                  Select all shown
+                </button>
+                {selected.size > 0 ? (
+                  <button
+                    type="button"
+                    className="font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                    onClick={() => setSelected(new Set())}
+                  >
+                    Clear
+                  </button>
+                ) : null}
+              </div>
+            </div>
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search enrolled families…"
+            />
+            {candidates.length === 0 ? (
+              <p className="py-2 text-sm text-muted-foreground">
+                No matching families.
+              </p>
+            ) : (
+              <ul className="max-h-56 space-y-0.5 overflow-y-auto rounded-md border p-1">
+                {candidates.map((f) => {
+                  const on = selected.has(f.id);
+                  return (
+                    <li key={f.id}>
+                      <button
+                        type="button"
+                        onClick={() => toggle(f.id)}
+                        aria-pressed={on}
+                        className={cn(
+                          "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm transition-colors",
+                          on ? "bg-muted" : "hover:bg-muted/50"
+                        )}
+                      >
+                        <span
+                          className={cn(
+                            "flex size-4 shrink-0 items-center justify-center rounded border",
+                            on
+                              ? "border-foreground bg-foreground text-background"
+                              : "border-border bg-white"
+                          )}
+                        >
+                          {on ? <Check className="size-3" /> : null}
+                        </span>
+                        <span className="truncate">{f.name}</span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        </div>
+
+        <DialogFooter className="border-t px-5 py-3">
+          <Button
+            variant="outline"
+            size="sm"
+            className="bg-white"
+            disabled={saving}
+            onClick={() => onDone(false)}
+          >
+            Cancel
+          </Button>
+          <Button
+            size="sm"
+            disabled={saving || !valid}
+            onClick={() => void save()}
+          >
+            {saving ? (
+              <>
+                <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                Saving
+              </>
+            ) : (
+              `Add for ${selected.size || ""} ${selected.size === 1 ? "family" : "families"}`
+            )}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/* ── Event reminder text dialog ───────────────────────────────────── */
+
+function fmtTimeMs(ms: number | null | undefined): string {
+  if (!ms || !Number.isFinite(ms)) return "";
+  return new Date(ms).toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+/** Generic reminder template — editable before sending, personalized
+ *  per recipient by the group route ({{first_name}}). */
+function defaultReminder(ev: VolunteerEvent): string {
+  const when = `${fmtDate(ev.date)}${
+    ev.start_time ? ` at ${fmtTimeMs(ev.start_time)}` : ""
+  }`;
+  const where = ev.location ? ` at ${ev.location}` : "";
+  const vol =
+    ev.parent_volunteer_hours && ev.volunteer_hour_total
+      ? ` Attending counts toward your volunteer hours (${formatHours(ev.volunteer_hour_total)} hrs).`
+      : "";
+  return `Hi {{first_name}} — reminder from SailFuture Academy: ${ev.title} is ${when}${where}.${vol}`;
+}
+
+/**
+ * Text an event reminder to enrolled families. The recipient list
+ * comes from the group-messaging audience (same reachability +
+ * opt-out data as the composer), pre-selected to every textable
+ * enrolled family — audit the list and deselect before sending. The
+ * send goes through the group blast route, so it's personalized,
+ * idempotent per dialog session, and lands on each family's thread.
+ */
+function EventReminderDialog({
+  yearId,
+  event,
+  onDone,
+}: {
+  yearId: number;
+  event: VolunteerEvent;
+  onDone: () => void;
+}) {
+  const { data, isLoading } = useSWR<{ contacts: GroupContact[] }>(
+    `/api/admin/messages/group/audience?yearId=${yearId}`,
+    adminFetcher
+  );
+  const enrolled = useMemo(
+    () =>
+      (data?.contacts ?? []).filter(
+        (c) => c.type === "family" && c.stage === "enrolled"
+      ),
+    [data]
+  );
+  const defaultSelected = useMemo(
+    () => new Set(enrolled.filter((c) => c.sendable).map((c) => c.id)),
+    [enrolled]
+  );
+  // null = "everything sendable" until the admin touches the list —
+  // avoids a state write when the audience finishes loading.
+  const [picked, setPicked] = useState<Set<number> | null>(null);
+  const selected = picked ?? defaultSelected;
+
+  const [message, setMessage] = useState(() => defaultReminder(event));
+  const [query, setQuery] = useState("");
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [sending, setSending] = useState(false);
+  // One blast id per dialog open — retries resume instead of
+  // double-texting (the group route's idempotency key).
+  const [blastId] = useState(() =>
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `reminder-${event.id}-${String(Math.random()).slice(2, 10)}`
+  );
+
+  const shown = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return q
+      ? enrolled.filter((c) => c.name.toLowerCase().includes(q))
+      : enrolled;
+  }, [enrolled, query]);
+
+  function toggle(id: number) {
+    const next = new Set(selected);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setPicked(next);
+  }
+
+  const text = message.trim();
+  const segments = text.length === 0 ? 0 : Math.ceil(text.length / 160);
+  const canSend = selected.size > 0 && text.length > 0;
+
+  async function send() {
+    if (!canSend || sending) return;
+    setSending(true);
+    try {
+      const res = await fetch("/api/admin/messages/group", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          yearId,
+          contacts: [...selected].map((id) => ({ type: "family", id })),
+          body: text,
+          blastId,
+        }),
+      });
+      const result = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(result?.error ?? `Send failed (${res.status})`);
+      }
+      const sent = Number(result?.sent) || 0;
+      const failed = Number(result?.failed) || 0;
+      toast.success(
+        `Reminder sent to ${sent} famil${sent === 1 ? "y" : "ies"}${failed ? ` (${failed} failed)` : ""}.`
+      );
+      onDone();
+    } catch (err) {
+      console.error("Failed to send reminder:", err);
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't send the reminder."
+      );
+      setConfirmOpen(false);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <>
+      <Dialog open onOpenChange={(o) => !sending && !o && onDone()}>
+        <DialogContent className="flex max-h-[85vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-xl">
+          <DialogHeader className="border-b px-5 py-4 pr-12">
+            <DialogTitle>Remind families · {event.title}</DialogTitle>
+            <DialogDescription>
+              Texts every selected enrolled family. Edit the message,
+              audit the list, and deselect anyone who shouldn&rsquo;t get
+              it.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
+            <div className="space-y-1.5">
+              <Label className="text-xs">Message</Label>
+              <Textarea
+                value={message}
+                onChange={(e) => setMessage(e.target.value)}
+                rows={4}
+              />
+              <p className="text-[11px] text-muted-foreground">
+                {"{{first_name}}"} becomes each parent&rsquo;s first name
+                · {text.length} chars
+                {segments > 0
+                  ? ` · ${segments} segment${segments === 1 ? "" : "s"}`
+                  : ""}
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  Recipients ({selected.size} of {enrolled.length})
+                </h3>
+                <div className="flex items-center gap-3 text-xs">
+                  <button
+                    type="button"
+                    className="font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                    onClick={() => setPicked(new Set(defaultSelected))}
+                  >
+                    Select all
+                  </button>
+                  {selected.size > 0 ? (
+                    <button
+                      type="button"
+                      className="font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                      onClick={() => setPicked(new Set())}
+                    >
+                      Clear
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+              <Input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search families…"
+              />
+              {isLoading && !data ? (
+                <div className="flex justify-center py-6">
+                  <Loader2 className="size-4 animate-spin text-muted-foreground" />
+                </div>
+              ) : shown.length === 0 ? (
+                <p className="py-2 text-sm text-muted-foreground">
+                  {query
+                    ? "No matching families."
+                    : "No enrolled families to text."}
+                </p>
+              ) : (
+                <ul className="max-h-56 space-y-0.5 overflow-y-auto rounded-md border p-1">
+                  {shown.map((c) => {
+                    const on = selected.has(c.id);
+                    return (
+                      <li key={c.key}>
+                        <button
+                          type="button"
+                          disabled={!c.sendable}
+                          onClick={() => toggle(c.id)}
+                          aria-pressed={on}
+                          className={cn(
+                            "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm transition-colors",
+                            !c.sendable
+                              ? "cursor-not-allowed opacity-50"
+                              : on
+                                ? "bg-muted"
+                                : "hover:bg-muted/50"
+                          )}
+                        >
+                          <span
+                            className={cn(
+                              "flex size-4 shrink-0 items-center justify-center rounded border",
+                              on
+                                ? "border-foreground bg-foreground text-background"
+                                : "border-border bg-white"
+                            )}
+                          >
+                            {on ? <Check className="size-3" /> : null}
+                          </span>
+                          <span className="min-w-0 flex-1 truncate">
+                            {c.name}
+                            {c.students ? (
+                              <span className="text-xs text-muted-foreground">
+                                {" "}
+                                · {c.students}
+                              </span>
+                            ) : null}
+                          </span>
+                          {!c.sendable ? (
+                            <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                              {c.optedOut ? "Opted out" : "No number"}
+                            </span>
+                          ) : null}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          </div>
+
+          <DialogFooter className="border-t px-5 py-3">
+            <Button
+              variant="outline"
+              size="sm"
+              className="bg-white"
+              disabled={sending}
+              onClick={() => onDone()}
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              disabled={sending || !canSend}
+              onClick={() => setConfirmOpen(true)}
+            >
+              <Bell className="size-3.5 mr-1.5" />
+              Send reminder
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Send confirm */}
+      <AlertDialog
+        open={confirmOpen}
+        onOpenChange={(o) => !sending && setConfirmOpen(o)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Text {selected.size} famil
+              {selected.size === 1 ? "y" : "ies"}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Sends the reminder about &ldquo;{event.title}&rdquo; as a
+              group text. Messages can&rsquo;t be unsent.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={sending}>
+              Go back
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={sending}
+              onClick={(e) => {
+                e.preventDefault();
+                void send();
+              }}
+            >
+              {sending ? (
+                <>
+                  <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                  Sending
+                </>
+              ) : (
+                "Send"
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }
