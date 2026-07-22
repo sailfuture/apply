@@ -1,12 +1,15 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { toast } from "sonner";
 import {
+  Check,
   ChevronLeft,
   ChevronRight,
+  ChevronsUpDown,
+  Clock,
   Loader2,
   MapPin,
   Pencil,
@@ -34,6 +37,19 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import {
   Sheet,
   SheetContent,
@@ -145,6 +161,39 @@ const TIME_OPTIONS: Array<{ value: string; label: string }> = (() => {
 function timeLabel12(h: number, m: number): string {
   const hour12 = h % 12 === 0 ? 12 : h % 12;
   return `${hour12}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
+}
+
+/** "HH:MM" → 12-hour label, for values off the 15-minute grid. */
+function labelForTimeValue(v: string): string {
+  const found = TIME_OPTIONS.find((o) => o.value === v);
+  if (found) return found.label;
+  const [h, m] = v.split(":").map(Number);
+  return timeLabel12(h ?? 0, m ?? 0);
+}
+
+/**
+ * Loose time parsing for the combobox — accepts "8", "8:05", "815",
+ * "8:05p", "8 pm", "14:30"… Bare hours with no AM/PM read as 24-hour
+ * (8 → 8:00 AM, 14 → 2:00 PM). Returns null when it isn't a time.
+ */
+function parseTimeInput(raw: string): { value: string; label: string } | null {
+  const s = raw.trim().toLowerCase().replace(/\./g, "");
+  if (!s) return null;
+  const m = s.match(/^(\d{1,2})(?::?(\d{2}))?\s*(a|am|p|pm)?$/);
+  if (!m) return null;
+  let h = Number(m[1]);
+  const min = m[2] ? Number(m[2]) : 0;
+  const mer = m[3];
+  if (min > 59) return null;
+  if (mer) {
+    if (h < 1 || h > 12) return null;
+    if ((mer === "p" || mer === "pm") && h !== 12) h += 12;
+    if ((mer === "a" || mer === "am") && h === 12) h = 0;
+  } else if (h > 23) {
+    return null;
+  }
+  const value = `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
+  return { value, label: timeLabel12(h, min) };
 }
 
 /** "YYYY-MM-DD" → local Date (avoids the UTC-midnight off-by-one that
@@ -878,10 +927,9 @@ function DayCell({
 /* ── Time + event-type field widgets ──────────────────────────────── */
 
 /**
- * Time dropdown in 15-minute steps with a "No time" clear option —
- * friendlier than the native time input. An off-grid stored value
- * (e.g. 8:05 from the old free-text input) is kept as an extra option
- * so editing doesn't silently drop it.
+ * Searchable time combobox — type to filter the 15-minute grid, or
+ * type any exact time ("8:05", "8:05p", "14:30") and pick the parsed
+ * "Use …" row it offers. "No time" clears.
  */
 function TimeSelect({
   value,
@@ -892,33 +940,240 @@ function TimeSelect({
   onChange: (v: string) => void;
   ariaLabel: string;
 }) {
-  const options = useMemo(() => {
-    if (!value || TIME_OPTIONS.some((o) => o.value === value)) {
-      return TIME_OPTIONS;
-    }
-    const [h, m] = value.split(":").map(Number);
-    return [
-      ...TIME_OPTIONS,
-      { value, label: timeLabel12(h ?? 0, m ?? 0) },
-    ].sort((a, b) => a.value.localeCompare(b.value));
-  }, [value]);
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+
+  // Free-typed time that isn't one of the grid rows — offered as its
+  // own "Use 8:05 AM" item (value = the raw query so cmdk's filter
+  // always keeps it visible).
+  const parsed = parseTimeInput(query);
+  const offParsed =
+    parsed && !TIME_OPTIONS.some((o) => o.value === parsed.value)
+      ? parsed
+      : null;
+
+  function pick(v: string) {
+    onChange(v);
+    setOpen(false);
+    setQuery("");
+  }
+
   return (
-    <Select
-      value={value || "none"}
-      onValueChange={(v) => onChange(v === "none" ? "" : v)}
+    <Popover
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o);
+        if (!o) setQuery("");
+      }}
     >
-      <SelectTrigger className="w-full bg-white" aria-label={ariaLabel}>
-        <SelectValue placeholder="No time" />
-      </SelectTrigger>
-      <SelectContent className="max-h-64">
-        <SelectItem value="none">No time</SelectItem>
-        {options.map((o) => (
-          <SelectItem key={o.value} value={o.value}>
-            {o.label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          aria-label={ariaLabel}
+          className="w-full justify-between bg-white px-3 font-normal"
+        >
+          <span
+            className={cn(
+              "flex min-w-0 items-center gap-1.5",
+              !value && "text-muted-foreground"
+            )}
+          >
+            <Clock className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="truncate">
+              {value ? labelForTimeValue(value) : "No time"}
+            </span>
+          </span>
+          <ChevronsUpDown className="size-3.5 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[220px] p-0" align="start">
+        <Command>
+          <CommandInput
+            placeholder="Type a time…"
+            value={query}
+            onValueChange={setQuery}
+          />
+          <CommandList className="max-h-56">
+            <CommandEmpty>No matching time.</CommandEmpty>
+            {offParsed ? (
+              <CommandGroup>
+                <CommandItem value={query} onSelect={() => pick(offParsed.value)}>
+                  Use {offParsed.label}
+                </CommandItem>
+              </CommandGroup>
+            ) : null}
+            <CommandGroup>
+              <CommandItem
+                value="no time clear none"
+                onSelect={() => pick("")}
+              >
+                No time
+                {!value ? <Check className="ml-auto size-3.5" /> : null}
+              </CommandItem>
+              {TIME_OPTIONS.map((o) => (
+                <CommandItem
+                  key={o.value}
+                  value={o.label}
+                  onSelect={() => pick(o.value)}
+                >
+                  {o.label}
+                  {value === o.value ? (
+                    <Check className="ml-auto size-3.5" />
+                  ) : null}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/** One Places suggestion from /api/admin/places. */
+interface PlaceSuggestion {
+  main: string;
+  secondary: string;
+  full: string;
+}
+
+/**
+ * Location field with Google Places autocomplete. Still a free-text
+ * input (events store location as plain text) — typing 3+ characters
+ * fetches address/place suggestions through the server-side proxy;
+ * picking one fills the input with the full formatted address. When
+ * the API key isn't configured the dropdown never appears and this
+ * behaves exactly like the old plain input.
+ */
+function LocationInput({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [suggestions, setSuggestions] = useState<PlaceSuggestion[]>([]);
+  const [loading, setLoading] = useState(false);
+  // Server said "no key configured" — stop asking for this mount.
+  const disabledRef = useRef(false);
+  // Google per-session billing token: one UUID per typing session,
+  // reset after a pick.
+  const sessionRef = useRef<string | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const seqRef = useRef(0);
+
+  useEffect(
+    () => () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    },
+    []
+  );
+
+  function queryPlaces(q: string) {
+    if (disabledRef.current) return;
+    if (timerRef.current) clearTimeout(timerRef.current);
+    if (q.trim().length < 3) {
+      setSuggestions([]);
+      setOpen(false);
+      return;
+    }
+    timerRef.current = setTimeout(async () => {
+      const seq = ++seqRef.current;
+      setLoading(true);
+      try {
+        if (!sessionRef.current) {
+          sessionRef.current =
+            typeof crypto !== "undefined" && "randomUUID" in crypto
+              ? crypto.randomUUID()
+              : String(Math.random()).slice(2);
+        }
+        const res = await fetch(
+          `/api/admin/places?q=${encodeURIComponent(q)}&session=${sessionRef.current}`
+        );
+        if (!res.ok) return;
+        const data = await res.json();
+        if (seq !== seqRef.current) return; // a newer keystroke won
+        if (data?.configured === false) {
+          disabledRef.current = true;
+          setOpen(false);
+          return;
+        }
+        const list: PlaceSuggestion[] = data?.suggestions ?? [];
+        setSuggestions(list);
+        setOpen(list.length > 0);
+      } catch {
+        // Best-effort — the field keeps working as plain text.
+      } finally {
+        if (seq === seqRef.current) setLoading(false);
+      }
+    }, 300);
+  }
+
+  return (
+    <div className="relative">
+      <Input
+        value={value}
+        onChange={(e) => {
+          onChange(e.target.value);
+          queryPlaces(e.target.value);
+        }}
+        onFocus={() => {
+          if (suggestions.length > 0 && value.trim().length >= 3) {
+            setOpen(true);
+          }
+        }}
+        onBlur={() => setOpen(false)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") setOpen(false);
+        }}
+        placeholder={placeholder}
+        autoComplete="off"
+      />
+      {loading ? (
+        <Loader2 className="absolute right-2.5 top-1/2 size-3.5 -translate-y-1/2 animate-spin text-muted-foreground" />
+      ) : null}
+      {open && suggestions.length > 0 ? (
+        <div className="absolute z-50 mt-1 w-full overflow-hidden rounded-md border bg-white shadow-md">
+          <ul className="max-h-56 overflow-y-auto py-1">
+            {suggestions.map((s) => (
+              <li key={s.full}>
+                {/* onMouseDown (not onClick) so the pick lands before
+                    the input's blur closes the dropdown. */}
+                <button
+                  type="button"
+                  className="w-full px-3 py-1.5 text-left transition-colors hover:bg-muted/60"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    onChange(s.full);
+                    setSuggestions([]);
+                    setOpen(false);
+                    sessionRef.current = null;
+                  }}
+                >
+                  <span className="block truncate text-sm font-medium">
+                    {s.main}
+                  </span>
+                  {s.secondary ? (
+                    <span className="block truncate text-xs text-muted-foreground">
+                      {s.secondary}
+                    </span>
+                  ) : null}
+                </button>
+              </li>
+            ))}
+          </ul>
+          {/* Required attribution for Places data shown without a map. */}
+          <p className="border-t px-3 py-1 text-right text-[10px] text-muted-foreground">
+            Powered by Google
+          </p>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -1142,9 +1397,9 @@ function NewEventDialog({
             </div>
             <div className="space-y-1.5">
               <Label className="text-xs">Location</Label>
-              <Input
+              <LocationInput
                 value={location}
-                onChange={(e) => setLocation(e.target.value)}
+                onChange={setLocation}
                 placeholder="Campus, marina, address…"
               />
             </div>
@@ -1713,9 +1968,9 @@ function EventForm({
       </div>
       <div className="space-y-1.5">
         <Label className="text-xs">Location</Label>
-        <Input
+        <LocationInput
           value={location}
-          onChange={(e) => setLocation(e.target.value)}
+          onChange={setLocation}
           placeholder="Campus, marina, address…"
         />
       </div>
