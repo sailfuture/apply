@@ -74,10 +74,13 @@ const NAV_ITEMS: NavItem[] = [
   // Two-way SMS inbox + group messaging.
   { title: "Messages", href: "/admin/messages" },
   // Settings — year-scoped configuration (tuition, fees, SUFS award
-  // amounts, billing start date).
+  // amounts, billing start date) and the day-by-day school calendar.
   {
     title: "Settings",
-    children: [{ title: "School Years", href: "/admin/school-years" }],
+    children: [
+      { title: "School Years", href: "/admin/school-years" },
+      { title: "School Calendar", href: "/admin/school-calendar" },
+    ],
   },
 ];
 

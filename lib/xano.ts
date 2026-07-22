@@ -2075,6 +2075,58 @@ function normalizeFamilyPaymentPK(
   return out as unknown as XanoFamilyPayment;
 }
 
+/**
+ * One day of the school calendar (`school_calendar`) — one row per
+ * calendar day per school year, seeded when the year's calendar is
+ * generated. `schoolyears_id` matches the registration year ids the
+ * top-bar year picker uses. `terms_id` groups days into terms (no
+ * terms endpoint exists — consumers label them ordinally). The six
+ * boundary flags mark term / externship-rotation / internship-rotation
+ * start and end days.
+ */
+export interface XanoSchoolCalendarDay {
+  id: number;
+  created_at: number;
+  schoolyears_id: number;
+  /** YYYY-MM-DD. */
+  date: string;
+  terms_id: number;
+  seasons_id: number;
+  /** "School" | "Weekend" | "Break". */
+  type: string;
+  day_of_week: string;
+  holiday: boolean;
+  break: boolean;
+  /** "Externship" | "Internship" | "" (non-work days). */
+  work_type: string;
+  last_day_term: boolean;
+  first_day_term: boolean;
+  last_day_extern_term: boolean;
+  first_day_extern_term: boolean;
+  last_day_intern_term: boolean;
+  first_day_intern_term: boolean;
+}
+
+/**
+ * An event pinned to one school-calendar day (`school_calendar_events`).
+ * `start_time` / `end_time` are unix-ms timestamps (0/null = not set —
+ * an all-day event). `parent_volunteer_hours` marks events parents can
+ * attend for volunteer-hour credit, worth `volunteer_hour_total` hours.
+ */
+export interface XanoSchoolCalendarEvent {
+  id: number;
+  created_at: number;
+  school_calendar_id: number;
+  start_time: number | null;
+  end_time: number | null;
+  title: string;
+  description: string;
+  location: string;
+  mandatory: boolean;
+  parent_volunteer_hours: boolean;
+  volunteer_hour_total: number;
+}
+
 export const xano = {
   parents: {
     async create(data: Omit<XanoParent, "id" | "created_at">) {
@@ -5128,6 +5180,80 @@ export const xano = {
 
     async delete(id: number): Promise<void> {
       const res = await fetch(`${getBaseUrl()}/registration_inquiry/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+    },
+  },
+
+  /** School calendar days — see `XanoSchoolCalendarDay`. */
+  schoolCalendar: {
+    /** Every day row for one school year. The plain endpoint has no
+     *  year filter, so we scan and filter in code — ~365 rows per
+     *  year keeps this cheap. */
+    async getByYear(yearId: number): Promise<XanoSchoolCalendarDay[]> {
+      const res = await fetch(`${getBaseUrl()}/school_calendar`, {
+        cache: "no-store",
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      const rows: XanoSchoolCalendarDay[] = await res.json();
+      return Array.isArray(rows)
+        ? rows.filter((r) => Number(r.schoolyears_id) === yearId)
+        : [];
+    },
+
+    async update(
+      id: number,
+      patch: Partial<XanoSchoolCalendarDay>
+    ): Promise<XanoSchoolCalendarDay> {
+      const res = await fetch(`${getBaseUrl()}/school_calendar/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+  },
+
+  /** Events pinned to calendar days — see `XanoSchoolCalendarEvent`. */
+  schoolCalendarEvents: {
+    async getAll(): Promise<XanoSchoolCalendarEvent[]> {
+      const res = await fetch(`${getBaseUrl()}/school_calendar_events`, {
+        cache: "no-store",
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      const rows = await res.json();
+      return Array.isArray(rows) ? rows : [];
+    },
+
+    async create(
+      data: Omit<XanoSchoolCalendarEvent, "id" | "created_at">
+    ): Promise<XanoSchoolCalendarEvent> {
+      const res = await fetch(`${getBaseUrl()}/school_calendar_events`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async update(
+      id: number,
+      patch: Partial<XanoSchoolCalendarEvent>
+    ): Promise<XanoSchoolCalendarEvent> {
+      const res = await fetch(`${getBaseUrl()}/school_calendar_events/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async delete(id: number): Promise<void> {
+      const res = await fetch(`${getBaseUrl()}/school_calendar_events/${id}`, {
+        method: "DELETE",
+      });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
     },
   },
