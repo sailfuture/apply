@@ -50,23 +50,35 @@ const NAV_ITEMS: NavItem[] = [
       { title: "Campus Visits", href: "/admin/campus-visits" },
     ],
   },
-  // Applications now folds in re-applications (with a `flow_type` pill
-  // on each row), so the standalone Re-Applications nav item is gone.
-  { title: "Applications", href: "/admin/applications" },
-  { title: "Registrations", href: "/admin/registrations" },
-  // Step Up For Students reconciliation — confirmed registrations
-  // with their award ID + tier, ticked off as each student is
-  // enrolled in the Step Up portal.
-  { title: "SUFS", href: "/admin/sufs" },
-  { title: "Enrolled", href: "/admin/enrolled" },
-  // Two-way SMS inbox + filtered group messaging.
+  // Admissions — the apply-through-enrolled pipeline. Applications
+  // folds in re-applications (with a `flow_type` pill on each row),
+  // so there's no standalone Re-Applications item.
+  {
+    title: "Admissions",
+    children: [
+      { title: "Applications", href: "/admin/applications" },
+      { title: "Registrations", href: "/admin/registrations" },
+      { title: "Enrolled", href: "/admin/enrolled" },
+    ],
+  },
+  // Finance — Stripe billing (per-family subscriptions, past-due
+  // filters, drill-through to the Billing card) and the Step Up For
+  // Students confirmation pipeline.
+  {
+    title: "Finance",
+    children: [
+      { title: "Billing", href: "/admin/billing" },
+      { title: "SUFS", href: "/admin/sufs" },
+    ],
+  },
+  // Two-way SMS inbox + group messaging.
   { title: "Messages", href: "/admin/messages" },
-  // Billing — shows every family with a Stripe subscription on file
-  // for the selected year, with quick filters for past-due families.
-  // Each row drills into the family registration detail page's
-  // Billing card for actions (pause / cancel / refund / update amount).
-  { title: "Billing", href: "/admin/billing" },
-  { title: "School Years", href: "/admin/school-years" },
+  // Settings — year-scoped configuration (tuition, fees, SUFS award
+  // amounts, billing start date).
+  {
+    title: "Settings",
+    children: [{ title: "School Years", href: "/admin/school-years" }],
+  },
 ];
 
 /**
