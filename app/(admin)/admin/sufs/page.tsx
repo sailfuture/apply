@@ -1,12 +1,13 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { toast } from "sonner";
-import { Download, Inbox } from "lucide-react";
+import { Activity, Download, Inbox } from "lucide-react";
 import { DataTable, type ColumnDef } from "@/components/admin/data-table";
+import { ActivityLogSheet } from "@/components/admin/activity-log-sheet";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -15,7 +16,6 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -24,6 +24,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { adminFetcher } from "@/lib/admin-fetcher";
+import { formatRelativeShort } from "@/lib/format-note-time";
 import { cn } from "@/lib/utils";
 import type { SufsStudentRow } from "@/app/api/admin/sufs/route";
 
@@ -56,6 +57,25 @@ const SUFS_LABELS: Record<string, string> = {
 };
 
 /**
+ * Grade-free tier labels for the on-page Award Type cell — the tables
+ * are grouped by incoming grade, so repeating the tier's grade there
+ * is noise. The cell pairs this with the award amount instead
+ * ("FTC · $7,770"). The full grade-carrying `SUFS_LABELS` above stays
+ * in use for the CSV export, where rows aren't grouped.
+ */
+const SUFS_TYPE_SHORT: Record<string, string> = {
+  fes_eo_8: "FES-EO",
+  fes_eo_9: "FES-EO",
+  ftc_8: "FTC",
+  ftc_9: "FTC",
+  fes_ua_8_ese_1_3: "FES-UA ESE 1-3",
+  fes_ua_9_ese_1_3: "FES-UA ESE 1-3",
+  fes_ua_ese_4: "FES-UA ESE 4",
+  fes_ua_ese_5: "FES-UA ESE 5",
+  custom: "Custom",
+};
+
+/**
  * Three-stage pipeline per student, derived from the two bools:
  *   - not_sent   — admin hasn't sent the Step Up enrollment request
  *   - pending    — request sent, waiting on the parent to complete it
@@ -83,6 +103,22 @@ const FILTER_LABEL: Record<StatusFilter, string> = {
 
 const QUARTERS = [1, 2, 3, 4] as const;
 type Quarter = (typeof QUARTERS)[number];
+
+/**
+ * Incoming-grade bucket for the within-status grouping. `student_grade`
+ * is free text from the application ("8th", "9", "10th grade", …), so
+ * we parse the first number and accept 8–12; anything else — including
+ * blank — lands in the trailing "Grade not set" bucket rather than
+ * silently disappearing.
+ */
+const GRADE_BUCKETS = [8, 9, 10, 11, 12] as const;
+
+function gradeOf(row: SufsStudentRow): number | null {
+  const m = /(\d{1,2})/.exec(row.student_grade ?? "");
+  if (!m) return null;
+  const n = Number(m[1]);
+  return n >= 8 && n <= 12 ? n : null;
+}
 
 /** Typed access into the flat per-quarter columns. */
 const qPaid = (r: SufsRow, q: Quarter) =>
@@ -233,6 +269,10 @@ export default function SufsPage() {
   const yearId = searchParams.get("yearId");
   const [filter, setFilter] = useState<StatusFilter>("all");
   const [savingId, setSavingId] = useState<number | null>(null);
+  // Row whose Activity sheet is open — ONE controlled sheet at page
+  // level shared by every row's trigger button, so a hundred rows
+  // don't each mount their own Sheet (and its lazy SWR fetch).
+  const [activityRow, setActivityRow] = useState<SufsRow | null>(null);
 
   const key = yearId ? `/api/admin/sufs?yearId=${yearId}` : null;
   const { data, isLoading, error, mutate } = useSWR<SufsStudentRow[]>(
@@ -368,10 +408,10 @@ export default function SufsPage() {
         <span className="block truncate font-medium">
           {row.student_full_name}
         </span>
-        {/* Family · incoming grade, dot-separated. */}
+        {/* Grade intentionally omitted — rows sit under their grade's
+            group header, so repeating it per row is noise. */}
         <span className="block truncate text-xs text-muted-foreground">
           {row.family_name}
-          {row.student_grade ? ` · Grade ${row.student_grade}` : ""}
         </span>
       </Link>
     ),
@@ -401,47 +441,54 @@ export default function SufsPage() {
     sortable: true,
     searchable: true,
     width: w,
-    accessor: (row) => SUFS_LABELS[row.sufs_type] ?? row.sufs_type,
+    accessor: (row) =>
+      `${SUFS_TYPE_SHORT[row.sufs_type] ?? row.sufs_type} ${
+        row.sufs_amount ?? ""
+      }`,
     render: (row) => {
       if (!row.sufs_type) {
         return (
           <span className="text-xs text-muted-foreground">Not on SUFS</span>
         );
       }
+      // Tier · amount, bullet-separated on one line. Grade lives in
+      // the grade group header, and award status is intentionally
+      // not shown here.
       return (
-        <span className="block min-w-0">
-          <span className="block truncate">
-            {SUFS_LABELS[row.sufs_type] ?? row.sufs_type}
-          </span>
-          <span className="block truncate text-xs text-muted-foreground">
-            {money(row.sufs_amount)}
-            {row.sufs_status ? ` · ${row.sufs_status}` : ""}
-          </span>
+        <span className="block truncate">
+          {SUFS_TYPE_SHORT[row.sufs_type] ?? row.sufs_type}
+          <span className="text-muted-foreground"> · </span>
+          <span className="tabular-nums">{money(row.sufs_amount)}</span>
         </span>
       );
     },
   });
 
-  const noteCol = (w: string): ColumnDef<SufsRow> => ({
-    key: "sufs_enrollment_request_notes",
-    header: "Note",
-    searchable: true,
+  // Replaces the old inline note field — comments now live on the
+  // family activity timeline (notes table), opened per-row via the
+  // shared controlled sheet. The legacy packet note still surfaces
+  // inside the stream as a timeline entry.
+  const activityCol = (w: string): ColumnDef<SufsRow> => ({
+    key: "activity",
+    header: "Activity",
+    align: "center",
     width: w,
     render: (row) => (
-      // `key` on the row id is load-bearing: DataTable keys its rows
-      // by array index, and rows shift indices when a checkbox moves
-      // one between the status tables. Keying by id remounts a
-      // NoteCell whose slot changed identity so a draft can never
-      // commit onto the wrong student.
-      <NoteCell
-        key={row.id}
-        row={row}
-        disabled={savingId === row.id || row.packet_id == null}
-        onSave={(note) => {
-          if (note === row.sufs_enrollment_request_notes) return;
-          void patchRow(row, { sufs_enrollment_request_notes: note });
-        }}
-      />
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="bg-white h-7 px-2"
+        onClick={() => setActivityRow(row)}
+        aria-label={`Open activity log for ${row.student_full_name}`}
+        title={
+          row.sufs_enrollment_request_notes
+            ? `Open activity — legacy note: ${row.sufs_enrollment_request_notes}`
+            : "Notes, texts, and account milestones"
+        }
+      >
+        <Activity className="size-3.5" />
+      </Button>
     ),
   });
 
@@ -467,22 +514,16 @@ export default function SufsPage() {
         : row.packet_id == null
           ? "No registration packet on file for this student yet"
           : "Mark once the Step Up enrollment request has been sent";
+      // No date caption here — the "Requested" relative-time column
+      // carries the timing; the tooltip keeps the full detail.
       return (
-        <span
-          className="inline-flex flex-col items-center gap-0.5"
-          title={title}
-        >
+        <span className="inline-flex items-center" title={title}>
           <Checkbox
             checked={sent}
             disabled={savingId === row.id || row.packet_id == null}
             onCheckedChange={(v) => toggleRequestSent(row, v === true)}
             aria-label={`Mark enrollment request sent for ${row.student_full_name}`}
           />
-          {sent && row.sufs_enrollment_request_time ? (
-            <span className="text-[10px] tabular-nums text-muted-foreground">
-              {fmtShort(row.sufs_enrollment_request_time)}
-            </span>
-          ) : null}
         </span>
       );
     },
@@ -508,22 +549,47 @@ export default function SufsPage() {
               : ""
           }`
         : "Mark once the parent has completed the Step Up enrollment";
+      // No date caption — the "Confirmed" relative-time column
+      // carries the timing; the tooltip keeps the full detail.
       return (
-        <span
-          className="inline-flex flex-col items-center gap-0.5"
-          title={title}
-        >
+        <span className="inline-flex items-center" title={title}>
           <Checkbox
             checked={confirmed}
             disabled={savingId === row.id || row.packet_id == null}
             onCheckedChange={(v) => toggleParentConfirmed(row, v === true)}
             aria-label={`Mark parent enrollment confirmed for ${row.student_full_name}`}
           />
-          {confirmed && row.sufs_parent_enrollment_request_time ? (
-            <span className="text-[10px] tabular-nums text-muted-foreground">
-              {fmtShort(row.sufs_parent_enrollment_request_time)}
-            </span>
-          ) : null}
+        </span>
+      );
+    },
+  });
+
+  /**
+   * Compact relative-time column ("now" / "5m" / "3h" / "4d", falling
+   * back to "May 2" past a week) for an audit timestamp. Sorts by the
+   * raw ms value; hover shows the full date.
+   */
+  const relativeTimeCol = (
+    key: string,
+    header: string,
+    getTime: (row: SufsRow) => number | null,
+    w: string
+  ): ColumnDef<SufsRow> => ({
+    key,
+    header,
+    sortable: true,
+    align: "center",
+    width: w,
+    accessor: (row) => getTime(row) ?? 0,
+    render: (row) => {
+      const t = getTime(row);
+      if (!t) return <span className="text-muted-foreground">—</span>;
+      return (
+        <span
+          className="text-xs tabular-nums text-muted-foreground"
+          title={fmtDate(t)}
+        >
+          {formatRelativeShort(t)}
         </span>
       );
     },
@@ -570,30 +636,48 @@ export default function SufsPage() {
   // Per-group column sets. Widths total 100% within each table; the
   // three tables carry different actions so their columns don't need
   // to line up across groups.
+  const requestedAtCol = (w: string) =>
+    relativeTimeCol(
+      "sufs_enrollment_request_time",
+      "Requested",
+      (row) => row.sufs_enrollment_request_time,
+      w
+    );
+  const confirmedAtCol = (w: string) =>
+    relativeTimeCol(
+      "sufs_parent_enrollment_request_time",
+      "Confirmed",
+      (row) => row.sufs_parent_enrollment_request_time,
+      w
+    );
+
   const notSentColumns: ColumnDef<SufsRow>[] = [
-    studentCol("w-[26%]"),
-    awardIdCol("w-[14%]"),
-    awardTypeCol("w-[18%]"),
-    noteCol("w-[28%]"),
-    requestSentCol("w-[14%]"),
+    studentCol("w-[30%]"),
+    awardIdCol("w-[16%]"),
+    awardTypeCol("w-[24%]"),
+    requestSentCol("w-[15%]"),
+    activityCol("w-[15%]"),
   ];
   const pendingColumns: ColumnDef<SufsRow>[] = [
-    studentCol("w-[23%]"),
+    studentCol("w-[24%]"),
     awardIdCol("w-[12%]"),
     awardTypeCol("w-[16%]"),
-    noteCol("w-[23%]"),
-    requestSentCol("w-[13%]"),
-    parentConfirmedCol("w-[13%]"),
+    requestSentCol("w-[11%]"),
+    requestedAtCol("w-[10%]"),
+    parentConfirmedCol("w-[14%]"),
+    activityCol("w-[13%]"),
   ];
   const confirmedColumns: ColumnDef<SufsRow>[] = [
-    studentCol("w-[22%]"),
-    awardTypeCol("w-[14%]"),
-    noteCol("w-[16%]"),
-    parentConfirmedCol("w-[12%]"),
-    quarterCol(1, "w-[9%]"),
-    quarterCol(2, "w-[9%]"),
-    quarterCol(3, "w-[9%]"),
-    quarterCol(4, "w-[9%]"),
+    studentCol("w-[18%]"),
+    awardTypeCol("w-[13%]"),
+    parentConfirmedCol("w-[10%]"),
+    requestedAtCol("w-[8%]"),
+    confirmedAtCol("w-[8%]"),
+    quarterCol(1, "w-[8%]"),
+    quarterCol(2, "w-[8%]"),
+    quarterCol(3, "w-[8%]"),
+    quarterCol(4, "w-[8%]"),
+    activityCol("w-[11%]"),
   ];
 
   // Export the FULL year dataset (`all`), not the filtered view — a
@@ -620,6 +704,23 @@ export default function SufsPage() {
 
   return (
     <div className="p-6 space-y-6">
+      {/* Shared controlled Activity sheet — one instance for every
+          row's trigger. Notes composed here tag section:"sufs" + the
+          row's student so the stream stays filterable per scope. */}
+      {activityRow && yearId ? (
+        <ActivityLogSheet
+          familyId={activityRow.family_id}
+          yearId={Number(yearId)}
+          open
+          onOpenChange={(o) => {
+            if (!o) setActivityRow(null);
+          }}
+          defaultFilter="sufs"
+          noteSection="sufs"
+          noteStudentId={activityRow.student_id}
+          contextLabel={activityRow.student_full_name}
+        />
+      ) : null}
       <div className="flex items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">
@@ -725,6 +826,28 @@ function SufsGroup({
    *  headers so the pipeline reads with the same color language. */
   dotColor: string;
 }) {
+  // Within-status grade grouping: 8th → 12th, with a trailing bucket
+  // for rows whose application has no parseable incoming grade (so a
+  // blank grade can't hide a student from the reconciliation list).
+  // Buckets are derived unconditionally (cheap) but the hook-free
+  // component keeps the early return below happy.
+  const buckets: Array<{ label: string; rows: SufsRow[] }> = [];
+  for (const g of GRADE_BUCKETS) {
+    const inGrade = rows.filter((r) => gradeOf(r) === g);
+    if (inGrade.length > 0) {
+      buckets.push({ label: `${g}th Grade`, rows: inGrade });
+    }
+  }
+  const ungraded = rows.filter((r) => gradeOf(r) === null);
+  if (ungraded.length > 0) {
+    buckets.push({ label: "Grade not set", rows: ungraded });
+  }
+
+  // Per-grade sub-tables can't each carry their own search box (five
+  // inputs per card is noise), so search is stripped — the tables are
+  // small once split by grade, and column sorting still works.
+  const bucketColumns = columns.map((c) => ({ ...c, searchable: false }));
+
   if (!isLoading && rows.length === 0) return null;
   return (
     <Card className="overflow-hidden bg-white py-0 gap-0">
@@ -746,13 +869,32 @@ function SufsGroup({
           <p className="text-xs text-muted-foreground">{description}</p>
         </div>
       </CardHeader>
-      <CardContent className="p-4 bg-white">
-        <DataTable<SufsRow>
-          columns={columns}
-          data={rows}
-          isLoading={isLoading}
-          searchPlaceholder={`Search ${title.toLowerCase()}…`}
-        />
+      <CardContent className="p-4 bg-white space-y-6">
+        {isLoading && buckets.length === 0 ? (
+          <DataTable<SufsRow>
+            columns={bucketColumns}
+            data={[]}
+            isLoading
+          />
+        ) : (
+          buckets.map((bucket) => (
+            <div key={bucket.label} className="space-y-2">
+              <div className="flex items-baseline gap-2">
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-foreground/70">
+                  {bucket.label}
+                </h3>
+                <span className="text-xs tabular-nums text-muted-foreground">
+                  ({bucket.rows.length})
+                </span>
+              </div>
+              <DataTable<SufsRow>
+                columns={bucketColumns}
+                data={bucket.rows}
+                isLoading={false}
+              />
+            </div>
+          ))
+        )}
       </CardContent>
     </Card>
   );
@@ -784,66 +926,6 @@ function SufsEmptyState() {
   );
 }
 
-/**
- * Inline note field. Keeps its own draft state while focused and
- * commits on blur (or Enter) — the same cheap blur-PATCH convention
- * the parent-facing SUFS award-ID input uses. Escape reverts.
- *
- * The caller keys this on the row id so DataTable's index-keyed rows
- * can't hand a live draft to a different student; we only re-sync from
- * props when not focused.
- */
-function NoteCell({
-  row,
-  disabled,
-  onSave,
-}: {
-  row: SufsRow;
-  disabled: boolean;
-  onSave: (note: string) => void;
-}) {
-  const [draft, setDraft] = useState(row.sufs_enrollment_request_notes);
-  const [focused, setFocused] = useState(false);
-  // Escape sets this so the synchronous blur it triggers skips the
-  // commit. `HTMLElement.blur()` dispatches `onBlur` before React
-  // flushes the reverted-draft state update in the same handler, so
-  // without this flag the blur would save the very text Escape asked
-  // to discard.
-  const skipSaveRef = useRef(false);
-
-  // Re-sync from the server value whenever the field isn't being
-  // edited — covers revalidation landing a note edited elsewhere.
-  const value = focused ? draft : row.sufs_enrollment_request_notes;
-
-  return (
-    <Input
-      value={value}
-      disabled={disabled}
-      placeholder="Add a note…"
-      className="h-8 border-transparent bg-transparent px-2 text-sm shadow-none hover:border-input focus-visible:border-input"
-      onFocus={() => {
-        setDraft(row.sufs_enrollment_request_notes);
-        setFocused(true);
-      }}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={() => {
-        setFocused(false);
-        if (skipSaveRef.current) {
-          skipSaveRef.current = false;
-          return;
-        }
-        onSave(draft.trim());
-      }}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") {
-          e.currentTarget.blur();
-        } else if (e.key === "Escape") {
-          skipSaveRef.current = true;
-          setDraft(row.sufs_enrollment_request_notes);
-          setFocused(false);
-          e.currentTarget.blur();
-        }
-      }}
-    />
-  );
-}
+// (The old inline NoteCell is gone — comments now live on the family
+// activity timeline via the ActivityLogSheet above; the legacy packet
+// note column still surfaces read-only inside the stream and the CSV.)
