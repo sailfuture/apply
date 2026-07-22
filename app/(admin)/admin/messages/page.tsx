@@ -67,6 +67,40 @@ export default function AdminMessagesPage() {
     id: number;
     name: string;
   } | null>(null);
+
+  // Viewed tracking — opening a conversation grays its needs-reply
+  // dot until a NEWER inbound text arrives. Persisted per browser in
+  // localStorage; loaded after mount (deferred a tick) so SSR and
+  // hydration render identically.
+  const [viewedMap, setViewedMap] = useState<Record<string, number>>({});
+  useEffect(() => {
+    const t = setTimeout(() => {
+      try {
+        setViewedMap(
+          JSON.parse(localStorage.getItem("sms-viewed-v1") ?? "{}")
+        );
+      } catch {
+        // Corrupt storage — start fresh.
+      }
+    }, 0);
+    return () => clearTimeout(t);
+  }, []);
+  function markViewed(type: string, id: number, lastAt: number) {
+    setViewedMap((prev) => {
+      const key = `${type}:${id}`;
+      if ((prev[key] ?? 0) >= lastAt) return prev;
+      const next = { ...prev, [key]: lastAt };
+      try {
+        localStorage.setItem("sms-viewed-v1", JSON.stringify(next));
+      } catch {
+        // Storage full/blocked — the dot still grays for this session.
+      }
+      return next;
+    });
+  }
+  const isUnread = (c: SmsConversation) =>
+    c.needsReply &&
+    (viewedMap[`${c.contactType}:${c.contactId}`] ?? 0) < c.lastAt;
   const active = selected
     ? (conversations.find(
         (c) =>
@@ -121,42 +155,42 @@ export default function AdminMessagesPage() {
 
   return (
     <div className="flex h-[calc(100dvh-3.5rem)] flex-col gap-4 p-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold">Messages</h1>
-          <p className="text-sm text-muted-foreground">
-            Two-way text threads with families. Reply to inbound texts, or
-            send a filtered group message.
-          </p>
+      <div>
+        <h1 className="text-2xl font-bold">Messages</h1>
+        <p className="text-sm text-muted-foreground">
+          Two-way text threads with families. Reply to inbound texts, or
+          send a filtered group message.
+        </p>
+      </div>
+
+      {/* Stage filter chips inline with the compose buttons — one
+          row: filters left, actions right. */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-1.5">
+          {STAGE_FILTERS.map((f) => {
+            const on = stageFilter === f.value;
+            return (
+              <button
+                key={f.value}
+                type="button"
+                aria-pressed={on}
+                onClick={() => changeStageFilter(f.value)}
+                className={cn(
+                  "rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors",
+                  on
+                    ? "border-foreground bg-foreground text-background"
+                    : "border-border bg-white text-muted-foreground hover:border-foreground/40 hover:text-foreground"
+                )}
+              >
+                {f.label}
+              </button>
+            );
+          })}
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <NewMessageDialog onPick={(contact) => setSelected(contact)} />
           <GroupMessageDialog onSent={() => mutate()} />
         </div>
-      </div>
-
-      {/* Stage filter chips — same pipeline vocabulary as the group
-          composer; single-select, All by default. */}
-      <div className="flex flex-wrap items-center gap-1.5">
-        {STAGE_FILTERS.map((f) => {
-          const on = stageFilter === f.value;
-          return (
-            <button
-              key={f.value}
-              type="button"
-              aria-pressed={on}
-              onClick={() => changeStageFilter(f.value)}
-              className={cn(
-                "rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors",
-                on
-                  ? "border-foreground bg-foreground text-background"
-                  : "border-border bg-white text-muted-foreground hover:border-foreground/40 hover:text-foreground"
-              )}
-            >
-              {f.label}
-            </button>
-          );
-        })}
       </div>
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 md:grid-cols-[320px_1fr]">
@@ -166,7 +200,7 @@ export default function AdminMessagesPage() {
             md+ always shows both. */}
         <div
           className={cn(
-            "min-h-0 overflow-y-auto rounded-lg border bg-white",
+            "min-h-0 overflow-y-auto overscroll-contain rounded-lg border bg-white",
             selected !== null && "hidden md:block"
           )}
         >
@@ -206,13 +240,14 @@ export default function AdminMessagesPage() {
                 <li key={`${c.contactType}:${c.contactId}`}>
                   <button
                     type="button"
-                    onClick={() =>
+                    onClick={() => {
                       setSelected({
                         type: c.contactType,
                         id: c.contactId,
                         name: c.name,
-                      })
-                    }
+                      });
+                      markViewed(c.contactType, c.contactId, c.lastAt);
+                    }}
                     className={cn(
                       "w-full px-4 py-3 text-left transition-colors hover:bg-muted/50",
                       selected?.type === c.contactType &&
@@ -234,8 +269,13 @@ export default function AdminMessagesPage() {
                     <div className="mt-0.5 flex items-center gap-1.5">
                       {c.needsReply ? (
                         <span
-                          className="size-2 shrink-0 rounded-full bg-blue-500"
-                          aria-label="Needs reply"
+                          className={cn(
+                            "size-2 shrink-0 rounded-full",
+                            isUnread(c) ? "bg-blue-500" : "bg-slate-300"
+                          )}
+                          aria-label={
+                            isUnread(c) ? "Needs reply" : "Viewed"
+                          }
                         />
                       ) : null}
                       {/* Group-blast preview reads differently from a
@@ -249,7 +289,7 @@ export default function AdminMessagesPage() {
                       <span
                         className={cn(
                           "truncate text-xs",
-                          c.needsReply
+                          isUnread(c)
                             ? "font-medium text-foreground"
                             : "text-muted-foreground"
                         )}

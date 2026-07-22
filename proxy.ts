@@ -11,6 +11,10 @@ const isPublicRoute = createRouteMatcher([
   // own auth runs, so the reminder sweep never executes in production.
   "/api/webhooks(.*)",
   "/api/cron(.*)",
+  // Public iCalendar feed — Google/Apple Calendar subscribe to it and
+  // can't present a Clerk session; the route guards itself with the
+  // CALENDAR_FEED_TOKEN query secret (404 without it).
+  "/api/calendar-feed(.*)",
 ]);
 
 /**

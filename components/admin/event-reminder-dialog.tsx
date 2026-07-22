@@ -191,7 +191,7 @@ export function EventReminderDialog({
             </DialogDescription>
           </DialogHeader>
 
-          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-5 py-4">
             <div className="space-y-1.5">
               <Label className="text-xs">Message</Label>
               <Textarea
@@ -248,7 +248,7 @@ export function EventReminderDialog({
                     : "No enrolled families to text."}
                 </p>
               ) : (
-                <ul className="max-h-56 space-y-0.5 overflow-y-auto rounded-md border p-1">
+                <ul className="max-h-56 space-y-0.5 overflow-y-auto overscroll-contain rounded-md border p-1">
                   {shown.map((c) => {
                     const on = selected.has(c.id);
                     return (

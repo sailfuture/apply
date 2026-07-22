@@ -183,7 +183,7 @@ function ExportDialogBody({
         </DialogDescription>
       </DialogHeader>
 
-      <div className="flex-1 overflow-y-auto space-y-5 py-4 pr-1">
+      <div className="flex-1 overflow-y-auto overscroll-contain space-y-5 py-4 pr-1">
         {/* Filename */}
         <div className="space-y-1.5">
           <Label htmlFor="export-filename">File name</Label>

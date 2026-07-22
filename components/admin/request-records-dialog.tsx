@@ -232,7 +232,7 @@ export function RequestRecordsDialog({
           {label}
         </Button>
       </DialogTrigger>
-      <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto overscroll-contain">
         <DialogHeader>
           <DialogTitle>Request student records</DialogTitle>
           <DialogDescription>

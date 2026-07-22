@@ -94,17 +94,14 @@ import type { EmailPreviewResponse } from "@/app/api/admin/email-preview/route";
  */
 
 /**
- * Composer modes. The first four log a note through the notes API
- * (`category` bucket); "text" SENDS a real SMS through the same
- * endpoint the Messages sheet uses — the sent text then shows up in
- * the stream like any other, since the activity feed reads
- * `sms_messages`.
+ * Composer modes — trimmed to just the two that matter (user request):
+ * "Note" logs through the notes API, "Text" SENDS a real SMS through
+ * the same endpoint the Messages sheet uses. Older notes saved under
+ * the retired call/email/in-person buckets still render in the stream
+ * — only the composer choices narrowed.
  */
 const COMPOSE_CATEGORIES = [
   { key: "other", label: "Note" },
-  { key: "phone", label: "Call" },
-  { key: "email", label: "Email" },
-  { key: "in-person", label: "In person" },
   { key: "text", label: "Text (SMS)" },
 ] as const;
 
@@ -431,9 +428,7 @@ export function ActivityLogSheet({
                       ? `Text ${recipient?.name || "this family"}…`
                       : "Texting unavailable"
                     : "Checking number on file…"
-                  : category === "phone"
-                    ? "Log the call — who you spoke to, what was said…"
-                    : "Add a note to the timeline…"
+                  : "Add a note to the timeline…"
               }
             />
             <div className="flex items-center justify-between gap-2">

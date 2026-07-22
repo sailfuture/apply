@@ -342,7 +342,7 @@ export function InquiryNotes({
 
   return (
     <div className="space-y-3">
-      <div className="space-y-2 max-h-[40vh] overflow-y-auto pr-1">
+      <div className="space-y-2 max-h-[40vh] overflow-y-auto overscroll-contain pr-1">
         {timeline}
       </div>
       {composer}

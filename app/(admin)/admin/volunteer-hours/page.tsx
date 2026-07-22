@@ -843,7 +843,7 @@ function FamilySheet({
     <Sheet open onOpenChange={(o) => !o && onClose()}>
       <SheetContent
         side="right"
-        className="flex w-full flex-col gap-0 overflow-y-auto p-0 sm:max-w-lg"
+        className="flex w-full flex-col gap-0 overflow-y-auto overscroll-contain p-0 sm:max-w-lg"
       >
         <SheetHeader className="border-b px-4 py-3">
           <SheetTitle className="text-base">{family.name}</SheetTitle>
@@ -1247,7 +1247,7 @@ function AttendeesDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-5 py-4">
           {/* Already credited */}
           {eventEntries.length > 0 ? (
             <div className="space-y-2">
@@ -1336,7 +1336,7 @@ function AttendeesDialog({
                   : "Every enrolled family is already credited."}
               </p>
             ) : (
-              <ul className="max-h-64 space-y-0.5 overflow-y-auto rounded-md border p-1">
+              <ul className="max-h-64 space-y-0.5 overflow-y-auto overscroll-contain rounded-md border p-1">
                 {candidates.map((f) => {
                   const on = selected.has(f.id);
                   return (
@@ -1513,7 +1513,7 @@ function BulkHoursDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-5 py-4">
           <div className="space-y-1.5">
             <Label className="text-xs">Linked event (optional)</Label>
             <Select value={eventId} onValueChange={pickEvent}>
@@ -1599,7 +1599,7 @@ function BulkHoursDialog({
                 No matching families.
               </p>
             ) : (
-              <ul className="max-h-56 space-y-0.5 overflow-y-auto rounded-md border p-1">
+              <ul className="max-h-56 space-y-0.5 overflow-y-auto overscroll-contain rounded-md border p-1">
                 {candidates.map((f) => {
                   const on = selected.has(f.id);
                   return (

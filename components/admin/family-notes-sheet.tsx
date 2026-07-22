@@ -491,7 +491,7 @@ export function FamilyNotesSheet({
           {/* Scrollable list — pinned first, then chronological newest
               first. Takes all available vertical space between the
               header and composer. */}
-          <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
+          <div className="flex-1 overflow-y-auto overscroll-contain px-4 py-4 space-y-3">
             {isLoading ? (
               <p className="text-xs text-muted-foreground px-2">
                 Loading notes…

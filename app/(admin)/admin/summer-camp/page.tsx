@@ -441,7 +441,7 @@ export default function SummerCampPage() {
                   Submitted {new Date(active.created_at).toLocaleString()}
                 </SheetDescription>
               </SheetHeader>
-              <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
+              <div className="flex-1 overflow-y-auto overscroll-contain px-6 py-5 space-y-6">
                 <SectionLabel>Student</SectionLabel>
                 <div className="grid grid-cols-2 gap-5">
                   <DetailRow label="Gender">{active.gender || "—"}</DetailRow>

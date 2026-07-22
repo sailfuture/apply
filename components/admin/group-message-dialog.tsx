@@ -480,7 +480,7 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
 
             {/* Recipient list — flexes to fill the fixed dialog frame,
                 so filtering changes what scrolls, never the layout. */}
-            <div className="min-h-0 flex-1 overflow-y-auto rounded-md border bg-white">
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain rounded-md border bg-white">
               {loadingAudience ? (
                 <div className="flex h-full items-center justify-center">
                   <Loader2 className="size-4 animate-spin text-muted-foreground" />

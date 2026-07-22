@@ -45,17 +45,27 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const [fap, srp, apps, students, families, inquiries, campRows, txns] =
-      await Promise.all([
-        xano.familyApplicationProgress.getByYear(yearId).catch(() => []),
-        xano.studentRegistrationProgress.getByYear(yearId).catch(() => []),
-        xano.applications.getAll().catch(() => []),
-        xano.students.getAll().catch(() => []),
-        xano.families.getAllDetails().catch(() => []),
-        xano.inquiries.getAll().catch(() => []),
-        xano.summerCamp.getAll().catch(() => []),
-        xano.paymentTransactions.getAllByYear(yearId).catch(() => []),
-      ]);
+    const [
+      fap,
+      srp,
+      apps,
+      students,
+      families,
+      inquiries,
+      campRows,
+      txns,
+      packets,
+    ] = await Promise.all([
+      xano.familyApplicationProgress.getByYear(yearId).catch(() => []),
+      xano.studentRegistrationProgress.getByYear(yearId).catch(() => []),
+      xano.applications.getAll().catch(() => []),
+      xano.students.getAll().catch(() => []),
+      xano.families.getAllDetails().catch(() => []),
+      xano.inquiries.getAll().catch(() => []),
+      xano.summerCamp.getAll().catch(() => []),
+      xano.paymentTransactions.getAllByYear(yearId).catch(() => []),
+      xano.studentRegistration.getByYear(yearId).catch(() => []),
+    ]);
 
     // ── Family stage sets — shared bucketing (also powers the inbox
     //    stage filter) so the two surfaces can't disagree. ──
@@ -74,6 +84,15 @@ export async function GET(req: NextRequest) {
         `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim(),
       ])
     );
+    // Admin-set packet placement (grade_level) wins over the
+    // application's incoming grade — it's the grade the Enrolled
+    // roster shows, so the composer's grade chips match that page.
+    const packetGradeByStudent = new Map<number, string>();
+    for (const p of packets) {
+      const sid = Number(p.registration_students_id);
+      const g = (p.grade_level ?? "").trim();
+      if (sid && g) packetGradeByStudent.set(sid, g);
+    }
     const familyStudents = new Map<
       number,
       Array<{ name: string; grade: number | null; gradeRaw: string }>
@@ -87,10 +106,13 @@ export async function GET(req: NextRequest) {
       const list = familyStudents.get(fid) ?? [];
       // Dedupe per student (re-created application rows).
       if (!list.some((s) => s.name === (studentNameById.get(sid) ?? ""))) {
+        const gradeRaw =
+          packetGradeByStudent.get(sid) ??
+          (a.current_grade ?? "").trim();
         list.push({
           name: studentNameById.get(sid) ?? "",
-          grade: parseGrade(a.current_grade),
-          gradeRaw: (a.current_grade ?? "").trim(),
+          grade: parseGrade(gradeRaw),
+          gradeRaw,
         });
       }
       familyStudents.set(fid, list);

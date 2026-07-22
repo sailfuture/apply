@@ -282,6 +282,20 @@ const STATUS_LABEL: Record<string, string> = {
   received: "Received",
 };
 
+/** Human text for the Twilio error codes we actually see — shown in
+ *  the footer beside the code so staff know what went wrong without
+ *  looking it up. Unknown codes fall back to "Delivery error". */
+const ERROR_TEXT: Record<string, string> = {
+  "21211": "Invalid phone number",
+  "21610": "Recipient has opted out",
+  "30003": "Phone unreachable or off",
+  "30004": "Blocked by the recipient",
+  "30005": "Unknown or inactive number",
+  "30006": "Landline — can't receive texts",
+  "30007": "Filtered by the carrier",
+  "30034": "Number not A2P-registered",
+};
+
 /**
  * Outbound bubble variant: red for a failed/undelivered send, a subtle
  * primary tint for automated trigger texts AND group blasts (so both
@@ -334,7 +348,9 @@ function MessageRow({
           <span>{timeLabel(msg.created_at)}</span>
           {msg.error_code ? (
             <span className={cn("text-destructive")}>
-              &nbsp;·&nbsp;{msg.error_code}
+              &nbsp;·&nbsp;
+              {ERROR_TEXT[msg.error_code] ?? "Delivery error"} (
+              {msg.error_code})
             </span>
           ) : null}
         </MessageFooter>

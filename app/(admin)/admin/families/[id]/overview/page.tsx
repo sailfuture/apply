@@ -871,7 +871,7 @@ function ParentDetailSheet({
           </SheetDescription>
         </SheetHeader>
         {parent ? (
-          <dl className="space-y-3 text-sm px-6 py-4 overflow-y-auto">
+          <dl className="space-y-3 text-sm px-6 py-4 overflow-y-auto overscroll-contain">
             <DetailRow label="Email">
               {parent.email ? (
                 <a

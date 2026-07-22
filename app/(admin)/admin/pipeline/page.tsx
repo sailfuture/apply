@@ -108,7 +108,7 @@ export default function PipelinePage() {
                     </span>
                   </div>
                 </CardHeader>
-                <CardContent className="flex-1 space-y-2 overflow-y-auto max-h-[500px]">
+                <CardContent className="flex-1 space-y-2 overflow-y-auto overscroll-contain max-h-[500px]">
                   {items.length === 0 ? (
                     <p className="text-xs text-muted-foreground text-center py-8">
                       No students

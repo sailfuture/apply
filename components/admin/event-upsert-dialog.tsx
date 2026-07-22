@@ -354,10 +354,29 @@ export function EventColorPicker({
   onChange: (v: string) => void;
 }) {
   const selected = eventColor(value);
+  const generalOn = value.trim() === "";
   return (
     <div className="space-y-1.5">
       <Label className="text-xs">Event type</Label>
       <div className="flex items-center gap-2">
+        {/* General is a real, selectable choice — stored as "" */}
+        <button
+          type="button"
+          title="General"
+          aria-label="General"
+          aria-pressed={generalOn}
+          onClick={() => onChange("")}
+          className={cn(
+            "flex size-8 items-center justify-center rounded-full bg-slate-300 transition-all",
+            generalOn
+              ? "ring-2 ring-foreground ring-offset-2"
+              : "opacity-70 hover:opacity-100"
+          )}
+        >
+          {generalOn ? (
+            <span className="size-2 rounded-full bg-black/80" />
+          ) : null}
+        </button>
         {EVENT_COLORS.map((c) => {
           const on = value.trim() === c.value;
           return (
@@ -384,7 +403,7 @@ export function EventColorPicker({
         })}
       </div>
       <p className="text-[11px] text-muted-foreground">
-        {selected ? selected.label : "General (gray)"}
+        {selected ? selected.label : "General"}
       </p>
     </div>
   );
@@ -639,9 +658,11 @@ export function EventUpsertDialog({
 
   return (
     <Dialog open onOpenChange={(o) => !saving && !o && onDone(false)}>
-      {/* lg (not md) so the side-by-side segmented time pickers fit. */}
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
+      {/* lg (not md) so the side-by-side segmented time pickers fit;
+          capped height with a scrolling body so the tall form never
+          runs off shorter viewports. */}
+      <DialogContent className="flex max-h-[85vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-lg">
+        <DialogHeader className="border-b px-5 py-4 pr-12">
           <DialogTitle>
             {existing ? "Edit event" : "Create event"}
           </DialogTitle>
@@ -651,7 +672,7 @@ export function EventUpsertDialog({
               : "Adds an event to a day on the school calendar."}
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-3">
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-5 py-4">
           <div className="space-y-1.5">
             <Label className="text-xs">Title</Label>
             <Input
@@ -768,7 +789,7 @@ export function EventUpsertDialog({
             </div>
           ) : null}
         </div>
-        <DialogFooter>
+        <DialogFooter className="border-t px-5 py-3">
           <Button
             variant="outline"
             size="sm"
