@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import useSWR from "swr";
-import { ExternalLink, Mail, Phone } from "lucide-react";
+import { ChevronRight, ExternalLink } from "lucide-react";
 import { DataTable, type ColumnDef } from "@/components/admin/data-table";
 import {
   Card,
@@ -18,6 +18,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { formatUSPhone } from "@/lib/phone";
 import type { CampusVisitRow } from "@/app/api/admin/campus-visits/route";
@@ -31,6 +38,11 @@ import type { CampusVisitRow } from "@/app/api/admin/campus-visits/route";
  * windows). The year dropdown here filters on that derived label —
  * campus visits aren't tied to the global year selector because a
  * visitor isn't an applicant yet.
+ *
+ * Table shape matches the other recruitment lists: single-line cells,
+ * relative Signed times, row click opens the visitor detail sheet
+ * (which holds everything trimmed from the table — email, school,
+ * academic year, and the signed waiver).
  */
 export default function CampusVisitsPage() {
   const { data, isLoading, error } = useSWR<CampusVisitRow[]>(
@@ -59,23 +71,21 @@ export default function CampusVisitsPage() {
     [rows, year]
   );
 
+  const [selected, setSelected] = useState<CampusVisitRow | null>(null);
+
   const columns: ColumnDef<CampusVisitRow>[] = useMemo(
     () => [
       {
         key: "signed_ts",
         header: "Signed",
         sortable: true,
-        width: "w-[110px]",
+        width: "w-[10%]",
         render: (r) => (
           <span
-            className="whitespace-nowrap text-sm tabular-nums"
+            className="whitespace-nowrap text-sm tabular-nums text-muted-foreground"
             title={new Date(r.signed_ts).toLocaleString()}
           >
-            {new Date(r.signed_ts).toLocaleDateString([], {
-              month: "short",
-              day: "numeric",
-              year: "numeric",
-            })}
+            {relTime(r.signed_ts)}
           </span>
         ),
       },
@@ -84,48 +94,50 @@ export default function CampusVisitsPage() {
         header: "Parent",
         sortable: true,
         searchable: true,
+        width: "w-[22%]",
         render: (r) => (
-          <div className="min-w-0">
-            <p className="truncate text-sm font-medium">{r.parent_name}</p>
-            <div className="mt-0.5 flex flex-col gap-0.5 text-xs text-muted-foreground">
-              {r.parent_email ? (
-                <a
-                  href={`mailto:${r.parent_email}`}
-                  className="inline-flex items-center gap-1 hover:text-foreground"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <Mail className="size-3 shrink-0" />
-                  <span className="truncate">{r.parent_email}</span>
-                </a>
-              ) : null}
-              {r.parent_phone ? (
-                <a
-                  href={`tel:${r.parent_phone}`}
-                  className="inline-flex items-center gap-1 hover:text-foreground"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <Phone className="size-3 shrink-0" />
-                  {formatUSPhone(r.parent_phone) || r.parent_phone}
-                </a>
-              ) : null}
-            </div>
-          </div>
+          <span className="block truncate text-sm font-medium">
+            {r.parent_name}
+          </span>
         ),
+      },
+      {
+        key: "parent_phone",
+        header: "Phone",
+        searchable: true,
+        width: "w-[14%]",
+        render: (r) =>
+          r.parent_phone ? (
+            <a
+              href={`tel:${r.parent_phone}`}
+              className="text-sm tabular-nums hover:underline"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {formatUSPhone(r.parent_phone) || r.parent_phone}
+            </a>
+          ) : (
+            <span className="text-sm text-muted-foreground">—</span>
+          ),
       },
       {
         key: "student_name",
         header: "Student",
         sortable: true,
         searchable: true,
+        width: "w-[20%]",
         render: (r) => (
-          <div className="min-w-0">
-            <p className="truncate text-sm">{r.student_name}</p>
-            {r.student_grade ? (
-              <p className="text-xs text-muted-foreground">
-                Grade {r.student_grade}
-              </p>
-            ) : null}
-          </div>
+          <span className="block truncate text-sm">{r.student_name}</span>
+        ),
+      },
+      {
+        key: "student_grade",
+        header: "Grade",
+        sortable: true,
+        width: "w-[9%]",
+        render: (r) => (
+          <span className="text-sm">
+            {r.student_grade ? `Grade ${r.student_grade}` : "—"}
+          </span>
         ),
       },
       {
@@ -133,25 +145,17 @@ export default function CampusVisitsPage() {
         header: "Current School",
         sortable: true,
         searchable: true,
+        width: "w-[15%]",
         render: (r) => (
-          <span className="text-sm">{r.student_school || "—"}</span>
-        ),
-      },
-      {
-        key: "academic_year",
-        header: "Academic Year",
-        sortable: true,
-        width: "w-[130px]",
-        render: (r) => (
-          <Badge variant="outline" className="font-normal">
-            {r.academic_year}
-          </Badge>
+          <span className="block truncate text-sm">
+            {r.student_school || "—"}
+          </span>
         ),
       },
       {
         key: "marketing_opt_in",
         header: "Marketing",
-        width: "w-[100px]",
+        width: "w-[10%]",
         accessor: (r) => (r.marketing_opt_in ? 1 : 0),
         render: (r) =>
           r.marketing_opt_in ? (
@@ -163,41 +167,31 @@ export default function CampusVisitsPage() {
           ),
       },
       {
-        key: "signature_url",
-        header: "Waiver",
-        width: "w-[90px]",
-        render: (r) =>
-          r.signature_url ? (
-            <a
-              href={r.signature_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-xs font-medium text-foreground underline underline-offset-2 hover:no-underline"
-              onClick={(e) => e.stopPropagation()}
-            >
-              View
-              <ExternalLink className="size-3" />
-            </a>
-          ) : (
-            <span className="text-xs text-muted-foreground">—</span>
-          ),
+        key: "id",
+        header: "",
+        width: "w-[40px]",
+        align: "right",
+        render: () => (
+          <ChevronRight className="size-4 text-muted-foreground inline" />
+        ),
       },
     ],
     []
   );
 
   return (
-    <div className="space-y-4">
+    <div className="p-6 space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold">Campus Visits</h1>
           <p className="text-sm text-muted-foreground">
             Liability waivers signed on the website before a campus tour.
+            Click a row for the visitor&rsquo;s full details.
           </p>
         </div>
         <div className="w-44">
           <Select value={year} onValueChange={setYear}>
-            <SelectTrigger>
+            <SelectTrigger className="bg-white">
               <SelectValue placeholder="Academic year" />
             </SelectTrigger>
             <SelectContent>
@@ -222,7 +216,7 @@ export default function CampusVisitsPage() {
             </span>
           </CardTitle>
         </CardHeader>
-        <CardContent className="p-0">
+        <CardContent className="p-4 bg-white">
           {error && !data ? (
             <div className="p-8 text-center text-sm text-muted-foreground">
               Couldn&rsquo;t load campus visits. Refresh to try again.
@@ -233,10 +227,178 @@ export default function CampusVisitsPage() {
               data={visible}
               isLoading={isLoading && !data}
               searchPlaceholder="Search by parent, student, or school…"
+              onRowClick={(r) => setSelected(r)}
             />
           )}
         </CardContent>
       </Card>
+
+      {/* Visitor detail sheet — everything the table trims (email,
+          school, academic year, waiver) plus the signature. */}
+      {selected ? (
+        <Sheet open onOpenChange={(o) => !o && setSelected(null)}>
+          <SheetContent
+            side="right"
+            className="flex w-full flex-col gap-0 overflow-y-auto overscroll-contain p-0 sm:max-w-lg"
+          >
+            <SheetHeader className="border-b px-4 py-3">
+              <SheetTitle className="text-base">
+                {selected.parent_name || "Campus visitor"}
+              </SheetTitle>
+              <SheetDescription className="text-xs">
+                Signed {new Date(selected.signed_ts).toLocaleString()}
+                {selected.academic_year
+                  ? ` · ${selected.academic_year}`
+                  : ""}
+              </SheetDescription>
+            </SheetHeader>
+
+            <div className="space-y-5 px-4 py-4">
+              <section className="space-y-2.5">
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  Parent
+                </h3>
+                <DetailRow label="Name" value={selected.parent_name} />
+                <DetailRow
+                  label="Email"
+                  value={
+                    selected.parent_email ? (
+                      <a
+                        href={`mailto:${selected.parent_email}`}
+                        className="hover:underline"
+                      >
+                        {selected.parent_email}
+                      </a>
+                    ) : null
+                  }
+                />
+                <DetailRow
+                  label="Phone"
+                  value={
+                    selected.parent_phone ? (
+                      <a
+                        href={`tel:${selected.parent_phone}`}
+                        className="tabular-nums hover:underline"
+                      >
+                        {formatUSPhone(selected.parent_phone) ||
+                          selected.parent_phone}
+                      </a>
+                    ) : null
+                  }
+                />
+                <DetailRow
+                  label="Marketing"
+                  value={
+                    selected.marketing_opt_in ? (
+                      <Badge className="bg-green-100 text-green-800 hover:bg-green-100">
+                        Opted in
+                      </Badge>
+                    ) : (
+                      "Not opted in"
+                    )
+                  }
+                />
+              </section>
+
+              <section className="space-y-2.5 border-t pt-4">
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  Student
+                </h3>
+                <DetailRow label="Name" value={selected.student_name} />
+                <DetailRow
+                  label="Grade"
+                  value={
+                    selected.student_grade
+                      ? `Grade ${selected.student_grade}`
+                      : null
+                  }
+                />
+                <DetailRow
+                  label="Current school"
+                  value={selected.student_school}
+                />
+                <DetailRow
+                  label="Academic year"
+                  value={selected.academic_year}
+                />
+              </section>
+
+              <section className="space-y-2.5 border-t pt-4">
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  Waiver
+                </h3>
+                <DetailRow
+                  label="Signed"
+                  value={new Date(selected.signed_ts).toLocaleString()}
+                />
+                {selected.signature_url ? (
+                  <>
+                    <div className="rounded-md border bg-muted/20 p-3">
+                      {/* Signature capture — plain img (Xano-hosted,
+                          arbitrary dimensions). */}
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={selected.signature_url}
+                        alt={`Signature — ${selected.parent_name}`}
+                        className="max-h-28 w-auto"
+                      />
+                    </div>
+                    <a
+                      href={selected.signature_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-xs font-medium text-foreground underline underline-offset-2 hover:no-underline"
+                    >
+                      Open signature
+                      <ExternalLink className="size-3" />
+                    </a>
+                  </>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    No signature image on file.
+                  </p>
+                )}
+              </section>
+            </div>
+          </SheetContent>
+        </Sheet>
+      ) : null}
     </div>
   );
+}
+
+function DetailRow({
+  label,
+  value,
+}: {
+  label: string;
+  value: React.ReactNode | null;
+}) {
+  return (
+    <div className="flex items-baseline justify-between gap-3 text-sm">
+      <span className="shrink-0 text-muted-foreground">{label}</span>
+      <span className="min-w-0 truncate text-right font-medium">
+        {value || <span className="font-normal text-muted-foreground">—</span>}
+      </span>
+    </div>
+  );
+}
+
+/** Compact relative time ("now", "5m ago", "3h ago", "4d ago", then a
+ *  date) — same vocabulary as the inbox and enrolled lists. */
+function relTime(ts: number): string {
+  if (!ts) return "—";
+  const diff = Date.now() - ts;
+  const MIN = 60_000;
+  const HOUR = 3_600_000;
+  const DAY = 86_400_000;
+  if (diff < MIN) return "now";
+  if (diff < HOUR) return `${Math.floor(diff / MIN)}m ago`;
+  if (diff < DAY) return `${Math.floor(diff / HOUR)}h ago`;
+  if (diff < 30 * DAY) return `${Math.floor(diff / DAY)}d ago`;
+  return new Date(ts).toLocaleDateString([], {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
 }

@@ -301,47 +301,47 @@ export default function ApplicationsPage() {
 
   return (
     <div className="p-6 space-y-6">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold">Applications</h1>
-          <p className="text-sm text-muted-foreground">
-            One row per family per academic year — both new applications
-            and re-applications. Click any section to open it for review
-            or editing.
-          </p>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          {/* Global search — filters every card below at once. */}
-          <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search all applications…"
-            className="w-[220px] bg-white"
-          />
-          <Select
-            value={filter}
-            onValueChange={(v) => setFilter(v as ProgressFilter)}
-          >
-            <SelectTrigger className="w-[200px] bg-white">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {(
-                [
-                  "all",
-                  "submitted",
-                  "in_progress",
-                  "not_started",
-                  "accepted",
-                ] as const
-              ).map((f) => (
-                <SelectItem key={f} value={f}>
-                  {FILTER_LABEL[f]} ({counts[f]})
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+      <div>
+        <h1 className="text-2xl font-bold">Applications</h1>
+        <p className="text-sm text-muted-foreground">
+          One row per family per academic year — both new applications
+          and re-applications. Click any section to open it for review
+          or editing.
+        </p>
+      </div>
+
+      {/* Search + filter — their own full-width row under the header,
+          spanning the same width as the tables below. */}
+      <div className="flex items-center gap-2">
+        <Input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search all applications…"
+          className="flex-1 bg-white"
+        />
+        <Select
+          value={filter}
+          onValueChange={(v) => setFilter(v as ProgressFilter)}
+        >
+          <SelectTrigger className="w-[200px] shrink-0 bg-white">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {(
+              [
+                "all",
+                "submitted",
+                "in_progress",
+                "not_started",
+                "accepted",
+              ] as const
+            ).map((f) => (
+              <SelectItem key={f} value={f}>
+                {FILTER_LABEL[f]} ({counts[f]})
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       {error ? (

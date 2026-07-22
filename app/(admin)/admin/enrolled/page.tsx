@@ -165,6 +165,9 @@ export default function EnrolledStudentsPage() {
   // flat "All grades" view (search filter spanning grade groups)
   // still surfaces the grade alongside the student name.
   const [activityFamily, setActivityFamily] = useState<number | null>(null);
+  // Page-level search — ONE bar under the header filters both roster
+  // cards (enrolled + unenrolled) at once.
+  const [search, setSearch] = useState("");
 
   const columns: ColumnDef<EnrolledStudentRow>[] = [
     {
@@ -346,6 +349,20 @@ export default function EnrolledStudentsPage() {
         ) : null}
       </div>
 
+      {/* Search — full-width row under the header, spanning the same
+          width as the roster cards below. Filters both cards. */}
+      {yearId ? (
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground/60" />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search enrolled students…"
+            className="pl-9 bg-white"
+          />
+        </div>
+      ) : null}
+
       {error ? (
         <div className="rounded-lg border border-border bg-muted/30 p-4 text-sm text-muted-foreground">
           Failed to load enrolled students:{" "}
@@ -376,6 +393,7 @@ export default function EnrolledStudentsPage() {
             columns={columns}
             grouped={groupedEnrolled}
             totalCount={enrolledRows.length}
+            search={search}
             emptyLabel="No students officially enrolled for this year yet."
             onRowClick={(row) =>
               router.push(
@@ -398,6 +416,7 @@ export default function EnrolledStudentsPage() {
               columns={columns}
               grouped={groupedUnenrolled}
               totalCount={unenrolledRows.length}
+              search={search}
               emptyLabel="No students in this bucket."
               onRowClick={(row) =>
                 router.push(
@@ -430,9 +449,13 @@ function EnrolledRoster({
   columns,
   grouped,
   totalCount,
+  search,
   emptyLabel,
   onRowClick,
 }: {
+  /** Page-level search value — one bar above the cards drives both
+   *  rosters. */
+  search: string;
   /** Card header label — "Enrolled" or "Unenrolled" so the page
    *  can render two stacked rosters with the same chrome. */
   title: string;
@@ -449,7 +472,6 @@ function EnrolledRoster({
   onRowClick: (row: EnrolledStudentRow) => void;
 }) {
   const colCount = columns.length;
-  const [search, setSearch] = useState("");
   // Filter each grade group's rows by the search query, then
   // drop any groups that have zero matches so empty grade
   // sections don't render. Matches against student name +
@@ -484,19 +506,6 @@ function EnrolledRoster({
         <p className="text-xs text-muted-foreground">{description}</p>
       </CardHeader>
       <CardContent className="p-6 bg-white space-y-3">
-        {/* Search bar mirrors the chrome on the Registrations
-            page's group cards. Filters across every grade group
-            in real time — empty groups drop out of the render
-            so admin doesn't scroll past blank sections. */}
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground/60" />
-          <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search enrolled students…"
-            className="pl-9 bg-white"
-          />
-        </div>
         <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
