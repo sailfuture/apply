@@ -180,6 +180,11 @@ function TimeSegmentInput({
     e.preventDefault();
     if (e.key === "ArrowRight") onRightFocus?.();
     if (e.key === "ArrowLeft") onLeftFocus?.();
+    if (e.key === "Backspace" || e.key === "Delete") {
+      // Reset the segment to its floor so retyping starts clean.
+      onCommit(kind === "hour12" ? "12" : "00");
+      setArmed(false);
+    }
     if (e.key === "ArrowUp" || e.key === "ArrowDown") {
       const step = e.key === "ArrowUp" ? 1 : -1;
       const cur = value
@@ -191,23 +196,32 @@ function TimeSegmentInput({
       if (armed) setArmed(false);
     }
     if (e.key >= "0" && e.key <= "9") {
-      let next: string;
+      const digit = e.key;
       if (!armed) {
-        next = "0" + e.key;
-      } else if (
-        kind === "hour12" &&
-        value.slice(1, 2) === "1" &&
-        prevKey === "0"
-      ) {
-        // "0" then "9" reads as 09, not 19-clamped-to-12.
-        next = "0" + e.key;
+        // First digit — restricted by what a valid hour/minute can
+        // still become: a digit that can't be a tens digit (hours
+        // 2–9, minutes 6–9) completes the segment immediately and
+        // hops to the next one; 0/1 (hours) and 0–5 (minutes) wait
+        // 2s for a second digit.
+        const tensPossible =
+          kind === "hour12"
+            ? digit === "0" || digit === "1"
+            : digit <= "5";
+        onCommit(clampSegment(kind, "0" + digit));
+        if (kind === "hour12") setPrevKey(digit);
+        if (tensPossible) setArmed(true);
+        else onRightFocus?.();
       } else {
-        next = value.slice(1, 2) + e.key;
+        // Second digit inside the window. After a leading "0" the
+        // hour reads 0X ("0" then "9" → 09, never 19-clamped-to-12).
+        const next =
+          kind === "hour12" && prevKey === "0"
+            ? "0" + digit
+            : value.slice(1, 2) + digit;
+        onCommit(clampSegment(kind, next));
+        setArmed(false);
+        onRightFocus?.();
       }
-      if (kind === "hour12") setPrevKey(e.key);
-      onCommit(clampSegment(kind, next));
-      if (armed) onRightFocus?.();
-      setArmed((p) => !p);
     }
   }
 
@@ -220,8 +234,11 @@ function TimeSegmentInput({
       value={value || "--"}
       onChange={(e) => e.preventDefault()}
       onKeyDown={handleKeyDown}
+      // px-0 + shrink-0 — the Input default px-3 inside a 44px box
+      // left ~4px for text once flex squeezed it, which rendered the
+      // typed digits invisible ("inputs not registering").
       className={cn(
-        "w-[44px] bg-white text-center font-mono tabular-nums caret-transparent focus:bg-accent focus:text-accent-foreground",
+        "w-[44px] shrink-0 px-0 bg-white text-center font-mono tabular-nums caret-transparent focus:bg-accent focus:text-accent-foreground",
         !value && "text-muted-foreground"
       )}
     />
@@ -277,7 +294,7 @@ export function TimeSelect({
         }
         onRightFocus={() => minuteRef.current?.focus()}
       />
-      <span className="text-sm text-muted-foreground">:</span>
+      <span className="shrink-0 text-sm text-muted-foreground">:</span>
       <TimeSegmentInput
         ref={minuteRef}
         kind="minute"
@@ -296,7 +313,7 @@ export function TimeSelect({
       >
         <SelectTrigger
           ref={periodRef}
-          className="w-[64px] bg-white"
+          className="w-[64px] shrink-0 bg-white"
           aria-label={`${ariaLabel} — AM or PM`}
           onKeyDown={(e) => {
             if (e.key === "ArrowLeft") minuteRef.current?.focus();
@@ -314,7 +331,7 @@ export function TimeSelect({
           type="button"
           variant="ghost"
           size="sm"
-          className="size-8 shrink-0 p-0 text-muted-foreground hover:text-foreground"
+          className="size-7 shrink-0 p-0 text-muted-foreground hover:text-foreground"
           onClick={() => onChange("")}
           aria-label={`Clear ${ariaLabel.toLowerCase()}`}
         >
