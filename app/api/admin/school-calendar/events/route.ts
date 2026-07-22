@@ -52,6 +52,7 @@ export async function POST(req: NextRequest) {
       mandatory: body.mandatory === true,
       parent_volunteer_hours: body.parent_volunteer_hours === true,
       volunteer_hour_total: coerceHours(body.volunteer_hour_total),
+      color: coerceColor(body.color),
     });
     return NextResponse.json(created, { status: 201 });
   } catch (err) {
@@ -69,4 +70,19 @@ function coerceMs(v: unknown): number {
 function coerceHours(v: unknown): number {
   const n = Number(v);
   return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/** Known event-category color slugs; anything else stores as "". */
+const EVENT_COLOR_SLUGS = new Set([
+  "sky",
+  "emerald",
+  "violet",
+  "amber",
+  "rose",
+  "orange",
+]);
+function coerceColor(v: unknown): string {
+  return typeof v === "string" && EVENT_COLOR_SLUGS.has(v.trim())
+    ? v.trim()
+    : "";
 }

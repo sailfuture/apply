@@ -2125,6 +2125,41 @@ export interface XanoSchoolCalendarEvent {
   mandatory: boolean;
   parent_volunteer_hours: boolean;
   volunteer_hour_total: number;
+  /** Event-category color slug ("sky" | "emerald" | "violet" |
+   *  "amber" | …) — "" / " " = uncategorized. The single-space form
+   *  exists because Xano's edit endpoints drop empty-string inputs,
+   *  so clearing a color PATCHes " " (trim before comparing). */
+  color: string;
+}
+
+/**
+ * An academic term (`registration_academic_terms`) — a named date
+ * range within a school year ("Term 1"…). `school_calendar.terms_id`
+ * points at these ids. Dates are "YYYY-MM-DD" or null on legacy rows
+ * that predate the date columns.
+ */
+export interface XanoAcademicTerm {
+  id: number;
+  created_at: number;
+  term_name: string;
+  start_date: string | null;
+  end_date: string | null;
+  registration_school_years_id: number;
+  isActive: boolean;
+}
+
+/**
+ * An academic season (`registration_academic_seasons`) — a named
+ * stretch tied to a school year and optionally one term
+ * (`registration_academic_terms_id` 0 = not linked). Seasons carry no
+ * dates of their own; their range comes from the linked term.
+ */
+export interface XanoAcademicSeason {
+  id: number;
+  created_at: number;
+  name: string;
+  registration_school_years_id: number;
+  registration_academic_terms_id: number;
 }
 
 export const xano = {
@@ -5254,6 +5289,127 @@ export const xano = {
       const res = await fetch(`${getBaseUrl()}/school_calendar_events/${id}`, {
         method: "DELETE",
       });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+    },
+  },
+
+  /** Academic terms — see `XanoAcademicTerm`. NOTE: unlike the older
+   *  plain tables, this list endpoint wraps rows as `{ value, Count }`
+   *  — the accessor unwraps either shape. */
+  academicTerms: {
+    async getByYear(yearId: number): Promise<XanoAcademicTerm[]> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_academic_terms`,
+        { cache: "no-store" }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      const data = await res.json();
+      const rows: XanoAcademicTerm[] = Array.isArray(data)
+        ? data
+        : Array.isArray(data?.value)
+          ? data.value
+          : [];
+      return rows.filter(
+        (r) => Number(r.registration_school_years_id) === yearId
+      );
+    },
+
+    async create(
+      data: Omit<XanoAcademicTerm, "id" | "created_at">
+    ): Promise<XanoAcademicTerm> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_academic_terms`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async update(
+      id: number,
+      patch: Partial<XanoAcademicTerm>
+    ): Promise<XanoAcademicTerm> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_academic_terms/${id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch),
+        }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async delete(id: number): Promise<void> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_academic_terms/${id}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+    },
+  },
+
+  /** Academic seasons — see `XanoAcademicSeason`. Same wrapped list
+   *  shape as `academicTerms`. */
+  academicSeasons: {
+    async getByYear(yearId: number): Promise<XanoAcademicSeason[]> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_academic_seasons`,
+        { cache: "no-store" }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      const data = await res.json();
+      const rows: XanoAcademicSeason[] = Array.isArray(data)
+        ? data
+        : Array.isArray(data?.value)
+          ? data.value
+          : [];
+      return rows.filter(
+        (r) => Number(r.registration_school_years_id) === yearId
+      );
+    },
+
+    async create(
+      data: Omit<XanoAcademicSeason, "id" | "created_at">
+    ): Promise<XanoAcademicSeason> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_academic_seasons`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async update(
+      id: number,
+      patch: Partial<XanoAcademicSeason>
+    ): Promise<XanoAcademicSeason> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_academic_seasons/${id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch),
+        }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async delete(id: number): Promise<void> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_academic_seasons/${id}`,
+        { method: "DELETE" }
+      );
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
     },
   },

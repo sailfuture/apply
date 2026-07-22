@@ -60,6 +60,12 @@ export async function PATCH(
     if ("volunteer_hour_total" in body) {
       patch.volunteer_hour_total = coerceHours(body.volunteer_hour_total);
     }
+    if ("color" in body) {
+      // Single-space sentinel when clearing — Xano's edit endpoints
+      // silently DROP empty-string inputs, so "" would leave the old
+      // color in place. Readers trim before comparing.
+      patch.color = coerceColor(body.color) || " ";
+    }
 
     if (Object.keys(patch).length === 0) {
       return NextResponse.json(
@@ -106,4 +112,19 @@ function coerceMs(v: unknown): number {
 function coerceHours(v: unknown): number {
   const n = Number(v);
   return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/** Known event-category color slugs; anything else coerces to "". */
+const EVENT_COLOR_SLUGS = new Set([
+  "sky",
+  "emerald",
+  "violet",
+  "amber",
+  "rose",
+  "orange",
+]);
+function coerceColor(v: unknown): string {
+  return typeof v === "string" && EVENT_COLOR_SLUGS.has(v.trim())
+    ? v.trim()
+    : "";
 }
