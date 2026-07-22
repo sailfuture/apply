@@ -48,7 +48,7 @@ export const messagesFetcher = async (
   return res.json();
 };
 
-export type ThreadContactType = "family" | "inquiry" | "camp";
+export type ThreadContactType = "family" | "inquiry" | "camp" | "visit";
 
 export function contactMessagesKey(
   type: ThreadContactType,

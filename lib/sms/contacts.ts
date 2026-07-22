@@ -4,6 +4,7 @@ import {
   type XanoInquiry,
   type XanoParent,
   type XanoSummerCampInquiry,
+  type XanoWebsiteLiabilityWaiver,
 } from "@/lib/xano";
 import { toE164 } from "@/lib/phone";
 
@@ -17,18 +18,21 @@ import { toE164 } from "@/lib/phone";
  *   - `camp`    — a summer-camp parent (`registration_summer_camp`,
  *                 standalone rows with their own phone/email).
  *   - `inquiry` — a prospective-family inquiry (`registration_inquiry`).
+ *   - `visit`   — a campus-visit waiver signer
+ *                 (`website_liability_waiver`) who ticked the marketing
+ *                 opt-in on the public form.
  *
  * When one number matches more than one record type (an inquiry that
  * converted to a family; a camp parent who later applied), attribution
- * follows `family > camp > inquiry` so the thread lands on the most
- * established record.
+ * follows `family > camp > inquiry > visit` so the thread lands on the
+ * most established record.
  *
  * Messages are deliberately NOT year-scoped: a contact's thread is one
  * continuous history across academic years (the optional year id on a
  * message row is trigger context, never a filter).
  */
 
-export type SmsContactType = "family" | "inquiry" | "camp";
+export type SmsContactType = "family" | "inquiry" | "camp" | "visit";
 
 export interface SmsContact {
   type: SmsContactType;
@@ -190,19 +194,41 @@ function inquiryContact(row: XanoInquiry): SmsContact {
   };
 }
 
+function visitContact(row: XanoWebsiteLiabilityWaiver): SmsContact {
+  const personName = (row.parent_name ?? "").trim();
+  return {
+    type: "visit",
+    id: row.id,
+    name: personName || `Visit #${row.id}`,
+    personName,
+    studentNames: (row.student_name ?? "").trim() || null,
+    phone: row.parent_phone ?? "",
+    e164: toE164(row.parent_phone),
+    // Only signers who ticked the marketing opt-in on the public
+    // waiver are contactable — everyone else reads as opted out.
+    optedOut: row.marketing_opt_in !== true,
+    parentId: null,
+  };
+}
+
 /**
- * Phone → contact directory across all three record types. Four table
- * scans total (families, parents, camp, inquiries), then first-wins
- * insertion in priority order so `family > camp > inquiry` on
- * collisions. Numbers that don't normalize to 10 digits are skipped.
+ * Phone → contact directory across all four record types. Five table
+ * scans total (families, parents, camp, inquiries, visit waivers),
+ * then first-wins insertion in priority order so
+ * `family > camp > inquiry > visit` on collisions. Numbers that don't
+ * normalize to 10 digits are skipped.
  */
 export async function buildSmsDirectory(): Promise<Map<string, SmsContact>> {
-  const [families, parents, campRows, inquiries] = await Promise.all([
-    xano.families.getAll().catch(() => [] as XanoFamily[]),
-    xano.parents.getAll().catch(() => [] as XanoParent[]),
-    xano.summerCamp.getAll().catch(() => [] as XanoSummerCampInquiry[]),
-    xano.inquiries.getAll().catch(() => [] as XanoInquiry[]),
-  ]);
+  const [families, parents, campRows, inquiries, waivers] =
+    await Promise.all([
+      xano.families.getAll().catch(() => [] as XanoFamily[]),
+      xano.parents.getAll().catch(() => [] as XanoParent[]),
+      xano.summerCamp.getAll().catch(() => [] as XanoSummerCampInquiry[]),
+      xano.inquiries.getAll().catch(() => [] as XanoInquiry[]),
+      xano.websiteWaivers
+        .getAll()
+        .catch(() => [] as XanoWebsiteLiabilityWaiver[]),
+    ]);
 
   const directory = new Map<string, SmsContact>();
   const add = (key: string, contact: SmsContact) => {
@@ -222,6 +248,9 @@ export async function buildSmsDirectory(): Promise<Map<string, SmsContact>> {
   }
   for (const row of inquiries) {
     add(normPhone(row.primary_phone), inquiryContact(row));
+  }
+  for (const row of waivers) {
+    add(normPhone(row.parent_phone), visitContact(row));
   }
   return directory;
 }
@@ -261,6 +290,19 @@ export async function getContactRecipient(
       optedOut: c.optedOut,
     };
   }
+  if (type === "visit") {
+    const rows = await xano.websiteWaivers.getAll().catch(() => []);
+    const row = rows.find((r) => r.id === id);
+    if (!row) return null;
+    const c = visitContact(row);
+    return {
+      parentId: null,
+      name: c.personName,
+      phone: c.phone,
+      e164: c.e164,
+      optedOut: c.optedOut,
+    };
+  }
   const row = await xano.inquiries.getById(id).catch(() => null);
   if (!row) return null;
   const c = inquiryContact(row);
@@ -273,15 +315,16 @@ export async function getContactRecipient(
   };
 }
 
-/** The `sms_messages` foreign-key trio for a contact — exactly one of
- *  the three ids is set. Shared by every code path that logs a row so
- *  a message can never be attributed to two records. */
+/** The `sms_messages` foreign-key quartet for a contact — exactly one
+ *  of the four ids is set. Shared by every code path that logs a row
+ *  so a message can never be attributed to two records. */
 export function contactMessageKeys(
   contact: { type: SmsContactType; id: number } | null
 ): {
   registration_families_id: number | null;
   registration_inquiry_id: number | null;
   registration_summer_camp_id: number | null;
+  website_liability_waiver_id: number | null;
 } {
   return {
     registration_families_id:
@@ -290,5 +333,7 @@ export function contactMessageKeys(
       contact?.type === "inquiry" ? contact.id : null,
     registration_summer_camp_id:
       contact?.type === "camp" ? contact.id : null,
+    website_liability_waiver_id:
+      contact?.type === "visit" ? contact.id : null,
   };
 }

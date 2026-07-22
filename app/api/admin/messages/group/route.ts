@@ -30,7 +30,12 @@ import {
  */
 export const maxDuration = 300;
 
-const CONTACT_TYPES: SmsContactType[] = ["family", "inquiry", "camp"];
+const CONTACT_TYPES: SmsContactType[] = [
+  "family",
+  "inquiry",
+  "camp",
+  "visit",
+];
 const BLAST_ID_RE = /^[\w-]{6,64}$/;
 
 /**
@@ -100,7 +105,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json(
           {
             error:
-              "Each contact must be { type: family|inquiry|camp, id: number }",
+              "Each contact must be { type: family|inquiry|camp|visit, id: number }",
           },
           { status: 400 }
         );
@@ -132,7 +137,8 @@ export async function POST(req: NextRequest) {
     const wantFamilies = contacts.some((c) => c.type === "family");
     const wantInquiries = contacts.some((c) => c.type === "inquiry");
     const wantCamp = contacts.some((c) => c.type === "camp");
-    const [families, inquiries, campRows] = await Promise.all([
+    const wantVisits = contacts.some((c) => c.type === "visit");
+    const [families, inquiries, campRows, waivers] = await Promise.all([
       wantFamilies
         ? xano.families.getAllDetails().catch(() => [])
         : Promise.resolve([]),
@@ -142,10 +148,14 @@ export async function POST(req: NextRequest) {
       wantCamp
         ? xano.summerCamp.getAll().catch(() => [])
         : Promise.resolve([]),
+      wantVisits
+        ? xano.websiteWaivers.getAll().catch(() => [])
+        : Promise.resolve([]),
     ]);
     const familyById = new Map(families.map((f) => [f.id, f]));
     const inquiryById = new Map(inquiries.map((i) => [i.id, i]));
     const campById = new Map(campRows.map((c) => [c.id, c]));
+    const visitById = new Map(waivers.map((w) => [w.id, w]));
 
     interface Target {
       ref: ContactRef;
@@ -200,6 +210,26 @@ export async function POST(req: NextRequest) {
           hasPhone: Boolean(e164),
         };
       }
+      if (ref.type === "visit") {
+        const row = visitById.get(ref.id);
+        const e164 = toE164(row?.parent_phone ?? "");
+        // The public waiver's marketing checkbox is the texting
+        // consent — anything else reads as opted out.
+        const optedOut = row?.marketing_opt_in !== true;
+        return {
+          ref,
+          send: {
+            contact: ref,
+            yearId,
+            body: text,
+            author: { email: admin.email, name: admin.name },
+          },
+          firstName: (row?.parent_name ?? "").trim().split(/\s+/)[0] ?? "",
+          sendable: Boolean(row) && Boolean(e164) && !optedOut,
+          optedOut,
+          hasPhone: Boolean(e164),
+        };
+      }
       const row = campById.get(ref.id);
       const e164 = toE164(row?.primary_phone ?? "");
       return {
@@ -235,6 +265,8 @@ export async function POST(req: NextRequest) {
           alreadySent.add(`inquiry-${m.registration_inquiry_id}`);
         if (m.registration_summer_camp_id)
           alreadySent.add(`camp-${m.registration_summer_camp_id}`);
+        if (m.website_liability_waiver_id)
+          alreadySent.add(`visit-${m.website_liability_waiver_id}`);
       }
     } catch {
       // proceed without resume data

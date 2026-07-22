@@ -469,7 +469,7 @@ export interface SmsReplyReceivedContext {
   /** Which record type the number matched: an applying/enrolled
    *  family, a prospective-family inquiry, or a summer-camp parent.
    *  Null when unattributed. */
-  contact_type: "family" | "inquiry" | "camp" | null;
+  contact_type: "family" | "inquiry" | "camp" | "visit" | null;
   /** Sender's number as Twilio delivered it (E.164). */
   from_number: string;
   /** The text they sent, verbatim. */
@@ -486,6 +486,7 @@ const CONTACT_TYPE_LABEL: Record<string, string> = {
   family: "Family",
   inquiry: "Inquiry",
   camp: "Summer camp",
+  visit: "Campus visit",
 };
 
 export function smsReplyReceived(ctx: SmsReplyReceivedContext): EmailContent {

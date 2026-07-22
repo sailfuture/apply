@@ -18,6 +18,7 @@ export type ConversationStage =
   | "application"
   | "inquiry"
   | "camp"
+  | "visit"
   | "none";
 
 /** One row in the global inbox's conversation list — the latest text
@@ -58,6 +59,9 @@ function messageContact(
   if (m.registration_summer_camp_id) {
     return { type: "camp", id: m.registration_summer_camp_id };
   }
+  if (m.website_liability_waiver_id) {
+    return { type: "visit", id: m.website_liability_waiver_id };
+  }
   return null;
 }
 
@@ -76,7 +80,9 @@ function parseContactParams(req: NextRequest): {
   const id = Number(idParam);
   if (!Number.isFinite(id)) return null;
   const type: SmsContactType =
-    typeParam === "inquiry" || typeParam === "camp" ? typeParam : "family";
+    typeParam === "inquiry" || typeParam === "camp" || typeParam === "visit"
+      ? typeParam
+      : "family";
   return { type, id };
 }
 
@@ -105,12 +111,13 @@ export async function GET(req: NextRequest) {
       const yearIdParam = req.nextUrl.searchParams.get("yearId");
       const yearId = Number(yearIdParam);
       const withStages = Number.isFinite(yearId) && yearId > 0;
-      const [messages, families, inquiries, campRows, fap, srp, apps] =
+      const [messages, families, inquiries, campRows, waivers, fap, srp, apps] =
         await Promise.all([
           xano.smsMessages.getAll(),
           xano.families.getAll().catch(() => []),
           xano.inquiries.getAll().catch(() => []),
           xano.summerCamp.getAll().catch(() => []),
+          xano.websiteWaivers.getAll().catch(() => []),
           withStages
             ? xano.familyApplicationProgress.getByYear(yearId).catch(() => [])
             : Promise.resolve([]),
@@ -148,19 +155,26 @@ export async function GET(req: NextRequest) {
           `${c.primary_parent_first_name ?? ""} ${c.primary_parent_last_name ?? ""}`.trim(),
         ])
       );
+      const visitName = new Map(
+        waivers.map((w) => [w.id, (w.parent_name ?? "").trim()])
+      );
       const nameFor = (type: SmsContactType, id: number): string => {
         const raw =
           type === "family"
             ? familyName.get(id)
             : type === "inquiry"
               ? inquiryName.get(id)
-              : campName.get(id);
+              : type === "camp"
+                ? campName.get(id)
+                : visitName.get(id);
         if (raw && raw.trim()) return raw.trim();
         return type === "family"
           ? `Family #${id}`
           : type === "inquiry"
             ? `Inquiry #${id}`
-            : `Camp #${id}`;
+            : type === "camp"
+              ? `Camp #${id}`
+              : `Visit #${id}`;
       };
 
       const byContact = new Map<
@@ -194,7 +208,9 @@ export async function GET(req: NextRequest) {
               ? ("inquiry" as const)
               : type === "camp"
                 ? ("camp" as const)
-                : familyStage(id),
+                : type === "visit"
+                  ? ("visit" as const)
+                  : familyStage(id),
           lastBody: last.body,
           lastAt: last.created_at,
           lastDirection: last.direction,
@@ -233,7 +249,9 @@ export async function POST(req: NextRequest) {
     // preferred, bare familyId honored for older callers.
     const rawType = body?.contactType;
     const contactType: SmsContactType =
-      rawType === "inquiry" || rawType === "camp" ? rawType : "family";
+      rawType === "inquiry" || rawType === "camp" || rawType === "visit"
+        ? rawType
+        : "family";
     const contactId = Number(body?.contactId ?? body?.familyId);
     if (!Number.isFinite(contactId)) {
       return NextResponse.json(

@@ -25,6 +25,7 @@ const STAGE_FILTERS: Array<{ value: ConversationStage | "all"; label: string }> 
     { value: "application", label: "Applying" },
     { value: "inquiry", label: "Inquiries" },
     { value: "camp", label: "Camp" },
+    { value: "visit", label: "Visits" },
   ];
 
 /**
@@ -376,7 +377,7 @@ function ContactBadge({
   if (type === "family") return null;
   return (
     <span className="shrink-0 rounded-full border px-1.5 py-px text-[10px] font-medium text-muted-foreground">
-      {type === "inquiry" ? "Inquiry" : "Camp"}
+      {type === "inquiry" ? "Inquiry" : type === "camp" ? "Camp" : "Visit"}
     </span>
   );
 }

@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/dialog";
 import { adminFetcher } from "@/lib/admin-fetcher";
 
-type ContactType = "family" | "inquiry" | "camp";
+type ContactType = "family" | "inquiry" | "camp" | "visit";
 
 interface PickedContact {
   type: ContactType;
@@ -58,6 +58,15 @@ interface CampRow {
   student_last_name: string;
 }
 
+/** The slice of `/api/admin/campus-visits` rows the picker needs —
+ *  only opted-in signers are listed. */
+interface VisitRow {
+  id: number;
+  parent_name: string;
+  student_name: string;
+  marketing_opt_in: boolean;
+}
+
 /**
  * "New message" — searchable contact picker for the global SMS inbox,
  * spanning all three textable record types: applying/enrolled
@@ -88,6 +97,10 @@ export function NewMessageDialog({
     open ? "/api/admin/summer-camp" : null,
     adminFetcher
   );
+  const { data: visitsData, isLoading: loadingVisits } = useSWR(
+    open ? "/api/admin/campus-visits" : null,
+    adminFetcher
+  );
 
   const families = useMemo<FamilyRow[]>(
     () => (Array.isArray(familiesData) ? (familiesData as FamilyRow[]) : []),
@@ -102,8 +115,18 @@ export function NewMessageDialog({
     () => (Array.isArray(campData) ? (campData as CampRow[]) : []),
     [campData]
   );
+  // Campus-visit waiver signers — opted-in only (the marketing
+  // checkbox on the public form is the texting consent).
+  const visitRows = useMemo<VisitRow[]>(
+    () =>
+      (Array.isArray(visitsData) ? (visitsData as VisitRow[]) : []).filter(
+        (v) => v.marketing_opt_in === true
+      ),
+    [visitsData]
+  );
 
-  const loading = loadingFamilies || loadingInquiries || loadingCamp;
+  const loading =
+    loadingFamilies || loadingInquiries || loadingCamp || loadingVisits;
 
   function pick(contact: PickedContact) {
     setOpen(false);
@@ -228,6 +251,30 @@ export function NewMessageDialog({
                           value={`camp ${name} ${student} ${c.id}`}
                           onSelect={() =>
                             pick({ type: "camp", id: c.id, name })
+                          }
+                          className="flex flex-col items-start gap-0.5 px-4 py-2"
+                        >
+                          <span className="text-sm font-medium">{name}</span>
+                          {student ? (
+                            <span className="text-xs text-muted-foreground">
+                              Student: {student}
+                            </span>
+                          ) : null}
+                        </CommandItem>
+                      );
+                    })}
+                  </CommandGroup>
+                  <CommandGroup heading="Campus visits">
+                    {visitRows.map((v) => {
+                      const name =
+                        (v.parent_name ?? "").trim() || `Visit #${v.id}`;
+                      const student = (v.student_name ?? "").trim();
+                      return (
+                        <CommandItem
+                          key={`visit-${v.id}`}
+                          value={`visit ${name} ${student} ${v.id}`}
+                          onSelect={() =>
+                            pick({ type: "visit", id: v.id, name })
                           }
                           className="flex flex-col items-start gap-0.5 px-4 py-2"
                         >

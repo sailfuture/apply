@@ -66,6 +66,7 @@ export async function GET(req: NextRequest) {
       xano.paymentTransactions.getAllByYear(yearId).catch(() => []),
       xano.studentRegistration.getByYear(yearId).catch(() => []),
     ]);
+    const waivers = await xano.websiteWaivers.getAll().catch(() => []);
 
     // ── Family stage sets — shared bucketing (also powers the inbox
     //    stage filter) so the two surfaces can't disagree. ──
@@ -216,10 +217,12 @@ export async function GET(req: NextRequest) {
     // an inquiry (both are further along per the stage ladder). Camp
     // rows record last grade COMPLETED, so the filterable grade is
     // +1 (their incoming grade).
+    const campPhones = new Set<string>();
     for (const c of campRows) {
       const key = normPhone(c.primary_phone);
       if (key.length === 10 && (familyPhones.has(key) || inquiryPhones.has(key)))
         continue;
+      if (key.length === 10) campPhones.add(key);
       const e164 = toE164(c.primary_phone ?? "");
       const student =
         `${c.student_first_name ?? ""} ${c.student_last_name ?? ""}`.trim();
@@ -253,6 +256,45 @@ export async function GET(req: NextRequest) {
       });
     }
 
+    // Campus-visit waiver signers — bottom rung; only OPTED-IN
+    // signers list (the marketing checkbox on the public form is the
+    // texting consent), and any phone already claimed by a family,
+    // inquiry, or camp row wins over the visit record.
+    for (const w of waivers) {
+      if (w.marketing_opt_in !== true) continue;
+      const key = normPhone(w.parent_phone);
+      if (
+        key.length === 10 &&
+        (familyPhones.has(key) ||
+          inquiryPhones.has(key) ||
+          campPhones.has(key))
+      ) {
+        continue;
+      }
+      const e164 = toE164(w.parent_phone ?? "");
+      const personName = (w.parent_name ?? "").trim();
+      const student = (w.student_name ?? "").trim();
+      const grade = parseGrade(w.student_grade);
+      contacts.push({
+        key: `visit-${w.id}`,
+        type: "visit",
+        id: w.id,
+        name: personName || `Visit #${w.id}`,
+        personName,
+        stage: "visit",
+        students: student
+          ? grade !== null
+            ? `${student} (${grade}th)`
+            : student
+          : "",
+        grades: grade !== null ? [grade] : [],
+        hasPhone: Boolean(e164),
+        optedOut: false,
+        sendable: Boolean(e164),
+        outstanding: false,
+      });
+    }
+
     // Stage ladder first (furthest along at the top), then name — the
     // dialog's grade chips + search narrow from there.
     const rank: Record<GroupStage, number> = {
@@ -261,6 +303,7 @@ export async function GET(req: NextRequest) {
       application: 2,
       inquiry: 3,
       camp: 4,
+      visit: 5,
     };
     contacts.sort(
       (a, b) => rank[a.stage] - rank[b.stage] || a.name.localeCompare(b.name)
@@ -291,12 +334,13 @@ export type GroupStage =
   | "registration"
   | "application"
   | "inquiry"
-  | "camp";
+  | "camp"
+  | "visit";
 
 export interface GroupContact {
   /** Stable selection key: `${type}-${id}`. */
   key: string;
-  type: "family" | "inquiry" | "camp";
+  type: "family" | "inquiry" | "camp" | "visit";
   id: number;
   /** Display name — family name, or the parent's name for
    *  inquiry/camp rows. */

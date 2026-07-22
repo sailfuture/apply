@@ -1140,6 +1140,10 @@ export interface XanoSmsMessage {
   /** Summer-camp contact (`registration_summer_camp`) this text
    *  belongs to. Same Xano column/input requirement as above. */
   registration_summer_camp_id?: number | null;
+  /** Campus-visit waiver contact (`website_liability_waiver`) this
+   *  text belongs to. Same Xano column/input requirement as above
+   *  (column added 2026-07-22). */
+  website_liability_waiver_id?: number | null;
   /** Optional student/year context — set when a trigger text is about
    *  a specific student or year; null for general/manual/group texts. */
   registration_students_id?: number | null;
@@ -4524,13 +4528,13 @@ export const xano = {
 
     /**
      * One contact's full text thread, oldest-first — generic across
-     * the three contact types (family / inquiry / summer-camp), each
-     * keyed by its own FK column on `sms_messages`. Threads are never
-     * year-filtered: one continuous history per contact across
-     * academic years.
+     * the four contact types (family / inquiry / summer-camp /
+     * campus-visit waiver), each keyed by its own FK column on
+     * `sms_messages`. Threads are never year-filtered: one continuous
+     * history per contact across academic years.
      */
     async getByContact(
-      type: "family" | "inquiry" | "camp",
+      type: "family" | "inquiry" | "camp" | "visit",
       id: number
     ): Promise<XanoSmsMessage[]> {
       const column =
@@ -4538,7 +4542,9 @@ export const xano = {
           ? "registration_families_id"
           : type === "inquiry"
             ? "registration_inquiry_id"
-            : "registration_summer_camp_id";
+            : type === "camp"
+              ? "registration_summer_camp_id"
+              : "website_liability_waiver_id";
       try {
         const res = await fetch(
           `${getBaseUrl()}/sms_messages?${column}=${id}`,

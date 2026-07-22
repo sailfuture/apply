@@ -77,6 +77,10 @@ const STAGE_BADGE: Record<GroupStage, { label: string; className: string }> = {
     label: "Camp",
     className: "border-teal-200 bg-teal-50 text-teal-800",
   },
+  visit: {
+    label: "Visit",
+    className: "border-rose-200 bg-rose-50 text-rose-800",
+  },
 };
 
 const GRADES = [8, 9, 10, 11, 12] as const;
@@ -89,6 +93,7 @@ const STAGE_FILTERS: Array<{ value: GroupStage; label: string }> = [
   { value: "application", label: "Applying" },
   { value: "inquiry", label: "Inquiries" },
   { value: "camp", label: "Camp" },
+  { value: "visit", label: "Visits" },
 ];
 
 /**
@@ -104,6 +109,7 @@ const STAGE_SEARCH_ALIASES: Record<GroupStage, string[]> = {
   application: ["application", "applications", "applying", "applicant", "applicants"],
   inquiry: ["inquiry", "inquiries"],
   camp: ["camp", "campers", "summer"],
+  visit: ["visit", "visits", "visitors", "waiver", "waivers"],
 };
 
 function matchesStageAlias(stage: GroupStage, q: string): boolean {
