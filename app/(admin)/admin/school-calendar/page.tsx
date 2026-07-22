@@ -5,7 +5,6 @@ import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { toast } from "sonner";
 import {
-  CalendarDays,
   ChevronLeft,
   ChevronRight,
   Loader2,
@@ -16,11 +15,13 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -58,12 +59,15 @@ import type {
 } from "@/lib/xano";
 
 /**
- * Settings → School Calendar. Month-grid view of the year's
+ * Settings → Calendar. Full-viewport month calendar over the year's
  * `school_calendar` day rows (School / Weekend / Break, externship vs
- * internship rotation, holidays, term boundaries), with a day editor
- * sheet that also manages the events pinned to that day
- * (`school_calendar_events`: title, time, location, mandatory,
- * parent-volunteer-hours credit).
+ * internship rotation, holidays, term boundaries). Styled like a
+ * calendar app: Today + chevron nav with a large month title, a
+ * "New event" dialog top-right, seamless hairline grid whose rows
+ * stretch to fill the viewport, and event chips inside day cells.
+ * Clicking a day opens the editor sheet, which also manages that
+ * day's events (`school_calendar_events`: title, time, location,
+ * mandatory, parent-volunteer-hours credit).
  *
  * The year comes from the top-bar year picker. Terms have no lookup
  * endpoint, so they're labeled ordinally (first distinct `terms_id`
@@ -77,13 +81,21 @@ const WORK_TYPES = [
   { value: "Internship", label: "Internship" },
 ] as const;
 
-const WEEKDAYS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 /** "YYYY-MM-DD" → local Date (avoids the UTC-midnight off-by-one that
  *  `new Date("YYYY-MM-DD")` gives in western timezones). */
 function parseDate(iso: string): Date {
   const [y, m, d] = iso.split("-").map(Number);
   return new Date(y, (m ?? 1) - 1, d ?? 1);
+}
+
+/** Local Date → "YYYY-MM-DD" (`toISOString` would shift to UTC and
+ *  report the wrong day in the evening for US timezones). */
+function localIso(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+    d.getDate()
+  ).padStart(2, "0")}`;
 }
 
 function monthKeyOf(iso: string): string {
@@ -182,7 +194,7 @@ export default function SchoolCalendarPage() {
     if (monthIdx !== null && monthIdx >= 0 && monthIdx < months.length) {
       return monthIdx;
     }
-    const nowKey = monthKeyOf(new Date().toISOString().slice(0, 10));
+    const nowKey = monthKeyOf(localIso(new Date()));
     const idx = months.indexOf(nowKey);
     return idx >= 0 ? idx : 0;
   }, [monthIdx, months]);
@@ -194,7 +206,10 @@ export default function SchoolCalendarPage() {
     [days, selectedDayId]
   );
 
-  // Month grid cells — leading blanks so the 1st lands on its weekday.
+  // Month grid cells — leading blanks so the 1st lands on its weekday,
+  // trailing blanks so the grid is a clean rectangle of full weeks
+  // (rows share the viewport height equally, so ragged rows would
+  // stretch oddly).
   const cells = useMemo(() => {
     if (!monthKey) return [];
     const [y, m] = monthKey.split("-").map(Number);
@@ -207,30 +222,85 @@ export default function SchoolCalendarPage() {
       const iso = `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
       out.push({ date: iso, day: dayByDate.get(iso) ?? null });
     }
+    while (out.length % 7 !== 0) out.push(null);
     return out;
   }, [monthKey, dayByDate]);
 
-  const monthStats = useMemo(() => {
-    if (!monthKey) return null;
-    const inMonth = days.filter((d) => monthKeyOf(d.date) === monthKey);
-    return {
-      school: inMonth.filter((d) => d.type === "School").length,
-      extern: inMonth.filter((d) => d.work_type === "Externship").length,
-      intern: inMonth.filter((d) => d.work_type === "Internship").length,
-      breaks: inMonth.filter((d) => d.type === "Break" || d.break).length,
-    };
-  }, [days, monthKey]);
+  const weekCount = Math.max(1, cells.length / 7);
+  const todayIso = localIso(new Date());
+  const todayMonthIdx = months.indexOf(monthKeyOf(todayIso));
 
   return (
-    <div className="p-6 space-y-6">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold">School Calendar</h1>
-          <p className="text-sm text-muted-foreground">
-            Every day of the selected year — school days, rotations,
-            breaks, holidays, and term boundaries. Click a day to edit it
-            or manage its events.
-          </p>
+    <div className="flex h-[calc(100dvh-3.5rem)] flex-col gap-4 p-6">
+      {/* Toolbar — Today · ‹ › · month title on the left; legend and
+          the New-event dialog on the right. The month label doubles as
+          the page heading, calendar-app style. */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-1">
+          <Button
+            variant="outline"
+            size="sm"
+            className="mr-1 bg-white"
+            disabled={todayMonthIdx < 0 || todayMonthIdx === effectiveMonthIdx}
+            onClick={() => setMonthIdx(todayMonthIdx)}
+          >
+            Today
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="size-8 p-0"
+            disabled={effectiveMonthIdx <= 0}
+            onClick={() => setMonthIdx(effectiveMonthIdx - 1)}
+            aria-label="Previous month"
+          >
+            <ChevronLeft className="size-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="size-8 p-0"
+            disabled={effectiveMonthIdx >= months.length - 1}
+            onClick={() => setMonthIdx(effectiveMonthIdx + 1)}
+            aria-label="Next month"
+          >
+            <ChevronRight className="size-4" />
+          </Button>
+          <h1 className="ml-2 text-xl font-semibold tracking-tight">
+            {monthKey ? monthLabel(monthKey) : "Calendar"}
+          </h1>
+        </div>
+        <div className="flex items-center gap-4">
+          {/* Legend — hidden on narrow viewports where it would wrap
+              the toolbar onto three lines. */}
+          <div className="hidden items-center gap-3 text-[11px] text-muted-foreground lg:flex">
+            <LegendSwatch className="bg-white border" label="School" />
+            <LegendSwatch className="bg-muted/60" label="Weekend" />
+            <LegendSwatch className="bg-amber-100" label="Break" />
+            <span className="inline-flex items-center gap-1">
+              <span className="size-2 rounded-full bg-red-500" />
+              Holiday
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <span className="rounded bg-indigo-100 px-1 font-medium text-indigo-700">
+                E
+              </span>
+              Externship
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <span className="rounded bg-teal-100 px-1 font-medium text-teal-700">
+                I
+              </span>
+              Internship
+            </span>
+          </div>
+          <NewEventDialog
+            days={days}
+            dayByDate={dayByDate}
+            monthKey={monthKey}
+            todayIso={todayIso}
+            onCreated={() => void mutate()}
+          />
         </div>
       </div>
 
@@ -242,115 +312,72 @@ export default function SchoolCalendarPage() {
       ) : null}
 
       {!yearId ? (
-        <div className="rounded-lg border bg-white px-6 py-12 text-center text-sm text-muted-foreground">
+        <div className="flex min-h-0 flex-1 items-center justify-center rounded-lg border bg-white p-6 text-center text-sm text-muted-foreground">
           Pick a school year above to view its calendar.
         </div>
       ) : isLoading && days.length === 0 ? (
-        <div className="flex justify-center rounded-lg border bg-white px-6 py-16">
+        <div className="flex min-h-0 flex-1 items-center justify-center rounded-lg border bg-white">
           <Loader2 className="size-5 animate-spin text-muted-foreground" />
         </div>
       ) : days.length === 0 ? (
-        <div className="rounded-lg border bg-white px-6 py-12 text-center text-sm text-muted-foreground">
+        <div className="flex min-h-0 flex-1 items-center justify-center rounded-lg border bg-white p-6 text-center text-sm text-muted-foreground">
           No calendar has been generated for this school year yet.
         </div>
       ) : (
-        <Card className="overflow-hidden bg-white py-0 gap-0">
-          <CardHeader className="py-4 border-b bg-white">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="bg-white"
-                  disabled={effectiveMonthIdx <= 0}
-                  onClick={() => setMonthIdx(effectiveMonthIdx - 1)}
-                  aria-label="Previous month"
-                >
-                  <ChevronLeft className="size-4" />
-                </Button>
-                <CardTitle className="min-w-[170px] text-center text-base">
-                  {monthKey ? monthLabel(monthKey) : ""}
-                </CardTitle>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="bg-white"
-                  disabled={effectiveMonthIdx >= months.length - 1}
-                  onClick={() => setMonthIdx(effectiveMonthIdx + 1)}
-                  aria-label="Next month"
-                >
-                  <ChevronRight className="size-4" />
-                </Button>
-                {monthStats ? (
-                  <span className="ml-2 text-xs tabular-nums text-muted-foreground">
-                    {monthStats.school} school days ·{" "}
-                    {monthStats.extern} externship · {monthStats.intern}{" "}
-                    internship
-                    {monthStats.breaks
-                      ? ` · ${monthStats.breaks} break`
-                      : ""}
-                  </span>
-                ) : null}
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border bg-white">
+          {/* Weekday header */}
+          <div className="grid shrink-0 grid-cols-7 border-b">
+            {WEEKDAYS.map((w) => (
+              <div
+                key={w}
+                className="py-2 text-center text-xs font-medium text-muted-foreground"
+              >
+                {w}
               </div>
-              {/* Legend */}
-              <div className="flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground">
-                <LegendSwatch className="bg-white border" label="School" />
-                <LegendSwatch className="bg-muted/60" label="Weekend" />
-                <LegendSwatch className="bg-amber-100" label="Break" />
-                <span className="inline-flex items-center gap-1">
-                  <span className="size-2 rounded-full bg-red-500" />
-                  Holiday
-                </span>
-                <span className="inline-flex items-center gap-1">
-                  <span className="rounded bg-indigo-100 px-1 font-medium text-indigo-700">
-                    E
-                  </span>
-                  Externship
-                </span>
-                <span className="inline-flex items-center gap-1">
-                  <span className="rounded bg-teal-100 px-1 font-medium text-teal-700">
-                    I
-                  </span>
-                  Internship
-                </span>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent className="p-4 bg-white">
-            <div className="grid grid-cols-7 gap-1">
-              {WEEKDAYS.map((w) => (
-                <div
-                  key={w}
-                  className="pb-1 text-center text-[11px] font-semibold uppercase tracking-wider text-muted-foreground"
-                >
-                  {w}
-                </div>
-              ))}
-              {cells.map((cell, i) =>
-                cell === null ? (
-                  <div key={`blank-${i}`} />
-                ) : (
-                  <DayCell
-                    key={cell.date}
-                    date={cell.date}
-                    day={cell.day}
-                    eventCount={
-                      cell.day
-                        ? (eventsByDay.get(cell.day.id)?.length ?? 0)
-                        : 0
-                    }
-                    termLabel={
-                      cell.day
-                        ? (termLabel.get(cell.day.terms_id) ?? "")
-                        : ""
-                    }
-                    onOpen={() => cell.day && setSelectedDayId(cell.day.id)}
-                  />
-                )
-              )}
-            </div>
-          </CardContent>
-        </Card>
+            ))}
+          </div>
+          {/* Month grid — a seamless hairline grid whose rows split the
+              remaining viewport height equally, so the calendar always
+              fills the page regardless of 4-, 5-, or 6-week months. */}
+          <div
+            className="grid min-h-0 flex-1 grid-cols-7"
+            style={{
+              gridTemplateRows: `repeat(${weekCount}, minmax(0, 1fr))`,
+            }}
+          >
+            {cells.map((cell, i) => {
+              // Hairline separators: right edge on all but the last
+              // column, bottom edge on all but the last row.
+              const edge = cn(
+                i % 7 !== 6 && "border-r",
+                i < cells.length - 7 && "border-b"
+              );
+              if (cell === null) {
+                return (
+                  <div key={`blank-${i}`} className={cn("bg-muted/20", edge)} />
+                );
+              }
+              return (
+                <DayCell
+                  key={cell.date}
+                  date={cell.date}
+                  day={cell.day}
+                  events={
+                    cell.day ? (eventsByDay.get(cell.day.id) ?? []) : []
+                  }
+                  termLabel={
+                    cell.day
+                      ? (termLabel.get(cell.day.terms_id) ?? "")
+                      : ""
+                  }
+                  isToday={cell.date === todayIso}
+                  className={edge}
+                  onOpen={() => cell.day && setSelectedDayId(cell.day.id)}
+                />
+              );
+            })}
+          </div>
+        </div>
       )}
 
       {/* Day editor + events sheet — keyed by day id so drafts reset
@@ -387,21 +414,30 @@ function LegendSwatch({
 function DayCell({
   date,
   day,
-  eventCount,
+  events,
   termLabel,
+  isToday,
+  className,
   onOpen,
 }: {
   date: string;
   day: XanoSchoolCalendarDay | null;
-  eventCount: number;
+  events: XanoSchoolCalendarEvent[];
   termLabel: string;
+  isToday: boolean;
+  className?: string;
   onOpen: () => void;
 }) {
   const num = Number(date.slice(8));
   if (!day) {
     // A month-edge day outside the school year's generated range.
     return (
-      <div className="min-h-[76px] rounded-md border border-dashed border-border/50 p-1.5 text-xs text-muted-foreground/40">
+      <div
+        className={cn(
+          "p-1.5 text-xs tabular-nums text-muted-foreground/40",
+          className
+        )}
+      >
         {num}
       </div>
     );
@@ -416,6 +452,12 @@ function DayCell({
   if (day.first_day_intern_term) boundaries.push("Internship starts");
   if (day.last_day_intern_term) boundaries.push("Internship ends");
 
+  // How many event chips fit varies with viewport height — cap at 3
+  // and summarize the rest; the day sheet lists them all.
+  const MAX_CHIPS = 3;
+  const shown = events.slice(0, MAX_CHIPS);
+  const extra = events.length - shown.length;
+
   return (
     <button
       type="button"
@@ -424,23 +466,32 @@ function DayCell({
         `${day.day_of_week} · ${day.type}${day.work_type ? ` · ${day.work_type}` : ""}`,
         day.holiday ? "Holiday" : "",
         ...boundaries,
-        eventCount
-          ? `${eventCount} event${eventCount === 1 ? "" : "s"}`
-          : "",
+        ...events.map((e) =>
+          e.start_time ? `${fmtTime(e.start_time)} ${e.title}` : e.title
+        ),
       ]
         .filter(Boolean)
         .join("\n")}
       className={cn(
-        "flex min-h-[76px] flex-col rounded-md border p-1.5 text-left text-xs transition-colors hover:border-foreground/40",
+        "flex h-full min-h-0 flex-col gap-1 overflow-hidden p-1.5 text-left text-xs transition-colors",
         isBreak
-          ? "bg-amber-100/70"
+          ? "bg-amber-100/60 hover:bg-amber-100"
           : isWeekend
-            ? "bg-muted/60 text-muted-foreground"
-            : "bg-white"
+            ? "bg-muted/50 text-muted-foreground hover:bg-muted/70"
+            : "bg-white hover:bg-muted/40",
+        className
       )}
     >
-      <span className="flex items-center justify-between">
-        <span className="font-medium tabular-nums">{num}</span>
+      <span className="flex shrink-0 items-center justify-between">
+        <span
+          className={cn(
+            "font-medium tabular-nums",
+            isToday &&
+              "flex size-6 -m-0.5 items-center justify-center rounded-full bg-foreground text-background"
+          )}
+        >
+          {num}
+        </span>
         <span className="flex items-center gap-1">
           {day.holiday ? (
             <span
@@ -459,23 +510,290 @@ function DayCell({
           ) : null}
         </span>
       </span>
-      <span className="mt-auto space-y-0.5">
-        {boundaries.slice(0, 2).map((b) => (
-          <span
-            key={b}
-            className="block truncate text-[9px] font-medium uppercase tracking-wide text-emerald-700"
-          >
-            {b}
-          </span>
-        ))}
-        {eventCount > 0 ? (
-          <span className="inline-flex items-center gap-1 rounded-full bg-primary px-1.5 py-px text-[10px] font-medium text-primary-foreground">
-            <CalendarDays className="size-2.5" />
-            {eventCount}
-          </span>
-        ) : null}
-      </span>
+      {boundaries.length > 0 ? (
+        <span className="shrink-0 space-y-px">
+          {boundaries.slice(0, 2).map((b) => (
+            <span
+              key={b}
+              className="block truncate text-[9px] font-medium uppercase tracking-wide text-emerald-700"
+            >
+              {b}
+            </span>
+          ))}
+        </span>
+      ) : null}
+      {shown.length > 0 ? (
+        <span className="flex min-h-0 flex-col gap-0.5 overflow-hidden">
+          {shown.map((e) => (
+            <span
+              key={e.id}
+              className="block shrink-0 truncate rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium leading-4 text-blue-900"
+            >
+              {e.start_time ? (
+                <span className="tabular-nums">{fmtTime(e.start_time)} </span>
+              ) : null}
+              {e.title}
+            </span>
+          ))}
+          {extra > 0 ? (
+            <span className="shrink-0 px-1 text-[10px] font-medium text-muted-foreground">
+              +{extra} more
+            </span>
+          ) : null}
+        </span>
+      ) : null}
     </button>
+  );
+}
+
+/* ── New-event dialog ─────────────────────────────────────────────── */
+
+/**
+ * "New event" from the toolbar — the same fields as the day sheet's
+ * inline form plus a date picker, since the toolbar isn't anchored to
+ * a day. Events pin to a `school_calendar` day row, so the date input
+ * is clamped to the school year's generated range.
+ */
+function NewEventDialog({
+  days,
+  dayByDate,
+  monthKey,
+  todayIso,
+  onCreated,
+}: {
+  days: XanoSchoolCalendarDay[];
+  dayByDate: Map<string, XanoSchoolCalendarDay>;
+  monthKey: string | null;
+  todayIso: string;
+  onCreated: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [date, setDate] = useState("");
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [location, setLocation] = useState("");
+  const [allDay, setAllDay] = useState(false);
+  const [start, setStart] = useState("");
+  const [end, setEnd] = useState("");
+  const [mandatory, setMandatory] = useState(false);
+  const [volunteer, setVolunteer] = useState(false);
+  const [hours, setHours] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const minDate = days[0]?.date;
+  const maxDate = days[days.length - 1]?.date;
+  const day = date ? (dayByDate.get(date) ?? null) : null;
+
+  function openDialog() {
+    // Default date: today when it's inside the school year, else the
+    // first day of the month being viewed.
+    let d = "";
+    if (dayByDate.has(todayIso)) d = todayIso;
+    else if (monthKey) {
+      d = days.find((x) => monthKeyOf(x.date) === monthKey)?.date ?? "";
+    }
+    setDate(d || (days[0]?.date ?? ""));
+    setTitle("");
+    setDescription("");
+    setLocation("");
+    setAllDay(false);
+    setStart("");
+    setEnd("");
+    setMandatory(false);
+    setVolunteer(false);
+    setHours("");
+    setOpen(true);
+  }
+
+  async function save() {
+    const trimmed = title.trim();
+    if (!trimmed || !day || saving) return;
+    setSaving(true);
+    try {
+      const res = await fetch("/api/admin/school-calendar/events", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          school_calendar_id: day.id,
+          title: trimmed,
+          location: location.trim(),
+          description: description.trim(),
+          start_time: allDay ? 0 : timeInputToMs(date, start),
+          end_time: allDay ? 0 : timeInputToMs(date, end),
+          mandatory,
+          parent_volunteer_hours: volunteer,
+          volunteer_hour_total: volunteer ? Number(hours) || 0 : 0,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        throw new Error(err?.error ?? `Save failed (${res.status})`);
+      }
+      toast.success("Event added.");
+      setOpen(false);
+      onCreated();
+    } catch (err) {
+      console.error("Failed to create event:", err);
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't create event."
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <>
+      <Button size="sm" onClick={openDialog} disabled={days.length === 0}>
+        <Plus className="size-4 mr-1" />
+        New event
+      </Button>
+      <Dialog open={open} onOpenChange={(o) => !saving && setOpen(o)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Create event</DialogTitle>
+            <DialogDescription>
+              Adds an event to a day on the school calendar.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs">Title</Label>
+              <Input
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="Family Night, field trip, early release…"
+                autoFocus
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Date</Label>
+              <Input
+                type="date"
+                value={date}
+                min={minDate}
+                max={maxDate}
+                onChange={(e) => setDate(e.target.value)}
+              />
+              {date && !day ? (
+                <p className="text-xs text-red-600">
+                  That date isn&rsquo;t part of this school year&rsquo;s
+                  calendar.
+                </p>
+              ) : null}
+            </div>
+            {!allDay ? (
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Starts</Label>
+                  <Input
+                    type="time"
+                    value={start}
+                    onChange={(e) => setStart(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Ends</Label>
+                  <Input
+                    type="time"
+                    value={end}
+                    onChange={(e) => setEnd(e.target.value)}
+                  />
+                </div>
+              </div>
+            ) : null}
+            <div className="flex items-center justify-between gap-2">
+              <Label htmlFor="ne-allday" className="text-xs font-normal">
+                All day
+              </Label>
+              <Switch
+                id="ne-allday"
+                size="sm"
+                checked={allDay}
+                onCheckedChange={setAllDay}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Location</Label>
+              <Input
+                value={location}
+                onChange={(e) => setLocation(e.target.value)}
+                placeholder="Campus, marina, address…"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Description</Label>
+              <Textarea
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                rows={2}
+                placeholder="Details families should know…"
+              />
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <Label htmlFor="ne-mandatory" className="text-xs font-normal">
+                Mandatory attendance
+              </Label>
+              <Switch
+                id="ne-mandatory"
+                size="sm"
+                checked={mandatory}
+                onCheckedChange={setMandatory}
+              />
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <Label htmlFor="ne-volunteer" className="text-xs font-normal">
+                Counts toward parent volunteer hours
+              </Label>
+              <Switch
+                id="ne-volunteer"
+                size="sm"
+                checked={volunteer}
+                onCheckedChange={setVolunteer}
+              />
+            </div>
+            {volunteer ? (
+              <div className="space-y-1.5">
+                <Label className="text-xs">Volunteer hours credited</Label>
+                <Input
+                  type="number"
+                  min="0"
+                  step="0.5"
+                  value={hours}
+                  onChange={(e) => setHours(e.target.value)}
+                  placeholder="2"
+                />
+              </div>
+            ) : null}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              size="sm"
+              className="bg-white"
+              disabled={saving}
+              onClick={() => setOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => void save()}
+              disabled={saving || !title.trim() || !day}
+            >
+              {saving ? (
+                <>
+                  <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                  Saving
+                </>
+              ) : (
+                "Save"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
@@ -641,7 +959,7 @@ function DaySheet({
                   </Select>
                 </div>
                 <div className="space-y-1.5">
-                  <Label className="text-xs">Work rotation</Label>
+                  <Label className="text-xs">Work type</Label>
                   <Select
                     value={workType || "none"}
                     onValueChange={(v) => setWorkType(v === "none" ? "" : v)}

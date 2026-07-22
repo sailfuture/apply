@@ -79,7 +79,7 @@ const NAV_ITEMS: NavItem[] = [
     title: "Settings",
     children: [
       { title: "School Years", href: "/admin/school-years" },
-      { title: "School Calendar", href: "/admin/school-calendar" },
+      { title: "Calendar", href: "/admin/school-calendar" },
     ],
   },
 ];
