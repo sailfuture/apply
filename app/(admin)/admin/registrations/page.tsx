@@ -763,7 +763,7 @@ function DocumentDots({ row }: { row: RegFamilyRow }) {
     // Shadcn tooltips with a 100ms delay instead of the native SVG
     // <title> hover — native tooltips take ~a second to appear, which
     // read as broken (user: "needs to be snappier").
-    <TooltipProvider delayDuration={100}>
+    <TooltipProvider delayDuration={100} disableHoverableContent>
       <span className="inline-flex items-center gap-1">
         {DOC_DEFS.map((d) => {
           const c = row.doc_counts[d.key];
@@ -826,7 +826,7 @@ function SectionDots({ row }: { row: RegFamilyRow }) {
     },
   ];
   return (
-    <TooltipProvider delayDuration={100}>
+    <TooltipProvider delayDuration={100} disableHoverableContent>
       <span className="inline-flex items-center gap-1">
         {sections.map((s) => (
           <Tooltip key={s.key}>

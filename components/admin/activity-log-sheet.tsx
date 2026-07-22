@@ -247,7 +247,19 @@ export function ActivityLogSheet({
     }
   }
 
-  const items = useMemo(() => buildItems(data?.events ?? []), [data]);
+  // Long threads paginate from the bottom: only the newest PAGE_SIZE
+  // events render (the scroller starts at the end anyway); "Show
+  // older" at the top of the stream expands the window. All events
+  // are already fetched — this is purely a render window, so paging
+  // is instant.
+  const PAGE_SIZE = 50;
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const allEvents = useMemo(() => data?.events ?? [], [data]);
+  const hiddenCount = Math.max(0, allEvents.length - visibleCount);
+  const items = useMemo(
+    () => buildItems(allEvents.slice(-visibleCount)),
+    [allEvents, visibleCount]
+  );
 
   return (
     <>
@@ -315,6 +327,19 @@ export function ActivityLogSheet({
                 <MessageScroller>
                   <MessageScrollerViewport>
                     <MessageScrollerContent className="px-4 py-4">
+                      {hiddenCount > 0 ? (
+                        <div className="flex justify-center pb-2">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setVisibleCount((n) => n + PAGE_SIZE)
+                            }
+                            className="rounded-full border bg-white px-3 py-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+                          >
+                            Show older ({hiddenCount})
+                          </button>
+                        </div>
+                      ) : null}
                       {items.map((item) =>
                         item.type === "separator" ? (
                           <MessageScrollerItem
@@ -542,7 +567,9 @@ function EmailPreviewDialog({
  *  enrolled) render as a larger green bubble so they pop in the
  *  stream; everything else keeps the compact muted marker. */
 function SystemRow({ event }: { event: ActivityEvent }) {
-  const milestone = /accepted|confirmed|enrolled/i.test(event.title);
+  const milestone = /accepted|confirmed|enrolled|invoice paid|payment/i.test(
+    event.title
+  );
   if (milestone) {
     return (
       <div className="flex justify-center py-1">
