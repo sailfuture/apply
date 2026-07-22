@@ -34,6 +34,10 @@ interface FamilyRow {
   id: number;
   family_name: string;
   primary_name: string;
+  /** Parents beyond the primary, comma-joined ("" when none). */
+  secondary_name: string;
+  /** The family's students, comma-joined ("" when none). */
+  student_names: string;
 }
 
 /** The slice of `/api/admin/inquiries` rows the picker needs. */
@@ -114,7 +118,11 @@ export function NewMessageDialog({
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="p-0 sm:max-w-md">
-          <DialogHeader className="px-4 pt-4">
+          {/* `pr-14` clears the dialog's absolutely-positioned close
+              button (top-4 right-4) — with the content's default
+              padding stripped (`p-0`), the description would otherwise
+              run underneath the X. */}
+          <DialogHeader className="px-4 pt-4 pr-14">
             <DialogTitle>New message</DialogTitle>
             <DialogDescription>
               Pick a family, inquiry, or camp parent to open their text
@@ -125,38 +133,60 @@ export function NewMessageDialog({
               record names in the value means staff can search by any. */}
           <Command className="border-t">
             <CommandInput placeholder="Search by family, parent, or student name…" />
-            <CommandList className="max-h-72">
+            {/* Fixed height (not max-h) so the dialog doesn't grow and
+                shrink as typing filters the result count — the list
+                scrolls inside a stable frame instead. */}
+            <CommandList className="h-72 max-h-72">
               {loading ? (
-                <div className="flex justify-center py-6">
+                <div className="flex h-full items-center justify-center">
                   <Loader2 className="size-4 animate-spin text-muted-foreground" />
                 </div>
               ) : (
                 <>
                   <CommandEmpty>No contacts found.</CommandEmpty>
                   <CommandGroup heading="Families">
-                    {families.map((f) => (
-                      <CommandItem
-                        key={`family-${f.id}`}
-                        value={`family ${f.family_name} ${f.primary_name} ${f.id}`}
-                        onSelect={() =>
-                          pick({
-                            type: "family",
-                            id: f.id,
-                            name: f.family_name,
-                          })
-                        }
-                        className="flex flex-col items-start gap-0.5 px-4 py-2"
-                      >
-                        <span className="text-sm font-medium">
-                          {f.family_name}
-                        </span>
-                        {f.primary_name ? (
-                          <span className="text-xs text-muted-foreground">
-                            {f.primary_name}
+                    {families.map((f) => {
+                      // Primary + secondary contacts on one line; the
+                      // search value carries BOTH plus every student
+                      // name, so staff can find the family through
+                      // whichever person they know. (Texts still open
+                      // the family thread, which resolves to the
+                      // primary contact's number.)
+                      const parents = [f.primary_name, f.secondary_name]
+                        .filter(Boolean)
+                        .join(" · ");
+                      return (
+                        <CommandItem
+                          key={`family-${f.id}`}
+                          value={`family ${f.family_name} ${f.primary_name} ${f.secondary_name} ${f.student_names} ${f.id}`}
+                          onSelect={() =>
+                            pick({
+                              type: "family",
+                              id: f.id,
+                              name: f.family_name,
+                            })
+                          }
+                          className="flex flex-col items-start gap-0.5 px-4 py-2"
+                        >
+                          <span className="text-sm font-medium">
+                            {f.family_name}
                           </span>
-                        ) : null}
-                      </CommandItem>
-                    ))}
+                          {parents ? (
+                            <span className="text-xs text-muted-foreground">
+                              {parents}
+                            </span>
+                          ) : null}
+                          {f.student_names ? (
+                            <span className="text-xs text-muted-foreground">
+                              {f.student_names.includes(",")
+                                ? "Students"
+                                : "Student"}
+                              : {f.student_names}
+                            </span>
+                          ) : null}
+                        </CommandItem>
+                      );
+                    })}
                   </CommandGroup>
                   <CommandGroup heading="Inquiries">
                     {inquiries.map((i) => {

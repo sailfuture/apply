@@ -18,7 +18,20 @@ export async function GET(req: NextRequest) {
     const yearIdParam = req.nextUrl.searchParams.get("yearId");
     const yearId = yearIdParam ? Number(yearIdParam) : null;
 
-    const families = await xano.families.getAllDetails();
+    // Students fetched alongside so rows can carry display names —
+    // the all-details payload only has student FKs (the "students"
+    // array is really application rows). Degrades to empty names on
+    // a hiccup rather than failing the list.
+    const [families, students] = await Promise.all([
+      xano.families.getAllDetails(),
+      xano.students.getAll().catch(() => []),
+    ]);
+    const studentNameById = new Map(
+      students.map((s) => [
+        s.id,
+        `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim(),
+      ])
+    );
 
     const rows = families.map((family) => {
       // Apps for the year (or all of them if no year filter). Each app
@@ -63,6 +76,20 @@ export async function GET(req: NextRequest) {
         primary_name: family.registration_parents_id[0]
           ? `${family.registration_parents_id[0].first_name} ${family.registration_parents_id[0].last_name}`.trim()
           : "",
+        // Every parent beyond the first — surfaces the secondary
+        // contact in pickers/search (the New Message dialog). Joined
+        // in case a family carries more than two parent records.
+        secondary_name: family.registration_parents_id
+          .slice(1)
+          .map((p) => `${p.first_name ?? ""} ${p.last_name ?? ""}`.trim())
+          .filter(Boolean)
+          .join(", "),
+        // Distinct student display names for the same pickers —
+        // admins often only know the student, not the parents.
+        student_names: Array.from(studentIds)
+          .map((id) => studentNameById.get(id) ?? "")
+          .filter(Boolean)
+          .join(", "),
       };
     });
 
