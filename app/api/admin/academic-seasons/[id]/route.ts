@@ -76,8 +76,21 @@ export async function DELETE(
         { status: 400 }
       );
     }
+    // Un-assign every calendar day pointing at this season BEFORE
+    // deleting the row, so day rows never carry a dangling seasons_id.
+    // All-years scan because the season row is the only thing that
+    // knows its year and we're about to delete it anyway.
+    const days = await xano.schoolCalendar.getAll();
+    const assigned = days.filter((d) => Number(d.seasons_id) === id);
+    for (let i = 0; i < assigned.length; i += 10) {
+      await Promise.all(
+        assigned
+          .slice(i, i + 10)
+          .map((d) => xano.schoolCalendar.update(d.id, { seasons_id: 0 }))
+      );
+    }
     await xano.academicSeasons.delete(id);
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, cleared: assigned.length });
   } catch (err) {
     return handleAdminError(err);
   }

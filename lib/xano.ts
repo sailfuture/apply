@@ -5221,6 +5221,18 @@ export const xano = {
 
   /** School calendar days — see `XanoSchoolCalendarDay`. */
   schoolCalendar: {
+    /** Every day row across all years — used by cleanup paths that
+     *  can't know the year (e.g. clearing a deleted season's day
+     *  assignments). */
+    async getAll(): Promise<XanoSchoolCalendarDay[]> {
+      const res = await fetch(`${getBaseUrl()}/school_calendar`, {
+        cache: "no-store",
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      const rows: XanoSchoolCalendarDay[] = await res.json();
+      return Array.isArray(rows) ? rows : [];
+    },
+
     /** Every day row for one school year. The plain endpoint has no
      *  year filter, so we scan and filter in code — ~365 rows per
      *  year keeps this cheap. */

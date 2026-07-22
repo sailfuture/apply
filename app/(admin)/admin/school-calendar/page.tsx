@@ -10,6 +10,7 @@ import {
   ChevronRight,
   ChevronsUpDown,
   Clock,
+  List,
   Loader2,
   MapPin,
   Pencil,
@@ -58,6 +59,14 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -89,12 +98,16 @@ import type {
  * event-type color, mandatory, parent-volunteer-hours credit).
  *
  * Term chips (real names + ranges from `registration_academic_terms`)
- * jump the month view to a term and filter the Agenda view — a
- * chronological stream of every event. The Terms & seasons sheet is
- * full CRUD over `registration_academic_terms` /
- * `registration_academic_seasons`. The year comes from the top-bar
- * year picker; ordinal "Term N" labels remain the fallback for
- * `terms_id`s the terms table doesn't know.
+ * jump the month view to a term and dim days outside it. The Events
+ * button opens a sheet streaming every event chronologically (term
+ * chips filter it; rows open the day editor on top). The Terms &
+ * seasons overlay is a table view with full CRUD over
+ * `registration_academic_terms` / `registration_academic_seasons` —
+ * season dates aren't columns, they derive from the calendar day rows
+ * assigned via `seasons_id` (the season editor stamps a date range).
+ * The year comes from the top-bar year picker; ordinal "Term N"
+ * labels remain the fallback for `terms_id`s the terms table doesn't
+ * know.
  */
 
 const DAY_TYPES = ["School", "Weekend", "Break"] as const;
@@ -338,7 +351,7 @@ export default function SchoolCalendarPage() {
     [days, selectedDayId]
   );
 
-  const [view, setView] = useState<"month" | "agenda">("month");
+  const [eventsOpen, setEventsOpen] = useState(false);
   const [termFilter, setTermFilter] = useState<number | "all">("all");
   const [termsOpen, setTermsOpen] = useState(false);
 
@@ -365,37 +378,6 @@ export default function SchoolCalendarPage() {
       : null;
   }, [termFilter, terms]);
 
-  /** Agenda stream — every event (optionally one term's), grouped by
-   *  day, chronological. */
-  const agendaGroups = useMemo(() => {
-    const dayById = new Map(days.map((d) => [d.id, d]));
-    const rows: Array<{
-      e: XanoSchoolCalendarEvent;
-      day: XanoSchoolCalendarDay;
-    }> = [];
-    for (const e of events) {
-      const day = dayById.get(Number(e.school_calendar_id));
-      if (!day) continue;
-      if (termFilter !== "all" && day.terms_id !== termFilter) continue;
-      rows.push({ e, day });
-    }
-    rows.sort(
-      (a, b) =>
-        a.day.date.localeCompare(b.day.date) ||
-        (a.e.start_time ?? 0) - (b.e.start_time ?? 0)
-    );
-    const groups: Array<{
-      date: string;
-      day: XanoSchoolCalendarDay;
-      items: XanoSchoolCalendarEvent[];
-    }> = [];
-    for (const r of rows) {
-      const last = groups[groups.length - 1];
-      if (last && last.date === r.day.date) last.items.push(r.e);
-      else groups.push({ date: r.day.date, day: r.day, items: [r.e] });
-    }
-    return groups;
-  }, [days, events, termFilter]);
 
   // Month grid cells — leading blanks so the 1st lands on its weekday,
   // trailing blanks so the grid is a clean rectangle of full weeks
@@ -462,40 +444,33 @@ export default function SchoolCalendarPage() {
           </h1>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {/* Legend — month view only, hidden on narrow viewports
-              where it would wrap the toolbar onto three lines. */}
-          {view === "month" ? (
-            <div className="mr-2 hidden items-center gap-3 text-[11px] text-muted-foreground xl:flex">
-              <LegendSwatch className="bg-white border" label="School" />
-              <LegendSwatch className="bg-muted/60" label="Weekend" />
-              <LegendSwatch className="bg-amber-100" label="Break" />
-              <span className="inline-flex items-center gap-1">
-                <span className="size-2 rounded-full bg-rose-500" />
-                Holiday
-              </span>
-              <span className="rounded-full bg-indigo-100 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-indigo-700">
-                Extern
-              </span>
-              <span className="rounded-full bg-orange-100 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-orange-700">
-                Intern
-              </span>
-            </div>
-          ) : null}
-          <Select
-            value={view}
-            onValueChange={(v) => setView(v as "month" | "agenda")}
+          {/* Legend — hidden on narrow viewports where it would wrap
+              the toolbar onto three lines. */}
+          <div className="mr-2 hidden items-center gap-3 text-[11px] text-muted-foreground xl:flex">
+            <LegendSwatch className="bg-white border" label="School" />
+            <LegendSwatch className="bg-muted/60" label="Weekend" />
+            <LegendSwatch className="bg-amber-100" label="Break" />
+            <span className="inline-flex items-center gap-1">
+              <span className="size-2 rounded-full bg-rose-500" />
+              Holiday
+            </span>
+            <span className="rounded-full bg-indigo-100 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-indigo-700">
+              Extern
+            </span>
+            <span className="rounded-full bg-orange-100 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-orange-700">
+              Intern
+            </span>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="bg-white"
+            disabled={!yearId}
+            onClick={() => setEventsOpen(true)}
           >
-            <SelectTrigger
-              className="h-8 w-[110px] bg-white"
-              aria-label="Calendar view"
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="month">Month</SelectItem>
-              <SelectItem value="agenda">Agenda</SelectItem>
-            </SelectContent>
-          </Select>
+            <List className="size-3.5 mr-1.5" />
+            Events
+          </Button>
           <Button
             variant="outline"
             size="sm"
@@ -516,58 +491,15 @@ export default function SchoolCalendarPage() {
         </div>
       </div>
 
-      {/* Term chips — jump the month view to a term and filter the
-          agenda stream. */}
+      {/* Term chips — jump the month view to a term's start and dim
+          days outside its range. */}
       {terms.length > 0 ? (
-        <div className="flex flex-wrap items-center gap-1.5">
-          <button
-            type="button"
-            aria-pressed={termFilter === "all"}
-            onClick={() => setTermFilter("all")}
-            className={cn(
-              "rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors",
-              termFilter === "all"
-                ? "border-foreground bg-foreground text-background"
-                : "border-border bg-white text-muted-foreground hover:border-foreground/40 hover:text-foreground"
-            )}
-          >
-            All terms
-          </button>
-          {terms.map((t) => {
-            const on = termFilter === t.id;
-            const range =
-              t.start_date && t.end_date
-                ? `${fmtShortDate(t.start_date)} – ${fmtShortDate(t.end_date)}`
-                : "";
-            return (
-              <button
-                key={t.id}
-                type="button"
-                aria-pressed={on}
-                title={range}
-                onClick={() => selectTerm(t)}
-                className={cn(
-                  "rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors",
-                  on
-                    ? "border-foreground bg-foreground text-background"
-                    : "border-border bg-white text-muted-foreground hover:border-foreground/40 hover:text-foreground"
-                )}
-              >
-                {t.term_name}
-                {range ? (
-                  <span
-                    className={cn(
-                      "ml-1.5 font-normal",
-                      on ? "text-background/70" : "text-muted-foreground/70"
-                    )}
-                  >
-                    {range}
-                  </span>
-                ) : null}
-              </button>
-            );
-          })}
-        </div>
+        <TermChipRow
+          terms={terms}
+          value={termFilter}
+          onAll={() => setTermFilter("all")}
+          onTerm={selectTerm}
+        />
       ) : null}
 
       {error ? (
@@ -588,88 +520,6 @@ export default function SchoolCalendarPage() {
       ) : days.length === 0 ? (
         <div className="flex min-h-0 flex-1 items-center justify-center rounded-lg border bg-white p-6 text-center text-sm text-muted-foreground">
           No calendar has been generated for this school year yet.
-        </div>
-      ) : view === "agenda" ? (
-        /* Agenda — a chronological stream of every event (or one
-           term's), grouped by day. Rows open the day sheet for edits. */
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border bg-white">
-          {agendaGroups.length === 0 ? (
-            <div className="flex flex-1 items-center justify-center p-6 text-center text-sm text-muted-foreground">
-              No events{termFilter !== "all" ? " in this term" : ""} yet —
-              use New event to add one.
-            </div>
-          ) : (
-            <div className="min-h-0 flex-1 overflow-y-auto">
-              {agendaGroups.map((g) => (
-                <div key={g.date}>
-                  <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-muted/60 px-4 py-1.5 backdrop-blur">
-                    <span className="text-xs font-semibold">
-                      {agendaDateLabel(g.date)}
-                    </span>
-                    <span className="text-[11px] text-muted-foreground">
-                      {termLabel.get(g.day.terms_id) ?? ""}
-                    </span>
-                  </div>
-                  <ul className="divide-y">
-                    {g.items.map((e) => {
-                      const c = eventColor(e.color);
-                      return (
-                        <li key={e.id}>
-                          <button
-                            type="button"
-                            onClick={() => setSelectedDayId(g.day.id)}
-                            className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-muted/40"
-                          >
-                            <span
-                              className={cn(
-                                "size-2.5 shrink-0 rounded-full",
-                                c ? c.dot : "bg-slate-300"
-                              )}
-                            />
-                            <span className="w-32 shrink-0 text-xs tabular-nums text-muted-foreground">
-                              {e.start_time
-                                ? `${fmtTime(e.start_time)}${
-                                    e.end_time
-                                      ? ` – ${fmtTime(e.end_time)}`
-                                      : ""
-                                  }`
-                                : "All day"}
-                            </span>
-                            <span className="min-w-0 flex-1">
-                              <span className="block truncate text-sm font-medium">
-                                {e.title}
-                                {e.mandatory ? (
-                                  <span className="ml-1.5 rounded-full border border-red-200 bg-red-50 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-red-700 align-middle">
-                                    Mandatory
-                                  </span>
-                                ) : null}
-                                {e.parent_volunteer_hours ? (
-                                  <span className="ml-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-emerald-700 align-middle">
-                                    {e.volunteer_hour_total || 0} vol hrs
-                                  </span>
-                                ) : null}
-                              </span>
-                              {e.location ? (
-                                <span className="block truncate text-xs text-muted-foreground">
-                                  <MapPin className="mr-0.5 inline size-3" />
-                                  {e.location}
-                                </span>
-                              ) : null}
-                            </span>
-                            {c ? (
-                              <span className="hidden shrink-0 text-[11px] text-muted-foreground sm:block">
-                                {c.label}
-                              </span>
-                            ) : null}
-                          </button>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border bg-white">
@@ -746,9 +596,22 @@ export default function SchoolCalendarPage() {
         />
       ) : null}
 
+      {/* All-events stream — right-hand sheet; clicking a row opens
+          that day's editor sheet on top. */}
+      {eventsOpen ? (
+        <EventsSheet
+          days={days}
+          events={events}
+          terms={terms}
+          termLabel={termLabel}
+          onClose={() => setEventsOpen(false)}
+          onOpenDay={(dayId) => setSelectedDayId(dayId)}
+        />
+      ) : null}
+
       {/* Terms & seasons management */}
       {termsOpen ? (
-        <TermsSheet
+        <TermsSeasonsDialog
           yearId={Number(yearId) || 0}
           terms={terms}
           seasons={seasons}
@@ -758,6 +621,228 @@ export default function SchoolCalendarPage() {
         />
       ) : null}
     </div>
+  );
+}
+
+/** Shared term filter chips — "All terms" + one chip per term with
+ *  its date range. */
+function TermChipRow({
+  terms,
+  value,
+  onAll,
+  onTerm,
+  className,
+}: {
+  terms: XanoAcademicTerm[];
+  value: number | "all";
+  onAll: () => void;
+  onTerm: (t: XanoAcademicTerm) => void;
+  className?: string;
+}) {
+  const chip = (on: boolean) =>
+    cn(
+      "rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors",
+      on
+        ? "border-foreground bg-foreground text-background"
+        : "border-border bg-white text-muted-foreground hover:border-foreground/40 hover:text-foreground"
+    );
+  return (
+    <div className={cn("flex flex-wrap items-center gap-1.5", className)}>
+      <button
+        type="button"
+        aria-pressed={value === "all"}
+        onClick={onAll}
+        className={chip(value === "all")}
+      >
+        All terms
+      </button>
+      {terms.map((t) => {
+        const on = value === t.id;
+        const range =
+          t.start_date && t.end_date
+            ? `${fmtShortDate(t.start_date)} – ${fmtShortDate(t.end_date)}`
+            : "";
+        return (
+          <button
+            key={t.id}
+            type="button"
+            aria-pressed={on}
+            title={range}
+            onClick={() => onTerm(t)}
+            className={chip(on)}
+          >
+            {t.term_name}
+            {range ? (
+              <span
+                className={cn(
+                  "ml-1.5 font-normal",
+                  on ? "text-background/70" : "text-muted-foreground/70"
+                )}
+              >
+                {range}
+              </span>
+            ) : null}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * Right-hand sheet listing every event on the year's calendar,
+ * oldest first, grouped by day with sticky date headers. Term chips
+ * filter the stream; clicking a row opens that day's editor sheet on
+ * top of this one.
+ */
+function EventsSheet({
+  days,
+  events,
+  terms,
+  termLabel,
+  onClose,
+  onOpenDay,
+}: {
+  days: XanoSchoolCalendarDay[];
+  events: XanoSchoolCalendarEvent[];
+  terms: XanoAcademicTerm[];
+  termLabel: Map<number, string>;
+  onClose: () => void;
+  onOpenDay: (dayId: number) => void;
+}) {
+  const [filter, setFilter] = useState<number | "all">("all");
+
+  const groups = useMemo(() => {
+    const dayById = new Map(days.map((d) => [d.id, d]));
+    const rows: Array<{
+      e: XanoSchoolCalendarEvent;
+      day: XanoSchoolCalendarDay;
+    }> = [];
+    for (const e of events) {
+      const day = dayById.get(Number(e.school_calendar_id));
+      if (!day) continue;
+      if (filter !== "all" && day.terms_id !== filter) continue;
+      rows.push({ e, day });
+    }
+    rows.sort(
+      (a, b) =>
+        a.day.date.localeCompare(b.day.date) ||
+        (a.e.start_time ?? 0) - (b.e.start_time ?? 0)
+    );
+    const out: Array<{
+      date: string;
+      day: XanoSchoolCalendarDay;
+      items: XanoSchoolCalendarEvent[];
+    }> = [];
+    for (const r of rows) {
+      const last = out[out.length - 1];
+      if (last && last.date === r.day.date) last.items.push(r.e);
+      else out.push({ date: r.day.date, day: r.day, items: [r.e] });
+    }
+    return out;
+  }, [days, events, filter]);
+
+  return (
+    <Sheet open onOpenChange={(o) => !o && onClose()}>
+      <SheetContent
+        side="right"
+        className="flex w-full flex-col gap-0 p-0 sm:max-w-xl"
+      >
+        <SheetHeader className="border-b px-4 py-3">
+          <SheetTitle className="text-base">Events</SheetTitle>
+          <SheetDescription className="text-xs">
+            Every event on this year&rsquo;s calendar. Click one to open
+            its day.
+          </SheetDescription>
+        </SheetHeader>
+        {terms.length > 0 ? (
+          <TermChipRow
+            terms={terms}
+            value={filter}
+            onAll={() => setFilter("all")}
+            onTerm={(t) => setFilter(t.id)}
+            className="border-b px-4 py-2.5"
+          />
+        ) : null}
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {groups.length === 0 ? (
+            <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
+              No events{filter !== "all" ? " in this term" : ""} yet —
+              use New event to add one.
+            </div>
+          ) : (
+            groups.map((g) => (
+              <div key={g.date}>
+                <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-muted/60 px-4 py-1.5 backdrop-blur">
+                  <span className="text-xs font-semibold">
+                    {agendaDateLabel(g.date)}
+                  </span>
+                  <span className="text-[11px] text-muted-foreground">
+                    {termLabel.get(g.day.terms_id) ?? ""}
+                  </span>
+                </div>
+                <ul className="divide-y">
+                  {g.items.map((e) => {
+                    const c = eventColor(e.color);
+                    return (
+                      <li key={e.id}>
+                        <button
+                          type="button"
+                          onClick={() => onOpenDay(g.day.id)}
+                          className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-muted/40"
+                        >
+                          <span
+                            className={cn(
+                              "size-2.5 shrink-0 rounded-full",
+                              c ? c.dot : "bg-slate-300"
+                            )}
+                          />
+                          <span className="w-28 shrink-0 text-xs tabular-nums text-muted-foreground">
+                            {e.start_time
+                              ? `${fmtTime(e.start_time)}${
+                                  e.end_time
+                                    ? ` – ${fmtTime(e.end_time)}`
+                                    : ""
+                                }`
+                              : "All day"}
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-sm font-medium">
+                              {e.title}
+                              {e.mandatory ? (
+                                <span className="ml-1.5 rounded-full border border-red-200 bg-red-50 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-red-700 align-middle">
+                                  Mandatory
+                                </span>
+                              ) : null}
+                              {e.parent_volunteer_hours ? (
+                                <span className="ml-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-emerald-700 align-middle">
+                                  {e.volunteer_hour_total || 0} vol hrs
+                                </span>
+                              ) : null}
+                            </span>
+                            {e.location ? (
+                              <span className="block truncate text-xs text-muted-foreground">
+                                <MapPin className="mr-0.5 inline size-3" />
+                                {e.location}
+                              </span>
+                            ) : null}
+                          </span>
+                          {c ? (
+                            <span className="hidden shrink-0 text-[11px] text-muted-foreground sm:block">
+                              {c.label}
+                            </span>
+                          ) : null}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            ))
+          )}
+        </div>
+      </SheetContent>
+    </Sheet>
   );
 }
 
@@ -2052,14 +2137,26 @@ function EventForm({
 
 /* ── Terms & seasons management ───────────────────────────────────── */
 
+/** "Aug 24, 2026" — school years span two calendar years, so the
+ *  tables always show the year. */
+function fmtMedDate(iso: string): string {
+  return parseDate(iso).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
 /**
- * Right-hand sheet for managing the year's academic terms (name,
- * start/end dates, active flag) and seasons (name + linked term).
- * Full CRUD against /api/admin/academic-terms and
- * /api/admin/academic-seasons; every change refreshes the calendar's
- * single SWR key so term chips and labels update in place.
+ * Large overlay for managing the year's academic terms and seasons as
+ * tables. Add/Edit open their own small modal (TermEditDialog /
+ * SeasonEditDialog) on top; deletes confirm via AlertDialog. Counts
+ * shown are in-session SCHOOL days, not raw calendar days. A season's
+ * dates aren't stored on the season row — they derive from the
+ * `school_calendar` day rows assigned to it (`seasons_id`), which the
+ * season editor manages via a date range.
  */
-function TermsSheet({
+function TermsSeasonsDialog({
   yearId,
   terms,
   seasons,
@@ -2074,19 +2171,13 @@ function TermsSheet({
   onClose: () => void;
   onChanged: () => void;
 }) {
-  // null = not editing; 0 = new row; otherwise the row id.
-  const [editingTermId, setEditingTermId] = useState<number | null>(null);
-  const [editingSeasonId, setEditingSeasonId] = useState<number | null>(
-    null
-  );
-  const editingTerm =
-    editingTermId && editingTermId > 0
-      ? (terms.find((t) => t.id === editingTermId) ?? null)
-      : null;
-  const editingSeason =
-    editingSeasonId && editingSeasonId > 0
-      ? (seasons.find((s) => s.id === editingSeasonId) ?? null)
-      : null;
+  // null = closed; { existing: null } = add-new.
+  const [termEdit, setTermEdit] = useState<{
+    existing: XanoAcademicTerm | null;
+  } | null>(null);
+  const [seasonEdit, setSeasonEdit] = useState<{
+    existing: XanoAcademicSeason | null;
+  } | null>(null);
 
   const [deleteTermTarget, setDeleteTermTarget] =
     useState<XanoAcademicTerm | null>(null);
@@ -2094,23 +2185,58 @@ function TermsSheet({
     useState<XanoAcademicSeason | null>(null);
   const [deleting, setDeleting] = useState(false);
 
-  const termNameById = useMemo(
-    () => new Map(terms.map((t) => [t.id, t.term_name])),
-    [terms]
-  );
-  const dayCountByTerm = useMemo(() => {
+  /** In-session school days per term (terms_id on day rows). */
+  const termSchoolDays = useMemo(() => {
     const m = new Map<number, number>();
     for (const d of days) {
-      if (d.terms_id > 0) m.set(d.terms_id, (m.get(d.terms_id) ?? 0) + 1);
+      if (d.type !== "School" || !d.terms_id) continue;
+      m.set(d.terms_id, (m.get(d.terms_id) ?? 0) + 1);
     }
     return m;
   }, [days]);
 
-  async function runDelete(
-    url: string,
-    label: string,
-    after: () => void
-  ) {
+  /** All day rows referencing each term — delete-warning integrity
+   *  count (broader than the school-day stat). */
+  const termDayRefs = useMemo(() => {
+    const m = new Map<number, number>();
+    for (const d of days) {
+      if (!d.terms_id) continue;
+      m.set(d.terms_id, (m.get(d.terms_id) ?? 0) + 1);
+    }
+    return m;
+  }, [days]);
+
+  /** Derived per-season info from assigned day rows: date range,
+   *  total assigned days, school-day count. */
+  const seasonInfo = useMemo(() => {
+    const m = new Map<
+      number,
+      { start: string; end: string; total: number; school: number }
+    >();
+    for (const d of days) {
+      const sid = Number(d.seasons_id);
+      if (!sid) continue;
+      const cur = m.get(sid) ?? {
+        start: d.date,
+        end: d.date,
+        total: 0,
+        school: 0,
+      };
+      if (d.date < cur.start) cur.start = d.date;
+      if (d.date > cur.end) cur.end = d.date;
+      cur.total += 1;
+      if (d.type === "School") cur.school += 1;
+      m.set(sid, cur);
+    }
+    return m;
+  }, [days]);
+
+  const termNameById = useMemo(
+    () => new Map(terms.map((t) => [t.id, t.term_name])),
+    [terms]
+  );
+
+  async function runDelete(url: string, label: string, after: () => void) {
     if (deleting) return;
     setDeleting(true);
     try {
@@ -2136,211 +2262,241 @@ function TermsSheet({
 
   return (
     <>
-      <Sheet open onOpenChange={(o) => !o && onClose()}>
-        <SheetContent
-          side="right"
-          className="flex w-full flex-col gap-0 overflow-y-auto p-0 sm:max-w-lg"
-        >
-          <SheetHeader className="border-b px-4 py-3">
-            <SheetTitle className="text-base">Terms &amp; seasons</SheetTitle>
-            <SheetDescription className="text-xs">
-              Academic term date ranges and the seasons tied to them for
-              this school year.
-            </SheetDescription>
-          </SheetHeader>
+      <Dialog open onOpenChange={(o) => !o && onClose()}>
+        <DialogContent className="flex max-h-[85vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-4xl">
+          <DialogHeader className="border-b px-6 py-4 pr-12">
+            <DialogTitle>Terms &amp; seasons</DialogTitle>
+            <DialogDescription>
+              Academic terms and seasons for this school year — dates,
+              in-session school-day counts, and the links between them.
+            </DialogDescription>
+          </DialogHeader>
 
-          <div className="space-y-5 px-4 py-4">
-            {/* ── Terms ── */}
+          <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-6 py-5">
+            {/* ── Terms table ── */}
             <section className="space-y-3">
               <div className="flex items-center justify-between">
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                   Terms ({terms.length})
                 </h3>
-                {editingTermId === null ? (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="bg-white"
-                    onClick={() => setEditingTermId(0)}
-                  >
-                    <Plus className="size-3.5 mr-1" />
-                    Add term
-                  </Button>
-                ) : null}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="bg-white"
+                  onClick={() => setTermEdit({ existing: null })}
+                >
+                  <Plus className="size-3.5 mr-1" />
+                  Add term
+                </Button>
               </div>
-
-              {terms.length === 0 && editingTermId === null ? (
-                <p className="text-sm text-muted-foreground">
-                  No terms for this school year yet.
-                </p>
-              ) : null}
-
-              <ul className="space-y-2">
-                {terms.map((t) => {
-                  const dayCount = dayCountByTerm.get(t.id) ?? 0;
-                  return (
-                    <li
-                      key={t.id}
-                      className="rounded-md border bg-muted/10 px-3 py-2"
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-medium">
+              <div className="overflow-hidden rounded-md border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Term</TableHead>
+                      <TableHead>Starts</TableHead>
+                      <TableHead>Ends</TableHead>
+                      <TableHead className="text-right">
+                        School days
+                      </TableHead>
+                      <TableHead className="w-20">
+                        <span className="sr-only">Actions</span>
+                      </TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {terms.length === 0 ? (
+                      <TableRow>
+                        <TableCell
+                          colSpan={5}
+                          className="py-6 text-center text-sm text-muted-foreground"
+                        >
+                          No terms for this school year yet.
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      terms.map((t) => (
+                        <TableRow key={t.id}>
+                          <TableCell className="font-medium">
                             {t.term_name}
                             {t.isActive ? (
                               <span className="ml-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-emerald-700 align-middle">
                                 Active
                               </span>
                             ) : null}
-                          </p>
-                          <p className="text-xs text-muted-foreground">
-                            {t.start_date && t.end_date
-                              ? `${fmtShortDate(t.start_date)} – ${fmtShortDate(t.end_date)}`
-                              : "No dates set"}
-                            {dayCount
-                              ? ` · ${dayCount} calendar days`
-                              : ""}
-                          </p>
-                        </div>
-                        <div className="flex shrink-0 items-center gap-1">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="size-7 p-0"
-                            onClick={() => setEditingTermId(t.id)}
-                            aria-label={`Edit ${t.term_name}`}
-                          >
-                            <Pencil className="size-3.5" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="size-7 p-0 text-red-600 hover:text-red-700"
-                            onClick={() => setDeleteTermTarget(t)}
-                            aria-label={`Delete ${t.term_name}`}
-                          >
-                            <Trash2 className="size-3.5" />
-                          </Button>
-                        </div>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-
-              {editingTermId !== null ? (
-                <TermForm
-                  key={editingTermId}
-                  yearId={yearId}
-                  existing={editingTerm}
-                  onDone={(saved) => {
-                    setEditingTermId(null);
-                    if (saved) onChanged();
-                  }}
-                />
-              ) : null}
+                          </TableCell>
+                          <TableCell className="tabular-nums">
+                            {t.start_date ? fmtMedDate(t.start_date) : "—"}
+                          </TableCell>
+                          <TableCell className="tabular-nums">
+                            {t.end_date ? fmtMedDate(t.end_date) : "—"}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {termSchoolDays.get(t.id) ?? 0}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex justify-end gap-1">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="size-7 p-0"
+                                onClick={() =>
+                                  setTermEdit({ existing: t })
+                                }
+                                aria-label={`Edit ${t.term_name}`}
+                              >
+                                <Pencil className="size-3.5" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="size-7 p-0 text-red-600 hover:text-red-700"
+                                onClick={() => setDeleteTermTarget(t)}
+                                aria-label={`Delete ${t.term_name}`}
+                              >
+                                <Trash2 className="size-3.5" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
             </section>
 
-            {/* ── Seasons ── */}
-            <section className="space-y-3 border-t pt-4">
+            {/* ── Seasons table ── */}
+            <section className="space-y-3">
               <div className="flex items-center justify-between">
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                   Seasons ({seasons.length})
                 </h3>
-                {editingSeasonId === null ? (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="bg-white"
-                    onClick={() => setEditingSeasonId(0)}
-                  >
-                    <Plus className="size-3.5 mr-1" />
-                    Add season
-                  </Button>
-                ) : null}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="bg-white"
+                  onClick={() => setSeasonEdit({ existing: null })}
+                >
+                  <Plus className="size-3.5 mr-1" />
+                  Add season
+                </Button>
               </div>
-
-              {seasons.length === 0 && editingSeasonId === null ? (
-                <p className="text-sm text-muted-foreground">
-                  No seasons for this school year yet.
-                </p>
-              ) : null}
-
-              <ul className="space-y-2">
-                {seasons.map((s) => {
-                  const linkedTerm =
-                    s.registration_academic_terms_id > 0
-                      ? terms.find(
-                          (t) => t.id === s.registration_academic_terms_id
-                        )
-                      : undefined;
-                  return (
-                    <li
-                      key={s.id}
-                      className="rounded-md border bg-muted/10 px-3 py-2"
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-medium">
-                            {s.name}
-                          </p>
-                          <p className="text-xs text-muted-foreground">
-                            {linkedTerm
-                              ? `${linkedTerm.term_name}${
-                                  linkedTerm.start_date &&
-                                  linkedTerm.end_date
-                                    ? ` · ${fmtShortDate(linkedTerm.start_date)} – ${fmtShortDate(linkedTerm.end_date)}`
-                                    : ""
-                                }`
-                              : s.registration_academic_terms_id > 0
+              <div className="overflow-hidden rounded-md border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Season</TableHead>
+                      <TableHead>Linked term</TableHead>
+                      <TableHead>Dates</TableHead>
+                      <TableHead className="text-right">
+                        School days
+                      </TableHead>
+                      <TableHead className="w-20">
+                        <span className="sr-only">Actions</span>
+                      </TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {seasons.length === 0 ? (
+                      <TableRow>
+                        <TableCell
+                          colSpan={5}
+                          className="py-6 text-center text-sm text-muted-foreground"
+                        >
+                          No seasons for this school year yet.
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      seasons.map((s) => {
+                        const info = seasonInfo.get(s.id);
+                        return (
+                          <TableRow key={s.id}>
+                            <TableCell className="font-medium">
+                              {s.name}
+                            </TableCell>
+                            <TableCell>
+                              {s.registration_academic_terms_id > 0
                                 ? (termNameById.get(
                                     s.registration_academic_terms_id
-                                  ) ?? "Linked term missing")
-                                : "Not linked to a term"}
-                          </p>
-                        </div>
-                        <div className="flex shrink-0 items-center gap-1">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="size-7 p-0"
-                            onClick={() => setEditingSeasonId(s.id)}
-                            aria-label={`Edit ${s.name}`}
-                          >
-                            <Pencil className="size-3.5" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="size-7 p-0 text-red-600 hover:text-red-700"
-                            onClick={() => setDeleteSeasonTarget(s)}
-                            aria-label={`Delete ${s.name}`}
-                          >
-                            <Trash2 className="size-3.5" />
-                          </Button>
-                        </div>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-
-              {editingSeasonId !== null ? (
-                <SeasonForm
-                  key={editingSeasonId}
-                  yearId={yearId}
-                  terms={terms}
-                  existing={editingSeason}
-                  onDone={(saved) => {
-                    setEditingSeasonId(null);
-                    if (saved) onChanged();
-                  }}
-                />
-              ) : null}
+                                  ) ?? "Missing term")
+                                : "—"}
+                            </TableCell>
+                            <TableCell className="tabular-nums">
+                              {info
+                                ? `${fmtMedDate(info.start)} – ${fmtMedDate(info.end)}`
+                                : "No dates set"}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums">
+                              {info?.school ?? 0}
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex justify-end gap-1">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="size-7 p-0"
+                                  onClick={() =>
+                                    setSeasonEdit({ existing: s })
+                                  }
+                                  aria-label={`Edit ${s.name}`}
+                                >
+                                  <Pencil className="size-3.5" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="size-7 p-0 text-red-600 hover:text-red-700"
+                                  onClick={() =>
+                                    setDeleteSeasonTarget(s)
+                                  }
+                                  aria-label={`Delete ${s.name}`}
+                                >
+                                  <Trash2 className="size-3.5" />
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                Season dates come from the calendar days assigned to the
+                season — pick the range in the season editor.
+              </p>
             </section>
           </div>
-        </SheetContent>
-      </Sheet>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add/Edit modals — stacked over the tables */}
+      {termEdit ? (
+        <TermEditDialog
+          key={termEdit.existing?.id ?? 0}
+          yearId={yearId}
+          existing={termEdit.existing}
+          onDone={(saved) => {
+            setTermEdit(null);
+            if (saved) onChanged();
+          }}
+        />
+      ) : null}
+      {seasonEdit ? (
+        <SeasonEditDialog
+          key={seasonEdit.existing?.id ?? 0}
+          yearId={yearId}
+          terms={terms}
+          days={days}
+          existing={seasonEdit.existing}
+          onDone={(saved) => {
+            setSeasonEdit(null);
+            if (saved) onChanged();
+          }}
+        />
+      ) : null}
 
       {/* Term delete confirm */}
       <AlertDialog
@@ -2354,11 +2510,14 @@ function TermsSheet({
             </AlertDialogTitle>
             <AlertDialogDescription>
               {(() => {
-                const n = deleteTermTarget
-                  ? (dayCountByTerm.get(deleteTermTarget.id) ?? 0)
+                const refs = deleteTermTarget
+                  ? (termDayRefs.get(deleteTermTarget.id) ?? 0)
                   : 0;
-                return n > 0
-                  ? `${n} calendar days currently reference this term — they'll keep pointing at a term that no longer exists. This can't be undone.`
+                const school = deleteTermTarget
+                  ? (termSchoolDays.get(deleteTermTarget.id) ?? 0)
+                  : 0;
+                return refs > 0
+                  ? `This term still covers ${school} school days (${refs} days on the calendar reference it) — those days will keep pointing at a term that no longer exists. This can't be undone.`
                   : "This can't be undone.";
               })()}
             </AlertDialogDescription>
@@ -2389,7 +2548,9 @@ function TermsSheet({
       {/* Season delete confirm */}
       <AlertDialog
         open={deleteSeasonTarget !== null}
-        onOpenChange={(o) => !deleting && !o && setDeleteSeasonTarget(null)}
+        onOpenChange={(o) =>
+          !deleting && !o && setDeleteSeasonTarget(null)
+        }
       >
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -2397,8 +2558,14 @@ function TermsSheet({
               Delete &ldquo;{deleteSeasonTarget?.name}&rdquo;?
             </AlertDialogTitle>
             <AlertDialogDescription>
-              Removes this season from the school year. This can&rsquo;t
-              be undone.
+              {(() => {
+                const n = deleteSeasonTarget
+                  ? (seasonInfo.get(deleteSeasonTarget.id)?.total ?? 0)
+                  : 0;
+                return n > 0
+                  ? `Clears the season from the ${n} days assigned to it, then deletes it. This can't be undone.`
+                  : "This can't be undone.";
+              })()}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -2427,7 +2594,8 @@ function TermsSheet({
   );
 }
 
-function TermForm({
+/** Small modal for adding/editing one academic term. */
+function TermEditDialog({
   yearId,
   existing,
   onDone,
@@ -2485,109 +2653,152 @@ function TermForm({
   }
 
   return (
-    <div className="space-y-3 rounded-md border bg-white p-3">
-      <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-        {existing ? "Edit term" : "New term"}
-      </p>
-      <div className="space-y-1.5">
-        <Label className="text-xs">Name</Label>
-        <Input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="Term 1"
-        />
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <div className="space-y-1.5">
-          <Label className="text-xs">Starts</Label>
-          <Input
-            type="date"
-            value={startDate}
-            onChange={(e) => setStartDate(e.target.value)}
-          />
+    <Dialog open onOpenChange={(o) => !saving && !o && onDone(false)}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>
+            {existing ? `Edit ${existing.term_name}` : "New term"}
+          </DialogTitle>
+          <DialogDescription>
+            Term name, date range, and whether it&rsquo;s the active
+            term.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="space-y-1.5">
+            <Label className="text-xs">Name</Label>
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Term 1"
+              autoFocus
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs">Starts</Label>
+              <Input
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Ends</Label>
+              <Input
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+              />
+            </div>
+          </div>
+          {rangeInvalid ? (
+            <p className="text-xs text-red-600">
+              End date can&rsquo;t be before the start date.
+            </p>
+          ) : null}
+          {existing && (existing.start_date || existing.end_date) ? (
+            <p className="text-[11px] text-muted-foreground">
+              Saved dates can be changed here, but not cleared.
+            </p>
+          ) : null}
+          <div className="flex items-center justify-between gap-2">
+            <Label htmlFor="term-active" className="text-xs font-normal">
+              Active term
+            </Label>
+            <Switch
+              id="term-active"
+              size="sm"
+              checked={active}
+              onCheckedChange={setActive}
+            />
+          </div>
         </div>
-        <div className="space-y-1.5">
-          <Label className="text-xs">Ends</Label>
-          <Input
-            type="date"
-            value={endDate}
-            onChange={(e) => setEndDate(e.target.value)}
-          />
-        </div>
-      </div>
-      {rangeInvalid ? (
-        <p className="text-xs text-red-600">
-          End date can&rsquo;t be before the start date.
-        </p>
-      ) : null}
-      {existing && (existing.start_date || existing.end_date) ? (
-        <p className="text-[11px] text-muted-foreground">
-          Saved dates can be changed here, but not cleared.
-        </p>
-      ) : null}
-      <div className="flex items-center justify-between gap-2">
-        <Label htmlFor="term-active" className="text-xs font-normal">
-          Active term
-        </Label>
-        <Switch
-          id="term-active"
-          size="sm"
-          checked={active}
-          onCheckedChange={setActive}
-        />
-      </div>
-      <div className="flex items-center justify-end gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          className="bg-white"
-          disabled={saving}
-          onClick={() => onDone(false)}
-        >
-          Cancel
-        </Button>
-        <Button
-          size="sm"
-          onClick={() => void save()}
-          disabled={saving || !name.trim() || rangeInvalid}
-        >
-          {saving ? (
-            <>
-              <Loader2 className="size-3.5 mr-1.5 animate-spin" />
-              Saving
-            </>
-          ) : existing ? (
-            "Save changes"
-          ) : (
-            "Add term"
-          )}
-        </Button>
-      </div>
-    </div>
+        <DialogFooter>
+          <Button
+            variant="outline"
+            size="sm"
+            className="bg-white"
+            disabled={saving}
+            onClick={() => onDone(false)}
+          >
+            Cancel
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => void save()}
+            disabled={saving || !name.trim() || rangeInvalid}
+          >
+            {saving ? (
+              <>
+                <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                Saving
+              </>
+            ) : (
+              "Save"
+            )}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
-function SeasonForm({
+/**
+ * Small modal for adding/editing one season. The date range here
+ * drives the calendar-day assignment: saving stamps `seasons_id` on
+ * every day row in the range (via the season's /days endpoint) and
+ * clears rows that fell out of it, so the season always reflects the
+ * selected dates. Both dates blank = clear the assignment.
+ */
+function SeasonEditDialog({
   yearId,
   terms,
+  days,
   existing,
   onDone,
 }: {
   yearId: number;
   terms: XanoAcademicTerm[];
+  days: XanoSchoolCalendarDay[];
   /** Null = creating a new season. */
   existing: XanoAcademicSeason | null;
   onDone: (saved: boolean) => void;
 }) {
+  // Days currently assigned to this season (days arrive date-sorted),
+  // seeding the range inputs with the season's present span.
+  const assigned = existing
+    ? days.filter((d) => Number(d.seasons_id) === existing.id)
+    : [];
   const [name, setName] = useState(existing?.name ?? "");
   const [termId, setTermId] = useState(
     String(existing?.registration_academic_terms_id || 0)
   );
+  const [startDate, setStartDate] = useState(assigned[0]?.date ?? "");
+  const [endDate, setEndDate] = useState(
+    assigned[assigned.length - 1]?.date ?? ""
+  );
   const [saving, setSaving] = useState(false);
+
+  const minDate = days[0]?.date;
+  const maxDate = days[days.length - 1]?.date;
+  const halfRange = Boolean(startDate) !== Boolean(endDate);
+  const rangeInvalid =
+    halfRange || Boolean(startDate && endDate && endDate < startDate);
+
+  const schoolDaysInRange =
+    startDate && endDate && endDate >= startDate
+      ? days.filter(
+          (d) =>
+            d.date >= startDate &&
+            d.date <= endDate &&
+            d.type === "School"
+        ).length
+      : 0;
 
   async function save() {
     const trimmed = name.trim();
-    if (!trimmed || saving) return;
+    if (!trimmed || saving || rangeInvalid) return;
     setSaving(true);
     try {
       const res = await fetch(
@@ -2610,6 +2821,37 @@ function SeasonForm({
         const err = await res.json().catch(() => null);
         throw new Error(err?.error ?? `Save failed (${res.status})`);
       }
+      const saved = await res.json().catch(() => null);
+      const seasonId = existing?.id ?? Number(saved?.id);
+
+      // Day assignment: set when a full range is picked; clear when
+      // the range was blanked out and the season had days before.
+      const wantAssign = Boolean(startDate && endDate);
+      const wantClear =
+        !startDate && !endDate && assigned.length > 0;
+      if (seasonId && (wantAssign || wantClear)) {
+        const dres = await fetch(
+          `/api/admin/academic-seasons/${seasonId}/days`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              yearId,
+              start_date: wantAssign ? startDate : null,
+              end_date: wantAssign ? endDate : null,
+            }),
+          }
+        );
+        if (!dres.ok) {
+          const err = await dres.json().catch(() => null);
+          toast.error(
+            err?.error ??
+              "Season saved, but assigning its days failed — reopen it and try again."
+          );
+          onDone(true);
+          return;
+        }
+      }
       toast.success(existing ? "Season updated." : "Season added.");
       onDone(true);
     } catch (err) {
@@ -2623,67 +2865,116 @@ function SeasonForm({
   }
 
   return (
-    <div className="space-y-3 rounded-md border bg-white p-3">
-      <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-        {existing ? "Edit season" : "New season"}
-      </p>
-      <div className="space-y-1.5">
-        <Label className="text-xs">Name</Label>
-        <Input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="Season 1"
-        />
-      </div>
-      <div className="space-y-1.5">
-        <Label className="text-xs">Linked term</Label>
-        <Select value={termId} onValueChange={setTermId}>
-          <SelectTrigger className="w-full bg-white">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="0">Not linked</SelectItem>
-            {terms.map((t) => (
-              <SelectItem key={t.id} value={String(t.id)}>
-                {t.term_name}
-                {t.start_date && t.end_date
-                  ? ` (${fmtShortDate(t.start_date)} – ${fmtShortDate(t.end_date)})`
-                  : ""}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <p className="text-[11px] text-muted-foreground">
-          Seasons take their dates from the linked term.
-        </p>
-      </div>
-      <div className="flex items-center justify-end gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          className="bg-white"
-          disabled={saving}
-          onClick={() => onDone(false)}
-        >
-          Cancel
-        </Button>
-        <Button
-          size="sm"
-          onClick={() => void save()}
-          disabled={saving || !name.trim()}
-        >
-          {saving ? (
-            <>
-              <Loader2 className="size-3.5 mr-1.5 animate-spin" />
-              Saving
-            </>
-          ) : existing ? (
-            "Save changes"
+    <Dialog open onOpenChange={(o) => !saving && !o && onDone(false)}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>
+            {existing ? `Edit ${existing.name}` : "New season"}
+          </DialogTitle>
+          <DialogDescription>
+            Name the season, link it to a term, and pick the calendar
+            dates it covers.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="space-y-1.5">
+            <Label className="text-xs">Name</Label>
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Season 1"
+              autoFocus
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs">Linked term</Label>
+            <Select value={termId} onValueChange={setTermId}>
+              <SelectTrigger className="w-full bg-white">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="0">Not linked</SelectItem>
+                {terms.map((t) => (
+                  <SelectItem key={t.id} value={String(t.id)}>
+                    {t.term_name}
+                    {t.start_date && t.end_date
+                      ? ` (${fmtShortDate(t.start_date)} – ${fmtShortDate(t.end_date)})`
+                      : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs">Starts</Label>
+              <Input
+                type="date"
+                value={startDate}
+                min={minDate}
+                max={maxDate}
+                onChange={(e) => setStartDate(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Ends</Label>
+              <Input
+                type="date"
+                value={endDate}
+                min={minDate}
+                max={maxDate}
+                onChange={(e) => setEndDate(e.target.value)}
+              />
+            </div>
+          </div>
+          {halfRange ? (
+            <p className="text-xs text-red-600">
+              Set both dates — or leave both blank to clear the
+              season&rsquo;s days.
+            </p>
+          ) : startDate && endDate && endDate < startDate ? (
+            <p className="text-xs text-red-600">
+              End date can&rsquo;t be before the start date.
+            </p>
+          ) : startDate && endDate ? (
+            <p className="text-[11px] text-muted-foreground">
+              Assigns every calendar day in this range to the season
+              ({schoolDaysInRange} school days). Days already in another
+              season move to this one.
+            </p>
           ) : (
-            "Add season"
+            <p className="text-[11px] text-muted-foreground">
+              The season&rsquo;s dates come from the calendar days
+              assigned to it.
+            </p>
           )}
-        </Button>
-      </div>
-    </div>
+        </div>
+        <DialogFooter>
+          <Button
+            variant="outline"
+            size="sm"
+            className="bg-white"
+            disabled={saving}
+            onClick={() => onDone(false)}
+          >
+            Cancel
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => void save()}
+            disabled={saving || !name.trim() || rangeInvalid}
+          >
+            {saving ? (
+              <>
+                <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                Saving
+              </>
+            ) : (
+              "Save"
+            )}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
