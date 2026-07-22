@@ -1100,27 +1100,17 @@ function DayCell({
           ) : null}
         </span>
       </span>
-      {boundaries.length > 0 ? (
-        <span className="shrink-0 space-y-px">
-          {boundaries.slice(0, 2).map((b) => (
-            <span
-              key={b}
-              className="block truncate text-[9px] font-medium uppercase tracking-wide text-muted-foreground"
-            >
-              {b}
-            </span>
-          ))}
-        </span>
-      ) : null}
+      {/* Events — larger single-line chips; long titles truncate
+          instead of wrapping so every chip stays one row. */}
       {shown.length > 0 ? (
-        <span className="flex min-h-0 flex-col gap-0.5 overflow-hidden">
+        <span className="flex min-h-0 flex-col gap-1 overflow-hidden">
           {shown.map((e) => {
             const c = eventColor(e.color);
             return (
               <span
                 key={e.id}
                 className={cn(
-                  "block shrink-0 truncate rounded px-1.5 py-0.5 text-[10px] font-medium leading-4",
+                  "block shrink-0 truncate whitespace-nowrap rounded-md px-2 py-1 text-xs font-medium leading-4",
                   c ? c.chip : "bg-slate-200/70 text-slate-800"
                 )}
               >
@@ -1138,6 +1128,21 @@ function DayCell({
               +{extra} more
             </span>
           ) : null}
+        </span>
+      ) : null}
+      {/* Day notices (term/rotation boundaries) — footer bubbles
+          styled like the event chips, pinned to the cell bottom so
+          they never push events around. */}
+      {boundaries.length > 0 ? (
+        <span className="mt-auto flex min-h-0 shrink-0 flex-col gap-1 overflow-hidden pt-0.5">
+          {boundaries.slice(0, 2).map((b) => (
+            <span
+              key={b}
+              className="block shrink-0 truncate whitespace-nowrap rounded-md bg-emerald-100 px-2 py-1 text-xs font-medium leading-4 text-emerald-800"
+            >
+              {b}
+            </span>
+          ))}
         </span>
       ) : null}
     </button>
