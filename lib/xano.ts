@@ -652,13 +652,19 @@ export interface XanoVolunteerHours {
   /** ISO date string (YYYY-MM-DD) for the day the family volunteered. */
   entry_date: string;
   hours: number;
-  activity_description: string;
-  activity_category: string;
   is_approved: boolean;
   approved_time: number | null;
-  /** Name of the admin who approved the entry. */
+  /** Name of the admin who approved the entry (" " = cleared — Xano
+   *  edits drop empty strings, so unapproving writes the sentinel). */
   is_approved_admin: string;
-  edited_at: number;
+  edited_at: number | null;
+  /** FK to `school_calendar_events` — 0 = manual entry not tied to a
+   *  calendar event. */
+  school_calendar_events_id: number;
+  /** Legacy columns dropped from the table (2026-07) — optional so
+   *  older readers keep compiling; new rows never carry them. */
+  activity_description?: string;
+  activity_category?: string;
 }
 
 export interface XanoScholarship {
@@ -3913,6 +3919,60 @@ export const xano = {
       } catch {
         return [];
       }
+    },
+
+    /** Every entry across all families/years — the admin review page
+     *  filters by year in code (plain CRUD endpoint, bare array). */
+    async getAll(): Promise<XanoVolunteerHours[]> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_families_volunteer_hours`,
+        { cache: "no-store" }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      const rows = await res.json();
+      return Array.isArray(rows) ? rows : [];
+    },
+
+    async create(
+      data: Omit<
+        XanoVolunteerHours,
+        "id" | "created_at" | "activity_description" | "activity_category"
+      >
+    ): Promise<XanoVolunteerHours> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_families_volunteer_hours`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async update(
+      id: number,
+      patch: Partial<XanoVolunteerHours>
+    ): Promise<XanoVolunteerHours> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_families_volunteer_hours/${id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch),
+        }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async delete(id: number): Promise<void> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_families_volunteer_hours/${id}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
     },
   },
 

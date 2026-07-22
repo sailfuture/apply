@@ -59,6 +59,7 @@ const NAV_ITEMS: NavItem[] = [
       { title: "Applications", href: "/admin/applications" },
       { title: "Registrations", href: "/admin/registrations" },
       { title: "Enrolled", href: "/admin/enrolled" },
+      { title: "Volunteer Hours", href: "/admin/volunteer-hours" },
     ],
   },
   // Finance — Stripe billing (per-family subscriptions, past-due

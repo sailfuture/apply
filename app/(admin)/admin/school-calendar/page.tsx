@@ -1,15 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { toast } from "sonner";
 import {
-  Check,
   ChevronLeft,
   ChevronRight,
-  ChevronsUpDown,
-  Clock,
   List,
   Loader2,
   MapPin,
@@ -18,6 +15,16 @@ import {
   Settings2,
   Trash2,
 } from "lucide-react";
+import {
+  EventColorPicker,
+  EventUpsertDialog,
+  LocationInput,
+  TimeSelect,
+  eventColor,
+  msToTimeInput,
+  parseDate,
+  timeInputToMs,
+} from "@/components/admin/event-upsert-dialog";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -38,19 +45,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from "@/components/ui/command";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
 import {
   Sheet,
   SheetContent,
@@ -119,103 +113,6 @@ const WORK_TYPES = [
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-/**
- * Event categories and their colors — the brand etiquette palette.
- * The slug is what `school_calendar_events.color` stores; empty (or
- * the " " clear-sentinel) renders the neutral gray chip.
- */
-const EVENT_COLORS = [
-  {
-    value: "sky",
-    label: "Testing",
-    dot: "bg-sky-400",
-    chip: "bg-sky-100 text-sky-900",
-  },
-  {
-    value: "emerald",
-    label: "SailFuture Serves",
-    dot: "bg-emerald-400",
-    chip: "bg-emerald-100 text-emerald-900",
-  },
-  {
-    value: "violet",
-    label: "Student Events",
-    dot: "bg-violet-400",
-    chip: "bg-violet-100 text-violet-900",
-  },
-  {
-    value: "amber",
-    label: "Parent Events",
-    dot: "bg-amber-400",
-    chip: "bg-amber-100 text-amber-900",
-  },
-] as const;
-
-function eventColor(color: string | null | undefined) {
-  const slug = (color ?? "").trim();
-  return EVENT_COLORS.find((c) => c.value === slug) ?? null;
-}
-
-/** 15-minute options for the time dropdowns — "HH:MM" 24h values with
- *  12-hour labels, like the pickers in calendar apps. */
-const TIME_OPTIONS: Array<{ value: string; label: string }> = (() => {
-  const out: Array<{ value: string; label: string }> = [];
-  for (let h = 0; h < 24; h++) {
-    for (let m = 0; m < 60; m += 15) {
-      out.push({
-        value: `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`,
-        label: timeLabel12(h, m),
-      });
-    }
-  }
-  return out;
-})();
-
-function timeLabel12(h: number, m: number): string {
-  const hour12 = h % 12 === 0 ? 12 : h % 12;
-  return `${hour12}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
-}
-
-/** "HH:MM" → 12-hour label, for values off the 15-minute grid. */
-function labelForTimeValue(v: string): string {
-  const found = TIME_OPTIONS.find((o) => o.value === v);
-  if (found) return found.label;
-  const [h, m] = v.split(":").map(Number);
-  return timeLabel12(h ?? 0, m ?? 0);
-}
-
-/**
- * Loose time parsing for the combobox — accepts "8", "8:05", "815",
- * "8:05p", "8 pm", "14:30"… Bare hours with no AM/PM read as 24-hour
- * (8 → 8:00 AM, 14 → 2:00 PM). Returns null when it isn't a time.
- */
-function parseTimeInput(raw: string): { value: string; label: string } | null {
-  const s = raw.trim().toLowerCase().replace(/\./g, "");
-  if (!s) return null;
-  const m = s.match(/^(\d{1,2})(?::?(\d{2}))?\s*(a|am|p|pm)?$/);
-  if (!m) return null;
-  let h = Number(m[1]);
-  const min = m[2] ? Number(m[2]) : 0;
-  const mer = m[3];
-  if (min > 59) return null;
-  if (mer) {
-    if (h < 1 || h > 12) return null;
-    if ((mer === "p" || mer === "pm") && h !== 12) h += 12;
-    if ((mer === "a" || mer === "am") && h === 12) h = 0;
-  } else if (h > 23) {
-    return null;
-  }
-  const value = `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
-  return { value, label: timeLabel12(h, min) };
-}
-
-/** "YYYY-MM-DD" → local Date (avoids the UTC-midnight off-by-one that
- *  `new Date("YYYY-MM-DD")` gives in western timezones). */
-function parseDate(iso: string): Date {
-  const [y, m, d] = iso.split("-").map(Number);
-  return new Date(y, (m ?? 1) - 1, d ?? 1);
-}
-
 /** Local Date → "YYYY-MM-DD" (`toISOString` would shift to UTC and
  *  report the wrong day in the evening for US timezones). */
 function localIso(d: Date): string {
@@ -234,24 +131,6 @@ function monthLabel(key: string): string {
     month: "long",
     year: "numeric",
   });
-}
-
-/** ms → "HH:MM" for a time input ("" when unset). */
-function msToTimeInput(ms: number | null | undefined): string {
-  if (!ms || !Number.isFinite(ms)) return "";
-  const d = new Date(ms);
-  return `${String(d.getHours()).padStart(2, "0")}:${String(
-    d.getMinutes()
-  ).padStart(2, "0")}`;
-}
-
-/** Day date + "HH:MM" → local unix-ms (0 when the time is blank). */
-function timeInputToMs(dateIso: string, hhmm: string): number {
-  if (!hhmm) return 0;
-  const [hh, mm] = hhmm.split(":").map(Number);
-  const d = parseDate(dateIso);
-  d.setHours(hh ?? 0, mm ?? 0, 0, 0);
-  return d.getTime();
 }
 
 function fmtTime(ms: number | null | undefined): string {
@@ -1009,314 +888,12 @@ function DayCell({
   );
 }
 
-/* ── Time + event-type field widgets ──────────────────────────────── */
-
-/**
- * Searchable time combobox — type to filter the 15-minute grid, or
- * type any exact time ("8:05", "8:05p", "14:30") and pick the parsed
- * "Use …" row it offers. "No time" clears.
- */
-function TimeSelect({
-  value,
-  onChange,
-  ariaLabel,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  ariaLabel: string;
-}) {
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
-
-  // Free-typed time that isn't one of the grid rows — offered as its
-  // own "Use 8:05 AM" item (value = the raw query so cmdk's filter
-  // always keeps it visible).
-  const parsed = parseTimeInput(query);
-  const offParsed =
-    parsed && !TIME_OPTIONS.some((o) => o.value === parsed.value)
-      ? parsed
-      : null;
-
-  function pick(v: string) {
-    onChange(v);
-    setOpen(false);
-    setQuery("");
-  }
-
-  return (
-    <Popover
-      open={open}
-      onOpenChange={(o) => {
-        setOpen(o);
-        if (!o) setQuery("");
-      }}
-    >
-      <PopoverTrigger asChild>
-        <Button
-          variant="outline"
-          role="combobox"
-          aria-expanded={open}
-          aria-label={ariaLabel}
-          className="w-full justify-between bg-white px-3 font-normal"
-        >
-          <span
-            className={cn(
-              "flex min-w-0 items-center gap-1.5",
-              !value && "text-muted-foreground"
-            )}
-          >
-            <Clock className="size-3.5 shrink-0 text-muted-foreground" />
-            <span className="truncate">
-              {value ? labelForTimeValue(value) : "No time"}
-            </span>
-          </span>
-          <ChevronsUpDown className="size-3.5 shrink-0 opacity-50" />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent className="w-[220px] p-0" align="start">
-        <Command>
-          <CommandInput
-            placeholder="Type a time…"
-            value={query}
-            onValueChange={setQuery}
-          />
-          <CommandList className="max-h-56">
-            <CommandEmpty>No matching time.</CommandEmpty>
-            {offParsed ? (
-              <CommandGroup>
-                <CommandItem value={query} onSelect={() => pick(offParsed.value)}>
-                  Use {offParsed.label}
-                </CommandItem>
-              </CommandGroup>
-            ) : null}
-            <CommandGroup>
-              <CommandItem
-                value="no time clear none"
-                onSelect={() => pick("")}
-              >
-                No time
-                {!value ? <Check className="ml-auto size-3.5" /> : null}
-              </CommandItem>
-              {TIME_OPTIONS.map((o) => (
-                <CommandItem
-                  key={o.value}
-                  value={o.label}
-                  onSelect={() => pick(o.value)}
-                >
-                  {o.label}
-                  {value === o.value ? (
-                    <Check className="ml-auto size-3.5" />
-                  ) : null}
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          </CommandList>
-        </Command>
-      </PopoverContent>
-    </Popover>
-  );
-}
-
-/** One Places suggestion from /api/admin/places. */
-interface PlaceSuggestion {
-  main: string;
-  secondary: string;
-  full: string;
-}
-
-/**
- * Location field with Google Places autocomplete. Still a free-text
- * input (events store location as plain text) — typing 3+ characters
- * fetches address/place suggestions through the server-side proxy;
- * picking one fills the input with the full formatted address. When
- * the API key isn't configured the dropdown never appears and this
- * behaves exactly like the old plain input.
- */
-function LocationInput({
-  value,
-  onChange,
-  placeholder,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  placeholder?: string;
-}) {
-  const [open, setOpen] = useState(false);
-  const [suggestions, setSuggestions] = useState<PlaceSuggestion[]>([]);
-  const [loading, setLoading] = useState(false);
-  // Server said "no key configured" — stop asking for this mount.
-  const disabledRef = useRef(false);
-  // Google per-session billing token: one UUID per typing session,
-  // reset after a pick.
-  const sessionRef = useRef<string | null>(null);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const seqRef = useRef(0);
-
-  useEffect(
-    () => () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-    },
-    []
-  );
-
-  function queryPlaces(q: string) {
-    if (disabledRef.current) return;
-    if (timerRef.current) clearTimeout(timerRef.current);
-    if (q.trim().length < 3) {
-      setSuggestions([]);
-      setOpen(false);
-      return;
-    }
-    timerRef.current = setTimeout(async () => {
-      const seq = ++seqRef.current;
-      setLoading(true);
-      try {
-        if (!sessionRef.current) {
-          sessionRef.current =
-            typeof crypto !== "undefined" && "randomUUID" in crypto
-              ? crypto.randomUUID()
-              : String(Math.random()).slice(2);
-        }
-        const res = await fetch(
-          `/api/admin/places?q=${encodeURIComponent(q)}&session=${sessionRef.current}`
-        );
-        if (!res.ok) return;
-        const data = await res.json();
-        if (seq !== seqRef.current) return; // a newer keystroke won
-        if (data?.configured === false) {
-          disabledRef.current = true;
-          setOpen(false);
-          return;
-        }
-        const list: PlaceSuggestion[] = data?.suggestions ?? [];
-        setSuggestions(list);
-        setOpen(list.length > 0);
-      } catch {
-        // Best-effort — the field keeps working as plain text.
-      } finally {
-        if (seq === seqRef.current) setLoading(false);
-      }
-    }, 300);
-  }
-
-  return (
-    <div className="relative">
-      <Input
-        value={value}
-        onChange={(e) => {
-          onChange(e.target.value);
-          queryPlaces(e.target.value);
-        }}
-        onFocus={() => {
-          if (suggestions.length > 0 && value.trim().length >= 3) {
-            setOpen(true);
-          }
-        }}
-        onBlur={() => setOpen(false)}
-        onKeyDown={(e) => {
-          if (e.key === "Escape") setOpen(false);
-        }}
-        placeholder={placeholder}
-        autoComplete="off"
-      />
-      {loading ? (
-        <Loader2 className="absolute right-2.5 top-1/2 size-3.5 -translate-y-1/2 animate-spin text-muted-foreground" />
-      ) : null}
-      {open && suggestions.length > 0 ? (
-        <div className="absolute z-50 mt-1 w-full overflow-hidden rounded-md border bg-white shadow-md">
-          <ul className="max-h-56 overflow-y-auto py-1">
-            {suggestions.map((s) => (
-              <li key={s.full}>
-                {/* onMouseDown (not onClick) so the pick lands before
-                    the input's blur closes the dropdown. */}
-                <button
-                  type="button"
-                  className="w-full px-3 py-1.5 text-left transition-colors hover:bg-muted/60"
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    onChange(s.full);
-                    setSuggestions([]);
-                    setOpen(false);
-                    sessionRef.current = null;
-                  }}
-                >
-                  <span className="block truncate text-sm font-medium">
-                    {s.main}
-                  </span>
-                  {s.secondary ? (
-                    <span className="block truncate text-xs text-muted-foreground">
-                      {s.secondary}
-                    </span>
-                  ) : null}
-                </button>
-              </li>
-            ))}
-          </ul>
-          {/* Required attribution for Places data shown without a map. */}
-          <p className="border-t px-3 py-1 text-right text-[10px] text-muted-foreground">
-            Powered by Google
-          </p>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-/**
- * Etiquette-style color dots, one per event category. Clicking the
- * selected dot again clears back to the neutral default.
- */
-function EventColorPicker({
-  value,
-  onChange,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-}) {
-  const selected = eventColor(value);
-  return (
-    <div className="space-y-1.5">
-      <Label className="text-xs">Event type</Label>
-      <div className="flex items-center gap-2">
-        {EVENT_COLORS.map((c) => {
-          const on = value.trim() === c.value;
-          return (
-            <button
-              key={c.value}
-              type="button"
-              title={c.label}
-              aria-label={c.label}
-              aria-pressed={on}
-              onClick={() => onChange(on ? "" : c.value)}
-              className={cn(
-                "flex size-8 items-center justify-center rounded-full transition-all",
-                c.dot,
-                on
-                  ? "ring-2 ring-foreground ring-offset-2"
-                  : "opacity-70 hover:opacity-100"
-              )}
-            >
-              {on ? (
-                <span className="size-2 rounded-full bg-black/80" />
-              ) : null}
-            </button>
-          );
-        })}
-      </div>
-      <p className="text-[11px] text-muted-foreground">
-        {selected ? selected.label : "General (gray)"}
-      </p>
-    </div>
-  );
-}
-
 /* ── New-event dialog ─────────────────────────────────────────────── */
 
 /**
- * "New event" from the toolbar — the same fields as the day sheet's
- * inline form plus a date picker, since the toolbar isn't anchored to
- * a day. Events pin to a `school_calendar` day row, so the date input
- * is clamped to the school year's generated range.
+ * Toolbar "New event" button wrapping the shared EventUpsertDialog in
+ * create mode. Default date: today when it's inside the school year,
+ * else the first day of the month being viewed.
  */
 function NewEventDialog({
   days,
@@ -1332,81 +909,16 @@ function NewEventDialog({
   onCreated: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [date, setDate] = useState("");
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
-  const [location, setLocation] = useState("");
-  const [allDay, setAllDay] = useState(false);
-  const [start, setStart] = useState("");
-  const [end, setEnd] = useState("");
-  const [color, setColor] = useState("");
-  const [mandatory, setMandatory] = useState(false);
-  const [volunteer, setVolunteer] = useState(false);
-  const [hours, setHours] = useState("");
-  const [saving, setSaving] = useState(false);
-
-  const minDate = days[0]?.date;
-  const maxDate = days[days.length - 1]?.date;
-  const day = date ? (dayByDate.get(date) ?? null) : null;
+  const [defaultDate, setDefaultDate] = useState("");
 
   function openDialog() {
-    // Default date: today when it's inside the school year, else the
-    // first day of the month being viewed.
     let d = "";
     if (dayByDate.has(todayIso)) d = todayIso;
     else if (monthKey) {
       d = days.find((x) => monthKeyOf(x.date) === monthKey)?.date ?? "";
     }
-    setDate(d || (days[0]?.date ?? ""));
-    setTitle("");
-    setDescription("");
-    setLocation("");
-    setAllDay(false);
-    setStart("");
-    setEnd("");
-    setColor("");
-    setMandatory(false);
-    setVolunteer(false);
-    setHours("");
+    setDefaultDate(d || (days[0]?.date ?? ""));
     setOpen(true);
-  }
-
-  async function save() {
-    const trimmed = title.trim();
-    if (!trimmed || !day || saving) return;
-    setSaving(true);
-    try {
-      const res = await fetch("/api/admin/school-calendar/events", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          school_calendar_id: day.id,
-          title: trimmed,
-          location: location.trim(),
-          description: description.trim(),
-          start_time: allDay ? 0 : timeInputToMs(date, start),
-          end_time: allDay ? 0 : timeInputToMs(date, end),
-          color,
-          mandatory,
-          parent_volunteer_hours: volunteer,
-          volunteer_hour_total: volunteer ? Number(hours) || 0 : 0,
-        }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => null);
-        throw new Error(err?.error ?? `Save failed (${res.status})`);
-      }
-      toast.success("Event added.");
-      setOpen(false);
-      onCreated();
-    } catch (err) {
-      console.error("Failed to create event:", err);
-      toast.error(
-        err instanceof Error ? err.message : "Couldn't create event."
-      );
-    } finally {
-      setSaving(false);
-    }
   }
 
   return (
@@ -1415,152 +927,17 @@ function NewEventDialog({
         <Plus className="size-4 mr-1" />
         New event
       </Button>
-      <Dialog open={open} onOpenChange={(o) => !saving && setOpen(o)}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Create event</DialogTitle>
-            <DialogDescription>
-              Adds an event to a day on the school calendar.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3">
-            <div className="space-y-1.5">
-              <Label className="text-xs">Title</Label>
-              <Input
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                placeholder="Family Night, field trip, early release…"
-                autoFocus
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs">Date</Label>
-              <Input
-                type="date"
-                value={date}
-                min={minDate}
-                max={maxDate}
-                onChange={(e) => setDate(e.target.value)}
-              />
-              {date && !day ? (
-                <p className="text-xs text-red-600">
-                  That date isn&rsquo;t part of this school year&rsquo;s
-                  calendar.
-                </p>
-              ) : null}
-            </div>
-            {!allDay ? (
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <Label className="text-xs">Starts</Label>
-                  <TimeSelect
-                    value={start}
-                    onChange={setStart}
-                    ariaLabel="Start time"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs">Ends</Label>
-                  <TimeSelect
-                    value={end}
-                    onChange={setEnd}
-                    ariaLabel="End time"
-                  />
-                </div>
-              </div>
-            ) : null}
-            <div className="flex items-center justify-between gap-2">
-              <Label htmlFor="ne-allday" className="text-xs font-normal">
-                All day
-              </Label>
-              <Switch
-                id="ne-allday"
-                size="sm"
-                checked={allDay}
-                onCheckedChange={setAllDay}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs">Location</Label>
-              <LocationInput
-                value={location}
-                onChange={setLocation}
-                placeholder="Campus, marina, address…"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs">Description</Label>
-              <Textarea
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                rows={2}
-                placeholder="Details families should know…"
-              />
-            </div>
-            <EventColorPicker value={color} onChange={setColor} />
-            <div className="flex items-center justify-between gap-2">
-              <Label htmlFor="ne-mandatory" className="text-xs font-normal">
-                Mandatory attendance
-              </Label>
-              <Switch
-                id="ne-mandatory"
-                size="sm"
-                checked={mandatory}
-                onCheckedChange={setMandatory}
-              />
-            </div>
-            <div className="flex items-center justify-between gap-2">
-              <Label htmlFor="ne-volunteer" className="text-xs font-normal">
-                Counts toward parent volunteer hours
-              </Label>
-              <Switch
-                id="ne-volunteer"
-                size="sm"
-                checked={volunteer}
-                onCheckedChange={setVolunteer}
-              />
-            </div>
-            {volunteer ? (
-              <div className="space-y-1.5">
-                <Label className="text-xs">Volunteer hours credited</Label>
-                <Input
-                  type="number"
-                  min="0"
-                  step="0.5"
-                  value={hours}
-                  onChange={(e) => setHours(e.target.value)}
-                  placeholder="2"
-                />
-              </div>
-            ) : null}
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              size="sm"
-              className="bg-white"
-              disabled={saving}
-              onClick={() => setOpen(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              size="sm"
-              onClick={() => void save()}
-              disabled={saving || !title.trim() || !day}
-            >
-              {saving ? (
-                <>
-                  <Loader2 className="size-3.5 mr-1.5 animate-spin" />
-                  Saving
-                </>
-              ) : (
-                "Save"
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {open ? (
+        <EventUpsertDialog
+          days={days}
+          existing={null}
+          defaultDate={defaultDate}
+          onDone={(saved) => {
+            setOpen(false);
+            if (saved) onCreated();
+          }}
+        />
+      ) : null}
     </>
   );
 }
