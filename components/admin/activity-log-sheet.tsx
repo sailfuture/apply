@@ -593,7 +593,10 @@ function BubbleRow({
             <span className="text-muted-foreground"> · {event.title}</span>
           ) : null}
           {event.kind === "sms" ? (
-            <span className="text-muted-foreground"> · Text</span>
+            <span className="text-muted-foreground">
+              {" "}
+              · {event.isGroup ? "Group text" : "Text"}
+            </span>
           ) : null}
           {isEmail ? (
             <span className="text-muted-foreground"> · Email</span>

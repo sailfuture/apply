@@ -1,28 +1,45 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
-import { sendSms } from "@/lib/sms/send";
-import { resolveGroupAudience, type Stage } from "@/lib/sms/audience";
+import { sendSms, type SendSmsInput } from "@/lib/sms/send";
+import { toE164 } from "@/lib/phone";
+import {
+  pickAccountHolderParent,
+  type SmsContactType,
+} from "@/lib/sms/contacts";
 
 /**
- * Group SMS blast to a filtered set of families (year + stage + billing
- * status). `POST { …, dryRun: true }` returns the recipient breakdown
- * without sending — the compose UI calls it to preview before the real
- * send. The real send texts each reachable family and logs it on their
- * thread (so a group message still shows up per-family), skipping
- * opt-outs and missing numbers.
+ * Group SMS blast to an EXPLICIT recipient list. The compose dialog
+ * builds the audience itself (search + multi-select over
+ * `/api/admin/messages/group/audience`) and posts exactly who to
+ * text:
  *
- * Idempotency: the client sends a `blastId` (UUID minted when the
- * compose dialog opens). The batch is logged with template
- * `group:<yearId>:<blastId>`, and before sending we skip any family
- * that already has a message logged under that template — so a retry
- * after a timeout / dropped response resumes instead of double-texting
- * the families that already went out.
+ *   POST { yearId, contacts: [{ type, id }, …], body, blastId }
+ *
+ * This replaced the filter-resolved audience (year + coarse stage
+ * pills) — the server no longer decides WHO, only whether each named
+ * contact is reachable right now (number on file, not opted out;
+ * `sendSms` re-checks consent as the final authority). Contacts span
+ * all three record types; each send logs onto that contact's own
+ * thread.
+ *
+ * Idempotency: the client mints a `blastId` per compose session; the
+ * batch logs with template `group:<yearId>:<blastId>` and any contact
+ * already carrying a non-failed message under that template is
+ * skipped — a retry after a timeout resumes instead of double-texting.
  */
 export const maxDuration = 300;
 
-const STAGES: Stage[] = ["applicant", "accepted", "enrolled"];
+const CONTACT_TYPES: SmsContactType[] = ["family", "inquiry", "camp"];
 const BLAST_ID_RE = /^[\w-]{6,64}$/;
+/** Sanity ceiling — one blast is a school's worth of families, not a
+ *  marketing list. */
+const MAX_RECIPIENTS = 500;
+
+interface ContactRef {
+  type: SmsContactType;
+  id: number;
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -43,114 +60,186 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Strict stage validation — a typo'd stage must NOT silently widen
-    // the blast to every family in the year. Absent/empty means "all
-    // stages" only as the explicit, documented default.
-    let stages: Stage[] = [];
-    if (body.stages !== undefined) {
+    // Strict recipient validation — a malformed entry must fail the
+    // whole request, never silently text the wrong record type.
+    const rawContacts = body.contacts;
+    if (!Array.isArray(rawContacts) || rawContacts.length === 0) {
+      return NextResponse.json(
+        { error: "contacts is required — pick at least one recipient" },
+        { status: 400 }
+      );
+    }
+    if (rawContacts.length > MAX_RECIPIENTS) {
+      return NextResponse.json(
+        { error: `At most ${MAX_RECIPIENTS} recipients per blast` },
+        { status: 400 }
+      );
+    }
+    const contacts: ContactRef[] = [];
+    const seen = new Set<string>();
+    for (const c of rawContacts) {
+      const type = c?.type as SmsContactType;
+      const id = Number(c?.id);
       if (
-        !Array.isArray(body.stages) ||
-        body.stages.some((s: unknown) => !STAGES.includes(s as Stage))
+        !CONTACT_TYPES.includes(type) ||
+        !Number.isFinite(id) ||
+        id <= 0
       ) {
         return NextResponse.json(
-          { error: `stages must be an array drawn from: ${STAGES.join(", ")}` },
+          {
+            error:
+              "Each contact must be { type: family|inquiry|camp, id: number }",
+          },
           { status: 400 }
         );
       }
-      stages = body.stages as Stage[];
+      const key = `${type}-${id}`;
+      if (seen.has(key)) continue; // client double-added — harmless
+      seen.add(key);
+      contacts.push({ type, id });
     }
 
-    const onlyOutstanding = body.onlyOutstanding === true;
-    const dryRun = body.dryRun === true;
     const text = typeof body.body === "string" ? body.body.trim() : "";
-
-    if (!dryRun && !text) {
+    if (!text) {
       return NextResponse.json(
         { error: "Message body is required" },
         { status: 400 }
       );
     }
 
-    // Required on real sends (the dialog always mints one); optional on
-    // dry runs, which send nothing.
     const blastId = typeof body.blastId === "string" ? body.blastId : "";
-    if (!dryRun && !BLAST_ID_RE.test(blastId)) {
+    if (!BLAST_ID_RE.test(blastId)) {
       return NextResponse.json(
         { error: "A valid blastId is required" },
         { status: 400 }
       );
     }
 
-    const audience = await resolveGroupAudience({
-      yearId,
-      stages,
-      onlyOutstanding,
+    // ── Resolve reachability for the named contacts (batch reads —
+    //    three table scans max, never N round-trips) ─────────────────
+    const wantFamilies = contacts.some((c) => c.type === "family");
+    const wantInquiries = contacts.some((c) => c.type === "inquiry");
+    const wantCamp = contacts.some((c) => c.type === "camp");
+    const [families, inquiries, campRows] = await Promise.all([
+      wantFamilies
+        ? xano.families.getAllDetails().catch(() => [])
+        : Promise.resolve([]),
+      wantInquiries
+        ? xano.inquiries.getAll().catch(() => [])
+        : Promise.resolve([]),
+      wantCamp
+        ? xano.summerCamp.getAll().catch(() => [])
+        : Promise.resolve([]),
+    ]);
+    const familyById = new Map(families.map((f) => [f.id, f]));
+    const inquiryById = new Map(inquiries.map((i) => [i.id, i]));
+    const campById = new Map(campRows.map((c) => [c.id, c]));
+
+    interface Target {
+      ref: ContactRef;
+      send: SendSmsInput;
+      sendable: boolean;
+      optedOut: boolean;
+      hasPhone: boolean;
+    }
+    const targets: Target[] = contacts.map((ref) => {
+      if (ref.type === "family") {
+        const fam = familyById.get(ref.id);
+        const parent = pickAccountHolderParent(
+          fam?.registration_parents_id ?? []
+        );
+        const e164 = toE164(parent?.phone ?? null);
+        const optedOut = Boolean(parent?.sms_opted_out_at);
+        return {
+          ref,
+          send: {
+            contact: ref,
+            yearId,
+            body: text,
+            // `parent` keeps sendSms's opt-out gate authoritative;
+            // `to` pins the resolved number.
+            parent: parent ?? null,
+            to: e164,
+            author: { email: admin.email, name: admin.name },
+          },
+          sendable: Boolean(e164) && !optedOut,
+          optedOut,
+          hasPhone: Boolean(e164),
+        };
+      }
+      if (ref.type === "inquiry") {
+        const row = inquiryById.get(ref.id);
+        const e164 = toE164(String(row?.primary_phone ?? ""));
+        const optedOut = row?.messaging_opt_in === false;
+        return {
+          ref,
+          send: {
+            contact: ref,
+            yearId,
+            body: text,
+            author: { email: admin.email, name: admin.name },
+          },
+          sendable: Boolean(row) && Boolean(e164) && !optedOut,
+          optedOut,
+          hasPhone: Boolean(e164),
+        };
+      }
+      const row = campById.get(ref.id);
+      const e164 = toE164(row?.primary_phone ?? "");
+      return {
+        ref,
+        send: {
+          contact: ref,
+          yearId,
+          body: text,
+          author: { email: admin.email, name: admin.name },
+        },
+        sendable: Boolean(row) && Boolean(e164),
+        optedOut: false,
+        hasPhone: Boolean(e164),
+      };
     });
 
-    if (dryRun) {
-      return NextResponse.json({
-        dryRun: true,
-        matched: audience.matched,
-        sendable: audience.sendable,
-        optedOut: audience.optedOut,
-        noPhone: audience.noPhone,
-      });
-    }
-
-    // One template value per blast: greppable in the log, renders as a
-    // staff message on each thread (the `group:` prefix keeps it out of
-    // the "automated" tint), and doubles as the idempotency key.
+    // One template value per blast — greppable, renders as a staff
+    // message on each thread, and doubles as the idempotency key.
     const template = `group:${yearId}:${blastId}`;
 
-    // Resume support — skip families this exact blast already texted
-    // (retry after a timeout or dropped response). Best-effort: if the
-    // log read fails we proceed; worst case is a duplicate text, and
-    // failed sends were logged with status "failed" so they DO retry.
-    const alreadySent = new Set<number>();
+    // Resume support across ALL contact types — skip anyone this
+    // exact blast already texted. Best-effort: on a failed log read
+    // we proceed; failed sends were logged "failed" so they retry.
+    const alreadySent = new Set<string>();
     try {
-      const priorMessages = await xano.smsMessages.getAll();
-      for (const m of priorMessages) {
-        // Group blasts are family-only, so a resume row always carries
-        // the family FK — but the column is nullable now (inquiry/camp
-        // messages), hence the guard.
-        if (
-          m.template === template &&
-          m.status !== "failed" &&
-          m.registration_families_id
-        ) {
-          alreadySent.add(m.registration_families_id);
-        }
+      const prior = await xano.smsMessages.getAll();
+      for (const m of prior) {
+        if (m.template !== template || m.status === "failed") continue;
+        if (m.registration_families_id)
+          alreadySent.add(`family-${m.registration_families_id}`);
+        if (m.registration_inquiry_id)
+          alreadySent.add(`inquiry-${m.registration_inquiry_id}`);
+        if (m.registration_summer_camp_id)
+          alreadySent.add(`camp-${m.registration_summer_camp_id}`);
       }
     } catch {
       // proceed without resume data
     }
 
-    const targets = audience.recipients.filter(
-      (r) => r.sendable && !alreadySent.has(r.familyId)
+    const toSend = targets.filter(
+      (t) => t.sendable && !alreadySent.has(`${t.ref.type}-${t.ref.id}`)
     );
 
-    // Bounded concurrency — fast enough for a few hundred families
-    // without hammering the Twilio API. The Messaging Service also
-    // queues/rate-limits on its side.
+    // Bounded concurrency — fast enough for a few hundred contacts
+    // without hammering Twilio; the Messaging Service also queues on
+    // its side.
     const CONCURRENCY = 5;
     let sent = 0;
     let failed = 0;
-    for (let i = 0; i < targets.length; i += CONCURRENCY) {
-      const batch = targets.slice(i, i + CONCURRENCY);
+    for (let i = 0; i < toSend.length; i += CONCURRENCY) {
+      const batch = toSend.slice(i, i + CONCURRENCY);
       const results = await Promise.all(
-        batch.map((r) =>
-          sendSms({
-            familyId: r.familyId,
-            yearId,
-            template,
-            body: text,
-            // Keep BOTH: `parent` re-engages sendSms's opt-out gate as
-            // the final consent authority; `to` pins the number the
-            // audience preview showed.
-            parent: r.parent,
-            to: r.e164,
-            author: { email: admin.email, name: admin.name },
-          }).catch(() => ({ ok: false as const }))
+        batch.map((t) =>
+          sendSms({ ...t.send, template }).catch(
+            () => ({ ok: false as const })
+          )
         )
       );
       for (const res of results) {
@@ -160,13 +249,13 @@ export async function POST(req: NextRequest) {
     }
 
     return NextResponse.json({
-      matched: audience.matched,
-      sendable: audience.sendable,
+      matched: targets.length,
+      sendable: targets.filter((t) => t.sendable).length,
       sent,
       failed,
       alreadySent: alreadySent.size,
-      skippedOptedOut: audience.optedOut,
-      skippedNoPhone: audience.noPhone,
+      skippedOptedOut: targets.filter((t) => t.optedOut).length,
+      skippedNoPhone: targets.filter((t) => !t.hasPhone).length,
     });
   } catch (err) {
     return handleAdminError(err);

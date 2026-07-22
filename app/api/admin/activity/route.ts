@@ -145,22 +145,27 @@ export async function GET(req: NextRequest) {
 
     // ── Texts ────────────────────────────────────────────────────────
     for (const m of sms) {
+      // Group-blast rows carry template `group:<yearId>:<blastId>` —
+      // surfaced so the stream distinguishes a blast from a 1:1 text.
+      const isGroup =
+        typeof m.template === "string" && m.template.startsWith("group");
       push({
         id: `sms-${m.id}`,
         ts: m.created_at,
         kind: "sms",
         scope: "general",
-        title: "Text message",
+        title: isGroup ? "Group text" : "Text message",
         body: m.body,
         author:
           m.direction === "outbound"
             ? m.author_name ||
-              (m.template && m.template !== "manual"
+              (m.template && m.template !== "manual" && !isGroup
                 ? "SailFuture (automated)"
                 : "SailFuture")
             : family?.family_name?.trim() || "Family",
         direction: m.direction === "outbound" ? "outbound" : "inbound",
         status: m.status,
+        isGroup,
       });
     }
 
@@ -546,6 +551,8 @@ export interface ActivityEvent {
   direction?: "inbound" | "outbound";
   /** Texts: Twilio delivery status. Emails: sent | failed. */
   status?: string;
+  /** Texts only — this row was part of a group blast. */
+  isGroup?: boolean;
   /** Emails only — Resend message id for the full-content preview. */
   resendId?: string;
   /** Set when the event is about one student. */

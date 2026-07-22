@@ -3,11 +3,12 @@
 import { useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
 import { toast } from "sonner";
-import { Loader2, Send, Users } from "lucide-react";
+import { Loader2, Search, Send, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
-import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -25,7 +26,11 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { adminFetcher } from "@/lib/admin-fetcher";
-import type { Stage } from "@/lib/sms/audience";
+import type {
+  GroupAudienceResponse,
+  GroupContact,
+  GroupStage,
+} from "@/app/api/admin/messages/group/audience/route";
 
 interface SchoolYear {
   id: number;
@@ -34,19 +39,44 @@ interface SchoolYear {
   isPast?: boolean;
 }
 
-interface Preview {
-  matched: number;
-  sendable: number;
-  optedOut: number;
-  noPhone: number;
-}
+/** Stage badge styling — the ladder reads furthest-along first, same
+ *  order the audience endpoint sorts by. */
+const STAGE_BADGE: Record<GroupStage, { label: string; className: string }> = {
+  enrolled: {
+    label: "Enrolled",
+    className: "border-emerald-200 bg-emerald-50 text-emerald-800",
+  },
+  registration: {
+    label: "Registration",
+    className: "border-blue-200 bg-blue-50 text-blue-800",
+  },
+  application: {
+    label: "Application",
+    className: "border-amber-200 bg-amber-50 text-amber-800",
+  },
+  inquiry: {
+    label: "Inquiry",
+    className: "border-violet-200 bg-violet-50 text-violet-800",
+  },
+  camp: {
+    label: "Camp",
+    className: "border-teal-200 bg-teal-50 text-teal-800",
+  },
+};
 
-const STAGE_OPTIONS: { value: Stage; label: string }[] = [
-  { value: "applicant", label: "Applicants" },
-  { value: "accepted", label: "Accepted" },
-  { value: "enrolled", label: "Enrolled" },
-];
+const GRADES = [8, 9, 10, 11, 12] as const;
 
+/**
+ * Group SMS composer — audience built by hand instead of coarse stage
+ * filters. The full contact directory for the year loads once
+ * (`/api/admin/messages/group/audience`), deduped so a household only
+ * appears at its furthest stage (enrolled > registration >
+ * application > inquiry > camp) with a stage badge saying where they
+ * are. Staff then search, narrow by incoming grade (8th–12th) or
+ * outstanding balance, and check off recipients — or select-all the
+ * current view. Send posts the explicit contact list; opted-out and
+ * no-number contacts can't be selected at all.
+ */
 export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
   const [open, setOpen] = useState(false);
   const { data: yearsData } = useSWR(
@@ -59,14 +89,14 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
   );
 
   const [yearId, setYearId] = useState<string>("");
-  const [stages, setStages] = useState<Stage[]>([]);
+  const [search, setSearch] = useState("");
+  const [gradeFilter, setGradeFilter] = useState<number[]>([]);
   const [onlyOutstanding, setOnlyOutstanding] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [body, setBody] = useState("");
-  const [preview, setPreview] = useState<Preview | null>(null);
-  const [previewing, setPreviewing] = useState(false);
   const [sending, setSending] = useState(false);
   // Idempotency key for the blast — minted per compose session so a
-  // retry after a timeout resumes the SAME blast server-side (families
+  // retry after a timeout resumes the SAME blast server-side (contacts
   // already texted are skipped) instead of double-texting.
   const [blastId, setBlastId] = useState("");
 
@@ -82,78 +112,79 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
     }
   }, [years, yearId]);
 
-  // Auto-preview recipient counts whenever the filters change (dry run,
-  // no body needed).
-  useEffect(() => {
-    if (!open || !yearId) {
-      setPreview(null);
-      return;
-    }
-    let cancelled = false;
-    setPreviewing(true);
-    fetch("/api/admin/messages/group", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        yearId: Number(yearId),
-        stages,
-        onlyOutstanding,
-        dryRun: true,
-      }),
-    })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        if (!cancelled && d) {
-          setPreview({
-            matched: d.matched,
-            sendable: d.sendable,
-            optedOut: d.optedOut,
-            noPhone: d.noPhone,
-          });
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setPreview(null);
-      })
-      .finally(() => {
-        if (!cancelled) setPreviewing(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open, yearId, stages, onlyOutstanding]);
+  const { data: audienceData, isLoading: loadingAudience } =
+    useSWR<GroupAudienceResponse>(
+      open && yearId
+        ? `/api/admin/messages/group/audience?yearId=${yearId}`
+        : null,
+      adminFetcher
+    );
+  const contacts = useMemo<GroupContact[]>(
+    () => audienceData?.contacts ?? [],
+    [audienceData]
+  );
+  const contactByKey = useMemo(
+    () => new Map(contacts.map((c) => [c.key, c])),
+    [contacts]
+  );
+
+  // Year switch invalidates the audience — drop any selection made
+  // against the previous year's list.
+  function changeYear(v: string) {
+    setYearId(v);
+    setSelected(new Set());
+  }
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return contacts.filter((c) => {
+      if (
+        gradeFilter.length > 0 &&
+        !c.grades.some((g) => gradeFilter.includes(g))
+      ) {
+        return false;
+      }
+      if (onlyOutstanding && !c.outstanding) return false;
+      if (!q) return true;
+      return (
+        c.name.toLowerCase().includes(q) ||
+        c.personName.toLowerCase().includes(q) ||
+        c.students.toLowerCase().includes(q)
+      );
+    });
+  }, [contacts, search, gradeFilter, onlyOutstanding]);
+
+  const selectedContacts = useMemo(
+    () =>
+      [...selected]
+        .map((k) => contactByKey.get(k))
+        .filter((c): c is GroupContact => Boolean(c)),
+    [selected, contactByKey]
+  );
+
+  function toggle(key: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  function selectAllShown() {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const c of filtered) {
+        if (c.sendable) next.add(c.key);
+      }
+      return next;
+    });
+  }
 
   const segments = body.length === 0 ? 0 : Math.ceil(body.length / 160);
-  const sendable = preview?.sendable ?? 0;
-  // Send is gated on a SETTLED preview (`preview !== null && !previewing`)
-  // so the "Send to N" count on the button always reflects the filters
-  // that will actually be posted — never a stale count from the previous
-  // filter combination while a new dry run is still in flight.
+  const sendCount = selectedContacts.length;
   const canSend =
-    Boolean(yearId) &&
-    body.trim().length > 0 &&
-    preview !== null &&
-    !previewing &&
-    sendable > 0 &&
-    !sending;
-
-  // Every filter mutation clears the preview in the same render commit,
-  // closing the race where the old audience count stays clickable while
-  // the new dry run resolves.
-  function changeYear(v: string) {
-    setPreview(null);
-    setYearId(v);
-  }
-  function toggleStage(s: Stage) {
-    setPreview(null);
-    setStages((prev) =>
-      prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]
-    );
-  }
-  function changeOnlyOutstanding(v: boolean) {
-    setPreview(null);
-    setOnlyOutstanding(v);
-  }
+    Boolean(yearId) && body.trim().length > 0 && sendCount > 0 && !sending;
 
   async function send() {
     if (!canSend) return;
@@ -164,8 +195,7 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           yearId: Number(yearId),
-          stages,
-          onlyOutstanding,
+          contacts: selectedContacts.map((c) => ({ type: c.type, id: c.id })),
           body: body.trim(),
           blastId,
         }),
@@ -174,10 +204,11 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
       if (!res.ok) throw new Error(d?.error ?? `Send failed (${res.status})`);
       toast.success(
         `Group text sent to ${d.sent} ${
-          d.sent === 1 ? "family" : "families"
+          d.sent === 1 ? "contact" : "contacts"
         }${d.failed ? ` (${d.failed} failed)` : ""}.`
       );
       setBody("");
+      setSelected(new Set());
       setOpen(false);
       onSent?.();
     } catch (err) {
@@ -198,21 +229,27 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
       </Button>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
+        {/* Large fixed-size panel (Slack-settings style) — the dialog
+            claims most of the viewport and the recipient list flexes
+            to absorb the height, so filtering/searching never resizes
+            the frame. */}
+        <DialogContent className="flex h-[85vh] max-h-[820px] flex-col gap-4 sm:max-w-4xl">
+          <DialogHeader className="shrink-0">
             <DialogTitle>New group message</DialogTitle>
             <DialogDescription>
-              Text a filtered set of families. Opted-out families and those
-              without a mobile number are skipped automatically.
+              Search and check off recipients — each contact appears once,
+              at the furthest stage they&rsquo;ve reached. Opted-out
+              contacts and those without a mobile number can&rsquo;t be
+              selected.
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4">
-            <div className="space-y-1.5">
-              <Label>School year</Label>
+          <div className="flex min-h-0 flex-1 flex-col gap-3">
+            {/* Year + search on one row */}
+            <div className="flex flex-wrap items-center gap-2">
               <Select value={yearId} onValueChange={changeYear}>
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Select a year" />
+                <SelectTrigger className="w-[160px]">
+                  <SelectValue placeholder="School year" />
                 </SelectTrigger>
                 <SelectContent>
                   {years.map((y) => (
@@ -222,47 +259,161 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
                   ))}
                 </SelectContent>
               </Select>
-            </div>
-
-            <div className="space-y-1.5">
-              <Label>
-                Stage{" "}
-                <span className="font-normal text-muted-foreground">
-                  (leave all off for every stage)
-                </span>
-              </Label>
-              <div className="flex flex-wrap gap-1.5">
-                {STAGE_OPTIONS.map((s) => {
-                  const on = stages.includes(s.value);
-                  return (
-                    <button
-                      key={s.value}
-                      type="button"
-                      aria-pressed={on}
-                      onClick={() => toggleStage(s.value)}
-                      className={cn(
-                        "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
-                        on
-                          ? "border-foreground bg-foreground text-background"
-                          : "border-border bg-white text-muted-foreground hover:border-foreground/40 hover:text-foreground"
-                      )}
-                    >
-                      {s.label}
-                    </button>
-                  );
-                })}
+              <div className="relative min-w-0 flex-1">
+                <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search families, parents, or students…"
+                  className="pl-8"
+                />
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
-              <Switch
-                id="only-outstanding"
-                checked={onlyOutstanding}
-                onCheckedChange={changeOnlyOutstanding}
-              />
-              <Label htmlFor="only-outstanding" className="font-normal">
-                Only families with an outstanding balance
-              </Label>
+            {/* Grade + balance narrowing chips */}
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                Grade
+              </span>
+              {GRADES.map((g) => {
+                const on = gradeFilter.includes(g);
+                return (
+                  <button
+                    key={g}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() =>
+                      setGradeFilter((prev) =>
+                        prev.includes(g)
+                          ? prev.filter((x) => x !== g)
+                          : [...prev, g]
+                      )
+                    }
+                    className={cn(
+                      "rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors",
+                      on
+                        ? "border-foreground bg-foreground text-background"
+                        : "border-border bg-white text-muted-foreground hover:border-foreground/40 hover:text-foreground"
+                    )}
+                  >
+                    {g}th
+                  </button>
+                );
+              })}
+              <span className="mx-1 h-4 w-px bg-border" aria-hidden />
+              <button
+                type="button"
+                aria-pressed={onlyOutstanding}
+                onClick={() => setOnlyOutstanding((v) => !v)}
+                className={cn(
+                  "rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors",
+                  onlyOutstanding
+                    ? "border-foreground bg-foreground text-background"
+                    : "border-border bg-white text-muted-foreground hover:border-foreground/40 hover:text-foreground"
+                )}
+              >
+                Outstanding balance
+              </button>
+            </div>
+
+            {/* Recipient list — flexes to fill the fixed dialog frame,
+                so filtering changes what scrolls, never the layout. */}
+            <div className="min-h-0 flex-1 overflow-y-auto rounded-md border bg-white">
+              {loadingAudience ? (
+                <div className="flex h-full items-center justify-center">
+                  <Loader2 className="size-4 animate-spin text-muted-foreground" />
+                </div>
+              ) : !yearId ? (
+                <div className="flex h-full items-center justify-center px-6 text-center text-sm text-muted-foreground">
+                  Pick a school year to load contacts.
+                </div>
+              ) : filtered.length === 0 ? (
+                <div className="flex h-full items-center justify-center px-6 text-center text-sm text-muted-foreground">
+                  No contacts match these filters.
+                </div>
+              ) : (
+                <ul className="divide-y">
+                  {filtered.map((c) => {
+                    const badge = STAGE_BADGE[c.stage];
+                    const checked = selected.has(c.key);
+                    return (
+                      <li key={c.key}>
+                        <label
+                          className={cn(
+                            "flex cursor-pointer items-start gap-3 px-3 py-2 hover:bg-muted/40",
+                            !c.sendable && "cursor-not-allowed opacity-60"
+                          )}
+                        >
+                          <Checkbox
+                            checked={checked}
+                            disabled={!c.sendable}
+                            onCheckedChange={() => toggle(c.key)}
+                            className="mt-0.5"
+                            aria-label={`Select ${c.name}`}
+                          />
+                          <span className="min-w-0 flex-1">
+                            <span className="flex items-center gap-2">
+                              <span className="truncate text-sm font-medium">
+                                {c.name}
+                              </span>
+                              <span
+                                className={cn(
+                                  "shrink-0 rounded-full border px-1.5 py-px text-[10px] font-medium uppercase tracking-wide",
+                                  badge.className
+                                )}
+                              >
+                                {badge.label}
+                              </span>
+                              {c.outstanding ? (
+                                <span className="shrink-0 rounded-full border border-red-200 bg-red-50 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-red-700">
+                                  Balance
+                                </span>
+                              ) : null}
+                            </span>
+                            <span className="block truncate text-xs text-muted-foreground">
+                              {[
+                                c.personName,
+                                c.students ? c.students : null,
+                              ]
+                                .filter(Boolean)
+                                .join(" · ") || "—"}
+                            </span>
+                          </span>
+                          {!c.sendable ? (
+                            <span className="shrink-0 self-center text-[11px] text-muted-foreground">
+                              {c.optedOut ? "Opted out" : "No number"}
+                            </span>
+                          ) : null}
+                        </label>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+
+            {/* Selection controls */}
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+              <span className="tabular-nums">
+                {filtered.length} shown · {sendCount} selected
+              </span>
+              <span className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={selectAllShown}
+                  className="underline underline-offset-2 hover:text-foreground"
+                >
+                  Select all shown
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelected(new Set())}
+                  className="underline underline-offset-2 hover:text-foreground"
+                  disabled={sendCount === 0}
+                >
+                  Clear
+                </button>
+              </span>
             </div>
 
             <div className="space-y-1.5">
@@ -271,26 +422,17 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
                 value={body}
                 onChange={(e) => setBody(e.target.value)}
                 rows={4}
-                placeholder="Type the text every selected family will receive…"
+                placeholder="Type the text every selected contact will receive…"
               />
-              <div className="flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
-                <span>
-                  {previewing
-                    ? "Counting recipients…"
-                    : preview
-                      ? `${preview.matched} match · ${preview.sendable} will be texted` +
-                        (preview.optedOut ? ` · ${preview.optedOut} opted out` : "") +
-                        (preview.noPhone ? ` · ${preview.noPhone} no number` : "")
-                      : "Pick a year to preview recipients."}
-                </span>
-                <span className="shrink-0 tabular-nums">
+              <div className="flex items-center justify-end text-[11px] text-muted-foreground">
+                <span className="tabular-nums">
                   {body.length} chars{segments ? ` · ${segments} seg` : ""}
                 </span>
               </div>
             </div>
           </div>
 
-          <DialogFooter>
+          <DialogFooter className="shrink-0">
             <Button variant="outline" onClick={() => setOpen(false)}>
               Cancel
             </Button>
@@ -303,10 +445,7 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
               ) : (
                 <>
                   <Send className="size-3.5 mr-1.5" />
-                  {/* Only show a count when it's settled — while the dry
-                      run is in flight the number would describe the
-                      PREVIOUS filters. */}
-                  {preview && !previewing ? `Send to ${sendable}` : "Send"}
+                  {sendCount > 0 ? `Send to ${sendCount}` : "Send"}
                 </>
               )}
             </Button>
