@@ -561,12 +561,15 @@ function TermChipRow({
   onAll,
   onTerm,
   className,
+  showRanges = true,
 }: {
   terms: XanoAcademicTerm[];
   value: number | "all";
   onAll: () => void;
   onTerm: (t: XanoAcademicTerm) => void;
   className?: string;
+  /** The events sheet hides the date ranges (names only). */
+  showRanges?: boolean;
 }) {
   const chip = (on: boolean) =>
     cn(
@@ -588,7 +591,7 @@ function TermChipRow({
       {terms.map((t) => {
         const on = value === t.id;
         const range =
-          t.start_date && t.end_date
+          showRanges && t.start_date && t.end_date
             ? `${fmtShortDate(t.start_date)} – ${fmtShortDate(t.end_date)}`
             : "";
         return (
@@ -711,6 +714,7 @@ function EventsSheet({
             onAll={() => setFilter("all")}
             onTerm={(t) => setFilter(t.id)}
             className="border-b px-4 py-2.5"
+            showRanges={false}
           />
         ) : null}
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
@@ -1692,7 +1696,7 @@ function EventForm({
         {existing ? "Edit event" : "New event"}
       </p>
       <div className="space-y-1.5">
-        <Label className="text-xs">Title</Label>
+        <Label className="text-xs">Event name</Label>
         <Input
           value={title}
           onChange={(e) => setTitle(e.target.value)}
@@ -1701,7 +1705,7 @@ function EventForm({
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1.5">
-          <Label className="text-xs">Starts</Label>
+          <Label className="text-xs">Start time</Label>
           <TimeSelect
             value={start}
             onChange={setStart}
@@ -1709,7 +1713,7 @@ function EventForm({
           />
         </div>
         <div className="space-y-1.5">
-          <Label className="text-xs">Ends</Label>
+          <Label className="text-xs">End time</Label>
           <TimeSelect value={end} onChange={setEnd} ariaLabel="End time" />
         </div>
       </div>
@@ -1732,23 +1736,21 @@ function EventForm({
       </div>
       <EventColorPicker value={color} onChange={setColor} />
       <div className="flex items-center justify-between gap-2">
-        <Label htmlFor="ev-mandatory" className="text-xs font-normal">
+        <Label htmlFor="ev-mandatory" className="text-sm font-normal">
           Mandatory attendance
         </Label>
         <Switch
           id="ev-mandatory"
-          size="sm"
           checked={mandatory}
           onCheckedChange={setMandatory}
         />
       </div>
       <div className="flex items-center justify-between gap-2">
-        <Label htmlFor="ev-volunteer" className="text-xs font-normal">
+        <Label htmlFor="ev-volunteer" className="text-sm font-normal">
           Counts toward parent volunteer hours
         </Label>
         <Switch
           id="ev-volunteer"
-          size="sm"
           checked={volunteer}
           onCheckedChange={setVolunteer}
         />

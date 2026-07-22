@@ -674,7 +674,7 @@ export function EventUpsertDialog({
         </DialogHeader>
         <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-5 py-4">
           <div className="space-y-1.5">
-            <Label className="text-xs">Title</Label>
+            <Label className="text-xs">Event name</Label>
             <Input
               value={title}
               onChange={(e) => setTitle(e.target.value)}
@@ -683,7 +683,7 @@ export function EventUpsertDialog({
             />
           </div>
           <div className="space-y-1.5">
-            <Label className="text-xs">Date</Label>
+            <Label className="text-xs">Event date</Label>
             <Input
               type="date"
               value={existing?.date ?? date}
@@ -707,7 +707,7 @@ export function EventUpsertDialog({
           {!allDay ? (
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label className="text-xs">Starts</Label>
+                <Label className="text-xs">Start time</Label>
                 <TimeSelect
                   value={start}
                   onChange={setStart}
@@ -715,7 +715,7 @@ export function EventUpsertDialog({
                 />
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs">Ends</Label>
+                <Label className="text-xs">End time</Label>
                 <TimeSelect
                   value={end}
                   onChange={setEnd}
@@ -725,12 +725,11 @@ export function EventUpsertDialog({
             </div>
           ) : null}
           <div className="flex items-center justify-between gap-2">
-            <Label htmlFor="ue-allday" className="text-xs font-normal">
+            <Label htmlFor="ue-allday" className="text-sm font-normal">
               All day
             </Label>
             <Switch
               id="ue-allday"
-              size="sm"
               checked={allDay}
               onCheckedChange={setAllDay}
             />
@@ -754,23 +753,21 @@ export function EventUpsertDialog({
           </div>
           <EventColorPicker value={color} onChange={setColor} />
           <div className="flex items-center justify-between gap-2">
-            <Label htmlFor="ue-mandatory" className="text-xs font-normal">
+            <Label htmlFor="ue-mandatory" className="text-sm font-normal">
               Mandatory attendance
             </Label>
             <Switch
               id="ue-mandatory"
-              size="sm"
               checked={mandatory}
               onCheckedChange={setMandatory}
             />
           </div>
           <div className="flex items-center justify-between gap-2">
-            <Label htmlFor="ue-volunteer" className="text-xs font-normal">
+            <Label htmlFor="ue-volunteer" className="text-sm font-normal">
               Counts toward parent volunteer hours
             </Label>
             <Switch
               id="ue-volunteer"
-              size="sm"
               checked={volunteer}
               onCheckedChange={setVolunteer}
             />
