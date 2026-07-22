@@ -62,7 +62,7 @@ import { Textarea } from "@/components/ui/textarea";
 // "Accepted" pill — keep the import even though
 // `StudentApplicationBlock` no longer uses it.
 import { StatusBadge } from "@/components/admin/status-badge";
-import { FamilyNotesSheet } from "@/components/admin/family-notes-sheet";
+import { ActivityLogSheet } from "@/components/admin/activity-log-sheet";
 import { FamilyMessagesSheet } from "@/components/admin/family-messages-sheet";
 import { EmailParentButton } from "@/components/admin/email-parent-button";
 import { DocumentsToReviewBlock } from "@/components/admin/documents-to-review-block";
@@ -661,15 +661,12 @@ export default function FamilyDetailPage() {
               subject={emailSubject}
               className="bg-white"
             />
-            {/* Page-header notes drawer is phase-scoped to
-                "application" so registration-phase comms (written
-                from /admin/registrations/[id]) don't leak into the
-                apply-flow timeline. Section-scoped drawers below
-                inherit the same scope. */}
-            <FamilyNotesSheet
+            {/* ONE consolidated activity feed (user request) — the
+                per-card note drawers are gone; notes, texts, emails,
+                and milestones all live in this single stream. */}
+            <ActivityLogSheet
               familyId={family.id}
-              defaultYearId={yearId ? Number(yearId) : null}
-              phase="application"
+              yearId={yearId ? Number(yearId) : 0}
             />
             <FamilyMessagesSheet
               familyId={family.id}
@@ -1400,7 +1397,6 @@ function SectionShell({
   title,
   editHref,
   status,
-  notes,
   confirm,
   children,
 }: {
@@ -1502,15 +1498,6 @@ function SectionShell({
               through the unverify path") and prevents accidental
               clicks from muddying a confirmed surface. */}
           <div className="flex items-center gap-2 shrink-0">
-            {notes ? (
-              <FamilyNotesSheet
-                familyId={notes.familyId}
-                section={notes.section}
-                title={notes.title}
-                phase="application"
-                disabled={fullyDone}
-              />
-            ) : null}
             {editHref ? (
               fullyDone ? (
                 <Button
@@ -4793,14 +4780,6 @@ function DecisionCard({
               affordance used to live here too; moved up to the page
               header so admin can grab the acceptance summary without
               scrolling to this card. */}
-          <div className="flex items-center gap-2 shrink-0">
-            <FamilyNotesSheet
-              familyId={familyId}
-              section="scholarship_determination"
-              title="Scholarship Determination"
-              phase="application"
-            />
-          </div>
         </div>
       </CardHeader>
       {/* Body fades to muted when admin has VERIFIED the

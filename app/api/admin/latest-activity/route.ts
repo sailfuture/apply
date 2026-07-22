@@ -9,6 +9,10 @@ export type LatestActivityMap = Record<
   { kind: "note" | "text"; body: string; at: number }
 >;
 
+/** Family id (string key) → unix-ms of the newest sent
+ *  records-request email — derived from the email audit log. */
+export type RecordsRequestMap = Record<string, number>;
+
 /**
  * The newest admin note or SMS per family — one bulk fetch that the
  * Applications and Registrations lists join client-side for their
@@ -19,9 +23,10 @@ export type LatestActivityMap = Record<
 export async function GET() {
   try {
     await requireAdmin();
-    const [notes, sms] = await Promise.all([
+    const [notes, sms, emails] = await Promise.all([
       xano.adminNotes.getAll().catch(() => []),
       xano.smsMessages.getAll().catch(() => []),
+      xano.emailNotifications.getAll().catch(() => []),
     ]);
 
     const byFamily: LatestActivityMap = {};
@@ -49,7 +54,22 @@ export async function GET() {
       });
     }
 
-    return NextResponse.json({ byFamily });
+    // Records-request tracking is DERIVED from the email audit log
+    // (no dedicated columns exist): any successfully sent
+    // "records-request" email marks the family, newest send wins.
+    const recordsByFamily: Record<string, number> = {};
+    for (const e of emails) {
+      if (e.template !== "records-request") continue;
+      if (e.status !== "sent") continue;
+      const fid = Number(e.registration_families_id);
+      if (!fid) continue;
+      const at = Number(e.created_at) || 0;
+      if (at > (recordsByFamily[String(fid)] ?? 0)) {
+        recordsByFamily[String(fid)] = at;
+      }
+    }
+
+    return NextResponse.json({ byFamily, recordsByFamily });
   } catch (err) {
     return handleAdminError(err);
   }

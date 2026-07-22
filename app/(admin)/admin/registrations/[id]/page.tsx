@@ -69,7 +69,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { FamilyNotesSheet } from "@/components/admin/family-notes-sheet";
 import { ActivityLogSheet } from "@/components/admin/activity-log-sheet";
 import { BillingCard } from "@/components/admin/billing-card";
 import { TuitionBreakdownTable } from "@/components/admin/tuition-breakdown-table";
@@ -210,6 +209,14 @@ export default function FamilyRegistrationDetailPage() {
     isAccepted: boolean;
   } | null>(applyProgressKey, adminFetcher);
   const accepted = applyProgress?.isAccepted === true;
+
+  // Records-request tag — derived from the email audit log (bulk map
+  // shared with the registrations list; no dedicated columns exist).
+  const { data: latestActivity } = useSWR<{
+    recordsByFamily: Record<string, number>;
+  }>("/api/admin/latest-activity", adminFetcher);
+  const recordsRequestedAt =
+    latestActivity?.recordsByFamily?.[String(familyId)] ?? null;
 
   // Tracks which section is mid-PATCH so the spinner inside that
   // section's verify footer is scoped — clicking Verify on Tuition
@@ -508,6 +515,14 @@ export default function FamilyRegistrationDetailPage() {
                   · {school_year.year_name}
                 </span>
               ) : null}
+              {recordsRequestedAt ? (
+                <span
+                  title={`Records requested ${new Date(recordsRequestedAt).toLocaleDateString()}`}
+                  className="ml-2 inline-flex items-center rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 align-middle text-[10px] font-medium uppercase tracking-wider text-violet-800"
+                >
+                  Records requested
+                </span>
+              ) : null}
             </h1>
             {primary ? (
               <p className="mt-1 text-sm text-muted-foreground">
@@ -565,15 +580,6 @@ export default function FamilyRegistrationDetailPage() {
               secondaryEmail={secondary?.email}
               subject={emailSubject}
               className="bg-white"
-            />
-            {/* Page-header notes drawer is phase-scoped — hits the
-                dedicated `..._by_registration` Xano query so admin
-                only sees registration-phase comms by default, not
-                the full apply-phase backlog. */}
-            <FamilyNotesSheet
-              familyId={Number(family?.id ?? familyId)}
-              defaultYearId={Number(yearId)}
-              phase="registration"
             />
             {/* Full account activity stream — notes + texts + emails
                 + system milestones (application, registration, SUFS,
@@ -1194,7 +1200,6 @@ const STATUS_LABEL: Record<SectionStatus, string> = {
 function SectionShell({
   title,
   status,
-  notes,
   editHref,
   verify,
   suppressVerifiedMute,
@@ -1299,16 +1304,6 @@ function SectionShell({
               section is verified, both are disabled — same audit
               treatment as the apply-flow SectionShell. */}
           <div className="flex items-center gap-2 shrink-0">
-            {notes ? (
-              <FamilyNotesSheet
-                familyId={notes.familyId}
-                section={notes.section}
-                title={notes.title}
-                phase="registration"
-                defaultYearId={notes.yearId}
-                disabled={fullyDone}
-              />
-            ) : null}
             {editHref ? (
               fullyDone ? (
                 <Button

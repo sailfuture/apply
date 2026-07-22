@@ -14,7 +14,10 @@ import { DataTable, type ColumnDef } from "@/components/admin/data-table";
 import { ActivityLogSheet } from "@/components/admin/activity-log-sheet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import type { LatestActivityMap } from "@/app/api/admin/latest-activity/route";
+import type {
+  LatestActivityMap,
+  RecordsRequestMap,
+} from "@/app/api/admin/latest-activity/route";
 import {
   Card,
   CardContent,
@@ -288,12 +291,14 @@ export default function RegistrationsPage() {
     adminFetcher
   );
   // Latest note/text per family — replaces the primary-contact email
-  // column (user request).
-  const { data: latestData } = useSWR<{ byFamily: LatestActivityMap }>(
-    "/api/admin/latest-activity",
-    adminFetcher
-  );
+  // column (user request). The same bulk fetch carries the
+  // records-request map (derived from the email audit log).
+  const { data: latestData } = useSWR<{
+    byFamily: LatestActivityMap;
+    recordsByFamily: RecordsRequestMap;
+  }>("/api/admin/latest-activity", adminFetcher);
   const latestByFamily = latestData?.byFamily ?? {};
+  const recordsByFamily = latestData?.recordsByFamily ?? {};
 
   const all = useMemo(
     () => aggregateByFamily(Array.isArray(data) ? data : []),
@@ -441,6 +446,29 @@ export default function RegistrationsPage() {
           >
             {label}
           </span>
+        );
+      },
+    },
+    {
+      // Derived from the email audit log — a family is "Requested"
+      // once any records-request email was successfully sent.
+      key: "records",
+      header: "Records",
+      sortable: true,
+      width: "w-[9%]",
+      accessor: (row) =>
+        recordsByFamily[String(row.family_id)] ? "requested" : "",
+      render: (row) => {
+        const at = recordsByFamily[String(row.family_id)];
+        return at ? (
+          <span
+            title={`Records requested ${new Date(at).toLocaleDateString()}`}
+            className="inline-flex items-center rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-violet-800"
+          >
+            Requested
+          </span>
+        ) : (
+          <span className="text-muted-foreground/60">—</span>
         );
       },
     },

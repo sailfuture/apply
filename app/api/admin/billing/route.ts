@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano, activeStripeSubscriptionId } from "@/lib/xano";
 import { parseAnchorDate, buildMonthSlots } from "@/lib/billing-schedule";
+import { getStripeClient } from "@/lib/stripe";
 
 /**
  * Admin Billing list — one row per family with a Stripe subscription
@@ -333,9 +334,80 @@ export async function GET(req: NextRequest) {
       )
       .sort((a, b) => a.family_name.localeCompare(b.family_name));
 
+    // Future-dated Stripe billing sitting in "Not started" (user
+    // request): a family can already have billing set up in Stripe —
+    // a trialing (future-anchored) subscription the webhook missed,
+    // or a dashboard-created SubscriptionSchedule that hasn't started
+    // — while the mirror holds no live id. Those are indistinguishable
+    // from "never started" above, so check Stripe per candidate (the
+    // pending-setup set is small) and lift matches into the main
+    // table with the Scheduled pill.
+    const lifted = new Set<number>();
+    try {
+      const stripe = getStripeClient();
+      await Promise.all(
+        notStarted.map(async (n) => {
+          const customerId =
+            familyById.get(n.family_id)?.stripe_customer_id ?? null;
+          if (!customerId) return;
+          try {
+            const [subs, schedules] = await Promise.all([
+              stripe.subscriptions.list({
+                customer: customerId,
+                status: "trialing",
+                limit: 1,
+              }),
+              stripe.subscriptionSchedules.list({
+                customer: customerId,
+                limit: 5,
+              }),
+            ]);
+            const trialing = subs.data[0] ?? null;
+            const pending =
+              schedules.data.find((s) => s.status === "not_started") ??
+              null;
+            if (!trialing && !pending) return;
+            lifted.add(n.family_id);
+            const startsAt = trialing?.trial_end
+              ? trialing.trial_end * 1000
+              : pending?.phases?.[0]?.start_date
+                ? pending.phases[0].start_date * 1000
+                : null;
+            rows.push({
+              // Synthetic row id — there's no payment-row id to use,
+              // and negatives can't collide with real Xano ids.
+              id: -n.family_id,
+              family_id: n.family_id,
+              year_id: yearId,
+              family_name: n.family_name,
+              primary_name: n.primary_name,
+              primary_email: n.primary_email,
+              monthly_tuition: n.monthly_tuition,
+              year_total:
+                n.monthly_tuition != null ? n.monthly_tuition * 12 : null,
+              paid_cents: 0,
+              outstanding_cents: 0,
+              invoices_issued: 0,
+              stripe_subscription_id: trialing?.id ?? pending?.id ?? null,
+              status: "scheduled",
+              next_invoice_at: startsAt,
+            });
+          } catch {
+            // Per-family Stripe hiccup — leave them in Not started.
+          }
+        })
+      );
+    } catch {
+      // Stripe not configured — mirror-only behavior, as before.
+    }
+    const notStartedFinal = notStarted.filter(
+      (n) => !lifted.has(n.family_id)
+    );
+    rows.sort((a, b) => a.family_name.localeCompare(b.family_name));
+
     return NextResponse.json({
       rows,
-      notStarted,
+      notStarted: notStartedFinal,
       billingStartDate,
       nextInvoiceAt,
     } satisfies BillingListResponse);

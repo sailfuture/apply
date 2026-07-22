@@ -3789,6 +3789,20 @@ export const xano = {
    * See `XanoEmailNotification` interface for the table schema.
    */
   emailNotifications: {
+    /** Every audit row — bulk consumers (records-request tags on the
+     *  registrations list) filter by template in code. */
+    async getAll(): Promise<XanoEmailNotification[]> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_email_notifications`,
+        { cache: "no-store" }
+      );
+      if (!res.ok) {
+        throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      }
+      const rows = await res.json();
+      return Array.isArray(rows) ? rows : [];
+    },
+
     async create(
       data: Omit<XanoEmailNotification, "id" | "created_at">
     ): Promise<XanoEmailNotification> {
