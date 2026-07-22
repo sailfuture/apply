@@ -3,7 +3,14 @@
 import { Fragment, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
-import { ChevronRight, GraduationCap, Search } from "lucide-react";
+import {
+  Activity,
+  ChevronRight,
+  GraduationCap,
+  Search,
+} from "lucide-react";
+import { ActivityLogSheet } from "@/components/admin/activity-log-sheet";
+import { Button } from "@/components/ui/button";
 import type { ColumnDef } from "@/components/admin/data-table";
 import { Input } from "@/components/ui/input";
 import {
@@ -157,6 +164,8 @@ export default function EnrolledStudentsPage() {
   // the list. Grade column added back as a sortable column so a
   // flat "All grades" view (search filter spanning grade groups)
   // still surfaces the grade alongside the student name.
+  const [activityFamily, setActivityFamily] = useState<number | null>(null);
+
   const columns: ColumnDef<EnrolledStudentRow>[] = [
     {
       key: "student_full_name",
@@ -231,17 +240,54 @@ export default function EnrolledStudentsPage() {
       sortable: true,
       width: "w-[10%]",
       render: (row) => {
-        const label = row.liability_waiver_pdf_url
+        // "Signed" and PandaDoc's "Completed" are the same done-state
+        // (completed = every signer finished) — collapse both to ONE
+        // green "Signed" pill so the column reads a single vocabulary.
+        const status = (row.liability_waiver_status ?? "")
+          .toString()
+          .toLowerCase();
+        const signed =
+          Boolean(row.liability_waiver_pdf_url) ||
+          status === "completed" ||
+          status === "signed" ||
+          status === "document.completed";
+        const label = signed
           ? "Signed"
           : row.liability_waiver_status
             ? formatPdStatus(row.liability_waiver_status)
             : "—";
         return (
-          <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+          <span
+            className={
+              signed
+                ? "inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-800"
+                : "inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground"
+            }
+          >
             {label}
           </span>
         );
       },
+    },
+    {
+      key: "activity",
+      header: "",
+      width: "w-[44px]",
+      align: "right",
+      render: (row) => (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="size-7 p-0"
+          aria-label="Family activity"
+          onClick={(e) => {
+            e.stopPropagation();
+            setActivityFamily(Number(row.family_id) || null);
+          }}
+        >
+          <Activity className="size-3.5 text-muted-foreground" />
+        </Button>
+      ),
     },
     {
       key: "id",
@@ -259,6 +305,17 @@ export default function EnrolledStudentsPage() {
 
   return (
     <div className="p-6 space-y-6">
+      {/* Shared controlled Activity sheet for the per-row triggers. */}
+      {activityFamily && yearId ? (
+        <ActivityLogSheet
+          familyId={activityFamily}
+          yearId={Number(yearId)}
+          open
+          onOpenChange={(o) => {
+            if (!o) setActivityFamily(null);
+          }}
+        />
+      ) : null}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold">

@@ -3,8 +3,18 @@
 import { useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
-import { CheckCircle2, Circle, ChevronRight, Inbox } from "lucide-react";
+import {
+  Activity,
+  CheckCircle2,
+  Circle,
+  ChevronRight,
+  Inbox,
+} from "lucide-react";
 import { DataTable, type ColumnDef } from "@/components/admin/data-table";
+import { ActivityLogSheet } from "@/components/admin/activity-log-sheet";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import type { LatestActivityMap } from "@/app/api/admin/latest-activity/route";
 import {
   Card,
   CardContent,
@@ -18,6 +28,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { cn } from "@/lib/utils";
 
@@ -263,11 +279,21 @@ export default function RegistrationsPage() {
   const searchParams = useSearchParams();
   const yearId = searchParams.get("yearId");
   const [filter, setFilter] = useState<ProgressFilter>("all");
+  // ONE search box filters every card on the page.
+  const [search, setSearch] = useState("");
+  const [activityFamily, setActivityFamily] = useState<number | null>(null);
 
   const { data, isLoading, error } = useSWR<RegStudentRow[]>(
     yearId ? `/api/admin/registrations?yearId=${yearId}` : null,
     adminFetcher
   );
+  // Latest note/text per family — replaces the primary-contact email
+  // column (user request).
+  const { data: latestData } = useSWR<{ byFamily: LatestActivityMap }>(
+    "/api/admin/latest-activity",
+    adminFetcher
+  );
+  const latestByFamily = latestData?.byFamily ?? {};
 
   const all = useMemo(
     () => aggregateByFamily(Array.isArray(data) ? data : []),
@@ -340,16 +366,28 @@ export default function RegistrationsPage() {
       ),
     },
     {
-      key: "primary_email",
-      header: "Primary Contact",
-      sortable: true,
+      key: "latest_activity",
+      header: "Latest Activity",
       searchable: true,
       width: "w-[18%]",
-      render: (row) => (
-        <span className="block truncate">
-          {row.primary_email || row.primary_name || "—"}
-        </span>
-      ),
+      accessor: (row) =>
+        latestByFamily[String(row.family_id)]?.body ?? "",
+      render: (row) => {
+        const latest = latestByFamily[String(row.family_id)];
+        return latest ? (
+          <span
+            className="block truncate text-muted-foreground"
+            title={latest.body}
+          >
+            <span className="font-medium text-foreground">
+              {latest.kind === "text" ? "Text: " : "Note: "}
+            </span>
+            {latest.body}
+          </span>
+        ) : (
+          <span className="text-muted-foreground/60">—</span>
+        );
+      },
     },
     {
       key: "sections_complete",
@@ -407,6 +445,26 @@ export default function RegistrationsPage() {
       },
     },
     {
+      key: "activity",
+      header: "",
+      width: "w-[44px]",
+      align: "right",
+      render: (row) => (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="size-7 p-0"
+          aria-label={`Activity for ${row.family_name}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            setActivityFamily(row.family_id);
+          }}
+        >
+          <Activity className="size-3.5 text-muted-foreground" />
+        </Button>
+      ),
+    },
+    {
       key: "id",
       header: "",
       width: "w-[40px]",
@@ -436,29 +494,38 @@ export default function RegistrationsPage() {
             confirmation live.
           </p>
         </div>
-        <Select
-          value={filter}
-          onValueChange={(v) => setFilter(v as ProgressFilter)}
-        >
-          <SelectTrigger className="w-[200px] bg-white">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {(
-              [
-                "all",
-                "completed",
-                "submitted",
-                "in_progress",
-                "not_started",
-              ] as const
-            ).map((f) => (
-              <SelectItem key={f} value={f}>
-                {FILTER_LABEL[f]} ({counts[f]})
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <div className="flex shrink-0 items-center gap-2">
+          {/* Global search — filters every card below at once. */}
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search all registrations…"
+            className="w-[220px] bg-white"
+          />
+          <Select
+            value={filter}
+            onValueChange={(v) => setFilter(v as ProgressFilter)}
+          >
+            <SelectTrigger className="w-[200px] bg-white">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {(
+                [
+                  "all",
+                  "completed",
+                  "submitted",
+                  "in_progress",
+                  "not_started",
+                ] as const
+              ).map((f) => (
+                <SelectItem key={f} value={f}>
+                  {FILTER_LABEL[f]} ({counts[f]})
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </div>
 
       {error ? (
@@ -484,6 +551,7 @@ export default function RegistrationsPage() {
                 - yellow = In Progress (waiting on the family)
                 - red    = Not Started (no movement) */}
           <RegistrationsGroup
+            search={search}
             title="Completed"
             description="Family registration is confirmed. Students are enrolled."
             dotColor="bg-green-500"
@@ -503,6 +571,7 @@ export default function RegistrationsPage() {
             }
           />
           <RegistrationsGroup
+            search={search}
             title="Submitted"
             description="Family has submitted the post-acceptance packet."
             dotColor="bg-blue-500"
@@ -522,6 +591,7 @@ export default function RegistrationsPage() {
             }
           />
           <RegistrationsGroup
+            search={search}
             title="In Progress"
             description="Started the packet but not yet submitted."
             dotColor="bg-amber-500"
@@ -541,6 +611,7 @@ export default function RegistrationsPage() {
             }
           />
           <RegistrationsGroup
+            search={search}
             title="Not Started"
             description="Accepted but the family hasn't begun the packet."
             dotColor="bg-red-500"
@@ -561,6 +632,19 @@ export default function RegistrationsPage() {
           />
         </div>
       )}
+
+      {/* Shared controlled Activity sheet — one instance for every
+          row's trigger. */}
+      {activityFamily && yearId ? (
+        <ActivityLogSheet
+          familyId={activityFamily}
+          yearId={Number(yearId)}
+          open
+          onOpenChange={(o) => {
+            if (!o) setActivityFamily(null);
+          }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -599,6 +683,7 @@ function RegistrationsGroup({
   columns,
   onRowClick,
   dotColor,
+  search,
 }: {
   title: string;
   description: string;
@@ -611,6 +696,8 @@ function RegistrationsGroup({
    *  title. Blue / amber / red mirror the Applications page palette
    *  so the two queues read with the same visual language. */
   dotColor: string;
+  /** Page-level search value — one input drives every card. */
+  search: string;
 }) {
   if (!isLoading && !error && rows.length === 0) return null;
   return (
@@ -641,7 +728,7 @@ function RegistrationsGroup({
           columns={columns}
           data={rows}
           isLoading={isLoading}
-          searchPlaceholder={`Search ${title.toLowerCase()}…`}
+          externalSearch={search}
           onRowClick={onRowClick}
         />
       </CardContent>
@@ -673,54 +760,49 @@ function RegistrationsGroup({
 function DocumentDots({ row }: { row: RegFamilyRow }) {
   const n = row.student_count;
   return (
-    <span className="inline-flex items-center gap-1">
-      {DOC_DEFS.map((d) => {
-        const c = row.doc_counts[d.key];
-        const title = `${d.label} — ${c.submitted}/${n} submitted · ${c.approved}/${n} approved`;
-        if (n > 0 && c.approved === n) {
+    // Shadcn tooltips with a 100ms delay instead of the native SVG
+    // <title> hover — native tooltips take ~a second to appear, which
+    // read as broken (user: "needs to be snappier").
+    <TooltipProvider delayDuration={100}>
+      <span className="inline-flex items-center gap-1">
+        {DOC_DEFS.map((d) => {
+          const c = row.doc_counts[d.key];
+          const title = `${d.label} — ${c.submitted}/${n} submitted · ${c.approved}/${n} approved`;
+          const dot =
+            n > 0 && c.approved === n ? (
+              <CheckCircle2
+                className="size-3 text-green-600"
+                aria-label={`${d.label} approved`}
+              />
+            ) : n > 0 && c.submitted === n ? (
+              <Circle
+                className="size-3 text-blue-600"
+                aria-label={`${d.label} submitted, awaiting review`}
+              />
+            ) : c.submitted > 0 ? (
+              <Circle
+                className="size-3 text-blue-400/70"
+                aria-label={`${d.label} partially submitted`}
+              />
+            ) : (
+              <Circle
+                className="size-3 text-muted-foreground/40"
+                aria-label={`${d.label} not submitted`}
+              />
+            );
           return (
-            <CheckCircle2
-              key={d.key}
-              className="size-3 text-green-600"
-              aria-label={`${d.label} approved`}
-            >
-              <title>{title}</title>
-            </CheckCircle2>
+            <Tooltip key={d.key}>
+              <TooltipTrigger asChild>
+                <span className="inline-flex">{dot}</span>
+              </TooltipTrigger>
+              <TooltipContent side="top" className="text-xs">
+                {title}
+              </TooltipContent>
+            </Tooltip>
           );
-        }
-        if (n > 0 && c.submitted === n) {
-          return (
-            <Circle
-              key={d.key}
-              className="size-3 text-blue-600"
-              aria-label={`${d.label} submitted, awaiting review`}
-            >
-              <title>{title}</title>
-            </Circle>
-          );
-        }
-        if (c.submitted > 0) {
-          return (
-            <Circle
-              key={d.key}
-              className="size-3 text-blue-400/70"
-              aria-label={`${d.label} partially submitted`}
-            >
-              <title>{title}</title>
-            </Circle>
-          );
-        }
-        return (
-          <Circle
-            key={d.key}
-            className="size-3 text-muted-foreground/40"
-            aria-label={`${d.label} not submitted`}
-          >
-            <title>{title}</title>
-          </Circle>
-        );
-      })}
-    </span>
+        })}
+      </span>
+    </TooltipProvider>
   );
 }
 
@@ -744,22 +826,31 @@ function SectionDots({ row }: { row: RegFamilyRow }) {
     },
   ];
   return (
-    <span className="inline-flex items-center gap-1">
-      {sections.map((s) =>
-        s.complete ? (
-          <CheckCircle2
-            key={s.key}
-            className="size-3 text-green-600"
-            aria-label={`${s.label} complete`}
-          />
-        ) : (
-          <Circle
-            key={s.key}
-            className="size-3 text-muted-foreground/40"
-            aria-label={`${s.label} not complete`}
-          />
-        )
-      )}
-    </span>
+    <TooltipProvider delayDuration={100}>
+      <span className="inline-flex items-center gap-1">
+        {sections.map((s) => (
+          <Tooltip key={s.key}>
+            <TooltipTrigger asChild>
+              <span className="inline-flex">
+                {s.complete ? (
+                  <CheckCircle2
+                    className="size-3 text-green-600"
+                    aria-label={`${s.label} complete`}
+                  />
+                ) : (
+                  <Circle
+                    className="size-3 text-muted-foreground/40"
+                    aria-label={`${s.label} not complete`}
+                  />
+                )}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="text-xs">
+              {s.label} — {s.complete ? "complete" : "not complete"}
+            </TooltipContent>
+          </Tooltip>
+        ))}
+      </span>
+    </TooltipProvider>
   );
 }

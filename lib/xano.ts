@@ -4311,6 +4311,17 @@ export const xano = {
   },
 
   adminNotes: {
+    /** Every note across all families — the latest-activity column on
+     *  the list pages bulk-joins these client-of-route side. */
+    async getAll(): Promise<XanoAdminNote[]> {
+      const res = await fetch(`${getBaseUrl()}/registration_admin_notes`, {
+        cache: "no-store",
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      const rows = await res.json();
+      return Array.isArray(rows) ? rows : [];
+    },
+
     /** All notes for a family, newest first. Pinned notes still appear in
      *  the same list — sorting/grouping happens in the UI. */
     async getByFamilyId(familyId: number): Promise<XanoAdminNote[]> {

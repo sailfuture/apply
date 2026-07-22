@@ -1217,35 +1217,11 @@ export default function StudentsStepPage() {
                               </option>
                             ))}
                           </select>
-                          {/* Selected-stop detail — show full address +
-                              pickup time so the parent can verify their
-                              choice without re-opening the menu. */}
-                          {app.bus_stop ? (
-                            (() => {
-                              const stop = busStops.find(
-                                (s) => s.name === app.bus_stop
-                              );
-                              if (!stop) return null;
-                              return (
-                                <p className="text-xs text-muted-foreground mt-1.5">
-                                  Pickup{" "}
-                                  {new Date(
-                                    stop.pick_up_time
-                                  ).toLocaleTimeString("en-US", {
-                                    hour: "numeric",
-                                    minute: "2-digit",
-                                  })}{" "}
-                                  · Drop-off{" "}
-                                  {new Date(
-                                    stop.drop_off_time
-                                  ).toLocaleTimeString("en-US", {
-                                    hour: "numeric",
-                                    minute: "2-digit",
-                                  })}
-                                </p>
-                              );
-                            })()
-                          ) : null}
+                          {/* Bus TIMES deliberately not shown to
+                              parents (user request) — schedules can
+                              shift, so the application only records
+                              the stop; times are communicated by
+                              staff closer to the school year. */}
                         </Field>
                       </div>
                     ) : null}

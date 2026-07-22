@@ -140,14 +140,10 @@ export async function GET(req: NextRequest) {
         .map((p) => p.registration_families_id)
     );
 
-    // Families whose registration admin has confirmed for this year.
-    // This is the gate for appearing on the SUFS list at all.
-    const confirmedFamilyIds = new Set(
-      progressRows
-        .filter((p) => p.isRegistrationConfirmed === true)
-        .map((p) => p.registration_families_id)
-    );
-
+    // Every ACCEPTED student appears on the SUFS list (user request —
+    // the gate was previously "registration confirmed", which hid
+    // accepted students still working their packet even though the
+    // SUFS enrollment request can start as soon as they're accepted).
     const eligibleApps = apps.filter((a) => {
       if (Number(a.registration_school_years_id) !== yearId) return false;
       // `isActive === false` is a soft delete (parent pulled the
@@ -155,7 +151,6 @@ export async function GET(req: NextRequest) {
       // legacy rows still appear — same convention as Registrations.
       if ((a as { isActive?: boolean }).isActive === false) return false;
       const familyId = Number(a.registration_families_id);
-      if (!confirmedFamilyIds.has(familyId)) return false;
       const familyAccepted = acceptedFamilyIds.has(familyId);
       const legacyStudentAccepted =
         (a as { isAccepted?: boolean }).isAccepted === true;

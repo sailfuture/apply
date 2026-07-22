@@ -5,8 +5,12 @@ import { useRouter, useSearchParams } from "next/navigation";
 
 type AdminRouter = ReturnType<typeof useRouter>;
 import useSWR from "swr";
-import { CheckCircle2, Circle, ChevronRight } from "lucide-react";
+import { Activity, CheckCircle2, Circle, ChevronRight } from "lucide-react";
 import { DataTable, type ColumnDef } from "@/components/admin/data-table";
+import { ActivityLogSheet } from "@/components/admin/activity-log-sheet";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import type { LatestActivityMap } from "@/app/api/admin/latest-activity/route";
 import {
   Card,
   CardContent,
@@ -100,11 +104,22 @@ export default function ApplicationsPage() {
   const searchParams = useSearchParams();
   const yearId = searchParams.get("yearId");
   const [filter, setFilter] = useState<ProgressFilter>("all");
+  // ONE search box filters every card on the page (user request —
+  // per-card search boxes are gone).
+  const [search, setSearch] = useState("");
+  const [activityFamily, setActivityFamily] = useState<number | null>(null);
 
   const { data, isLoading, error } = useSWR<AppProgressRow[]>(
     yearId ? `/api/admin/applications?yearId=${yearId}` : null,
     adminFetcher
   );
+  // Latest note/text per family — the "Primary Contact" email column
+  // was replaced with this (user request).
+  const { data: latestData } = useSWR<{ byFamily: LatestActivityMap }>(
+    "/api/admin/latest-activity",
+    adminFetcher
+  );
+  const latestByFamily = latestData?.byFamily ?? {};
 
   const all = useMemo(() => (Array.isArray(data) ? data : []), [data]);
 
@@ -195,16 +210,25 @@ export default function ApplicationsPage() {
       ),
     },
     {
-      key: "primary_email",
-      header: "Primary Contact",
-      sortable: true,
+      key: "latest_activity",
+      header: "Latest Activity",
       searchable: true,
       width: "w-[20%]",
-      render: (row) => (
-        <span className="block truncate">
-          {row.primary_email || row.primary_name || "—"}
-        </span>
-      ),
+      accessor: (row) =>
+        latestByFamily[String(row.family_id)]?.body ?? "",
+      render: (row) => {
+        const latest = latestByFamily[String(row.family_id)];
+        return latest ? (
+          <span className="block truncate text-muted-foreground" title={latest.body}>
+            <span className="font-medium text-foreground">
+              {latest.kind === "text" ? "Text: " : "Note: "}
+            </span>
+            {latest.body}
+          </span>
+        ) : (
+          <span className="text-muted-foreground/60">—</span>
+        );
+      },
     },
     {
       key: "flow_type",
@@ -245,6 +269,26 @@ export default function ApplicationsPage() {
       ),
     },
     {
+      key: "activity",
+      header: "",
+      width: "w-[44px]",
+      align: "right",
+      render: (row) => (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="size-7 p-0"
+          aria-label={`Activity for ${row.family_name}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            setActivityFamily(row.family_id);
+          }}
+        >
+          <Activity className="size-3.5 text-muted-foreground" />
+        </Button>
+      ),
+    },
+    {
       key: "id",
       header: "",
       width: "w-[40px]",
@@ -266,29 +310,38 @@ export default function ApplicationsPage() {
             or editing.
           </p>
         </div>
-        <Select
-          value={filter}
-          onValueChange={(v) => setFilter(v as ProgressFilter)}
-        >
-          <SelectTrigger className="w-[200px] bg-white">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {(
-              [
-                "all",
-                "accepted",
-                "submitted",
-                "in_progress",
-                "not_started",
-              ] as const
-            ).map((f) => (
-              <SelectItem key={f} value={f}>
-                {FILTER_LABEL[f]} ({counts[f]})
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <div className="flex shrink-0 items-center gap-2">
+          {/* Global search — filters every card below at once. */}
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search all applications…"
+            className="w-[220px] bg-white"
+          />
+          <Select
+            value={filter}
+            onValueChange={(v) => setFilter(v as ProgressFilter)}
+          >
+            <SelectTrigger className="w-[200px] bg-white">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {(
+                [
+                  "all",
+                  "submitted",
+                  "in_progress",
+                  "not_started",
+                  "accepted",
+                ] as const
+              ).map((f) => (
+                <SelectItem key={f} value={f}>
+                  {FILTER_LABEL[f]} ({counts[f]})
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </div>
 
       {error ? (
@@ -304,11 +357,44 @@ export default function ApplicationsPage() {
         </div>
       ) : (
         <div className="space-y-8">
-          {/* Accepted — admin has approved this family for the
-              year via the family detail Accept button. Sits above
-              Submitted because acceptance is downstream of
-              submission and admin wants the highest-status rows up
-              top. The family-progress route auto-flips
+          {/* Page order (user request): Submitted → In Progress →
+              Not Started → Accepted → Archived. Submitted leads
+              because it's the action queue; accepted families are
+              done deals and read further down. */}
+          <ApplicationsGroup
+            title="Submitted"
+            description="Awaiting admissions decision."
+            dotColor="bg-blue-500"
+            rows={visibleGroups.submitted}
+            isLoading={isLoading}
+            error={error}
+            columns={columns}
+            router={router}
+            search={search}
+          />
+          <ApplicationsGroup
+            title="In Progress"
+            description="Started but not yet submitted by the family."
+            dotColor="bg-amber-500"
+            rows={visibleGroups.inProgress}
+            isLoading={isLoading}
+            error={error}
+            columns={columns}
+            router={router}
+            search={search}
+          />
+          <ApplicationsGroup
+            title="Not Started"
+            description="Family has a progress row but hasn't completed any sections."
+            dotColor="bg-red-500"
+            rows={visibleGroups.notStarted}
+            isLoading={isLoading}
+            error={error}
+            columns={columns}
+            router={router}
+            search={search}
+          />
+          {/* Accepted — the family-progress route auto-flips
               `isSubmitted = true` on accept, so any accepted row
               would otherwise also show up under Submitted; the
               `deriveFilter` precedence keeps them in this one
@@ -316,99 +402,40 @@ export default function ApplicationsPage() {
           <ApplicationsGroup
             title="Accepted"
             description="Admin approved this family. Ready for tuition + enrollment signing."
-            // Green-500 — the brighter "done deal" green. Distinct
-            // from the blue used on Submitted so admin can scan
-            // the cards by color alone: green = approved and
-            // moving forward, blue = waiting on admin decision.
             dotColor="bg-green-500"
             rows={visibleGroups.accepted}
-            isLoading={
-              isLoading &&
-              filter !== "submitted" &&
-              filter !== "in_progress" &&
-              filter !== "not_started"
-            }
+            isLoading={isLoading}
             error={error}
             columns={columns}
             router={router}
+            search={search}
           />
-          <ApplicationsGroup
-            title="Submitted"
-            description="Awaiting admissions decision."
-            // Blue = "needs admin action." Distinct from Accepted's
-            // green so the two cards read differently at a glance —
-            // submitted families are queued for review, accepted
-            // families have already cleared that bar.
-            dotColor="bg-blue-500"
-            rows={visibleGroups.submitted}
-            isLoading={
-              isLoading &&
-              filter !== "accepted" &&
-              filter !== "in_progress" &&
-              filter !== "not_started"
-            }
-            error={error}
-            columns={columns}
-            router={router}
-          />
-          <ApplicationsGroup
-            title="In Progress"
-            description="Started but not yet submitted by the family."
-            // Yellow = "in flight, waiting on the family." Same amber
-            // family used by the in-progress step circle on the
-            // parent-side side nav for visual consistency.
-            dotColor="bg-amber-500"
-            rows={visibleGroups.inProgress}
-            isLoading={
-              isLoading &&
-              filter !== "accepted" &&
-              filter !== "submitted" &&
-              filter !== "not_started"
-            }
-            error={error}
-            columns={columns}
-            router={router}
-          />
-          <ApplicationsGroup
-            title="Not Started"
-            description="Family has a progress row but hasn't completed any sections."
-            // Red = "no movement." Lets admin spot stalled families at a
-            // glance without reading the section pills.
-            dotColor="bg-red-500"
-            rows={visibleGroups.notStarted}
-            isLoading={
-              isLoading &&
-              filter !== "accepted" &&
-              filter !== "submitted" &&
-              filter !== "in_progress"
-            }
-            error={error}
-            columns={columns}
-            router={router}
-          />
-          {/* Archived — admin retired the row via the family detail
-              page's Archive button. Surfaces here so admin can find
-              the row again (and read the captured reason) without
-              digging through Xano. Slate dot keeps the visual
-              hierarchy below the active queues. */}
           <ApplicationsGroup
             title="Archived"
             description="Set aside by admin. Click into a row to read the reason or unarchive."
             dotColor="bg-slate-400"
             rows={visibleGroups.archived}
-            isLoading={
-              isLoading &&
-              filter !== "accepted" &&
-              filter !== "submitted" &&
-              filter !== "in_progress" &&
-              filter !== "not_started"
-            }
+            isLoading={isLoading}
             error={error}
             columns={columns}
             router={router}
+            search={search}
           />
         </div>
       )}
+
+      {/* Shared controlled Activity sheet — one instance for every
+          row's trigger. */}
+      {activityFamily && yearId ? (
+        <ActivityLogSheet
+          familyId={activityFamily}
+          yearId={Number(yearId)}
+          open
+          onOpenChange={(o) => {
+            if (!o) setActivityFamily(null);
+          }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -467,6 +494,7 @@ function ApplicationsGroup({
   columns,
   router,
   dotColor,
+  search,
 }: {
   title: string;
   description: string;
@@ -475,6 +503,8 @@ function ApplicationsGroup({
   error: unknown;
   columns: ColumnDef<AppProgressRow>[];
   router: AdminRouter;
+  /** Page-level search value — drives every card's table at once. */
+  search: string;
   /** Tailwind bg-... class for the small status dot rendered before the
    *  title — green for Submitted, amber for In Progress, red for Not
    *  Started. Lives at the section-card level rather than inside the
@@ -509,7 +539,7 @@ function ApplicationsGroup({
           columns={columns}
           data={rows}
           isLoading={isLoading}
-          searchPlaceholder={`Search ${title.toLowerCase()}…`}
+          externalSearch={search}
           onRowClick={(row) => {
             router.push(
               `/admin/families/${row.family_id}?yearId=${row.year_id}`

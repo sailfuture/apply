@@ -41,6 +41,10 @@ interface DataTableProps<T> {
   isLoading?: boolean;
   pageSize?: number;
   searchPlaceholder?: string;
+  /** Page-level search: when provided, the table filters by THIS
+   *  value and hides its own search input — lets one input drive
+   *  every card on a page instead of per-card boxes. */
+  externalSearch?: string;
   onRowClick?: (row: T) => void;
   /** Optional per-row class (e.g. a background tint for rows that
    *  need to stand out). When it returns a value, it fully owns the
@@ -55,10 +59,12 @@ export function DataTable<T extends Record<string, unknown>>({
   isLoading = false,
   pageSize = 20,
   searchPlaceholder = "Search...",
+  externalSearch,
   onRowClick,
   rowClassName,
 }: DataTableProps<T>) {
-  const [search, setSearch] = useState("");
+  const [internalSearch, setSearch] = useState("");
+  const search = externalSearch !== undefined ? externalSearch : internalSearch;
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [page, setPage] = useState(0);
@@ -129,10 +135,10 @@ export function DataTable<T extends Record<string, unknown>>({
 
   return (
     <div className="space-y-4">
-      {searchableKeys.length > 0 && (
+      {searchableKeys.length > 0 && externalSearch === undefined && (
         <Input
           placeholder={searchPlaceholder}
-          value={search}
+          value={internalSearch}
           onChange={(e) => {
             setSearch(e.target.value);
             setPage(0);
