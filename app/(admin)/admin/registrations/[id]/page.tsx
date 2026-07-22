@@ -70,6 +70,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { FamilyNotesSheet } from "@/components/admin/family-notes-sheet";
+import { ActivityLogSheet } from "@/components/admin/activity-log-sheet";
 import { BillingCard } from "@/components/admin/billing-card";
 import { TuitionBreakdownTable } from "@/components/admin/tuition-breakdown-table";
 import { RequestRecordsDialog } from "@/components/admin/request-records-dialog";
@@ -573,6 +574,15 @@ export default function FamilyRegistrationDetailPage() {
               familyId={Number(family?.id ?? familyId)}
               defaultYearId={Number(yearId)}
               phase="registration"
+            />
+            {/* Full account activity stream — notes + texts + system
+                milestones (application, registration, SUFS, billing)
+                in one timeline. Complements the phase-scoped notes
+                drawer; opens with the App & Reg pill preselected. */}
+            <ActivityLogSheet
+              familyId={Number(family?.id ?? familyId)}
+              yearId={Number(yearId)}
+              defaultFilter="appreg"
             />
           </div>
         </div>

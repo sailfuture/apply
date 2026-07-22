@@ -70,6 +70,7 @@ import {
   FileUploadList,
 } from "@/components/ui/file-upload";
 import { RequestRecordsDialog } from "@/components/admin/request-records-dialog";
+import { ActivityLogSheet } from "@/components/admin/activity-log-sheet";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { cn } from "@/lib/utils";
 import {
@@ -239,6 +240,19 @@ export default function EnrolledStudentDetailPage() {
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <BackLink href={backHref} />
         <div className="flex items-center gap-2 shrink-0 flex-wrap">
+          {/* Unified account activity stream — notes + texts + system
+              milestones (enrollment pill preselected: invoices, crew
+              changes, unenrollment). Notes composed here tag this
+              student. */}
+          {family && yearId ? (
+            <ActivityLogSheet
+              familyId={Number(family.id)}
+              yearId={Number(yearId)}
+              defaultFilter="enrollment"
+              noteStudentId={student.id}
+              contextLabel={fullName}
+            />
+          ) : null}
           <RequestRecordsDialog
             defaults={{
               studentName: `${student.first_name ?? ""} ${student.last_name ?? ""}`.trim(),
