@@ -8,6 +8,7 @@ import {
   Ban,
   CircleCheck,
   Loader2,
+  MessageSquareText,
   NotebookPen,
   Send,
 } from "lucide-react";
@@ -27,13 +28,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/marker";
 import {
@@ -51,6 +45,7 @@ import {
   MessageScrollerViewport,
 } from "@/components/ui/message-scroller";
 import { adminFetcher } from "@/lib/admin-fetcher";
+import { cn } from "@/lib/utils";
 import {
   messagesFetcher,
   messagesKey,
@@ -366,24 +361,31 @@ export function ActivityLogSheet({
               outbound message appears in the stream like any other. */}
           <div className="space-y-2 border-t bg-muted/20 px-4 py-3">
             <div className="flex items-center gap-2">
-              <NotebookPen className="size-3.5 text-muted-foreground" />
-              <Select
-                value={category}
-                onValueChange={(v) =>
-                  setCategory(v as (typeof COMPOSE_CATEGORIES)[number]["key"])
-                }
-              >
-                <SelectTrigger className="h-7 w-[130px] bg-white text-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {COMPOSE_CATEGORIES.map((c) => (
-                    <SelectItem key={c.key} value={c.key}>
-                      {c.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {/* Segmented Note | Text toggle — with only two modes a
+                  dropdown was two clicks for a binary choice. */}
+              <div className="inline-flex rounded-md border bg-white p-0.5">
+                {COMPOSE_CATEGORIES.map((c) => (
+                  <button
+                    key={c.key}
+                    type="button"
+                    aria-pressed={category === c.key}
+                    onClick={() => setCategory(c.key)}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium transition-colors",
+                      category === c.key
+                        ? "bg-foreground text-background"
+                        : "text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    {c.key === "text" ? (
+                      <MessageSquareText className="size-3" />
+                    ) : (
+                      <NotebookPen className="size-3" />
+                    )}
+                    {c.key === "text" ? "Text" : "Note"}
+                  </button>
+                ))}
+              </div>
               {contextLabel ? (
                 <span className="truncate text-[11px] text-muted-foreground">
                   About {contextLabel}
@@ -431,16 +433,16 @@ export function ActivityLogSheet({
                   : "Add a note to the timeline…"
               }
             />
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-[11px] text-muted-foreground tabular-nums">
-                {textMode && segments > 0
-                  ? `${body.length} chars · ${segments} segment${
-                      segments === 1 ? "" : "s"
-                    }`
-                  : ""}
-              </span>
+            <div className="space-y-1.5">
+              {textMode && segments > 0 ? (
+                <p className="text-[11px] text-muted-foreground tabular-nums">
+                  {body.length} chars · {segments} segment
+                  {segments === 1 ? "" : "s"}
+                </p>
+              ) : null}
               <Button
                 size="sm"
+                className="w-full"
                 onClick={() => void submit()}
                 disabled={saving || !body.trim() || composerBlocked}
               >
@@ -452,7 +454,7 @@ export function ActivityLogSheet({
                 ) : (
                   <>
                     <Send className="size-3.5 mr-1.5" />
-                    {textMode ? "Send text" : "Log"}
+                    {textMode ? "Send Text" : "Add Note"}
                   </>
                 )}
               </Button>
@@ -536,8 +538,26 @@ function EmailPreviewDialog({
 
 /* ── Stream rendering ─────────────────────────────────────────────── */
 
-/** System milestone — a compact centered marker between the bubbles. */
+/** System milestone — positive outcomes (accepted / confirmed /
+ *  enrolled) render as a larger green bubble so they pop in the
+ *  stream; everything else keeps the compact muted marker. */
 function SystemRow({ event }: { event: ActivityEvent }) {
+  const milestone = /accepted|confirmed|enrolled/i.test(event.title);
+  if (milestone) {
+    return (
+      <div className="flex justify-center py-1">
+        <div className="inline-flex max-w-full items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-800">
+          <CircleCheck className="size-4 shrink-0 text-emerald-600" />
+          <span className="min-w-0 truncate">
+            <span className="font-semibold">{event.title}</span>
+            {event.studentName ? <> — {event.studentName}</> : null}
+            {event.author ? <> · {event.author}</> : null}
+            <span className="tabular-nums"> · {shortWhen(event.ts)}</span>
+          </span>
+        </div>
+      </div>
+    );
+  }
   return (
     <Marker className="text-muted-foreground">
       <MarkerIcon>

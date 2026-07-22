@@ -276,9 +276,9 @@ export default function EnrolledStudentsPage() {
       align: "right",
       render: (row) => (
         <Button
-          variant="ghost"
+          variant="outline"
           size="sm"
-          className="size-7 p-0"
+          className="size-7 bg-white p-0"
           aria-label="Family activity"
           onClick={(e) => {
             e.stopPropagation();

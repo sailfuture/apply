@@ -417,6 +417,37 @@ export default function SufsPage() {
     ),
   });
 
+  // Family's furthest pipeline stage — colored pill so admin can see
+  // at a glance whether the student is still applying, in the
+  // registration packet, or fully enrolled.
+  const stageCol = (w: string): ColumnDef<SufsRow> => ({
+    key: "stage",
+    header: "Status",
+    sortable: true,
+    width: w,
+    render: (row) => {
+      const s = row.stage;
+      return (
+        <span
+          className={cn(
+            "inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider",
+            s === "enrolled"
+              ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+              : s === "registration"
+                ? "border-amber-200 bg-amber-50 text-amber-800"
+                : "border-blue-200 bg-blue-50 text-blue-800"
+          )}
+        >
+          {s === "enrolled"
+            ? "Enrolled"
+            : s === "registration"
+              ? "Registration"
+              : "Applying"}
+        </span>
+      );
+    },
+  });
+
   const awardIdCol = (w: string): ColumnDef<SufsRow> => ({
     key: "sufs_award_id",
     header: "Award ID",
@@ -652,32 +683,35 @@ export default function SufsPage() {
     );
 
   const notSentColumns: ColumnDef<SufsRow>[] = [
-    studentCol("w-[30%]"),
-    awardIdCol("w-[16%]"),
-    awardTypeCol("w-[24%]"),
-    requestSentCol("w-[15%]"),
-    activityCol("w-[15%]"),
+    studentCol("w-[26%]"),
+    stageCol("w-[12%]"),
+    awardIdCol("w-[14%]"),
+    awardTypeCol("w-[20%]"),
+    requestSentCol("w-[14%]"),
+    activityCol("w-[14%]"),
   ];
   const pendingColumns: ColumnDef<SufsRow>[] = [
-    studentCol("w-[24%]"),
-    awardIdCol("w-[12%]"),
-    awardTypeCol("w-[16%]"),
-    requestSentCol("w-[11%]"),
-    requestedAtCol("w-[10%]"),
-    parentConfirmedCol("w-[14%]"),
-    activityCol("w-[13%]"),
+    studentCol("w-[20%]"),
+    stageCol("w-[11%]"),
+    awardIdCol("w-[11%]"),
+    awardTypeCol("w-[14%]"),
+    requestSentCol("w-[10%]"),
+    requestedAtCol("w-[9%]"),
+    parentConfirmedCol("w-[13%]"),
+    activityCol("w-[12%]"),
   ];
   const confirmedColumns: ColumnDef<SufsRow>[] = [
-    studentCol("w-[18%]"),
-    awardTypeCol("w-[13%]"),
-    parentConfirmedCol("w-[10%]"),
-    requestedAtCol("w-[8%]"),
-    confirmedAtCol("w-[8%]"),
+    studentCol("w-[16%]"),
+    stageCol("w-[10%]"),
+    awardTypeCol("w-[11%]"),
+    parentConfirmedCol("w-[9%]"),
+    requestedAtCol("w-[7%]"),
+    confirmedAtCol("w-[7%]"),
     quarterCol(1, "w-[8%]"),
     quarterCol(2, "w-[8%]"),
     quarterCol(3, "w-[8%]"),
     quarterCol(4, "w-[8%]"),
-    activityCol("w-[11%]"),
+    activityCol("w-[10%]"),
   ];
 
   // Export the FULL year dataset (`all`), not the filtered view — a

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
+import { computeFamilyStageSets } from "@/lib/sms/stages";
 
 /**
  * Admin SUFS list — one row per student whose family registration has
@@ -157,6 +158,24 @@ export async function GET(req: NextRequest) {
       return familyAccepted || legacyStudentAccepted;
     });
 
+    // Pipeline stage per family for the Status column — the same
+    // shared bucketing the inbox + group composer use (enrolled >
+    // registration > application).
+    const stageSets = computeFamilyStageSets({
+      yearId,
+      fap: familyProgressRows,
+      srp: progressRows,
+      apps,
+    });
+    const familyStage = (
+      fid: number
+    ): "application" | "registration" | "enrolled" =>
+      stageSets.enrolled.has(fid)
+        ? "enrolled"
+        : stageSets.registration.has(fid)
+          ? "registration"
+          : "application";
+
     const rows: SufsStudentRow[] = eligibleApps.map((app) => {
       const studentId = Number(app.registration_students_id);
       const familyId = Number(app.registration_families_id);
@@ -181,6 +200,7 @@ export async function GET(req: NextRequest) {
           : `Student #${studentId}`,
         student_grade: app.current_grade ?? "",
         family_name: family?.family_name?.trim() || `Family #${familyId}`,
+        stage: familyStage(familyId),
         // 0 is the "not entered yet" sentinel the parent-facing award-ID
         // input writes, so normalize it to null for the UI rather than
         // rendering a literal "0".
@@ -306,6 +326,9 @@ export interface SufsStudentRow {
   student_full_name: string;
   student_grade: string;
   family_name: string;
+  /** Family's furthest pipeline stage for the year — the Status
+   *  column (shared bucketing: enrolled > registration > applying). */
+  stage: "application" | "registration" | "enrolled";
   /** Parent-entered 9-digit Step Up award ID. `null` when unset (the
    *  underlying column uses 0 as its empty sentinel). */
   sufs_award_id: number | null;
