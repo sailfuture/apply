@@ -247,8 +247,8 @@ function downloadTextFile(filename: string, text: string, mime: string) {
 /**
  * Admin Step Up for Students Confirmation page.
  *
- * One row per student whose family registration is confirmed for the
- * selected year, split into the three pipeline tables:
+ * One row per active student for the selected year (applying through
+ * enrolled — see the API route), split into the three pipeline tables:
  *
  *   - red    — enrollment request not sent yet (admin's queue)
  *   - yellow — request sent, waiting on the parent
@@ -751,10 +751,10 @@ export default function SufsPage() {
             Step Up for Students Confirmation
           </h1>
           <p className="text-sm text-muted-foreground">
-            Every student with a confirmed registration for the selected
-            year. Send the Step Up enrollment request, mark when the
-            parent completes it, then track quarterly payment
-            confirmations.
+            Every active student for the selected year — applying,
+            accepted, or enrolled. Send the Step Up enrollment request,
+            mark when the parent completes it, then track quarterly
+            payment confirmations.
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -933,9 +933,9 @@ function SufsGroup({
 }
 
 /**
- * Shown when the year has no confirmed registrations yet. The action
- * that populates this page lives on the Registrations detail view
- * (Confirm Family Registration), so point there.
+ * Shown when the year has no active students yet — nothing has been
+ * submitted for it. Applicants enter the pipeline from the apply flow,
+ * so point admin at Applications.
  */
 function SufsEmptyState() {
   return (
@@ -944,14 +944,11 @@ function SufsEmptyState() {
         <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-full bg-muted">
           <Inbox className="size-6 text-muted-foreground" />
         </div>
-        <h3 className="text-base font-semibold">
-          No completed registrations yet
-        </h3>
+        <h3 className="text-base font-semibold">No students yet</h3>
         <p className="mt-1 text-sm text-muted-foreground max-w-md mx-auto">
-          A student shows up here once their family&rsquo;s registration
-          has been confirmed for this year. Head to{" "}
-          <strong>Registrations</strong> to review submitted packets and
-          confirm families.
+          A student shows up here once their family has a submitted
+          application for this year. Head to{" "}
+          <strong>Applications</strong> to review incoming applicants.
         </p>
       </CardContent>
     </Card>

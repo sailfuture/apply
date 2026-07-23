@@ -4,31 +4,26 @@ import { xano } from "@/lib/xano";
 import { computeFamilyStageSets } from "@/lib/sms/stages";
 
 /**
- * Admin SUFS list — one row per student whose family registration has
- * been **confirmed** for the requested academic year, carrying that
- * student's Step Up For Students award data.
+ * Admin SUFS list — one row per active student for the requested
+ * academic year, carrying that student's Step Up For Students award
+ * data. This is the reconciliation surface: admin works the list
+ * against the Step Up portal, ticking each student off as they're
+ * enrolled there.
  *
- * This is the reconciliation surface: admin works this list against
- * the Step Up portal, ticking each student off as they're enrolled
- * there. It is deliberately narrower than `/api/admin/registrations`:
+ * Scope has widened over time and now mirrors the full active
+ * pipeline (see the eligibility filter below):
  *
- *   - Registrations shows the whole accepted pipeline (not started →
- *     submitted → completed) so admin can chase families.
- *   - SUFS shows only the *finished* end of it, because a student who
- *     hasn't completed registration shouldn't be enrolled on the
- *     portal yet.
+ *   - applying     — family has a submitted, non-denied application
+ *   - registration — family accepted for the year
+ *   - enrolled     — registration confirmed
  *
- * "Completed" === the family-level
- * `registration_student_registration_progress.isRegistrationConfirmed`
- * — the same latch that drives the Completed bucket on the
- * Registrations list. Note this lives on the *family* progress row, so
- * confirming a family surfaces all of its active students here at
- * once.
- *
- * Acceptance is still checked first (a family can't have a confirmed
- * registration without being accepted, but the two flags live on
- * different tables and we don't want a stale/orphaned progress row to
- * leak a non-accepted student onto this list).
+ * The Status pill on each row says which stage the family is in. A
+ * student appears as soon as they're applying so admin can line up the
+ * Step Up work early; the per-stage checkboxes stay disabled until the
+ * student actually has a registration packet to write to. Denied
+ * students never appear (neither families where every active app was
+ * denied, nor an individually-denied student in an otherwise-live
+ * family).
  *
  * Joins mirror `/api/admin/registrations` — see that route for why
  * each one is needed. Every fetch is wrapped in `Promise.allSettled`
@@ -141,26 +136,9 @@ export async function GET(req: NextRequest) {
         .map((p) => p.registration_families_id)
     );
 
-    // Every ACCEPTED student appears on the SUFS list (user request —
-    // the gate was previously "registration confirmed", which hid
-    // accepted students still working their packet even though the
-    // SUFS enrollment request can start as soon as they're accepted).
-    const eligibleApps = apps.filter((a) => {
-      if (Number(a.registration_school_years_id) !== yearId) return false;
-      // `isActive === false` is a soft delete (parent pulled the
-      // student from the year). `undefined` counts as active so
-      // legacy rows still appear — same convention as Registrations.
-      if ((a as { isActive?: boolean }).isActive === false) return false;
-      const familyId = Number(a.registration_families_id);
-      const familyAccepted = acceptedFamilyIds.has(familyId);
-      const legacyStudentAccepted =
-        (a as { isAccepted?: boolean }).isAccepted === true;
-      return familyAccepted || legacyStudentAccepted;
-    });
-
-    // Pipeline stage per family for the Status column — the same
-    // shared bucketing the inbox + group composer use (enrolled >
-    // registration > application).
+    // Pipeline stage per family — the same shared bucketing the inbox +
+    // group composer use (enrolled > registration > application). Also
+    // drives the eligibility filter below, so it's computed first.
     const stageSets = computeFamilyStageSets({
       yearId,
       fap: familyProgressRows,
@@ -175,6 +153,32 @@ export async function GET(req: NextRequest) {
         : stageSets.registration.has(fid)
           ? "registration"
           : "application";
+
+    // Which students land on the SUFS list. History: the gate was
+    // "registration confirmed", then loosened to "accepted", and now
+    // APPLYING families appear too (user request) so the reconciliation
+    // list mirrors the full active pipeline — a student shows as soon as
+    // their family has a submitted, non-denied application, and the
+    // Status pill (Applying / Registration / Enrolled) says how far
+    // along they are.
+    const eligibleApps = apps.filter((a) => {
+      if (Number(a.registration_school_years_id) !== yearId) return false;
+      // `isActive === false` is a soft delete (parent pulled the
+      // student from the year). `undefined` counts as active so
+      // legacy rows still appear — same convention as Registrations.
+      if ((a as { isActive?: boolean }).isActive === false) return false;
+      const familyId = Number(a.registration_families_id);
+      const familyAccepted = acceptedFamilyIds.has(familyId);
+      const legacyStudentAccepted =
+        (a as { isAccepted?: boolean }).isAccepted === true;
+      if (familyAccepted || legacyStudentAccepted) return true;
+      // Applying: submitted but not yet accepted. `stageSets.application`
+      // already excludes families whose every active app was denied;
+      // also drop an individually-denied student inside an otherwise-
+      // live family so a rejected student never surfaces here.
+      if ((a as { isDenied?: boolean }).isDenied === true) return false;
+      return stageSets.application.has(familyId);
+    });
 
     const rows: SufsStudentRow[] = eligibleApps.map((app) => {
       const studentId = Number(app.registration_students_id);
