@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
-import { xano } from "@/lib/xano";
+import { xano, activeStripeSubscriptionId } from "@/lib/xano";
 import {
   fetchActiveFamilyApplications,
   sumFamilyBillingTotals,
@@ -71,7 +71,7 @@ export async function GET(
       );
     }
 
-    const [year, transactions, activeApps, family, progress] =
+    const [year, transactions, activeApps, family, progress, payments] =
       await Promise.all([
         xano.schoolYears.getById(yearId),
         xano.paymentTransactions.getByFamilyAndYear(familyId, yearId),
@@ -87,7 +87,18 @@ export async function GET(
           familyId,
           yearId
         ),
+        // Payment row — a LIVE subscription with no invoices yet means
+        // the months are SCHEDULED (future-dated billing), not
+        // "not started".
+        xano.familyPayments.getAllByYear(yearId).catch(() => []),
       ]);
+    const paymentRow =
+      payments.find(
+        (p) => Number(p.registration_families_id) === familyId
+      ) ?? null;
+    const hasLiveSubscription = Boolean(
+      activeStripeSubscriptionId(paymentRow?.stripe_subscription_id)
+    );
 
     // Family monthly total is derived from per-student
     // `monthly_amount` on each active application row — the
@@ -119,7 +130,13 @@ export async function GET(
       if (!tx) {
         return {
           ...slot,
-          status: "not_started" as const,
+          // No invoice yet: with a live subscription on file that
+          // month is SCHEDULED (Stripe will bill it — e.g. a
+          // future-dated start via trial_end); without one it truly
+          // hasn't started.
+          status: hasLiveSubscription
+            ? ("scheduled" as const)
+            : ("not_started" as const),
           invoice: null,
         };
       }
@@ -196,7 +213,7 @@ export interface ScheduleSlot {
   periodEndExclusive: number;
   /** Human label ("Aug 2026") for the row. */
   monthLabel: string;
-  status: "not_started" | "open" | "paid" | "failed" | "void";
+  status: "not_started" | "scheduled" | "open" | "paid" | "failed" | "void";
   invoice: {
     stripeInvoiceId: string;
     amountDueCents: number;

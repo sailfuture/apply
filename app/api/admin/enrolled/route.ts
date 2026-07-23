@@ -109,7 +109,6 @@ export async function GET(req: NextRequest) {
     const parents =
       parentsResult.status === "fulfilled" ? parentsResult.value : [];
 
-    const studentById = new Map(students.map((s) => [s.id, s]));
     const familyById = new Map(families.map((f) => [f.id, f]));
     // Per-student app for the year — gives us the current grade. Map by
     // student id so the join below stays an O(1) lookup.
@@ -205,11 +204,31 @@ export async function GET(req: NextRequest) {
             ? `${primary.first_name ?? ""} ${primary.last_name ?? ""}`.trim()
             : "",
           primary_email: primary?.email ?? "",
+          primary_phone: (primary?.phone ?? "").toString(),
           confirmed_at: enrolledAt,
           liability_waiver_status: packet?.liability_waiver_status ?? "",
           liability_waiver_pdf_url: packet?.liability_waiver_pdf_url ?? "",
           is_enrolled: isEnrolled,
           is_archived: student.isArchived === true,
+          // Required-document states for the row-click detail sheet —
+          // same derivation as the Registrations list (submitted =
+          // parent uploaded files, approved = admin doc-confirm).
+          doc_immunization_submitted: hasFiles(student.immunization_forms),
+          doc_immunization_approved:
+            student.immunization_admin_confirm === true,
+          doc_birth_certificate_submitted: hasFiles(
+            student.birth_certificate
+          ),
+          doc_birth_certificate_approved:
+            student.birth_certificate_admin_confirm === true,
+          doc_school_health_form_submitted: hasFiles(
+            student.school_health_form
+          ),
+          doc_school_health_form_approved:
+            student.school_health_form_admin_confirm === true,
+          doc_transcripts_submitted: hasFiles(student.transcripts),
+          doc_transcripts_approved:
+            student.transcripts_admin_confirm === true,
         },
       ];
     });
@@ -265,6 +284,20 @@ export interface EnrolledStudentRow {
   confirmed_at: number;
   liability_waiver_status: string;
   liability_waiver_pdf_url: string;
+  /** Primary parent's phone (bare digits as stored) — surfaced in the
+   *  row-click detail sheet. */
+  primary_phone: string;
+  /** Required-document states for the detail sheet — submitted =
+   *  parent uploaded files into the slot, approved = admin
+   *  doc-confirm. Same derivation as the Registrations list. */
+  doc_immunization_submitted: boolean;
+  doc_immunization_approved: boolean;
+  doc_birth_certificate_submitted: boolean;
+  doc_birth_certificate_approved: boolean;
+  doc_school_health_form_submitted: boolean;
+  doc_school_health_form_approved: boolean;
+  doc_transcripts_submitted: boolean;
+  doc_transcripts_approved: boolean;
   /** True when the student is officially enrolled for the year:
    *  `student.isEnrolled === true && student.isArchived !== true`.
    *  Drives the Enrolled vs Not Enrolled grouping on the page. */
@@ -279,4 +312,14 @@ export interface EnrolledStudentRow {
    *  client-side cast. Mirrors the same pattern on
    *  `RegistrationStudentRow`. */
   [key: string]: unknown;
+}
+
+/** Xano file-field presence check — upload columns come back as an
+ *  array of file objects (or a bare object on legacy rows). Hoisted
+ *  module function so the row map above can use it. */
+function hasFiles(v: unknown): boolean {
+  if (!v) return false;
+  if (Array.isArray(v)) return v.length > 0;
+  if (typeof v === "object") return Object.keys(v).length > 0;
+  return false;
 }

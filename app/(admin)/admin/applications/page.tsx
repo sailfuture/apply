@@ -2,8 +2,6 @@
 
 import { useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-
-type AdminRouter = ReturnType<typeof useRouter>;
 import useSWR from "swr";
 import { Activity, CheckCircle2, Circle, ChevronRight } from "lucide-react";
 import { DataTable, type ColumnDef } from "@/components/admin/data-table";
@@ -188,8 +186,21 @@ export default function ApplicationsPage() {
       sortable: true,
       searchable: true,
       width: "w-[22%]",
+      // Name click = full application page; the ROW click opens the
+      // activity sheet, so this stops propagation.
       render: (row) => (
-        <span className="block truncate font-medium">{row.family_name}</span>
+        <button
+          type="button"
+          className="block max-w-full truncate text-left font-medium hover:underline"
+          onClick={(e) => {
+            e.stopPropagation();
+            router.push(
+              `/admin/families/${row.family_id}?yearId=${row.year_id}`
+            );
+          }}
+        >
+          {row.family_name}
+        </button>
       ),
     },
     {
@@ -369,7 +380,7 @@ export default function ApplicationsPage() {
             isLoading={isLoading}
             error={error}
             columns={columns}
-            router={router}
+            onRowClick={(row) => setActivityFamily(row.family_id)}
             search={search}
           />
           <ApplicationsGroup
@@ -380,7 +391,7 @@ export default function ApplicationsPage() {
             isLoading={isLoading}
             error={error}
             columns={columns}
-            router={router}
+            onRowClick={(row) => setActivityFamily(row.family_id)}
             search={search}
           />
           <ApplicationsGroup
@@ -391,7 +402,7 @@ export default function ApplicationsPage() {
             isLoading={isLoading}
             error={error}
             columns={columns}
-            router={router}
+            onRowClick={(row) => setActivityFamily(row.family_id)}
             search={search}
           />
           {/* Accepted — the family-progress route auto-flips
@@ -407,7 +418,7 @@ export default function ApplicationsPage() {
             isLoading={isLoading}
             error={error}
             columns={columns}
-            router={router}
+            onRowClick={(row) => setActivityFamily(row.family_id)}
             search={search}
           />
           <ApplicationsGroup
@@ -418,7 +429,7 @@ export default function ApplicationsPage() {
             isLoading={isLoading}
             error={error}
             columns={columns}
-            router={router}
+            onRowClick={(row) => setActivityFamily(row.family_id)}
             search={search}
           />
         </div>
@@ -492,7 +503,7 @@ function ApplicationsGroup({
   isLoading,
   error,
   columns,
-  router,
+  onRowClick,
   dotColor,
   search,
 }: {
@@ -502,7 +513,9 @@ function ApplicationsGroup({
   isLoading: boolean;
   error: unknown;
   columns: ColumnDef<AppProgressRow>[];
-  router: AdminRouter;
+  /** Row click opens the family's activity sheet (the family-name
+   *  cell handles navigation to the full page itself). */
+  onRowClick: (row: AppProgressRow) => void;
   /** Page-level search value — drives every card's table at once. */
   search: string;
   /** Tailwind bg-... class for the small status dot rendered before the
@@ -540,11 +553,7 @@ function ApplicationsGroup({
           data={rows}
           isLoading={isLoading}
           externalSearch={search}
-          onRowClick={(row) => {
-            router.push(
-              `/admin/families/${row.family_id}?yearId=${row.year_id}`
-            );
-          }}
+          onRowClick={onRowClick}
         />
       </CardContent>
     </Card>

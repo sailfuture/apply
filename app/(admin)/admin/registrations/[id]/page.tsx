@@ -518,7 +518,7 @@ export default function FamilyRegistrationDetailPage() {
               {recordsRequestedAt ? (
                 <span
                   title={`Records requested ${new Date(recordsRequestedAt).toLocaleDateString()}`}
-                  className="ml-2 inline-flex items-center rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 align-middle text-[10px] font-medium uppercase tracking-wider text-violet-800"
+                  className="ml-2 inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 align-middle text-[10px] font-medium uppercase tracking-wider text-emerald-800"
                 >
                   Records requested
                 </span>

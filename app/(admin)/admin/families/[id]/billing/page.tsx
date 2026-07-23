@@ -415,6 +415,14 @@ function StatusPill({ status }: { status: ScheduleSlot["status"] }) {
           tone: "bg-muted text-muted-foreground ring-border",
           Icon: XCircle,
         };
+      case "scheduled":
+        // Live subscription, invoice not generated yet (future-dated
+        // billing) — Stripe will bill this month automatically.
+        return {
+          label: "Scheduled",
+          tone: "bg-blue-50 text-blue-700 ring-blue-200",
+          Icon: Circle,
+        };
       case "not_started":
       default:
         return {

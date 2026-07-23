@@ -28,6 +28,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/marker";
 import {
@@ -118,6 +128,10 @@ interface Props {
   /** Extra header context, e.g. the student's name on a per-row
    *  sheet. */
   contextLabel?: string;
+  /** Restrict the stream to one scope (e.g. "billing" shows only
+   *  Stripe subscription/invoice/payment events + billing emails).
+   *  Notes composed here still tag `noteSection`. */
+  filterScope?: string;
   disabled?: boolean;
 }
 
@@ -131,6 +145,7 @@ export function ActivityLogSheet({
   noteSection,
   noteStudentId,
   contextLabel,
+  filterScope,
   disabled,
 }: Props) {
   const [openState, setOpenState] = useState(false);
@@ -170,6 +185,34 @@ export function ActivityLogSheet({
     resendId: string;
     subject: string;
   } | null>(null);
+
+  // Note pending deletion — set by the subtle Delete in a note
+  // bubble's footer, confirmed via the warning modal below.
+  const [deleteNoteId, setDeleteNoteId] = useState<number | null>(null);
+  const [deletingNote, setDeletingNote] = useState(false);
+  async function deleteNote() {
+    if (!deleteNoteId || deletingNote) return;
+    setDeletingNote(true);
+    try {
+      const res = await fetch(`/api/admin/notes/${deleteNoteId}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        throw new Error(err?.error ?? `Delete failed (${res.status})`);
+      }
+      await mutate();
+      toast.success("Note deleted.");
+      setDeleteNoteId(null);
+    } catch (err) {
+      console.error("Failed to delete note:", err);
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't delete note."
+      );
+    } finally {
+      setDeletingNote(false);
+    }
+  }
 
   const [body, setBody] = useState("");
   const [category, setCategory] =
@@ -254,7 +297,12 @@ export function ActivityLogSheet({
   // is instant.
   const PAGE_SIZE = 50;
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
-  const allEvents = useMemo(() => data?.events ?? [], [data]);
+  const allEvents = useMemo(() => {
+    const evs = data?.events ?? [];
+    return filterScope
+      ? evs.filter((e) => e.scope === filterScope)
+      : evs;
+  }, [data, filterScope]);
   const hiddenCount = Math.max(0, allEvents.length - visibleCount);
   const items = useMemo(
     () => buildItems(allEvents.slice(-visibleCount)),
@@ -368,6 +416,9 @@ export function ActivityLogSheet({
                               onPreviewEmail={(resendId, subject) =>
                                 setPreviewEmail({ resendId, subject })
                               }
+                              onDeleteNote={(noteId) =>
+                                setDeleteNoteId(noteId)
+                              }
                             />
                           </MessageScrollerItem>
                         )
@@ -385,38 +436,36 @@ export function ActivityLogSheet({
               the same endpoint as the Messages sheet, then the
               outbound message appears in the stream like any other. */}
           <div className="space-y-2 border-t bg-muted/20 px-4 py-3">
-            <div className="flex items-center gap-2">
-              {/* Segmented Note | Text toggle — with only two modes a
-                  dropdown was two clicks for a binary choice. */}
-              <div className="inline-flex rounded-md border bg-white p-0.5">
-                {COMPOSE_CATEGORIES.map((c) => (
-                  <button
-                    key={c.key}
-                    type="button"
-                    aria-pressed={category === c.key}
-                    onClick={() => setCategory(c.key)}
-                    className={cn(
-                      "inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium transition-colors",
-                      category === c.key
-                        ? "bg-foreground text-background"
-                        : "text-muted-foreground hover:text-foreground"
-                    )}
-                  >
-                    {c.key === "text" ? (
-                      <MessageSquareText className="size-3" />
-                    ) : (
-                      <NotebookPen className="size-3" />
-                    )}
-                    {c.key === "text" ? "Text" : "Note"}
-                  </button>
-                ))}
-              </div>
-              {contextLabel ? (
-                <span className="truncate text-[11px] text-muted-foreground">
-                  About {contextLabel}
-                </span>
-              ) : null}
+            {/* Segmented Note | Text toggle — full width, split 50/50
+                (user request). */}
+            <div className="grid w-full grid-cols-2 rounded-md border bg-white p-0.5">
+              {COMPOSE_CATEGORIES.map((c) => (
+                <button
+                  key={c.key}
+                  type="button"
+                  aria-pressed={category === c.key}
+                  onClick={() => setCategory(c.key)}
+                  className={cn(
+                    "inline-flex items-center justify-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium transition-colors",
+                    category === c.key
+                      ? "bg-foreground text-background"
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  {c.key === "text" ? (
+                    <MessageSquareText className="size-3" />
+                  ) : (
+                    <NotebookPen className="size-3" />
+                  )}
+                  {c.key === "text" ? "Text" : "Note"}
+                </button>
+              ))}
             </div>
+            {contextLabel ? (
+              <p className="truncate text-[11px] text-muted-foreground">
+                About {contextLabel}
+              </p>
+            ) : null}
             {textMode && recipientLoaded && recipient?.optedOut ? (
               <Marker className="text-amber-600">
                 <MarkerIcon>
@@ -492,6 +541,37 @@ export function ActivityLogSheet({
         preview={previewEmail}
         onClose={() => setPreviewEmail(null)}
       />
+
+      {/* Note-delete warning modal */}
+      <AlertDialog
+        open={deleteNoteId !== null}
+        onOpenChange={(o) => !deletingNote && !o && setDeleteNoteId(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this note?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Removes it from the family&rsquo;s timeline for everyone.
+              This can&rsquo;t be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deletingNote}>
+              Keep note
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={deletingNote}
+              className="bg-red-600 hover:bg-red-700"
+              onClick={(e) => {
+                e.preventDefault();
+                void deleteNote();
+              }}
+            >
+              {deletingNote ? "Deleting…" : "Delete note"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }
@@ -609,11 +689,19 @@ function SystemRow({ event }: { event: ActivityEvent }) {
 function BubbleRow({
   event,
   onPreviewEmail,
+  onDeleteNote,
 }: {
   event: ActivityEvent;
   onPreviewEmail: (resendId: string, subject: string) => void;
+  /** Only real admin notes (id `note-<n>`) are deletable — derived
+   *  legacy notes in the stream aren't. */
+  onDeleteNote: (noteId: number) => void;
 }) {
   const isNote = event.kind === "note";
+  const deletableNoteId =
+    isNote && /^note-(\d+)$/.test(event.id)
+      ? Number(event.id.slice(5))
+      : null;
   const isEmail = event.kind === "email";
   const failed =
     event.status === "failed" || event.status === "undelivered";
@@ -682,6 +770,20 @@ function BubbleRow({
                 }
               >
                 View full email
+              </button>
+            </>
+          ) : null}
+          {/* Subtle footer delete for admin notes — confirmed via the
+              warning modal owned by the sheet. */}
+          {deletableNoteId !== null ? (
+            <>
+              &nbsp;·&nbsp;
+              <button
+                type="button"
+                className="underline underline-offset-2 hover:text-destructive"
+                onClick={() => onDeleteNote(deletableNoteId)}
+              >
+                Delete
               </button>
             </>
           ) : null}

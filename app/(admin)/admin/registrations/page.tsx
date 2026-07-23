@@ -349,8 +349,21 @@ export default function RegistrationsPage() {
       sortable: true,
       searchable: true,
       width: "w-[20%]",
+      // Name click = full registration page; the ROW click opens the
+      // activity sheet, so this stops propagation.
       render: (row) => (
-        <span className="block truncate font-medium">{row.family_name}</span>
+        <button
+          type="button"
+          className="block max-w-full truncate text-left font-medium hover:underline"
+          onClick={(e) => {
+            e.stopPropagation();
+            router.push(
+              `/admin/registrations/${row.family_id}?yearId=${row.year_id}`
+            );
+          }}
+        >
+          {row.family_name}
+        </button>
       ),
     },
     {
@@ -369,30 +382,6 @@ export default function RegistrationsPage() {
           </span>
         </span>
       ),
-    },
-    {
-      key: "latest_activity",
-      header: "Latest Activity",
-      searchable: true,
-      width: "w-[18%]",
-      accessor: (row) =>
-        latestByFamily[String(row.family_id)]?.body ?? "",
-      render: (row) => {
-        const latest = latestByFamily[String(row.family_id)];
-        return latest ? (
-          <span
-            className="block truncate text-muted-foreground"
-            title={latest.body}
-          >
-            <span className="font-medium text-foreground">
-              {latest.kind === "text" ? "Text: " : "Note: "}
-            </span>
-            {latest.body}
-          </span>
-        ) : (
-          <span className="text-muted-foreground/60">—</span>
-        );
-      },
     },
     {
       key: "sections_complete",
@@ -463,9 +452,33 @@ export default function RegistrationsPage() {
         return at ? (
           <span
             title={`Records requested ${new Date(at).toLocaleDateString()}`}
-            className="inline-flex items-center rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-violet-800"
+            className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-800"
           >
             Requested
+          </span>
+        ) : (
+          <span className="text-muted-foreground/60">—</span>
+        );
+      },
+    },
+    {
+      key: "latest_activity",
+      header: "Latest Activity",
+      searchable: true,
+      width: "w-[18%]",
+      accessor: (row) =>
+        latestByFamily[String(row.family_id)]?.body ?? "",
+      render: (row) => {
+        const latest = latestByFamily[String(row.family_id)];
+        return latest ? (
+          <span
+            className="block truncate text-muted-foreground"
+            title={latest.body}
+          >
+            <span className="font-medium text-foreground">
+              {latest.kind === "text" ? "Text: " : "Note: "}
+            </span>
+            {latest.body}
           </span>
         ) : (
           <span className="text-muted-foreground/60">—</span>
@@ -592,11 +605,7 @@ export default function RegistrationsPage() {
             }
             error={error}
             columns={columns}
-            onRowClick={(row) =>
-              router.push(
-                `/admin/registrations/${row.family_id}?yearId=${row.year_id}`
-              )
-            }
+            onRowClick={(row) => setActivityFamily(row.family_id)}
           />
           <RegistrationsGroup
             search={search}
@@ -612,11 +621,7 @@ export default function RegistrationsPage() {
             }
             error={error}
             columns={columns}
-            onRowClick={(row) =>
-              router.push(
-                `/admin/registrations/${row.family_id}?yearId=${row.year_id}`
-              )
-            }
+            onRowClick={(row) => setActivityFamily(row.family_id)}
           />
           <RegistrationsGroup
             search={search}
@@ -632,11 +637,7 @@ export default function RegistrationsPage() {
             }
             error={error}
             columns={columns}
-            onRowClick={(row) =>
-              router.push(
-                `/admin/registrations/${row.family_id}?yearId=${row.year_id}`
-              )
-            }
+            onRowClick={(row) => setActivityFamily(row.family_id)}
           />
           <RegistrationsGroup
             search={search}
@@ -652,11 +653,7 @@ export default function RegistrationsPage() {
             }
             error={error}
             columns={columns}
-            onRowClick={(row) =>
-              router.push(
-                `/admin/registrations/${row.family_id}?yearId=${row.year_id}`
-              )
-            }
+            onRowClick={(row) => setActivityFamily(row.family_id)}
           />
         </div>
       )}

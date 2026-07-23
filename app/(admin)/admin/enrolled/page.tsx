@@ -28,9 +28,17 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { formatRelativeShort } from "@/lib/format-note-time";
+import { formatUSPhone } from "@/lib/phone";
 import { EnrolledExportDialog } from "@/components/admin/enrolled-export-dialog";
 import type { EnrolledStudentRow } from "@/app/api/admin/enrolled/route";
 
@@ -168,6 +176,8 @@ export default function EnrolledStudentsPage() {
   // Page-level search — ONE bar under the header filters both roster
   // cards (enrolled + unenrolled) at once.
   const [search, setSearch] = useState("");
+  // Row-click quick-detail sheet (contact info + required documents).
+  const [sheetRow, setSheetRow] = useState<EnrolledStudentRow | null>(null);
 
   const columns: ColumnDef<EnrolledStudentRow>[] = [
     {
@@ -176,10 +186,21 @@ export default function EnrolledStudentsPage() {
       sortable: true,
       searchable: true,
       width: "w-[26%]",
+      // Name click = full student page; the ROW click opens the
+      // quick-detail sheet, so this stops propagation.
       render: (row) => (
-        <span className="block truncate font-medium">
+        <button
+          type="button"
+          className="block max-w-full truncate text-left font-medium hover:underline"
+          onClick={(e) => {
+            e.stopPropagation();
+            router.push(
+              `/admin/enrolled/${row.student_id}?yearId=${row.year_id}`
+            );
+          }}
+        >
           {row.student_full_name}
-        </span>
+        </button>
       ),
     },
     {
@@ -319,6 +340,20 @@ export default function EnrolledStudentsPage() {
           }}
         />
       ) : null}
+
+      {/* Row-click quick detail — contact info + required documents. */}
+      {sheetRow ? (
+        <StudentDetailSheet
+          key={sheetRow.student_id}
+          row={sheetRow}
+          onClose={() => setSheetRow(null)}
+          onOpenFull={() => {
+            router.push(
+              `/admin/enrolled/${sheetRow.student_id}?yearId=${sheetRow.year_id}`
+            );
+          }}
+        />
+      ) : null}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold">
@@ -338,27 +373,25 @@ export default function EnrolledStudentsPage() {
             details.
           </p>
         </div>
-        {/* Export to XLSX — opens a modal to pick filename, columns,
-            and which students (enrolled/unenrolled × community/
-            residential). Only shown once a year is selected. */}
-        {yearId ? (
+      </div>
+
+      {/* Search + export — one full-width row under the header,
+          spanning the same width as the roster cards below. The
+          search filters both cards. */}
+      {yearId ? (
+        <div className="flex items-center gap-2">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground/60" />
+            <Input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search enrolled students…"
+              className="pl-9 bg-white"
+            />
+          </div>
           <EnrolledExportDialog
             yearId={Number(yearId)}
             yearName={schoolYear?.year_name}
-          />
-        ) : null}
-      </div>
-
-      {/* Search — full-width row under the header, spanning the same
-          width as the roster cards below. Filters both cards. */}
-      {yearId ? (
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground/60" />
-          <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search enrolled students…"
-            className="pl-9 bg-white"
           />
         </div>
       ) : null}
@@ -395,11 +428,7 @@ export default function EnrolledStudentsPage() {
             totalCount={enrolledRows.length}
             search={search}
             emptyLabel="No students officially enrolled for this year yet."
-            onRowClick={(row) =>
-              router.push(
-                `/admin/enrolled/${row.student_id}?yearId=${row.year_id}`
-              )
-            }
+            onRowClick={(row) => setSheetRow(row)}
           />
           {/* Unenrolled group — students who were officially
               enrolled at some point and have since been unenrolled
@@ -418,11 +447,7 @@ export default function EnrolledStudentsPage() {
               totalCount={unenrolledRows.length}
               search={search}
               emptyLabel="No students in this bucket."
-              onRowClick={(row) =>
-                router.push(
-                  `/admin/enrolled/${row.student_id}?yearId=${row.year_id}`
-                )
-              }
+              onRowClick={(row) => setSheetRow(row)}
             />
           ) : null}
         </div>
@@ -671,4 +696,179 @@ function formatPdStatus(status: string): string {
   const cleaned = status.replace(/^document\./, "").replace(/_/g, " ");
   if (!cleaned) return status;
   return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+}
+
+/**
+ * Row-click quick detail — the student's contact essentials and the
+ * four required documents, without leaving the roster. The student
+ * NAME in the table (and the button here) goes to the full page.
+ */
+function StudentDetailSheet({
+  row,
+  onClose,
+  onOpenFull,
+}: {
+  row: EnrolledStudentRow;
+  onClose: () => void;
+  onOpenFull: () => void;
+}) {
+  const docs = [
+    {
+      label: "Birth certificate",
+      submitted: row.doc_birth_certificate_submitted,
+      approved: row.doc_birth_certificate_approved,
+    },
+    {
+      label: "School health form",
+      submitted: row.doc_school_health_form_submitted,
+      approved: row.doc_school_health_form_approved,
+    },
+    {
+      label: "Transcripts",
+      submitted: row.doc_transcripts_submitted,
+      approved: row.doc_transcripts_approved,
+    },
+    {
+      label: "Immunization forms",
+      submitted: row.doc_immunization_submitted,
+      approved: row.doc_immunization_approved,
+    },
+  ];
+  const waiverStatus = (row.liability_waiver_status ?? "")
+    .toString()
+    .toLowerCase();
+  const waiverSigned =
+    Boolean(row.liability_waiver_pdf_url) ||
+    waiverStatus === "completed" ||
+    waiverStatus === "signed" ||
+    waiverStatus === "document.completed";
+
+  return (
+    <Sheet open onOpenChange={(o) => !o && onClose()}>
+      <SheetContent
+        side="right"
+        className="flex w-full flex-col gap-0 overflow-y-auto overscroll-contain p-0 sm:max-w-lg"
+      >
+        <SheetHeader className="border-b px-4 py-3">
+          <SheetTitle className="text-base">
+            {row.student_full_name}
+          </SheetTitle>
+          <SheetDescription className="text-xs">
+            {row.grade_level?.trim() || row.student_grade || "No grade set"}
+            {" · "}
+            {row.family_name}
+          </SheetDescription>
+        </SheetHeader>
+
+        <div className="space-y-5 px-4 py-4">
+          <section className="space-y-2.5">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Contact
+            </h3>
+            <SheetDetailRow label="Family" value={row.family_name} />
+            <SheetDetailRow
+              label="Primary parent"
+              value={row.primary_name}
+            />
+            <SheetDetailRow
+              label="Email"
+              value={
+                row.primary_email ? (
+                  <a
+                    href={`mailto:${row.primary_email}`}
+                    className="hover:underline"
+                  >
+                    {row.primary_email}
+                  </a>
+                ) : null
+              }
+            />
+            <SheetDetailRow
+              label="Phone"
+              value={
+                row.primary_phone ? (
+                  <a
+                    href={`tel:${row.primary_phone}`}
+                    className="tabular-nums hover:underline"
+                  >
+                    {formatUSPhone(row.primary_phone) || row.primary_phone}
+                  </a>
+                ) : null
+              }
+            />
+            <SheetDetailRow
+              label="Date of birth"
+              value={row.student_dob}
+            />
+          </section>
+
+          <section className="space-y-2.5 border-t pt-4">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Required documents
+            </h3>
+            <ul className="space-y-1.5">
+              {docs.map((d) => (
+                <li
+                  key={d.label}
+                  className="flex items-center justify-between gap-3 text-sm"
+                >
+                  <span>{d.label}</span>
+                  {d.approved ? (
+                    <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-800">
+                      Approved
+                    </span>
+                  ) : d.submitted ? (
+                    <span className="inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-blue-800">
+                      Submitted
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                      Missing
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+            <SheetDetailRow
+              label="Liability waiver"
+              value={
+                waiverSigned ? (
+                  <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-800">
+                    Signed
+                  </span>
+                ) : (
+                  row.liability_waiver_status || "Not sent"
+                )
+              }
+            />
+          </section>
+
+          <div className="border-t pt-4">
+            <Button size="sm" className="w-full" onClick={onOpenFull}>
+              Open full student page
+            </Button>
+          </div>
+        </div>
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+function SheetDetailRow({
+  label,
+  value,
+}: {
+  label: string;
+  value: React.ReactNode | null;
+}) {
+  return (
+    <div className="flex items-baseline justify-between gap-3 text-sm">
+      <span className="shrink-0 text-muted-foreground">{label}</span>
+      <span className="min-w-0 truncate text-right font-medium">
+        {value || (
+          <span className="font-normal text-muted-foreground">—</span>
+        )}
+      </span>
+    </div>
+  );
 }

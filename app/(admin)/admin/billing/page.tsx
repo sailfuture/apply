@@ -10,6 +10,7 @@ import {
   ExternalLink,
   Search,
 } from "lucide-react";
+import { ActivityLogSheet } from "@/components/admin/activity-log-sheet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -81,6 +82,11 @@ export default function AdminBillingPage() {
   // year (not the search-filtered subset) — `exceljs` is lazy-loaded
   // inside the helper so it only ships on demand.
   const [exporting, setExporting] = useState(false);
+  // Row-click billing activity sheet — the stream filtered to Stripe
+  // subscription/invoice/payment events only.
+  const [billingActivityFamily, setBillingActivityFamily] = useState<
+    number | null
+  >(null);
   async function handleExport() {
     if (rows.length === 0 || exporting) return;
     setExporting(true);
@@ -134,6 +140,22 @@ export default function AdminBillingPage() {
           </Button>
         </div>
       </div>
+
+      {/* Row-click billing activity — the family stream filtered to
+          Stripe subscription/invoice/payment events. */}
+      {billingActivityFamily && yearId ? (
+        <ActivityLogSheet
+          familyId={billingActivityFamily}
+          yearId={Number(yearId)}
+          open
+          filterScope="billing"
+          noteSection="billing"
+          contextLabel="Billing"
+          onOpenChange={(o) => {
+            if (!o) setBillingActivityFamily(null);
+          }}
+        />
+      ) : null}
 
       {error ? (
         <div className="rounded-lg border border-border bg-muted/30 p-4 text-sm text-muted-foreground">
@@ -205,10 +227,13 @@ export default function AdminBillingPage() {
           {rows.length > 0 ? (
             <BillingTable
               rows={rows}
-              onRowClick={(row) =>
+              onOpenFamily={(row) =>
                 router.push(
                   `/admin/families/${row.family_id}/billing?yearId=${row.year_id}`
                 )
+              }
+              onRowClick={(row) =>
+                setBillingActivityFamily(row.family_id)
               }
             />
           ) : null}
@@ -375,9 +400,13 @@ function NotStartedTable({
 function BillingTable({
   rows,
   onRowClick,
+  onOpenFamily,
 }: {
   rows: BillingRow[];
+  /** Row click — opens the billing-scoped activity sheet. */
   onRowClick: (row: BillingRow) => void;
+  /** Family-name click — navigates to the family's billing page. */
+  onOpenFamily: (row: BillingRow) => void;
 }) {
   const [search, setSearch] = useState("");
   const visible = useMemo(() => {
@@ -460,7 +489,18 @@ function BillingTable({
                   className="cursor-pointer"
                 >
                   <TableCell className="text-sm font-medium">
-                    {row.family_name}
+                    {/* Name click = full billing page; the ROW click
+                        opens the billing activity sheet. */}
+                    <button
+                      type="button"
+                      className="block max-w-full truncate text-left font-medium hover:underline"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onOpenFamily(row);
+                      }}
+                    >
+                      {row.family_name}
+                    </button>
                   </TableCell>
                   <TableCell className="text-sm">
                     <span className="block truncate">
