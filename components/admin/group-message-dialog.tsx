@@ -556,13 +556,17 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
                               <span className="truncate text-sm font-medium">
                                 {c.name}
                               </span>
-                              {/* Inquiry interest stars — warm leads
-                                  pop without opening the inquiry. */}
-                              {c.type === "inquiry" &&
-                              (c.rating ?? 0) > 0 ? (
+                              {/* Inquiry interest stars — always
+                                  rendered so warm leads pop; unrated
+                                  rows show 5 muted stars. */}
+                              {c.type === "inquiry" ? (
                                 <span
                                   className="flex shrink-0 items-center gap-px"
-                                  aria-label={`${c.rating} of 5 stars`}
+                                  aria-label={
+                                    (c.rating ?? 0) > 0
+                                      ? `${c.rating} of 5 stars`
+                                      : "Not rated"
+                                  }
                                 >
                                   {[1, 2, 3, 4, 5].map((n) => (
                                     <Star

@@ -5,6 +5,36 @@ function getBaseUrl() {
   return BASE_URL;
 }
 
+/**
+ * GET with two retries + short backoff for the hot LIST accessors.
+ * Xano intermittently fails under the burst load our fan-out routes
+ * generate (rate limiting / transient 5xx); a single failed scan used
+ * to degrade whole responses (e.g. every inbox name falling back to
+ * "Family #id" until the next poll). Retrying smooths the blips.
+ * Only used for idempotent reads — never writes.
+ */
+async function fetchRetry(url: string): Promise<Response> {
+  let last: Response | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) {
+      await new Promise((r) => setTimeout(r, 250 * attempt));
+    }
+    try {
+      const res = await fetch(url, { cache: "no-store" });
+      if (res.ok) return res;
+      last = res;
+      // 4xx other than 429 won't get better on retry.
+      if (res.status < 500 && res.status !== 429) return res;
+    } catch {
+      // Network-level failure — retry.
+    }
+  }
+  if (last) return last;
+  // All attempts threw — surface one real error for the caller's
+  // existing catch handling.
+  return fetch(url, { cache: "no-store" });
+}
+
 /** Host root for Xano — strips the `/api:<group>` suffix from
  *  `XANO_API_BASE_URL`. Useful when a query lives on a different API
  *  group than the one the base is pointed at; the caller can append
@@ -2189,9 +2219,7 @@ export const xano = {
     },
 
     async getAll(): Promise<XanoParent[]> {
-      const res = await fetch(`${getBaseUrl()}/registration_parents`, {
-        cache: "no-store",
-      });
+      const res = await fetchRetry(`${getBaseUrl()}/registration_parents`);
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
       return res.json();
     },
@@ -2294,9 +2322,7 @@ export const xano = {
     },
 
     async getAll(): Promise<XanoFamily[]> {
-      const res = await fetch(`${getBaseUrl()}/registration_families`, {
-        cache: "no-store",
-      });
+      const res = await fetchRetry(`${getBaseUrl()}/registration_families`);
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
       return res.json();
     },
@@ -2804,9 +2830,7 @@ export const xano = {
 
   schoolYears: {
     async getAll(): Promise<XanoSchoolYear[]> {
-      const res = await fetch(`${getBaseUrl()}/registration_school_years`, {
-        cache: "no-store",
-      });
+      const res = await fetchRetry(`${getBaseUrl()}/registration_school_years`);
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
       return res.json();
     },
@@ -5267,9 +5291,7 @@ export const xano = {
      *  like the other read accessors. */
     async getAll(): Promise<XanoWebsiteLiabilityWaiver[]> {
       try {
-        const res = await fetch(`${getBaseUrl()}/website_liability_waiver`, {
-          cache: "no-store",
-        });
+        const res = await fetchRetry(`${getBaseUrl()}/website_liability_waiver`);
         if (!res.ok) return [];
         const items: XanoWebsiteLiabilityWaiver[] = await res.json();
         return Array.isArray(items) ? items : [];
@@ -5281,9 +5303,7 @@ export const xano = {
 
   summerCamp: {
     async getAll(): Promise<XanoSummerCampInquiry[]> {
-      const res = await fetch(`${getBaseUrl()}/registration_summer_camp`, {
-        cache: "no-store",
-      });
+      const res = await fetchRetry(`${getBaseUrl()}/registration_summer_camp`);
       if (!res.ok) return [];
       return res.json();
     },
@@ -5307,7 +5327,7 @@ export const xano = {
 
   inquiries: {
     async getAll(): Promise<XanoInquiry[]> {
-      const res = await fetch(`${getBaseUrl()}/registration_inquiry`, { cache: "no-store" });
+      const res = await fetchRetry(`${getBaseUrl()}/registration_inquiry`);
       if (!res.ok) return [];
       return res.json();
     },

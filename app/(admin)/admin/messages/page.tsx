@@ -29,6 +29,17 @@ const STAGE_FILTERS: Array<{ value: ConversationStage | "all"; label: string }> 
   ];
 
 /**
+ * Name resilience: when an upstream blip degrades one poll's name
+ * lookups, the API falls back to "Family #58"-style placeholders —
+ * which made names flicker on and off between refreshes. This per-tab
+ * cache remembers the last REAL name per contact so a placeholder
+ * never replaces a name we've already shown. Module-level (not a ref)
+ * because the repo lint forbids ref reads during render; a display
+ * cache is exactly the kind of state that's safe to share per tab.
+ */
+const NAME_CACHE = new Map<string, string>();
+
+/**
  * Global SMS inbox — two panes: every family conversation on the left
  * (newest first, with a blue dot when the family texted last and we
  * haven't replied), the selected family's two-way thread on the right.
@@ -47,7 +58,21 @@ export default function AdminMessagesPage() {
     adminFetcher,
     { refreshInterval: 20_000 }
   );
-  const conversations = useMemo(() => data?.conversations ?? [], [data]);
+  const conversations = useMemo(() => {
+    const raw = data?.conversations ?? [];
+    return raw.map((c) => {
+      const cacheKey = `${c.contactType}:${c.contactId}`;
+      const isPlaceholder = /^(Family|Inquiry|Camp|Visit) #\d+$/.test(
+        c.name
+      );
+      if (!isPlaceholder) {
+        NAME_CACHE.set(cacheKey, c.name);
+        return c;
+      }
+      const cached = NAME_CACHE.get(cacheKey);
+      return cached ? { ...c, name: cached } : c;
+    });
+  }, [data]);
 
   const [stageFilter, setStageFilter] = useState<ConversationStage | "all">(
     "all"
