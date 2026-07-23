@@ -3480,7 +3480,7 @@ export default function ScholarshipPage() {
               </p>
               <p className="text-sm text-muted-foreground mb-3">
                 Once you&apos;ve confirmed the application, please sign below and we&apos;ll proceed with the final review of your tuition amount. Should you have any questions or concerns, please don&apos;t hesitate to reach out at{" "}
-                <a href="mailto:tward@sailfuture.org" className="text-primary underline">tward@sailfuture.org</a>
+                <a href="mailto:admissions@sailfuture.org" className="text-primary underline">admissions@sailfuture.org</a>
                 {" "}or{" "}
                 <a href="tel:+17279001436" className="text-primary underline">(727) 900-1436</a>
               </p>
