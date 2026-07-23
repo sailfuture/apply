@@ -124,19 +124,31 @@ export async function GET(
     // (manual out-of-cycle) → the most recent wins.
     const txByMonthKey = indexTransactionsByMonth(transactions);
 
-    const enrichedSlots = slots.map((slot) => {
+    // Only the NEXT billing cycle is genuinely "scheduled": Stripe
+    // materializes exactly one upcoming invoice per subscription, and
+    // months beyond it don't exist in any form yet. So with a live
+    // subscription, the earliest invoice-less slot that hasn't fully
+    // passed gets the Scheduled pill; everything after it stays
+    // Not started until its cycle arrives.
+    let nextScheduledIdx = -1;
+    if (hasLiveSubscription) {
+      const now = Date.now();
+      nextScheduledIdx = slots.findIndex((slot) => {
+        const k = monthKey(new Date(slot.periodStart));
+        return !txByMonthKey.get(k) && slot.periodEndExclusive > now;
+      });
+    }
+
+    const enrichedSlots = slots.map((slot, i) => {
       const k = monthKey(new Date(slot.periodStart));
       const tx = txByMonthKey.get(k) ?? null;
       if (!tx) {
         return {
           ...slot,
-          // No invoice yet: with a live subscription on file that
-          // month is SCHEDULED (Stripe will bill it — e.g. a
-          // future-dated start via trial_end); without one it truly
-          // hasn't started.
-          status: hasLiveSubscription
-            ? ("scheduled" as const)
-            : ("not_started" as const),
+          status:
+            i === nextScheduledIdx
+              ? ("scheduled" as const)
+              : ("not_started" as const),
           invoice: null,
         };
       }
