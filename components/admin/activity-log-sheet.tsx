@@ -660,6 +660,17 @@ function BubbleRow({
             <span className="text-destructive">Failed&nbsp;·&nbsp;</span>
           ) : null}
           {timeLabel(event.ts)}
+          {/* First-open stamp from Resend's open tracking. Pixel-based
+              — "Viewed" means probably viewed; absence means unknown,
+              not unread. */}
+          {isEmail && event.openedAt ? (
+            <span
+              className="text-emerald-600"
+              title={`First opened ${new Date(event.openedAt).toLocaleString()}`}
+            >
+              &nbsp;·&nbsp;Viewed {shortWhen(event.openedAt)}
+            </span>
+          ) : null}
           {isEmail && event.resendId ? (
             <>
               &nbsp;·&nbsp;

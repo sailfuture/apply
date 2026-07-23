@@ -190,6 +190,9 @@ export async function GET(req: NextRequest) {
         // Lets the sheet's "View email" fetch the exact sent content
         // from Resend via /api/admin/email-preview.
         resendId: e.resend_id ?? undefined,
+        // First-open stamp from the Resend webhook (open tracking) —
+        // renders as "Viewed …" in the bubble footer.
+        openedAt: e.opened_at ?? undefined,
       });
     }
 
@@ -555,6 +558,10 @@ export interface ActivityEvent {
   isGroup?: boolean;
   /** Emails only — Resend message id for the full-content preview. */
   resendId?: string;
+  /** Emails only — unix-ms of the FIRST open reported by Resend's
+   *  open tracking (webhook-stamped). Absent = no open recorded,
+   *  which means "unknown", not "unread" (pixel tracking). */
+  openedAt?: number;
   /** Set when the event is about one student. */
   studentName?: string;
   /** Notes only — raw category bucket. */

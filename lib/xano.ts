@@ -635,6 +635,10 @@ export interface XanoEmailNotification {
   status: "sent" | "failed" | "dry_run" | string;
   resend_id: string | null;
   error_message: string | null;
+  /** Unix-ms of the FIRST `email.opened` event from Resend's open
+   *  tracking (stamped by /api/webhooks/resend). Null/absent = no
+   *  open recorded. Optional — legacy rows predate the column. */
+  opened_at?: number | null;
 }
 
 /** Single volunteer-hour entry for a family. Rows are created by admin
@@ -3793,6 +3797,26 @@ export const xano = {
    * See `XanoEmailNotification` interface for the table schema.
    */
   emailNotifications: {
+    /** Stamp webhook-reported state (e.g. `opened_at`) onto one audit
+     *  row. */
+    async update(
+      id: number,
+      patch: Partial<XanoEmailNotification>
+    ): Promise<XanoEmailNotification> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_email_notifications/${id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch),
+        }
+      );
+      if (!res.ok) {
+        throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      }
+      return res.json();
+    },
+
     /** Every audit row — bulk consumers (records-request tags on the
      *  registrations list) filter by template in code. */
     async getAll(): Promise<XanoEmailNotification[]> {
