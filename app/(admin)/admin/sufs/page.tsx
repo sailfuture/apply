@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { toast } from "sonner";
-import { Activity, Download, Inbox } from "lucide-react";
+import { Download, Inbox } from "lucide-react";
 import { DataTable, type ColumnDef } from "@/components/admin/data-table";
 import { ActivityLogSheet } from "@/components/admin/activity-log-sheet";
 import { Button } from "@/components/ui/button";
@@ -260,9 +260,9 @@ function downloadTextFile(filename: string, text: string, mime: string) {
  * ordering (see the route). The post-save revalidation then lands the
  * server's audit stamps without visibly reshuffling anything.
  *
- * Deliberately no row-click navigation — rows carry interactive
- * controls and DataTable's `onRowClick` fires from the `<tr>` without
- * stopping propagation. The student name is an explicit link instead.
+ * Row click opens the family's activity sheet. The interactive cells
+ * (status checkboxes, the student-name link) stop propagation so
+ * toggling a pipeline flag or navigating never opens the sheet.
  */
 export default function SufsPage() {
   const searchParams = useSearchParams();
@@ -404,6 +404,7 @@ export default function SufsPage() {
       <Link
         href={`/admin/registrations/${row.family_id}?yearId=${row.year_id}`}
         className="block min-w-0 hover:underline"
+        onClick={(e) => e.stopPropagation()}
       >
         <span className="block truncate font-medium">
           {row.student_full_name}
@@ -495,31 +496,18 @@ export default function SufsPage() {
     },
   });
 
-  // Replaces the old inline note field — comments now live on the
-  // family activity timeline (notes table), opened per-row via the
-  // shared controlled sheet. The legacy packet note still surfaces
-  // inside the stream as a timeline entry.
-  const activityCol = (w: string): ColumnDef<SufsRow> => ({
-    key: "activity",
-    header: "Activity",
-    align: "center",
+  // Incoming grade level (the application's current_grade) as its own
+  // column. The old per-row Activity BUTTON column is gone — clicking
+  // the row itself opens the activity sheet now.
+  const gradeCol = (w: string): ColumnDef<SufsRow> => ({
+    key: "student_grade",
+    header: "Grade",
+    sortable: true,
     width: w,
     render: (row) => (
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        className="bg-white h-7 px-2"
-        onClick={() => setActivityRow(row)}
-        aria-label={`Open activity log for ${row.student_full_name}`}
-        title={
-          row.sufs_enrollment_request_notes
-            ? `Open activity — legacy note: ${row.sufs_enrollment_request_notes}`
-            : "Notes, texts, and account milestones"
-        }
-      >
-        <Activity className="size-3.5" />
-      </Button>
+      <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+        {row.student_grade?.trim() || "—"}
+      </span>
     ),
   });
 
@@ -550,6 +538,7 @@ export default function SufsPage() {
       return (
         <span className="inline-flex items-center" title={title}>
           <Checkbox
+            onClick={(e) => e.stopPropagation()}
             checked={sent}
             disabled={savingId === row.id || row.packet_id == null}
             onCheckedChange={(v) => toggleRequestSent(row, v === true)}
@@ -585,6 +574,7 @@ export default function SufsPage() {
       return (
         <span className="inline-flex items-center" title={title}>
           <Checkbox
+            onClick={(e) => e.stopPropagation()}
             checked={confirmed}
             disabled={savingId === row.id || row.packet_id == null}
             onCheckedChange={(v) => toggleParentConfirmed(row, v === true)}
@@ -648,6 +638,7 @@ export default function SufsPage() {
           title={title}
         >
           <Checkbox
+            onClick={(e) => e.stopPropagation()}
             checked={paid}
             disabled={savingId === row.id || row.packet_id == null}
             onCheckedChange={(v) => toggleQuarter(row, q, v === true)}
@@ -684,34 +675,34 @@ export default function SufsPage() {
 
   const notSentColumns: ColumnDef<SufsRow>[] = [
     studentCol("w-[26%]"),
+    gradeCol("w-[10%]"),
     stageCol("w-[12%]"),
     awardIdCol("w-[14%]"),
-    awardTypeCol("w-[20%]"),
-    requestSentCol("w-[14%]"),
-    activityCol("w-[14%]"),
+    awardTypeCol("w-[22%]"),
+    requestSentCol("w-[16%]"),
   ];
   const pendingColumns: ColumnDef<SufsRow>[] = [
     studentCol("w-[20%]"),
+    gradeCol("w-[9%]"),
     stageCol("w-[11%]"),
-    awardIdCol("w-[11%]"),
-    awardTypeCol("w-[14%]"),
+    awardIdCol("w-[12%]"),
+    awardTypeCol("w-[15%]"),
     requestSentCol("w-[10%]"),
     requestedAtCol("w-[9%]"),
-    parentConfirmedCol("w-[13%]"),
-    activityCol("w-[12%]"),
+    parentConfirmedCol("w-[14%]"),
   ];
   const confirmedColumns: ColumnDef<SufsRow>[] = [
     studentCol("w-[16%]"),
+    gradeCol("w-[8%]"),
     stageCol("w-[10%]"),
-    awardTypeCol("w-[11%]"),
-    parentConfirmedCol("w-[9%]"),
+    awardTypeCol("w-[12%]"),
+    parentConfirmedCol("w-[10%]"),
     requestedAtCol("w-[7%]"),
     confirmedAtCol("w-[7%]"),
-    quarterCol(1, "w-[8%]"),
-    quarterCol(2, "w-[8%]"),
-    quarterCol(3, "w-[8%]"),
-    quarterCol(4, "w-[8%]"),
-    activityCol("w-[10%]"),
+    quarterCol(1, "w-[7%]"),
+    quarterCol(2, "w-[7%]"),
+    quarterCol(3, "w-[7%]"),
+    quarterCol(4, "w-[7%]"),
   ];
 
   // Export the FULL year dataset (`all`), not the filtered view — a
@@ -812,6 +803,7 @@ export default function SufsPage() {
       ) : (
         <div className="space-y-8">
           <SufsGroup
+          onRowClick={(row) => setActivityRow(row)}
             title="Enrollment Request Not Sent"
             description="Registration confirmed — the Step Up enrollment request hasn't been sent yet."
             dotColor="bg-red-500"
@@ -820,6 +812,7 @@ export default function SufsPage() {
             columns={notSentColumns}
           />
           <SufsGroup
+          onRowClick={(row) => setActivityRow(row)}
             title="Awaiting Parent Confirmation"
             description="Request sent — waiting on the parent to complete enrollment in the Step Up portal."
             dotColor="bg-amber-500"
@@ -828,6 +821,7 @@ export default function SufsPage() {
             columns={pendingColumns}
           />
           <SufsGroup
+          onRowClick={(row) => setActivityRow(row)}
             title="Enrollment Confirmed"
             description="Parent completed Step Up enrollment. Tick off each quarterly payment as it's confirmed."
             dotColor="bg-green-500"
@@ -848,6 +842,7 @@ function SufsGroup({
   isLoading,
   columns,
   dotColor,
+  onRowClick,
 }: {
   title: string;
   description: string;
@@ -858,6 +853,9 @@ function SufsGroup({
    *  red / amber / green mirror the Registrations page's group
    *  headers so the pipeline reads with the same color language. */
   dotColor: string;
+  /** Row click opens the family activity sheet (interactive cells —
+   *  checkboxes + the student link — stop propagation). */
+  onRowClick: (row: SufsRow) => void;
 }) {
   // Within-status grade grouping: 8th → 12th, with a trailing bucket
   // for rows whose application has no parseable incoming grade (so a
@@ -924,6 +922,7 @@ function SufsGroup({
                 columns={bucketColumns}
                 data={bucket.rows}
                 isLoading={false}
+                onRowClick={onRowClick}
               />
             </div>
           ))
