@@ -210,6 +210,9 @@ export async function GET(req: NextRequest) {
         optedOut,
         sendable: Boolean(e164) && !optedOut,
         outstanding: false,
+        // Admin's interest stars — shown on inquiry rows in the
+        // group composer so warm leads stand out.
+        rating: Number(i.interest_level) || 0,
       });
     }
 
@@ -359,6 +362,8 @@ export interface GroupContact {
   sendable: boolean;
   /** Families only — open/uncollectible balance for the year. */
   outstanding: boolean;
+  /** Inquiries only — admin's 1–5 interest stars (0 = unrated). */
+  rating?: number;
 }
 
 export interface GroupAudienceResponse {

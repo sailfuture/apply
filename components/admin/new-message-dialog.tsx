@@ -190,24 +190,27 @@ export function NewMessageDialog({
                               name: f.family_name,
                             })
                           }
-                          className="flex flex-col items-start gap-0.5 px-4 py-2"
+                          className="px-4 py-1.5"
                         >
-                          <span className="text-sm font-medium">
-                            {f.family_name}
+                          {/* Single-line row (user request): family ·
+                              parents · students, truncating right. */}
+                          <span className="block w-full truncate text-sm">
+                            <span className="font-medium">
+                              {f.family_name}
+                            </span>
+                            {parents ? (
+                              <span className="text-muted-foreground">
+                                {" "}
+                                · {parents}
+                              </span>
+                            ) : null}
+                            {f.student_names ? (
+                              <span className="text-muted-foreground">
+                                {" "}
+                                · {f.student_names}
+                              </span>
+                            ) : null}
                           </span>
-                          {parents ? (
-                            <span className="text-xs text-muted-foreground">
-                              {parents}
-                            </span>
-                          ) : null}
-                          {f.student_names ? (
-                            <span className="text-xs text-muted-foreground">
-                              {f.student_names.includes(",")
-                                ? "Students"
-                                : "Student"}
-                              : {f.student_names}
-                            </span>
-                          ) : null}
                         </CommandItem>
                       );
                     })}
@@ -226,14 +229,17 @@ export function NewMessageDialog({
                           onSelect={() =>
                             pick({ type: "inquiry", id: i.id, name })
                           }
-                          className="flex flex-col items-start gap-0.5 px-4 py-2"
+                          className="px-4 py-1.5"
                         >
-                          <span className="text-sm font-medium">{name}</span>
-                          {student ? (
-                            <span className="text-xs text-muted-foreground">
-                              Student: {student}
-                            </span>
-                          ) : null}
+                          <span className="block w-full truncate text-sm">
+                            <span className="font-medium">{name}</span>
+                            {student ? (
+                              <span className="text-muted-foreground">
+                                {" "}
+                                · {student}
+                              </span>
+                            ) : null}
+                          </span>
                         </CommandItem>
                       );
                     })}
@@ -252,14 +258,17 @@ export function NewMessageDialog({
                           onSelect={() =>
                             pick({ type: "camp", id: c.id, name })
                           }
-                          className="flex flex-col items-start gap-0.5 px-4 py-2"
+                          className="px-4 py-1.5"
                         >
-                          <span className="text-sm font-medium">{name}</span>
-                          {student ? (
-                            <span className="text-xs text-muted-foreground">
-                              Student: {student}
-                            </span>
-                          ) : null}
+                          <span className="block w-full truncate text-sm">
+                            <span className="font-medium">{name}</span>
+                            {student ? (
+                              <span className="text-muted-foreground">
+                                {" "}
+                                · {student}
+                              </span>
+                            ) : null}
+                          </span>
                         </CommandItem>
                       );
                     })}
@@ -276,14 +285,17 @@ export function NewMessageDialog({
                           onSelect={() =>
                             pick({ type: "visit", id: v.id, name })
                           }
-                          className="flex flex-col items-start gap-0.5 px-4 py-2"
+                          className="px-4 py-1.5"
                         >
-                          <span className="text-sm font-medium">{name}</span>
-                          {student ? (
-                            <span className="text-xs text-muted-foreground">
-                              Student: {student}
-                            </span>
-                          ) : null}
+                          <span className="block w-full truncate text-sm">
+                            <span className="font-medium">{name}</span>
+                            {student ? (
+                              <span className="text-muted-foreground">
+                                {" "}
+                                · {student}
+                              </span>
+                            ) : null}
+                          </span>
                         </CommandItem>
                       );
                     })}

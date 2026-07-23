@@ -1,9 +1,17 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
 import { toast } from "sonner";
-import { Link2, Loader2, Search, Send, UserRound, Users } from "lucide-react";
+import {
+  Link2,
+  Loader2,
+  Search,
+  Send,
+  Star,
+  UserRound,
+  Users,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -81,6 +89,16 @@ const STAGE_BADGE: Record<GroupStage, { label: string; className: string }> = {
     label: "Visit",
     className: "border-rose-200 bg-rose-50 text-rose-800",
   },
+};
+
+/** Section headings for the recipient list — one per contact TYPE, in
+ *  the order the audience endpoint sorts (families → inquiries → camp
+ *  → visits). */
+const TYPE_HEADING: Record<GroupContact["type"], string> = {
+  family: "Families",
+  inquiry: "Inquiries",
+  camp: "Summer camp",
+  visit: "Campus visits",
 };
 
 const GRADES = [8, 9, 10, 11, 12] as const;
@@ -501,11 +519,23 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
                 </div>
               ) : (
                 <ul className="divide-y">
-                  {filtered.map((c) => {
+                  {filtered.map((c, i) => {
                     const badge = STAGE_BADGE[c.stage];
                     const checked = selected.has(c.key);
+                    // Section header whenever the contact TYPE changes
+                    // — the list is already sorted families → inquiries
+                    // → camp → visits, so this yields one heading per
+                    // type (user request).
+                    const showTypeHeader =
+                      i === 0 || filtered[i - 1].type !== c.type;
                     return (
-                      <li key={c.key}>
+                      <Fragment key={c.key}>
+                        {showTypeHeader ? (
+                          <li className="sticky top-0 z-10 border-b bg-muted/70 px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground backdrop-blur">
+                            {TYPE_HEADING[c.type]}
+                          </li>
+                        ) : null}
+                        <li>
                         <label
                           className={cn(
                             "flex cursor-pointer items-start gap-3 px-3 py-2 hover:bg-muted/40",
@@ -526,6 +556,27 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
                               <span className="truncate text-sm font-medium">
                                 {c.name}
                               </span>
+                              {/* Inquiry interest stars — warm leads
+                                  pop without opening the inquiry. */}
+                              {c.type === "inquiry" &&
+                              (c.rating ?? 0) > 0 ? (
+                                <span
+                                  className="flex shrink-0 items-center gap-px"
+                                  aria-label={`${c.rating} of 5 stars`}
+                                >
+                                  {[1, 2, 3, 4, 5].map((n) => (
+                                    <Star
+                                      key={n}
+                                      className={cn(
+                                        "size-3",
+                                        n <= (c.rating ?? 0)
+                                          ? "fill-amber-400 text-amber-400"
+                                          : "text-muted-foreground/30"
+                                      )}
+                                    />
+                                  ))}
+                                </span>
+                              ) : null}
                               {c.outstanding ? (
                                 <span className="shrink-0 rounded-full border border-red-200 bg-red-50 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-red-700">
                                   Balance
@@ -551,7 +602,8 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
                             </span>
                           ) : null}
                         </label>
-                      </li>
+                        </li>
+                      </Fragment>
                     );
                   })}
                 </ul>
