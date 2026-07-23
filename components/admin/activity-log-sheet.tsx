@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import useSWR from "swr";
 import { toast } from "sonner";
 import {
@@ -224,6 +224,25 @@ export function ActivityLogSheet({
   const segments = body.length === 0 ? 0 : Math.ceil(body.length / 160);
   const composerBlocked = textMode && (!recipientLoaded || !canText);
 
+  // Keep the stream pinned to the BOTTOM when a note/text is added —
+  // without this the refetched list could land scrolled to the top.
+  // Double rAF so the new items have painted before we measure, then
+  // a smooth scroll for the snappy "it went in" feel.
+  const streamRef = useRef<HTMLDivElement>(null);
+  function scrollStreamToBottom() {
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        const viewport = streamRef.current?.querySelector<HTMLElement>(
+          '[data-slot="message-scroller-viewport"]'
+        );
+        viewport?.scrollTo({
+          top: viewport.scrollHeight,
+          behavior: "smooth",
+        });
+      })
+    );
+  }
+
   async function submit() {
     const text = body.trim();
     if (!text || saving) return;
@@ -252,6 +271,7 @@ export function ActivityLogSheet({
         // Refresh both caches: the stream (shows the outbound text)
         // and the shared messages cache (Messages sheet badge/thread).
         await Promise.all([mutate(), mutateMessages()]);
+        scrollStreamToBottom();
         toast.success("Text sent.");
       } else {
         const res = await fetch("/api/admin/notes", {
@@ -272,6 +292,7 @@ export function ActivityLogSheet({
         }
         setBody("");
         await mutate();
+        scrollStreamToBottom();
         toast.success(
           category === "other" ? "Note added." : "Logged to the timeline."
         );
@@ -358,7 +379,7 @@ export function ActivityLogSheet({
             </SheetDescription>
           </SheetHeader>
 
-          <div className="min-h-0 flex-1">
+          <div ref={streamRef} className="min-h-0 flex-1">
             {isLoading && !data ? (
               <div className="flex h-full items-center justify-center">
                 <Loader2 className="size-4 animate-spin text-muted-foreground" />
@@ -715,7 +736,12 @@ function BubbleRow({
         ? "secondary"
         : "default";
   return (
-    <Message align={align}>
+    // Quick fade/slide on mount — newly appended notes and texts pop
+    // in at the bottom instead of just appearing.
+    <Message
+      align={align}
+      className="animate-in fade-in-0 slide-in-from-bottom-1 duration-200"
+    >
       <MessageContent>
         <MessageHeader>
           {event.author || "Admin"}
