@@ -165,19 +165,12 @@ export function ActivityLogSheet({
   const { data, isLoading, mutate } = useSWR<ActivityResponse>(
     key,
     adminFetcher,
-    { refreshInterval: 30_000 }
+    // No focus revalidation: alt-tabbing back re-fired the whole
+    // 9-scan aggregate for every open sheet, which is exactly the
+    // burst load that trips upstream rate limits. The 30s poll (and
+    // explicit mutate() after composing) keep it fresh enough.
+    { refreshInterval: 30_000, revalidateOnFocus: false }
   );
-
-  // Recipient state for the Text compose mode — same endpoint (and
-  // same SWR cache entry) the Messages sheet uses, so opt-out and
-  // phone-number state can't disagree between the two surfaces.
-  // Fetched lazily with the sheet.
-  const { data: msgData, mutate: mutateMessages } = useSWR<MessagesResponse>(
-    open && familyId ? messagesKey(familyId) : null,
-    messagesFetcher
-  );
-  const recipient = msgData?.recipient ?? null;
-  const recipientLoaded = msgData !== undefined;
 
   // Email whose full sent content is being previewed (Resend id +
   // the subject for the dialog title while it loads).
@@ -220,6 +213,22 @@ export function ActivityLogSheet({
   const [saving, setSaving] = useState(false);
 
   const textMode = category === "text";
+
+  // Recipient state for the Text compose mode — same endpoint (and
+  // same SWR cache entry) the Messages sheet uses, so opt-out and
+  // phone-number state can't disagree between the two surfaces.
+  // DEFERRED until the composer is actually switched to Text: opening
+  // the sheet used to fire this second route (three more upstream
+  // scans) alongside the 9-scan activity aggregate, and that burst
+  // was most of the perceived open latency.
+  const { data: msgData, mutate: mutateMessages } = useSWR<MessagesResponse>(
+    open && familyId && textMode ? messagesKey(familyId) : null,
+    messagesFetcher,
+    { revalidateOnFocus: false }
+  );
+  const recipient = msgData?.recipient ?? null;
+  const recipientLoaded = msgData !== undefined;
+
   const canText = Boolean(recipient?.e164) && !recipient?.optedOut;
   const segments = body.length === 0 ? 0 : Math.ceil(body.length / 160);
   const composerBlocked = textMode && (!recipientLoaded || !canText);
