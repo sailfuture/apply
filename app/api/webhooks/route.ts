@@ -38,21 +38,16 @@ export async function POST(req: NextRequest) {
         });
         console.log(`Linked invited parent ${existingParent.id} to Clerk user ${id}`);
       } else {
-        await xano.parents.create({
-          clerk_user_id: id,
-          first_name: first_name ?? "",
-          last_name: last_name ?? "",
-          email: primaryEmail,
-          phone: primaryPhone,
-          relationship: "",
-          invite_status: "active",
-          address_line_1: "",
-          address_line_2: "",
-          city: "",
-          state: "",
-          zipcode: "",
-        });
-        console.log(`Created new parent record for Clerk user ${id}`);
+        // Deliberately NO create here. `ensureParentRecord` (dashboard
+        // page + families POST) lazily creates the row on the user's
+        // first authenticated request, so a webhook-side create is
+        // redundant — and because Clerk fires this webhook at the same
+        // moment the new user lands on the dashboard, the two creators
+        // raced and produced duplicate parent rows for one clerk id
+        // (seen live: rows 195+196 created 196 ms apart; the orphan
+        // made ownership guards 403 real saves). The webhook's only
+        // creation-adjacent job is claiming pending-invite rows above.
+        console.log(`No pending invite for Clerk user ${id}; parent row deferred to first sign-in`);
       }
     }
 

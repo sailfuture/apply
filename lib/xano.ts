@@ -2049,7 +2049,7 @@ async function _doEnsureParentRecord(
     });
   }
 
-  return await xano.parents.create({
+  const created = await xano.parents.create({
     clerk_user_id: clerkUserId,
     first_name: clerkUser.firstName ?? "",
     last_name: clerkUser.lastName ?? "",
@@ -2063,6 +2063,27 @@ async function _doEnsureParentRecord(
     state: "",
     zipcode: "",
   });
+
+  // Post-create duplicate check. The pre-create `findByClerkId` above
+  // can't stop a cross-instance race (two serverless invocations both
+  // see "no row" and both insert — the in-memory `pendingEnsure` mutex
+  // only covers one instance, and Xano has no unique constraint to
+  // reject the second insert). Re-resolve after inserting:
+  // `findByClerkId` deterministically returns the OLDEST match, so if
+  // it comes back with a row older than ours, a concurrent creator won
+  // — delete our duplicate and adopt theirs. The oldest row never
+  // deletes itself, so concurrent losers converge on one survivor.
+  try {
+    const canonical = await xano.parents.findByClerkId(clerkUserId);
+    if (canonical && canonical.id < created.id) {
+      await xano.parents.delete(created.id);
+      return canonical;
+    }
+  } catch {
+    // Best-effort — a failed dedupe leaves an extra row, which readers
+    // already tolerate via the oldest-row pick in `findByClerkId`.
+  }
+  return created;
 }
 
 /**
@@ -2264,6 +2285,19 @@ export const xano = {
     },
 
     async findByClerkId(clerkUserId: string): Promise<XanoParent | null> {
+      // A Clerk account can end up with DUPLICATE parent rows (races on
+      // first sign-in / historical webhook double-fires). The family row
+      // links to only one of them — in practice the OLDEST — so when
+      // multiple rows match we return the lowest id instead of whichever
+      // row Xano happens to list first. Picking the wrong duplicate made
+      // ownership guards resolve "no family" and 403 real parents (seen
+      // live: clerk user with parent rows 195+196, family linked to 195,
+      // Xano returned 196 first).
+      const pick = (items: XanoParent[]): XanoParent | null => {
+        const matches = items.filter((p) => p.clerk_user_id === clerkUserId);
+        if (matches.length === 0) return null;
+        return matches.reduce((a, b) => (a.id <= b.id ? a : b));
+      };
       try {
         const res = await fetch(
           `${getBaseUrl()}/registration_parents?clerk_user_id=${encodeURIComponent(clerkUserId)}`,
@@ -2271,15 +2305,12 @@ export const xano = {
         );
         if (!res.ok) {
           // Fallback to full scan if query param not supported
-          const all = await this.getAll();
-          return all.find((p) => p.clerk_user_id === clerkUserId) ?? null;
+          return pick(await this.getAll());
         }
         const results: XanoParent[] = await res.json();
-        const items = Array.isArray(results) ? results : [];
-        return items.find((p) => p.clerk_user_id === clerkUserId) ?? null;
+        return pick(Array.isArray(results) ? results : []);
       } catch {
-        const all = await this.getAll();
-        return all.find((p) => p.clerk_user_id === clerkUserId) ?? null;
+        return pick(await this.getAll());
       }
     },
 
