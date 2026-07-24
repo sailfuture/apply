@@ -21,6 +21,7 @@ import { PhoneInput } from "@/components/ui/phone-input";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
+import { InviteStatusBadge, ResendInviteButton } from "@/components/invite-status";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Select,
@@ -98,6 +99,7 @@ interface Parent {
   city: string;
   state: string;
   zipcode: string;
+  invite_status: string;
 }
 
 interface EmergencyContact {
@@ -1836,6 +1838,12 @@ export default function RegistrationPage() {
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
+                        <InviteStatusBadge status={parent.invite_status} />
+                        <ResendInviteButton
+                          parentId={parent.id}
+                          status={parent.invite_status}
+                          size="xs"
+                        />
                         <StatusIcon complete={isParentComplete(parent)} />
                       </div>
                     </div>

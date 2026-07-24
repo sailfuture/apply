@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { useUser } from "@clerk/nextjs";
 import { useFamily, useStudents, useApplications, useSchoolYears, mutateFamily } from "@/hooks/use-api";
 import { Button } from "@/components/ui/button";
+import { InviteStatusBadge, ResendInviteButton } from "@/components/invite-status";
 import { LoadingScreen } from "@/components/loading-screen";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
@@ -55,6 +56,9 @@ type Parent = {
   city: string;
   state: string;
   zipcode: string;
+  // Optional because `EmergencyContact` extends this type and EC rows
+  // (from `/api/emergency-contacts`) carry no invite state.
+  invite_status?: string;
 };
 
 type EmergencyContact = Parent & {
@@ -930,6 +934,7 @@ export function EnrolledFamilyDashboard({
                     <ContactTableRow
                       contact={primary}
                       role="Primary"
+                      invite={{ status: primary.invite_status }}
                       onEdit={() =>
                         setEditing({ kind: "parent", record: primary })
                       }
@@ -941,6 +946,7 @@ export function EnrolledFamilyDashboard({
                     <ContactTableRow
                       contact={secondary}
                       role="Secondary"
+                      invite={{ status: secondary.invite_status }}
                       onEdit={() =>
                         setEditing({ kind: "parent", record: secondary })
                       }
@@ -1284,6 +1290,7 @@ function ContactTableRow({
   onEdit,
   onDelete,
   role,
+  invite,
 }: {
   contact: Parent | EmergencyContact;
   onEdit: () => void;
@@ -1291,6 +1298,10 @@ function ContactTableRow({
   /** Optional pill rendered next to the name — used to label primary vs.
    *  secondary parents under the combined Parents / Guardians group. */
   role?: string;
+  /** When present (parent rows only), renders the invite-status badge +
+   *  a "Resend invite" button. Omitted for emergency contacts, which
+   *  have no Clerk login. */
+  invite?: { status?: string | null; clerkUserId?: string | null };
 }) {
   return (
     <TableRow>
@@ -1309,12 +1320,27 @@ function ContactTableRow({
               {contact.relationship}
             </span>
           ) : null}
+          {invite ? (
+            <InviteStatusBadge
+              status={invite.status}
+              clerkUserId={invite.clerkUserId}
+            />
+          ) : null}
         </p>
         <p className="text-xs text-muted-foreground mt-0.5">
           {[contact.phone, contact.email].filter(Boolean).join(" · ") || "—"}
         </p>
       </TableCell>
       <TableCell className="px-4 py-3 text-right whitespace-nowrap">
+        {invite ? (
+          <ResendInviteButton
+            parentId={contact.id}
+            status={invite.status}
+            clerkUserId={invite.clerkUserId}
+            size="xs"
+            className="mr-1 align-middle"
+          />
+        ) : null}
         <Button
           size="icon"
           variant="ghost"

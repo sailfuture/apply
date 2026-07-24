@@ -66,6 +66,7 @@ import { ActivityLogSheet } from "@/components/admin/activity-log-sheet";
 import { FamilyMessagesSheet } from "@/components/admin/family-messages-sheet";
 import { EmailParentButton } from "@/components/admin/email-parent-button";
 import { DocumentsToReviewBlock } from "@/components/admin/documents-to-review-block";
+import { InviteStatusBadge, ResendInviteButton } from "@/components/invite-status";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { cn } from "@/lib/utils";
 import { formatNoteTimestamp } from "@/lib/format-note-time";
@@ -84,6 +85,7 @@ const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 interface Parent {
   id: number;
+  clerk_user_id: string;
   first_name: string;
   last_name: string;
   email: string;
@@ -94,6 +96,7 @@ interface Parent {
   city: string;
   state: string;
   zipcode: string;
+  invite_status: string;
 }
 
 interface Student {
@@ -1962,7 +1965,13 @@ function ParentBlock({
           the right. Matches the StudentApplicationBlock pattern
           so admin uses the same affordance shape across the page. */}
       <div className="flex items-center justify-between gap-3">
-        <p className="text-sm font-semibold truncate">{displayName}</p>
+        <div className="flex items-center gap-2 min-w-0">
+          <p className="text-sm font-semibold truncate">{displayName}</p>
+          <InviteStatusBadge
+            status={parent.invite_status}
+            clerkUserId={parent.clerk_user_id}
+          />
+        </div>
         <div className="flex items-center gap-2 shrink-0">
           {editing ? (
             <>
@@ -1992,16 +2001,26 @@ function ParentBlock({
               </Button>
             </>
           ) : (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={enterEdit}
-              className="bg-white"
-            >
-              <Pencil className="size-3.5 mr-1.5" />
-              Edit
-            </Button>
+            <>
+              <ResendInviteButton
+                parentId={parent.id}
+                admin
+                status={parent.invite_status}
+                clerkUserId={parent.clerk_user_id}
+                onResent={onChanged}
+                className="bg-white"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={enterEdit}
+                className="bg-white"
+              >
+                <Pencil className="size-3.5 mr-1.5" />
+                Edit
+              </Button>
+            </>
           )}
         </div>
       </div>

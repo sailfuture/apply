@@ -71,6 +71,7 @@ import {
 } from "@/components/ui/file-upload";
 import { RequestRecordsDialog } from "@/components/admin/request-records-dialog";
 import { ActivityLogSheet } from "@/components/admin/activity-log-sheet";
+import { InviteStatusBadge, ResendInviteButton } from "@/components/invite-status";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { cn } from "@/lib/utils";
 import {
@@ -1783,23 +1784,40 @@ function ParentRowEditable({
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-3">
-        {indexLabel ? (
-          <p className="text-xs font-medium text-muted-foreground">
-            {indexLabel}
-            <span className="ml-1.5 text-foreground/70">· {displayName}</span>
-          </p>
-        ) : (
-          <p className="text-xs font-medium text-muted-foreground">
-            {displayName}
-          </p>
-        )}
-        <CardEditToggle
-          editing={editing}
-          saving={saving}
-          onEdit={enterEdit}
-          onCancel={() => setEditing(false)}
-          onSave={() => void runSave()}
-        />
+        <div className="flex min-w-0 items-center gap-2">
+          {indexLabel ? (
+            <p className="truncate text-xs font-medium text-muted-foreground">
+              {indexLabel}
+              <span className="ml-1.5 text-foreground/70">· {displayName}</span>
+            </p>
+          ) : (
+            <p className="truncate text-xs font-medium text-muted-foreground">
+              {displayName}
+            </p>
+          )}
+          <InviteStatusBadge
+            status={parent.invite_status}
+            clerkUserId={parent.clerk_user_id}
+          />
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {!editing && (
+            <ResendInviteButton
+              parentId={parent.id}
+              admin
+              status={parent.invite_status}
+              clerkUserId={parent.clerk_user_id}
+              onResent={onChanged}
+            />
+          )}
+          <CardEditToggle
+            editing={editing}
+            saving={saving}
+            onEdit={enterEdit}
+            onCancel={() => setEditing(false)}
+            onSave={() => void runSave()}
+          />
+        </div>
       </div>
       <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
         {editing ? (

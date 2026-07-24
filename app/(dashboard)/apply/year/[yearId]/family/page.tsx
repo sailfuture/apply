@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
 import { useApplicationFlow } from "@/contexts/application-flow-context";
 import { Button } from "@/components/ui/button";
+import { InviteStatusBadge, ResendInviteButton } from "@/components/invite-status";
 import { Input } from "@/components/ui/input";
 import { PhoneInput } from "@/components/ui/phone-input";
 import {
@@ -468,6 +469,12 @@ export default function FamilyStepPage() {
                       </CardTitle>
                     </div>
                     <div className="flex items-center gap-2">
+                      <InviteStatusBadge status={parent.invite_status} />
+                      <ResendInviteButton
+                        parentId={parent.id}
+                        status={parent.invite_status}
+                        size="xs"
+                      />
                       {isParentComplete(parent) ? (
                         <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-green-500 text-white">
                           <svg className="size-4" viewBox="0 0 20 20" fill="currentColor">

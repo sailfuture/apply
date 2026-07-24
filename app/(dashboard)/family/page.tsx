@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
+import { InviteStatusBadge, ResendInviteButton } from "@/components/invite-status";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -355,17 +356,14 @@ export default function FamilyPage() {
                         {parent.relationship || "—"}
                       </td>
                       <td className="px-4 py-3">
-                        <span
-                          className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                            parent.invite_status === "active"
-                              ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400"
-                              : "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400"
-                          }`}
-                        >
-                          {parent.invite_status === "active"
-                            ? "Active"
-                            : "Pending"}
-                        </span>
+                        <div className="flex items-center gap-2">
+                          <InviteStatusBadge status={parent.invite_status} />
+                          <ResendInviteButton
+                            parentId={parent.id}
+                            status={parent.invite_status}
+                            size="xs"
+                          />
+                        </div>
                       </td>
                     </tr>
                   ))}

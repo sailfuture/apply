@@ -364,6 +364,10 @@ function shapeParent(p: XanoParent) {
     email: p.email ?? "",
     phone: p.phone ?? "",
     relationship: p.relationship ?? "",
+    // Surfaced so the Family Information card can render the invite
+    // badge + "Resend invite" safety button per parent.
+    invite_status: p.invite_status ?? "",
+    clerk_user_id: p.clerk_user_id ?? "",
   };
 }
 
