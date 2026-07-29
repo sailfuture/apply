@@ -2,8 +2,11 @@
 
 import { useMemo, useState } from "react";
 import useSWR from "swr";
-import { ChevronRight, ExternalLink } from "lucide-react";
+import { toast } from "sonner";
+import { Check, ChevronRight, Copy, Download, ExternalLink } from "lucide-react";
 import { DataTable, type ColumnDef } from "@/components/admin/data-table";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Card,
   CardContent,
@@ -27,6 +30,10 @@ import {
 } from "@/components/ui/sheet";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { formatUSPhone } from "@/lib/phone";
+import {
+  copyCampusVisitsTable,
+  downloadCampusVisitsCsv,
+} from "@/lib/campus-visits-export";
 import type { CampusVisitRow } from "@/app/api/admin/campus-visits/route";
 
 /**
@@ -71,6 +78,51 @@ export default function CampusVisitsPage() {
     [rows, year]
   );
 
+  // Search is lifted out of the DataTable (via `externalSearch`) so the
+  // Copy / Export actions can operate on exactly what's on screen —
+  // otherwise they'd silently ignore the search box and hand back rows
+  // the user had already filtered away.
+  const [search, setSearch] = useState("");
+  const exportRows = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return visible;
+    return visible.filter((r) =>
+      [r.parent_name, r.parent_email, r.parent_phone, r.student_name, r.student_school]
+        .some((v) => (v ?? "").toLowerCase().includes(q))
+    );
+  }, [visible, search]);
+
+  const [copied, setCopied] = useState(false);
+
+  function handleExport() {
+    if (exportRows.length === 0) {
+      toast.error("Nothing to export.");
+      return;
+    }
+    downloadCampusVisitsCsv(exportRows, year === "all" ? "all-years" : year);
+    toast.success(
+      `Exported ${exportRows.length} visit${exportRows.length === 1 ? "" : "s"} to CSV.`
+    );
+  }
+
+  async function handleCopy() {
+    if (exportRows.length === 0) {
+      toast.error("Nothing to copy.");
+      return;
+    }
+    try {
+      await copyCampusVisitsTable(exportRows);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+      toast.success(
+        `Copied ${exportRows.length} visit${exportRows.length === 1 ? "" : "s"} to the clipboard.`
+      );
+    } catch (err) {
+      console.error("[CampusVisits.handleCopy]", err);
+      toast.error("Couldn't copy to the clipboard.");
+    }
+  }
+
   const [selected, setSelected] = useState<CampusVisitRow | null>(null);
 
   const columns: ColumnDef<CampusVisitRow>[] = useMemo(
@@ -79,7 +131,7 @@ export default function CampusVisitsPage() {
         key: "signed_ts",
         header: "Signed",
         sortable: true,
-        width: "w-[10%]",
+        width: "w-[9%]",
         render: (r) => (
           <span
             className="whitespace-nowrap text-sm tabular-nums text-muted-foreground"
@@ -94,7 +146,7 @@ export default function CampusVisitsPage() {
         header: "Parent",
         sortable: true,
         searchable: true,
-        width: "w-[22%]",
+        width: "w-[16%]",
         render: (r) => (
           <span className="block truncate text-sm font-medium">
             {r.parent_name}
@@ -102,10 +154,30 @@ export default function CampusVisitsPage() {
         ),
       },
       {
+        key: "parent_email",
+        header: "Email",
+        sortable: true,
+        searchable: true,
+        width: "w-[19%]",
+        render: (r) =>
+          r.parent_email ? (
+            <a
+              href={`mailto:${r.parent_email}`}
+              className="block truncate text-sm hover:underline"
+              title={r.parent_email}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {r.parent_email}
+            </a>
+          ) : (
+            <span className="text-sm text-muted-foreground">—</span>
+          ),
+      },
+      {
         key: "parent_phone",
         header: "Phone",
         searchable: true,
-        width: "w-[14%]",
+        width: "w-[12%]",
         render: (r) =>
           r.parent_phone ? (
             <a
@@ -124,7 +196,7 @@ export default function CampusVisitsPage() {
         header: "Student",
         sortable: true,
         searchable: true,
-        width: "w-[20%]",
+        width: "w-[15%]",
         render: (r) => (
           <span className="block truncate text-sm">{r.student_name}</span>
         ),
@@ -133,7 +205,7 @@ export default function CampusVisitsPage() {
         key: "student_grade",
         header: "Grade",
         sortable: true,
-        width: "w-[9%]",
+        width: "w-[7%]",
         render: (r) => (
           <span className="text-sm">
             {r.student_grade ? `Grade ${r.student_grade}` : "—"}
@@ -145,7 +217,7 @@ export default function CampusVisitsPage() {
         header: "Current School",
         sortable: true,
         searchable: true,
-        width: "w-[15%]",
+        width: "w-[12%]",
         render: (r) => (
           <span className="block truncate text-sm">
             {r.student_school || "—"}
@@ -155,7 +227,7 @@ export default function CampusVisitsPage() {
       {
         key: "marketing_opt_in",
         header: "Marketing",
-        width: "w-[10%]",
+        width: "w-[9%]",
         accessor: (r) => (r.marketing_opt_in ? 1 : 0),
         render: (r) =>
           r.marketing_opt_in ? (
@@ -208,13 +280,47 @@ export default function CampusVisitsPage() {
 
       <Card className="overflow-hidden bg-white py-0 gap-0">
         <CardHeader className="py-4 border-b bg-white">
-          <CardTitle className="text-base">
-            Signed waivers
-            <span className="ml-2 text-sm font-normal text-muted-foreground">
-              {visible.length}
-              {year === "all" ? "" : ` in ${year}`}
-            </span>
-          </CardTitle>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <CardTitle className="text-base">
+              Signed waivers
+              <span className="ml-2 text-sm font-normal text-muted-foreground">
+                {exportRows.length}
+                {year === "all" ? "" : ` in ${year}`}
+              </span>
+            </CardTitle>
+            {/* Search + row actions. Copy / Export both act on exactly
+                the rows the filters leave on screen. */}
+            <div className="flex flex-wrap items-center gap-2">
+              <Input
+                placeholder="Search by parent, email, student, or school…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="h-9 w-full sm:w-72"
+              />
+              <Button
+                variant="outline"
+                onClick={() => void handleCopy()}
+                disabled={exportRows.length === 0}
+                className="bg-white"
+              >
+                {copied ? (
+                  <Check className="size-4" />
+                ) : (
+                  <Copy className="size-4" />
+                )}
+                {copied ? "Copied" : "Copy table"}
+              </Button>
+              <Button
+                variant="outline"
+                onClick={handleExport}
+                disabled={exportRows.length === 0}
+                className="bg-white"
+              >
+                <Download className="size-4" />
+                Export CSV
+              </Button>
+            </div>
+          </div>
         </CardHeader>
         <CardContent className="p-4 bg-white">
           {error && !data ? (
@@ -226,7 +332,7 @@ export default function CampusVisitsPage() {
               columns={columns}
               data={visible}
               isLoading={isLoading && !data}
-              searchPlaceholder="Search by parent, student, or school…"
+              externalSearch={search}
               onRowClick={(r) => setSelected(r)}
             />
           )}

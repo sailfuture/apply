@@ -436,14 +436,18 @@ export default function SufsPage() {
               ? "border-emerald-200 bg-emerald-50 text-emerald-800"
               : s === "registration"
                 ? "border-amber-200 bg-amber-50 text-amber-800"
-                : "border-blue-200 bg-blue-50 text-blue-800"
+                : s === "application"
+                  ? "border-blue-200 bg-blue-50 text-blue-800"
+                  : "border-slate-200 bg-slate-50 text-slate-600"
           )}
         >
           {s === "enrolled"
             ? "Enrolled"
             : s === "registration"
               ? "Registration"
-              : "Applying"}
+              : s === "application"
+                ? "Applying"
+                : "In Progress"}
         </span>
       );
     },

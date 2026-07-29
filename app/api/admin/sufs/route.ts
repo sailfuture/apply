@@ -13,9 +13,15 @@ import { computeFamilyStageSets } from "@/lib/sms/stages";
  * Scope has widened over time and now mirrors the full active
  * pipeline (see the eligibility filter below):
  *
+ *   - in progress  — family has started (but not submitted) an
+ *                    application for the year
  *   - applying     — family has a submitted, non-denied application
  *   - registration — family accepted for the year
  *   - enrolled     — registration confirmed
+ *
+ * Archived rows are the only exclusion: an archived student, or a
+ * family whose apply-progress rows for the year are all archived,
+ * never appears.
  *
  * The Status pill on each row says which stage the family is in. A
  * student appears as soon as they're applying so admin can line up the
@@ -145,39 +151,60 @@ export async function GET(req: NextRequest) {
       srp: progressRows,
       apps,
     });
+    // Families that have STARTED an application for the year — any
+    // non-archived apply-progress row, submitted or not. This is what
+    // makes "in progress" families visible: `stageSets.application`
+    // only counts SUBMITTED applications, so a family still filling the
+    // form out had no bucket at all before.
+    const startedFamilyIds = new Set(
+      familyProgressRows
+        .filter((p) => p.is_archived !== true)
+        .map((p) => p.registration_families_id)
+    );
+
     const familyStage = (
       fid: number
-    ): "application" | "registration" | "enrolled" =>
+    ): "in_progress" | "application" | "registration" | "enrolled" =>
       stageSets.enrolled.has(fid)
         ? "enrolled"
         : stageSets.registration.has(fid)
           ? "registration"
-          : "application";
+          : stageSets.application.has(fid)
+            ? "application"
+            : "in_progress";
 
     // Which students land on the SUFS list. History: the gate was
-    // "registration confirmed", then loosened to "accepted", and now
-    // APPLYING families appear too (user request) so the reconciliation
-    // list mirrors the full active pipeline — a student shows as soon as
-    // their family has a submitted, non-denied application, and the
-    // Status pill (Applying / Registration / Enrolled) says how far
-    // along they are.
+    // "registration confirmed", then loosened to "accepted", then to
+    // submitted-and-applying, and now to the FULL active pipeline
+    // (user request) — in-progress, applying, accepted and enrolled all
+    // show; only archived rows are held back. The Status pill (In
+    // Progress / Applying / Registration / Enrolled) says how far along
+    // each one is.
     const eligibleApps = apps.filter((a) => {
       if (Number(a.registration_school_years_id) !== yearId) return false;
       // `isActive === false` is a soft delete (parent pulled the
       // student from the year). `undefined` counts as active so
       // legacy rows still appear — same convention as Registrations.
       if ((a as { isActive?: boolean }).isActive === false) return false;
+      // Archived student — formally unenrolled / removed from the
+      // roster. Explicitly excluded regardless of pipeline stage.
+      const student = studentById.get(Number(a.registration_students_id));
+      if (student?.isArchived === true) return false;
       const familyId = Number(a.registration_families_id);
       const familyAccepted = acceptedFamilyIds.has(familyId);
       const legacyStudentAccepted =
         (a as { isAccepted?: boolean }).isAccepted === true;
       if (familyAccepted || legacyStudentAccepted) return true;
-      // Applying: submitted but not yet accepted. `stageSets.application`
-      // already excludes families whose every active app was denied;
-      // also drop an individually-denied student inside an otherwise-
-      // live family so a rejected student never surfaces here.
+      if (stageSets.enrolled.has(familyId)) return true;
+      // An individually-denied student never surfaces, even inside an
+      // otherwise-live family. (`stageSets.application` already drops
+      // families whose every active app was denied.)
       if ((a as { isDenied?: boolean }).isDenied === true) return false;
-      return stageSets.application.has(familyId);
+      // Submitted-and-applying, or still filling the application out.
+      // `startedFamilyIds` is archive-filtered, so a family whose only
+      // apply-progress rows are archived drops out here.
+      if (stageSets.application.has(familyId)) return true;
+      return startedFamilyIds.has(familyId);
     });
 
     const rows: SufsStudentRow[] = eligibleApps.map((app) => {
@@ -331,8 +358,8 @@ export interface SufsStudentRow {
   student_grade: string;
   family_name: string;
   /** Family's furthest pipeline stage for the year — the Status
-   *  column (shared bucketing: enrolled > registration > applying). */
-  stage: "application" | "registration" | "enrolled";
+   *  column (enrolled > registration > applying > in progress). */
+  stage: "in_progress" | "application" | "registration" | "enrolled";
   /** Parent-entered 9-digit Step Up award ID. `null` when unset (the
    *  underlying column uses 0 as its empty sentinel). */
   sufs_award_id: number | null;
