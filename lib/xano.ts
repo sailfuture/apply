@@ -1312,6 +1312,28 @@ export interface XanoWebsiteLiabilityWaiver {
   signed_at: number | null;
 }
 
+/** One TASCO summer-visit sign-up (`tasco_summer_visit`). Public form
+ *  collected at St. Pete recreation centers over the summer — a
+ *  recruitment lead list, with no link to families/students and no
+ *  school-year column. `parent_email` is frequently blank (many were
+ *  captured phone-only at the center). Lives on the `2GcBXyoA` API
+ *  group. */
+export interface XanoTascoSummerVisit {
+  id: number;
+  created_at: number;
+  student_name: string;
+  current_grade: string;
+  current_school: string;
+  /** Which rec center the student signed up at. Free text — the same
+   *  center appears under several spellings ("J.W. Cate Recreation
+   *  Center" / "jwcate recreation cenetre"), so the admin route
+   *  normalizes it for grouping/filtering. */
+  recreation_center: string;
+  parent_phone: string;
+  parent_email: string;
+  marketing_opt_in: boolean;
+}
+
 /** Lookup table — distinguishes new applicants from returning enrollments. */
 export interface XanoRegistrationType {
   id: number;
@@ -5325,6 +5347,28 @@ export const xano = {
         const res = await fetchRetry(`${getBaseUrl()}/website_liability_waiver`);
         if (!res.ok) return [];
         const items: XanoWebsiteLiabilityWaiver[] = await res.json();
+        return Array.isArray(items) ? items : [];
+      } catch {
+        return [];
+      }
+    },
+  },
+
+  tascoSummerVisits: {
+    /** TASCO summer-visit sign-ups (`tasco_summer_visit`). Lives on the
+     *  `2GcBXyoA` API group rather than the one `XANO_API_BASE_URL`
+     *  points at, so it's reached via `getXanoHost()` — same approach
+     *  the `registration_students` admin-group accessor uses, and it
+     *  avoids a second env var. Fail-soft like the other read
+     *  accessors: a Xano blip degrades the page to empty instead of
+     *  500-ing it. */
+    async getAll(): Promise<XanoTascoSummerVisit[]> {
+      try {
+        const res = await fetchRetry(
+          `${getXanoHost()}/api:2GcBXyoA/tasco_summer_visit`
+        );
+        if (!res.ok) return [];
+        const items: XanoTascoSummerVisit[] = await res.json();
         return Array.isArray(items) ? items : [];
       } catch {
         return [];
