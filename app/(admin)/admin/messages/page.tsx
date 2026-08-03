@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { toast } from "sonner";
-import { Loader2, MessageSquareText, Users } from "lucide-react";
+import { Loader2, MessageSquareText, Search, Users, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { formatUSPhone } from "@/lib/phone";
@@ -80,13 +80,26 @@ export default function AdminMessagesPage() {
   const [stageFilter, setStageFilter] = useState<ConversationStage | "all">(
     "all"
   );
-  const filtered = useMemo(
-    () =>
+  // Free-text search across who the conversation is WITH — family,
+  // parent, and student names (via the API's searchText), the phone
+  // in any format, and the latest message body.
+  const [search, setSearch] = useState("");
+  const filtered = useMemo(() => {
+    const byStage =
       stageFilter === "all"
         ? conversations
-        : conversations.filter((c) => c.stage === stageFilter),
-    [conversations, stageFilter]
-  );
+        : conversations.filter((c) => c.stage === stageFilter);
+    const q = search.trim().toLowerCase();
+    if (!q) return byStage;
+    const qDigits = q.replace(/\D/g, "");
+    return byStage.filter(
+      (c) =>
+        c.name.toLowerCase().includes(q) ||
+        (c.searchText ?? "").includes(q) ||
+        c.lastBody.toLowerCase().includes(q) ||
+        (qDigits.length >= 3 && c.phone.includes(qDigits))
+    );
+  }, [conversations, stageFilter, search]);
   // Selection carries the name too (not just type+id) so a contact
   // picked from the "New message" dialog — who has NO conversation row
   // yet — can still render a thread header. Once the first text sends,
@@ -186,6 +199,10 @@ export default function AdminMessagesPage() {
     setStageFilter(v);
     setVisibleCount(PAGE);
   }
+  function changeSearch(v: string) {
+    setSearch(v);
+    setVisibleCount(PAGE);
+  }
 
   return (
     <div className="flex h-[calc(100dvh-3.5rem)] flex-col gap-4 p-6">
@@ -234,10 +251,34 @@ export default function AdminMessagesPage() {
             md+ always shows both. */}
         <div
           className={cn(
-            "min-h-0 overflow-y-auto overscroll-contain rounded-lg border bg-white",
-            selected !== null && "hidden md:block"
+            "flex min-h-0 flex-col rounded-lg border bg-white",
+            selected !== null && "hidden md:flex"
           )}
         >
+          {/* Search — matches family/parent/student names, phone (any
+              format), and the latest message text. Sticky above the
+              scrolling list. */}
+          <div className="relative border-b px-3 py-2">
+            <Search className="pointer-events-none absolute left-5.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+            <input
+              type="search"
+              value={search}
+              onChange={(e) => changeSearch(e.target.value)}
+              placeholder="Search by student, parent, or phone…"
+              className="w-full rounded-md border bg-muted/20 py-1.5 pl-8 pr-7 text-sm outline-none placeholder:text-muted-foreground focus:border-foreground/40"
+            />
+            {search ? (
+              <button
+                type="button"
+                onClick={() => changeSearch("")}
+                className="absolute right-5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                aria-label="Clear search"
+              >
+                <X className="size-3.5" />
+              </button>
+            ) : null}
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
           {/* Distinguish "still loading" and "failed to load" from a
               genuinely empty inbox — asserting "no conversations" while
               the request is in flight (or after it errored) reads as
@@ -266,7 +307,9 @@ export default function AdminMessagesPage() {
             </div>
           ) : filtered.length === 0 ? (
             <div className="p-6 text-center text-sm text-muted-foreground">
-              No conversations match this filter.
+              {search.trim()
+                ? "No conversations match this search."
+                : "No conversations match this filter."}
             </div>
           ) : (
             <ul className="divide-y">
@@ -355,6 +398,7 @@ export default function AdminMessagesPage() {
               ) : null}
             </ul>
           )}
+          </div>
         </div>
 
         {/* Thread pane */}

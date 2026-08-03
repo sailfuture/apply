@@ -150,28 +150,32 @@ export async function sendSms(input: SendSmsInput): Promise<SendSmsResult> {
     });
 
     // Log the accepted send. If logging fails the text still WENT OUT,
-    // so don't report failure to the caller — just surface it server-side.
-    const log = await xano.smsMessages
-      .create({
-        ...contactKeys,
-        registration_students_id: studentId,
-        registration_school_years_id: yearId,
-        direction: "outbound",
-        to_number: to,
-        from_number: msg.from ?? from,
-        body,
-        status: msg.status ?? "queued",
-        twilio_message_sid: msg.sid,
-        template,
-        error_code: msg.errorCode != null ? String(msg.errorCode) : null,
-        author_email: author?.email ?? null,
-        author_name: author?.name ?? null,
-        segments: msg.numSegments != null ? Number(msg.numSegments) : null,
-      })
-      .catch((err) => {
-        console.error("[sendSms] sent but failed to log:", err);
+    // so don't report failure to the caller — but retry once first: an
+    // unlogged send is invisible in every thread and the inbox until
+    // the next Twilio sync backfills it, which reads as a lost message.
+    const logRow = {
+      ...contactKeys,
+      registration_students_id: studentId,
+      registration_school_years_id: yearId,
+      direction: "outbound",
+      to_number: to,
+      from_number: msg.from ?? from,
+      body,
+      status: msg.status ?? "queued",
+      twilio_message_sid: msg.sid,
+      template,
+      error_code: msg.errorCode != null ? String(msg.errorCode) : null,
+      author_email: author?.email ?? null,
+      author_name: author?.name ?? null,
+      segments: msg.numSegments != null ? Number(msg.numSegments) : null,
+    };
+    const log = await xano.smsMessages.create(logRow).catch(async (err) => {
+      console.error("[sendSms] sent but failed to log, retrying:", err);
+      return xano.smsMessages.create(logRow).catch((err2) => {
+        console.error("[sendSms] sent but failed to log (retry):", err2);
         return null;
       });
+    });
 
     return { ok: true, messageSid: msg.sid, logId: log?.id };
   } catch (err) {

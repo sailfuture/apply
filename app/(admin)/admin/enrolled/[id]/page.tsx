@@ -70,6 +70,7 @@ import {
   FileUploadList,
 } from "@/components/ui/file-upload";
 import { RequestRecordsDialog } from "@/components/admin/request-records-dialog";
+import { SufsAwardCard } from "@/components/admin/sufs-award-card";
 import { ActivityLogSheet } from "@/components/admin/activity-log-sheet";
 import { InviteStatusBadge, ResendInviteButton } from "@/components/invite-status";
 import { adminFetcher } from "@/lib/admin-fetcher";
@@ -317,6 +318,26 @@ export default function EnrolledStudentDetailPage() {
         schoolYear={school_year}
         onChanged={() => mutate()}
       />
+
+      {/* SUFS award ID — the portal assigns it after the scholarship
+          determination (often post-enrollment), so admin records it
+          here on the application row without leaving this page. */}
+      {app ? (
+        <SufsAwardCard
+          rows={[
+            {
+              applicationId: app.id,
+              studentName:
+                `${student.first_name ?? ""} ${student.last_name ?? ""}`.trim() ||
+                `Student #${student.id}`,
+              sufsType: app.sufs_type,
+              sufsStatus: app.sufs_status,
+              awardId: app.sufs_award_id || null,
+            },
+          ]}
+          onSaved={() => void mutate()}
+        />
+      ) : null}
 
       {/* Student photo — admin uploads a headshot that's compressed in
           the browser and stored on the student row's `student_photo`

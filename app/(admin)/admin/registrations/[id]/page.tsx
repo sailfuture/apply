@@ -72,6 +72,7 @@ import {
 import { ActivityLogSheet } from "@/components/admin/activity-log-sheet";
 import { BillingCard } from "@/components/admin/billing-card";
 import { TuitionBreakdownTable } from "@/components/admin/tuition-breakdown-table";
+import { SufsAwardCard } from "@/components/admin/sufs-award-card";
 import { RequestRecordsDialog } from "@/components/admin/request-records-dialog";
 import { EmailParentButton } from "@/components/admin/email-parent-button";
 import { adminFetcher } from "@/lib/admin-fetcher";
@@ -753,6 +754,20 @@ export default function FamilyRegistrationDetailPage() {
               students={students}
               schoolYear={school_year}
               scholarship={scholarship}
+            />
+            {/* SUFS award IDs — the portal assigns these after the
+                scholarship determination, often mid-registration, so
+                admin records them here without reopening the
+                application's Decision card. */}
+            <SufsAwardCard
+              rows={students.map((s) => ({
+                applicationId: s.application_id,
+                studentName: s.student_full_name,
+                sufsType: s.sufs_type,
+                sufsStatus: s.sufs_status,
+                awardId: s.sufs_award_id || null,
+              }))}
+              onSaved={() => void refresh()}
             />
           </SectionShell>
         </section>

@@ -281,6 +281,9 @@ function shapeApp(a: XanoApplication) {
     current_previous_school: a.current_previous_school ?? "",
     sufs_type: a.sufs_type ?? "",
     sufs_status: a.sufs_status ?? "",
+    // 9-digit SUFS-portal award ID; 0 = not recorded. Editable from
+    // the enrolled page's Step Up Award IDs card.
+    sufs_award_id: a.sufs_award_id ?? 0,
     is_bus_transportation: a.is_bus_transportation === true,
     bus_stop: a.bus_stop ?? "",
     nwea_testing_complete: a.nwea_testing_complete === true,

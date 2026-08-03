@@ -24,26 +24,11 @@ import type {
 
 /** Source chip vocabulary — mirrors the messaging composer's labels so
  *  the two surfaces speak the same language. */
-const SOURCE_META: Record<
-  LeadSource,
-  { label: string; badgeClass: string }
-> = {
-  inquiry: {
-    label: "Inquiry",
-    badgeClass: "border-violet-200 bg-violet-50 text-violet-800",
-  },
-  camp: {
-    label: "Summer Camp",
-    badgeClass: "border-teal-200 bg-teal-50 text-teal-800",
-  },
-  visit: {
-    label: "Liability Waiver Visit",
-    badgeClass: "border-rose-200 bg-rose-50 text-rose-800",
-  },
-  tasco: {
-    label: "TASCO",
-    badgeClass: "border-orange-200 bg-orange-50 text-orange-800",
-  },
+const SOURCE_META: Record<LeadSource, { label: string }> = {
+  inquiry: { label: "Inquiry" },
+  camp: { label: "Summer Camp" },
+  visit: { label: "Liability Waiver Visit" },
+  tasco: { label: "TASCO" },
 };
 
 const SOURCE_FILTERS: LeadSource[] = ["inquiry", "camp", "visit", "tasco"];
@@ -164,10 +149,7 @@ export default function AllLeadsPage() {
         width: "w-[13%]",
         accessor: (r) => SOURCE_META[r.source].label,
         render: (r) => (
-          <Badge
-            variant="outline"
-            className={cn("font-medium", SOURCE_META[r.source].badgeClass)}
-          >
+          <Badge variant="outline" className="font-medium">
             {SOURCE_META[r.source].label}
           </Badge>
         ),

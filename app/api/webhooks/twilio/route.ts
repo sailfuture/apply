@@ -91,9 +91,12 @@ export async function POST(req: NextRequest) {
     // have no column (Twilio's carrier-level block still applies).
     if (contact && (isStop || isStart)) {
       if (contact.type === "family" && contact.parentId) {
+        // 0 (not null) clears the flag on START — Xano's PATCH silently
+        // drops null/empty inputs, so null would leave the parent
+        // opted out forever. 0 is falsy everywhere the flag is read.
         await xano.parents
           .update(contact.parentId, {
-            sms_opted_out_at: isStop ? Date.now() : null,
+            sms_opted_out_at: isStop ? Date.now() : 0,
           })
           .catch((err) =>
             console.error("[twilio webhook] opt-out update failed:", err)

@@ -1,9 +1,16 @@
 "use client";
 
 import { useState } from "react";
-import useSWR from "swr";
+import useSWR, { useSWRConfig } from "swr";
 import { toast } from "sonner";
-import { Pin, PinOff, Pencil, Trash2, Loader2 } from "lucide-react";
+import {
+  Pin,
+  PinOff,
+  Pencil,
+  Trash2,
+  Loader2,
+  MessageSquareText,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 // Category selector is now selectable pills, not a dropdown — see
@@ -21,7 +28,16 @@ import {
 } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 import { formatNoteTimestamp } from "@/lib/format-note-time";
-import type { LeadNoteSource, XanoAdminNote } from "@/lib/xano";
+import {
+  contactMessagesKey,
+  messagesFetcher,
+  type MessagesResponse,
+} from "@/components/admin/family-message-thread";
+import type {
+  LeadNoteSource,
+  XanoAdminNote,
+  XanoSmsMessage,
+} from "@/lib/xano";
 
 const fetcher = async (url: string): Promise<XanoAdminNote[]> => {
   const res = await fetch(url);
@@ -55,6 +71,46 @@ const CATEGORY_OPTIONS: { value: string; label: string; short: string }[] = [
   { value: "sms", label: "Text message", short: "SMS" },
   { value: "other", label: "Other", short: "Other" },
 ];
+
+/**
+ * Composer submit shared by both variants. The SMS category is not a
+ * note — it sends a real text through the messaging pipeline
+ * (`POST /api/admin/messages` resolves the lead's phone, honors
+ * opt-outs, and logs the thread in the Messages inbox). Every other
+ * category writes a comms-log note. Throws with a human-readable
+ * message on failure so callers can toast it verbatim.
+ */
+async function postLeadEntry(
+  scope: LeadNoteScope,
+  category: string,
+  text: string
+): Promise<void> {
+  const isSms = category === "sms";
+  const res = await fetch(
+    isSms ? "/api/admin/messages" : "/api/admin/notes",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(
+        isSms
+          ? { contactType: scope.source, contactId: scope.id, body: text }
+          : {
+              leadSource: scope.source,
+              leadId: scope.id,
+              body: text,
+              category,
+              is_pinned: false,
+            }
+      ),
+    }
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => null);
+    throw new Error(
+      err?.error ?? `${isSms ? "Send" : "Save"} failed (${res.status})`
+    );
+  }
+}
 
 /**
  * Renders the category-pill row used by both composer variants
@@ -157,13 +213,28 @@ export function InquiryNotes({
   const { data, isLoading, mutate } = useSWR<XanoAdminNote[]>(swrKey, fetcher, {
     revalidateOnFocus: false,
   });
+  // The lead's real SMS thread, merged into the timeline below so the
+  // comms log shows texts (sent AND received) inline with call/email
+  // notes. Same SWR key as the Messages inbox thread — a send from
+  // either surface refreshes both.
+  const smsKey = contactMessagesKey(leadScope.source, leadScope.id);
+  const { data: smsData, mutate: mutateSms } = useSWR<MessagesResponse>(
+    smsKey,
+    messagesFetcher,
+    { revalidateOnFocus: false }
+  );
+  const smsMessages = smsData?.messages ?? [];
 
   const notes = data ?? [];
   const pinned = notes.filter((n) => n.is_pinned);
-  const rest = notes
-    .filter((n) => !n.is_pinned)
-    .slice()
-    .sort((a, b) => b.created_at - a.created_at);
+  // Chronological stream (newest first): un-pinned notes + every text
+  // on this lead's thread, interleaved by timestamp.
+  const rest: TimelineEntry[] = [
+    ...notes
+      .filter((n) => !n.is_pinned)
+      .map((note) => ({ kind: "note" as const, note })),
+    ...smsMessages.map((msg) => ({ kind: "sms" as const, msg })),
+  ].sort((a, b) => entryTs(b) - entryTs(a));
 
   const [body, setBody] = useState("");
   const [category, setCategory] = useState("phone");
@@ -172,30 +243,23 @@ export function InquiryNotes({
 
   async function submitNote() {
     if (!body.trim() || saving) return;
+    const isSms = category === "sms";
     setSaving(true);
     try {
-      const res = await fetch("/api/admin/notes", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          leadSource: leadScope.source,
-          leadId: leadScope.id,
-          body: body.trim(),
-          category,
-          is_pinned: false,
-        }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => null);
-        throw new Error(err?.error ?? `Save failed (${res.status})`);
-      }
+      await postLeadEntry(leadScope, category, body.trim());
       setBody("");
-      await mutate();
+      await (isSms ? mutateSms() : mutate());
       onNoteAdded?.();
-      toast.success("Note added.");
+      toast.success(isSms ? "Text sent." : "Note added.");
     } catch (err) {
-      console.error("Failed to add note:", err);
-      toast.error(err instanceof Error ? err.message : "Failed to add note.");
+      console.error(isSms ? "Failed to send text:" : "Failed to add note:", err);
+      toast.error(
+        err instanceof Error
+          ? err.message
+          : isSms
+            ? "Failed to send text."
+            : "Failed to add note."
+      );
     } finally {
       setSaving(false);
     }
@@ -245,7 +309,7 @@ export function InquiryNotes({
     <>
       {isLoading ? (
         <p className="text-xs text-muted-foreground">Loading notes…</p>
-      ) : notes.length === 0 ? (
+      ) : notes.length === 0 && smsMessages.length === 0 ? (
         <p className="text-xs italic text-muted-foreground">
           No communications logged yet. The first note here is yours.
         </p>
@@ -275,15 +339,19 @@ export function InquiryNotes({
                   Recent
                 </p>
               ) : null}
-              {rest.map((n) => (
-                <NoteRow
-                  key={n.id}
-                  note={n}
-                  onTogglePin={togglePin}
-                  onDelete={(id) => setPendingDelete(id)}
-                  onEdited={() => mutate()}
-                />
-              ))}
+              {rest.map((entry) =>
+                entry.kind === "note" ? (
+                  <NoteRow
+                    key={`note-${entry.note.id}`}
+                    note={entry.note}
+                    onTogglePin={togglePin}
+                    onDelete={(id) => setPendingDelete(id)}
+                    onEdited={() => mutate()}
+                  />
+                ) : (
+                  <SmsRow key={`sms-${entry.msg.id}`} msg={entry.msg} />
+                )
+              )}
             </div>
           ) : null}
         </>
@@ -299,7 +367,11 @@ export function InquiryNotes({
     <div className="rounded-md border bg-muted/20 p-3 space-y-2">
       <CategoryPills value={category} onChange={setCategory} />
       <Textarea
-        placeholder="Phone call summary, follow-up needed, parent context — write what the next admin should know."
+        placeholder={
+          category === "sms"
+            ? "Write the text message — it will be sent to this lead's phone and logged in Messages."
+            : "Phone call summary, follow-up needed, parent context — write what the next admin should know."
+        }
         value={body}
         onChange={(e) => setBody(e.target.value)}
         rows={3}
@@ -313,8 +385,10 @@ export function InquiryNotes({
         {saving ? (
           <>
             <Loader2 className="size-3.5 animate-spin mr-1.5" />
-            Saving
+            {category === "sms" ? "Sending" : "Saving"}
           </>
+        ) : category === "sms" ? (
+          "Send text"
         ) : (
           "Add note"
         )}
@@ -403,6 +477,9 @@ export function InquiryNoteComposer({
   const { mutate } = useSWR<XanoAdminNote[]>(swrKey, fetcher, {
     revalidateOnFocus: false,
   });
+  // Global mutate so an SMS send refreshes the timeline's message
+  // subscription (mounted in a sibling <InquiryNotes>) by key.
+  const { mutate: globalMutate } = useSWRConfig();
 
   const [body, setBody] = useState("");
   const [category, setCategory] = useState("phone");
@@ -410,30 +487,25 @@ export function InquiryNoteComposer({
 
   async function submitNote() {
     if (!body.trim() || saving) return;
+    const isSms = category === "sms";
     setSaving(true);
     try {
-      const res = await fetch("/api/admin/notes", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          leadSource: leadScope.source,
-          leadId: leadScope.id,
-          body: body.trim(),
-          category,
-          is_pinned: false,
-        }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => null);
-        throw new Error(err?.error ?? `Save failed (${res.status})`);
-      }
+      await postLeadEntry(leadScope, category, body.trim());
       setBody("");
-      await mutate();
+      await (isSms
+        ? globalMutate(contactMessagesKey(leadScope.source, leadScope.id))
+        : mutate());
       onNoteAdded?.();
-      toast.success("Note added.");
+      toast.success(isSms ? "Text sent." : "Note added.");
     } catch (err) {
-      console.error("Failed to add note:", err);
-      toast.error(err instanceof Error ? err.message : "Failed to add note.");
+      console.error(isSms ? "Failed to send text:" : "Failed to add note:", err);
+      toast.error(
+        err instanceof Error
+          ? err.message
+          : isSms
+            ? "Failed to send text."
+            : "Failed to add note."
+      );
     } finally {
       setSaving(false);
     }
@@ -447,7 +519,11 @@ export function InquiryNoteComposer({
     <div className="space-y-2">
       <CategoryPills value={category} onChange={setCategory} />
       <Textarea
-        placeholder="Phone call summary, follow-up needed, parent context — write what the next admin should know."
+        placeholder={
+          category === "sms"
+            ? "Write the text message — it will be sent to this lead's phone and logged in Messages."
+            : "Phone call summary, follow-up needed, parent context — write what the next admin should know."
+        }
         value={body}
         onChange={(e) => setBody(e.target.value)}
         rows={3}
@@ -461,8 +537,10 @@ export function InquiryNoteComposer({
         {saving ? (
           <>
             <Loader2 className="size-3.5 animate-spin mr-1.5" />
-            Saving
+            {category === "sms" ? "Sending" : "Saving"}
           </>
+        ) : category === "sms" ? (
+          "Send text"
         ) : (
           "Add note"
         )}
@@ -605,4 +683,57 @@ function NoteRow({
 function formatCategory(c: string): string {
   const found = CATEGORY_OPTIONS.find((o) => o.value === c);
   return found?.label ?? c;
+}
+
+/** One entry in the merged comms timeline — an admin note or a real
+ *  text from the lead's SMS thread. */
+type TimelineEntry =
+  | { kind: "note"; note: XanoAdminNote }
+  | { kind: "sms"; msg: XanoSmsMessage };
+
+function entryTs(e: TimelineEntry): number {
+  return e.kind === "note" ? e.note.created_at : e.msg.created_at;
+}
+
+/** Compact delivery-state vocabulary for timeline SMS rows — mirrors
+ *  the labels the Messages inbox thread uses. */
+const SMS_STATUS_LABEL: Record<string, string> = {
+  queued: "Queued",
+  sent: "Sent",
+  delivered: "Delivered",
+  undelivered: "Undelivered",
+  failed: "Failed",
+};
+
+/**
+ * Read-only SMS card in the comms timeline. Distinct from a note row —
+ * icon + direction header, no pin/edit/delete (the message log is a
+ * record of what was actually sent/received, not editable prose).
+ */
+function SmsRow({ msg }: { msg: XanoSmsMessage }) {
+  const outbound = msg.direction === "outbound";
+  const failed = msg.status === "failed" || msg.status === "undelivered";
+  return (
+    <div className="rounded-md border border-sky-100 bg-sky-50/40 p-3">
+      <p className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-foreground">
+        <MessageSquareText className="size-3.5 shrink-0 text-muted-foreground" />
+        <span className="truncate">
+          {outbound
+            ? msg.author_name || "SailFuture"
+            : "Reply from parent"}
+        </span>
+      </p>
+      <p className="mt-1.5 whitespace-pre-wrap text-sm">{msg.body}</p>
+      <p className="mt-2 text-[11px] text-muted-foreground/80">
+        <span>Text message</span>
+        {outbound ? (
+          <span className={cn(failed && "text-red-600")}>
+            {" · "}
+            {SMS_STATUS_LABEL[msg.status] ?? msg.status}
+          </span>
+        ) : null}
+        <span> · {formatNoteTimestamp(msg.created_at)}</span>
+      </p>
+    </div>
+  );
 }

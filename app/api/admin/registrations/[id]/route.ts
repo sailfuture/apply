@@ -348,6 +348,7 @@ export async function GET(
           // source so admin sees exactly what the parent signed.
           sufs_status: app.sufs_status ?? "",
           sufs_type: app.sufs_type ?? "",
+          sufs_award_id: app.sufs_award_id ?? 0,
           opportunity_scholarship_award_amount:
             app.opportunity_scholarship_award_amount ?? null,
           is_bus_transportation: !!app.is_bus_transportation,
@@ -581,6 +582,9 @@ export interface AdminFamilyRegistrationStudentRow {
    *  the apply-flow view. */
   sufs_status: string;
   sufs_type: string;
+  /** 9-digit SUFS-portal award ID from the application row; 0 = none.
+   *  Editable on the page via the Step Up Award IDs card. */
+  sufs_award_id: number;
   opportunity_scholarship_award_amount: number | null;
   is_bus_transportation: boolean;
   bus_stop: string;

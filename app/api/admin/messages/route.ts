@@ -1,15 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
-import { xano, type XanoSmsMessage } from "@/lib/xano";
+import {
+  xano,
+  LEAD_NOTE_SOURCES,
+  type LeadNoteSource,
+  type XanoSmsMessage,
+} from "@/lib/xano";
 import { sendSms } from "@/lib/sms/send";
 import {
   counterpartyPhone,
   getContactRecipient,
   messageContactRef as messageContact,
   phoneFromAdhocId,
+  resolvePrimaryParent,
   type SmsContactType,
 } from "@/lib/sms/contacts";
 import { computeFamilyStageSets } from "@/lib/sms/stages";
+import { bumpLeadReachOut } from "@/lib/leads";
 
 /** Where a conversation's contact sits in the pipeline — the inbox's
  *  filter chips. Family stages come from the shared bucketing in
@@ -51,6 +58,10 @@ export interface SmsConversation {
   /** True when the most recent message is inbound (contact texted, no
    *  reply yet) — drives the unread dot in the inbox. */
   needsReply: boolean;
+  /** Everything the inbox search box should match beyond the display
+   *  name — parent + student names for families, the student's name
+   *  for lead contacts. Lowercased server-side. */
+  searchText: string;
 }
 
 function parseContactParams(req: NextRequest): {
@@ -110,6 +121,8 @@ export async function GET(req: NextRequest) {
         campRows,
         waivers,
         tascoRows,
+        parents,
+        students,
         fap,
         srp,
         apps,
@@ -121,6 +134,8 @@ export async function GET(req: NextRequest) {
           xano.summerCamp.getAll().catch(() => []),
           xano.websiteWaivers.getAll().catch(() => []),
           xano.tascoSummerVisits.getAll().catch(() => []),
+          xano.parents.getAll().catch(() => []),
+          xano.students.getAll().catch(() => []),
           withStages
             ? xano.familyApplicationProgress.getByYear(yearId).catch(() => [])
             : Promise.resolve([]),
@@ -167,6 +182,61 @@ export async function GET(req: NextRequest) {
           return [t.id, student ? `Parent of ${student}` : ""];
         })
       );
+      // Per-contact search haystack — the inbox search box matches on
+      // this in addition to the display name, so typing a STUDENT's or
+      // a parent's name finds the family conversation even though the
+      // list shows only the family name.
+      const familySearch = new Map<number, string>();
+      const parentById = new Map(parents.map((p) => [p.id, p]));
+      for (const f of families) {
+        const names = xano.families
+          .getParentIds(f)
+          .map((pid) => parentById.get(pid))
+          .filter((p) => p != null)
+          .map((p) => `${p.first_name ?? ""} ${p.last_name ?? ""}`.trim());
+        familySearch.set(f.id, names.join(" "));
+      }
+      for (const s of students) {
+        const fid = s.registration_families_id;
+        if (!fid) continue;
+        const name = `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim();
+        if (!name) continue;
+        familySearch.set(fid, `${familySearch.get(fid) ?? ""} ${name}`);
+      }
+      const inquirySearch = new Map(
+        inquiries.map((i) => [
+          i.id,
+          `${i.student_first_name ?? ""} ${i.student_last_name ?? ""}`.trim(),
+        ])
+      );
+      const campSearch = new Map(
+        campRows.map((c) => [
+          c.id,
+          `${c.student_first_name ?? ""} ${c.student_last_name ?? ""}`.trim(),
+        ])
+      );
+      const visitSearch = new Map(
+        waivers.map((w) => [w.id, (w.student_name ?? "").trim()])
+      );
+      const tascoSearch = new Map(
+        tascoRows.map((t) => [t.id, (t.student_name ?? "").trim()])
+      );
+      const searchFor = (type: SmsContactType, id: number): string => {
+        const extra =
+          type === "family"
+            ? familySearch.get(id)
+            : type === "inquiry"
+              ? inquirySearch.get(id)
+              : type === "camp"
+                ? campSearch.get(id)
+                : type === "visit"
+                  ? visitSearch.get(id)
+                  : type === "tasco"
+                    ? tascoSearch.get(id)
+                    : "";
+        return (extra ?? "").toLowerCase();
+      };
+
       const nameFor = (type: SmsContactType, id: number): string => {
         // Ad-hoc threads have no record — the formatted number IS the
         // name (the inbox shows it verbatim).
@@ -240,6 +310,7 @@ export async function GET(req: NextRequest) {
             last.template.startsWith("group"),
           messageCount: count,
           needsReply: last.direction === "inbound",
+          searchText: searchFor(type, id),
         }))
         .sort((a, b) => b.lastAt - a.lastAt);
       return NextResponse.json({ conversations });
@@ -341,7 +412,77 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Manual texts count as contact — stamp the lead's
+    // `last_reach_out` the same way a comms-log note does, so the
+    // recruitment lists' "Last contact" column reflects the send.
+    // Best-effort: bumpLeadReachOut logs and swallows its own errors.
+    if (LEAD_NOTE_SOURCES.includes(contactType as LeadNoteSource)) {
+      await bumpLeadReachOut(contactType as LeadNoteSource, contactId);
+    }
+
     return NextResponse.json(result, { status: 201 });
+  } catch (err) {
+    return handleAdminError(err);
+  }
+}
+
+/**
+ * `PATCH { contactType: "family", contactId, optedOut }` — manually
+ * flip a family's SMS opt-out state (the account-holder parent's
+ * `sms_opted_out_at`). Admin uses this to opt a family back in after
+ * an accidental STOP, or to opt one out by hand.
+ *
+ * Scope note: only family contacts carry an app-side opt-out flag on a
+ * parent row. And our flag is only half the story — if the parent
+ * actually texted STOP, Twilio/carriers keep blocking sends (error
+ * 21610) until the parent texts START from their phone; the UI copy
+ * says so.
+ */
+export async function PATCH(req: NextRequest) {
+  try {
+    await requireAdmin();
+    const body = await req.json().catch(() => null);
+    const contactId = Number(body?.contactId);
+    if (body?.contactType !== "family" || !Number.isFinite(contactId)) {
+      return NextResponse.json(
+        { error: "Opt-out state can only be changed for family contacts" },
+        { status: 400 }
+      );
+    }
+    const optedOut = body?.optedOut === true;
+
+    const parent = await resolvePrimaryParent(contactId);
+    if (!parent) {
+      return NextResponse.json(
+        { error: "No parent on file for this family" },
+        { status: 404 }
+      );
+    }
+
+    // Xano PATCH silently drops empty inputs, so null can't clear the
+    // column — 0 is the "opted back in" sentinel (falsy everywhere the
+    // flag is read). Verify the write actually landed: if the endpoint
+    // treats 0 as empty too, the timestamp would survive and the UI
+    // would un-gray a composer that still can't send.
+    const updated = await xano.parents.update(parent.id, {
+      sms_opted_out_at: optedOut ? Date.now() : 0,
+    });
+    if (!optedOut && updated?.sms_opted_out_at) {
+      return NextResponse.json(
+        {
+          error:
+            "Xano ignored the opt-in write — the registration_parents " +
+            "PATCH endpoint must accept 0 for `sms_opted_out_at`.",
+        },
+        { status: 502 }
+      );
+    }
+
+    return NextResponse.json({
+      ok: true,
+      parentId: parent.id,
+      optedOut: Boolean(updated?.sms_opted_out_at),
+    });
   } catch (err) {
     return handleAdminError(err);
   }

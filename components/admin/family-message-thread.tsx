@@ -124,14 +124,71 @@ export function FamilyMessageThread({
 
   const [body, setBody] = useState("");
   const [sending, setSending] = useState(false);
+  const [optingIn, setOptingIn] = useState(false);
 
   const canSend = Boolean(recipient?.e164) && !recipient?.optedOut;
+
+  // Manual opt-in — clears the parent row's `sms_opted_out_at` so the
+  // app allows sends again. Family threads only (the flag lives on the
+  // parent record; lead contacts gate on their own form-consent flags).
+  async function optBackIn() {
+    if (optingIn || contactType !== "family") return;
+    setOptingIn(true);
+    try {
+      const res = await fetch("/api/admin/messages", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contactType,
+          contactId,
+          optedOut: false,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        throw new Error(err?.error ?? `Opt-in failed (${res.status})`);
+      }
+      await mutate();
+      toast.success(
+        "Opted back in. If they texted STOP, their carrier still blocks texts until they reply START."
+      );
+    } catch (err) {
+      console.error("Failed to opt contact back in:", err);
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't opt them back in."
+      );
+    } finally {
+      setOptingIn(false);
+    }
+  }
   const segments = body.length === 0 ? 0 : Math.ceil(body.length / 160);
 
   async function send() {
     const text = body.trim();
     if (!text || sending || !canSend) return;
     setSending(true);
+    // Optimistic append — the bubble shows the instant Send is clicked
+    // (status "Sending…"), then revalidation swaps in the real logged
+    // row. Negative id so it can never collide with a Xano row id.
+    const optimistic: XanoSmsMessage = {
+      id: -Date.now(),
+      created_at: Date.now(),
+      registration_families_id: contactType === "family" ? contactId : null,
+      direction: "outbound",
+      to_number: recipient?.e164 ?? "",
+      from_number: "",
+      body: text,
+      status: "sending",
+      template: "manual",
+    };
+    await mutate(
+      (curr) =>
+        curr
+          ? { ...curr, messages: [...curr.messages, optimistic] }
+          : curr,
+      { revalidate: false }
+    );
+    setBody("");
     try {
       const res = await fetch("/api/admin/messages", {
         method: "POST",
@@ -148,13 +205,16 @@ export function FamilyMessageThread({
         const err = await res.json().catch(() => null);
         throw new Error(err?.error ?? `Send failed (${res.status})`);
       }
-      setBody("");
       await mutate();
       onSent?.();
       toast.success("Text sent.");
     } catch (err) {
       console.error("Failed to send text:", err);
       toast.error(err instanceof Error ? err.message : "Couldn't send text.");
+      // Revalidate to drop the optimistic bubble, and give the admin
+      // their draft back so the failed text isn't lost.
+      await mutate();
+      setBody(text);
     } finally {
       setSending(false);
     }
@@ -211,15 +271,34 @@ export function FamilyMessageThread({
 
       <div className="space-y-2 border-t bg-muted/20 px-4 py-3">
         {recipient?.optedOut ? (
-          <Marker className="text-amber-600">
-            <MarkerIcon>
-              <Ban />
-            </MarkerIcon>
-            <MarkerContent>
-              This contact opted out of text messages. You can&rsquo;t
-              message them until they opt back in.
-            </MarkerContent>
-          </Marker>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <Marker className="text-amber-600">
+              <MarkerIcon>
+                <Ban />
+              </MarkerIcon>
+              <MarkerContent>
+                This contact opted out of text messages.
+                {contactType === "family"
+                  ? " If they texted STOP, they must reply START before texts go through — opting in here only clears our flag."
+                  : " You can't message them until they opt back in."}
+              </MarkerContent>
+            </Marker>
+            {contactType === "family" ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="shrink-0 bg-white"
+                disabled={optingIn}
+                onClick={() => void optBackIn()}
+              >
+                {optingIn ? (
+                  <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                ) : null}
+                Opt back in
+              </Button>
+            ) : null}
+          </div>
         ) : !recipient?.e164 ? (
           <Marker className="text-muted-foreground">
             <MarkerContent>
@@ -282,6 +361,7 @@ export function FamilyMessageThread({
 
 /** Human status label for the message footer. */
 const STATUS_LABEL: Record<string, string> = {
+  sending: "Sending…",
   queued: "Queued",
   sent: "Sent",
   delivered: "Delivered",
