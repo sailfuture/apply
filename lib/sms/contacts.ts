@@ -3,10 +3,12 @@ import {
   type XanoFamily,
   type XanoInquiry,
   type XanoParent,
+  type XanoSmsMessage,
   type XanoSummerCampInquiry,
+  type XanoTascoSummerVisit,
   type XanoWebsiteLiabilityWaiver,
 } from "@/lib/xano";
-import { toE164 } from "@/lib/phone";
+import { formatUSPhone, toE164 } from "@/lib/phone";
 
 /**
  * Unified SMS contact model. A phone number that texts us — or that
@@ -18,21 +20,34 @@ import { toE164 } from "@/lib/phone";
  *   - `camp`    — a summer-camp parent (`registration_summer_camp`,
  *                 standalone rows with their own phone/email).
  *   - `inquiry` — a prospective-family inquiry (`registration_inquiry`).
- *   - `visit`   — a campus-visit waiver signer
+ *   - `visit`   — a campus-visit liability-waiver signer
  *                 (`website_liability_waiver`) who ticked the marketing
  *                 opt-in on the public form.
+ *   - `tasco`   — a TASCO summer-visit sign-up (`tasco_summer_visit`) —
+ *                 recruitment leads captured at St. Pete rec centers.
+ *   - `adhoc`   — no record at all: a phone number staff typed by hand.
+ *                 The contact ID **is** the bare 10-digit number (fits a
+ *                 JS number exactly); messages log with every FK null
+ *                 and thread by phone instead.
  *
  * When one number matches more than one record type (an inquiry that
  * converted to a family; a camp parent who later applied), attribution
- * follows `family > camp > inquiry > visit` so the thread lands on the
- * most established record.
+ * follows `family > camp > inquiry > visit > tasco` so the thread lands
+ * on the most established record. `adhoc` never wins a collision — it
+ * only exists when nothing matched.
  *
  * Messages are deliberately NOT year-scoped: a contact's thread is one
  * continuous history across academic years (the optional year id on a
  * message row is trigger context, never a filter).
  */
 
-export type SmsContactType = "family" | "inquiry" | "camp" | "visit";
+export type SmsContactType =
+  | "family"
+  | "inquiry"
+  | "camp"
+  | "visit"
+  | "tasco"
+  | "adhoc";
 
 export interface SmsContact {
   type: SmsContactType;
@@ -61,6 +76,23 @@ export interface SmsContact {
 export function normPhone(raw: string | number | null | undefined): string {
   const d = String(raw ?? "").replace(/\D/g, "");
   return d.length === 11 && d.startsWith("1") ? d.slice(1) : d;
+}
+
+/* ─────────────────────── Ad-hoc phone contacts ─────────────────────── */
+
+/** Ad-hoc contact id for a raw phone — the bare 10-digit number as an
+ *  integer (safe: 10 digits ≪ 2^53). Null when the input doesn't
+ *  normalize to a US 10-digit number. */
+export function adhocIdFromPhone(
+  raw: string | number | null | undefined
+): number | null {
+  const key = normPhone(raw);
+  return key.length === 10 ? Number(key) : null;
+}
+
+/** The 10-digit phone string an ad-hoc contact id encodes. */
+export function phoneFromAdhocId(id: number): string {
+  return String(id).padStart(10, "0");
 }
 
 /* ─────────────── Family recipient helpers (canonical home) ─────────────── */
@@ -194,6 +226,43 @@ function inquiryContact(row: XanoInquiry): SmsContact {
   };
 }
 
+function tascoContact(row: XanoTascoSummerVisit): SmsContact {
+  const student = (row.student_name ?? "").trim();
+  return {
+    type: "tasco",
+    id: row.id,
+    // The TASCO form captured no parent name — the student is the only
+    // name on the record, so the thread reads "Parent of <student>".
+    name: student ? `Parent of ${student}` : `TASCO #${row.id}`,
+    personName: "",
+    studentNames: student || null,
+    phone: row.parent_phone ?? "",
+    e164: toE164(row.parent_phone),
+    // Signing up at the rec-center table is the consent signal (same
+    // implied-consent stance as summer camp); Twilio's carrier-level
+    // STOP still blocks sends to a number that opted out.
+    optedOut: false,
+    parentId: null,
+  };
+}
+
+/** A number with no record behind it — staff typed it by hand, or an
+ *  unknown number texted us. Named by its formatted phone. */
+function adhocContact(id: number): SmsContact {
+  const phone = phoneFromAdhocId(id);
+  return {
+    type: "adhoc",
+    id,
+    name: formatUSPhone(phone) || phone,
+    personName: "",
+    studentNames: null,
+    phone,
+    e164: toE164(phone),
+    optedOut: false,
+    parentId: null,
+  };
+}
+
 function visitContact(row: XanoWebsiteLiabilityWaiver): SmsContact {
   const personName = (row.parent_name ?? "").trim();
   return {
@@ -212,14 +281,14 @@ function visitContact(row: XanoWebsiteLiabilityWaiver): SmsContact {
 }
 
 /**
- * Phone → contact directory across all four record types. Five table
- * scans total (families, parents, camp, inquiries, visit waivers),
- * then first-wins insertion in priority order so
- * `family > camp > inquiry > visit` on collisions. Numbers that don't
- * normalize to 10 digits are skipped.
+ * Phone → contact directory across all five record types. Six table
+ * scans total (families, parents, camp, inquiries, visit waivers,
+ * TASCO sign-ups), then first-wins insertion in priority order so
+ * `family > camp > inquiry > visit > tasco` on collisions. Numbers
+ * that don't normalize to 10 digits are skipped.
  */
 export async function buildSmsDirectory(): Promise<Map<string, SmsContact>> {
-  const [families, parents, campRows, inquiries, waivers] =
+  const [families, parents, campRows, inquiries, waivers, tascoRows] =
     await Promise.all([
       xano.families.getAll().catch(() => [] as XanoFamily[]),
       xano.parents.getAll().catch(() => [] as XanoParent[]),
@@ -228,6 +297,9 @@ export async function buildSmsDirectory(): Promise<Map<string, SmsContact>> {
       xano.websiteWaivers
         .getAll()
         .catch(() => [] as XanoWebsiteLiabilityWaiver[]),
+      xano.tascoSummerVisits
+        .getAll()
+        .catch(() => [] as XanoTascoSummerVisit[]),
     ]);
 
   const directory = new Map<string, SmsContact>();
@@ -251,6 +323,9 @@ export async function buildSmsDirectory(): Promise<Map<string, SmsContact>> {
   }
   for (const row of waivers) {
     add(normPhone(row.parent_phone), visitContact(row));
+  }
+  for (const row of tascoRows) {
+    add(normPhone(row.parent_phone), tascoContact(row));
   }
   return directory;
 }
@@ -277,6 +352,30 @@ export async function getContactRecipient(
   id: number
 ): Promise<FamilyRecipient | null> {
   if (type === "family") return getFamilyRecipient(id);
+  if (type === "adhoc") {
+    // No record to look up — the id IS the phone number.
+    const c = adhocContact(id);
+    return {
+      parentId: null,
+      name: c.name,
+      phone: c.phone,
+      e164: c.e164,
+      optedOut: false,
+    };
+  }
+  if (type === "tasco") {
+    const rows = await xano.tascoSummerVisits.getAll().catch(() => []);
+    const row = rows.find((r) => r.id === id);
+    if (!row) return null;
+    const c = tascoContact(row);
+    return {
+      parentId: null,
+      name: c.name,
+      phone: c.phone,
+      e164: c.e164,
+      optedOut: c.optedOut,
+    };
+  }
   if (type === "camp") {
     const rows = await xano.summerCamp.getAll().catch(() => []);
     const row = rows.find((r) => r.id === id);
@@ -315,8 +414,9 @@ export async function getContactRecipient(
   };
 }
 
-/** The `sms_messages` foreign-key quartet for a contact — exactly one
- *  of the four ids is set. Shared by every code path that logs a row
+/** The `sms_messages` foreign-key set for a contact — at most one of
+ *  the five ids is set (ad-hoc contacts set none; their thread keys on
+ *  the phone number itself). Shared by every code path that logs a row
  *  so a message can never be attributed to two records. */
 export function contactMessageKeys(
   contact: { type: SmsContactType; id: number } | null
@@ -325,6 +425,7 @@ export function contactMessageKeys(
   registration_inquiry_id: number | null;
   registration_summer_camp_id: number | null;
   website_liability_waiver_id: number | null;
+  tasco_summer_visit_id: number | null;
 } {
   return {
     registration_families_id:
@@ -335,5 +436,47 @@ export function contactMessageKeys(
       contact?.type === "camp" ? contact.id : null,
     website_liability_waiver_id:
       contact?.type === "visit" ? contact.id : null,
+    tasco_summer_visit_id:
+      contact?.type === "tasco" ? contact.id : null,
   };
+}
+
+/** The number on the CONTACT side of a message — who we texted for
+ *  outbound, who texted us for inbound. Bare 10-digit form. */
+export function counterpartyPhone(m: XanoSmsMessage): string {
+  return normPhone(m.direction === "inbound" ? m.from_number : m.to_number);
+}
+
+/** Which contact a logged message belongs to — the inverse of
+ *  `contactMessageKeys`. At most one of the five FK columns is set per
+ *  row (family wins if legacy rows ever carry more than one). Rows with
+ *  NO contact FK are ad-hoc sends / texts from unknown numbers: they
+ *  thread by the counterparty phone, with the 10-digit number doubling
+ *  as the contact id.
+ *
+ *  Shared by the inbox feed and the unread-count endpoint so both agree
+ *  on how the flat message log groups into conversations. */
+export function messageContactRef(
+  m: XanoSmsMessage
+): { type: SmsContactType; id: number } | null {
+  if (m.registration_families_id) {
+    return { type: "family", id: m.registration_families_id };
+  }
+  if (m.registration_inquiry_id) {
+    return { type: "inquiry", id: m.registration_inquiry_id };
+  }
+  if (m.registration_summer_camp_id) {
+    return { type: "camp", id: m.registration_summer_camp_id };
+  }
+  if (m.website_liability_waiver_id) {
+    return { type: "visit", id: m.website_liability_waiver_id };
+  }
+  if (m.tasco_summer_visit_id) {
+    return { type: "tasco", id: m.tasco_summer_visit_id };
+  }
+  const adhocId = adhocIdFromPhone(counterpartyPhone(m));
+  if (adhocId !== null) {
+    return { type: "adhoc", id: adhocId };
+  }
+  return null;
 }

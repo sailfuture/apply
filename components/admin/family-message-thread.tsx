@@ -48,7 +48,15 @@ export const messagesFetcher = async (
   return res.json();
 };
 
-export type ThreadContactType = "family" | "inquiry" | "camp" | "visit";
+export type ThreadContactType =
+  | "family"
+  | "inquiry"
+  | "camp"
+  | "visit"
+  | "tasco"
+  /** A bare phone number with no record — the id IS the 10-digit
+   *  number (see `adhocIdFromPhone` in lib/sms/contacts.ts). */
+  | "adhoc";
 
 export function contactMessagesKey(
   type: ThreadContactType,

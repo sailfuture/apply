@@ -5,6 +5,7 @@ import { getTwilioAuthToken } from "@/lib/twilio";
 import { sendEmail } from "@/lib/emails/send";
 import { smsReplyReceived } from "@/lib/emails/templates";
 import {
+  adhocIdFromPhone,
   contactMessageKeys,
   findSmsContactByPhone,
 } from "@/lib/sms/contacts";
@@ -106,8 +107,13 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Log the inbound text on the contact's thread (when attributable).
-    if (contact) {
+    // Log the inbound text — on the contact's thread when attributable,
+    // otherwise as an ad-hoc (no-FK) row so the text still lands in the
+    // inbox threaded by its number. Staff-initiated ad-hoc sends rely
+    // on this: the reply has no record to match, but it must not
+    // vanish. Non-US-shaped numbers (shortcodes, alphanumeric senders)
+    // still fall through to the warn — they can't thread by phone.
+    if (contact || adhocIdFromPhone(from) !== null) {
       await xano.smsMessages
         .create({
           ...contactMessageKeys(contact),

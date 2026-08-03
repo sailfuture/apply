@@ -7,9 +7,11 @@ import { toast } from "sonner";
 import { Loader2, MessageSquareText, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { adminFetcher } from "@/lib/admin-fetcher";
+import { formatUSPhone } from "@/lib/phone";
 import { FamilyMessageThread } from "@/components/admin/family-message-thread";
 import { GroupMessageDialog } from "@/components/admin/group-message-dialog";
 import { NewMessageDialog } from "@/components/admin/new-message-dialog";
+import { SMS_VIEWED_EVENT } from "@/components/admin/messages-unread-badge";
 import type {
   ConversationStage,
   SmsConversation,
@@ -25,7 +27,8 @@ const STAGE_FILTERS: Array<{ value: ConversationStage | "all"; label: string }> 
     { value: "application", label: "Applying" },
     { value: "inquiry", label: "Inquiries" },
     { value: "camp", label: "Camp" },
-    { value: "visit", label: "Visits" },
+    { value: "visit", label: "Liability Waiver Visit" },
+    { value: "tasco", label: "TASCO" },
   ];
 
 /**
@@ -62,7 +65,7 @@ export default function AdminMessagesPage() {
     const raw = data?.conversations ?? [];
     return raw.map((c) => {
       const cacheKey = `${c.contactType}:${c.contactId}`;
-      const isPlaceholder = /^(Family|Inquiry|Camp|Visit) #\d+$/.test(
+      const isPlaceholder = /^(Family|Inquiry|Camp|Visit|TASCO) #\d+$/.test(
         c.name
       );
       if (!isPlaceholder) {
@@ -118,6 +121,10 @@ export default function AdminMessagesPage() {
       const next = { ...prev, [key]: lastAt };
       try {
         localStorage.setItem("sms-viewed-v1", JSON.stringify(next));
+        // Same-tab nudge for the nav's unread badge — `storage` only
+        // fires in other tabs, so without this the badge would keep
+        // counting a thread the admin is currently reading.
+        window.dispatchEvent(new Event(SMS_VIEWED_EVENT));
       } catch {
         // Storage full/blocked — the dot still grays for this session.
       }
@@ -135,6 +142,7 @@ export default function AdminMessagesPage() {
         contactType: selected.type,
         contactId: selected.id,
         name: selected.name,
+        phone: "",
       })
     : null;
 
@@ -284,9 +292,12 @@ export default function AdminMessagesPage() {
                     <div className="flex items-center justify-between gap-2">
                       <span className="flex min-w-0 items-center gap-1.5">
                         <span className="truncate text-sm font-medium">
-                          {c.name}
+                          {displayName(c.contactType, c.name)}
                         </span>
-                        <ContactBadge type={c.contactType} />
+                        <ContactPhone
+                          type={c.contactType}
+                          phone={c.phone}
+                        />
                       </span>
                       <span className="shrink-0 text-[10px] text-muted-foreground tabular-nums">
                         {relTime(c.lastAt)}
@@ -357,8 +368,13 @@ export default function AdminMessagesPage() {
             <>
               <div className="flex items-center justify-between gap-2 border-b px-4 py-3">
                 <p className="flex min-w-0 items-center gap-1.5 text-sm font-semibold">
-                  <span className="truncate">{active.name}</span>
-                  <ContactBadge type={active.contactType} />
+                  <span className="truncate">
+                    {displayName(active.contactType, active.name)}
+                  </span>
+                  <ContactPhone
+                    type={active.contactType}
+                    phone={active.phone}
+                  />
                 </p>
                 {/* Quick way back to the list on mobile, where the list
                     is hidden while a thread is open. */}
@@ -391,18 +407,31 @@ export default function AdminMessagesPage() {
   );
 }
 
-/** Tiny type chip beside a conversation name. Families are the
- *  default relationship, so they carry no badge — only inquiry and
- *  summer-camp contacts are flagged. */
-function ContactBadge({
+/** Ad-hoc conversations are NAMED by their raw 10-digit number —
+ *  pretty-print it; every other type shows its record name. */
+function displayName(
+  type: SmsConversation["contactType"],
+  name: string
+): string {
+  if (type === "adhoc") return formatUSPhone(name) || name;
+  return name;
+}
+
+/** The contact's phone beside the conversation name (replaces the old
+ *  Inquiry/Camp/Visit type chip — the stage filter chips already say
+ *  where a contact sits). Ad-hoc rows skip it: their NAME is already
+ *  the number. */
+function ContactPhone({
   type,
+  phone,
 }: {
   type: SmsConversation["contactType"];
+  phone: string;
 }) {
-  if (type === "family") return null;
+  if (type === "adhoc" || !phone) return null;
   return (
-    <span className="shrink-0 rounded-full border px-1.5 py-px text-[10px] font-medium text-muted-foreground">
-      {type === "inquiry" ? "Inquiry" : type === "camp" ? "Camp" : "Visit"}
+    <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+      {formatUSPhone(phone) || phone}
     </span>
   );
 }

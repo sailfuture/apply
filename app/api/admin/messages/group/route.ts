@@ -4,6 +4,8 @@ import { xano } from "@/lib/xano";
 import { sendSms, type SendSmsInput } from "@/lib/sms/send";
 import { toE164 } from "@/lib/phone";
 import {
+  normPhone,
+  phoneFromAdhocId,
   pickAccountHolderParent,
   type SmsContactType,
 } from "@/lib/sms/contacts";
@@ -35,6 +37,10 @@ const CONTACT_TYPES: SmsContactType[] = [
   "inquiry",
   "camp",
   "visit",
+  "tasco",
+  // Ad-hoc: staff-typed numbers with no record — id IS the 10-digit
+  // phone; sends log with no contact FK and thread by number.
+  "adhoc",
 ];
 const BLAST_ID_RE = /^[\w-]{6,64}$/;
 
@@ -105,7 +111,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json(
           {
             error:
-              "Each contact must be { type: family|inquiry|camp|visit, id: number }",
+              "Each contact must be { type: family|inquiry|camp|visit|tasco|adhoc, id: number }",
           },
           { status: 400 }
         );
@@ -138,24 +144,30 @@ export async function POST(req: NextRequest) {
     const wantInquiries = contacts.some((c) => c.type === "inquiry");
     const wantCamp = contacts.some((c) => c.type === "camp");
     const wantVisits = contacts.some((c) => c.type === "visit");
-    const [families, inquiries, campRows, waivers] = await Promise.all([
-      wantFamilies
-        ? xano.families.getAllDetails().catch(() => [])
-        : Promise.resolve([]),
-      wantInquiries
-        ? xano.inquiries.getAll().catch(() => [])
-        : Promise.resolve([]),
-      wantCamp
-        ? xano.summerCamp.getAll().catch(() => [])
-        : Promise.resolve([]),
-      wantVisits
-        ? xano.websiteWaivers.getAll().catch(() => [])
-        : Promise.resolve([]),
-    ]);
+    const wantTasco = contacts.some((c) => c.type === "tasco");
+    const [families, inquiries, campRows, waivers, tascoRows] =
+      await Promise.all([
+        wantFamilies
+          ? xano.families.getAllDetails().catch(() => [])
+          : Promise.resolve([]),
+        wantInquiries
+          ? xano.inquiries.getAll().catch(() => [])
+          : Promise.resolve([]),
+        wantCamp
+          ? xano.summerCamp.getAll().catch(() => [])
+          : Promise.resolve([]),
+        wantVisits
+          ? xano.websiteWaivers.getAll().catch(() => [])
+          : Promise.resolve([]),
+        wantTasco
+          ? xano.tascoSummerVisits.getAll().catch(() => [])
+          : Promise.resolve([]),
+      ]);
     const familyById = new Map(families.map((f) => [f.id, f]));
     const inquiryById = new Map(inquiries.map((i) => [i.id, i]));
     const campById = new Map(campRows.map((c) => [c.id, c]));
     const visitById = new Map(waivers.map((w) => [w.id, w]));
+    const tascoById = new Map(tascoRows.map((t) => [t.id, t]));
 
     interface Target {
       ref: ContactRef;
@@ -230,6 +242,41 @@ export async function POST(req: NextRequest) {
           hasPhone: Boolean(e164),
         };
       }
+      if (ref.type === "tasco") {
+        const row = tascoById.get(ref.id);
+        const e164 = toE164(row?.parent_phone ?? "");
+        return {
+          ref,
+          send: {
+            contact: ref,
+            yearId,
+            body: text,
+            author: { email: admin.email, name: admin.name },
+          },
+          // TASCO rows have no parent name — personalization falls
+          // back to "there".
+          firstName: "",
+          sendable: Boolean(row) && Boolean(e164),
+          optedOut: false,
+          hasPhone: Boolean(e164),
+        };
+      }
+      if (ref.type === "adhoc") {
+        const e164 = toE164(phoneFromAdhocId(ref.id));
+        return {
+          ref,
+          send: {
+            contact: ref,
+            yearId,
+            body: text,
+            author: { email: admin.email, name: admin.name },
+          },
+          firstName: "",
+          sendable: Boolean(e164),
+          optedOut: false,
+          hasPhone: Boolean(e164),
+        };
+      }
       const row = campById.get(ref.id);
       const e164 = toE164(row?.primary_phone ?? "");
       return {
@@ -267,6 +314,20 @@ export async function POST(req: NextRequest) {
           alreadySent.add(`camp-${m.registration_summer_camp_id}`);
         if (m.website_liability_waiver_id)
           alreadySent.add(`visit-${m.website_liability_waiver_id}`);
+        if (m.tasco_summer_visit_id)
+          alreadySent.add(`tasco-${m.tasco_summer_visit_id}`);
+        // Ad-hoc rows carry no FK — resume-match them on the number
+        // the blast texted.
+        if (
+          !m.registration_families_id &&
+          !m.registration_inquiry_id &&
+          !m.registration_summer_camp_id &&
+          !m.website_liability_waiver_id &&
+          !m.tasco_summer_visit_id
+        ) {
+          const key = normPhone(m.to_number);
+          if (key.length === 10) alreadySent.add(`adhoc-${Number(key)}`);
+        }
       }
     } catch {
       // proceed without resume data

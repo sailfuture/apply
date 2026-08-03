@@ -1115,6 +1115,14 @@ export interface XanoAdminNote {
    *  Optional because the column was added after launch and family
    *  notes still have it null/undefined. */
   registration_inquiry_id?: number | null;
+  /** Summer-camp lead this note belongs to. One of the four LEAD FKs
+   *  (inquiry / camp / visit / TASCO) — mutually exclusive with each
+   *  other and with the family + progress-row scopes. */
+  registration_summer_camp_id?: number | null;
+  /** Liability-waiver visit lead this note belongs to. */
+  website_liability_waiver_id?: number | null;
+  /** TASCO summer-visit lead this note belongs to. */
+  tasco_summer_visit_id?: number | null;
   /** Per-student registration progress row this note belongs to. Set
    *  for notes that are about a specific student's post-acceptance
    *  registration packet (e.g. a stalled volunteer-hours stage). All
@@ -1152,6 +1160,32 @@ export interface XanoAdminNote {
   last_edited: number | null;
 }
 
+/** The four recruitment lead sources that can own a note. Same
+ *  vocabulary the All Leads page and the SMS contact model use. */
+export type LeadNoteSource = "inquiry" | "camp" | "visit" | "tasco";
+
+export const LEAD_NOTE_SOURCES: LeadNoteSource[] = [
+  "inquiry",
+  "camp",
+  "visit",
+  "tasco",
+];
+
+/** Which `registration_admin_notes` FK column scopes a note to each
+ *  lead source. ONE map so every read/write path agrees. */
+export const LEAD_NOTE_COLUMN: Record<
+  LeadNoteSource,
+  | "registration_inquiry_id"
+  | "registration_summer_camp_id"
+  | "website_liability_waiver_id"
+  | "tasco_summer_visit_id"
+> = {
+  inquiry: "registration_inquiry_id",
+  camp: "registration_summer_camp_id",
+  visit: "website_liability_waiver_id",
+  tasco: "tasco_summer_visit_id",
+};
+
 /**
  * One SMS in a family's text thread (`sms_messages`). Both outbound
  * (staff-typed, automated triggers, group blasts) and inbound (family
@@ -1178,6 +1212,13 @@ export interface XanoSmsMessage {
    *  text belongs to. Same Xano column/input requirement as above
    *  (column added 2026-07-22). */
   website_liability_waiver_id?: number | null;
+  /** TASCO summer-visit contact (`tasco_summer_visit`) this text
+   *  belongs to. Same Xano column/input requirement as above. Note the
+   *  target table lives on the `2GcBXyoA` API group but this FK column
+   *  lives on `sms_messages` in the main group like its siblings.
+   *  Rows sent to an AD-HOC number (staff typed a phone that matches
+   *  no record) carry NO contact FK at all — they thread by phone. */
+  tasco_summer_visit_id?: number | null;
   /** Optional student/year context — set when a trigger text is about
    *  a specific student or year; null for general/manual/group texts. */
   registration_students_id?: number | null;
@@ -1263,6 +1304,19 @@ export interface XanoSummerCampInquiry {
   id: number;
   created_at: number;
   isNotAttending: boolean;
+  /** Admin flag — student actually showed up to camp. Optional because
+   *  legacy rows predate the column; undefined reads as `false`. */
+  attended_camp?: boolean;
+  /** Admin's 1–5 conversion-likelihood stars (All Leads page). Same
+   *  semantics as `XanoInquiry.interest_level`: 0/undefined = unrated. */
+  interest_level?: number | null;
+  /** Admin "we've reached out" flag — same semantics as
+   *  `XanoInquiry.isFollowedUp`; undefined reads as `false`. */
+  isFollowedUp?: boolean;
+  /** Server-managed timestamp of the most recent note on this lead.
+   *  Bumped by the notes POST endpoint; never hand-edited (the admin
+   *  PATCH allowlists exclude it). */
+  last_reach_out?: number | null;
   student_first_name: string;
   student_last_name: string;
   gender: string;
@@ -1310,6 +1364,13 @@ export interface XanoWebsiteLiabilityWaiver {
   signed_ip: string;
   user_agent: string;
   signed_at: number | null;
+  /** Admin's 1–5 conversion-likelihood stars (All Leads page).
+   *  0/undefined = unrated. */
+  interest_level?: number | null;
+  /** Admin "we've reached out" flag; undefined reads as `false`. */
+  isFollowedUp?: boolean;
+  /** Server-managed timestamp of the most recent note on this lead. */
+  last_reach_out?: number | null;
 }
 
 /** One TASCO summer-visit sign-up (`tasco_summer_visit`). Public form
@@ -1332,6 +1393,13 @@ export interface XanoTascoSummerVisit {
   parent_phone: string;
   parent_email: string;
   marketing_opt_in: boolean;
+  /** Admin's 1–5 conversion-likelihood stars (All Leads page).
+   *  0/undefined = unrated. */
+  interest_level?: number | null;
+  /** Admin "we've reached out" flag; undefined reads as `false`. */
+  isFollowedUp?: boolean;
+  /** Server-managed timestamp of the most recent note on this lead. */
+  last_reach_out?: number | null;
 }
 
 /** Lookup table — distinguishes new applicants from returning enrollments. */
@@ -4454,14 +4522,16 @@ export const xano = {
         return Array.isArray(items)
           ? items
               .filter((n) => n.registration_families_id === familyId)
-              // Family notes only — inquiry-scoped notes share the
-              // same table but live on a different foreign key. Filter
-              // them out so a stray match (e.g. shared ids across
-              // tables) doesn't bleed into the family timeline.
-              .filter(
-                (n) =>
-                  n.registration_inquiry_id === null ||
-                  n.registration_inquiry_id === undefined
+              // Family notes only — LEAD-scoped notes (inquiry, camp,
+              // visit, TASCO) share the same table but live on their
+              // own foreign keys. Filter them out so a stray match
+              // (e.g. shared ids across tables) can't bleed into the
+              // family timeline.
+              .filter((n) =>
+                LEAD_NOTE_SOURCES.every((s) => {
+                  const v = n[LEAD_NOTE_COLUMN[s]];
+                  return v == null || v === 0;
+                })
               )
               .sort((a, b) => b.created_at - a.created_at)
           : [];
@@ -4536,21 +4606,39 @@ export const xano = {
       }
     },
 
-    /** Inquiry-scoped variant. Same table, filtered to rows whose
-     *  `registration_inquiry_id` matches. Mutually exclusive with the
-     *  family timeline above — a single note is tied to one or the
-     *  other, not both. */
+    /** Inquiry-scoped variant. Delegates to the generic lead reader —
+     *  kept as a named accessor because several callers predate the
+     *  four-source lead model. */
     async getByInquiryId(inquiryId: number): Promise<XanoAdminNote[]> {
+      return this.getByLead("inquiry", inquiryId);
+    },
+
+    /**
+     * Notes for ONE recruitment lead, newest first. The four lead
+     * sources share `registration_admin_notes`, each keyed by its own
+     * nullable FK column (mutually exclusive with each other and with
+     * the family/progress scopes), so a lead timeline can never bleed
+     * into another's.
+     *
+     * The client-side re-filter is load-bearing, same as everywhere
+     * else in this file: a Xano query input that isn't wired returns
+     * the whole table rather than erroring.
+     */
+    async getByLead(
+      source: LeadNoteSource,
+      id: number
+    ): Promise<XanoAdminNote[]> {
+      const column = LEAD_NOTE_COLUMN[source];
       try {
         const res = await fetch(
-          `${getBaseUrl()}/registration_admin_notes?registration_inquiry_id=${inquiryId}`,
+          `${getBaseUrl()}/registration_admin_notes?${column}=${id}`,
           { cache: "no-store" }
         );
         if (!res.ok) return [];
         const items: XanoAdminNote[] = await res.json();
         return Array.isArray(items)
           ? items
-              .filter((n) => n.registration_inquiry_id === inquiryId)
+              .filter((n) => n[column] === id)
               .sort((a, b) => b.created_at - a.created_at)
           : [];
       } catch {
@@ -4561,12 +4649,22 @@ export const xano = {
     /** Every inquiry-scoped note across all inquiries, in one fetch.
      *  Powers the inquiries dashboard's "Last note" column — grouping
      *  the most-recent note per inquiry happens on the server so the
-     *  table needs one round-trip, not one per row. Filters the shared
-     *  notes table down to rows that carry an inquiry FK so family
-     *  comms never bleed in. Mirrors the unfiltered-getAll assumption
-     *  the rest of this file relies on (see `parents.getAll`): the Xano
-     *  "Get all records" endpoint returns the full array. */
+     *  table needs one round-trip, not one per row. */
     async getAllInquiryNotes(): Promise<XanoAdminNote[]> {
+      const byLead = await this.getAllLeadNotes();
+      return byLead.filter(
+        (n) => n.registration_inquiry_id != null &&
+          n.registration_inquiry_id !== 0
+      );
+    },
+
+    /** Every LEAD-scoped note (all four sources) in one fetch — powers
+     *  the "last contacted" columns on the recruitment lists and All
+     *  Leads without one round-trip per row. Family + progress-scoped
+     *  notes are filtered out. Mirrors the unfiltered-getAll
+     *  assumption the rest of this file relies on (see
+     *  `parents.getAll`): Xano's "Get all records" returns everything. */
+    async getAllLeadNotes(): Promise<XanoAdminNote[]> {
       try {
         const res = await fetch(
           `${getBaseUrl()}/registration_admin_notes`,
@@ -4575,10 +4673,11 @@ export const xano = {
         if (!res.ok) return [];
         const items: XanoAdminNote[] = await res.json();
         return Array.isArray(items)
-          ? items.filter(
-              (n) =>
-                n.registration_inquiry_id != null &&
-                n.registration_inquiry_id !== 0
+          ? items.filter((n) =>
+              LEAD_NOTE_SOURCES.some((s) => {
+                const v = n[LEAD_NOTE_COLUMN[s]];
+                return v != null && v !== 0;
+              })
             )
           : [];
       } catch {
@@ -4635,7 +4734,7 @@ export const xano = {
      * history per contact across academic years.
      */
     async getByContact(
-      type: "family" | "inquiry" | "camp" | "visit",
+      type: "family" | "inquiry" | "camp" | "visit" | "tasco",
       id: number
     ): Promise<XanoSmsMessage[]> {
       const column =
@@ -4645,7 +4744,9 @@ export const xano = {
             ? "registration_inquiry_id"
             : type === "camp"
               ? "registration_summer_camp_id"
-              : "website_liability_waiver_id";
+              : type === "tasco"
+                ? "tasco_summer_visit_id"
+                : "website_liability_waiver_id";
       try {
         const res = await fetch(
           `${getBaseUrl()}/sms_messages?${column}=${id}`,
@@ -4659,7 +4760,13 @@ export const xano = {
         return Array.isArray(items)
           ? items
               .filter((m) => m[column] === id)
-              .sort((a, b) => a.created_at - b.created_at)
+              // Tie-break on id: rows backfilled by the Twilio sync
+              // can share one `created_at` (Xano stamps import time
+              // when the Add Record endpoint doesn't accept the
+              // field), and the sync inserts oldest-first — so id
+              // order IS send order inside a tied batch. Without this
+              // the thread's order is whatever Xano returned.
+              .sort((a, b) => a.created_at - b.created_at || a.id - b.id)
           : [];
       } catch {
         return [];
@@ -4676,7 +4783,15 @@ export const xano = {
         if (!res.ok) return [];
         const items: XanoSmsMessage[] = await res.json();
         return Array.isArray(items)
-          ? items.slice().sort((a, b) => b.created_at - a.created_at)
+          ? items
+              .slice()
+              // Same tie-break as `getByContact`, reversed: with a
+              // batch of backfilled rows sharing one timestamp, the
+              // highest id is the newest message. The inbox picks each
+              // conversation's "last message" as the first row it sees
+              // per contact, so an unordered tie made it show an
+              // arbitrary message (and the wrong needs-reply state).
+              .sort((a, b) => b.created_at - a.created_at || b.id - a.id)
           : [];
       } catch {
         return [];
@@ -4702,12 +4817,12 @@ export const xano = {
     },
 
     async create(
-      // `created_at` is optionally accepted for the Twilio backfill
-      // sync, which preserves the original send time on imported
-      // rows. It only sticks if the Xano `POST /sms_messages`
-      // endpoint exposes `created_at` as an input — otherwise Xano
-      // ignores the field and stamps "now" (harmless: the sync
-      // inserts oldest-first so thread order survives).
+      // `created_at` is accepted so the Twilio backfill sync can
+      // preserve each message's ORIGINAL send time instead of letting
+      // Xano stamp the import moment (which is what made every
+      // imported text share one clock time). Requires `created_at` as
+      // an input on the Xano `POST /sms_messages` endpoint — wired
+      // 2026-08-03. Omitted on live sends, where "now" is correct.
       data: Omit<XanoSmsMessage, "id" | "created_at"> & {
         created_at?: number;
       }
@@ -4723,7 +4838,13 @@ export const xano = {
 
     async update(
       id: number,
-      data: Partial<Omit<XanoSmsMessage, "id" | "created_at">>
+      // `created_at` is writable here only for the one-time timestamp
+      // repair (`lib/sms/repair-timestamps.ts`), which restores the
+      // real Twilio send time on rows the backfill stamped with the
+      // import moment. Nothing else should ever set it.
+      data: Partial<Omit<XanoSmsMessage, "id" | "created_at">> & {
+        created_at?: number;
+      }
     ): Promise<XanoSmsMessage> {
       const res = await fetch(`${getBaseUrl()}/sms_messages/${id}`, {
         method: "PATCH",
@@ -5352,6 +5473,25 @@ export const xano = {
         return [];
       }
     },
+
+    /** Admin writes (All Leads star rating). Requires the standard
+     *  Xano PATCH endpoint on `website_liability_waiver` — throws with
+     *  the Xano status if it isn't wired yet. */
+    async update(
+      id: number,
+      patch: Partial<XanoWebsiteLiabilityWaiver>
+    ): Promise<XanoWebsiteLiabilityWaiver> {
+      const res = await fetch(
+        `${getBaseUrl()}/website_liability_waiver/${id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch),
+        }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
   },
 
   tascoSummerVisits: {
@@ -5373,6 +5513,26 @@ export const xano = {
       } catch {
         return [];
       }
+    },
+
+    /** Admin writes (All Leads star rating). Same `2GcBXyoA` group as
+     *  the read; requires the standard PATCH endpoint on
+     *  `tasco_summer_visit` — throws with the Xano status if it isn't
+     *  wired yet. */
+    async update(
+      id: number,
+      patch: Partial<XanoTascoSummerVisit>
+    ): Promise<XanoTascoSummerVisit> {
+      const res = await fetch(
+        `${getXanoHost()}/api:2GcBXyoA/tasco_summer_visit/${id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch),
+        }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
     },
   },
 

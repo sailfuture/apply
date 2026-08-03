@@ -21,13 +21,26 @@ import {
 } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 import { formatNoteTimestamp } from "@/lib/format-note-time";
-import type { XanoAdminNote } from "@/lib/xano";
+import type { LeadNoteSource, XanoAdminNote } from "@/lib/xano";
 
 const fetcher = async (url: string): Promise<XanoAdminNote[]> => {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Failed to load notes (${res.status})`);
   return res.json();
 };
+
+/** Which recruitment lead a notes timeline belongs to. All four
+ *  sources share `registration_admin_notes`, keyed by their own FK. */
+export interface LeadNoteScope {
+  source: LeadNoteSource;
+  id: number;
+}
+
+/** One SWR key per lead — the timeline and any standalone composer
+ *  subscribe to the same entry, so a post from either refreshes both. */
+export function leadNotesKey(scope: LeadNoteScope): string {
+  return `/api/admin/notes?leadSource=${scope.source}&leadId=${scope.id}`;
+}
 
 /**
  * Note categories. `short` is the abbreviated label for the
@@ -87,9 +100,14 @@ function CategoryPills({
 }
 
 interface Props {
-  inquiryId: number;
+  /** Inquiry-scoped shorthand — equivalent to
+   *  `scope={{ source: "inquiry", id }}`. */
+  inquiryId?: number;
+  /** Any recruitment lead (inquiry / camp / visit / TASCO). Takes
+   *  precedence over `inquiryId`. */
+  scope?: LeadNoteScope;
   /** Optional callback fired after a successful note add — the parent
-   *  Sheet uses this to revalidate the inquiry list so `last_reach_out`
+   *  Sheet uses this to revalidate the lead list so `last_reach_out`
    *  (bumped server-side on POST) reflects in the table immediately. */
   onNoteAdded?: () => void;
   /**
@@ -107,14 +125,16 @@ interface Props {
 }
 
 /**
- * Inquiry-scoped notes log. Backed by the same `registration_admin_notes`
- * Xano table the family-side comms log uses; rows are distinguished by
- * which foreign key is set (`registration_inquiry_id` vs
- * `registration_families_id`) so the two timelines never bleed.
+ * Lead-scoped notes log — inquiries, summer camp, liability-waiver
+ * visits, and TASCO all use this. Backed by the same
+ * `registration_admin_notes` Xano table the family-side comms log
+ * uses; rows are distinguished by which foreign key is set (one per
+ * lead source, vs `registration_families_id`) so no two timelines
+ * bleed into each other.
  *
  * Pinned notes float to the top, then chronological newest first —
  * same ordering the family notes drawer uses, so admins see the same
- * timeline shape on both surfaces.
+ * timeline shape on every surface.
  *
  * Rendering shape is controlled by `variant`:
  *   - `panel` packs the list + composer into one block (used by
@@ -125,10 +145,15 @@ interface Props {
  */
 export function InquiryNotes({
   inquiryId,
+  scope,
   onNoteAdded,
   variant = "panel",
 }: Props) {
-  const swrKey = `/api/admin/notes?inquiryId=${inquiryId}`;
+  const leadScope: LeadNoteScope = scope ?? {
+    source: "inquiry",
+    id: inquiryId ?? 0,
+  };
+  const swrKey = leadNotesKey(leadScope);
   const { data, isLoading, mutate } = useSWR<XanoAdminNote[]>(swrKey, fetcher, {
     revalidateOnFocus: false,
   });
@@ -153,7 +178,8 @@ export function InquiryNotes({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          registration_inquiry_id: inquiryId,
+          leadSource: leadScope.source,
+          leadId: leadScope.id,
           body: body.trim(),
           category,
           is_pinned: false,
@@ -307,7 +333,7 @@ export function InquiryNotes({
         <AlertDialogHeader>
           <AlertDialogTitle>Delete this note?</AlertDialogTitle>
           <AlertDialogDescription>
-            The note will be removed from the inquiry record. This
+            The note will be removed from this lead&rsquo;s record. This
             can&rsquo;t be undone.
           </AlertDialogDescription>
         </AlertDialogHeader>
@@ -362,12 +388,18 @@ export function InquiryNotes({
  */
 export function InquiryNoteComposer({
   inquiryId,
+  scope,
   onNoteAdded,
 }: {
-  inquiryId: number;
+  inquiryId?: number;
+  scope?: LeadNoteScope;
   onNoteAdded?: () => void;
 }) {
-  const swrKey = `/api/admin/notes?inquiryId=${inquiryId}`;
+  const leadScope: LeadNoteScope = scope ?? {
+    source: "inquiry",
+    id: inquiryId ?? 0,
+  };
+  const swrKey = leadNotesKey(leadScope);
   const { mutate } = useSWR<XanoAdminNote[]>(swrKey, fetcher, {
     revalidateOnFocus: false,
   });
@@ -384,7 +416,8 @@ export function InquiryNoteComposer({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          registration_inquiry_id: inquiryId,
+          leadSource: leadScope.source,
+          leadId: leadScope.id,
           body: body.trim(),
           category,
           is_pinned: false,

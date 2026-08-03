@@ -13,6 +13,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { YearSelector } from "@/components/admin/year-selector";
+import {
+  NotificationBadge,
+  useUnreadMessageCount,
+} from "@/components/admin/messages-unread-badge";
 import { cn } from "@/lib/utils";
 
 interface AdminUser {
@@ -22,6 +26,10 @@ interface AdminUser {
   role: string;
 }
 
+/** Which live counter, if any, renders as a blue badge beside a nav
+ *  label. Only unread SMS today. */
+type NavBadge = "messages";
+
 interface NavLeaf {
   title: string;
   href: string;
@@ -29,25 +37,30 @@ interface NavLeaf {
    *  but the dashboard ("/admin") needs an exact match so it doesn't light up
    *  on every sub-route. */
   matchExact?: boolean;
+  badge?: NavBadge;
 }
 
 /** Either a plain link or a labeled dropdown of links. */
-type NavItem = NavLeaf | { title: string; children: NavLeaf[] };
+type NavItem =
+  | NavLeaf
+  | { title: string; children: NavLeaf[]; badge?: NavBadge };
 
 // Pipeline intentionally hidden from the nav — file still exists at
 // /admin/pipeline but we're not surfacing it while we focus on the
 // daily-job applications + inquiries + records flow.
 const NAV_ITEMS: NavItem[] = [
   { title: "Dashboard", href: "/admin", matchExact: true },
-  // Recruitment — the pre-application funnel: prospective-family
-  // inquiries, the standalone summer-camp program, and campus-visit
-  // liability waivers signed on the marketing site.
+  // Recruitment — the pre-application funnel. All Leads unifies the
+  // four lead sources (inquiries, summer camp, liability-waiver
+  // visits, TASCO) into one ratable list; the per-source pages keep
+  // their full detail views.
   {
     title: "Recruitment",
     children: [
+      { title: "All Leads", href: "/admin/all-leads" },
       { title: "Inquiries", href: "/admin/inquiries" },
       { title: "Summer Camp", href: "/admin/summer-camp" },
-      { title: "Campus Visits", href: "/admin/campus-visits" },
+      { title: "Liability Waiver Visits", href: "/admin/campus-visits" },
       { title: "TASCO Summer Visits", href: "/admin/tasco-summer-visits" },
     ],
   },
@@ -74,11 +87,14 @@ const NAV_ITEMS: NavItem[] = [
   },
   // Parent Engagement — the two-way SMS inbox + group messaging, the
   // school calendar (events + reminders), and the family
-  // volunteer-hours program.
+  // volunteer-hours program. Unread texts badge on the group label as
+  // well as on Messages itself: the group is collapsed by default, so
+  // a badge only inside the dropdown would never be seen.
   {
     title: "Parent Engagement",
+    badge: "messages",
     children: [
-      { title: "Messages", href: "/admin/messages" },
+      { title: "Messages", href: "/admin/messages", badge: "messages" },
       { title: "Calendar", href: "/admin/school-calendar" },
       { title: "Volunteer Hours", href: "/admin/volunteer-hours" },
     ],
@@ -107,6 +123,10 @@ export function AdminTopNav({ admin }: { admin: AdminUser | null }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const yearId = searchParams.get("yearId");
+  // Texts waiting on a reply — badged on Parent Engagement / Messages.
+  const unreadMessages = useUnreadMessageCount();
+  const badgeCount = (badge?: NavBadge) =>
+    badge === "messages" ? unreadMessages : 0;
 
   const buildHref = React.useCallback(
     (base: string) => (yearId ? `${base}?yearId=${yearId}` : base),
@@ -179,6 +199,7 @@ export function AdminTopNav({ admin }: { admin: AdminUser | null }) {
                     className={cn(pill(groupActive), "gap-1 outline-none")}
                   >
                     {item.title}
+                    <NotificationBadge count={badgeCount(item.badge)} />
                     <ChevronDown className="size-3.5 opacity-60" />
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="start">
@@ -191,11 +212,15 @@ export function AdminTopNav({ admin }: { admin: AdminUser | null }) {
                           <Link
                             href={buildHref(child.href)}
                             className={cn(
-                              "w-full cursor-pointer",
+                              "flex w-full cursor-pointer items-center gap-2",
                               childActive && "font-semibold"
                             )}
                           >
                             {child.title}
+                            <NotificationBadge
+                              count={badgeCount(child.badge)}
+                              className="ml-auto"
+                            />
                           </Link>
                         </DropdownMenuItem>
                       );

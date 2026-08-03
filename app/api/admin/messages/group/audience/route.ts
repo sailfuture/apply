@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
-import { toE164 } from "@/lib/phone";
+import { formatUSPhone, toE164 } from "@/lib/phone";
 import { normPhone, pickAccountHolderParent } from "@/lib/sms/contacts";
 import { computeFamilyStageSets } from "@/lib/sms/stages";
 
@@ -26,8 +26,9 @@ import { computeFamilyStageSets } from "@/lib/sms/stages";
  *                    active application was denied are excluded — a
  *                    blast must not text turned-down families)
  * Families with no activity for the year are omitted; the single-
- * message picker still reaches them. Inquiry + camp rows aren't
- * year-scoped and always list (minus phone-collisions with families).
+ * message picker still reaches them. Inquiry / camp / visit / TASCO
+ * rows aren't year-scoped and always list (minus phone-collisions
+ * with rows further up the ladder).
  *
  * Each contact also carries its students with parsed grade levels
  * (8–12) so the dialog can filter/group the audience by incoming
@@ -66,7 +67,10 @@ export async function GET(req: NextRequest) {
       xano.paymentTransactions.getAllByYear(yearId).catch(() => []),
       xano.studentRegistration.getByYear(yearId).catch(() => []),
     ]);
-    const waivers = await xano.websiteWaivers.getAll().catch(() => []);
+    const [waivers, tascoRows] = await Promise.all([
+      xano.websiteWaivers.getAll().catch(() => []),
+      xano.tascoSummerVisits.getAll().catch(() => []),
+    ]);
 
     // ── Family stage sets — shared bucketing (also powers the inbox
     //    stage filter) so the two surfaces can't disagree. ──
@@ -170,6 +174,7 @@ export async function GET(req: NextRequest) {
               .filter((g): g is number => g !== null)
           ),
         ],
+        phone: formatUSPhone(parent?.phone ?? "") || "",
         hasPhone: Boolean(e164),
         optedOut,
         sendable: Boolean(e164) && !optedOut,
@@ -206,12 +211,13 @@ export async function GET(req: NextRequest) {
             : student
           : "",
         grades: grade !== null ? [grade] : [],
+        phone: formatUSPhone(String(i.primary_phone ?? "")) || "",
         hasPhone: Boolean(e164),
         optedOut,
         sendable: Boolean(e164) && !optedOut,
         outstanding: false,
-        // Admin's interest stars — shown on inquiry rows in the
-        // group composer so warm leads stand out.
+        // Admin's interest stars — shown on lead rows in the group
+        // composer so warm leads stand out, and filterable there.
         rating: Number(i.interest_level) || 0,
       });
     }
@@ -250,19 +256,22 @@ export async function GET(req: NextRequest) {
             : student
           : "",
         grades: incoming !== null ? [incoming] : [],
+        phone: formatUSPhone(c.primary_phone ?? "") || "",
         hasPhone: Boolean(e164),
         // No opt-out column on camp rows; carrier-level STOP still
         // blocks the send.
         optedOut: false,
         sendable: Boolean(e164),
         outstanding: false,
+        rating: Number(c.interest_level) || 0,
       });
     }
 
-    // Campus-visit waiver signers — bottom rung; only OPTED-IN
-    // signers list (the marketing checkbox on the public form is the
-    // texting consent), and any phone already claimed by a family,
-    // inquiry, or camp row wins over the visit record.
+    // Liability-waiver visit signers — only OPTED-IN signers list (the
+    // marketing checkbox on the public form is the texting consent),
+    // and any phone already claimed by a family, inquiry, or camp row
+    // wins over the visit record.
+    const visitPhones = new Set<string>();
     for (const w of waivers) {
       if (w.marketing_opt_in !== true) continue;
       const key = normPhone(w.parent_phone);
@@ -274,6 +283,7 @@ export async function GET(req: NextRequest) {
       ) {
         continue;
       }
+      if (key.length === 10) visitPhones.add(key);
       const e164 = toE164(w.parent_phone ?? "");
       const personName = (w.parent_name ?? "").trim();
       const student = (w.student_name ?? "").trim();
@@ -291,10 +301,53 @@ export async function GET(req: NextRequest) {
             : student
           : "",
         grades: grade !== null ? [grade] : [],
+        phone: formatUSPhone(w.parent_phone ?? "") || "",
         hasPhone: Boolean(e164),
         optedOut: false,
         sendable: Boolean(e164),
         outstanding: false,
+        rating: Number(w.interest_level) || 0,
+      });
+    }
+
+    // TASCO summer-visit sign-ups — bottom rung. Signing up at the
+    // rec-center table is the consent signal (same implied-consent
+    // stance as camp; carrier-level STOP still applies), so ALL rows
+    // with a phone list, not just marketing opt-ins. No parent name on
+    // the form — rows read "Parent of <student>".
+    for (const t of tascoRows) {
+      const key = normPhone(t.parent_phone);
+      if (
+        key.length === 10 &&
+        (familyPhones.has(key) ||
+          inquiryPhones.has(key) ||
+          campPhones.has(key) ||
+          visitPhones.has(key))
+      ) {
+        continue;
+      }
+      const e164 = toE164(t.parent_phone ?? "");
+      const student = (t.student_name ?? "").trim();
+      const grade = parseGrade(t.current_grade);
+      contacts.push({
+        key: `tasco-${t.id}`,
+        type: "tasco",
+        id: t.id,
+        name: student ? `Parent of ${student}` : `TASCO #${t.id}`,
+        personName: "",
+        stage: "tasco",
+        students: student
+          ? grade !== null
+            ? `${student} (${grade}th)`
+            : student
+          : "",
+        grades: grade !== null ? [grade] : [],
+        phone: formatUSPhone(t.parent_phone ?? "") || "",
+        hasPhone: Boolean(e164),
+        optedOut: false,
+        sendable: Boolean(e164),
+        outstanding: false,
+        rating: Number(t.interest_level) || 0,
       });
     }
 
@@ -307,6 +360,7 @@ export async function GET(req: NextRequest) {
       inquiry: 3,
       camp: 4,
       visit: 5,
+      tasco: 6,
     };
     contacts.sort(
       (a, b) => rank[a.stage] - rank[b.stage] || a.name.localeCompare(b.name)
@@ -338,12 +392,13 @@ export type GroupStage =
   | "application"
   | "inquiry"
   | "camp"
-  | "visit";
+  | "visit"
+  | "tasco";
 
 export interface GroupContact {
   /** Stable selection key: `${type}-${id}`. */
   key: string;
-  type: "family" | "inquiry" | "camp" | "visit";
+  type: "family" | "inquiry" | "camp" | "visit" | "tasco";
   id: number;
   /** Display name — family name, or the parent's name for
    *  inquiry/camp rows. */
@@ -356,13 +411,17 @@ export interface GroupContact {
   students: string;
   /** Distinct parsed grades 8–12 — drives the dialog's grade filter. */
   grades: number[];
+  /** Display-formatted phone ("(727) 555-0143"); empty when none on
+   *  file. Shown on every recipient row. */
+  phone: string;
   hasPhone: boolean;
   optedOut: boolean;
   /** Has a number on file and hasn't opted out. */
   sendable: boolean;
   /** Families only — open/uncollectible balance for the year. */
   outstanding: boolean;
-  /** Inquiries only — admin's 1–5 interest stars (0 = unrated). */
+  /** Lead rows (inquiry / camp / visit / TASCO) — admin's 1–5
+   *  conversion-likelihood stars (0 = unrated). */
   rating?: number;
 }
 

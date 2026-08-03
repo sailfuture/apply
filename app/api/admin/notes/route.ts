@@ -1,39 +1,83 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
-import { xano } from "@/lib/xano";
+import {
+  xano,
+  LEAD_NOTE_COLUMN,
+  LEAD_NOTE_SOURCES,
+  type LeadNoteSource,
+} from "@/lib/xano";
+import { bumpLeadReachOut } from "@/lib/leads";
 
 /**
- * Admin notes (the comms log). Two scopes share the same table:
+ * Admin notes (the comms log). Two kinds of scope share the table:
  *
  *  - `?familyId=X` — notes about a family, used on the family detail
  *    page's pinned bottom-right Notes drawer.
- *  - `?inquiryId=X` — notes about a prospective-family inquiry, used
- *    on the inquiries dashboard's per-row Sheet.
+ *  - `?leadSource=inquiry|camp|visit|tasco&leadId=X` — notes about a
+ *    recruitment lead, used by the per-source recruitment pages and
+ *    All Leads. `?inquiryId=X` is the legacy spelling of
+ *    `leadSource=inquiry`.
  *
- * Exactly one scope must be supplied. Inquiry scope is filtered on
- * `registration_inquiry_id` so family notes never bleed into the
- * inquiry timeline (and vice versa).
+ * Exactly one scope must be supplied. Lead scopes filter on their own
+ * FK column so timelines never bleed into each other or into family
+ * comms.
  *
  * Notes can optionally narrow to a specific student or year via the
  * `registration_students_id` / `registration_school_years_id` columns;
  * filtering by those is done client-side since we always read the full
  * per-scope list anyway.
  */
+
+/** Resolve the lead scope from either spelling; null when absent,
+ *  `"invalid"` when present but malformed. */
+function parseLeadScope(
+  params: URLSearchParams
+): { source: LeadNoteSource; id: number } | null | "invalid" {
+  const legacyInquiry = params.get("inquiryId");
+  const sourceParam = params.get("leadSource");
+  const idParam = params.get("leadId");
+  if (legacyInquiry) {
+    const id = Number(legacyInquiry);
+    return Number.isFinite(id) && id > 0
+      ? { source: "inquiry", id }
+      : "invalid";
+  }
+  if (!sourceParam && !idParam) return null;
+  const id = Number(idParam);
+  if (
+    !LEAD_NOTE_SOURCES.includes(sourceParam as LeadNoteSource) ||
+    !Number.isFinite(id) ||
+    id <= 0
+  ) {
+    return "invalid";
+  }
+  return { source: sourceParam as LeadNoteSource, id };
+}
+
 export async function GET(req: NextRequest) {
   try {
     await requireAdmin();
     const familyIdParam = req.nextUrl.searchParams.get("familyId");
-    const inquiryIdParam = req.nextUrl.searchParams.get("inquiryId");
+    const lead = parseLeadScope(req.nextUrl.searchParams);
 
-    if (!familyIdParam && !inquiryIdParam) {
+    if (lead === "invalid") {
       return NextResponse.json(
-        { error: "familyId or inquiryId is required" },
+        {
+          error:
+            "leadSource must be inquiry|camp|visit|tasco and leadId a positive number",
+        },
         { status: 400 }
       );
     }
-    if (familyIdParam && inquiryIdParam) {
+    if (!familyIdParam && !lead) {
       return NextResponse.json(
-        { error: "Provide only one of familyId or inquiryId" },
+        { error: "familyId or leadSource+leadId is required" },
+        { status: 400 }
+      );
+    }
+    if (familyIdParam && lead) {
+      return NextResponse.json(
+        { error: "Provide only one of familyId or leadSource+leadId" },
         { status: 400 }
       );
     }
@@ -56,15 +100,8 @@ export async function GET(req: NextRequest) {
     const phaseParam = req.nextUrl.searchParams.get("phase");
     const yearIdParam = req.nextUrl.searchParams.get("yearId");
 
-    if (inquiryIdParam) {
-      const inquiryId = Number(inquiryIdParam);
-      if (!Number.isFinite(inquiryId)) {
-        return NextResponse.json(
-          { error: "inquiryId must be a number" },
-          { status: 400 }
-        );
-      }
-      const notes = await xano.adminNotes.getByInquiryId(inquiryId);
+    if (lead) {
+      const notes = await xano.adminNotes.getByLead(lead.source, lead.id);
       return NextResponse.json(
         sectionParam ? notes.filter((n) => n.section === sectionParam) : notes
       );
@@ -128,24 +165,46 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
 
     const familyId = optionalNumber(body?.registration_families_id);
-    const inquiryId = optionalNumber(body?.registration_inquiry_id);
+    // Lead scope: `leadSource` + `leadId`, or the legacy
+    // `registration_inquiry_id` spelling.
+    const legacyInquiryId = optionalNumber(body?.registration_inquiry_id);
+    const rawLeadSource = body?.leadSource;
+    const leadIdFromBody = optionalNumber(body?.leadId);
+    let lead: { source: LeadNoteSource; id: number } | null = null;
+    if (legacyInquiryId) {
+      lead = { source: "inquiry", id: legacyInquiryId };
+    } else if (rawLeadSource != null || leadIdFromBody != null) {
+      if (
+        !LEAD_NOTE_SOURCES.includes(rawLeadSource as LeadNoteSource) ||
+        !leadIdFromBody
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "leadSource must be inquiry|camp|visit|tasco and leadId a positive number",
+          },
+          { status: 400 }
+        );
+      }
+      lead = { source: rawLeadSource as LeadNoteSource, id: leadIdFromBody };
+    }
 
     // Exactly-one rule mirrors the GET — keeps a single note from
     // appearing in two timelines and simplifies cache invalidation.
-    if (!familyId && !inquiryId) {
+    if (!familyId && !lead) {
       return NextResponse.json(
         {
           error:
-            "registration_families_id or registration_inquiry_id is required",
+            "registration_families_id or leadSource+leadId is required",
         },
         { status: 400 }
       );
     }
-    if (familyId && inquiryId) {
+    if (familyId && lead) {
       return NextResponse.json(
         {
           error:
-            "Provide only one of registration_families_id / registration_inquiry_id",
+            "Provide only one of registration_families_id / leadSource+leadId",
         },
         { status: 400 }
       );
@@ -239,14 +298,21 @@ export async function POST(req: NextRequest) {
     }
 
     // For family notes, `registration_families_id` is the required FK
-    // on Xano. For inquiry-scoped notes we still send a families id
+    // on Xano. For lead-scoped notes we still send a families id
     // (Xano column is non-nullable on legacy rows) — set to 0 so
     // it's an explicit "no family" rather than dragging in a real one.
+    // Exactly one lead FK is set; the other three stay null.
     const note = await xano.adminNotes.create({
       registration_families_id: familyId ?? 0,
       registration_students_id: optionalNumber(body?.registration_students_id),
       registration_school_years_id: yearForPhase,
-      registration_inquiry_id: inquiryId ?? null,
+      registration_inquiry_id:
+        lead?.source === "inquiry" ? lead.id : null,
+      registration_summer_camp_id:
+        lead?.source === "camp" ? lead.id : null,
+      website_liability_waiver_id:
+        lead?.source === "visit" ? lead.id : null,
+      tasco_summer_visit_id: lead?.source === "tasco" ? lead.id : null,
       registration_student_registration_progress_id: registrationProgressId,
       registration_family_application_progress_id: applicationProgressId,
       author_email: admin.email,
@@ -264,22 +330,43 @@ export async function POST(req: NextRequest) {
       is_shared_with_parent: body?.is_shared_with_parent === true,
     });
 
-    // Bump the inquiry's `last_reach_out` so the dashboard can show
-    // "last contacted X days ago" without scanning the notes timeline
-    // on every render. Server-managed: the inquiries PATCH endpoint's
-    // allowlist intentionally excludes this field so admins can't
-    // edit it by hand.
-    if (inquiryId) {
-      try {
-        await xano.inquiries.update(inquiryId, {
-          last_reach_out: Date.now(),
+    // Guard against an unwired Xano column. Xano silently DROPS
+    // inputs its Add Record endpoint doesn't declare, so a missing
+    // lead FK column (or a column that exists but isn't exposed as an
+    // input) would save the note with no scope at all — it would
+    // vanish from every timeline while still reporting success. Verify
+    // the FK came back set; if it didn't, remove the orphan and tell
+    // the caller exactly what to wire, rather than leaving a note the
+    // admin thinks they saved.
+    if (lead) {
+      const column = LEAD_NOTE_COLUMN[lead.source];
+      if (Number(note?.[column]) !== lead.id) {
+        await xano.adminNotes.delete(note.id).catch((err) => {
+          console.error(
+            "[/api/admin/notes POST] failed to clean up unscoped note:",
+            err
+          );
         });
-      } catch (err) {
-        // Don't fail the note POST just because the timestamp bump
-        // failed — admin still gets their note saved. Surface the
-        // error in the server log so it's visible during diagnosis.
-        console.error("Failed to bump last_reach_out:", err);
+        return NextResponse.json(
+          {
+            error:
+              `Notes aren't wired for this lead type yet: add the nullable ` +
+              `\`${column}\` column to registration_admin_notes in Xano and ` +
+              `expose it as an input on the Add Record endpoint.`,
+          },
+          { status: 501 }
+        );
       }
+    }
+
+    // Bump the lead's `last_reach_out` so the recruitment lists can
+    // show "last contacted X days ago" without scanning the notes
+    // timeline on every render. Server-managed: each lead table's
+    // PATCH allowlist intentionally excludes this field so admins
+    // can't edit it by hand. Best-effort — `bumpLeadReachOut` logs
+    // and swallows so a failed stamp never loses the saved note.
+    if (lead) {
+      await bumpLeadReachOut(lead.source, lead.id);
     }
 
     return NextResponse.json(note, { status: 201 });

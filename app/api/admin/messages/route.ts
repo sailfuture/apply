@@ -3,7 +3,10 @@ import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano, type XanoSmsMessage } from "@/lib/xano";
 import { sendSms } from "@/lib/sms/send";
 import {
+  counterpartyPhone,
   getContactRecipient,
+  messageContactRef as messageContact,
+  phoneFromAdhocId,
   type SmsContactType,
 } from "@/lib/sms/contacts";
 import { computeFamilyStageSets } from "@/lib/sms/stages";
@@ -11,7 +14,8 @@ import { computeFamilyStageSets } from "@/lib/sms/stages";
 /** Where a conversation's contact sits in the pipeline — the inbox's
  *  filter chips. Family stages come from the shared bucketing in
  *  lib/sms/stages.ts (scoped to the `?yearId=` the inbox passes);
- *  "none" = a family with no activity for that year. */
+ *  "none" = a family with no activity for that year (and ad-hoc
+ *  numbers, which have no pipeline position at all). */
 export type ConversationStage =
   | "enrolled"
   | "registration"
@@ -19,6 +23,7 @@ export type ConversationStage =
   | "inquiry"
   | "camp"
   | "visit"
+  | "tasco"
   | "none";
 
 /** One row in the global inbox's conversation list — the latest text
@@ -31,6 +36,10 @@ export interface SmsConversation {
   contactId: number;
   /** Display name — family name, or the inquiry/camp parent's name. */
   name: string;
+  /** The contact's phone (bare 10-digit), derived from the latest
+   *  message's counterparty number — shown beside the name in the
+   *  inbox. Empty when it can't be derived. */
+  phone: string;
   stage: ConversationStage;
   lastBody: string;
   lastAt: number;
@@ -42,27 +51,6 @@ export interface SmsConversation {
   /** True when the most recent message is inbound (contact texted, no
    *  reply yet) — drives the unread dot in the inbox. */
   needsReply: boolean;
-}
-
-/** Which contact a logged message belongs to — exactly one of the
- *  three FK columns is set per row (family wins if legacy rows ever
- *  carry more than one). */
-function messageContact(
-  m: XanoSmsMessage
-): { type: SmsContactType; id: number } | null {
-  if (m.registration_families_id) {
-    return { type: "family", id: m.registration_families_id };
-  }
-  if (m.registration_inquiry_id) {
-    return { type: "inquiry", id: m.registration_inquiry_id };
-  }
-  if (m.registration_summer_camp_id) {
-    return { type: "camp", id: m.registration_summer_camp_id };
-  }
-  if (m.website_liability_waiver_id) {
-    return { type: "visit", id: m.website_liability_waiver_id };
-  }
-  return null;
 }
 
 function parseContactParams(req: NextRequest): {
@@ -80,7 +68,11 @@ function parseContactParams(req: NextRequest): {
   const id = Number(idParam);
   if (!Number.isFinite(id)) return null;
   const type: SmsContactType =
-    typeParam === "inquiry" || typeParam === "camp" || typeParam === "visit"
+    typeParam === "inquiry" ||
+    typeParam === "camp" ||
+    typeParam === "visit" ||
+    typeParam === "tasco" ||
+    typeParam === "adhoc"
       ? typeParam
       : "family";
   return { type, id };
@@ -111,13 +103,24 @@ export async function GET(req: NextRequest) {
       const yearIdParam = req.nextUrl.searchParams.get("yearId");
       const yearId = Number(yearIdParam);
       const withStages = Number.isFinite(yearId) && yearId > 0;
-      const [messages, families, inquiries, campRows, waivers, fap, srp, apps] =
+      const [
+        messages,
+        families,
+        inquiries,
+        campRows,
+        waivers,
+        tascoRows,
+        fap,
+        srp,
+        apps,
+      ] =
         await Promise.all([
           xano.smsMessages.getAll(),
           xano.families.getAll().catch(() => []),
           xano.inquiries.getAll().catch(() => []),
           xano.summerCamp.getAll().catch(() => []),
           xano.websiteWaivers.getAll().catch(() => []),
+          xano.tascoSummerVisits.getAll().catch(() => []),
           withStages
             ? xano.familyApplicationProgress.getByYear(yearId).catch(() => [])
             : Promise.resolve([]),
@@ -158,7 +161,16 @@ export async function GET(req: NextRequest) {
       const visitName = new Map(
         waivers.map((w) => [w.id, (w.parent_name ?? "").trim()])
       );
+      const tascoName = new Map(
+        tascoRows.map((t) => {
+          const student = (t.student_name ?? "").trim();
+          return [t.id, student ? `Parent of ${student}` : ""];
+        })
+      );
       const nameFor = (type: SmsContactType, id: number): string => {
+        // Ad-hoc threads have no record — the formatted number IS the
+        // name (the inbox shows it verbatim).
+        if (type === "adhoc") return phoneFromAdhocId(id);
         const raw =
           type === "family"
             ? familyName.get(id)
@@ -166,7 +178,9 @@ export async function GET(req: NextRequest) {
               ? inquiryName.get(id)
               : type === "camp"
                 ? campName.get(id)
-                : visitName.get(id);
+                : type === "tasco"
+                  ? tascoName.get(id)
+                  : visitName.get(id);
         if (raw && raw.trim()) return raw.trim();
         return type === "family"
           ? `Family #${id}`
@@ -174,7 +188,9 @@ export async function GET(req: NextRequest) {
             ? `Inquiry #${id}`
             : type === "camp"
               ? `Camp #${id}`
-              : `Visit #${id}`;
+              : type === "tasco"
+                ? `TASCO #${id}`
+                : `Visit #${id}`;
       };
 
       const byContact = new Map<
@@ -203,6 +219,7 @@ export async function GET(req: NextRequest) {
           contactType: type,
           contactId: id,
           name: nameFor(type, id),
+          phone: counterpartyPhone(last),
           stage:
             type === "inquiry"
               ? ("inquiry" as const)
@@ -210,7 +227,11 @@ export async function GET(req: NextRequest) {
                 ? ("camp" as const)
                 : type === "visit"
                   ? ("visit" as const)
-                  : familyStage(id),
+                  : type === "tasco"
+                    ? ("tasco" as const)
+                    : type === "adhoc"
+                      ? ("none" as const)
+                      : familyStage(id),
           lastBody: last.body,
           lastAt: last.created_at,
           lastDirection: last.direction,
@@ -224,8 +245,23 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ conversations });
     }
 
+    // Ad-hoc threads have no FK column to query on — filter the full
+    // log down to no-contact rows whose counterparty is this number.
+    const messagesPromise =
+      contact.type === "adhoc"
+        ? xano.smsMessages.getAll().then((all) => {
+            const phone = phoneFromAdhocId(contact.id);
+            return all
+              .filter(
+                (m) =>
+                  messageContact(m)?.type === "adhoc" &&
+                  counterpartyPhone(m) === phone
+              )
+              .sort((a, b) => a.created_at - b.created_at);
+          })
+        : xano.smsMessages.getByContact(contact.type, contact.id);
     const [messages, recipient] = await Promise.all([
-      xano.smsMessages.getByContact(contact.type, contact.id),
+      messagesPromise,
       getContactRecipient(contact.type, contact.id),
     ]);
     return NextResponse.json({ messages, recipient });
@@ -249,7 +285,11 @@ export async function POST(req: NextRequest) {
     // preferred, bare familyId honored for older callers.
     const rawType = body?.contactType;
     const contactType: SmsContactType =
-      rawType === "inquiry" || rawType === "camp" || rawType === "visit"
+      rawType === "inquiry" ||
+      rawType === "camp" ||
+      rawType === "visit" ||
+      rawType === "tasco" ||
+      rawType === "adhoc"
         ? rawType
         : "family";
     const contactId = Number(body?.contactId ?? body?.familyId);

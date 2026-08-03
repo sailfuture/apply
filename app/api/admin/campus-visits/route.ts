@@ -33,6 +33,13 @@ export type CampusVisitRow = {
   academic_year: string;
   /** Absolute URL of the signature image, when one was captured. */
   signature_url: string | null;
+  /** Admin's 1–5 conversion stars; 0 = unrated. */
+  rating: number;
+  /** Admin's "we've reached out" flag. */
+  followed_up: boolean;
+  /** Server-stamped time of the most recent note; 0 when never
+   *  contacted. */
+  last_reach_out: number;
 };
 
 function deriveAcademicYear(ts: number, years: XanoSchoolYear[]): string {
@@ -101,6 +108,9 @@ export async function GET() {
           marketing_opt_in: w.marketing_opt_in === true,
           academic_year: deriveAcademicYear(signedTs, years),
           signature_url: signatureUrl,
+          rating: Number(w.interest_level) || 0,
+          followed_up: w.isFollowedUp === true,
+          last_reach_out: Number(w.last_reach_out) || 0,
         };
       })
       .sort((a, b) => b.signed_ts - a.signed_ts);

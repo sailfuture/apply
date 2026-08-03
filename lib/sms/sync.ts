@@ -125,10 +125,12 @@ export async function syncMessagesFromTwilio({
         author_email: null,
         author_name: inbound ? null : "Sent outside Apply",
         segments: msg.numSegments ? Number(msg.numSegments) : null,
-        // Preserve Twilio's actual send time. Only takes effect when
-        // the Xano `POST /sms_messages` endpoint exposes `created_at`
-        // as an input; otherwise Xano stamps "now" and the ordering
-        // above keeps threads readable.
+        // Preserve Twilio's actual send time. Before `created_at` was
+        // exposed as an input on the Xano endpoint (2026-08-03) this
+        // was silently dropped, so every row imported by one sweep
+        // carried that sweep's clock time — "delivered at 9:30am" on
+        // an entire back-history. Rows written before the fix are
+        // repaired by `lib/sms/repair-timestamps.ts`.
         created_at: msg.dateSent?.getTime(),
       });
       knownSids.add(msg.sid);

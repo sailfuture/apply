@@ -4,6 +4,13 @@ import { useMemo, useState } from "react";
 import useSWR from "swr";
 import { toast } from "sonner";
 import { Bus, Car, Download, Loader2, Mail, Phone, Undo2, X } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { LeadTriageControls } from "@/components/admin/lead-triage";
+import {
+  InquiryNoteComposer,
+  InquiryNotes,
+} from "@/components/admin/inquiry-notes";
+import { StarRating } from "@/components/admin/star-rating";
 import {
   DataTable,
   type ColumnDef,
@@ -39,6 +46,15 @@ interface SummerCampRow {
   id: number;
   created_at: number;
   isNotAttending: boolean;
+  /** Admin flag — student actually showed up to camp. Optional
+   *  because legacy rows predate the column. */
+  attended_camp?: boolean;
+  /** Admin's 1–5 conversion stars; 0/undefined = unrated. */
+  interest_level?: number | null;
+  /** Admin's "we've reached out" flag. */
+  isFollowedUp?: boolean;
+  /** Server-stamped time of the most recent note. */
+  last_reach_out?: number | null;
   student_first_name: string;
   student_last_name: string;
   gender: string;
@@ -164,6 +180,74 @@ export default function SummerCampPage() {
     }
   }
 
+  // Flip the attended-camp flag with the same optimistic-mutate shape
+  // as the attendance toggle. Separate pending id so both controls on
+  // one row can't wedge each other's spinner.
+  const [attendSavingId, setAttendSavingId] = useState<number | null>(null);
+  async function setAttendedCamp(row: SummerCampRow, attended: boolean) {
+    setAttendSavingId(row.id);
+    try {
+      mutate(
+        (curr) =>
+          (curr ?? []).map((r) =>
+            r.id === row.id ? { ...r, attended_camp: attended } : r
+          ),
+        { revalidate: false }
+      );
+      setActive((curr) =>
+        curr && curr.id === row.id
+          ? { ...curr, attended_camp: attended }
+          : curr
+      );
+      const res = await fetch(`/api/admin/summer-camp/${row.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ attended_camp: attended }),
+      });
+      if (!res.ok) throw new Error(`Save failed (${res.status})`);
+      mutate();
+    } catch (err) {
+      console.error("Failed to update attended-camp flag:", err);
+      toast.error("Couldn't update the attended flag.");
+      mutate();
+    } finally {
+      setAttendSavingId(null);
+    }
+  }
+
+  // Inline star write — same endpoint every lead surface uses.
+  async function setRating(row: SummerCampRow, rating: number) {
+    try {
+      mutate(
+        (curr) =>
+          (curr ?? []).map((r) =>
+            r.id === row.id ? { ...r, interest_level: rating } : r
+          ),
+        { revalidate: false }
+      );
+      setActive((curr) =>
+        curr && curr.id === row.id
+          ? { ...curr, interest_level: rating }
+          : curr
+      );
+      const res = await fetch("/api/admin/leads", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source: "camp",
+          id: row.id,
+          interest_level: rating,
+        }),
+      });
+      if (!res.ok) throw new Error(`Save failed (${res.status})`);
+      mutate();
+    } catch (err) {
+      console.error("Failed to save camp rating:", err);
+      toast.error("Couldn't save the rating.");
+      mutate();
+    }
+  }
+
   async function handleExport() {
     if (exporting || rows.length === 0) return;
     setExporting(true);
@@ -183,11 +267,24 @@ export default function SummerCampPage() {
   // sheet, so no trailing action/chevron columns.
   const columns: ColumnDef<SummerCampRow>[] = [
     {
+      key: "interest_level",
+      header: "Rating",
+      sortable: true,
+      width: "w-[10%]",
+      accessor: (row) => row.interest_level ?? 0,
+      render: (row) => (
+        <StarRating
+          value={row.interest_level ?? 0}
+          onChange={(v) => void setRating(row, v)}
+        />
+      ),
+    },
+    {
       key: "student_name",
       header: "Student",
       sortable: true,
       searchable: true,
-      width: "w-[14%]",
+      width: "w-[12%]",
       render: (row) => (
         <span className="block truncate font-medium">
           {row.student_name || "—"}
@@ -288,6 +385,33 @@ export default function SummerCampPage() {
         ),
     },
     {
+      // Admin checkbox — did the student actually show up to camp?
+      // Writes `attended_camp`; sortable so attendees group together.
+      key: "attended_camp",
+      header: "Attended",
+      sortable: true,
+      width: "w-[8%]",
+      accessor: (row) => (row.attended_camp ? 1 : 0),
+      render: (row) => (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="flex items-center"
+        >
+          {attendSavingId === row.id ? (
+            <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
+          ) : (
+            <Checkbox
+              checked={row.attended_camp === true}
+              onCheckedChange={(v) =>
+                void setAttendedCamp(row, v === true)
+              }
+              aria-label={`${row.student_name || "Student"} attended camp`}
+            />
+          )}
+        </div>
+      ),
+    },
+    {
       key: "created_at",
       header: "Submitted",
       sortable: true,
@@ -305,6 +429,32 @@ export default function SummerCampPage() {
           {formatRelativeCompact(row.created_at)}
         </span>
       ),
+    },
+    {
+      key: "isFollowedUp",
+      header: "Follow-up",
+      sortable: true,
+      width: "w-[9%]",
+      accessor: (row) => (row.isFollowedUp ? 1 : 0),
+      render: (row) =>
+        row.isFollowedUp ? (
+          <Badge className="bg-green-100 text-green-800 hover:bg-green-100">
+            Followed up
+          </Badge>
+        ) : (
+          <span
+            className="text-xs text-muted-foreground"
+            title={
+              row.last_reach_out
+                ? `Last contacted ${new Date(row.last_reach_out).toLocaleString()}`
+                : undefined
+            }
+          >
+            {row.last_reach_out
+              ? formatRelativeCompact(row.last_reach_out)
+              : "Needs"}
+          </span>
+        ),
     },
     {
       // Single toggle action so both sections keep identical columns:
@@ -429,6 +579,11 @@ export default function SummerCampPage() {
                       Not attending
                     </Badge>
                   ) : null}
+                  {active.attended_camp ? (
+                    <Badge className="bg-green-100 text-green-800 border-green-200 font-medium">
+                      Attended camp
+                    </Badge>
+                  ) : null}
                   {active.carry_epi_pen ? (
                     // Epi-pen carriers get a loud badge up top — this
                     // is the one health fact staff must never miss.
@@ -441,7 +596,33 @@ export default function SummerCampPage() {
                   Submitted {new Date(active.created_at).toLocaleString()}
                 </SheetDescription>
               </SheetHeader>
+              {/* Shared lead triage — rating + follow-up, pinned above
+                  the scrolling record so it's always the first thing
+                  admin can act on. */}
+              <div className="border-b px-6 py-4">
+                <LeadTriageControls
+                  scope={{ source: "camp", id: active.id }}
+                  rating={active.interest_level ?? 0}
+                  isFollowedUp={active.isFollowedUp === true}
+                  lastReachOut={active.last_reach_out ?? null}
+                  onChanged={() => void mutate()}
+                />
+              </div>
               <div className="flex-1 overflow-y-auto overscroll-contain px-6 py-5 space-y-6">
+                <SectionLabel>Communication log</SectionLabel>
+                <div className="space-y-2.5">
+                  <InquiryNotes
+                    scope={{ source: "camp", id: active.id }}
+                    variant="timeline"
+                  />
+                  <div className="rounded-md border bg-muted/20 p-3">
+                    <InquiryNoteComposer
+                      scope={{ source: "camp", id: active.id }}
+                      onNoteAdded={() => void mutate()}
+                    />
+                  </div>
+                </div>
+
                 <SectionLabel>Student</SectionLabel>
                 <div className="grid grid-cols-2 gap-5">
                   <DetailRow label="Gender">{active.gender || "—"}</DetailRow>

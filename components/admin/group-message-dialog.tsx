@@ -6,11 +6,14 @@ import { toast } from "sonner";
 import {
   Link2,
   Loader2,
+  Phone,
+  Plus,
   Search,
   Send,
   Star,
   UserRound,
   Users,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -49,6 +52,7 @@ import {
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { adminFetcher } from "@/lib/admin-fetcher";
+import { formatUSPhone, validateUSPhone } from "@/lib/phone";
 import type {
   GroupAudienceResponse,
   GroupContact,
@@ -86,19 +90,24 @@ const STAGE_BADGE: Record<GroupStage, { label: string; className: string }> = {
     className: "border-teal-200 bg-teal-50 text-teal-800",
   },
   visit: {
-    label: "Visit",
+    label: "Liability Waiver Visit",
     className: "border-rose-200 bg-rose-50 text-rose-800",
+  },
+  tasco: {
+    label: "TASCO",
+    className: "border-orange-200 bg-orange-50 text-orange-800",
   },
 };
 
 /** Section headings for the recipient list — one per contact TYPE, in
  *  the order the audience endpoint sorts (families → inquiries → camp
- *  → visits). */
+ *  → visits → TASCO). */
 const TYPE_HEADING: Record<GroupContact["type"], string> = {
   family: "Families",
   inquiry: "Inquiries",
   camp: "Summer camp",
-  visit: "Campus visits",
+  visit: "Liability waiver visits",
+  tasco: "TASCO summer visits",
 };
 
 const GRADES = [8, 9, 10, 11, 12] as const;
@@ -111,7 +120,8 @@ const STAGE_FILTERS: Array<{ value: GroupStage; label: string }> = [
   { value: "application", label: "Applying" },
   { value: "inquiry", label: "Inquiries" },
   { value: "camp", label: "Camp" },
-  { value: "visit", label: "Visits" },
+  { value: "visit", label: "Liability Waiver Visit" },
+  { value: "tasco", label: "TASCO" },
 ];
 
 /**
@@ -127,7 +137,8 @@ const STAGE_SEARCH_ALIASES: Record<GroupStage, string[]> = {
   application: ["application", "applications", "applying", "applicant", "applicants"],
   inquiry: ["inquiry", "inquiries"],
   camp: ["camp", "campers", "summer"],
-  visit: ["visit", "visits", "visitors", "waiver", "waivers"],
+  visit: ["visit", "visits", "visitors", "waiver", "waivers", "liability"],
+  tasco: ["tasco", "recreation", "rec center"],
 };
 
 function matchesStageAlias(stage: GroupStage, q: string): boolean {
@@ -173,7 +184,14 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
   const [stageFilter, setStageFilter] = useState<GroupStage[]>([]);
   const [gradeFilter, setGradeFilter] = useState<number[]>([]);
   const [onlyOutstanding, setOnlyOutstanding] = useState(false);
+  // Minimum star rating (0 = any). Ratings live on LEAD rows (inquiry
+  // / camp / visit / TASCO), so any minimum > 0 narrows to rated leads.
+  const [minRating, setMinRating] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // Manually-typed recipients — bare 10-digit numbers with no record
+  // behind them. Sent as `adhoc` contacts (id = the number itself).
+  const [adhocNumbers, setAdhocNumbers] = useState<string[]>([]);
+  const [adhocInput, setAdhocInput] = useState("");
   const [body, setBody] = useState("");
   const [sending, setSending] = useState(false);
   // Send is two-step: the footer button opens this confirm, which
@@ -267,6 +285,7 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
         return false;
       }
       if (onlyOutstanding && !c.outstanding) return false;
+      if (minRating > 0 && (c.rating ?? 0) < minRating) return false;
       if (!q) return true;
       return (
         c.name.toLowerCase().includes(q) ||
@@ -277,7 +296,7 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
         matchesStageAlias(c.stage, q)
       );
     });
-  }, [contacts, search, stageFilter, gradeFilter, onlyOutstanding]);
+  }, [contacts, search, stageFilter, gradeFilter, onlyOutstanding, minRating]);
 
   const selectedContacts = useMemo(
     () =>
@@ -306,8 +325,25 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
     });
   }
 
+  /** Add the typed number as an ad-hoc recipient (validated, deduped —
+   *  against both the manual list and any directory contact already
+   *  matching that number). */
+  function addAdhocNumber() {
+    const { valid, digits } = validateUSPhone(adhocInput);
+    if (!valid || digits.length !== 10) {
+      toast.error("Enter a valid 10-digit US phone number.");
+      return;
+    }
+    if (adhocNumbers.includes(digits)) {
+      setAdhocInput("");
+      return;
+    }
+    setAdhocNumbers((prev) => [...prev, digits]);
+    setAdhocInput("");
+  }
+
   const segments = body.length === 0 ? 0 : Math.ceil(body.length / 160);
-  const sendCount = selectedContacts.length;
+  const sendCount = selectedContacts.length + adhocNumbers.length;
   const canSend =
     Boolean(yearId) && body.trim().length > 0 && sendCount > 0 && !sending;
 
@@ -318,10 +354,16 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
     for (const c of selectedContacts) {
       counts.set(c.stage, (counts.get(c.stage) ?? 0) + 1);
     }
-    return STAGE_FILTERS.filter((s) => counts.has(s.value))
-      .map((s) => `${counts.get(s.value)} ${s.label}`)
-      .join(" · ");
-  }, [selectedContacts]);
+    const parts = STAGE_FILTERS.filter((s) => counts.has(s.value)).map(
+      (s) => `${counts.get(s.value)} ${s.label}`
+    );
+    if (adhocNumbers.length > 0) {
+      parts.push(
+        `${adhocNumbers.length} manual number${adhocNumbers.length === 1 ? "" : "s"}`
+      );
+    }
+    return parts.join(" · ");
+  }, [selectedContacts, adhocNumbers]);
 
   const hasNameToken = FIRST_NAME_RE.test(body);
   // Example fill for the confirm's personalization note — the first
@@ -346,7 +388,15 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           yearId: Number(yearId),
-          contacts: selectedContacts.map((c) => ({ type: c.type, id: c.id })),
+          contacts: [
+            ...selectedContacts.map((c) => ({ type: c.type, id: c.id })),
+            // Manually-typed numbers ride along as ad-hoc contacts —
+            // the 10-digit number doubles as the contact id.
+            ...adhocNumbers.map((d) => ({
+              type: "adhoc" as const,
+              id: Number(d),
+            })),
+          ],
           body: body.trim(),
           blastId,
         }),
@@ -360,6 +410,7 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
       );
       setBody("");
       setSelected(new Set());
+      setAdhocNumbers([]);
       setOpen(false);
       onSent?.();
     } catch (err) {
@@ -383,8 +434,9 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
         {/* Large fixed-size panel (Slack-settings style) — the dialog
             claims most of the viewport and the recipient list flexes
             to absorb the height, so filtering/searching never resizes
-            the frame. */}
-        <DialogContent className="flex h-[85vh] max-h-[820px] flex-col gap-4 sm:max-w-4xl">
+            the frame. Sized generously (user request) so the recipient
+            list shows a real page of names. */}
+        <DialogContent className="flex h-[92vh] max-h-[1040px] flex-col gap-4 sm:max-w-6xl">
           <DialogHeader className="shrink-0">
             <DialogTitle>New group message</DialogTitle>
             <DialogDescription>
@@ -500,6 +552,40 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
               >
                 Outstanding balance
               </button>
+              {/* Minimum star rating — narrows to leads rated at least
+                  N stars (ratings live on inquiry/camp/visit/TASCO
+                  rows). Clicking the active chip clears it. */}
+              <span className="mx-1 h-4 w-px bg-border" aria-hidden />
+              <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                Rating
+              </span>
+              {[1, 2, 3, 4, 5].map((n) => {
+                const on = minRating === n;
+                return (
+                  <button
+                    key={n}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => setMinRating(on ? 0 : n)}
+                    className={cn(
+                      "inline-flex items-center gap-0.5 rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors",
+                      on
+                        ? "border-foreground bg-foreground text-background"
+                        : "border-border bg-white text-muted-foreground hover:border-foreground/40 hover:text-foreground"
+                    )}
+                    title={`Rated ${n}${n < 5 ? " or more" : ""} stars`}
+                  >
+                    {n}
+                    <Star
+                      className={cn(
+                        "size-3",
+                        on ? "fill-background" : "fill-amber-400 text-amber-400"
+                      )}
+                    />
+                    {n < 5 ? "+" : ""}
+                  </button>
+                );
+              })}
             </div>
 
             {/* Recipient list — flexes to fill the fixed dialog frame,
@@ -556,10 +642,11 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
                               <span className="truncate text-sm font-medium">
                                 {c.name}
                               </span>
-                              {/* Inquiry interest stars — always
-                                  rendered so warm leads pop; unrated
-                                  rows show 5 muted stars. */}
-                              {c.type === "inquiry" ? (
+                              {/* Lead interest stars (inquiry / camp /
+                                  visit / TASCO) — always rendered so
+                                  warm leads pop; unrated rows show 5
+                                  muted stars. */}
+                              {c.type !== "family" ? (
                                 <span
                                   className="flex shrink-0 items-center gap-px"
                                   aria-label={
@@ -587,13 +674,14 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
                                 </span>
                               ) : null}
                             </span>
-                            {/* Person · students · stage — the stage
-                                reads as part of the detail line
+                            {/* Person · students · phone · stage — the
+                                stage reads as part of the detail line
                                 (dot-separated) rather than a badge. */}
                             <span className="block truncate text-xs text-muted-foreground">
                               {[
                                 c.personName,
                                 c.students ? c.students : null,
+                                c.phone || null,
                                 badge.label,
                               ]
                                 .filter(Boolean)
@@ -614,6 +702,57 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
               )}
             </div>
 
+            {/* Manual numbers — text a number that isn't on any list.
+                Added numbers show as removable chips and send as
+                ad-hoc contacts (they thread by phone in the inbox). */}
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="relative w-56">
+                <Phone className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={adhocInput}
+                  onChange={(e) => setAdhocInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      addAdhocNumber();
+                    }
+                  }}
+                  placeholder="Add a phone number…"
+                  className="h-8 pl-8 text-sm"
+                  inputMode="tel"
+                />
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 bg-white px-2 text-xs"
+                onClick={addAdhocNumber}
+                disabled={!adhocInput.trim()}
+              >
+                <Plus className="size-3.5 mr-1" />
+                Add number
+              </Button>
+              {adhocNumbers.map((d) => (
+                <span
+                  key={d}
+                  className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/40 py-0.5 pl-2.5 pr-1 text-xs font-medium tabular-nums"
+                >
+                  {formatUSPhone(d)}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setAdhocNumbers((prev) => prev.filter((x) => x !== d))
+                    }
+                    className="rounded-full p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                    aria-label={`Remove ${formatUSPhone(d)}`}
+                  >
+                    <X className="size-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+
             {/* Selection controls */}
             <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
               <span className="tabular-nums">
@@ -629,7 +768,10 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setSelected(new Set())}
+                  onClick={() => {
+                    setSelected(new Set());
+                    setAdhocNumbers([]);
+                  }}
                   className="underline underline-offset-2 hover:text-foreground"
                   disabled={sendCount === 0}
                 >

@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { adminFetcher } from "@/lib/admin-fetcher";
+import { formatUSPhone, validateUSPhone } from "@/lib/phone";
 import type {
   GroupAudienceResponse,
   GroupContact,
@@ -22,7 +23,9 @@ import type {
 } from "@/app/api/admin/messages/group/audience/route";
 
 interface PickedContact {
-  type: GroupContact["type"];
+  /** Directory types, plus `adhoc` when staff typed a bare number —
+   *  its id is the 10-digit phone itself. */
+  type: GroupContact["type"] | "adhoc";
   id: number;
   name: string;
 }
@@ -34,7 +37,8 @@ const STAGE_FILTERS: Array<{ value: GroupStage; label: string }> = [
   { value: "application", label: "Applying" },
   { value: "inquiry", label: "Inquiries" },
   { value: "camp", label: "Camp" },
-  { value: "visit", label: "Visits" },
+  { value: "visit", label: "Liability Waiver Visit" },
+  { value: "tasco", label: "TASCO" },
 ];
 
 const STAGE_LABEL: Record<GroupStage, string> = {
@@ -43,7 +47,8 @@ const STAGE_LABEL: Record<GroupStage, string> = {
   application: "Application",
   inquiry: "Inquiry",
   camp: "Camp",
-  visit: "Visit",
+  visit: "Liability Waiver Visit",
+  tasco: "TASCO",
 };
 
 /** Section headings per contact TYPE — identical to the group list. */
@@ -51,7 +56,8 @@ const TYPE_HEADING: Record<GroupContact["type"], string> = {
   family: "Families",
   inquiry: "Inquiries",
   camp: "Summer camp",
-  visit: "Campus visits",
+  visit: "Liability waiver visits",
+  tasco: "TASCO summer visits",
 };
 
 const GRADES = [8, 9, 10, 11, 12] as const;
@@ -113,6 +119,24 @@ export function NewMessageDialog({
     onPick({ type: c.type, id: c.id, name: c.name });
   }
 
+  // When the search box contains a valid US number, offer to text it
+  // directly — even if it matches no record. Opens an ad-hoc thread
+  // keyed by the 10-digit number.
+  const adhocDigits = useMemo(() => {
+    const { valid, digits } = validateUSPhone(search);
+    return valid && digits.length === 10 ? digits : null;
+  }, [search]);
+
+  function pickAdhoc(digits: string) {
+    setOpen(false);
+    setSearch("");
+    onPick({
+      type: "adhoc",
+      id: Number(digits),
+      name: formatUSPhone(digits) || digits,
+    });
+  }
+
   return (
     <>
       <Button
@@ -131,7 +155,7 @@ export function NewMessageDialog({
           if (!o) setSearch("");
         }}
       >
-        <DialogContent className="flex h-[85vh] max-h-[820px] flex-col gap-4 sm:max-w-4xl">
+        <DialogContent className="flex h-[92vh] max-h-[1040px] flex-col gap-4 sm:max-w-6xl">
           <DialogHeader className="shrink-0">
             <DialogTitle>New message</DialogTitle>
             <DialogDescription>
@@ -146,7 +170,7 @@ export function NewMessageDialog({
             <Input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search families, parents, or students…"
+              placeholder="Search families, parents, students — or type a phone number…"
               className="pl-8"
             />
           </div>
@@ -226,12 +250,31 @@ export function NewMessageDialog({
               <div className="flex h-full items-center justify-center">
                 <Loader2 className="size-4 animate-spin text-muted-foreground" />
               </div>
-            ) : filtered.length === 0 ? (
+            ) : filtered.length === 0 && !adhocDigits ? (
               <div className="flex h-full items-center justify-center px-6 text-center text-sm text-muted-foreground">
                 No contacts match these filters.
               </div>
             ) : (
               <ul className="divide-y">
+                {/* Direct-to-number row — the typed search is a valid
+                    US phone, so offer to text it even with no record
+                    behind it. */}
+                {adhocDigits ? (
+                  <li>
+                    <button
+                      type="button"
+                      onClick={() => pickAdhoc(adhocDigits)}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-muted/40"
+                    >
+                      <span className="text-sm font-medium tabular-nums">
+                        Text {formatUSPhone(adhocDigits)}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        — number isn&rsquo;t on any list
+                      </span>
+                    </button>
+                  </li>
+                ) : null}
                 {filtered.map((c, i) => {
                   const showTypeHeader =
                     i === 0 || filtered[i - 1].type !== c.type;
@@ -259,7 +302,7 @@ export function NewMessageDialog({
                               <span className="truncate text-sm font-medium">
                                 {c.name}
                               </span>
-                              {c.type === "inquiry" ? (
+                              {c.type !== "family" ? (
                                 <span
                                   className="flex shrink-0 items-center gap-px"
                                   aria-label={
@@ -291,6 +334,7 @@ export function NewMessageDialog({
                               {[
                                 c.personName,
                                 c.students ? c.students : null,
+                                c.phone || null,
                                 STAGE_LABEL[c.stage],
                               ]
                                 .filter(Boolean)

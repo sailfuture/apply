@@ -3,8 +3,10 @@
 import { useMemo, useState } from "react";
 import useSWR from "swr";
 import { toast } from "sonner";
-import { Check, Copy, Download } from "lucide-react";
+import { Check, ChevronRight, Copy, Download } from "lucide-react";
 import { DataTable, type ColumnDef } from "@/components/admin/data-table";
+import { LeadTriageSheet } from "@/components/admin/lead-triage";
+import { StarRating } from "@/components/admin/star-rating";
 import {
   Card,
   CardContent,
@@ -41,7 +43,7 @@ import type { TascoSummerVisitRow } from "@/app/api/admin/tasco-summer-visits/ro
  * what's on screen, and single-line cells.
  */
 export default function TascoSummerVisitsPage() {
-  const { data, isLoading, error } = useSWR<TascoSummerVisitRow[]>(
+  const { data, isLoading, error, mutate } = useSWR<TascoSummerVisitRow[]>(
     "/api/admin/tasco-summer-visits",
     adminFetcher,
     { refreshInterval: 60_000 }
@@ -88,6 +90,38 @@ export default function TascoSummerVisitsPage() {
   }, [visible, search]);
 
   const [copied, setCopied] = useState(false);
+  const [selected, setSelected] = useState<TascoSummerVisitRow | null>(null);
+  // Re-read the clicked row from the list so the sheet reflects
+  // rating / follow-up / note writes after revalidation.
+  const activeRow = selected
+    ? (rows.find((r) => r.id === selected.id) ?? selected)
+    : null;
+
+  // Inline star write — same endpoint every lead surface uses.
+  async function setRating(row: TascoSummerVisitRow, rating: number) {
+    try {
+      mutate(
+        (curr) =>
+          (curr ?? []).map((r) => (r.id === row.id ? { ...r, rating } : r)),
+        { revalidate: false }
+      );
+      const res = await fetch("/api/admin/leads", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source: "tasco",
+          id: row.id,
+          interest_level: rating,
+        }),
+      });
+      if (!res.ok) throw new Error(`Save failed (${res.status})`);
+      mutate();
+    } catch (err) {
+      console.error("Failed to save TASCO rating:", err);
+      toast.error("Couldn't save the rating.");
+      mutate();
+    }
+  }
 
   function handleExport() {
     if (exportRows.length === 0) {
@@ -121,13 +155,27 @@ export default function TascoSummerVisitsPage() {
     }
   }
 
-  const columns: ColumnDef<TascoSummerVisitRow>[] = useMemo(
-    () => [
+  // Defined inline (not memoized) — the rating cell's closure needs
+  // `setRating`'s latest SWR bindings.
+  const columns: ColumnDef<TascoSummerVisitRow>[] = [
+      {
+        key: "rating",
+        header: "Rating",
+        sortable: true,
+        width: "w-[10%]",
+        accessor: (r) => r.rating,
+        render: (r) => (
+          <StarRating
+            value={r.rating}
+            onChange={(v) => void setRating(r, v)}
+          />
+        ),
+      },
       {
         key: "submitted_ts",
         header: "Submitted",
         sortable: true,
-        width: "w-[10%]",
+        width: "w-[8%]",
         render: (r) => (
           <span
             className="whitespace-nowrap text-sm tabular-nums text-muted-foreground"
@@ -235,7 +283,7 @@ export default function TascoSummerVisitsPage() {
       {
         key: "marketing_opt_in",
         header: "Marketing",
-        width: "w-[8%]",
+        width: "w-[7%]",
         accessor: (r) => (r.marketing_opt_in ? 1 : 0),
         render: (r) =>
           r.marketing_opt_in ? (
@@ -246,9 +294,40 @@ export default function TascoSummerVisitsPage() {
             <span className="text-xs text-muted-foreground">—</span>
           ),
       },
-    ],
-    []
-  );
+      {
+        key: "followed_up",
+        header: "Follow-up",
+        sortable: true,
+        width: "w-[9%]",
+        accessor: (r) => (r.followed_up ? 1 : 0),
+        render: (r) =>
+          r.followed_up ? (
+            <Badge className="bg-green-100 text-green-800 hover:bg-green-100">
+              Followed up
+            </Badge>
+          ) : (
+            <span
+              className="text-xs text-muted-foreground"
+              title={
+                r.last_reach_out
+                  ? `Last contacted ${new Date(r.last_reach_out).toLocaleString()}`
+                  : undefined
+              }
+            >
+              {r.last_reach_out ? relTime(r.last_reach_out) : "Needs"}
+            </span>
+          ),
+      },
+      {
+        key: "chevron",
+        header: "",
+        width: "w-[36px]",
+        align: "right",
+        render: () => (
+          <ChevronRight className="size-4 text-muted-foreground inline" />
+        ),
+      },
+  ];
 
   return (
     <div className="p-6 space-y-6">
@@ -260,7 +339,7 @@ export default function TascoSummerVisitsPage() {
             recreation centers.
           </p>
         </div>
-        <div className="w-64">
+        <div className="w-80">
           <Select value={center} onValueChange={setCenter}>
             <SelectTrigger className="bg-white">
               <SelectValue placeholder="Recreation center" />
@@ -332,10 +411,33 @@ export default function TascoSummerVisitsPage() {
               data={visible}
               isLoading={isLoading && !data}
               externalSearch={search}
+              onRowClick={(r) => setSelected(r)}
             />
           )}
         </CardContent>
       </Card>
+
+      {/* Triage sheet — rating, follow-up, and the comms log for this
+          sign-up. Same surface every recruitment list uses. */}
+      {activeRow ? (
+        <LeadTriageSheet
+          open
+          onOpenChange={(o) => !o && setSelected(null)}
+          scope={{ source: "tasco", id: activeRow.id }}
+          title={activeRow.student_name || `TASCO sign-up #${activeRow.id}`}
+          subtitle={[
+            activeRow.recreation_center || null,
+            activeRow.current_grade || null,
+            formatUSPhone(activeRow.parent_phone) || null,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+          rating={activeRow.rating}
+          isFollowedUp={activeRow.followed_up}
+          lastReachOut={activeRow.last_reach_out || null}
+          onChanged={() => void mutate()}
+        />
+      ) : null}
     </div>
   );
 }

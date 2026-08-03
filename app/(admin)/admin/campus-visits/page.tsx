@@ -28,6 +28,12 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { LeadTriageControls } from "@/components/admin/lead-triage";
+import {
+  InquiryNoteComposer,
+  InquiryNotes,
+} from "@/components/admin/inquiry-notes";
+import { StarRating } from "@/components/admin/star-rating";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { formatUSPhone } from "@/lib/phone";
 import {
@@ -52,7 +58,7 @@ import type { CampusVisitRow } from "@/app/api/admin/campus-visits/route";
  * academic year, and the signed waiver).
  */
 export default function CampusVisitsPage() {
-  const { data, isLoading, error } = useSWR<CampusVisitRow[]>(
+  const { data, isLoading, error, mutate } = useSWR<CampusVisitRow[]>(
     "/api/admin/campus-visits",
     adminFetcher,
     { refreshInterval: 60_000 }
@@ -124,14 +130,59 @@ export default function CampusVisitsPage() {
   }
 
   const [selected, setSelected] = useState<CampusVisitRow | null>(null);
+  // Re-read from the list so the open sheet reflects rating /
+  // follow-up / note writes after revalidation.
+  const activeRow = selected
+    ? (rows.find((r) => r.id === selected.id) ?? selected)
+    : null;
 
-  const columns: ColumnDef<CampusVisitRow>[] = useMemo(
-    () => [
+  // Inline star write — same endpoint every lead surface uses.
+  async function setRating(row: CampusVisitRow, rating: number) {
+    try {
+      mutate(
+        (curr) =>
+          (curr ?? []).map((r) => (r.id === row.id ? { ...r, rating } : r)),
+        { revalidate: false }
+      );
+      const res = await fetch("/api/admin/leads", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source: "visit",
+          id: row.id,
+          interest_level: rating,
+        }),
+      });
+      if (!res.ok) throw new Error(`Save failed (${res.status})`);
+      mutate();
+    } catch (err) {
+      console.error("Failed to save visit rating:", err);
+      toast.error("Couldn't save the rating.");
+      mutate();
+    }
+  }
+
+  // Defined inline (not memoized) — the rating cell's closure needs
+  // `setRating`'s latest SWR bindings.
+  const columns: ColumnDef<CampusVisitRow>[] = [
+      {
+        key: "rating",
+        header: "Rating",
+        sortable: true,
+        width: "w-[10%]",
+        accessor: (r) => r.rating,
+        render: (r) => (
+          <StarRating
+            value={r.rating}
+            onChange={(v) => void setRating(r, v)}
+          />
+        ),
+      },
       {
         key: "signed_ts",
         header: "Signed",
         sortable: true,
-        width: "w-[9%]",
+        width: "w-[8%]",
         render: (r) => (
           <span
             className="whitespace-nowrap text-sm tabular-nums text-muted-foreground"
@@ -227,7 +278,7 @@ export default function CampusVisitsPage() {
       {
         key: "marketing_opt_in",
         header: "Marketing",
-        width: "w-[9%]",
+        width: "w-[8%]",
         accessor: (r) => (r.marketing_opt_in ? 1 : 0),
         render: (r) =>
           r.marketing_opt_in ? (
@@ -239,23 +290,45 @@ export default function CampusVisitsPage() {
           ),
       },
       {
+        key: "followed_up",
+        header: "Follow-up",
+        sortable: true,
+        width: "w-[9%]",
+        accessor: (r) => (r.followed_up ? 1 : 0),
+        render: (r) =>
+          r.followed_up ? (
+            <Badge className="bg-green-100 text-green-800 hover:bg-green-100">
+              Followed up
+            </Badge>
+          ) : (
+            <span
+              className="text-xs text-muted-foreground"
+              title={
+                r.last_reach_out
+                  ? `Last contacted ${new Date(r.last_reach_out).toLocaleString()}`
+                  : undefined
+              }
+            >
+              {r.last_reach_out ? relTime(r.last_reach_out) : "Needs"}
+            </span>
+          ),
+      },
+      {
         key: "id",
         header: "",
-        width: "w-[40px]",
+        width: "w-[36px]",
         align: "right",
         render: () => (
           <ChevronRight className="size-4 text-muted-foreground inline" />
         ),
       },
-    ],
-    []
-  );
+  ];
 
   return (
     <div className="p-6 space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold">Campus Visits</h1>
+          <h1 className="text-2xl font-bold">Liability Waiver Visits</h1>
           <p className="text-sm text-muted-foreground">
             Liability waivers signed on the website before a campus tour.
             Click a row for the visitor&rsquo;s full details.
@@ -340,8 +413,9 @@ export default function CampusVisitsPage() {
       </Card>
 
       {/* Visitor detail sheet — everything the table trims (email,
-          school, academic year, waiver) plus the signature. */}
-      {selected ? (
+          school, academic year, waiver) plus the signature, and the
+          shared lead triage block (rating, follow-up, comms log). */}
+      {activeRow ? (
         <Sheet open onOpenChange={(o) => !o && setSelected(null)}>
           <SheetContent
             side="right"
@@ -349,31 +423,59 @@ export default function CampusVisitsPage() {
           >
             <SheetHeader className="border-b px-4 py-3">
               <SheetTitle className="text-base">
-                {selected.parent_name || "Campus visitor"}
+                {activeRow.parent_name || "Campus visitor"}
               </SheetTitle>
               <SheetDescription className="text-xs">
-                Signed {new Date(selected.signed_ts).toLocaleString()}
-                {selected.academic_year
-                  ? ` · ${selected.academic_year}`
+                Signed {new Date(activeRow.signed_ts).toLocaleString()}
+                {activeRow.academic_year
+                  ? ` · ${activeRow.academic_year}`
                   : ""}
               </SheetDescription>
             </SheetHeader>
 
+            <div className="border-b px-4 py-4">
+              <LeadTriageControls
+                scope={{ source: "visit", id: activeRow.id }}
+                rating={activeRow.rating}
+                isFollowedUp={activeRow.followed_up}
+                lastReachOut={activeRow.last_reach_out || null}
+                onChanged={() => void mutate()}
+              />
+            </div>
+
             <div className="space-y-5 px-4 py-4">
+              {/* Comms log first — it's the working surface; the
+                  submitted record below is reference. */}
               <section className="space-y-2.5">
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  Communication log
+                </h3>
+                <InquiryNotes
+                  scope={{ source: "visit", id: activeRow.id }}
+                  variant="timeline"
+                />
+                <div className="rounded-md border bg-muted/20 p-3">
+                  <InquiryNoteComposer
+                    scope={{ source: "visit", id: activeRow.id }}
+                    onNoteAdded={() => void mutate()}
+                  />
+                </div>
+              </section>
+
+              <section className="space-y-2.5 border-t pt-4">
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                   Parent
                 </h3>
-                <DetailRow label="Name" value={selected.parent_name} />
+                <DetailRow label="Name" value={activeRow.parent_name} />
                 <DetailRow
                   label="Email"
                   value={
-                    selected.parent_email ? (
+                    activeRow.parent_email ? (
                       <a
-                        href={`mailto:${selected.parent_email}`}
+                        href={`mailto:${activeRow.parent_email}`}
                         className="hover:underline"
                       >
-                        {selected.parent_email}
+                        {activeRow.parent_email}
                       </a>
                     ) : null
                   }
@@ -381,13 +483,13 @@ export default function CampusVisitsPage() {
                 <DetailRow
                   label="Phone"
                   value={
-                    selected.parent_phone ? (
+                    activeRow.parent_phone ? (
                       <a
-                        href={`tel:${selected.parent_phone}`}
+                        href={`tel:${activeRow.parent_phone}`}
                         className="tabular-nums hover:underline"
                       >
-                        {formatUSPhone(selected.parent_phone) ||
-                          selected.parent_phone}
+                        {formatUSPhone(activeRow.parent_phone) ||
+                          activeRow.parent_phone}
                       </a>
                     ) : null
                   }
@@ -395,7 +497,7 @@ export default function CampusVisitsPage() {
                 <DetailRow
                   label="Marketing"
                   value={
-                    selected.marketing_opt_in ? (
+                    activeRow.marketing_opt_in ? (
                       <Badge className="bg-green-100 text-green-800 hover:bg-green-100">
                         Opted in
                       </Badge>
@@ -410,22 +512,22 @@ export default function CampusVisitsPage() {
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                   Student
                 </h3>
-                <DetailRow label="Name" value={selected.student_name} />
+                <DetailRow label="Name" value={activeRow.student_name} />
                 <DetailRow
                   label="Grade"
                   value={
-                    selected.student_grade
-                      ? `Grade ${selected.student_grade}`
+                    activeRow.student_grade
+                      ? `Grade ${activeRow.student_grade}`
                       : null
                   }
                 />
                 <DetailRow
                   label="Current school"
-                  value={selected.student_school}
+                  value={activeRow.student_school}
                 />
                 <DetailRow
                   label="Academic year"
-                  value={selected.academic_year}
+                  value={activeRow.academic_year}
                 />
               </section>
 
@@ -435,22 +537,22 @@ export default function CampusVisitsPage() {
                 </h3>
                 <DetailRow
                   label="Signed"
-                  value={new Date(selected.signed_ts).toLocaleString()}
+                  value={new Date(activeRow.signed_ts).toLocaleString()}
                 />
-                {selected.signature_url ? (
+                {activeRow.signature_url ? (
                   <>
                     <div className="rounded-md border bg-muted/20 p-3">
                       {/* Signature capture — plain img (Xano-hosted,
                           arbitrary dimensions). */}
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
-                        src={selected.signature_url}
-                        alt={`Signature — ${selected.parent_name}`}
+                        src={activeRow.signature_url}
+                        alt={`Signature — ${activeRow.parent_name}`}
                         className="max-h-28 w-auto"
                       />
                     </div>
                     <a
-                      href={selected.signature_url}
+                      href={activeRow.signature_url}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="inline-flex items-center gap-1 text-xs font-medium text-foreground underline underline-offset-2 hover:no-underline"

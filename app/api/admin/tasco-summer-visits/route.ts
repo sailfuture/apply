@@ -36,6 +36,13 @@ export type TascoSummerVisitRow = {
   parent_phone: string;
   parent_email: string;
   marketing_opt_in: boolean;
+  /** Admin's 1–5 conversion stars; 0 = unrated. */
+  rating: number;
+  /** Admin's "we've reached out" flag. */
+  followed_up: boolean;
+  /** Server-stamped time of the most recent note; 0 when never
+   *  contacted. */
+  last_reach_out: number;
 };
 
 /**
@@ -85,6 +92,9 @@ export async function GET() {
         parent_phone: v.parent_phone ?? "",
         parent_email: v.parent_email ?? "",
         marketing_opt_in: v.marketing_opt_in === true,
+        rating: Number(v.interest_level) || 0,
+        followed_up: v.isFollowedUp === true,
+        last_reach_out: Number(v.last_reach_out) || 0,
       }))
       .sort((a, b) => b.submitted_ts - a.submitted_ts);
 
