@@ -420,6 +420,24 @@ export async function POST(req: NextRequest) {
       await bumpLeadReachOut(contactType as LeadNoteSource, contactId);
     }
 
+    // Sent-but-unlogged: the text went out (so this is still a 201),
+    // but the Xano log write failed — without a row, the message is
+    // invisible in every thread until the Twilio sync backfills it.
+    // Tell the sender instead of letting the thread quietly not show
+    // what they just sent.
+    if (!result.logId) {
+      return NextResponse.json(
+        {
+          ...result,
+          warning:
+            "The text was sent, but logging it failed — it may not show " +
+            "in the thread until the next Twilio sync. If this keeps " +
+            "happening, check the Xano sms_messages Add Record endpoint.",
+        },
+        { status: 201 }
+      );
+    }
+
     return NextResponse.json(result, { status: 201 });
   } catch (err) {
     return handleAdminError(err);

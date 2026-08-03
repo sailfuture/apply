@@ -214,6 +214,30 @@ export default function AdminMessagesPage() {
         </p>
       </div>
 
+      {/* Search — its own row between the header and the filter
+          chips. Matches family/parent/student names, phone (any
+          format), and the latest message text. */}
+      <div className="relative max-w-md">
+        <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+        <input
+          type="search"
+          value={search}
+          onChange={(e) => changeSearch(e.target.value)}
+          placeholder="Search by student, parent, or phone…"
+          className="w-full rounded-md border bg-white py-1.5 pl-8 pr-7 text-sm outline-none placeholder:text-muted-foreground focus:border-foreground/40"
+        />
+        {search ? (
+          <button
+            type="button"
+            onClick={() => changeSearch("")}
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+            aria-label="Clear search"
+          >
+            <X className="size-3.5" />
+          </button>
+        ) : null}
+      </div>
+
       {/* Stage filter chips inline with the compose buttons — one
           row: filters left, actions right. */}
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -251,34 +275,10 @@ export default function AdminMessagesPage() {
             md+ always shows both. */}
         <div
           className={cn(
-            "flex min-h-0 flex-col rounded-lg border bg-white",
-            selected !== null && "hidden md:flex"
+            "min-h-0 overflow-y-auto overscroll-contain rounded-lg border bg-white",
+            selected !== null && "hidden md:block"
           )}
         >
-          {/* Search — matches family/parent/student names, phone (any
-              format), and the latest message text. Sticky above the
-              scrolling list. */}
-          <div className="relative border-b px-3 py-2">
-            <Search className="pointer-events-none absolute left-5.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-            <input
-              type="search"
-              value={search}
-              onChange={(e) => changeSearch(e.target.value)}
-              placeholder="Search by student, parent, or phone…"
-              className="w-full rounded-md border bg-muted/20 py-1.5 pl-8 pr-7 text-sm outline-none placeholder:text-muted-foreground focus:border-foreground/40"
-            />
-            {search ? (
-              <button
-                type="button"
-                onClick={() => changeSearch("")}
-                className="absolute right-5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                aria-label="Clear search"
-              >
-                <X className="size-3.5" />
-              </button>
-            ) : null}
-          </div>
-          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
           {/* Distinguish "still loading" and "failed to load" from a
               genuinely empty inbox — asserting "no conversations" while
               the request is in flight (or after it errored) reads as
@@ -398,7 +398,6 @@ export default function AdminMessagesPage() {
               ) : null}
             </ul>
           )}
-          </div>
         </div>
 
         {/* Thread pane */}

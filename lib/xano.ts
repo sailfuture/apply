@@ -4833,7 +4833,40 @@ export const xano = {
         body: JSON.stringify(data),
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
-      return res.json();
+      const row: XanoSmsMessage = await res.json();
+      // Guard against a mis-wired Add Record endpoint. Xano silently
+      // DROPS inputs the endpoint doesn't declare — observed live on
+      // 2026-08-03, when an endpoint edit broke the input mapping and
+      // every send/sync insert landed as an all-empty row (which the
+      // sync then re-imported forever, because the SID never saved).
+      // If the row doesn't echo the body we sent, remove the orphan
+      // and throw with the exact fix, instead of returning a "success"
+      // that poisons the log.
+      if (data.body && row.body !== data.body) {
+        await this.delete(row.id).catch((err) => {
+          console.error(
+            "[xano.smsMessages.create] failed to clean up empty row:",
+            err
+          );
+        });
+        throw new Error(
+          "Xano ignored the message fields on POST /sms_messages — the " +
+            "Add Record endpoint's inputs are unwired. In Xano, open the " +
+            "sms_messages Add Record endpoint and re-map every input " +
+            "(direction, to_number, body, twilio_message_sid, …) to its " +
+            "column, then retry."
+        );
+      }
+      return row;
+    },
+
+    /** Hard-delete one row — used by the create() echo-guard above and
+     *  by cleanup tooling. */
+    async delete(id: number): Promise<void> {
+      const res = await fetch(`${getBaseUrl()}/sms_messages/${id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
     },
 
     async update(

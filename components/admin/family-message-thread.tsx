@@ -205,9 +205,14 @@ export function FamilyMessageThread({
         const err = await res.json().catch(() => null);
         throw new Error(err?.error ?? `Send failed (${res.status})`);
       }
+      const sent = await res.json().catch(() => null);
       await mutate();
       onSent?.();
-      toast.success("Text sent.");
+      if (sent?.warning) {
+        toast.warning(sent.warning);
+      } else {
+        toast.success("Text sent.");
+      }
     } catch (err) {
       console.error("Failed to send text:", err);
       toast.error(err instanceof Error ? err.message : "Couldn't send text.");

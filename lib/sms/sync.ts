@@ -1,6 +1,7 @@
 import { xano } from "@/lib/xano";
 import { getTwilioClient, isTwilioConfigured } from "@/lib/twilio";
 import {
+  adhocIdFromPhone,
   buildSmsDirectory,
   contactMessageKeys,
   normPhone,
@@ -25,9 +26,11 @@ import {
  * text: `to` for outbound, `from` for inbound) matched against the
  * unified contact directory — family parents, summer-camp parents,
  * and inquiries, with family > camp > inquiry priority. Numbers that
- * match no contact at all are counted and reported, not written —
- * `sms_messages` is contact-keyed, so an unattributable text has no
- * thread to land on.
+ * match no contact still import — as ad-hoc rows (every FK null),
+ * which the inbox threads by the phone number itself, same as the
+ * webhook does for unknown inbound texters. Only numbers that can't
+ * thread by phone at all (shortcodes, alphanumeric senders) are
+ * skipped, counted in `unmatched`.
  *
  * Safe to run repeatedly: the Twilio SID is the natural key, so
  * re-running imports nothing new. Never throws — callers (admin
@@ -45,8 +48,9 @@ export interface SmsSyncResult {
   imported: number;
   /** Already present (SID match) — the common case on re-runs. */
   alreadyLogged: number;
-  /** Messages whose counterparty number matched no contact on file
-   *  (no family parent, no summer-camp parent, no inquiry). */
+  /** Messages whose counterparty can't thread by phone at all
+   *  (shortcodes, alphanumeric senders) — record-less US numbers
+   *  import as ad-hoc rows and are NOT counted here. */
   unmatched: number;
   /** Distinct unmatched numbers (up to 10) for the admin to inspect. */
   unmatchedNumbers: string[];
@@ -101,8 +105,12 @@ export async function syncMessagesFromTwilio({
       }
       const inbound = msg.direction === "inbound";
       const counterparty = inbound ? msg.from : msg.to;
-      const contact = directory.get(normPhone(counterparty));
-      if (!contact) {
+      const contact = directory.get(normPhone(counterparty)) ?? null;
+      // No record match → import as an ad-hoc row (all FKs null; the
+      // inbox threads it by the number). Only a counterparty that
+      // can't shape into a 10-digit US number has no thread to land
+      // on — skip and report those.
+      if (!contact && adhocIdFromPhone(counterparty) === null) {
         base.unmatched += 1;
         if (counterparty) unmatchedSet.add(counterparty);
         continue;

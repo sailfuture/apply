@@ -84,7 +84,7 @@ async function postLeadEntry(
   scope: LeadNoteScope,
   category: string,
   text: string
-): Promise<void> {
+): Promise<{ warning?: string }> {
   const isSms = category === "sms";
   const res = await fetch(
     isSms ? "/api/admin/messages" : "/api/admin/notes",
@@ -110,6 +110,10 @@ async function postLeadEntry(
       err?.error ?? `${isSms ? "Send" : "Save"} failed (${res.status})`
     );
   }
+  // A 201 can still carry a warning (e.g. "sent but logging failed") —
+  // pass it up so the composer can toast it instead of a plain success.
+  const data = await res.json().catch(() => null);
+  return { warning: typeof data?.warning === "string" ? data.warning : undefined };
 }
 
 /**
@@ -246,11 +250,12 @@ export function InquiryNotes({
     const isSms = category === "sms";
     setSaving(true);
     try {
-      await postLeadEntry(leadScope, category, body.trim());
+      const { warning } = await postLeadEntry(leadScope, category, body.trim());
       setBody("");
       await (isSms ? mutateSms() : mutate());
       onNoteAdded?.();
-      toast.success(isSms ? "Text sent." : "Note added.");
+      if (warning) toast.warning(warning);
+      else toast.success(isSms ? "Text sent." : "Note added.");
     } catch (err) {
       console.error(isSms ? "Failed to send text:" : "Failed to add note:", err);
       toast.error(
@@ -490,13 +495,14 @@ export function InquiryNoteComposer({
     const isSms = category === "sms";
     setSaving(true);
     try {
-      await postLeadEntry(leadScope, category, body.trim());
+      const { warning } = await postLeadEntry(leadScope, category, body.trim());
       setBody("");
       await (isSms
         ? globalMutate(contactMessagesKey(leadScope.source, leadScope.id))
         : mutate());
       onNoteAdded?.();
-      toast.success(isSms ? "Text sent." : "Note added.");
+      if (warning) toast.warning(warning);
+      else toast.success(isSms ? "Text sent." : "Note added.");
     } catch (err) {
       console.error(isSms ? "Failed to send text:" : "Failed to add note:", err);
       toast.error(
