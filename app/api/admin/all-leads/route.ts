@@ -55,6 +55,14 @@ export type AllLeadRow = {
   /** Source-specific annotation (rec center / attended camp /
    *  inquiry status). Empty when there's nothing notable. */
   detail: string;
+  /** Messaging/marketing consent. inquiry `messaging_opt_in` (missing
+   *  = opted in, matching the SMS layer), visit + tasco
+   *  `marketing_opt_in`; camp rows have no column — sign-up is the
+   *  implied consent, so they read `true` and aren't editable. */
+  opt_in: boolean;
+  /** Unformatted grade value for the edit sheet — `grade` may carry
+   *  display suffixes (camp's "(completed)"). */
+  grade_raw: string;
 };
 
 export async function GET() {
@@ -112,6 +120,8 @@ export async function GET() {
               : status === "not_interested"
                 ? "Not interested"
                 : "",
+          opt_in: i.messaging_opt_in !== false,
+          grade_raw: (i.starting_grade || i.current_grade || "").trim(),
         };
       }),
       ...campRows.map(
@@ -140,6 +150,8 @@ export async function GET() {
             : c.isNotAttending
               ? "Not attending"
               : "",
+          opt_in: true,
+          grade_raw: (c.last_grade_completed ?? "").trim(),
         })
       ),
       ...waivers.map(
@@ -158,6 +170,8 @@ export async function GET() {
           followed_up: w.isFollowedUp === true,
           last_reach_out: reachOut(`visit-${w.id}`, w.last_reach_out),
           detail: w.marketing_opt_in ? "" : "No marketing opt-in",
+          opt_in: w.marketing_opt_in === true,
+          grade_raw: (w.student_grade ?? "").trim(),
         })
       ),
       ...tascoRows.map(
@@ -176,6 +190,8 @@ export async function GET() {
           followed_up: t.isFollowedUp === true,
           last_reach_out: reachOut(`tasco-${t.id}`, t.last_reach_out),
           detail: (t.recreation_center ?? "").trim(),
+          opt_in: t.marketing_opt_in === true,
+          grade_raw: (t.current_grade ?? "").trim(),
         })
       ),
     ].sort((a, b) => b.submitted_ts - a.submitted_ts);

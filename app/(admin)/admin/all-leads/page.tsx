@@ -13,6 +13,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { StarRating } from "@/components/admin/star-rating";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { formatUSPhone } from "@/lib/phone";
@@ -23,12 +24,14 @@ import type {
 } from "@/app/api/admin/all-leads/route";
 
 /** Source chip vocabulary — mirrors the messaging composer's labels so
- *  the two surfaces speak the same language. */
-const SOURCE_META: Record<LeadSource, { label: string }> = {
-  inquiry: { label: "Inquiry" },
-  camp: { label: "Summer Camp" },
-  visit: { label: "Liability Waiver Visit" },
-  tasco: { label: "TASCO" },
+ *  the two surfaces speak the same language. `short` is the acronym
+ *  the table's Source column renders (full label on hover + in the
+ *  filter chips / sheet subtitle). */
+const SOURCE_META: Record<LeadSource, { label: string; short: string }> = {
+  inquiry: { label: "Inquiry", short: "INQ" },
+  camp: { label: "Summer Camp", short: "CAMP" },
+  visit: { label: "Liability Waiver Visit", short: "LWV" },
+  tasco: { label: "TASCO", short: "TASCO" },
 };
 
 const SOURCE_FILTERS: LeadSource[] = ["inquiry", "camp", "visit", "tasco"];
@@ -105,6 +108,49 @@ export default function AllLeadsPage() {
     }
   }
 
+  // Toggle a boolean lead flag straight from the table — follow-up on
+  // every source, opt-in where the source table has a consent column
+  // (camp doesn't; sign-up is the implied consent). Same optimistic
+  // shape as `setRating`.
+  async function setLeadBool(
+    row: AllLeadRow,
+    field: "followed_up" | "opt_in",
+    value: boolean
+  ) {
+    const bodyKey = field === "followed_up" ? "isFollowedUp" : "opt_in";
+    try {
+      mutate(
+        (curr) =>
+          (curr ?? []).map((r) =>
+            r.key === row.key ? { ...r, [field]: value } : r
+          ),
+        { revalidate: false }
+      );
+      const res = await fetch("/api/admin/leads", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source: row.source,
+          id: row.id,
+          [bodyKey]: value,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        throw new Error(err?.error ?? `Save failed (${res.status})`);
+      }
+      const data = await res.json().catch(() => null);
+      if (data?.warning) toast.warning(data.warning);
+      mutate();
+    } catch (err) {
+      console.error(`Failed to save lead ${field}:`, err);
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't save the change."
+      );
+      mutate();
+    }
+  }
+
   // Defined inline (not memoized) like the other recruitment lists —
   // the render closures need `setRating`'s latest SWR bindings.
   const columns: ColumnDef<AllLeadRow>[] = [
@@ -146,11 +192,15 @@ export default function AllLeadsPage() {
         key: "source",
         header: "Source",
         sortable: true,
-        width: "w-[13%]",
+        width: "w-[8%]",
         accessor: (r) => SOURCE_META[r.source].label,
         render: (r) => (
-          <Badge variant="outline" className="font-medium">
-            {SOURCE_META[r.source].label}
+          <Badge
+            variant="outline"
+            className="font-medium"
+            title={SOURCE_META[r.source].label}
+          >
+            {SOURCE_META[r.source].short}
           </Badge>
         ),
       },
@@ -240,19 +290,34 @@ export default function AllLeadsPage() {
         ),
       },
       {
-        // Source-specific annotation — rec center, camp attendance,
-        // inquiry lifecycle.
-        key: "detail",
-        header: "Detail",
+        // Messaging/marketing consent, editable inline where the
+        // source table has a column. Camp rows have none — sign-up is
+        // the implied consent, so they render checked + locked.
+        key: "opt_in",
+        header: "Opt-in",
         sortable: true,
-        searchable: true,
-        width: "w-[9%]",
+        width: "w-[7%]",
+        accessor: (r) => (r.opt_in ? 1 : 0),
         render: (r) => (
           <span
-            className="block truncate text-xs text-muted-foreground"
-            title={r.detail}
+            className="inline-flex"
+            onClick={(e) => e.stopPropagation()}
+            title={
+              r.source === "camp"
+                ? "Implied consent from camp sign-up"
+                : r.opt_in
+                  ? "Opted in — uncheck to opt out"
+                  : "Opted out — check to opt in"
+            }
           >
-            {r.detail || "—"}
+            <Checkbox
+              checked={r.opt_in}
+              disabled={r.source === "camp"}
+              aria-label="Messaging opt-in"
+              onCheckedChange={(v) =>
+                void setLeadBool(r, "opt_in", v === true)
+              }
+            />
           </span>
         ),
       },
@@ -262,17 +327,21 @@ export default function AllLeadsPage() {
         key: "followed_up",
         header: "Follow-up",
         sortable: true,
-        width: "w-[9%]",
+        width: "w-[8%]",
         accessor: (r) => (r.followed_up ? 1 : 0),
         render: (r) => (
-          <span className="block">
-            {r.followed_up ? (
-              <Badge className="bg-green-100 text-green-800 hover:bg-green-100">
-                Followed up
-              </Badge>
-            ) : (
-              <span className="text-xs text-muted-foreground">Needs</span>
-            )}
+          <span
+            className="inline-flex"
+            onClick={(e) => e.stopPropagation()}
+            title={r.followed_up ? "Followed up" : "Needs follow-up"}
+          >
+            <Checkbox
+              checked={r.followed_up}
+              aria-label="Followed up"
+              onCheckedChange={(v) =>
+                void setLeadBool(r, "followed_up", v === true)
+              }
+            />
           </span>
         ),
       },
@@ -449,12 +518,24 @@ export default function AllLeadsPage() {
             SOURCE_META[activeRow.source].label,
             activeRow.parent_name || null,
             formatUSPhone(activeRow.phone) || null,
+            activeRow.detail || null,
           ]
             .filter(Boolean)
             .join(" · ")}
           rating={activeRow.rating}
           isFollowedUp={activeRow.followed_up}
           lastReachOut={activeRow.last_reach_out || null}
+          details={{
+            student_name: activeRow.student_name,
+            // TASCO rows have no parent-name column — null hides the
+            // input instead of offering an edit that can't save.
+            parent_name:
+              activeRow.source === "tasco" ? null : activeRow.parent_name,
+            phone: activeRow.phone,
+            email: activeRow.email,
+            grade: activeRow.grade_raw,
+            school: activeRow.school,
+          }}
           onChanged={() => void mutate()}
         />
       ) : null}
