@@ -1,7 +1,12 @@
 import { NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
-import { messageContactRef } from "@/lib/sms/contacts";
+import {
+  counterpartyPhone,
+  messageContactRef,
+  phoneFromAdhocId,
+} from "@/lib/sms/contacts";
+import { formatUSPhone } from "@/lib/phone";
 
 /** One conversation whose newest message is inbound — i.e. a contact
  *  texted us and nobody has replied. The nav badge subtracts the ones
@@ -13,7 +18,20 @@ export interface UnreadConversation {
   key: string;
   /** `created_at` of the newest message on the thread (unix ms). */
   lastAt: number;
+  /** Who texted — a record name where we can resolve one cheaply,
+   *  otherwise the formatted phone. Powers the desktop notification;
+   *  the badge ignores it. */
+  name: string;
+  /** First line of the inbound text, truncated — the notification
+   *  body. */
+  preview: string;
 }
+
+/** Cap on name resolution. Unread counts are small in practice; this
+ *  keeps a pathological backlog from fanning out dozens of lookups on
+ *  an endpoint that polls from every admin page. */
+const NAME_LOOKUP_CAP = 10;
+const PREVIEW_CHARS = 120;
 
 export interface UnreadMessagesResponse {
   conversations: UnreadConversation[];
@@ -41,7 +59,14 @@ export async function GET() {
     // that thread's latest message.
     const messages = await xano.smsMessages.getAll();
     const seen = new Set<string>();
-    const conversations: UnreadConversation[] = [];
+    const pending: Array<{
+      key: string;
+      type: string;
+      id: number;
+      lastAt: number;
+      preview: string;
+      phone: string;
+    }> = [];
     for (const m of messages) {
       const contact = messageContactRef(m);
       if (!contact) continue;
@@ -49,9 +74,81 @@ export async function GET() {
       if (seen.has(key)) continue;
       seen.add(key);
       if (m.direction === "inbound") {
-        conversations.push({ key, lastAt: m.created_at });
+        pending.push({
+          key,
+          type: contact.type,
+          id: contact.id,
+          lastAt: m.created_at,
+          preview: (m.body ?? "").trim().slice(0, PREVIEW_CHARS),
+          phone: counterpartyPhone(m),
+        });
       }
     }
+
+    // Resolve sender names only for the threads we're returning, and
+    // only up to the cap — with nothing unread (the common case) this
+    // whole block is skipped and the endpoint stays a single scan.
+    const toName = pending.slice(0, NAME_LOOKUP_CAP);
+    const needsScan = (t: string) =>
+      toName.some((p) => p.type === t);
+    const [camps, waivers, tascos] = await Promise.all([
+      needsScan("camp")
+        ? xano.summerCamp.getAll().catch(() => [])
+        : Promise.resolve([]),
+      needsScan("visit")
+        ? xano.websiteWaivers.getAll().catch(() => [])
+        : Promise.resolve([]),
+      needsScan("tasco")
+        ? xano.tascoSummerVisits.getAll().catch(() => [])
+        : Promise.resolve([]),
+    ]);
+
+    const names = await Promise.all(
+      toName.map(async (p) => {
+        const fallback = formatUSPhone(p.phone) || p.phone || "Unknown number";
+        try {
+          if (p.type === "adhoc") {
+            return formatUSPhone(phoneFromAdhocId(p.id)) || fallback;
+          }
+          if (p.type === "family") {
+            const f = await xano.families.getById(p.id);
+            return f?.family_name?.trim() || fallback;
+          }
+          if (p.type === "inquiry") {
+            const i = await xano.inquiries.getById(p.id);
+            const n = `${i?.primary_first_name ?? ""} ${i?.primary_last_name ?? ""}`.trim();
+            return n || fallback;
+          }
+          if (p.type === "camp") {
+            const c = camps.find((r) => r.id === p.id);
+            const n = `${c?.primary_parent_first_name ?? ""} ${c?.primary_parent_last_name ?? ""}`.trim();
+            return n || fallback;
+          }
+          if (p.type === "visit") {
+            const w = waivers.find((r) => r.id === p.id);
+            return (w?.parent_name ?? "").trim() || fallback;
+          }
+          if (p.type === "tasco") {
+            const t = tascos.find((r) => r.id === p.id);
+            const student = (t?.student_name ?? "").trim();
+            return student ? `Parent of ${student}` : fallback;
+          }
+        } catch {
+          // Name lookup is best-effort — the phone still identifies
+          // the sender, and the badge doesn't use the name at all.
+        }
+        return fallback;
+      })
+    );
+
+    const conversations: UnreadConversation[] = pending.map((p, i) => ({
+      key: p.key,
+      lastAt: p.lastAt,
+      name:
+        names[i] ?? (formatUSPhone(p.phone) || p.phone || "Unknown number"),
+      preview: p.preview,
+    }));
+
     return NextResponse.json({
       conversations,
     } satisfies UnreadMessagesResponse);

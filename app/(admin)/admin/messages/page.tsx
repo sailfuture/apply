@@ -22,6 +22,7 @@ import { formatUSPhone } from "@/lib/phone";
 import { FamilyMessageThread } from "@/components/admin/family-message-thread";
 import { GroupMessageDialog } from "@/components/admin/group-message-dialog";
 import { NewMessageDialog } from "@/components/admin/new-message-dialog";
+import { SmsNotificationToggle } from "@/components/admin/sms-notifications";
 import { SMS_VIEWED_EVENT } from "@/components/admin/messages-unread-badge";
 import type {
   ConversationStage,
@@ -316,6 +317,7 @@ export default function AdminMessagesPage() {
           })}
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          <SmsNotificationToggle />
           <NewMessageDialog
             onPick={(contact) => {
               setSelected(contact);

@@ -17,6 +17,7 @@ import {
   NotificationBadge,
   useUnreadMessageCount,
 } from "@/components/admin/messages-unread-badge";
+import { SmsNotificationWatcher } from "@/components/admin/sms-notifications";
 import { cn } from "@/lib/utils";
 
 interface AdminUser {
@@ -273,6 +274,9 @@ export function AdminTopNav({ admin }: { admin: AdminUser | null }) {
           ) : null}
         </div>
       </div>
+      {/* Desktop alerts for inbound parent texts. Lives in the nav so
+          it's mounted on every admin page; renders nothing. */}
+      <SmsNotificationWatcher />
     </header>
   );
 }
