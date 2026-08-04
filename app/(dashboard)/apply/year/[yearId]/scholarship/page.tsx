@@ -54,7 +54,7 @@ import {
   EmptyContent,
 } from "@/components/ui/empty";
 
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, motion } from "motion/react";
 import SignatureCanvas from "react-signature-canvas";
 import {
   FileUpload,

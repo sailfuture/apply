@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
-import { Loader2, Pencil } from "lucide-react";
+import { Check, Copy, Loader2, Mail, Pencil, Phone } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -200,6 +200,93 @@ export interface LeadEditableDetails {
 }
 
 /**
+ * Full-width phone/email row: the value on its own line (wrapping
+ * rather than truncating, so a long address stays readable), with a
+ * one-tap action (call / compose) and a copy button.
+ */
+function ContactRow({
+  label,
+  value,
+  copyValue,
+  href,
+  actionLabel,
+  actionIcon,
+}: {
+  label: string;
+  value: string;
+  /** Raw value for the clipboard — the phone copies as digits, not
+   *  the prettified display form. */
+  copyValue: string;
+  href: string | null;
+  actionLabel: string;
+  actionIcon: React.ReactNode;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(copyValue);
+      setCopied(true);
+      // Revert the tick after a beat — a persistent check would read
+      // as state rather than as confirmation.
+      setTimeout(() => setCopied(false), 1500);
+    } catch (err) {
+      console.error("[ContactRow.copy]", err);
+      toast.error("Couldn't copy — your browser blocked clipboard access.");
+    }
+  }
+
+  return (
+    <div className="min-w-0">
+      <p className="text-[11px] text-muted-foreground">{label}</p>
+      {value ? (
+        <div className="flex items-start justify-between gap-2">
+          <a
+            href={href ?? undefined}
+            className="min-w-0 flex-1 break-all text-sm text-foreground hover:underline"
+            title={`${actionLabel} ${value}`}
+          >
+            {value}
+          </a>
+          <span className="flex shrink-0 items-center gap-0.5">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-7"
+              onClick={() => void copy()}
+              title={copied ? "Copied" : `Copy ${label.toLowerCase()}`}
+              aria-label={`Copy ${label.toLowerCase()}`}
+            >
+              {copied ? (
+                <Check className="size-3.5 text-green-600" />
+              ) : (
+                <Copy className="size-3.5" />
+              )}
+            </Button>
+            {href ? (
+              <Button
+                asChild
+                variant="ghost"
+                size="icon"
+                className="size-7"
+                title={`${actionLabel} ${value}`}
+              >
+                <a href={href} aria-label={actionLabel}>
+                  {actionIcon}
+                </a>
+              </Button>
+            ) : null}
+          </span>
+        </div>
+      ) : (
+        <p className="text-sm text-muted-foreground">—</p>
+      )}
+    </div>
+  );
+}
+
+/**
  * Inline editor for a lead's contact facts — read-mode grid with an
  * Edit toggle, PATCHing only the changed fields. Blank values can't
  * be saved (Xano skips empty inputs); the server says so in a warning
@@ -349,7 +436,11 @@ function LeadDetailsEditor({
     }
   }
 
-  const fields: Array<{
+  // Short facts pair up in two columns; phone and email get their own
+  // full-width rows underneath. An email in a half-width cell was
+  // truncating to the point of being unreadable, and both want room
+  // for their call/mail/copy actions.
+  const gridFields: Array<{
     key: keyof typeof draft;
     label: string;
     readValue: string;
@@ -362,12 +453,6 @@ function LeadDetailsEditor({
       readValue: shown.parent_name ?? "",
       hidden: shown.parent_name === null,
     },
-    {
-      key: "phone",
-      label: "Phone",
-      readValue: formatUSPhone(shown.phone) || shown.phone,
-    },
-    { key: "email", label: "Email", readValue: shown.email },
     { key: "grade", label: "Grade", readValue: shown.grade },
     { key: "school", label: "School", readValue: shown.school },
   ];
@@ -422,7 +507,7 @@ function LeadDetailsEditor({
         )}
       </div>
       <div className="grid grid-cols-2 gap-x-4 gap-y-2.5">
-        {fields
+        {gridFields
           .filter((f) => !f.hidden)
           .map((f) =>
             editing ? (
@@ -451,6 +536,60 @@ function LeadDetailsEditor({
               </div>
             )
           )}
+      </div>
+
+      {/* Phone + email get full-width rows of their own: an email in a
+          half-width cell truncated past readability, and both carry
+          actions (call / mail / copy). */}
+      <div className="space-y-2.5">
+        {editing ? (
+          <>
+            <div>
+              <p className="mb-1 text-[11px] text-muted-foreground">Phone</p>
+              <Input
+                value={draft.phone}
+                disabled={saving}
+                className="h-8 border-input bg-white text-sm"
+                onChange={(e) =>
+                  setDraft((d) => ({ ...d, phone: e.target.value }))
+                }
+              />
+            </div>
+            <div>
+              <p className="mb-1 text-[11px] text-muted-foreground">Email</p>
+              <Input
+                value={draft.email}
+                disabled={saving}
+                className="h-8 border-input bg-white text-sm"
+                onChange={(e) =>
+                  setDraft((d) => ({ ...d, email: e.target.value }))
+                }
+              />
+            </div>
+          </>
+        ) : (
+          <>
+            <ContactRow
+              label="Phone"
+              value={formatUSPhone(shown.phone) || shown.phone}
+              copyValue={shown.phone}
+              href={shown.phone ? `tel:${shown.phone}` : null}
+              actionLabel="Call"
+              actionIcon={<Phone className="size-3.5" />}
+            />
+            <ContactRow
+              label="Email"
+              value={shown.email}
+              copyValue={shown.email}
+              href={shown.email ? `mailto:${shown.email}` : null}
+              actionLabel="Email"
+              actionIcon={<Mail className="size-3.5" />}
+            />
+          </>
+        )}
+      </div>
+
+      <div className="grid grid-cols-2 gap-x-4 gap-y-2.5">
         {/* Opt-in — read-only checkbox until Edit is clicked. Camp
             leads stay locked even then (no consent column; sign-up is
             the implied consent). */}

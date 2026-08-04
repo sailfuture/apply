@@ -69,7 +69,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { GlobalSaveStatusPill } from "@/components/save-status-pill";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, motion } from "motion/react";
 import { toast } from "sonner";
 import { US_STATES } from "@/lib/us-states";
 import {

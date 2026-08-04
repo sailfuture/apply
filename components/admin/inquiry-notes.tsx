@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { AnimatePresence, motion } from "motion/react";
 import useSWR, { useSWRConfig } from "swr";
 import { toast } from "sonner";
 import {
@@ -384,6 +385,35 @@ export function InquiryNotes({
       });
     }
   }
+  // Smooth scroll to the newest entry whenever one is ADDED. The
+  // scroller keeps itself pinned to the bottom, but only if you were
+  // already there — after scrolling back through history, a note you
+  // just wrote would land off-screen. Skips the initial load (prev
+  // count 0) so opening the sheet doesn't animate a scroll.
+  const streamRef = useRef<HTMLDivElement>(null);
+  const prevRowCount = useRef(0);
+  const rowCount = pinned.length + stream.length;
+  useEffect(() => {
+    const prev = prevRowCount.current;
+    prevRowCount.current = rowCount;
+    if (prev === 0 || rowCount <= prev) return;
+    const viewport = streamRef.current?.querySelector<HTMLElement>(
+      '[data-slot="message-scroller-viewport"]'
+    );
+    if (!viewport) return;
+    // Double rAF so the new row has been laid out (and its enter
+    // animation started) before we measure scrollHeight.
+    const raf = requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        viewport.scrollTo({
+          top: viewport.scrollHeight,
+          behavior: "smooth",
+        });
+      })
+    );
+    return () => cancelAnimationFrame(raf);
+  }, [rowCount]);
+
   let lastDay = "";
   for (const e of stream) {
     const ts = entryTs(e);
@@ -531,24 +561,45 @@ export function InquiryNotes({
             </p>
           </div>
         ) : (
-          <MessageScrollerProvider autoScroll defaultScrollPosition="end">
-            <MessageScroller>
-              <MessageScrollerViewport>
-                <MessageScrollerContent className="px-4 py-4">
-                  {rows.map((r) => (
-                    <MessageScrollerItem
-                      key={r.id}
-                      messageId={r.id}
-                      scrollAnchor={r.anchor}
-                    >
-                      {r.node}
-                    </MessageScrollerItem>
-                  ))}
-                </MessageScrollerContent>
-              </MessageScrollerViewport>
-              <MessageScrollerButton />
-            </MessageScroller>
-          </MessageScrollerProvider>
+          <div ref={streamRef} className="h-full">
+            <MessageScrollerProvider autoScroll defaultScrollPosition="end">
+              <MessageScroller>
+                <MessageScrollerViewport>
+                  <MessageScrollerContent className="px-4 py-4">
+                    {/* `initial={false}` is the whole trick: rows
+                        already present on first paint appear instantly,
+                        and only entries added afterwards animate in.
+                        Without it the log would replay every note
+                        every time the sheet opens. */}
+                    <AnimatePresence initial={false}>
+                      {rows.map((r) => (
+                        <MessageScrollerItem
+                          key={r.id}
+                          messageId={r.id}
+                          scrollAnchor={r.anchor}
+                        >
+                          <motion.div
+                            layout="position"
+                            initial={{ opacity: 0, y: 12 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, scale: 0.97 }}
+                            transition={{
+                              type: "spring",
+                              bounce: 0.2,
+                              visualDuration: 0.3,
+                            }}
+                          >
+                            {r.node}
+                          </motion.div>
+                        </MessageScrollerItem>
+                      ))}
+                    </AnimatePresence>
+                  </MessageScrollerContent>
+                </MessageScrollerViewport>
+                <MessageScrollerButton />
+              </MessageScroller>
+            </MessageScrollerProvider>
+          </div>
         )}
         {deleteDialog}
       </>
