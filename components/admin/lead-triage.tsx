@@ -55,6 +55,31 @@ export function LeadTriageControls({
 }) {
   const [savingRating, setSavingRating] = useState(false);
   const [savingFollowUp, setSavingFollowUp] = useState(false);
+  // Optimistic mirrors — the control flips the instant it's clicked
+  // instead of waiting for the PATCH + host revalidation round-trip.
+  // The prop catches up after `onChanged()` refreshes the host list;
+  // the render-phase resets below clear the mirror when it does (the
+  // sanctioned adjust-state-on-prop-change pattern — effects are the
+  // wrong tool and the lint bans setState in them). A failed save
+  // clears the mirror immediately, visibly reverting the control.
+  const [optimisticRating, setOptimisticRating] = useState<number | null>(
+    null
+  );
+  const [optimisticFollowUp, setOptimisticFollowUp] = useState<
+    boolean | null
+  >(null);
+  const [prevRating, setPrevRating] = useState(rating);
+  const [prevFollowedUp, setPrevFollowedUp] = useState(isFollowedUp);
+  if (rating !== prevRating) {
+    setPrevRating(rating);
+    setOptimisticRating(null);
+  }
+  if (isFollowedUp !== prevFollowedUp) {
+    setPrevFollowedUp(isFollowedUp);
+    setOptimisticFollowUp(null);
+  }
+  const shownRating = optimisticRating ?? rating;
+  const shownFollowedUp = optimisticFollowUp ?? isFollowedUp;
 
   async function patchLead(
     patch: { interest_level?: number; isFollowedUp?: boolean },
@@ -72,6 +97,7 @@ export function LeadTriageControls({
   }
 
   async function setRating(v: number) {
+    setOptimisticRating(v);
     setSavingRating(true);
     try {
       await patchLead({ interest_level: v }, "Rating save");
@@ -81,23 +107,25 @@ export function LeadTriageControls({
       toast.error(
         err instanceof Error ? err.message : "Couldn't save the rating."
       );
+      setOptimisticRating(null);
     } finally {
       setSavingRating(false);
     }
   }
 
   async function toggleFollowUp() {
-    const next = !isFollowedUp;
+    const next = !shownFollowedUp;
+    setOptimisticFollowUp(next);
     setSavingFollowUp(true);
     try {
       await patchLead({ isFollowedUp: next }, "Follow-up save");
       onChanged?.();
-      toast.success(next ? "Marked followed up." : "Moved back to needs follow-up.");
     } catch (err) {
       console.error("Failed to save follow-up flag:", err);
       toast.error(
         err instanceof Error ? err.message : "Couldn't update follow-up."
       );
+      setOptimisticFollowUp(null);
     } finally {
       setSavingFollowUp(false);
     }
@@ -112,12 +140,12 @@ export function LeadTriageControls({
         </p>
         <div className="mt-1 flex items-center gap-2">
           <StarRating
-            value={rating}
+            value={shownRating}
             disabled={savingRating}
             onChange={(v) => void setRating(v)}
           />
           <span className="text-xs text-muted-foreground tabular-nums">
-            {rating ? `${rating}/5` : "Not rated"}
+            {shownRating ? `${shownRating}/5` : "Not rated"}
           </span>
           {savingRating ? (
             <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
@@ -127,7 +155,7 @@ export function LeadTriageControls({
       {/* Follow-up — checkbox under the rating (was a header button). */}
       <label className="flex w-fit cursor-pointer items-center gap-2 text-sm">
         <Checkbox
-          checked={isFollowedUp}
+          checked={shownFollowedUp}
           disabled={savingFollowUp}
           aria-label="Followed up"
           onCheckedChange={() => void toggleFollowUp()}
