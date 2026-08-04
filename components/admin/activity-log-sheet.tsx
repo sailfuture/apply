@@ -443,6 +443,7 @@ export function ActivityLogSheet({
                           >
                             <BubbleRow
                               event={item.event}
+                              showHeader={item.showHeader}
                               onPreviewEmail={(resendId, subject) =>
                                 setPreviewEmail({ resendId, subject })
                               }
@@ -718,10 +719,14 @@ function SystemRow({ event }: { event: ActivityEvent }) {
  *  preview dialog. */
 function BubbleRow({
   event,
+  showHeader,
   onPreviewEmail,
   onDeleteNote,
 }: {
   event: ActivityEvent;
+  /** False when the previous bubble carries the identical header
+   *  (same author, kind, etc.) — the run shows it once. */
+  showHeader: boolean;
   onPreviewEmail: (resendId: string, subject: string) => void;
   /** Only real admin notes (id `note-<n>`) are deletable — derived
    *  legacy notes in the stream aren't. */
@@ -752,27 +757,29 @@ function BubbleRow({
       className="animate-in fade-in-0 slide-in-from-bottom-1 duration-200"
     >
       <MessageContent>
-        <MessageHeader>
-          {event.author || "Admin"}
-          {isNote && event.title !== "Note" ? (
-            <span className="text-muted-foreground"> · {event.title}</span>
-          ) : null}
-          {event.kind === "sms" ? (
-            <span className="text-muted-foreground">
-              {" "}
-              · {event.isGroup ? "Group text" : "Text"}
-            </span>
-          ) : null}
-          {isEmail ? (
-            <span className="text-muted-foreground"> · Email</span>
-          ) : null}
-          {event.studentName ? (
-            <span className="text-muted-foreground">
-              {" "}
-              · {event.studentName}
-            </span>
-          ) : null}
-        </MessageHeader>
+        {showHeader ? (
+          <MessageHeader>
+            {event.author || "Admin"}
+            {isNote && event.title !== "Note" ? (
+              <span className="text-muted-foreground"> · {event.title}</span>
+            ) : null}
+            {event.kind === "sms" ? (
+              <span className="text-muted-foreground">
+                {" "}
+                · {event.isGroup ? "Group text" : "Text"}
+              </span>
+            ) : null}
+            {isEmail ? (
+              <span className="text-muted-foreground"> · Email</span>
+            ) : null}
+            {event.studentName ? (
+              <span className="text-muted-foreground">
+                {" "}
+                · {event.studentName}
+              </span>
+            ) : null}
+          </MessageHeader>
+        ) : null}
         <Bubble variant={variant}>
           <BubbleContent className="whitespace-pre-wrap">
             {event.body}
@@ -830,21 +837,45 @@ function BubbleRow({
 
 type StreamItem =
   | { type: "separator"; id: string; label: string }
-  | { type: "event"; id: string; event: ActivityEvent };
+  | { type: "event"; id: string; event: ActivityEvent; showHeader: boolean };
+
+/** What the bubble header would SAY — consecutive bubbles with the
+ *  same header collapse into one run showing it once (chat-style
+ *  grouping: two of your notes in a row shouldn't name you twice).
+ *  Null for system events, which render as markers and break runs. */
+function headerSignature(e: ActivityEvent): string | null {
+  if (e.kind === "system") return null;
+  return [
+    e.author || "Admin",
+    e.kind,
+    e.kind === "note" ? e.title : "",
+    e.kind === "sms" ? `${e.direction}:${e.isGroup ? "group" : ""}` : "",
+    e.studentName ?? "",
+  ].join("|");
+}
 
 /** Flatten ascending events into render items with day separators —
  *  same pattern as the SMS thread. */
 function buildItems(events: ActivityEvent[]): StreamItem[] {
   const out: StreamItem[] = [];
   let lastDay = "";
+  let prevSig: string | null = null;
   for (const e of events) {
     const d = new Date(e.ts);
     const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
     if (key !== lastDay) {
       out.push({ type: "separator", id: `sep-${key}`, label: dayLabel(e.ts) });
       lastDay = key;
+      prevSig = null; // a day break restarts header runs
     }
-    out.push({ type: "event", id: e.id, event: e });
+    const sig = headerSignature(e);
+    out.push({
+      type: "event",
+      id: e.id,
+      event: e,
+      showHeader: sig === null || sig !== prevSig,
+    });
+    prevSig = sig;
   }
   return out;
 }

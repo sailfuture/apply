@@ -87,6 +87,9 @@ const CATEGORY_OPTIONS: { value: string; label: string; short: string }[] = [
   { value: "email", label: "Email", short: "Email" },
   { value: "in-person", label: "In-person", short: "Visit" },
   { value: "sms", label: "Text message", short: "SMS" },
+  // Written by the tours API (schedule / reschedule / cancel /
+  // outcome), never by the composer.
+  { value: "tour", label: "Campus tour", short: "Tour" },
   { value: "other", label: "Note", short: "Note" },
 ];
 
@@ -442,6 +445,11 @@ export function InquiryNotes({
   }, [rowCount]);
 
   let lastDay = "";
+  // Chat-style header grouping: consecutive entries whose header
+  // would read identically (same author + category, or same SMS
+  // direction + number) show it once — two of your notes in a row
+  // shouldn't name you twice. Day separators restart runs.
+  let prevSig: string | null = null;
   for (const e of stream) {
     const ts = entryTs(e);
     const d = new Date(ts);
@@ -456,7 +464,14 @@ export function InquiryNotes({
         ),
       });
       lastDay = dayKey;
+      prevSig = null;
     }
+    const sig =
+      e.kind === "note"
+        ? `note|${e.note.author_name}|${e.note.category ?? ""}|${e.note.is_pinned}`
+        : `sms|${e.msg.direction}|${e.msg.from_number}`;
+    const showHeader = sig !== prevSig;
+    prevSig = sig;
     if (e.kind === "note") {
       rows.push({
         id: `note-${e.note.id}`,
@@ -464,6 +479,7 @@ export function InquiryNotes({
         node: (
           <NoteBubble
             note={e.note}
+            showHeader={showHeader}
             onTogglePin={togglePin}
             onDelete={(id) => setPendingDelete(id)}
             onEdited={() => mutate()}
@@ -477,6 +493,7 @@ export function InquiryNotes({
         node: (
           <SmsBubble
             msg={e.msg}
+            showHeader={showHeader}
             onRetry={(text) => void retrySms(text)}
             retrying={retryingBody === e.msg.body}
           />
@@ -789,11 +806,15 @@ export function InquiryNoteComposer({
  */
 function NoteBubble({
   note,
+  showHeader = true,
   onTogglePin,
   onDelete,
   onEdited,
 }: {
   note: XanoAdminNote;
+  /** False when the previous entry carries the identical header —
+   *  the run shows the author once, chat-style. */
+  showHeader?: boolean;
   onTogglePin: (n: XanoAdminNote) => void;
   onDelete: (id: number) => void;
   onEdited: () => void;
@@ -829,18 +850,20 @@ function NoteBubble({
       className="animate-in fade-in-0 slide-in-from-bottom-1 duration-200"
     >
       <MessageContent>
-        <MessageHeader>
-          {note.author_name || "Admin"}
-          {note.category ? (
-            <span className="text-muted-foreground">
-              {" "}
-              · {formatCategory(note.category)}
-            </span>
-          ) : null}
-          {note.is_pinned ? (
-            <span className="text-muted-foreground"> · Pinned</span>
-          ) : null}
-        </MessageHeader>
+        {showHeader ? (
+          <MessageHeader>
+            {note.author_name || "Admin"}
+            {note.category ? (
+              <span className="text-muted-foreground">
+                {" "}
+                · {formatCategory(note.category)}
+              </span>
+            ) : null}
+            {note.is_pinned ? (
+              <span className="text-muted-foreground"> · Pinned</span>
+            ) : null}
+          </MessageHeader>
+        ) : null}
         {editing ? (
           <div className="w-full space-y-2">
             <Textarea
@@ -950,10 +973,14 @@ const SMS_STATUS_LABEL: Record<string, string> = {
  */
 function SmsBubble({
   msg,
+  showHeader = true,
   onRetry,
   retrying,
 }: {
   msg: XanoSmsMessage;
+  /** False when the previous entry is a text in the same direction
+   *  from the same number — the run shows the header once. */
+  showHeader?: boolean;
   onRetry?: (body: string) => void;
   retrying?: boolean;
 }) {
@@ -964,21 +991,23 @@ function SmsBubble({
   return (
     <Message align={outbound ? "end" : "start"}>
       <MessageContent>
-        <MessageHeader>
-          {/* One line, always: the label never wraps, and the from
-              value truncates (it's usually a phone, but legacy rows
-              can carry a long Twilio Messaging Service SID). */}
-          <span className="shrink-0 whitespace-nowrap">Text message</span>
-          {fromLabel ? (
-            <span
-              className="min-w-0 truncate whitespace-nowrap text-muted-foreground"
-              title={fromLabel}
-            >
-              &nbsp;· from{" "}
-              <span className="tabular-nums">{fromLabel}</span>
-            </span>
-          ) : null}
-        </MessageHeader>
+        {showHeader ? (
+          <MessageHeader>
+            {/* One line, always: the label never wraps, and the from
+                value truncates (it's usually a phone, but legacy rows
+                can carry a long Twilio Messaging Service SID). */}
+            <span className="shrink-0 whitespace-nowrap">Text message</span>
+            {fromLabel ? (
+              <span
+                className="min-w-0 truncate whitespace-nowrap text-muted-foreground"
+                title={fromLabel}
+              >
+                &nbsp;· from{" "}
+                <span className="tabular-nums">{fromLabel}</span>
+              </span>
+            ) : null}
+          </MessageHeader>
+        ) : null}
         <Bubble
           variant={
             outbound ? (failed ? "destructive" : "default") : "secondary"

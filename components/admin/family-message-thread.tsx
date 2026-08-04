@@ -304,6 +304,7 @@ export function FamilyMessageThread({
                       >
                         <MessageRow
                           msg={item.msg}
+                          showHeader={item.showHeader}
                           recipientName={recipient?.name}
                           onRetry={(text) => void retrySend(text)}
                           retrying={retryingBody === item.msg.body}
@@ -443,11 +444,15 @@ function outboundVariant(
 
 function MessageRow({
   msg,
+  showHeader = true,
   recipientName,
   onRetry,
   retrying,
 }: {
   msg: XanoSmsMessage;
+  /** False when the previous bubble names the same sender — the run
+   *  shows the name once. */
+  showHeader?: boolean;
   recipientName?: string;
   /** Re-send this message's text to the same contact. */
   onRetry?: (body: string) => void;
@@ -469,10 +474,12 @@ function MessageRow({
   return (
     <Message align={align}>
       <MessageContent>
-        <MessageHeader>
-          {sender}
-          {isGroup ? " · Group text" : ""}
-        </MessageHeader>
+        {showHeader ? (
+          <MessageHeader>
+            {sender}
+            {isGroup ? " · Group text" : ""}
+          </MessageHeader>
+        ) : null}
         <Bubble variant={outbound ? outboundVariant(msg) : "secondary"}>
           <BubbleContent className="whitespace-pre-wrap">
             {msg.body}
@@ -521,13 +528,33 @@ function MessageRow({
 
 type ThreadItem =
   | { type: "separator"; id: string; label: string }
-  | { type: "message"; id: string; msg: XanoSmsMessage };
+  | {
+      type: "message";
+      id: string;
+      msg: XanoSmsMessage;
+      /** False when the previous bubble has the same sender header —
+       *  chat-style grouping shows the name once per run. */
+      showHeader: boolean;
+    };
+
+/** What MessageRow's header would say for this message — used to
+ *  collapse consecutive same-sender bubbles into one named run. */
+function senderSignature(m: XanoSmsMessage): string {
+  const isGroup = Boolean(m.template?.startsWith("group"));
+  return [
+    m.direction,
+    m.author_name ?? "",
+    m.template && m.template !== "manual" ? "auto" : "",
+    isGroup ? "group" : "",
+  ].join("|");
+}
 
 /** Flatten the message list into render items, inserting a day
  *  separator whenever the calendar day changes. */
 function buildThreadItems(messages: XanoSmsMessage[]): ThreadItem[] {
   const out: ThreadItem[] = [];
   let lastDay = "";
+  let prevSig: string | null = null;
   for (const m of messages) {
     const key = dayKey(m.created_at);
     if (key !== lastDay) {
@@ -537,8 +564,16 @@ function buildThreadItems(messages: XanoSmsMessage[]): ThreadItem[] {
         label: dayLabel(m.created_at),
       });
       lastDay = key;
+      prevSig = null; // a day break restarts sender runs
     }
-    out.push({ type: "message", id: `msg-${m.id}`, msg: m });
+    const sig = senderSignature(m);
+    out.push({
+      type: "message",
+      id: `msg-${m.id}`,
+      msg: m,
+      showHeader: sig !== prevSig,
+    });
+    prevSig = sig;
   }
   return out;
 }
