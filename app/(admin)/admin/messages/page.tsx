@@ -217,10 +217,12 @@ export default function AdminMessagesPage() {
       {/* Search — its own row between the header and the filter
           chips. Matches family/parent/student names, phone (any
           format), and the latest message text. */}
-      <div className="relative max-w-md">
+      <div className="relative">
         <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+        {/* type="text" (not "search") — the browser's built-in clear
+            X doubled up with ours. */}
         <input
-          type="search"
+          type="text"
           value={search}
           onChange={(e) => changeSearch(e.target.value)}
           placeholder="Search by student, parent, or phone…"

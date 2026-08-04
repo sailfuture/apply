@@ -1,16 +1,25 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import { toast } from "sonner";
+import { Loader2 } from "lucide-react";
+import { Bubble, BubbleContent } from "@/components/ui/bubble";
+import { Marker, MarkerContent } from "@/components/ui/marker";
 import {
-  Pin,
-  PinOff,
-  Pencil,
-  Trash2,
-  Loader2,
-  MessageSquareText,
-} from "lucide-react";
+  Message,
+  MessageContent,
+  MessageFooter,
+  MessageHeader,
+} from "@/components/ui/message";
+import {
+  MessageScroller,
+  MessageScrollerButton,
+  MessageScrollerContent,
+  MessageScrollerItem,
+  MessageScrollerProvider,
+  MessageScrollerViewport,
+} from "@/components/ui/message-scroller";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 // Category selector is now selectable pills, not a dropdown — see
@@ -27,7 +36,6 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
-import { formatNoteTimestamp } from "@/lib/format-note-time";
 import { formatUSPhone } from "@/lib/phone";
 import {
   contactMessagesKey,
@@ -232,14 +240,15 @@ export function InquiryNotes({
 
   const notes = data ?? [];
   const pinned = notes.filter((n) => n.is_pinned);
-  // Chronological stream (newest first): un-pinned notes + every text
-  // on this lead's thread, interleaved by timestamp.
-  const rest: TimelineEntry[] = [
+  // Chronological chat stream (oldest → newest, same shape as the
+  // activity sheet): un-pinned notes + every text on this lead's
+  // thread, interleaved by timestamp under day separators.
+  const stream: TimelineEntry[] = [
     ...notes
       .filter((n) => !n.is_pinned)
       .map((note) => ({ kind: "note" as const, note })),
     ...smsMessages.map((msg) => ({ kind: "sms" as const, msg })),
-  ].sort((a, b) => entryTs(b) - entryTs(a));
+  ].sort((a, b) => entryTs(a) - entryTs(b));
 
   const [body, setBody] = useState("");
   const [category, setCategory] = useState("phone");
@@ -309,61 +318,72 @@ export function InquiryNotes({
     }
   }
 
-  // Shared timeline body — same JSX for both layout variants. Wrapped
-  // in different containers below depending on variant.
-  const timeline = (
-    <>
-      {isLoading ? (
-        <p className="text-xs text-muted-foreground">Loading notes…</p>
-      ) : notes.length === 0 && smsMessages.length === 0 ? (
-        <p className="text-xs italic text-muted-foreground">
-          No communications logged yet. The first note here is yours.
-        </p>
-      ) : (
-        <>
-          {pinned.length > 0 ? (
-            <div className="space-y-2">
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Pinned
-              </p>
-              {pinned.map((n) => (
-                <NoteRow
-                  key={n.id}
-                  note={n}
-                  onTogglePin={togglePin}
-                  onDelete={(id) => setPendingDelete(id)}
-                  onEdited={() => mutate()}
-                />
-              ))}
-            </div>
-          ) : null}
-
-          {rest.length > 0 ? (
-            <div className="space-y-2">
-              {pinned.length > 0 ? (
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  Recent
-                </p>
-              ) : null}
-              {rest.map((entry) =>
-                entry.kind === "note" ? (
-                  <NoteRow
-                    key={`note-${entry.note.id}`}
-                    note={entry.note}
-                    onTogglePin={togglePin}
-                    onDelete={(id) => setPendingDelete(id)}
-                    onEdited={() => mutate()}
-                  />
-                ) : (
-                  <SmsRow key={`sms-${entry.msg.id}`} msg={entry.msg} />
-                )
-              )}
-            </div>
-          ) : null}
-        </>
-      )}
-    </>
-  );
+  // Render rows: pinned cluster first, then the day-separated chat
+  // stream — notes are right-aligned admin bubbles, texts render like
+  // the SMS inbox (outbound right, inbound left). Shared by both
+  // variants: the sheet timeline wraps each row in a
+  // MessageScrollerItem; the panel renders them directly.
+  const rows: Array<{ id: string; anchor?: boolean; node: ReactNode }> = [];
+  if (pinned.length > 0) {
+    rows.push({
+      id: "pinned-sep",
+      node: (
+        <Marker variant="separator">
+          <MarkerContent>Pinned</MarkerContent>
+        </Marker>
+      ),
+    });
+    for (const n of pinned) {
+      rows.push({
+        id: `pin-${n.id}`,
+        node: (
+          <NoteBubble
+            note={n}
+            onTogglePin={togglePin}
+            onDelete={(id) => setPendingDelete(id)}
+            onEdited={() => mutate()}
+          />
+        ),
+      });
+    }
+  }
+  let lastDay = "";
+  for (const e of stream) {
+    const ts = entryTs(e);
+    const d = new Date(ts);
+    const dayKey = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+    if (dayKey !== lastDay) {
+      rows.push({
+        id: `sep-${dayKey}`,
+        node: (
+          <Marker variant="separator">
+            <MarkerContent>{dayLabel(ts)}</MarkerContent>
+          </Marker>
+        ),
+      });
+      lastDay = dayKey;
+    }
+    if (e.kind === "note") {
+      rows.push({
+        id: `note-${e.note.id}`,
+        anchor: true,
+        node: (
+          <NoteBubble
+            note={e.note}
+            onTogglePin={togglePin}
+            onDelete={(id) => setPendingDelete(id)}
+            onEdited={() => mutate()}
+          />
+        ),
+      });
+    } else {
+      rows.push({
+        id: `sms-${e.msg.id}`,
+        anchor: e.msg.direction === "outbound",
+        node: <SmsBubble msg={e.msg} />,
+      });
+    }
+  }
 
   const composer = (
     // Layout (top → bottom): category pills, textarea, full-width
@@ -434,13 +454,44 @@ export function InquiryNotes({
   );
 
   if (variant === "timeline") {
-    // List-only — caller is expected to render a sibling
-    // `<InquiryNoteComposer>` somewhere (typically docked to the
-    // bottom of a Sheet). We still need the delete dialog to live
-    // somewhere in the React tree, so it ships with the timeline.
+    // Chat stream filling the host's height-constrained region —
+    // MessageScroller pins to the newest message like the SMS inbox
+    // and activity sheets. Caller renders a sibling
+    // `<InquiryNoteComposer>` (typically docked to the Sheet bottom).
+    // The delete dialog ships with the timeline.
     return (
       <>
-        <div className="space-y-2">{timeline}</div>
+        {isLoading ? (
+          <div className="flex h-full items-center justify-center">
+            <Loader2 className="size-4 animate-spin text-muted-foreground" />
+          </div>
+        ) : rows.length === 0 ? (
+          <div className="flex h-full items-center justify-center px-8 text-center">
+            <p className="text-sm text-muted-foreground">
+              No communications logged yet. The first note here is
+              yours.
+            </p>
+          </div>
+        ) : (
+          <MessageScrollerProvider autoScroll defaultScrollPosition="end">
+            <MessageScroller>
+              <MessageScrollerViewport>
+                <MessageScrollerContent className="px-4 py-4">
+                  {rows.map((r) => (
+                    <MessageScrollerItem
+                      key={r.id}
+                      messageId={r.id}
+                      scrollAnchor={r.anchor}
+                    >
+                      {r.node}
+                    </MessageScrollerItem>
+                  ))}
+                </MessageScrollerContent>
+              </MessageScrollerViewport>
+              <MessageScrollerButton />
+            </MessageScroller>
+          </MessageScrollerProvider>
+        )}
         {deleteDialog}
       </>
     );
@@ -448,8 +499,16 @@ export function InquiryNotes({
 
   return (
     <div className="space-y-3">
-      <div className="space-y-2 max-h-[40vh] overflow-y-auto overscroll-contain pr-1">
-        {timeline}
+      <div className="max-h-[40vh] space-y-3 overflow-y-auto overscroll-contain pr-1">
+        {isLoading ? (
+          <p className="text-xs text-muted-foreground">Loading notes…</p>
+        ) : rows.length === 0 ? (
+          <p className="text-xs italic text-muted-foreground">
+            No communications logged yet. The first note here is yours.
+          </p>
+        ) : (
+          rows.map((r) => <div key={r.id}>{r.node}</div>)
+        )}
       </div>
       {composer}
       {deleteDialog}
@@ -556,7 +615,12 @@ export function InquiryNoteComposer({
   );
 }
 
-function NoteRow({
+/**
+ * Admin note as a right-aligned chat bubble (tinted, matching the
+ * activity stream's notes). Pin / Edit / Delete are subtle footer
+ * links; Edit swaps the bubble for an in-place textarea.
+ */
+function NoteBubble({
   note,
   onTogglePin,
   onDelete,
@@ -593,97 +657,91 @@ function NoteRow({
   }
 
   return (
-    <div
-      className={cn(
-        "rounded-md border p-3 bg-white",
-        note.is_pinned && "border-amber-200 bg-amber-50/40"
-      )}
+    <Message
+      align="end"
+      className="animate-in fade-in-0 slide-in-from-bottom-1 duration-200"
     >
-      {/* Top: author (left) + actions (right). Metadata strip
-          (category · timestamp · edited) lives at the bottom of
-          the card so the body stays the focal point — same shape
-          as `family-notes-sheet`'s NoteRow. */}
-      <div className="flex items-start justify-between gap-2">
-        <p className="text-sm font-medium text-foreground min-w-0 truncate">
-          {note.author_name}
-        </p>
-        <div className="flex items-center gap-0.5 shrink-0">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-7"
-            onClick={() => onTogglePin(note)}
-            title={note.is_pinned ? "Unpin" : "Pin to top"}
-          >
-            {note.is_pinned ? (
-              <PinOff className="size-3.5" />
-            ) : (
-              <Pin className="size-3.5" />
-            )}
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-7"
-            onClick={() => setEditing((e) => !e)}
-            title="Edit"
-          >
-            <Pencil className="size-3.5" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-7 text-muted-foreground hover:text-red-600"
-            onClick={() => onDelete(note.id)}
-            title="Delete"
-          >
-            <Trash2 className="size-3.5" />
-          </Button>
-        </div>
-      </div>
-      {editing ? (
-        <div className="mt-2 space-y-2">
-          <Textarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            rows={3}
-          />
-          <div className="flex items-center gap-2 justify-end">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                setEditing(false);
-                setDraft(note.body);
-              }}
-            >
-              Cancel
-            </Button>
-            <Button size="sm" disabled={saving} onClick={saveEdit}>
-              {saving ? "Saving…" : "Save"}
-            </Button>
-          </div>
-        </div>
-      ) : (
-        <p className="mt-1.5 text-sm whitespace-pre-wrap">{note.body}</p>
-      )}
-      {/* Footer metadata — category · day · time · Edited. Tiny so
-          it sits as a chronology stamp at the bottom-edge of the
-          card without competing with the body. Title-cased rather
-          than all-caps tracking-wider — same shape as the
-          family-side note row. Hidden during edit mode (Save/Cancel
-          takes the visual slot). */}
-      {!editing ? (
-        <p className="mt-2 text-[11px] text-muted-foreground/80">
+      <MessageContent>
+        <MessageHeader>
+          {note.author_name || "Admin"}
           {note.category ? (
-            <span>{formatCategory(note.category)}</span>
+            <span className="text-muted-foreground">
+              {" "}
+              · {formatCategory(note.category)}
+            </span>
           ) : null}
-          {note.category ? <span> · </span> : null}
-          <span>{formatNoteTimestamp(note.created_at)}</span>
-          {note.last_edited ? <span> · Edited</span> : null}
-        </p>
-      ) : null}
-    </div>
+          {note.is_pinned ? (
+            <span className="text-muted-foreground"> · Pinned</span>
+          ) : null}
+        </MessageHeader>
+        {editing ? (
+          <div className="w-full space-y-2">
+            <Textarea
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              rows={3}
+            />
+            <div className="flex items-center justify-end gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setEditing(false);
+                  setDraft(note.body);
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                disabled={saving}
+                onClick={() => void saveEdit()}
+              >
+                {saving ? "Saving…" : "Save"}
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <Bubble variant="tinted">
+              <BubbleContent className="whitespace-pre-wrap">
+                {note.body}
+              </BubbleContent>
+            </Bubble>
+            <MessageFooter
+              title={new Date(note.created_at).toLocaleString()}
+            >
+              {timeLabel(note.created_at)}
+              {note.last_edited ? <span>&nbsp;·&nbsp;Edited</span> : null}
+              &nbsp;·&nbsp;
+              <button
+                type="button"
+                className="underline underline-offset-2 hover:text-foreground"
+                onClick={() => onTogglePin(note)}
+              >
+                {note.is_pinned ? "Unpin" : "Pin"}
+              </button>
+              &nbsp;·&nbsp;
+              <button
+                type="button"
+                className="underline underline-offset-2 hover:text-foreground"
+                onClick={() => setEditing(true)}
+              >
+                Edit
+              </button>
+              &nbsp;·&nbsp;
+              <button
+                type="button"
+                className="underline underline-offset-2 hover:text-destructive"
+                onClick={() => onDelete(note.id)}
+              >
+                Delete
+              </button>
+            </MessageFooter>
+          </>
+        )}
+      </MessageContent>
+    </Message>
   );
 }
 
@@ -713,41 +771,71 @@ const SMS_STATUS_LABEL: Record<string, string> = {
 };
 
 /**
- * Read-only SMS card in the comms timeline. Distinct from a note row —
- * icon + direction header, no pin/edit/delete (the message log is a
- * record of what was actually sent/received, not editable prose).
+ * Real SMS as a chat bubble — outbound aligns right (red when the
+ * carrier bounced it), inbound replies align left. Read-only: the
+ * message log records what was actually sent/received. Header carries
+ * the from-number (our Twilio number outbound, the parent's inbound).
  */
-function SmsRow({ msg }: { msg: XanoSmsMessage }) {
+function SmsBubble({ msg }: { msg: XanoSmsMessage }) {
   const outbound = msg.direction === "outbound";
   const failed = msg.status === "failed" || msg.status === "undelivered";
-  // The number the text came FROM — our Twilio number for outbound,
-  // the parent's phone for inbound replies.
   const fromLabel = formatUSPhone(msg.from_number) || msg.from_number;
   return (
-    <div className="rounded-md border border-sky-100 bg-sky-50/40 p-3">
-      <p className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-foreground">
-        <MessageSquareText className="size-3.5 shrink-0 text-muted-foreground" />
-        <span className="truncate">
+    <Message align={outbound ? "end" : "start"}>
+      <MessageContent>
+        <MessageHeader>
           Text message
           {fromLabel ? (
-            <span className="font-normal text-muted-foreground">
-              {" · from "}
-              <span className="tabular-nums">{fromLabel}</span>
+            <span className="text-muted-foreground">
+              {" "}
+              · from <span className="tabular-nums">{fromLabel}</span>
             </span>
           ) : null}
-        </span>
-      </p>
-      <p className="mt-1.5 whitespace-pre-wrap text-sm">{msg.body}</p>
-      <p className="mt-2 text-[11px] text-muted-foreground/80">
-        {outbound ? (
-          <span className={cn(failed && "text-red-600")}>
-            {SMS_STATUS_LABEL[msg.status] ?? msg.status}
-          </span>
-        ) : (
-          <span>Received</span>
-        )}
-        <span> · {formatNoteTimestamp(msg.created_at)}</span>
-      </p>
-    </div>
+        </MessageHeader>
+        <Bubble
+          variant={
+            outbound ? (failed ? "destructive" : "default") : "secondary"
+          }
+        >
+          <BubbleContent className="whitespace-pre-wrap">
+            {msg.body}
+          </BubbleContent>
+        </Bubble>
+        <MessageFooter title={new Date(msg.created_at).toLocaleString()}>
+          {outbound ? (
+            <span className={cn(failed && "text-destructive")}>
+              {SMS_STATUS_LABEL[msg.status] ?? msg.status}
+            </span>
+          ) : (
+            <span>Received</span>
+          )}
+          <span>&nbsp;·&nbsp;{timeLabel(msg.created_at)}</span>
+        </MessageFooter>
+      </MessageContent>
+    </Message>
   );
+}
+
+/** Day separator label — "Today" / "Yesterday" / "Jul 21". Same
+ *  vocabulary as the SMS thread and activity stream. */
+function dayLabel(ts: number): string {
+  const d = new Date(ts);
+  const now = new Date();
+  const startOf = (x: Date) =>
+    new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diffDays = Math.round((startOf(now) - startOf(d)) / 86_400_000);
+  if (diffDays === 0) return "Today";
+  if (diffDays === 1) return "Yesterday";
+  return d.toLocaleDateString([], {
+    month: "short",
+    day: "numeric",
+    year: d.getFullYear() === now.getFullYear() ? undefined : "numeric",
+  });
+}
+
+function timeLabel(ts: number): string {
+  return new Date(ts).toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }

@@ -124,7 +124,12 @@ export function AdminTopNav({ admin }: { admin: AdminUser | null }) {
   const searchParams = useSearchParams();
   const yearId = searchParams.get("yearId");
   // Texts waiting on a reply — badged on Parent Engagement / Messages.
-  const unreadMessages = useUnreadMessageCount();
+  // Suppressed while ON the Messages page: the admin is already
+  // looking at the inbox, so the count is noise there.
+  const unreadCount = useUnreadMessageCount();
+  const unreadMessages = pathname.startsWith("/admin/messages")
+    ? 0
+    : unreadCount;
   const badgeCount = (badge?: NavBadge) =>
     badge === "messages" ? unreadMessages : 0;
 

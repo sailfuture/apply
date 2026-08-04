@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { formatUSPhone } from "@/lib/phone";
+import { formatNoteTimestamp } from "@/lib/format-note-time";
 import {
   Sheet,
   SheetContent,
@@ -136,9 +137,16 @@ export function LeadTriageControls({
           <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
         ) : null}
       </label>
-      <p className="text-xs text-muted-foreground">
+      <p
+        className="text-xs text-muted-foreground"
+        title={
+          lastReachOut
+            ? new Date(lastReachOut).toLocaleString()
+            : undefined
+        }
+      >
         {lastReachOut
-          ? `Last contacted ${new Date(lastReachOut).toLocaleString()}`
+          ? `Last contacted ${formatNoteTimestamp(lastReachOut)}`
           : "No contact logged yet."}
       </p>
     </div>
@@ -473,12 +481,16 @@ export function LeadTriageSheet({
           </div>
         ) : null}
 
-        {/* Timeline scrolls; composer stays pinned below it. */}
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4">
-          <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        {/* Timeline — a chat stream pinned to the newest message
+            (MessageScroller inside InquiryNotes); composer stays
+            docked below it. */}
+        <div className="flex min-h-0 flex-1 flex-col">
+          <p className="shrink-0 border-b px-4 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
             Communication log
           </p>
-          <InquiryNotes scope={scope} variant="timeline" />
+          <div className="min-h-0 flex-1">
+            <InquiryNotes scope={scope} variant="timeline" />
+          </div>
         </div>
         <div className="border-t bg-muted/20 px-4 py-3">
           <InquiryNoteComposer scope={scope} onNoteAdded={onChanged} />

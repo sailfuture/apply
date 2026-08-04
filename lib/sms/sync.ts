@@ -52,6 +52,11 @@ export interface SmsSyncResult {
    *  (shortcodes, alphanumeric senders) — record-less US numbers
    *  import as ad-hoc rows and are NOT counted here. */
   unmatched: number;
+  /** Previously FK-less (ad-hoc) rows whose number now matches a
+   *  contact — re-attributed so the thread lands on the named record
+   *  (lead created after the text, or the directory was unavailable
+   *  when the row was first written). */
+  reattributed: number;
   /** Distinct unmatched numbers (up to 10) for the admin to inspect. */
   unmatchedNumbers: string[];
 }
@@ -66,6 +71,7 @@ export async function syncMessagesFromTwilio({
     alreadyLogged: 0,
     unmatched: 0,
     unmatchedNumbers: [],
+    reattributed: 0,
   };
   if (!isTwilioConfigured()) {
     return { ...base, ok: false, skipped: "not_configured" };
@@ -146,6 +152,39 @@ export async function syncMessagesFromTwilio({
     }
 
     base.unmatchedNumbers = [...unmatchedSet].slice(0, 10);
+
+    // Heal ad-hoc rows: a logged message with NO contact FK whose
+    // counterparty now matches the directory gets its FK stamped, so
+    // the thread moves from a bare-number conversation onto the named
+    // contact. Covers two real cases: the lead/family record was
+    // created AFTER the text, and a partially-failed directory fetch
+    // at import time (rate limit) that left attributable rows ad-hoc.
+    for (const row of existing) {
+      const hasFk =
+        row.registration_families_id ||
+        row.registration_inquiry_id ||
+        row.registration_summer_camp_id ||
+        row.website_liability_waiver_id ||
+        row.tasco_summer_visit_id;
+      if (hasFk) continue;
+      const phone = normPhone(
+        row.direction === "inbound" ? row.from_number : row.to_number
+      );
+      const contact = directory.get(phone);
+      if (!contact) continue;
+      try {
+        // Only the matched FK is non-null; Xano drops the null inputs,
+        // so the other columns stay untouched.
+        await xano.smsMessages.update(row.id, contactMessageKeys(contact));
+        base.reattributed += 1;
+      } catch (err) {
+        console.error(
+          `[sms/sync] re-attribution failed for row ${row.id}:`,
+          err
+        );
+      }
+    }
+
     return base;
   } catch (err) {
     console.error("[sms/sync] failed:", err);

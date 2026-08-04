@@ -143,7 +143,7 @@ export function DataTable<T extends Record<string, unknown>>({
             setSearch(e.target.value);
             setPage(0);
           }}
-          className="max-w-sm"
+          className="w-full"
         />
       )}
 
