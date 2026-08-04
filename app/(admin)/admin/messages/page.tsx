@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { toast } from "sonner";
@@ -14,6 +13,9 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { FamilyProfileSheet } from "@/components/admin/family-profile-sheet";
+import { LeadTriageSheet } from "@/components/admin/lead-triage";
+import type { AllLeadRow } from "@/app/api/admin/all-leads/route";
 import { cn } from "@/lib/utils";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { formatUSPhone } from "@/lib/phone";
@@ -168,6 +170,46 @@ export default function AdminMessagesPage() {
       })
     : null;
 
+  // In-place profile sheet for the open conversation — family details
+  // for families, the full lead triage sheet for the four lead
+  // sources (no page navigation). The all-leads fetch is lazy: it
+  // only fires once a lead's profile is actually requested.
+  const [profileOpen, setProfileOpen] = useState(false);
+  const wantLeadProfile =
+    profileOpen &&
+    selected !== null &&
+    selected.type !== "family" &&
+    selected.type !== "adhoc";
+  const {
+    data: leadRows,
+    isLoading: leadRowsLoading,
+    mutate: mutateLeadRows,
+  } = useSWR<AllLeadRow[]>(
+    wantLeadProfile ? "/api/admin/all-leads" : null,
+    adminFetcher,
+    {
+      // Fetch finished but the lead's row is gone (deleted record) —
+      // say so instead of leaving a dead button.
+      onSuccess: (rows) => {
+        const found =
+          selected &&
+          rows.some(
+            (r) => r.source === selected.type && r.id === selected.id
+          );
+        if (!found) {
+          toast.error("Couldn't find this lead's record.");
+          setProfileOpen(false);
+        }
+      },
+    }
+  );
+  const leadRow =
+    wantLeadProfile && Array.isArray(leadRows)
+      ? (leadRows.find(
+          (r) => r.source === selected.type && r.id === selected.id
+        ) ?? null)
+      : null;
+
   // Reconcile against Twilio's own log once per visit — texts sent
   // outside the app (Twilio console, legacy forwarder) and inbound
   // messages the webhook missed get backfilled into the inbox.
@@ -274,7 +316,12 @@ export default function AdminMessagesPage() {
           })}
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <NewMessageDialog onPick={(contact) => setSelected(contact)} />
+          <NewMessageDialog
+            onPick={(contact) => {
+              setSelected(contact);
+              setProfileOpen(false);
+            }}
+          />
           <GroupMessageDialog onSent={() => mutate()} />
         </div>
       </div>
@@ -325,10 +372,7 @@ export default function AdminMessagesPage() {
           ) : (
             <ul className="divide-y">
               {visibleConversations.map((c) => (
-                <li
-                  key={`${c.contactType}:${c.contactId}`}
-                  className="group relative"
-                >
+                <li key={`${c.contactType}:${c.contactId}`}>
                   <button
                     type="button"
                     onClick={() => {
@@ -337,6 +381,7 @@ export default function AdminMessagesPage() {
                         id: c.contactId,
                         name: c.name,
                       });
+                      setProfileOpen(false);
                       markViewed(c.contactType, c.contactId, c.lastAt);
                     }}
                     className={cn(
@@ -397,24 +442,6 @@ export default function AdminMessagesPage() {
                       </span>
                     </div>
                   </button>
-                  {/* Hover affordance to the contact's full record.
-                      Overlaid (not nested) because the row itself is
-                      a button — anchors can't live inside it. */}
-                  {profileHref(c.contactType, c.contactId) ? (
-                    <Link
-                      href={
-                        profileHref(c.contactType, c.contactId) as string
-                      }
-                      title={
-                        c.contactType === "family"
-                          ? "Family details"
-                          : "View lead"
-                      }
-                      className="absolute right-2 top-1/2 hidden -translate-y-1/2 rounded-full border bg-white p-1.5 text-muted-foreground shadow-sm transition-colors hover:text-foreground group-hover:block"
-                    >
-                      <UserRound className="size-3.5" />
-                    </Link>
-                  ) : null}
                 </li>
               ))}
               {filtered.length > visibleCount ? (
@@ -452,28 +479,25 @@ export default function AdminMessagesPage() {
                   />
                 </p>
                 <div className="flex shrink-0 items-center gap-2">
-                  {/* Jump to the contact's full record — family detail
-                      page, or the lead's triage sheet on All Leads. */}
-                  {profileHref(active.contactType, active.contactId) ? (
+                  {/* Open the contact's profile IN PLACE — a family
+                      details sheet, or the lead's full triage sheet —
+                      no page navigation. Ad-hoc numbers have no
+                      record, so no button. */}
+                  {active.contactType !== "adhoc" ? (
                     <Button
-                      asChild
                       variant="outline"
                       size="sm"
                       className="bg-white"
+                      onClick={() => setProfileOpen(true)}
                     >
-                      <Link
-                        href={
-                          profileHref(
-                            active.contactType,
-                            active.contactId
-                          ) as string
-                        }
-                      >
+                      {wantLeadProfile && leadRowsLoading ? (
+                        <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                      ) : (
                         <UserRound className="size-3.5 mr-1.5" />
-                        {active.contactType === "family"
-                          ? "Family details"
-                          : "View lead"}
-                      </Link>
+                      )}
+                      {active.contactType === "family"
+                        ? "Family details"
+                        : "View lead"}
                     </Button>
                   ) : null}
                   {/* Quick way back to the list on mobile, where the
@@ -504,24 +528,65 @@ export default function AdminMessagesPage() {
           )}
         </div>
       </div>
+
+      {/* Profile sheets — opened by the thread header's button, no
+          page navigation. Families get the compact profile sheet;
+          leads get the same triage sheet All Leads uses (rating,
+          editable details, chat-style comms log). */}
+      {selected && selected.type === "family" ? (
+        <FamilyProfileSheet
+          familyId={selected.id}
+          open={profileOpen}
+          onOpenChange={setProfileOpen}
+        />
+      ) : null}
+      {profileOpen && leadRow ? (
+        <LeadTriageSheet
+          open
+          onOpenChange={(o) => !o && setProfileOpen(false)}
+          scope={{ source: leadRow.source, id: leadRow.id }}
+          title={
+            leadRow.student_name ||
+            leadRow.parent_name ||
+            `${LEAD_LABEL[leadRow.source]} #${leadRow.id}`
+          }
+          subtitle={[
+            LEAD_LABEL[leadRow.source],
+            leadRow.parent_name || null,
+            formatUSPhone(leadRow.phone) || null,
+            leadRow.detail || null,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+          rating={leadRow.rating}
+          isFollowedUp={leadRow.followed_up}
+          lastReachOut={leadRow.last_reach_out || null}
+          details={{
+            student_name: leadRow.student_name,
+            parent_name:
+              leadRow.source === "tasco" ? null : leadRow.parent_name,
+            phone: leadRow.phone,
+            email: leadRow.email,
+            grade: leadRow.grade_raw,
+            school: leadRow.school,
+            opt_in: leadRow.opt_in,
+            opt_in_editable: leadRow.source !== "camp",
+          }}
+          onChanged={() => void mutateLeadRows()}
+        />
+      ) : null}
     </div>
   );
 }
 
-/**
- * Where a conversation's contact profile lives — the family detail
- * page for families, the All Leads triage sheet (via `?open=`) for
- * the four lead sources. Ad-hoc numbers have no record → null, no
- * button.
- */
-function profileHref(
-  type: SmsConversation["contactType"],
-  id: number
-): string | null {
-  if (type === "family") return `/admin/families/${id}`;
-  if (type === "adhoc") return null;
-  return `/admin/all-leads?open=${type}-${id}`;
-}
+/** Full label per lead source — the triage sheet's subtitle. Mirrors
+ *  the All Leads page's vocabulary. */
+const LEAD_LABEL: Record<AllLeadRow["source"], string> = {
+  inquiry: "Inquiry",
+  camp: "Summer Camp",
+  visit: "Liability Waiver Visit",
+  tasco: "TASCO",
+};
 
 /** Ad-hoc conversations are NAMED by their raw 10-digit number —
  *  pretty-print it; every other type shows its record name. */
