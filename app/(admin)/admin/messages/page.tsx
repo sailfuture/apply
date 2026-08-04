@@ -523,6 +523,12 @@ export default function AdminMessagesPage() {
                 onSent={() => mutate()}
               />
             </>
+          ) : isLoading && !data ? (
+            // Conversation list is still loading — an empty pane here
+            // (the list's own spinner carries the state). Prompting
+            // "select a conversation" before there's anything to
+            // select reads as a broken page.
+            <div className="h-full" />
           ) : (
             <div className="flex h-full items-center justify-center px-8 text-center">
               <div className="text-sm text-muted-foreground">
