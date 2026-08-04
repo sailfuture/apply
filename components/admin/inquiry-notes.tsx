@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 import { formatNoteTimestamp } from "@/lib/format-note-time";
+import { formatUSPhone } from "@/lib/phone";
 import {
   contactMessagesKey,
   messagesFetcher,
@@ -719,25 +720,32 @@ const SMS_STATUS_LABEL: Record<string, string> = {
 function SmsRow({ msg }: { msg: XanoSmsMessage }) {
   const outbound = msg.direction === "outbound";
   const failed = msg.status === "failed" || msg.status === "undelivered";
+  // The number the text came FROM — our Twilio number for outbound,
+  // the parent's phone for inbound replies.
+  const fromLabel = formatUSPhone(msg.from_number) || msg.from_number;
   return (
     <div className="rounded-md border border-sky-100 bg-sky-50/40 p-3">
       <p className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-foreground">
         <MessageSquareText className="size-3.5 shrink-0 text-muted-foreground" />
         <span className="truncate">
-          {outbound
-            ? msg.author_name || "SailFuture"
-            : "Reply from parent"}
+          Text message
+          {fromLabel ? (
+            <span className="font-normal text-muted-foreground">
+              {" · from "}
+              <span className="tabular-nums">{fromLabel}</span>
+            </span>
+          ) : null}
         </span>
       </p>
       <p className="mt-1.5 whitespace-pre-wrap text-sm">{msg.body}</p>
       <p className="mt-2 text-[11px] text-muted-foreground/80">
-        <span>Text message</span>
         {outbound ? (
           <span className={cn(failed && "text-red-600")}>
-            {" · "}
             {SMS_STATUS_LABEL[msg.status] ?? msg.status}
           </span>
-        ) : null}
+        ) : (
+          <span>Received</span>
+        )}
         <span> · {formatNoteTimestamp(msg.created_at)}</span>
       </p>
     </div>
