@@ -438,6 +438,15 @@ export function InquiryNotes({
         }
         value={body}
         onChange={(e) => setBody(e.target.value)}
+        onKeyDown={(e) => {
+          // Shift+Enter (and Cmd/Ctrl+Enter) submits; a bare Enter
+          // still inserts a newline so multi-line notes stay easy to
+          // write. Same chord as the Messages thread composer.
+          if (e.key === "Enter" && (e.shiftKey || e.metaKey || e.ctrlKey)) {
+            e.preventDefault();
+            void submitNote();
+          }
+        }}
         rows={3}
       />
       <Button
@@ -457,6 +466,16 @@ export function InquiryNotes({
           "Add note"
         )}
       </Button>
+      <p className="text-center text-[10px] text-muted-foreground">
+        <kbd className="rounded border bg-white px-1 py-px font-sans">
+          Shift
+        </kbd>
+        {" + "}
+        <kbd className="rounded border bg-white px-1 py-px font-sans">
+          Enter
+        </kbd>{" "}
+        to {category === "sms" ? "send" : "save"}
+      </p>
     </div>
   );
 
@@ -641,6 +660,15 @@ export function InquiryNoteComposer({
         }
         value={body}
         onChange={(e) => setBody(e.target.value)}
+        onKeyDown={(e) => {
+          // Shift+Enter (and Cmd/Ctrl+Enter) submits; a bare Enter
+          // still inserts a newline so multi-line notes stay easy to
+          // write. Same chord as the Messages thread composer.
+          if (e.key === "Enter" && (e.shiftKey || e.metaKey || e.ctrlKey)) {
+            e.preventDefault();
+            void submitNote();
+          }
+        }}
         rows={3}
       />
       <Button
@@ -660,6 +688,16 @@ export function InquiryNoteComposer({
           "Add note"
         )}
       </Button>
+      <p className="text-center text-[10px] text-muted-foreground">
+        <kbd className="rounded border bg-white px-1 py-px font-sans">
+          Shift
+        </kbd>
+        {" + "}
+        <kbd className="rounded border bg-white px-1 py-px font-sans">
+          Enter
+        </kbd>{" "}
+        to {category === "sms" ? "send" : "save"}
+      </p>
     </div>
   );
 }

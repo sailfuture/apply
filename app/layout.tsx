@@ -51,7 +51,8 @@ export default function RootLayout({
             <AppChrome>{children}</AppChrome>
           </SWRProvider>
           {/* Position is responsive — top-center on mobile (so it doesn't
-              collide with the fixed bottom nav), bottom-right on xl+. */}
+              collide with the fixed bottom nav), bottom-LEFT on xl+ so
+              toasts clear the right-hand sheets. */}
           <Toaster />
           <Analytics />
         </body>

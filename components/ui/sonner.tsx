@@ -5,15 +5,19 @@ import { useTheme } from "next-themes"
 import { Toaster as Sonner, type ToasterProps } from "sonner"
 import { CircleCheckIcon, InfoIcon, TriangleAlertIcon, OctagonXIcon, Loader2Icon } from "lucide-react"
 
-/** Use bottom-right on xl+ screens (where there's a sidenav and empty space),
- *  top-center on smaller screens so toasts don't land on top of the fixed
- *  bottom nav. */
+/** Use bottom-LEFT on xl+ screens, top-center on smaller screens so toasts
+ *  don't land on top of the fixed bottom nav.
+ *
+ *  Left, not right: every sheet in the admin app opens from the right edge
+ *  (lead triage, family profile, activity, messages), so bottom-right toasts
+ *  landed on top of the sheet's own composer and action buttons — exactly
+ *  where you're looking when the toast fires. */
 function useResponsivePosition(): ToasterProps["position"] {
   const [position, setPosition] = useState<ToasterProps["position"]>("top-center")
   useEffect(() => {
     if (typeof window === "undefined") return
     const mql = window.matchMedia("(min-width: 1280px)")
-    const sync = () => setPosition(mql.matches ? "bottom-right" : "top-center")
+    const sync = () => setPosition(mql.matches ? "bottom-left" : "top-center")
     sync()
     mql.addEventListener("change", sync)
     return () => mql.removeEventListener("change", sync)
