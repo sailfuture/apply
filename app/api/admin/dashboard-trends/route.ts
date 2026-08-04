@@ -3,7 +3,8 @@ import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
 
 /**
- * 30-day trend series for the admin dashboard charts.
+ * Trend series for the admin dashboard charts, over a selectable
+ * window (`?days=`, default 30).
  *
  * Two series, deliberately different shapes because the underlying
  * events are different densities:
@@ -20,7 +21,7 @@ import { xano } from "@/lib/xano";
  * `registration_confirmed_admin_time` — when admin clicked Confirm
  * Registration. Students enrolled BEFORE the window form the
  * baseline the curve starts from, so the chart never implies the
- * roster began at zero 30 days ago.
+ * roster began at zero when the window opened.
  *
  * Buckets are UTC days. The client formats the returned `YYYY-MM-DD`
  * strings as-is (no timezone re-interpretation), so server and
@@ -28,14 +29,16 @@ import { xano } from "@/lib/xano";
  */
 
 export interface DashboardTrendsResponse {
-  /** 30 `YYYY-MM-DD` UTC dates, oldest first. */
+  /** Window length actually used (after clamping). */
+  windowDays: number;
+  /** `YYYY-MM-DD` UTC dates, oldest first — `windowDays` of them. */
   days: string[];
   inquiries: {
     /** New inquiries per day, aligned to `days`. */
     daily: number[];
     /** Total across the window. */
     total: number;
-    /** Total across the PRIOR 30 days — powers the delta chip. */
+    /** Total across the PRIOR window of the same length — the delta chip. */
     previousTotal: number;
   };
   enrollment: {
@@ -51,7 +54,11 @@ export interface DashboardTrendsResponse {
 }
 
 const DAY_MS = 86_400_000;
-const WINDOW_DAYS = 30;
+const DEFAULT_WINDOW_DAYS = 30;
+/** Selectable windows. Bounded rather than free-form: the series are
+ *  computed from full-table scans, so an unbounded `?days=` would let
+ *  a URL tweak turn the dashboard into a very expensive query. */
+export const TREND_WINDOW_OPTIONS = [7, 14, 30, 60, 90] as const;
 
 /** `YYYY-MM-DD` for a timestamp, in UTC. */
 function utcDay(ts: number): string {
@@ -63,6 +70,16 @@ export async function GET(req: NextRequest) {
     await requireAdmin();
     const yearIdParam = req.nextUrl.searchParams.get("yearId");
     const yearId = yearIdParam ? Number(yearIdParam) : null;
+
+    // `?days=` picks the window, restricted to the offered options —
+    // anything else falls back to the default rather than erroring,
+    // since a bad value here shouldn't blank the dashboard.
+    const daysParam = Number(req.nextUrl.searchParams.get("days"));
+    const windowDays = (
+      TREND_WINDOW_OPTIONS as readonly number[]
+    ).includes(daysParam)
+      ? daysParam
+      : DEFAULT_WINDOW_DAYS;
 
     // Every read is isolated: one failing table degrades its own
     // series to zeros rather than 500-ing the whole dashboard.
@@ -93,20 +110,20 @@ export async function GET(req: NextRequest) {
       studentsRes.status === "fulfilled" ? studentsRes.value : [];
     const apps = appsRes.status === "fulfilled" ? appsRes.value : [];
 
-    // Window: the last 30 UTC days ending today (inclusive).
+    // Window: the last `windowDays` UTC days, ending today (inclusive).
     const now = Date.now();
     const todayStart = Date.parse(`${utcDay(now)}T00:00:00.000Z`);
     const days: string[] = [];
-    for (let i = WINDOW_DAYS - 1; i >= 0; i--) {
+    for (let i = windowDays - 1; i >= 0; i--) {
       days.push(utcDay(todayStart - i * DAY_MS));
     }
-    const windowStart = todayStart - (WINDOW_DAYS - 1) * DAY_MS;
+    const windowStart = todayStart - (windowDays - 1) * DAY_MS;
     const indexOfDay = new Map(days.map((d, i) => [d, i]));
 
     /* ── Inquiries: new per day ─────────────────────────────── */
-    const inquiryDaily = new Array<number>(WINDOW_DAYS).fill(0);
+    const inquiryDaily = new Array<number>(windowDays).fill(0);
     let previousTotal = 0;
-    const priorWindowStart = windowStart - WINDOW_DAYS * DAY_MS;
+    const priorWindowStart = windowStart - windowDays * DAY_MS;
     for (const i of inquiries) {
       const ts = Number(i.created_at);
       if (!Number.isFinite(ts) || ts <= 0) continue;
@@ -162,7 +179,7 @@ export async function GET(req: NextRequest) {
         (!yearStudentIds || yearStudentIds.has(s.id))
     );
 
-    const added = new Array<number>(WINDOW_DAYS).fill(0);
+    const added = new Array<number>(windowDays).fill(0);
     let baseline = 0; // enrolled before the window opened
     let undated = 0; // enrolled, but no confirm timestamp on file
     for (const s of enrolledNow) {
@@ -183,12 +200,13 @@ export async function GET(req: NextRequest) {
 
     const cumulative: number[] = [];
     let running = baseline;
-    for (let i = 0; i < WINDOW_DAYS; i++) {
+    for (let i = 0; i < windowDays; i++) {
       running += added[i];
       cumulative.push(running);
     }
 
     const payload: DashboardTrendsResponse = {
+      windowDays,
       days,
       inquiries: {
         daily: inquiryDaily,

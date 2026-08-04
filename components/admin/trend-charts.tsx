@@ -82,13 +82,18 @@ function shortDate(iso: string): string {
 }
 
 /**
- * Which x positions get a date label: every 7th day, plus the last.
- * The `total - 4` guard drops an every-7th tick that would land
- * within a few days of the final one — at 30 points, index 28 and
- * index 29 are ~13px apart and their labels collide.
+ * Which x positions get a date label. The step scales with the window
+ * so any length lands on ~6 labels — a fixed every-7th rule gives 2
+ * labels at 7 days and 13 (overlapping) at 90.
+ *
+ * The trailing guard drops a tick that would sit too close to the
+ * always-labelled final day; without it the last two labels collide
+ * (at 30 points, indexes 28 and 29 are ~13px apart).
  */
 function isLabelledDay(i: number, total: number): boolean {
-  return (i % 7 === 0 && i < total - 4) || i === total - 1;
+  const step = Math.max(1, Math.round(total / 5));
+  const clearOfEnd = i < total - Math.ceil(step * 0.6);
+  return (i % step === 0 && clearOfEnd) || i === total - 1;
 }
 
 /** Column path: rounded at the data end, square at the baseline. */
