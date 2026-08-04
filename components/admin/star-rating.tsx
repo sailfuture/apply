@@ -24,7 +24,11 @@ export function StarRating({
   return (
     <div
       onClick={(e) => e.stopPropagation()}
-      className={cn("inline-flex items-center gap-0.5", className)}
+      // `flex w-fit` (block-level), NOT `inline-flex`: table cells
+      // truncate with text-overflow, and an inline star row that
+      // brushes the cell edge rendered a stray "…" dot after the
+      // stars. Block children never get the ellipsis.
+      className={cn("flex w-fit items-center gap-0.5", className)}
       role="radiogroup"
       aria-label="Interest level"
     >
@@ -39,9 +43,9 @@ export function StarRating({
           disabled={disabled || !onChange}
           onClick={() => onChange?.(n === value ? 0 : n)}
           className={cn(
-            "p-0.5",
+            "rounded p-0.5",
             onChange && !disabled
-              ? "cursor-pointer transition-transform hover:scale-110"
+              ? "cursor-pointer transition-[transform,background-color] hover:scale-110 hover:bg-gray-200"
               : "cursor-default"
           )}
         >
