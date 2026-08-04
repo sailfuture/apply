@@ -80,6 +80,16 @@ function externalAttendee(event: CalendarEvent, host: string) {
   );
 }
 
+/** Booker's name for an appointment-schedule event. Google usually
+ *  omits attendee displayName on bookings, but the schedule embeds
+ *  the form's name in the summary — "SailFuture Academy: School Tour
+ *  (Amanda Brooks)" — so fall back to the trailing parenthetical. */
+function bookerName(event: CalendarEvent, displayName: string): string {
+  if (displayName.trim()) return displayName.trim();
+  const m = event.summary.match(/\(([^()]+)\)\s*$/);
+  return m ? m[1].trim() : "";
+}
+
 export async function POST() {
   try {
     const { admin } = await requireAdmin();
@@ -222,7 +232,7 @@ export async function POST() {
         status: "scheduled",
         google_event_id: event.id,
         rsvp_status: booker.responseStatus || "accepted",
-        parent_name: booker.displayName || booker.email,
+        parent_name: bookerName(event, booker.displayName) || booker.email,
         parent_email: booker.email,
         parent_phone: "",
         student_name: "",
