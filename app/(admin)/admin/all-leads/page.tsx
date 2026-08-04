@@ -236,27 +236,11 @@ export default function AllLeadsPage() {
         ),
       },
       {
-        key: "source",
-        header: "Source",
-        sortable: true,
-        width: "w-[8%]",
-        accessor: (r) => SOURCE_META[r.source].label,
-        render: (r) => (
-          <Badge
-            variant="outline"
-            className="font-medium"
-            title={SOURCE_META[r.source].label}
-          >
-            {SOURCE_META[r.source].short}
-          </Badge>
-        ),
-      },
-      {
         key: "student_name",
         header: "Student",
         sortable: true,
         searchable: true,
-        width: "w-[13%]",
+        width: "w-[15%]",
         render: (r) => (
           <span className="block truncate text-sm font-medium">
             {r.student_name || "—"}
@@ -279,7 +263,13 @@ export default function AllLeadsPage() {
         header: "Parent",
         sortable: true,
         searchable: true,
-        width: "w-[11%]",
+        width: "w-[14%]",
+        // Accessor carries the CONTACT INFO too: phone + email left
+        // the table (they crowded it; the row's sheet has both with
+        // call / mail / copy actions), but searching by them must
+        // keep working. Sorting still orders by parent name — the
+        // name is the string's prefix.
+        accessor: (r) => `${r.parent_name} ${r.email} ${r.phone}`,
         render: (r) => (
           <span className="block truncate text-sm">
             {r.parent_name || "—"}
@@ -287,53 +277,31 @@ export default function AllLeadsPage() {
         ),
       },
       {
-        key: "phone",
-        header: "Phone",
-        searchable: true,
-        width: "w-[10%]",
-        render: (r) =>
-          r.phone ? (
-            <a
-              href={`tel:${r.phone}`}
-              className="text-sm tabular-nums hover:underline"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {formatUSPhone(r.phone) || r.phone}
-            </a>
-          ) : (
-            <span className="text-sm text-muted-foreground">—</span>
-          ),
-      },
-      {
-        key: "email",
-        header: "Email",
-        sortable: true,
-        searchable: true,
-        width: "w-[13%]",
-        render: (r) =>
-          r.email ? (
-            <a
-              href={`mailto:${r.email}`}
-              className="block truncate text-sm hover:underline"
-              title={r.email}
-              onClick={(e) => e.stopPropagation()}
-            >
-              {r.email}
-            </a>
-          ) : (
-            <span className="text-sm text-muted-foreground">—</span>
-          ),
-      },
-      {
         key: "school",
         header: "School",
         sortable: true,
         searchable: true,
-        width: "w-[13%]",
+        width: "w-[15%]",
         render: (r) => (
           <span className="block truncate text-sm" title={r.school}>
             {r.school || "—"}
           </span>
+        ),
+      },
+      {
+        key: "source",
+        header: "Source",
+        sortable: true,
+        width: "w-[8%]",
+        accessor: (r) => SOURCE_META[r.source].label,
+        render: (r) => (
+          <Badge
+            variant="outline"
+            className="whitespace-nowrap font-medium"
+            title={SOURCE_META[r.source].label}
+          >
+            {SOURCE_META[r.source].short}
+          </Badge>
         ),
       },
       {
@@ -375,15 +343,21 @@ export default function AllLeadsPage() {
         render: (r) => {
           const meta = TOUR_META[r.tour_status];
           return meta ? (
+            // nowrap + hidden overflow: a badge that doesn't fit the
+            // column truncates instead of wrapping to a second line
+            // and doubling the row height.
             <Badge
-              className={cn(meta.chip)}
+              className={cn(
+                meta.chip,
+                "max-w-full overflow-hidden whitespace-nowrap"
+              )}
               title={
                 r.tour_at
-                  ? new Date(r.tour_at).toLocaleString()
-                  : undefined
+                  ? `${meta.label} — ${new Date(r.tour_at).toLocaleString()}`
+                  : meta.label
               }
             >
-              {meta.label}
+              <span className="truncate">{meta.label}</span>
             </Badge>
           ) : (
             <span className="text-sm text-muted-foreground">—</span>

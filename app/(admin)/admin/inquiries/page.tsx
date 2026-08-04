@@ -6,8 +6,6 @@ import { toast } from "sonner";
 import {
   Check,
   Loader2,
-  Mail,
-  Phone,
   Trash2,
   Undo2,
   UserCheck,
@@ -514,7 +512,12 @@ export default function InquiriesPage() {
       header: "Parent",
       sortable: true,
       searchable: true,
-      width: "w-[12%]",
+      width: "w-[16%]",
+      // Accessor carries the contact info: email + phone left the
+      // table (see below) but must stay searchable. Sorting still
+      // orders by parent name — it's the string's prefix.
+      accessor: (row) =>
+        `${row.parent_name ?? ""} ${row.primary_email ?? ""} ${row.primary_phone ?? ""}`,
       // The "likely applied" auto-suggest hint is now a blue row tint
       // (see rowTint) rather than a per-cell icon.
       render: (row) => (
@@ -528,7 +531,7 @@ export default function InquiriesPage() {
       header: "Student",
       sortable: true,
       searchable: true,
-      width: "w-[12%]",
+      width: "w-[16%]",
       render: (row) => (
         <span className="block truncate font-medium">
           {row.student_name || "—"}
@@ -549,54 +552,18 @@ export default function InquiriesPage() {
         </span>
       ),
     },
-    {
-      key: "primary_email",
-      header: "Email",
-      sortable: true,
-      searchable: true,
-      width: "w-[13%]",
-      render: (row) =>
-        row.primary_email ? (
-          <a
-            href={`mailto:${row.primary_email}`}
-            onClick={(e) => e.stopPropagation()}
-            // max-w-full bounds the inline-flex anchor to the cell so
-            // the inner span ellipsizes ("…") instead of the cell
-            // hard-clipping the text mid-character.
-            className="inline-flex max-w-full items-center gap-1 truncate hover:underline"
-          >
-            <Mail className="size-3 shrink-0" />
-            <span className="truncate">{row.primary_email}</span>
-          </a>
-        ) : (
-          <span>—</span>
-        ),
-    },
-    {
-      key: "primary_phone",
-      header: "Phone",
-      width: "w-[11%]",
-      render: (row) => {
-        const formatted = formatPhone(row.primary_phone);
-        if (!formatted) return "—";
-        return (
-          <a
-            href={`tel:${String(row.primary_phone).replace(/\D/g, "")}`}
-            onClick={(e) => e.stopPropagation()}
-            className="inline-flex max-w-full items-center gap-1 truncate hover:underline"
-          >
-            <Phone className="size-3 shrink-0" />
-            <span className="truncate">{formatted}</span>
-          </a>
-        );
-      },
-    },
+    // Email + phone are deliberately NOT columns: they crowded the
+    // table and are one click away in the row's sheet, which also
+    // offers call / mail / copy actions. Both stay searchable via the
+    // Parent column's accessor above.
     {
       key: "hear_about_us",
       header: "Source",
-      width: "w-[7%]",
+      width: "w-[12%]",
       render: (row) => (
-        <span className="block truncate">{row.hear_about_us || "—"}</span>
+        <span className="block truncate" title={row.hear_about_us || undefined}>
+          {row.hear_about_us || "—"}
+        </span>
       ),
     },
     {
