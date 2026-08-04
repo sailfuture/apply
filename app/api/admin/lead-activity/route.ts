@@ -41,6 +41,9 @@ export interface LeadActivityRow {
   /** Who did it — note author; empty for inbound texts. */
   author: string;
   ts: number;
+  /** The lead's 1–5 conversion stars (`interest_level` on its source
+   *  table); 0 = unrated. */
+  rating: number;
 }
 
 export interface LeadActivityResponse {
@@ -125,6 +128,23 @@ export async function GET(req: NextRequest) {
       fallback ||
       `${source === "inquiry" ? "Inquiry" : source === "camp" ? "Camp" : source === "visit" ? "Visit" : "TASCO"} #${id}`;
 
+    // Conversion stars per lead — same tables we already loaded for
+    // names, so this is free.
+    const ratings: Record<LeadNoteSource, Map<number, number>> = {
+      inquiry: new Map(
+        inquiries.map((i) => [i.id, Number(i.interest_level) || 0])
+      ),
+      camp: new Map(camps.map((c) => [c.id, Number(c.interest_level) || 0])),
+      visit: new Map(
+        visits.map((w) => [w.id, Number(w.interest_level) || 0])
+      ),
+      tasco: new Map(
+        tascos.map((t) => [t.id, Number(t.interest_level) || 0])
+      ),
+    };
+    const ratingFor = (source: LeadNoteSource, id: number) =>
+      ratings[source].get(id) ?? 0;
+
     const rows: LeadActivityRow[] = [];
 
     // Notes — one row per lead-scoped note.
@@ -142,6 +162,7 @@ export async function GET(req: NextRequest) {
           body: (n.body ?? "").trim().slice(0, BODY_CHARS),
           author: (n.author_name ?? "").trim(),
           ts: Number(n.created_at) || 0,
+          rating: ratingFor(source, leadId),
         });
         break; // exactly one lead FK is set per note
       }
@@ -171,6 +192,7 @@ export async function GET(req: NextRequest) {
         body: (m.body ?? "").trim().slice(0, BODY_CHARS),
         author: inbound ? "" : (m.author_name ?? "").trim(),
         ts: Number(m.created_at) || 0,
+        rating: ratingFor(source, contact.id),
       });
     }
 

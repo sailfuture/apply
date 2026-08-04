@@ -18,6 +18,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatRelativeShort } from "@/lib/format-note-time";
+import { StarRating } from "@/components/admin/star-rating";
 import { useSmsViewedMap } from "@/components/admin/messages-unread-badge";
 import { cn } from "@/lib/utils";
 import type { UnreadMessagesResponse } from "@/app/api/admin/messages/unread/route";
@@ -225,16 +226,19 @@ export function LeadActivityCard({
           <Table className="table-fixed">
             <TableHeader>
               <TableRow className="hover:bg-transparent">
-                <TableHead className="w-[22%] text-[10px] uppercase tracking-wider text-muted-foreground">
+                <TableHead className="w-[20%] text-[10px] uppercase tracking-wider text-muted-foreground">
                   Lead
                 </TableHead>
-                <TableHead className="w-[16%] text-[10px] uppercase tracking-wider text-muted-foreground">
-                  Activity
-                </TableHead>
-                <TableHead className="w-[38%] text-[10px] uppercase tracking-wider text-muted-foreground">
-                  Detail
+                <TableHead className="w-[12%] text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Rating
                 </TableHead>
                 <TableHead className="w-[14%] text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Activity
+                </TableHead>
+                <TableHead className="w-[32%] text-[10px] uppercase tracking-wider text-muted-foreground">
+                  Detail
+                </TableHead>
+                <TableHead className="w-[12%] text-[10px] uppercase tracking-wider text-muted-foreground">
                   By
                 </TableHead>
                 <TableHead className="w-[10%] text-right text-[10px] uppercase tracking-wider text-muted-foreground">
@@ -253,6 +257,11 @@ export function LeadActivityCard({
                     <span className="block truncate" title={r.name}>
                       {r.name}
                     </span>
+                  </TableCell>
+                  <TableCell>
+                    {/* Read-only conversion stars (no onChange) — rate
+                        from the sheet the row opens, not the table. */}
+                    <StarRating value={r.rating} />
                   </TableCell>
                   <TableCell>
                     <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-xs text-muted-foreground">

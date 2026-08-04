@@ -2,8 +2,9 @@
 
 import { useMemo, useState } from "react";
 
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
+import { toast } from "sonner";
 import {
   ArrowDownRight,
   ArrowUpRight,
@@ -14,7 +15,10 @@ import {
   MessageSquare,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { formatUSPhone } from "@/lib/phone";
 import { StatsCard } from "@/components/admin/stats-card";
+import { LeadTriageSheet } from "@/components/admin/lead-triage";
+import type { AllLeadRow } from "@/app/api/admin/all-leads/route";
 import {
   TrendAreaChart,
   TrendBarChart,
@@ -87,7 +91,6 @@ interface SchoolYearRow {
 }
 
 export default function AdminDashboardPage() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const yearId = searchParams.get("yearId");
   const yearIdNum = yearId ? Number(yearId) : null;
@@ -131,12 +134,43 @@ export default function AdminDashboardPage() {
     );
 
   // Newest notes + texts across every recruitment lead.
-  const { data: activity, isLoading: activityLoading } =
+  const { data: activity, isLoading: activityLoading, mutate: mutateActivity } =
     useSWR<LeadActivityResponse>(
       "/api/admin/lead-activity?limit=25",
       fetcher,
       { refreshInterval: 60_000 }
     );
+
+  // Clicking an activity row opens the lead's triage sheet IN PLACE
+  // (no page navigation) — same lazy pattern the Messages page uses:
+  // the all-leads fetch only fires once a lead is actually opened.
+  const [selectedLead, setSelectedLead] = useState<{
+    source: AllLeadRow["source"];
+    id: number;
+  } | null>(null);
+  const { data: leadRows, mutate: mutateLeadRows } = useSWR<AllLeadRow[]>(
+    selectedLead ? "/api/admin/all-leads" : null,
+    fetcher,
+    {
+      onSuccess: (rows) => {
+        const found =
+          selectedLead &&
+          rows.some(
+            (r) => r.source === selectedLead.source && r.id === selectedLead.id
+          );
+        if (!found) {
+          toast.error("Couldn't find this lead's record.");
+          setSelectedLead(null);
+        }
+      },
+    }
+  );
+  const leadRow =
+    selectedLead && Array.isArray(leadRows)
+      ? (leadRows.find(
+          (r) => r.source === selectedLead.source && r.id === selectedLead.id
+        ) ?? null)
+      : null;
 
   const yearName = useMemo(() => {
     if (!yearIdNum || !schoolYears) return null;
@@ -296,7 +330,7 @@ export default function AdminDashboardPage() {
               : null
           }
           deltaLabel={`vs the prior ${windowDays} days`}
-          loading={trendsLoading && !trends}
+          loading={trendsLoading}
         >
           {trends ? (
             <TrendBarChart
@@ -315,7 +349,7 @@ export default function AdminDashboardPage() {
           valueLabel="enrolled today"
           delta={trends ? trends.enrollment.addedInWindow : null}
           deltaLabel="newly enrolled in this window"
-          loading={trendsLoading && !trends}
+          loading={trendsLoading}
         >
           {trends ? (
             <TrendAreaChart
@@ -344,14 +378,64 @@ export default function AdminDashboardPage() {
         truncated={activity?.truncated ?? false}
         loading={activityLoading && !activity}
         onRowClick={(row) =>
-          router.push(
-            `/admin/all-leads?open=${row.source}-${row.leadId}`
-          )
+          setSelectedLead({ source: row.source, id: row.leadId })
         }
       />
+
+      {/* The clicked lead's triage sheet — the same one All Leads and
+          Messages use (rating, editable details, comms log). */}
+      {leadRow ? (
+        <LeadTriageSheet
+          open
+          onOpenChange={(o) => !o && setSelectedLead(null)}
+          scope={{ source: leadRow.source, id: leadRow.id }}
+          title={
+            leadRow.student_name ||
+            leadRow.parent_name ||
+            `${LEAD_LABEL[leadRow.source]} #${leadRow.id}`
+          }
+          subtitle={[
+            LEAD_LABEL[leadRow.source],
+            leadRow.parent_name || null,
+            formatUSPhone(leadRow.phone) || null,
+            leadRow.detail || null,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+          rating={leadRow.rating}
+          isFollowedUp={leadRow.followed_up}
+          lastReachOut={leadRow.last_reach_out || null}
+          details={{
+            student_name: leadRow.student_name,
+            parent_name:
+              leadRow.source === "tasco" ? null : leadRow.parent_name,
+            phone: leadRow.phone,
+            email: leadRow.email,
+            grade: leadRow.grade_raw,
+            school: leadRow.school,
+            opt_in: leadRow.opt_in,
+            opt_in_editable: leadRow.source !== "camp",
+          }}
+          onChanged={() => {
+            void mutateLeadRows();
+            // Ratings and notes written in the sheet show up in the
+            // activity table too — keep it in step.
+            void mutateActivity();
+          }}
+        />
+      ) : null}
     </div>
   );
 }
+
+/** Full label per lead source — the triage sheet's subtitle. Same
+ *  vocabulary as All Leads and the Messages page. */
+const LEAD_LABEL: Record<AllLeadRow["source"], string> = {
+  inquiry: "Inquiry",
+  camp: "Summer Camp",
+  visit: "Liability Waiver Visit",
+  tasco: "TASCO",
+};
 
 /* ─────────────────────── Trend cards ─────────────────────── */
 
@@ -383,11 +467,15 @@ function TrendCard({
   /** Signed change vs the comparison period; null while loading. */
   delta: number | null;
   deltaLabel: string;
+  /** True whenever the CURRENT window's data isn't in yet — both the
+   *  first load and every range-pill change (SWR's `isLoading` goes
+   *  true again on a key change even with keepPreviousData). The
+   *  figure shows "—" and the plot area skeletons. */
   loading: boolean;
   children: React.ReactNode;
 }) {
   return (
-    <Card className="overflow-hidden bg-white py-0 gap-0">
+    <Card aria-busy={loading} className="overflow-hidden bg-white py-0 gap-0">
       <CardHeader className="py-4 border-b bg-white">
         <CardTitle className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
           {title}
