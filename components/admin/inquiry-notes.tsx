@@ -3,7 +3,12 @@
 import { useState, type ReactNode } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import { toast } from "sonner";
-import { Loader2, MessageSquareText, NotebookPen } from "lucide-react";
+import {
+  AlertTriangle,
+  Loader2,
+  MessageSquareText,
+  NotebookPen,
+} from "lucide-react";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Marker, MarkerContent } from "@/components/ui/marker";
 import {
@@ -138,6 +143,18 @@ async function postLeadEntry(
  * 50/50 control the activity sheet's composer uses, so the two
  * surfaces read identically. Behaves like a `radiogroup`.
  */
+function ComposerError({ message }: { message: string }) {
+  return (
+    <p
+      role="alert"
+      className="flex items-start gap-1.5 rounded-md border border-red-200 bg-red-50 px-2.5 py-2 text-xs text-red-700"
+    >
+      <AlertTriangle className="mt-px size-3.5 shrink-0" />
+      <span>{message}</span>
+    </p>
+  );
+}
+
 function CategoryPills({
   value,
   onChange,
@@ -265,28 +282,36 @@ export function InquiryNotes({
   const [body, setBody] = useState("");
   const [category, setCategory] = useState("other");
   const [saving, setSaving] = useState(false);
+  // Sticky failure text. A toast auto-dismisses, so a failed send
+  // (opted out, no number, SMS not configured) could read as "nothing
+  // happened" — the draft is still in the box but nothing says why.
+  const [sendError, setSendError] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<number | null>(null);
 
   async function submitNote() {
     if (!body.trim() || saving) return;
     const isSms = category === "sms";
     setSaving(true);
+    setSendError(null);
     try {
       const { warning } = await postLeadEntry(leadScope, category, body.trim());
       setBody("");
       await (isSms ? mutateSms() : mutate());
       onNoteAdded?.();
-      if (warning) toast.warning(warning);
-      else toast.success(isSms ? "Text sent." : "Note added.");
+      if (warning) {
+        setSendError(warning);
+        toast.warning(warning);
+      } else toast.success(isSms ? "Text sent." : "Note added.");
     } catch (err) {
       console.error(isSms ? "Failed to send text:" : "Failed to add note:", err);
-      toast.error(
+      const msg =
         err instanceof Error
           ? err.message
           : isSms
             ? "Failed to send text."
-            : "Failed to add note."
-      );
+            : "Failed to add note.";
+      setSendError(msg);
+      toast.error(msg);
     } finally {
       setSaving(false);
     }
@@ -404,6 +429,7 @@ export function InquiryNotes({
     // flow ("I just had a call → write what we discussed").
     <div className="rounded-md border bg-muted/20 p-3 space-y-2">
       <CategoryPills value={category} onChange={setCategory} />
+      {sendError ? <ComposerError message={sendError} /> : null}
       <Textarea
         placeholder={
           category === "sms"
@@ -564,11 +590,15 @@ export function InquiryNoteComposer({
   const [body, setBody] = useState("");
   const [category, setCategory] = useState("other");
   const [saving, setSaving] = useState(false);
+  // See the panel composer: a toast alone made a failed send look
+  // like nothing happened at all.
+  const [sendError, setSendError] = useState<string | null>(null);
 
   async function submitNote() {
     if (!body.trim() || saving) return;
     const isSms = category === "sms";
     setSaving(true);
+    setSendError(null);
     try {
       const { warning } = await postLeadEntry(leadScope, category, body.trim());
       setBody("");
@@ -576,17 +606,20 @@ export function InquiryNoteComposer({
         ? globalMutate(contactMessagesKey(leadScope.source, leadScope.id))
         : mutate());
       onNoteAdded?.();
-      if (warning) toast.warning(warning);
-      else toast.success(isSms ? "Text sent." : "Note added.");
+      if (warning) {
+        setSendError(warning);
+        toast.warning(warning);
+      } else toast.success(isSms ? "Text sent." : "Note added.");
     } catch (err) {
       console.error(isSms ? "Failed to send text:" : "Failed to add note:", err);
-      toast.error(
+      const msg =
         err instanceof Error
           ? err.message
           : isSms
             ? "Failed to send text."
-            : "Failed to add note."
-      );
+            : "Failed to add note.";
+      setSendError(msg);
+      toast.error(msg);
     } finally {
       setSaving(false);
     }
@@ -599,6 +632,7 @@ export function InquiryNoteComposer({
     // standalone composer; padded card for the panel composer).
     <div className="space-y-2">
       <CategoryPills value={category} onChange={setCategory} />
+      {sendError ? <ComposerError message={sendError} /> : null}
       <Textarea
         placeholder={
           category === "sms"
