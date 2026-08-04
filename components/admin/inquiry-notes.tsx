@@ -460,22 +460,20 @@ export function InquiryNotes({
             <Loader2 className="size-3.5 animate-spin mr-1.5" />
             {category === "sms" ? "Sending" : "Saving"}
           </>
-        ) : category === "sms" ? (
-          "Send text"
         ) : (
-          "Add note"
+          <>
+            {category === "sms" ? "Send text" : "Add note"}
+            {/* Shortcut hint rides inside the button — dimmed so it
+                reads as a footnote on the label, not a second one. */}
+            <span
+              aria-hidden
+              className="ml-1.5 text-[10px] font-normal opacity-60"
+            >
+              ⇧↵
+            </span>
+          </>
         )}
       </Button>
-      <p className="text-center text-[10px] text-muted-foreground">
-        <kbd className="rounded border bg-white px-1 py-px font-sans">
-          Shift
-        </kbd>
-        {" + "}
-        <kbd className="rounded border bg-white px-1 py-px font-sans">
-          Enter
-        </kbd>{" "}
-        to {category === "sms" ? "send" : "save"}
-      </p>
     </div>
   );
 
@@ -682,22 +680,20 @@ export function InquiryNoteComposer({
             <Loader2 className="size-3.5 animate-spin mr-1.5" />
             {category === "sms" ? "Sending" : "Saving"}
           </>
-        ) : category === "sms" ? (
-          "Send text"
         ) : (
-          "Add note"
+          <>
+            {category === "sms" ? "Send text" : "Add note"}
+            {/* Shortcut hint rides inside the button — dimmed so it
+                reads as a footnote on the label, not a second one. */}
+            <span
+              aria-hidden
+              className="ml-1.5 text-[10px] font-normal opacity-60"
+            >
+              ⇧↵
+            </span>
+          </>
         )}
       </Button>
-      <p className="text-center text-[10px] text-muted-foreground">
-        <kbd className="rounded border bg-white px-1 py-px font-sans">
-          Shift
-        </kbd>
-        {" + "}
-        <kbd className="rounded border bg-white px-1 py-px font-sans">
-          Enter
-        </kbd>{" "}
-        to {category === "sms" ? "send" : "save"}
-      </p>
     </div>
   );
 }
@@ -850,7 +846,12 @@ function entryTs(e: TimelineEntry): number {
 /** Compact delivery-state vocabulary for timeline SMS rows — mirrors
  *  the labels the Messages inbox thread uses. */
 const SMS_STATUS_LABEL: Record<string, string> = {
+  sending: "Sending…",
   queued: "Queued",
+  // See the thread's STATUS_LABEL: Twilio's "accepted" just means the
+  // API took the request; show it as Sent rather than raw jargon.
+  accepted: "Sent",
+  scheduled: "Scheduled",
   sent: "Sent",
   delivered: "Delivered",
   undelivered: "Undelivered",

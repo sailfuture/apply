@@ -371,6 +371,10 @@ export function FamilyMessageThread({
 const STATUS_LABEL: Record<string, string> = {
   sending: "Sending…",
   queued: "Queued",
+  // Twilio's own wording for "we took the request" — meaningless to
+  // an admin, and it was leaking through raw as "accepted".
+  accepted: "Sent",
+  scheduled: "Scheduled",
   sent: "Sent",
   delivered: "Delivered",
   undelivered: "Undelivered",
