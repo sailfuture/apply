@@ -16,8 +16,8 @@ import {
 import {
   TOUR_DEFAULT_LOCATION,
   tourInviteDescription,
-  tourNoteBody,
 } from "@/lib/tours";
+import { writeTourNote } from "@/lib/tour-notes";
 
 /**
  * Scheduled campus tours (`registration_tours`).
@@ -226,28 +226,15 @@ export async function POST(req: NextRequest) {
     }
 
     // 3. Comms-log note + reach-out bump — the tour IS an outreach.
-    try {
-      await xano.adminNotes.create({
-        registration_families_id: 0,
-        registration_students_id: null,
-        registration_school_years_id: null,
-        // Same four FK column names as the tour row itself.
-        ...tourLeadFk({ source, id: leadId }),
-        registration_student_registration_progress_id: null,
-        registration_family_application_progress_id: null,
-        author_email: admin.email,
-        author_name: admin.name,
-        body: tourNoteBody("scheduled", tour, warning === undefined),
-        category: "tour",
-        is_pinned: false,
-        section: null,
-        is_shared_with_parent: false,
-      });
-      await bumpLeadReachOut(source, leadId);
-    } catch (err) {
-      // The tour + invite are real even if the log write hiccuped.
-      console.error("[/api/admin/tours POST] activity note failed:", err);
-    }
+    const noteResult = await writeTourNote({
+      lead: { source, id: leadId },
+      tour,
+      event: "scheduled",
+      admin,
+      notified: warning === undefined,
+    });
+    if (!noteResult.ok && !warning) warning = noteResult.warning;
+    await bumpLeadReachOut(source, leadId);
 
     return NextResponse.json({ tour, warning }, { status: 201 });
   } catch (err) {

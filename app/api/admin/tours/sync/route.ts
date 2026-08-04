@@ -15,7 +15,7 @@ import {
   listCalendarEvents,
   type CalendarEvent,
 } from "@/lib/google-calendar";
-import { tourNoteBody } from "@/lib/tours";
+import { writeTourNote } from "@/lib/tour-notes";
 
 /**
  * Pull website tour bookings off Google Calendar into the app.
@@ -201,7 +201,10 @@ export async function POST(req: NextRequest) {
             google_event_id: `${TOUR_EVENT_CANCELED_PREFIX}${event.id}`,
           });
           result.canceled++;
-          await writeTourNote(tour, "canceled", admin, false);
+          // The parent canceled from their own invite (or staff
+          // deleted the event in Google), so Google already told
+          // everyone — we're only mirroring it here.
+          await syncNote(tour, "canceled", admin, false);
         }
         continue;
       }
@@ -270,7 +273,7 @@ export async function POST(req: NextRequest) {
           );
         }
         result.matched++;
-        await writeTourNote(tour, "booked", admin, true);
+        await syncNote(tour, "booked", admin, true);
         await bumpLeadReachOut(lead.source, lead.id);
       } else {
         result.unmatched++;
@@ -285,35 +288,26 @@ export async function POST(req: NextRequest) {
 
 /** Comms-log note for a synced tour — only when the tour is linked to
  *  a real lead (an unmatched booking has no timeline to land on).
- *  Best-effort like every other tour note. */
-async function writeTourNote(
+ *  Goes through the shared guarded writer, so a note that can't be
+ *  scoped is removed rather than left as an invisible orphan. */
+async function syncNote(
   tour: XanoTour,
   event: "booked" | "canceled",
   admin: { email: string; name: string },
-  inviteSent: boolean
+  notified: boolean
 ): Promise<void> {
   const lead = tourLeadScope(tour);
   if (!lead) return;
-  try {
-    await xano.adminNotes.create({
-      registration_families_id: 0,
-      registration_students_id: null,
-      registration_school_years_id: null,
-      // Same four FK column names as the tour row itself.
-      ...tourLeadFk(lead),
-      registration_student_registration_progress_id: null,
-      registration_family_application_progress_id: null,
-      // Attributed to the booking pipeline, not whichever admin
-      // happened to open the Tours tab and trigger the sync.
-      author_email: admin.email,
-      author_name: event === "booked" ? "Website booking" : admin.name,
-      body: tourNoteBody(event, tour, inviteSent),
-      category: "tour",
-      is_pinned: false,
-      section: null,
-      is_shared_with_parent: false,
-    });
-  } catch (err) {
-    console.error("[/api/admin/tours/sync] activity note failed:", err);
-  }
+  await writeTourNote({
+    lead,
+    tour,
+    event,
+    // Attributed to the booking pipeline, not whichever admin
+    // happened to open the Tours page and trigger the sync.
+    admin: {
+      email: admin.email,
+      name: event === "booked" ? "Website booking" : admin.name,
+    },
+    notified,
+  });
 }

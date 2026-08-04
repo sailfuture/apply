@@ -17,6 +17,7 @@ import {
   updateTourEvent,
 } from "@/lib/google-calendar";
 import { tourInviteDescription, tourNoteBody } from "@/lib/tours";
+import { writeTourNote } from "@/lib/tour-notes";
 
 /**
  * One tour's lifecycle. PATCH takes an explicit `action` rather than
@@ -69,6 +70,12 @@ export async function PATCH(
     let warning: string | undefined;
     let tour: XanoTour;
     let noteEvent: Parameters<typeof tourNoteBody>[0];
+    // Did the PARENT actually get an email for this change? Only true
+    // when there was a live Google event to update/cancel and the
+    // call succeeded — a tour with no invite (Calendar unconfigured
+    // when it was created) notifies nobody, and the log must not
+    // claim otherwise.
+    let notified = false;
 
     // The lead this tour was attached to BEFORE this request — the
     // link actions need it to write the "unlinked" note on the old
@@ -130,11 +137,17 @@ export async function PATCH(
           previousLead.source !== target.source ||
           previousLead.id !== target.id);
       if (movedAway) {
-        await writeLeadNote(previousLead, tour, "unlinked", admin);
+        const res = await writeTourNote({
+          lead: previousLead,
+          tour,
+          event: "unlinked",
+          admin,
+        });
+        if (!res.ok) warning = res.warning;
       }
       // A detach has no new lead to annotate; the response is enough.
       if (!target) {
-        return NextResponse.json({ tour });
+        return NextResponse.json({ tour, warning });
       }
       noteEvent = "linked";
     } else if (action === "complete" || action === "no_show") {
@@ -146,12 +159,18 @@ export async function PATCH(
       if (eventId && isGoogleCalendarConfigured()) {
         try {
           await cancelTourEvent(eventId);
+          // Google emails the attendee the cancellation (sendUpdates=all).
+          notified = Boolean(existing.parent_email);
         } catch (err) {
           console.error("[/api/admin/tours PATCH] Google cancel failed:", err);
           warning =
             "The tour was canceled here, but the Google Calendar event " +
             "couldn't be removed — delete it from the calendar by hand.";
         }
+      } else {
+        warning =
+          "The tour was canceled here. It had no calendar invite, so " +
+          "nobody was emailed — tell the family directly.";
       }
       tour = await xano.tours.update(id, {
         status: "canceled",
@@ -202,6 +221,7 @@ export async function PATCH(
             attendeeEmail: tour.parent_email,
             attendeeName: tour.parent_name,
           });
+          notified = Boolean(tour.parent_email);
         } catch (err) {
           console.error(
             "[/api/admin/tours PATCH] Google reschedule failed:",
@@ -222,7 +242,16 @@ export async function PATCH(
     // rather than creating an orphan note.
     const lead = tourLeadScope(tour);
     if (lead) {
-      await writeLeadNote(lead, tour, noteEvent, admin, warning === undefined);
+      const res = await writeTourNote({
+        lead,
+        tour,
+        event: noteEvent,
+        admin,
+        notified,
+      });
+      // A note that couldn't be scoped is worth telling the admin
+      // about — it means this action left no trace on the timeline.
+      if (!res.ok && !warning) warning = res.warning;
       // Cancel/reschedule touch the family; outcome bookkeeping after
       // the fact isn't a fresh reach-out.
       if (noteEvent === "rescheduled" || noteEvent === "canceled") {
@@ -233,37 +262,5 @@ export async function PATCH(
     return NextResponse.json({ tour, warning });
   } catch (err) {
     return handleAdminError(err);
-  }
-}
-
-/** Append a tour event to one lead's comms log. Best-effort by
- *  contract — the tour state change has already landed, and a failed
- *  note must never turn a successful action into an error. */
-async function writeLeadNote(
-  lead: { source: LeadNoteSource; id: number },
-  tour: XanoTour,
-  event: Parameters<typeof tourNoteBody>[0],
-  admin: { email: string; name: string },
-  inviteSent = true
-): Promise<void> {
-  try {
-    await xano.adminNotes.create({
-      registration_families_id: 0,
-      registration_students_id: null,
-      registration_school_years_id: null,
-      // Same four FK column names as the tour row itself.
-      ...tourLeadFk(lead),
-      registration_student_registration_progress_id: null,
-      registration_family_application_progress_id: null,
-      author_email: admin.email,
-      author_name: admin.name,
-      body: tourNoteBody(event, tour, inviteSent),
-      category: "tour",
-      is_pinned: false,
-      section: null,
-      is_shared_with_parent: false,
-    });
-  } catch (err) {
-    console.error("[/api/admin/tours PATCH] activity note failed:", err);
   }
 }
