@@ -499,6 +499,16 @@ export default function AllLeadsPage() {
               isLoading={isLoading && !data}
               searchPlaceholder="Search by student, parent, school, phone, or email…"
               onRowClick={(r) => setSelected(r)}
+              // Keep the open lead's row tinted so it's obvious which
+              // one the sheet belongs to; clears when the sheet
+              // closes (`selected` back to null). Returning a value
+              // takes over the row's background AND hover, so
+              // unselected rows have to restate the default hover.
+              rowClassName={(r) =>
+                selected?.key === r.key
+                  ? "bg-muted hover:bg-muted"
+                  : "hover:bg-muted/50"
+              }
             />
           )}
         </CardContent>
