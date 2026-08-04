@@ -226,16 +226,33 @@ function LeadDetailsEditor({
   });
   const [draftOptIn, setDraftOptIn] = useState(false);
 
+  // Optimistic snapshot shown between clicking Save and the host's
+  // refetch landing. Cleared in the render phase below once the
+  // incoming `details` change — the sanctioned adjust-state-on-prop-
+  // change pattern (an effect here would flash the stale values).
+  const [optimistic, setOptimistic] = useState<LeadEditableDetails | null>(
+    null
+  );
+  const detailsSig = JSON.stringify(details);
+  const [prevSig, setPrevSig] = useState(detailsSig);
+  if (detailsSig !== prevSig) {
+    setPrevSig(detailsSig);
+    setOptimistic(null);
+  }
+  // Everything below reads through this, so read mode, the edit
+  // seed, and the diff base all agree on what's currently shown.
+  const shown = optimistic ?? details;
+
   function enterEdit() {
     setDraft({
-      student_name: details.student_name,
-      parent_name: details.parent_name ?? "",
-      phone: formatUSPhone(details.phone) || details.phone,
-      email: details.email,
-      grade: details.grade,
-      school: details.school,
+      student_name: shown.student_name,
+      parent_name: shown.parent_name ?? "",
+      phone: formatUSPhone(shown.phone) || shown.phone,
+      email: shown.email,
+      grade: shown.grade,
+      school: shown.school,
     });
-    setDraftOptIn(details.opt_in);
+    setDraftOptIn(shown.opt_in);
     setEditing(true);
   }
 
@@ -243,29 +260,63 @@ function LeadDetailsEditor({
     // Diff-only patch against the row snapshot — untouched fields
     // never hit the API, so a stale value elsewhere can't clobber.
     const patch: Record<string, string | boolean> = {};
-    if (draft.student_name.trim() !== details.student_name) {
+    if (draft.student_name.trim() !== shown.student_name) {
       patch.student_name = draft.student_name;
     }
     if (
-      details.parent_name !== null &&
-      draft.parent_name.trim() !== details.parent_name
+      shown.parent_name !== null &&
+      draft.parent_name.trim() !== shown.parent_name
     ) {
       patch.parent_name = draft.parent_name;
     }
     const draftDigits = draft.phone.replace(/\D/g, "");
-    if (draftDigits !== details.phone.replace(/\D/g, "")) {
+    if (draftDigits !== shown.phone.replace(/\D/g, "")) {
       patch.phone = draft.phone;
     }
-    if (draft.email.trim() !== details.email) patch.email = draft.email;
-    if (draft.grade.trim() !== details.grade) patch.grade = draft.grade;
-    if (draft.school.trim() !== details.school) patch.school = draft.school;
-    if (details.opt_in_editable && draftOptIn !== details.opt_in) {
+    if (draft.email.trim() !== shown.email) patch.email = draft.email;
+    if (draft.grade.trim() !== shown.grade) patch.grade = draft.grade;
+    if (draft.school.trim() !== shown.school) patch.school = draft.school;
+    if (shown.opt_in_editable && draftOptIn !== shown.opt_in) {
       patch.opt_in = draftOptIn;
     }
     if (Object.keys(patch).length === 0) {
       setEditing(false);
       return;
     }
+
+    // Show the new values immediately and close the editor. Waiting
+    // for the PATCH *and* the host's full All-Leads refetch (which
+    // rescans four lead tables) meant the editor closed on stale text
+    // and the values visibly changed a beat later.
+    //
+    // The optimistic snapshot mirrors what the SERVER will actually
+    // store, not the raw draft: blank values are dropped (Xano skips
+    // empty inputs) and the phone is stored as bare digits — so a
+    // cleared field must not appear cleared here.
+    const optimisticNext: LeadEditableDetails = {
+      ...shown,
+      ...(typeof patch.student_name === "string" && patch.student_name.trim()
+        ? { student_name: patch.student_name.trim() }
+        : {}),
+      ...(typeof patch.parent_name === "string" && patch.parent_name.trim()
+        ? { parent_name: patch.parent_name.trim() }
+        : {}),
+      ...(typeof patch.phone === "string" && patch.phone.replace(/\D/g, "")
+        ? { phone: patch.phone.replace(/\D/g, "") }
+        : {}),
+      ...(typeof patch.email === "string" && patch.email.trim()
+        ? { email: patch.email.trim() }
+        : {}),
+      ...(typeof patch.grade === "string" && patch.grade.trim()
+        ? { grade: patch.grade.trim() }
+        : {}),
+      ...(typeof patch.school === "string" && patch.school.trim()
+        ? { school: patch.school.trim() }
+        : {}),
+      ...(typeof patch.opt_in === "boolean" ? { opt_in: patch.opt_in } : {}),
+    };
+    setOptimistic(optimisticNext);
+    setEditing(false);
     setSaving(true);
     try {
       const res = await fetch("/api/admin/leads", {
@@ -284,11 +335,15 @@ function LeadDetailsEditor({
       const data = await res.json().catch(() => null);
       if (data?.warning) toast.warning(data.warning);
       else toast.success("Lead details saved.");
-      setEditing(false);
       onChanged?.();
     } catch (err) {
       console.error("[LeadDetailsEditor.save]", err);
       toast.error(err instanceof Error ? err.message : "Couldn't save.");
+      // Roll the display back and reopen the editor with the draft
+      // intact, so a failed save is obviously unsaved and retryable
+      // rather than silently showing values that never persisted.
+      setOptimistic(null);
+      setEditing(true);
     } finally {
       setSaving(false);
     }
@@ -300,28 +355,33 @@ function LeadDetailsEditor({
     readValue: string;
     hidden?: boolean;
   }> = [
-    { key: "student_name", label: "Student", readValue: details.student_name },
+    { key: "student_name", label: "Student", readValue: shown.student_name },
     {
       key: "parent_name",
       label: "Parent",
-      readValue: details.parent_name ?? "",
-      hidden: details.parent_name === null,
+      readValue: shown.parent_name ?? "",
+      hidden: shown.parent_name === null,
     },
     {
       key: "phone",
       label: "Phone",
-      readValue: formatUSPhone(details.phone) || details.phone,
+      readValue: formatUSPhone(shown.phone) || shown.phone,
     },
-    { key: "email", label: "Email", readValue: details.email },
-    { key: "grade", label: "Grade", readValue: details.grade },
-    { key: "school", label: "School", readValue: details.school },
+    { key: "email", label: "Email", readValue: shown.email },
+    { key: "grade", label: "Grade", readValue: shown.grade },
+    { key: "school", label: "School", readValue: shown.school },
   ];
 
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-2">
-        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <p className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
           Lead details
+          {/* The editor has already closed on the new values by the
+              time this shows — it just marks the write in flight. */}
+          {saving && !editing ? (
+            <Loader2 className="size-3 animate-spin" />
+          ) : null}
         </p>
         {editing ? (
           <div className="flex items-center gap-1.5">
@@ -399,12 +459,12 @@ function LeadDetailsEditor({
           <label
             className={cn(
               "flex w-fit items-center gap-2 text-sm",
-              editing && details.opt_in_editable
+              editing && shown.opt_in_editable
                 ? "cursor-pointer"
                 : "cursor-default"
             )}
             title={
-              !details.opt_in_editable
+              !shown.opt_in_editable
                 ? "Implied consent from camp sign-up"
                 : editing
                   ? undefined
@@ -412,8 +472,8 @@ function LeadDetailsEditor({
             }
           >
             <Checkbox
-              checked={editing ? draftOptIn : details.opt_in}
-              disabled={!editing || !details.opt_in_editable || saving}
+              checked={editing ? draftOptIn : shown.opt_in}
+              disabled={!editing || !shown.opt_in_editable || saving}
               aria-label="Messaging opt-in"
               className={cn(
                 !editing && "disabled:opacity-100 disabled:cursor-default"
@@ -422,12 +482,12 @@ function LeadDetailsEditor({
             />
             <span
               className={cn(
-                (editing ? draftOptIn : details.opt_in)
+                (editing ? draftOptIn : shown.opt_in)
                   ? "text-foreground"
                   : "text-muted-foreground"
               )}
             >
-              {(editing ? draftOptIn : details.opt_in)
+              {(editing ? draftOptIn : shown.opt_in)
                 ? "Opted in"
                 : "Opted out"}
             </span>
