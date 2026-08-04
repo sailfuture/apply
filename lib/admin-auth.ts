@@ -50,11 +50,44 @@ let cache: AdminCache | null = null;
 let inflight: Promise<AdminCache> | null = null;
 
 async function loadAdmins(): Promise<AdminCache> {
-  const res = await fetch(`${ADMIN_API_BASE}/teachers_by_admin`, {
-    cache: "no-store",
-  });
-  if (!res.ok) {
-    throw new Error(`Failed to load admin list (${res.status})`);
+  // Retry + stale fallback. Admin pages fan out 10–25 API calls at
+  // once and EVERY one runs through this list — so a single transient
+  // Xano failure here used to 500 a whole page's worth of routes
+  // simultaneously. Retry transient failures, and if the fetch still
+  // can't complete, serve the expired in-process cache rather than
+  // failing: a staff roster that's minutes stale is strictly better
+  // than an admin surface that's down.
+  let res: Response | null = null;
+  let lastErr: unknown = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) {
+      await new Promise((r) => setTimeout(r, 250 * attempt));
+    }
+    try {
+      res = await fetch(`${ADMIN_API_BASE}/teachers_by_admin`, {
+        cache: "no-store",
+      });
+      if (res.ok) break;
+      lastErr = new Error(`Failed to load admin list (${res.status})`);
+      // Non-retryable client errors won't get better.
+      if (res.status < 500 && res.status !== 429) break;
+      res = null;
+    } catch (err) {
+      lastErr = err;
+      res = null;
+    }
+  }
+  if (!res || !res.ok) {
+    if (cache) {
+      console.warn(
+        "[admin-auth] admin-list refresh failed; serving stale cache:",
+        lastErr
+      );
+      return cache;
+    }
+    throw lastErr instanceof Error
+      ? lastErr
+      : new Error("Failed to load admin list");
   }
   const raw = (await res.json()) as RawTeacher[];
   const byEmail = new Map<string, AdminUser>();

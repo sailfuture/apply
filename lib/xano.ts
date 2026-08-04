@@ -2694,22 +2694,24 @@ export const xano = {
       familyId: number,
       yearId: number
     ): Promise<XanoAdminFamilyDetail | null> {
-      try {
-        const url = new URL(`${getBaseUrl()}/admin_family_application`);
-        url.searchParams.set(
-          "registration_families_id",
-          String(familyId)
-        );
-        url.searchParams.set(
-          "registration_school_years_id",
-          String(yearId)
-        );
-        const res = await fetch(url.toString(), { cache: "no-store" });
-        if (!res.ok) return null;
-        return (await res.json()) as XanoAdminFamilyDetail;
-      } catch {
-        return null;
+      const url = new URL(`${getBaseUrl()}/admin_family_application`);
+      url.searchParams.set(
+        "registration_families_id",
+        String(familyId)
+      );
+      url.searchParams.set(
+        "registration_school_years_id",
+        String(yearId)
+      );
+      // Retry + THROW on failure. This used to swallow every non-OK
+      // response into `null`, which the API route rendered as a 404
+      // ("Family detail not found") — so a transient Xano blip under
+      // the family page's fan-out burst masqueraded as missing data.
+      const res = await fetchRetry(url.toString());
+      if (!res.ok) {
+        throw new Error(`Xano error ${res.status}: ${await res.text()}`);
       }
+      return (await res.json()) as XanoAdminFamilyDetail;
     },
 
     async getAll(): Promise<XanoApplication[]> {
@@ -3013,7 +3015,9 @@ export const xano = {
         "registration_school_years_id",
         String(yearId)
       );
-      const res = await fetch(url.toString(), { cache: "no-store" });
+      // Retried read — this is on the family page's fan-out hot path,
+      // where one transient Xano failure used to surface as a 500.
+      const res = await fetchRetry(url.toString());
       if (!res.ok) {
         // Return [] instead of throwing on 404/empty-table so a freshly
         // configured year (with no matrix yet) renders an empty grid
@@ -3089,7 +3093,8 @@ export const xano = {
         "registration_school_years_id",
         String(yearId)
       );
-      const res = await fetch(url.toString(), { cache: "no-store" });
+      // Retried read — same fan-out hot path as the award brackets.
+      const res = await fetchRetry(url.toString());
       if (!res.ok) {
         if (res.status === 404) return [];
         throw new Error(`Xano error ${res.status}: ${await res.text()}`);
