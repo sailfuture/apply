@@ -18,6 +18,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatRelativeShort } from "@/lib/format-note-time";
+import { useSmsViewedMap } from "@/components/admin/messages-unread-badge";
 import { cn } from "@/lib/utils";
 import type { UnreadMessagesResponse } from "@/app/api/admin/messages/unread/route";
 import type { LeadActivityResponse } from "@/app/api/admin/lead-activity/route";
@@ -30,10 +31,13 @@ type ActivityRow = LeadActivityResponse["rows"][number];
  * Threads whose newest message is inbound — parents waiting on a
  * reply.
  *
- * Deliberately the SERVER half of "unread" only: the per-browser
- * viewed state that grays the inbox dots isn't consulted here,
- * because on a dashboard a thread you've read but not answered is
- * still outstanding work.
+ * Uses BOTH halves of "unread", exactly like the inbox list and the
+ * nav badge: the server half (newest message is inbound) picks the
+ * rows, and the per-browser viewed map decides blue ("Needs reply")
+ * vs gray ("Viewed") — so this card, the badge count, and the inbox
+ * dots can never disagree. Viewed-but-unanswered threads stay listed
+ * (they're still outstanding work) but grayed and below the new ones.
+ * Each row deep-links to its own thread via `?open=<key>`.
  */
 export function UnreadMessagesCard({
   rows,
@@ -42,7 +46,16 @@ export function UnreadMessagesCard({
   rows: UnreadMessagesResponse["conversations"];
   loading: boolean;
 }) {
-  const sorted = [...rows].sort((a, b) => b.lastAt - a.lastAt);
+  const viewed = useSmsViewedMap();
+  const isUnviewed = (c: UnreadMessagesResponse["conversations"][number]) =>
+    (viewed[c.key] ?? 0) < c.lastAt;
+  const sorted = [...rows].sort((a, b) => {
+    const av = isUnviewed(a) ? 0 : 1;
+    const bv = isUnviewed(b) ? 0 : 1;
+    return av !== bv ? av - bv : b.lastAt - a.lastAt;
+  });
+  const unviewedCount = sorted.filter(isUnviewed).length;
+  const viewedCount = sorted.length - unviewedCount;
   return (
     <Card className="overflow-hidden bg-white py-0 gap-0">
       <CardHeader className="py-4 border-b bg-white">
@@ -51,8 +64,12 @@ export function UnreadMessagesCard({
             <CardTitle className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
               Needs a reply
             </CardTitle>
+            {/* The headline number matches the nav badge (new only);
+                viewed-but-unanswered threads are counted separately so
+                the two surfaces never appear to disagree. */}
             <span className="text-xs tabular-nums text-muted-foreground">
-              ({sorted.length})
+              ({unviewedCount}
+              {viewedCount > 0 ? ` new · ${viewedCount} viewed` : ""})
             </span>
           </div>
           <Link
@@ -81,32 +98,54 @@ export function UnreadMessagesCard({
           </div>
         ) : (
           <ul className="divide-y">
-            {sorted.map((c) => (
-              <li key={c.key}>
-                <Link
-                  href="/admin/messages"
-                  className="flex items-start gap-3 px-4 py-3 transition-colors hover:bg-muted/50"
-                >
-                  <span
-                    className="mt-1.5 size-2 shrink-0 rounded-full bg-blue-500"
-                    aria-hidden
-                  />
-                  <span className="min-w-0 flex-1">
-                    <span className="flex items-baseline justify-between gap-2">
-                      <span className="truncate text-sm font-medium">
-                        {c.name}
+            {sorted.map((c) => {
+              const unviewedRow = isUnviewed(c);
+              return (
+                <li key={c.key}>
+                  <Link
+                    href={`/admin/messages?open=${encodeURIComponent(c.key)}`}
+                    className="flex items-start gap-3 px-4 py-3 transition-colors hover:bg-muted/50"
+                  >
+                    {/* Same dot vocabulary as the inbox list: blue =
+                        needs reply, gray = viewed but unanswered. */}
+                    <span
+                      className={cn(
+                        "mt-1.5 size-2 shrink-0 rounded-full",
+                        unviewedRow ? "bg-blue-500" : "bg-slate-300"
+                      )}
+                      aria-label={unviewedRow ? "Needs reply" : "Viewed"}
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-baseline justify-between gap-2">
+                        <span
+                          className={cn(
+                            "truncate text-sm",
+                            unviewedRow
+                              ? "font-medium"
+                              : "text-muted-foreground"
+                          )}
+                        >
+                          {c.name}
+                        </span>
+                        <span className="flex shrink-0 items-baseline gap-2">
+                          {!unviewedRow ? (
+                            <span className="text-[10px] text-muted-foreground">
+                              Viewed
+                            </span>
+                          ) : null}
+                          <span className="text-[10px] tabular-nums text-muted-foreground">
+                            {formatRelativeShort(c.lastAt)}
+                          </span>
+                        </span>
                       </span>
-                      <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
-                        {formatRelativeShort(c.lastAt)}
+                      <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+                        {c.preview || "(no message text)"}
                       </span>
                     </span>
-                    <span className="mt-0.5 block truncate text-xs text-muted-foreground">
-                      {c.preview || "(no message text)"}
-                    </span>
-                  </span>
-                </Link>
-              </li>
-            ))}
+                  </Link>
+                </li>
+              );
+            })}
           </ul>
         )}
       </CardContent>

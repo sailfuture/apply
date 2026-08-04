@@ -159,6 +159,35 @@ export default function AdminMessagesPage() {
   const isUnread = (c: SmsConversation) =>
     c.needsReply &&
     (viewedMap[`${c.contactType}:${c.contactId}`] ?? 0) < c.lastAt;
+
+  // Deep link: `?open=<contactType>:<contactId>` (the same key shape
+  // the unread feed and viewed map use) selects that thread once the
+  // conversation list lands — the dashboard's "Needs a reply" rows
+  // arrive here. One-shot so the param doesn't fight the admin's own
+  // clicking afterwards; opening also marks the thread viewed, exactly
+  // like clicking its row.
+  const openParam = searchParams.get("open");
+  const openedFromParam = useRef(false);
+  useEffect(() => {
+    if (openedFromParam.current || !openParam || conversations.length === 0) {
+      return;
+    }
+    openedFromParam.current = true;
+    const sep = openParam.indexOf(":");
+    if (sep === -1) return;
+    const type = openParam.slice(0, sep);
+    const id = Number(openParam.slice(sep + 1));
+    const match = conversations.find(
+      (c) => c.contactType === type && c.contactId === id
+    );
+    if (!match) return; // stale link — leave the inbox as-is
+    setSelected({
+      type: match.contactType,
+      id: match.contactId,
+      name: match.name,
+    });
+    markViewed(match.contactType, match.contactId, match.lastAt);
+  }, [openParam, conversations]);
   const active = selected
     ? (conversations.find(
         (c) =>

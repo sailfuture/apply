@@ -27,20 +27,14 @@ export const SMS_VIEWED_EVENT = "sms-viewed-changed";
  * The viewed map is read after mount (never during render) so SSR and
  * hydration produce identical markup — the badge pops in a tick later.
  */
-export function useUnreadMessageCount(): number {
-  const { data } = useSWR<UnreadMessagesResponse>(
-    "/api/admin/messages/unread",
-    adminFetcher,
-    {
-      // The nav is mounted on every admin page; a minute of staleness
-      // on a badge is fine and keeps this off the hot path.
-      refreshInterval: 60_000,
-      revalidateOnFocus: true,
-      // A failed badge fetch should never surface as a page error.
-      shouldRetryOnError: false,
-    }
-  );
-
+/**
+ * Live view of the `sms-viewed-v1` map — the client half of "unread".
+ * Reads after mount (never during render) so SSR and hydration match,
+ * then stays current via the same-tab event and cross-tab `storage`.
+ * Shared by the nav badge, the dashboard's Needs-a-reply card, and
+ * anything else that must agree with the inbox's dots.
+ */
+export function useSmsViewedMap(): Record<string, number> {
   const [viewed, setViewed] = useState<Record<string, number>>({});
   useEffect(() => {
     const read = () => {
@@ -59,6 +53,23 @@ export function useUnreadMessageCount(): number {
       window.removeEventListener("storage", read);
     };
   }, []);
+  return viewed;
+}
+
+export function useUnreadMessageCount(): number {
+  const { data } = useSWR<UnreadMessagesResponse>(
+    "/api/admin/messages/unread",
+    adminFetcher,
+    {
+      // The nav is mounted on every admin page; a minute of staleness
+      // on a badge is fine and keeps this off the hot path.
+      refreshInterval: 60_000,
+      revalidateOnFocus: true,
+      // A failed badge fetch should never surface as a page error.
+      shouldRetryOnError: false,
+    }
+  );
+  const viewed = useSmsViewedMap();
 
   return (data?.conversations ?? []).filter(
     (c) => (viewed[c.key] ?? 0) < c.lastAt
