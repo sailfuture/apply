@@ -57,6 +57,10 @@ export interface SmsSyncResult {
    *  (lead created after the text, or the directory was unavailable
    *  when the row was first written). */
   reattributed: number;
+  /** Rows stuck on a non-terminal status (usually "queued") whose
+   *  real Twilio status is settled — repaired from Twilio's own log.
+   *  See the reconciliation block for why they get stuck. */
+  statusRepaired: number;
   /** Distinct unmatched numbers (up to 10) for the admin to inspect. */
   unmatchedNumbers: string[];
 }
@@ -72,6 +76,7 @@ export async function syncMessagesFromTwilio({
     unmatched: 0,
     unmatchedNumbers: [],
     reattributed: 0,
+    statusRepaired: 0,
   };
   if (!isTwilioConfigured()) {
     return { ...base, ok: false, skipped: "not_configured" };
@@ -152,6 +157,50 @@ export async function syncMessagesFromTwilio({
     }
 
     base.unmatchedNumbers = [...unmatchedSet].slice(0, 10);
+
+    // Heal stale delivery statuses.
+    //
+    // `sendSms` logs the row AFTER Twilio accepts the message, stamped
+    // with Twilio's status at that instant — almost always "queued".
+    // The real status arrives later on the statusCallback webhook,
+    // which matches rows by SID. But a fast delivery can fire that
+    // callback BEFORE the row exists, and the webhook drops updates it
+    // can't match (`if (existing)`), leaving the row stuck on "queued"
+    // forever even though the text was delivered.
+    //
+    // Twilio's list above already carries the true status, so
+    // reconciling costs nothing extra and is self-healing for rows
+    // that lost the race.
+    const TERMINAL = new Set([
+      "delivered",
+      "undelivered",
+      "failed",
+      "received",
+    ]);
+    const truthBySid = new Map<string, string>();
+    for (const m of twilioMessages) {
+      if (m.sid && m.status) truthBySid.set(m.sid, String(m.status));
+    }
+    for (const row of existing) {
+      const sid = row.twilio_message_sid;
+      if (!sid) continue;
+      // Only rows we believe are still in flight — never overwrite a
+      // status the callback already settled.
+      if (TERMINAL.has(row.status)) continue;
+      const actual = truthBySid.get(sid);
+      if (!actual || actual === row.status || !TERMINAL.has(actual)) {
+        continue;
+      }
+      try {
+        await xano.smsMessages.update(row.id, { status: actual });
+        base.statusRepaired += 1;
+      } catch (err) {
+        console.error(
+          `[sms/sync] status repair failed for row ${row.id}:`,
+          err
+        );
+      }
+    }
 
     // Heal ad-hoc rows: a logged message with NO contact FK whose
     // counterparty now matches the directory gets its FK stamped, so

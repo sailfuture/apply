@@ -57,7 +57,17 @@ export async function POST(req: NextRequest) {
   const isStatusCallback = !params.Body && !!messageStatus && !!messageSid;
   if (isStatusCallback) {
     try {
-      const existing = await xano.smsMessages.findByMessageSid(messageSid);
+      // Retry the lookup: `sendSms` writes the log row AFTER Twilio
+      // accepts the message, so a fast delivery can fire this callback
+      // before the row exists. Dropping it left the row stuck on
+      // "queued" forever even though the text was delivered. A short
+      // backoff covers the ordinary race; the Twilio sync reconciles
+      // anything that still slips through.
+      let existing = await xano.smsMessages.findByMessageSid(messageSid);
+      for (let attempt = 0; !existing && attempt < 2; attempt++) {
+        await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+        existing = await xano.smsMessages.findByMessageSid(messageSid);
+      }
       if (existing) {
         await xano.smsMessages.update(existing.id, {
           status: messageStatus,
@@ -65,6 +75,10 @@ export async function POST(req: NextRequest) {
             ? String(params.ErrorCode)
             : (existing.error_code ?? null),
         });
+      } else {
+        console.warn(
+          `[twilio webhook] no logged row for ${messageSid} after retries — the sync will reconcile its status`
+        );
       }
     } catch (err) {
       console.error("[twilio webhook] status update failed:", err);
