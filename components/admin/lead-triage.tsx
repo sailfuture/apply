@@ -2,8 +2,9 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
-import { Check, Loader2, Pencil, Undo2 } from "lucide-react";
+import { Loader2, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { formatUSPhone } from "@/lib/phone";
 import {
@@ -102,44 +103,39 @@ export function LeadTriageControls({
   }
 
   return (
-    <div className={cn("space-y-4", className)}>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-            Likelihood of conversion
-          </p>
-          <div className="mt-1 flex items-center gap-2">
-            <StarRating
-              value={rating}
-              disabled={savingRating}
-              onChange={(v) => void setRating(v)}
-            />
-            <span className="text-xs text-muted-foreground tabular-nums">
-              {rating ? `${rating}/5` : "Not rated"}
-            </span>
-            {savingRating ? (
-              <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
-            ) : null}
-          </div>
+    <div className={cn("space-y-3", className)}>
+      {/* Conversion rating — full-width row of its own. */}
+      <div>
+        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          Likelihood of conversion
+        </p>
+        <div className="mt-1 flex items-center gap-2">
+          <StarRating
+            value={rating}
+            disabled={savingRating}
+            onChange={(v) => void setRating(v)}
+          />
+          <span className="text-xs text-muted-foreground tabular-nums">
+            {rating ? `${rating}/5` : "Not rated"}
+          </span>
+          {savingRating ? (
+            <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
+          ) : null}
         </div>
-        <Button
-          type="button"
-          variant={isFollowedUp ? "outline" : "default"}
-          size="sm"
-          className={cn(isFollowedUp && "bg-white")}
-          disabled={savingFollowUp}
-          onClick={() => void toggleFollowUp()}
-        >
-          {savingFollowUp ? (
-            <Loader2 className="size-3.5 mr-1.5 animate-spin" />
-          ) : isFollowedUp ? (
-            <Undo2 className="size-3.5 mr-1.5" />
-          ) : (
-            <Check className="size-3.5 mr-1.5" />
-          )}
-          {isFollowedUp ? "Undo follow-up" : "Mark followed up"}
-        </Button>
       </div>
+      {/* Follow-up — checkbox under the rating (was a header button). */}
+      <label className="flex w-fit cursor-pointer items-center gap-2 text-sm">
+        <Checkbox
+          checked={isFollowedUp}
+          disabled={savingFollowUp}
+          aria-label="Followed up"
+          onCheckedChange={() => void toggleFollowUp()}
+        />
+        <span className="font-medium">Followed up</span>
+        {savingFollowUp ? (
+          <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
+        ) : null}
+      </label>
       <p className="text-xs text-muted-foreground">
         {lastReachOut
           ? `Last contacted ${new Date(lastReachOut).toLocaleString()}`
@@ -160,6 +156,11 @@ export interface LeadEditableDetails {
   email: string;
   grade: string;
   school: string;
+  /** Messaging/marketing consent. Read-only until Edit is clicked —
+   *  and never editable when the source has no consent column
+   *  (camp: sign-up is the implied consent). */
+  opt_in: boolean;
+  opt_in_editable: boolean;
 }
 
 /**
@@ -187,6 +188,7 @@ function LeadDetailsEditor({
     grade: "",
     school: "",
   });
+  const [draftOptIn, setDraftOptIn] = useState(false);
 
   function enterEdit() {
     setDraft({
@@ -197,13 +199,14 @@ function LeadDetailsEditor({
       grade: details.grade,
       school: details.school,
     });
+    setDraftOptIn(details.opt_in);
     setEditing(true);
   }
 
   async function save() {
     // Diff-only patch against the row snapshot — untouched fields
     // never hit the API, so a stale value elsewhere can't clobber.
-    const patch: Record<string, string> = {};
+    const patch: Record<string, string | boolean> = {};
     if (draft.student_name.trim() !== details.student_name) {
       patch.student_name = draft.student_name;
     }
@@ -220,6 +223,9 @@ function LeadDetailsEditor({
     if (draft.email.trim() !== details.email) patch.email = draft.email;
     if (draft.grade.trim() !== details.grade) patch.grade = draft.grade;
     if (draft.school.trim() !== details.school) patch.school = draft.school;
+    if (details.opt_in_editable && draftOptIn !== details.opt_in) {
+      patch.opt_in = draftOptIn;
+    }
     if (Object.keys(patch).length === 0) {
       setEditing(false);
       return;
@@ -349,6 +355,48 @@ function LeadDetailsEditor({
               </div>
             )
           )}
+        {/* Opt-in — read-only checkbox until Edit is clicked. Camp
+            leads stay locked even then (no consent column; sign-up is
+            the implied consent). */}
+        <div>
+          <p className="mb-1 text-[11px] text-muted-foreground">Opt-in</p>
+          <label
+            className={cn(
+              "flex w-fit items-center gap-2 text-sm",
+              editing && details.opt_in_editable
+                ? "cursor-pointer"
+                : "cursor-default"
+            )}
+            title={
+              !details.opt_in_editable
+                ? "Implied consent from camp sign-up"
+                : editing
+                  ? undefined
+                  : "Click Edit to change"
+            }
+          >
+            <Checkbox
+              checked={editing ? draftOptIn : details.opt_in}
+              disabled={!editing || !details.opt_in_editable || saving}
+              aria-label="Messaging opt-in"
+              className={cn(
+                !editing && "disabled:opacity-100 disabled:cursor-default"
+              )}
+              onCheckedChange={(v) => setDraftOptIn(v === true)}
+            />
+            <span
+              className={cn(
+                (editing ? draftOptIn : details.opt_in)
+                  ? "text-foreground"
+                  : "text-muted-foreground"
+              )}
+            >
+              {(editing ? draftOptIn : details.opt_in)
+                ? "Opted in"
+                : "Opted out"}
+            </span>
+          </label>
+        </div>
       </div>
     </div>
   );

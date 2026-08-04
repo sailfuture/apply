@@ -108,21 +108,15 @@ export default function AllLeadsPage() {
     }
   }
 
-  // Toggle a boolean lead flag straight from the table — follow-up on
-  // every source, opt-in where the source table has a consent column
-  // (camp doesn't; sign-up is the implied consent). Same optimistic
-  // shape as `setRating`.
-  async function setLeadBool(
-    row: AllLeadRow,
-    field: "followed_up" | "opt_in",
-    value: boolean
-  ) {
-    const bodyKey = field === "followed_up" ? "isFollowedUp" : "opt_in";
+  // Toggle the follow-up flag straight from the table. Same
+  // optimistic shape as `setRating`. (Opt-in is deliberately NOT
+  // table-togglable — consent edits go through the sheet's Edit mode.)
+  async function setFollowedUp(row: AllLeadRow, value: boolean) {
     try {
       mutate(
         (curr) =>
           (curr ?? []).map((r) =>
-            r.key === row.key ? { ...r, [field]: value } : r
+            r.key === row.key ? { ...r, followed_up: value } : r
           ),
         { revalidate: false }
       );
@@ -132,18 +126,16 @@ export default function AllLeadsPage() {
         body: JSON.stringify({
           source: row.source,
           id: row.id,
-          [bodyKey]: value,
+          isFollowedUp: value,
         }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => null);
         throw new Error(err?.error ?? `Save failed (${res.status})`);
       }
-      const data = await res.json().catch(() => null);
-      if (data?.warning) toast.warning(data.warning);
       mutate();
     } catch (err) {
-      console.error(`Failed to save lead ${field}:`, err);
+      console.error("Failed to save lead follow-up:", err);
       toast.error(
         err instanceof Error ? err.message : "Couldn't save the change."
       );
@@ -290,9 +282,9 @@ export default function AllLeadsPage() {
         ),
       },
       {
-        // Messaging/marketing consent, editable inline where the
-        // source table has a column. Camp rows have none — sign-up is
-        // the implied consent, so they render checked + locked.
+        // Messaging/marketing consent — read-only in the table;
+        // changing it requires opening the lead's sheet and clicking
+        // Edit (deliberate friction on a consent flag).
         key: "opt_in",
         header: "Opt-in",
         sortable: true,
@@ -301,22 +293,17 @@ export default function AllLeadsPage() {
         render: (r) => (
           <span
             className="inline-flex"
-            onClick={(e) => e.stopPropagation()}
             title={
               r.source === "camp"
                 ? "Implied consent from camp sign-up"
-                : r.opt_in
-                  ? "Opted in — uncheck to opt out"
-                  : "Opted out — check to opt in"
+                : "Edit from the lead's sheet"
             }
           >
             <Checkbox
               checked={r.opt_in}
-              disabled={r.source === "camp"}
+              disabled
               aria-label="Messaging opt-in"
-              onCheckedChange={(v) =>
-                void setLeadBool(r, "opt_in", v === true)
-              }
+              className="disabled:opacity-100 disabled:cursor-default"
             />
           </span>
         ),
@@ -339,7 +326,7 @@ export default function AllLeadsPage() {
               checked={r.followed_up}
               aria-label="Followed up"
               onCheckedChange={(v) =>
-                void setLeadBool(r, "followed_up", v === true)
+                void setFollowedUp(r, v === true)
               }
             />
           </span>
@@ -535,6 +522,9 @@ export default function AllLeadsPage() {
             email: activeRow.email,
             grade: activeRow.grade_raw,
             school: activeRow.school,
+            opt_in: activeRow.opt_in,
+            // Camp has no consent column — implied by sign-up.
+            opt_in_editable: activeRow.source !== "camp",
           }}
           onChanged={() => void mutate()}
         />
