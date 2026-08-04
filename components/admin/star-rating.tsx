@@ -64,12 +64,13 @@ export function StarRating({
           <Star
             className={cn(
               "size-4 transition-colors",
-              previewing
-                ? n <= hover
+              // The saved rating stays amber ON TOP of any hover
+              // preview — gray only fills the hovered stars beyond
+              // it, so the current value never disappears mid-hover.
+              n <= value
+                ? "fill-amber-400 text-amber-400"
+                : previewing && n <= hover
                   ? "fill-gray-400 text-gray-400"
-                  : "text-muted-foreground/30"
-                : n <= value
-                  ? "fill-amber-400 text-amber-400"
                   : "text-muted-foreground/30"
             )}
           />
