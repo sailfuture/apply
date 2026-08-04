@@ -532,8 +532,8 @@ export function ToursPanel() {
           </div>
         ) : sorted.length === 0 && !isLoading ? (
           <div className="p-8 text-center text-sm text-muted-foreground">
-            No tours yet. Schedule one from a lead&rsquo;s sheet on All
-            Leads (or a visitor sheet on Liability Waiver Visits).
+            No tours yet. Bookings from the website tour page import
+            here automatically — use Sync Google to pull them in now.
           </div>
         ) : (
           <DataTable<TourRow>

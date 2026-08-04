@@ -111,15 +111,17 @@ export function tourNoteBody(
   tour: XanoTour,
   inviteSent: boolean
 ): string {
+  // Deliberately NO location in these lines: every tour is at the
+  // same campus address, so repeating it in each comms-log entry was
+  // pure noise. The address still rides on the calendar invite.
   const when = tourWhenLabel(tour.scheduled_at, tour.duration_minutes);
-  const where = tour.location ? ` at ${tour.location}` : "";
   switch (event) {
     case "linked":
       // Admin attached an existing (usually website-booked) tour to
       // this lead by hand — backfills the comms log the email
       // matcher couldn't write automatically.
       return (
-        `Campus tour linked to this lead — ${when}${where}.` +
+        `Campus tour linked to this lead — ${when}.` +
         (tour.parent_email ? ` Booked by ${tour.parent_email}.` : "")
       );
     case "unlinked":
@@ -131,23 +133,21 @@ export function tourNoteBody(
       );
     case "booked":
       // Self-service: the family picked the slot on the website
-      // booking page — Google already confirmed it to their email.
+      // booking page and Google emailed them the confirmation.
       return (
-        `Campus tour booked via the website for ${when}${where}.` +
-        (tour.parent_email
-          ? ` Confirmed to ${tour.parent_email}.`
-          : "")
+        `Campus tour booked via the website for ${when}.` +
+        (tour.parent_email ? ` Sent to ${tour.parent_email}.` : "")
       );
     case "scheduled":
       return (
-        `Campus tour scheduled for ${when}${where}.` +
+        `Campus tour scheduled for ${when}.` +
         (inviteSent && tour.parent_email
-          ? ` Calendar invite sent to ${tour.parent_email}.`
+          ? ` Sent to ${tour.parent_email}.`
           : " No calendar invite sent.")
       );
     case "rescheduled":
       return (
-        `Campus tour rescheduled to ${when}${where}.` +
+        `Campus tour rescheduled to ${when}.` +
         (inviteSent && tour.parent_email
           ? ` Updated invite sent to ${tour.parent_email}.`
           : " No updated invite sent.")
@@ -160,7 +160,7 @@ export function tourNoteBody(
       return (
         `Campus tour canceled (was ${when}).` +
         (inviteSent && tour.parent_email
-          ? ` Cancellation sent to ${tour.parent_email}.`
+          ? ` Sent to ${tour.parent_email}.`
           : "")
       );
   }

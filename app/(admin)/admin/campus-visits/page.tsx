@@ -29,7 +29,6 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { LeadTriageControls } from "@/components/admin/lead-triage";
-import { LeadTourSection } from "@/components/admin/tour-section";
 import {
   InquiryNoteComposer,
   InquiryNotes,
@@ -454,19 +453,6 @@ export default function CampusVisitsPage() {
                 rating={activeRow.rating}
                 isFollowedUp={activeRow.followed_up}
                 lastReachOut={activeRow.last_reach_out || null}
-                onChanged={() => void mutate()}
-              />
-            </div>
-
-            {/* Campus tour — schedule (Google Calendar invite) or
-                manage this visitor's upcoming tour. */}
-            <div className="border-b px-4 py-4">
-              <LeadTourSection
-                scope={{ source: "visit", id: activeRow.id }}
-                parentName={activeRow.parent_name}
-                parentEmail={activeRow.parent_email}
-                parentPhone={activeRow.parent_phone}
-                studentName={activeRow.student_name}
                 onChanged={() => void mutate()}
               />
             </div>
