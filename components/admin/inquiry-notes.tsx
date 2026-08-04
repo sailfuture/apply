@@ -796,11 +796,17 @@ function SmsBubble({ msg }: { msg: XanoSmsMessage }) {
     <Message align={outbound ? "end" : "start"}>
       <MessageContent>
         <MessageHeader>
-          Text message
+          {/* One line, always: the label never wraps, and the from
+              value truncates (it's usually a phone, but legacy rows
+              can carry a long Twilio Messaging Service SID). */}
+          <span className="shrink-0 whitespace-nowrap">Text message</span>
           {fromLabel ? (
-            <span className="text-muted-foreground">
-              {" "}
-              · from <span className="tabular-nums">{fromLabel}</span>
+            <span
+              className="min-w-0 truncate whitespace-nowrap text-muted-foreground"
+              title={fromLabel}
+            >
+              &nbsp;· from{" "}
+              <span className="tabular-nums">{fromLabel}</span>
             </span>
           ) : null}
         </MessageHeader>

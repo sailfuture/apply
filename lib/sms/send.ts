@@ -159,7 +159,11 @@ export async function sendSms(input: SendSmsInput): Promise<SendSmsResult> {
       registration_school_years_id: yearId,
       direction: "outbound",
       to_number: to,
-      from_number: msg.from ?? from,
+      // Twilio assigns the sender number async when using a Messaging
+      // Service — `msg.from` is often null at accept time, and the
+      // service SID ("MG…") is NOT a phone number, so never store it
+      // as one. Blank is honest; the UI hides an empty from-number.
+      from_number: msg.from ?? "",
       body,
       status: msg.status ?? "queued",
       twilio_message_sid: msg.sid,
@@ -188,7 +192,9 @@ export async function sendSms(input: SendSmsInput): Promise<SendSmsResult> {
         registration_school_years_id: yearId,
         direction: "outbound",
         to_number: to,
-        from_number: from,
+        // Same rule as the success path: the Messaging Service SID is
+        // not a phone number — leave blank.
+        from_number: "",
         body,
         status: "failed",
         twilio_message_sid: null,
