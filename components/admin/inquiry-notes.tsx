@@ -3,7 +3,7 @@
 import { useState, type ReactNode } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import { toast } from "sonner";
-import { Loader2 } from "lucide-react";
+import { Loader2, MessageSquareText, NotebookPen } from "lucide-react";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Marker, MarkerContent } from "@/components/ui/marker";
 import {
@@ -68,18 +68,26 @@ export function leadNotesKey(scope: LeadNoteScope): string {
 }
 
 /**
- * Note categories. `short` is the abbreviated label for the
- * selectable-pill picker in the composer (rendered as a horizontal
- * row, so we want concise text); `label` is the long form rendered
- * inside the timeline metadata strip ("Phone call · 2:14pm").
+ * DISPLAY labels for note categories — the timeline still renders
+ * legacy phone/email/in-person notes with their original labels, so
+ * this list stays complete even though the composer below only offers
+ * two choices now.
  */
 const CATEGORY_OPTIONS: { value: string; label: string; short: string }[] = [
   { value: "phone", label: "Phone call", short: "Call" },
   { value: "email", label: "Email", short: "Email" },
   { value: "in-person", label: "In-person", short: "Visit" },
   { value: "sms", label: "Text message", short: "SMS" },
-  { value: "other", label: "Other", short: "Other" },
+  { value: "other", label: "Note", short: "Note" },
 ];
+
+/** Composer choices — trimmed to the two that matter (user request):
+ *  "Note" logs to the comms timeline ("other" category), "SMS" sends
+ *  a REAL text through the messaging pipeline. */
+const COMPOSE_CATEGORIES = [
+  { value: "other", label: "Note" },
+  { value: "sms", label: "SMS" },
+] as const;
 
 /**
  * Composer submit shared by both variants. The SMS category is not a
@@ -126,9 +134,9 @@ async function postLeadEntry(
 }
 
 /**
- * Renders the category-pill row used by both composer variants
- * (panel and standalone). Behaves like a `radiogroup` — exactly
- * one selection at a time, click to switch.
+ * Segmented Note | SMS toggle used by both composer variants — same
+ * 50/50 control the activity sheet's composer uses, so the two
+ * surfaces read identically. Behaves like a `radiogroup`.
  */
 function CategoryPills({
   value,
@@ -139,11 +147,11 @@ function CategoryPills({
 }) {
   return (
     <div
-      className="flex flex-wrap gap-1.5"
+      className="grid w-full grid-cols-2 rounded-md border bg-white p-0.5"
       role="radiogroup"
-      aria-label="Note category"
+      aria-label="Composer mode"
     >
-      {CATEGORY_OPTIONS.map((c) => {
+      {COMPOSE_CATEGORIES.map((c) => {
         const selected = value === c.value;
         return (
           <button
@@ -152,15 +160,19 @@ function CategoryPills({
             role="radio"
             aria-checked={selected}
             onClick={() => onChange(c.value)}
-            title={c.label}
             className={cn(
-              "rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors",
+              "inline-flex items-center justify-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium transition-colors",
               selected
-                ? "border-foreground bg-foreground text-background"
-                : "border-border bg-white text-muted-foreground hover:border-foreground/40 hover:text-foreground"
+                ? "bg-foreground text-background"
+                : "text-muted-foreground hover:text-foreground"
             )}
           >
-            {c.short}
+            {c.value === "sms" ? (
+              <MessageSquareText className="size-3" />
+            ) : (
+              <NotebookPen className="size-3" />
+            )}
+            {c.label}
           </button>
         );
       })}
@@ -251,7 +263,7 @@ export function InquiryNotes({
   ].sort((a, b) => entryTs(a) - entryTs(b));
 
   const [body, setBody] = useState("");
-  const [category, setCategory] = useState("phone");
+  const [category, setCategory] = useState("other");
   const [saving, setSaving] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<number | null>(null);
 
@@ -547,7 +559,7 @@ export function InquiryNoteComposer({
   const { mutate: globalMutate } = useSWRConfig();
 
   const [body, setBody] = useState("");
-  const [category, setCategory] = useState("phone");
+  const [category, setCategory] = useState("other");
   const [saving, setSaving] = useState(false);
 
   async function submitNote() {
