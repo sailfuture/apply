@@ -34,6 +34,7 @@ import { adminFetcher } from "@/lib/admin-fetcher";
 import {
   TOUR_DEFAULT_LOCATION,
   TOUR_STATUS_LABEL,
+  leadToursKey,
   tourRsvpBadge,
   tourWhenLabel,
 } from "@/lib/tours";
@@ -56,10 +57,6 @@ import { cn } from "@/lib/utils";
 const DURATION_OPTIONS = [30, 45, 60, 90] as const;
 const DEFAULT_LOCATION = TOUR_DEFAULT_LOCATION;
 
-export function leadToursKey(scope: LeadNoteScope): string {
-  return `/api/admin/tours?leadSource=${scope.source}&leadId=${scope.id}`;
-}
-
 /** Status → badge tint, matching the app's existing badge idiom. */
 export function tourStatusBadgeClass(status: string): string {
   switch (status) {
@@ -72,6 +69,64 @@ export function tourStatusBadgeClass(status: string): string {
     default:
       return "bg-muted text-muted-foreground hover:bg-muted";
   }
+}
+
+/**
+ * Just the "Book campus tour" action for a lead sheet — no status
+ * card. The tour itself surfaces in the lead's activity log (which
+ * reads the tours table directly), so a second card restating it was
+ * redundant; what the sheet still needs is the way to start one.
+ */
+export function LeadTourButton({
+  scope,
+  parentName,
+  parentEmail,
+  parentPhone,
+  studentName,
+  onChanged,
+}: {
+  scope: LeadNoteScope;
+  parentName?: string;
+  parentEmail?: string;
+  parentPhone?: string;
+  studentName?: string;
+  onChanged?: () => void;
+}) {
+  const { data, mutate } = useSWR<ToursResponse>(
+    leadToursKey(scope),
+    adminFetcher,
+    { revalidateOnFocus: false }
+  );
+  const [open, setOpen] = useState(false);
+
+  return (
+    <>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="h-8 bg-white"
+        onClick={() => setOpen(true)}
+      >
+        <CalendarPlus className="size-3.5" />
+        Book campus tour
+      </Button>
+      <TourScheduleDialog
+        open={open}
+        onOpenChange={setOpen}
+        scope={scope}
+        parentName={parentName ?? ""}
+        parentEmail={parentEmail ?? ""}
+        parentPhone={parentPhone ?? ""}
+        studentName={studentName ?? ""}
+        calendarConfigured={data?.calendarConfigured ?? false}
+        onScheduled={() => {
+          void mutate();
+          onChanged?.();
+        }}
+      />
+    </>
+  );
 }
 
 export function LeadTourSection({

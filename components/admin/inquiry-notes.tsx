@@ -6,6 +6,7 @@ import useSWR, { useSWRConfig } from "swr";
 import { toast } from "sonner";
 import {
   AlertTriangle,
+  CalendarDays,
   Loader2,
   MessageSquareText,
   NotebookPen,
@@ -14,7 +15,7 @@ import {
 } from "lucide-react";
 import { describeSmsError, isFailedStatus } from "@/lib/sms/errors";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
-import { Marker, MarkerContent } from "@/components/ui/marker";
+import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/marker";
 import {
   Message,
   MessageContent,
@@ -45,16 +46,24 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
+import { adminFetcher } from "@/lib/admin-fetcher";
 import { formatUSPhone } from "@/lib/phone";
 import {
   contactMessagesKey,
   messagesFetcher,
   type MessagesResponse,
 } from "@/components/admin/family-message-thread";
+import {
+  TOUR_STATUS_LABEL,
+  leadToursKey,
+  tourWhenLabel,
+} from "@/lib/tours";
+import type { ToursResponse } from "@/app/api/admin/tours/route";
 import type {
   LeadNoteSource,
   XanoAdminNote,
   XanoSmsMessage,
+  XanoTour,
 } from "@/lib/xano";
 
 const fetcher = async (url: string): Promise<XanoAdminNote[]> => {
@@ -274,16 +283,29 @@ export function InquiryNotes({
   );
   const smsMessages = smsData?.messages ?? [];
 
+  // Campus tours for this lead, read from the tours table itself —
+  // that way a booking shows in the log even if it predates this
+  // feature or its note write was rejected (see the tour-notes
+  // helper's echo guard).
+  const { data: toursData } = useSWR<ToursResponse>(
+    leadToursKey(leadScope),
+    adminFetcher,
+    { revalidateOnFocus: false }
+  );
+  const tours = toursData?.tours ?? [];
+
   const notes = data ?? [];
   const pinned = notes.filter((n) => n.is_pinned);
   // Chronological chat stream (oldest → newest, same shape as the
-  // activity sheet): un-pinned notes + every text on this lead's
-  // thread, interleaved by timestamp under day separators.
+  // activity sheet): un-pinned notes, every text on this lead's
+  // thread, and their campus tours, interleaved by timestamp under
+  // day separators.
   const stream: TimelineEntry[] = [
     ...notes
       .filter((n) => !n.is_pinned)
       .map((note) => ({ kind: "note" as const, note })),
     ...smsMessages.map((msg) => ({ kind: "sms" as const, msg })),
+    ...tours.map((tour) => ({ kind: "tour" as const, tour })),
   ].sort((a, b) => entryTs(a) - entryTs(b));
 
   const [body, setBody] = useState("");
@@ -469,10 +491,19 @@ export function InquiryNotes({
     const sig =
       e.kind === "note"
         ? `note|${e.note.author_name}|${e.note.category ?? ""}|${e.note.is_pinned}`
-        : `sms|${e.msg.direction}|${e.msg.from_number}`;
+        : e.kind === "sms"
+          ? `sms|${e.msg.direction}|${e.msg.from_number}`
+          : // A tour marker breaks any run — the next bubble re-names
+            // its sender.
+            `tour|${e.tour.id}`;
     const showHeader = sig !== prevSig;
     prevSig = sig;
-    if (e.kind === "note") {
+    if (e.kind === "tour") {
+      rows.push({
+        id: `tour-${e.tour.id}`,
+        node: <TourMarker tour={e.tour} />,
+      });
+    } else if (e.kind === "note") {
       rows.push({
         id: `note-${e.note.id}`,
         anchor: true,
@@ -940,14 +971,42 @@ function formatCategory(c: string): string {
   return found?.label ?? c;
 }
 
-/** One entry in the merged comms timeline — an admin note or a real
- *  text from the lead's SMS thread. */
+/** One entry in the merged activity timeline — an admin note, a real
+ *  text from the lead's SMS thread, or a campus tour. */
 type TimelineEntry =
   | { kind: "note"; note: XanoAdminNote }
-  | { kind: "sms"; msg: XanoSmsMessage };
+  | { kind: "sms"; msg: XanoSmsMessage }
+  | { kind: "tour"; tour: XanoTour };
 
 function entryTs(e: TimelineEntry): number {
-  return e.kind === "note" ? e.note.created_at : e.msg.created_at;
+  if (e.kind === "note") return e.note.created_at;
+  if (e.kind === "sms") return e.msg.created_at;
+  // Placed at BOOKING time, which is when it entered this lead's
+  // story; the tour's own date is in the label.
+  return e.tour.created_at || e.tour.scheduled_at;
+}
+
+/** Campus tour as a timeline marker — read straight from the tours
+ *  table rather than from a note, so every tour a lead has ever had
+ *  shows here, including ones booked before this log existed and any
+ *  whose note write failed. Always current: the status reflects the
+ *  tour now, not what it was when it was booked. */
+function TourMarker({ tour }: { tour: XanoTour }) {
+  const status = TOUR_STATUS_LABEL[tour.status] ?? tour.status;
+  return (
+    <Marker className="text-muted-foreground">
+      <MarkerIcon>
+        <CalendarDays />
+      </MarkerIcon>
+      <MarkerContent>
+        <span className="font-medium text-foreground/80">Campus tour</span>
+        {" — "}
+        {tourWhenLabel(tour.scheduled_at, tour.duration_minutes)}
+        {status ? <> · {status}</> : null}
+        {tour.author_name ? <> · {tour.author_name}</> : null}
+      </MarkerContent>
+    </Marker>
+  );
 }
 
 /** Compact delivery-state vocabulary for timeline SMS rows — mirrors

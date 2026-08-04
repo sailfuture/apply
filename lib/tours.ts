@@ -14,6 +14,16 @@ import type { XanoTour } from "@/lib/xano";
  * mutation invalidates this whole family and any mounted timeline
  * animates the new entry in immediately.
  */
+/** SWR key for one lead's tours. Lives here (not in a component) so
+ *  the activity log and the tour controls can share it without an
+ *  import cycle. */
+export function leadToursKey(scope: {
+  source: string;
+  id: number;
+}): string {
+  return `/api/admin/tours?leadSource=${scope.source}&leadId=${scope.id}`;
+}
+
 export function isTourAffectedKey(key: unknown): boolean {
   if (typeof key !== "string") return false;
   return (

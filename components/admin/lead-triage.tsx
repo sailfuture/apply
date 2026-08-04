@@ -20,6 +20,7 @@ import {
   InquiryNotes,
   type LeadNoteScope,
 } from "@/components/admin/inquiry-notes";
+import { LeadTourButton } from "@/components/admin/tour-section";
 import { StarRating } from "@/components/admin/star-rating";
 import { cn } from "@/lib/utils";
 
@@ -685,12 +686,23 @@ export function LeadTriageSheet({
           ) : null}
         </SheetHeader>
 
-        <div className="border-b px-4 py-4">
+        <div className="space-y-3 border-b px-4 py-4">
           <LeadTriageControls
             scope={scope}
             rating={rating}
             isFollowedUp={isFollowedUp}
             lastReachOut={lastReachOut}
+            onChanged={onChanged}
+          />
+          {/* Booking a tour is a triage action like rating or
+              following up — the tour itself then shows in the
+              activity log below. */}
+          <LeadTourButton
+            scope={scope}
+            parentName={details?.parent_name ?? ""}
+            parentEmail={details?.email ?? ""}
+            parentPhone={details?.phone ?? ""}
+            studentName={details?.student_name ?? ""}
             onChanged={onChanged}
           />
         </div>
