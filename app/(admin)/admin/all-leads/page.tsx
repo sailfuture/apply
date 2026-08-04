@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { toast } from "sonner";
 import { ChevronRight, Star } from "lucide-react";
@@ -77,6 +78,20 @@ export default function AllLeadsPage() {
   const activeRow = selected
     ? (rows.find((r) => r.key === selected.key) ?? selected)
     : null;
+
+  // Deep link: `?open=<source>-<id>` opens that lead's triage sheet
+  // once the rows load — the Messages inbox's "View lead" button
+  // lands here. Consumed once so closing the sheet doesn't reopen it.
+  const searchParams = useSearchParams();
+  const openedFromUrl = useRef(false);
+  useEffect(() => {
+    if (openedFromUrl.current || rows.length === 0) return;
+    const openParam = searchParams.get("open");
+    if (!openParam) return;
+    openedFromUrl.current = true;
+    const row = rows.find((r) => r.key === openParam);
+    if (row) setSelected(row);
+  }, [rows, searchParams]);
 
   // Rate a lead with an optimistic mutate so the stars fill in
   // immediately; a failed write re-fetches authoritative data. The

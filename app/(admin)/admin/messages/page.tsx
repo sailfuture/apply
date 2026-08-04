@@ -1,10 +1,19 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { toast } from "sonner";
-import { Loader2, MessageSquareText, Search, Users, X } from "lucide-react";
+import {
+  Loader2,
+  MessageSquareText,
+  Search,
+  UserRound,
+  Users,
+  X,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { formatUSPhone } from "@/lib/phone";
@@ -316,7 +325,10 @@ export default function AdminMessagesPage() {
           ) : (
             <ul className="divide-y">
               {visibleConversations.map((c) => (
-                <li key={`${c.contactType}:${c.contactId}`}>
+                <li
+                  key={`${c.contactType}:${c.contactId}`}
+                  className="group relative"
+                >
                   <button
                     type="button"
                     onClick={() => {
@@ -385,6 +397,24 @@ export default function AdminMessagesPage() {
                       </span>
                     </div>
                   </button>
+                  {/* Hover affordance to the contact's full record.
+                      Overlaid (not nested) because the row itself is
+                      a button — anchors can't live inside it. */}
+                  {profileHref(c.contactType, c.contactId) ? (
+                    <Link
+                      href={
+                        profileHref(c.contactType, c.contactId) as string
+                      }
+                      title={
+                        c.contactType === "family"
+                          ? "Family details"
+                          : "View lead"
+                      }
+                      className="absolute right-2 top-1/2 hidden -translate-y-1/2 rounded-full border bg-white p-1.5 text-muted-foreground shadow-sm transition-colors hover:text-foreground group-hover:block"
+                    >
+                      <UserRound className="size-3.5" />
+                    </Link>
+                  ) : null}
                 </li>
               ))}
               {filtered.length > visibleCount ? (
@@ -421,15 +451,41 @@ export default function AdminMessagesPage() {
                     phone={active.phone}
                   />
                 </p>
-                {/* Quick way back to the list on mobile, where the list
-                    is hidden while a thread is open. */}
-                <button
-                  type="button"
-                  onClick={() => setSelected(null)}
-                  className="text-xs text-muted-foreground hover:text-foreground md:hidden"
-                >
-                  ← All
-                </button>
+                <div className="flex shrink-0 items-center gap-2">
+                  {/* Jump to the contact's full record — family detail
+                      page, or the lead's triage sheet on All Leads. */}
+                  {profileHref(active.contactType, active.contactId) ? (
+                    <Button
+                      asChild
+                      variant="outline"
+                      size="sm"
+                      className="bg-white"
+                    >
+                      <Link
+                        href={
+                          profileHref(
+                            active.contactType,
+                            active.contactId
+                          ) as string
+                        }
+                      >
+                        <UserRound className="size-3.5 mr-1.5" />
+                        {active.contactType === "family"
+                          ? "Family details"
+                          : "View lead"}
+                      </Link>
+                    </Button>
+                  ) : null}
+                  {/* Quick way back to the list on mobile, where the
+                      list is hidden while a thread is open. */}
+                  <button
+                    type="button"
+                    onClick={() => setSelected(null)}
+                    className="text-xs text-muted-foreground hover:text-foreground md:hidden"
+                  >
+                    ← All
+                  </button>
+                </div>
               </div>
               <FamilyMessageThread
                 key={`${active.contactType}:${active.contactId}`}
@@ -450,6 +506,21 @@ export default function AdminMessagesPage() {
       </div>
     </div>
   );
+}
+
+/**
+ * Where a conversation's contact profile lives — the family detail
+ * page for families, the All Leads triage sheet (via `?open=`) for
+ * the four lead sources. Ad-hoc numbers have no record → null, no
+ * button.
+ */
+function profileHref(
+  type: SmsConversation["contactType"],
+  id: number
+): string | null {
+  if (type === "family") return `/admin/families/${id}`;
+  if (type === "adhoc") return null;
+  return `/admin/all-leads?open=${type}-${id}`;
 }
 
 /** Ad-hoc conversations are NAMED by their raw 10-digit number —
