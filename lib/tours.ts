@@ -49,6 +49,30 @@ export const TOUR_RSVP_LABEL: Record<string, string> = {
   needsAction: "No reply yet",
 };
 
+/** RSVP badge tint — green confirmed, amber still waiting, red
+ *  declined (the one that needs a phone call). Unknown/absent RSVPs
+ *  fall through to the neutral muted chip. */
+export const TOUR_RSVP_BADGE: Record<string, string> = {
+  accepted: "bg-green-100 text-green-800 hover:bg-green-100",
+  needsAction: "bg-amber-100 text-amber-800 hover:bg-amber-100",
+  tentative: "bg-amber-100 text-amber-800 hover:bg-amber-100",
+  declined: "bg-red-100 text-red-800 hover:bg-red-100",
+};
+
+/** Label + tint for an RSVP value, defaulting to "No reply yet" —
+ *  an invite with no response recorded is exactly that. */
+export function tourRsvpBadge(rsvp: string): {
+  label: string;
+  className: string;
+} {
+  const key = rsvp || "needsAction";
+  return {
+    label: TOUR_RSVP_LABEL[key] ?? key,
+    className:
+      TOUR_RSVP_BADGE[key] ?? "bg-muted text-muted-foreground hover:bg-muted",
+  };
+}
+
 /** "Mon, Aug 10 · 10:00 AM–11:00 AM" — the one way a tour's time is
  *  written everywhere (notes, invite description, UI rows). */
 export function tourWhenLabel(

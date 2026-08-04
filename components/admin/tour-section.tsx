@@ -33,8 +33,8 @@ import type { LeadNoteScope } from "@/components/admin/inquiry-notes";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import {
   TOUR_DEFAULT_LOCATION,
-  TOUR_RSVP_LABEL,
   TOUR_STATUS_LABEL,
+  tourRsvpBadge,
   tourWhenLabel,
 } from "@/lib/tours";
 import type { ToursResponse } from "@/app/api/admin/tours/route";
@@ -151,13 +151,20 @@ export function LeadTourSection({
               {active.location}
             </p>
           ) : null}
-          <p className="text-xs text-muted-foreground">
-            {active.google_event_id && active.parent_email
-              ? `Invite: ${active.parent_email} — ${
-                  TOUR_RSVP_LABEL[active.rsvp_status] ?? "No reply yet"
-                }`
-              : "No calendar invite sent."}
-          </p>
+          {active.google_event_id && active.parent_email ? (
+            <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+              <span className="truncate">Invite: {active.parent_email}</span>
+              <Badge
+                className={cn(tourRsvpBadge(active.rsvp_status).className)}
+              >
+                {tourRsvpBadge(active.rsvp_status).label}
+              </Badge>
+            </p>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              No calendar invite sent.
+            </p>
+          )}
           <div className="flex items-center gap-2 pt-1">
             <Button
               type="button"
@@ -330,6 +337,8 @@ export function TourScheduleDialog({
                 value={time}
                 onChange={setTime}
                 ariaLabel="Tour start time"
+                // A tour always has a time — no clear button.
+                clearable={false}
               />
             </div>
           </div>

@@ -255,10 +255,16 @@ export function TimeSelect({
   value,
   onChange,
   ariaLabel,
+  clearable = true,
 }: {
   value: string;
   onChange: (v: string) => void;
   ariaLabel: string;
+  /** Show the trailing clear (✕) button. True for calendar events,
+   *  where "no time" means an all-day event; pass false where a time
+   *  is required (a tour must happen at some hour) — otherwise the
+   *  extra control just overflows a tight two-column layout. */
+  clearable?: boolean;
 }) {
   const hourRef = useRef<HTMLInputElement>(null);
   const minuteRef = useRef<HTMLInputElement>(null);
@@ -326,7 +332,7 @@ export function TimeSelect({
           <SelectItem value="PM">PM</SelectItem>
         </SelectContent>
       </Select>
-      {value ? (
+      {clearable && value ? (
         <Button
           type="button"
           variant="ghost"

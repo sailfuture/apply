@@ -49,8 +49,8 @@ import { LeadTriageSheet } from "@/components/admin/lead-triage";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { formatUSPhone } from "@/lib/phone";
 import {
-  TOUR_RSVP_LABEL,
   TOUR_STATUS_LABEL,
+  tourRsvpBadge,
   tourWhenLabel,
 } from "@/lib/tours";
 import {
@@ -183,7 +183,14 @@ export function ToursPanel() {
   async function runSync(manual: boolean) {
     setSyncing(true);
     try {
-      const res = await fetch("/api/admin/tours/sync", { method: "POST" });
+      // Manual = "get me everything", so it sweeps back to the start
+      // of 2026; the quiet on-mount sync keeps the cheap 30-day
+      // window.
+      const res = await fetch("/api/admin/tours/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(manual ? { deep: true } : {}),
+      });
       if (!res.ok) {
         const err = await res.json().catch(() => null);
         throw new Error(err?.error ?? `Sync failed (${res.status})`);
@@ -373,9 +380,9 @@ export function ToursPanel() {
       width: "w-[9%]",
       render: (r) =>
         r.hasInvite ? (
-          <span className="text-xs text-muted-foreground">
-            {TOUR_RSVP_LABEL[r.rsvp] ?? "No reply yet"}
-          </span>
+          <Badge className={cn(tourRsvpBadge(r.rsvp).className)}>
+            {tourRsvpBadge(r.rsvp).label}
+          </Badge>
         ) : (
           <span className="text-xs text-muted-foreground">—</span>
         ),
@@ -504,7 +511,7 @@ export function ToursPanel() {
               className="bg-white"
               disabled={syncing}
               onClick={() => void runSync(true)}
-              title="Pull website bookings and RSVP changes from Google Calendar"
+              title="Pull every booking since Jan 1 2026, plus RSVP changes, from Google Calendar"
             >
               <RefreshCw className={cn("size-4", syncing && "animate-spin")} />
               {syncing ? "Syncing…" : "Sync Google"}
@@ -787,7 +794,9 @@ function TourRescheduleDialog({
               : ""}
           </DialogDescription>
         </DialogHeader>
-        <div className="grid grid-cols-2 gap-3">
+        {/* Stacked, not side-by-side: the time control is three
+            inputs wide and got crushed in a half-width column. */}
+        <div className="space-y-3">
           <div className="space-y-1.5">
             <Label htmlFor="reschedule-date" className="text-xs">
               New date
@@ -806,6 +815,8 @@ function TourRescheduleDialog({
               value={time}
               onChange={setTime}
               ariaLabel="New tour time"
+              // A tour always has a time — no clear button.
+              clearable={false}
             />
           </div>
         </div>

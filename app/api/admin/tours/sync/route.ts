@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import {
   xano,
@@ -59,6 +59,12 @@ export interface TourSyncResult {
 const LOOKBACK_MS = 30 * 86_400_000;
 const LOOKAHEAD_MS = 120 * 86_400_000;
 
+/** Floor for a DEEP sync (`{ deep: true }`) — the start of the
+ *  2026 recruitment year, which is as far back as the booking page
+ *  has meaningful history. The routine on-mount sync stays on the
+ *  30-day window; the manual button asks for everything. */
+const DEEP_SYNC_FROM = Date.UTC(2026, 0, 1);
+
 /** Summary filter for booking-page events — the schedule title is
  *  "SailFuture Academy: School Tour", so the default "tour" matches.
  *  Overridable in case the schedule is ever renamed. */
@@ -90,9 +96,20 @@ function bookerName(event: CalendarEvent, displayName: string): string {
   return m ? m[1].trim() : "";
 }
 
-export async function POST() {
+export async function POST(req: NextRequest) {
   try {
     const { admin } = await requireAdmin();
+    // `{ deep: true }` widens the window back to DEEP_SYNC_FROM so
+    // historical bookings (before this feature existed) import too;
+    // `{ since: <unix ms> }` overrides it explicitly. Body is
+    // optional — the auto-sync posts nothing.
+    const body = await req.json().catch(() => null);
+    const sinceParam = Number(body?.since);
+    const since = Number.isFinite(sinceParam) && sinceParam > 0
+      ? sinceParam
+      : body?.deep === true
+        ? DEEP_SYNC_FROM
+        : null;
     if (!isGoogleCalendarConfigured()) {
       return NextResponse.json({
         configured: false,
@@ -105,9 +122,10 @@ export async function POST() {
     }
 
     const now = Date.now();
+    const windowStart = Math.min(since ?? now - LOOKBACK_MS, now - LOOKBACK_MS);
     const [events, tours, inquiries, camps, waivers, tascos] =
       await Promise.all([
-        listCalendarEvents(now - LOOKBACK_MS, now + LOOKAHEAD_MS),
+        listCalendarEvents(windowStart, now + LOOKAHEAD_MS),
         xano.tours.getAll(),
         xano.inquiries.getAll().catch(() => []),
         xano.summerCamp.getAll().catch(() => []),

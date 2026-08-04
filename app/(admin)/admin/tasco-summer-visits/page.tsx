@@ -3,7 +3,13 @@
 import { useMemo, useState } from "react";
 import useSWR from "swr";
 import { toast } from "sonner";
-import { Check, ChevronRight, Copy, Download } from "lucide-react";
+import {
+  Check,
+  ChevronRight,
+  Copy,
+  Download,
+  ExternalLink,
+} from "lucide-react";
 import { DataTable, type ColumnDef } from "@/components/admin/data-table";
 import { LeadTriageSheet } from "@/components/admin/lead-triage";
 import { StarRating } from "@/components/admin/star-rating";
@@ -339,21 +345,18 @@ export default function TascoSummerVisitsPage() {
             recreation centers.
           </p>
         </div>
-        <div className="w-80">
-          <Select value={center} onValueChange={setCenter}>
-            <SelectTrigger className="bg-white">
-              <SelectValue placeholder="Recreation center" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All centers</SelectItem>
-              {centerOptions.map((c) => (
-                <SelectItem key={c} value={c}>
-                  {c}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+        {/* Public sign-up form — staff open this on a tablet at a rec
+            center, so it belongs beside the page title, not buried. */}
+        <Button asChild variant="outline" className="bg-white">
+          <a
+            href="https://www.sailfutureacademy.org/tasco-summer-visit"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <ExternalLink className="size-4" />
+            Open sign-up form
+          </a>
+        </Button>
       </div>
 
       <Card className="overflow-hidden bg-white py-0 gap-0">
@@ -366,9 +369,23 @@ export default function TascoSummerVisitsPage() {
                 {center === "all" ? "" : ` at ${center}`}
               </span>
             </CardTitle>
-            {/* Search + row actions. Copy / Export both act on exactly
-                the rows the filters leave on screen. */}
+            {/* Center filter sits with the search + row actions it
+                works alongside; Copy / Export act on exactly the rows
+                these filters leave on screen. */}
             <div className="flex flex-wrap items-center gap-2">
+              <Select value={center} onValueChange={setCenter}>
+                <SelectTrigger className="h-9 w-full bg-white sm:w-56">
+                  <SelectValue placeholder="Recreation center" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All centers</SelectItem>
+                  {centerOptions.map((c) => (
+                    <SelectItem key={c} value={c}>
+                      {c}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <Input
                 placeholder="Search by student, school, center, or contact…"
                 value={search}

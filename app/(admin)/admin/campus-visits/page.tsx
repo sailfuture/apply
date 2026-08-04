@@ -335,20 +335,34 @@ export default function CampusVisitsPage() {
             Click a row for the visitor&rsquo;s full details.
           </p>
         </div>
-        <div className="w-44">
-          <Select value={year} onValueChange={setYear}>
-            <SelectTrigger className="bg-white">
-              <SelectValue placeholder="Academic year" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All years</SelectItem>
-              {yearOptions.map((y) => (
-                <SelectItem key={y} value={y}>
-                  {y}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Public waiver form — staff hand this to a visitor who
+              arrives without having signed. */}
+          <Button asChild variant="outline" className="bg-white">
+            <a
+              href="https://www.sailfutureacademy.org/waiver"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <ExternalLink className="size-4" />
+              Open waiver form
+            </a>
+          </Button>
+          <div className="w-44">
+            <Select value={year} onValueChange={setYear}>
+              <SelectTrigger className="bg-white">
+                <SelectValue placeholder="Academic year" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All years</SelectItem>
+                {yearOptions.map((y) => (
+                  <SelectItem key={y} value={y}>
+                    {y}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
       </div>
 
