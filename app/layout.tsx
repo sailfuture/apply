@@ -21,6 +21,19 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "SFA Registration",
   description: "SailFuture Academy Registration Portal",
+  // Home-screen install support. `appleWebApp` is what makes iOS open
+  // the site chrome-less once added to the home screen — and a
+  // home-screen install is the only context where iOS exposes web
+  // notifications at all (Safari tabs never do).
+  appleWebApp: {
+    capable: true,
+    title: "SFA Admin",
+    statusBarStyle: "default",
+  },
+  icons: {
+    icon: "/logo.svg",
+    apple: "/logo.jpg",
+  },
 };
 
 export default function RootLayout({

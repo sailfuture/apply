@@ -257,10 +257,15 @@ export default function AdminMessagesPage() {
   }
 
   return (
-    <div className="flex h-[calc(100dvh-3.5rem)] flex-col gap-4 p-6">
+    // Tighter gaps + padding on phones: this page is used one-handed
+    // to read and reply to parent texts, so every row of chrome above
+    // the list costs a message.
+    <div className="flex h-[calc(100dvh-3.5rem)] flex-col gap-3 p-4 md:gap-4 md:p-6">
       <div>
-        <h1 className="text-2xl font-bold">Messages</h1>
-        <p className="text-sm text-muted-foreground">
+        <h1 className="text-xl font-bold md:text-2xl">Messages</h1>
+        {/* Explanatory copy is desktop-only — on a phone it pushes the
+            conversation list below the fold. */}
+        <p className="hidden text-sm text-muted-foreground sm:block">
           Two-way text threads with families. Reply to inbound texts, or
           send a filtered group message.
         </p>
@@ -295,7 +300,9 @@ export default function AdminMessagesPage() {
       {/* Stage filter chips inline with the compose buttons — one
           row: filters left, actions right. */}
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-wrap items-center gap-1.5">
+        {/* Chips scroll sideways on a phone rather than wrapping to
+            three rows; they wrap normally from md up. */}
+        <div className="-mx-1 flex max-w-full items-center gap-1.5 overflow-x-auto px-1 pb-0.5 md:mx-0 md:flex-wrap md:overflow-visible md:px-0">
           {STAGE_FILTERS.map((f) => {
             const on = stageFilter === f.value;
             return (
@@ -305,7 +312,10 @@ export default function AdminMessagesPage() {
                 aria-pressed={on}
                 onClick={() => changeStageFilter(f.value)}
                 className={cn(
-                  "rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors",
+                  // shrink-0 + nowrap: in the mobile scroll row a long
+                  // label ("Liability Waiver Visit") would otherwise
+                  // compress and wrap instead of scrolling.
+                  "shrink-0 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors",
                   on
                     ? "border-foreground bg-foreground text-background"
                     : "border-border bg-white text-muted-foreground hover:border-foreground/40 hover:text-foreground"
