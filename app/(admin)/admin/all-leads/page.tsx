@@ -37,6 +37,34 @@ const SOURCE_META: Record<LeadSource, { label: string; short: string }> = {
 
 const SOURCE_FILTERS: LeadSource[] = ["inquiry", "camp", "visit", "tasco"];
 
+/** Tour-state display: label + badge tint + sort rank (higher =
+ *  further along). Vocabulary matches the Campus Tours tab. */
+const TOUR_META: Record<
+  string,
+  { label: string; chip: string; rank: number }
+> = {
+  completed: {
+    label: "Toured",
+    chip: "bg-green-100 text-green-800 hover:bg-green-100",
+    rank: 4,
+  },
+  scheduled: {
+    label: "Scheduled",
+    chip: "bg-sky-100 text-sky-800 hover:bg-sky-100",
+    rank: 3,
+  },
+  no_show: {
+    label: "No-show",
+    chip: "bg-amber-100 text-amber-800 hover:bg-amber-100",
+    rank: 2,
+  },
+  canceled: {
+    label: "Canceled",
+    chip: "bg-muted text-muted-foreground hover:bg-muted",
+    rank: 1,
+  },
+};
+
 /**
  * All Leads — the four recruitment sources (website inquiries, summer
  * camp, liability-waiver visits, TASCO summer visits) flattened into
@@ -56,6 +84,11 @@ export default function AllLeadsPage() {
   const [minRating, setMinRating] = useState(0);
   // null = no follow-up filter; false = needs follow-up; true = done.
   const [followUpFilter, setFollowUpFilter] = useState<boolean | null>(null);
+  // null = no tour filter; "completed"/"scheduled" match that state;
+  // "none" = leads with no tour on record at all.
+  const [tourFilter, setTourFilter] = useState<
+    "completed" | "scheduled" | "none" | null
+  >(null);
   const [selected, setSelected] = useState<AllLeadRow | null>(null);
 
   const visible = useMemo(
@@ -68,9 +101,16 @@ export default function AllLeadsPage() {
         if (followUpFilter !== null && r.followed_up !== followUpFilter) {
           return false;
         }
+        if (tourFilter !== null) {
+          if (tourFilter === "none") {
+            if (r.tour_status !== "") return false;
+          } else if (r.tour_status !== tourFilter) {
+            return false;
+          }
+        }
         return true;
       }),
-    [rows, sourceFilter, minRating, followUpFilter]
+    [rows, sourceFilter, minRating, followUpFilter, tourFilter]
   );
 
   // Keep the open sheet's snapshot fresh after a rating/follow-up/note
@@ -324,6 +364,33 @@ export default function AllLeadsPage() {
         ),
       },
       {
+        // Campus-tour state — sortable so "who has toured" ranks to
+        // the top; scheduling/managing tours happens in the lead's
+        // sheet and on the Campus Tours tab.
+        key: "tour_status",
+        header: "Tour",
+        sortable: true,
+        width: "w-[8%]",
+        accessor: (r) => TOUR_META[r.tour_status]?.rank ?? 0,
+        render: (r) => {
+          const meta = TOUR_META[r.tour_status];
+          return meta ? (
+            <Badge
+              className={cn(meta.chip)}
+              title={
+                r.tour_at
+                  ? new Date(r.tour_at).toLocaleString()
+                  : undefined
+              }
+            >
+              {meta.label}
+            </Badge>
+          ) : (
+            <span className="text-sm text-muted-foreground">—</span>
+          );
+        },
+      },
+      {
         // Follow-up state + when we last logged contact — the two
         // facts that decide who to call next.
         key: "followed_up",
@@ -465,6 +532,35 @@ export default function AllLeadsPage() {
               type="button"
               aria-pressed={on}
               onClick={() => setFollowUpFilter(on ? null : f.value)}
+              className={cn(
+                "rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors",
+                on
+                  ? "border-foreground bg-foreground text-background"
+                  : "border-border bg-white text-muted-foreground hover:border-foreground/40 hover:text-foreground"
+              )}
+            >
+              {f.label}
+            </button>
+          );
+        })}
+        <span className="mx-1 h-4 w-px bg-border" aria-hidden />
+        <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          Tour
+        </span>
+        {(
+          [
+            { value: "completed", label: "Toured" },
+            { value: "scheduled", label: "Tour scheduled" },
+            { value: "none", label: "No tour" },
+          ] as const
+        ).map((f) => {
+          const on = tourFilter === f.value;
+          return (
+            <button
+              key={f.value}
+              type="button"
+              aria-pressed={on}
+              onClick={() => setTourFilter(on ? null : f.value)}
               className={cn(
                 "rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors",
                 on

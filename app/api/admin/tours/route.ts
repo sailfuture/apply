@@ -13,7 +13,11 @@ import {
   createTourEvent,
   isGoogleCalendarConfigured,
 } from "@/lib/google-calendar";
-import { tourNoteBody, tourWhenLabel } from "@/lib/tours";
+import {
+  TOUR_DEFAULT_LOCATION,
+  tourInviteDescription,
+  tourNoteBody,
+} from "@/lib/tours";
 
 /**
  * Scheduled campus tours (`registration_tours`).
@@ -114,7 +118,9 @@ export async function POST(req: NextRequest) {
 
     const str = (v: unknown): string =>
       typeof v === "string" ? v.trim() : "";
-    const location = str(body?.location);
+    // Default to the campus address so the invite always has a
+    // mappable location, even when the field was cleared.
+    const location = str(body?.location) || TOUR_DEFAULT_LOCATION;
     const notes = str(body?.notes);
     const parentName = str(body?.parent_name);
     const parentEmail = str(body?.parent_email);
@@ -191,7 +197,7 @@ export async function POST(req: NextRequest) {
       try {
         const event = await createTourEvent({
           summary: `Campus tour — ${studentName || parentName || "prospective family"}`,
-          description: buildEventDescription(tour),
+          description: tourInviteDescription(notes),
           location,
           startMs: scheduledAt,
           endMs: scheduledAt + durationMinutes * 60_000,
@@ -247,23 +253,4 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     return handleAdminError(err);
   }
-}
-
-/** Invite description the PARENT reads in the Google Calendar event —
- *  welcome copy plus the admin's notes, no internal jargon. */
-function buildEventDescription(tour: XanoTour): string {
-  const lines = [
-    `Campus tour at SailFuture Academy for ${
-      tour.student_name || "your student"
-    }.`,
-    "",
-    `When: ${tourWhenLabel(tour.scheduled_at, tour.duration_minutes)}`,
-  ];
-  if (tour.location) lines.push(`Where: ${tour.location}`);
-  if (tour.notes) lines.push("", tour.notes);
-  lines.push(
-    "",
-    "Need to reschedule? Reply to this invite or contact the school."
-  );
-  return lines.join("\n");
 }

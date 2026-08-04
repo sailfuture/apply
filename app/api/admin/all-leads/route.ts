@@ -4,7 +4,9 @@ import {
   xano,
   LEAD_NOTE_COLUMN,
   LEAD_NOTE_SOURCES,
+  tourLeadScope,
   type XanoAdminNote,
+  type XanoTour,
 } from "@/lib/xano";
 
 /**
@@ -63,19 +65,54 @@ export type AllLeadRow = {
   /** Unformatted grade value for the edit sheet — `grade` may carry
    *  display suffixes (camp's "(completed)"). */
   grade_raw: string;
+  /** The lead's campus-tour state, from `registration_tours`:
+   *  "completed" | "scheduled" | "no_show" | "canceled" | "" (none).
+   *  When a lead has several tours, the most meaningful one wins —
+   *  completed beats an upcoming booking beats a no-show beats a
+   *  cancellation. */
+  tour_status: string;
+  /** `scheduled_at` of the tour behind `tour_status`; 0 when none. */
+  tour_at: number;
 };
 
 export async function GET() {
   try {
     await requireAdmin();
-    const [inquiries, campRows, waivers, tascoRows, leadNotes] =
+    const [inquiries, campRows, waivers, tascoRows, leadNotes, tours] =
       await Promise.all([
         xano.inquiries.getAll().catch(() => []),
         xano.summerCamp.getAll().catch(() => []),
         xano.websiteWaivers.getAll().catch(() => []),
         xano.tascoSummerVisits.getAll().catch(() => []),
         xano.adminNotes.getAllLeadNotes().catch(() => [] as XanoAdminNote[]),
+        xano.tours.getAll().catch(() => [] as XanoTour[]),
       ]);
+
+    // Best tour per lead. Rank: a COMPLETED tour is the fact this
+    // page filters on ("who has toured"), then an upcoming booking,
+    // then the negative outcomes. Ties go to the most recent tour.
+    const TOUR_RANK: Record<string, number> = {
+      completed: 4,
+      scheduled: 3,
+      no_show: 2,
+      canceled: 1,
+    };
+    const tourByLead = new Map<string, { status: string; at: number }>();
+    for (const t of tours) {
+      if (!(Number(t.scheduled_at) > 0)) continue; // blank wiring rows
+      const lead = tourLeadScope(t);
+      if (!lead) continue;
+      const key = `${lead.source}-${lead.id}`;
+      const rank = TOUR_RANK[t.status] ?? 0;
+      if (rank === 0) continue;
+      const cur = tourByLead.get(key);
+      const curRank = cur ? (TOUR_RANK[cur.status] ?? 0) : -1;
+      if (rank > curRank || (rank === curRank && t.scheduled_at > cur!.at)) {
+        tourByLead.set(key, { status: t.status, at: t.scheduled_at });
+      }
+    }
+    const tourFor = (key: string) =>
+      tourByLead.get(key) ?? { status: "", at: 0 };
 
     // Newest note per lead — the fallback for rows whose
     // `last_reach_out` column is empty (notes written before the
@@ -95,8 +132,12 @@ export async function GET() {
     const reachOut = (key: string, stored: number | null | undefined): number =>
       Number(stored) || newestNoteAt.get(key) || 0;
 
-    const rows: AllLeadRow[] = [
-      ...inquiries.map((i): AllLeadRow => {
+    // The per-source mappers build rows without the tour fields —
+    // those are stamped on afterward from the one tours map, so four
+    // mappers don't each repeat the lookup.
+    type BareRow = Omit<AllLeadRow, "tour_status" | "tour_at">;
+    const bare: BareRow[] = [
+      ...inquiries.map((i): BareRow => {
         const status = (i.status ?? "").trim();
         return {
           key: `inquiry-${i.id}`,
@@ -125,7 +166,7 @@ export async function GET() {
         };
       }),
       ...campRows.map(
-        (c): AllLeadRow => ({
+        (c): BareRow => ({
           key: `camp-${c.id}`,
           source: "camp",
           id: c.id,
@@ -155,7 +196,7 @@ export async function GET() {
         })
       ),
       ...waivers.map(
-        (w): AllLeadRow => ({
+        (w): BareRow => ({
           key: `visit-${w.id}`,
           source: "visit",
           id: w.id,
@@ -175,7 +216,7 @@ export async function GET() {
         })
       ),
       ...tascoRows.map(
-        (t): AllLeadRow => ({
+        (t): BareRow => ({
           key: `tasco-${t.id}`,
           source: "tasco",
           id: t.id,
@@ -194,7 +235,14 @@ export async function GET() {
           grade_raw: (t.current_grade ?? "").trim(),
         })
       ),
-    ].sort((a, b) => b.submitted_ts - a.submitted_ts);
+    ];
+
+    const rows: AllLeadRow[] = bare
+      .map((r) => {
+        const tour = tourFor(r.key);
+        return { ...r, tour_status: tour.status, tour_at: tour.at };
+      })
+      .sort((a, b) => b.submitted_ts - a.submitted_ts);
 
     return NextResponse.json(rows);
   } catch (err) {

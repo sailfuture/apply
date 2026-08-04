@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { toast } from "sonner";
 import { Check, ChevronRight, Copy, Download, ExternalLink } from "lucide-react";
@@ -61,6 +62,18 @@ import type { CampusVisitRow } from "@/app/api/admin/campus-visits/route";
  * academic year, and the signed waiver).
  */
 export default function CampusVisitsPage() {
+  // `?tab=tours` (the nav's "Campus Tours" item) opens the tours tab
+  // directly. Controlled + render-phase sync so clicking the nav item
+  // while already on this page still switches tabs.
+  const searchParams = useSearchParams();
+  const tabParam = searchParams.get("tab") === "tours" ? "tours" : "waivers";
+  const [tab, setTab] = useState(tabParam);
+  const [prevTabParam, setPrevTabParam] = useState(tabParam);
+  if (tabParam !== prevTabParam) {
+    setPrevTabParam(tabParam);
+    setTab(tabParam);
+  }
+
   const { data, isLoading, error, mutate } = useSWR<CampusVisitRow[]>(
     "/api/admin/campus-visits",
     adminFetcher,
@@ -356,7 +369,7 @@ export default function CampusVisitsPage() {
 
       {/* Two surfaces, one page: the waiver database (this card) and
           the scheduled-tours operational list. */}
-      <Tabs defaultValue="waivers">
+      <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
           <TabsTrigger value="waivers">Signed waivers</TabsTrigger>
           <TabsTrigger value="tours">Scheduled tours</TabsTrigger>

@@ -32,6 +32,7 @@ import {
 import type { LeadNoteScope } from "@/components/admin/inquiry-notes";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import {
+  TOUR_DEFAULT_LOCATION,
   TOUR_RSVP_LABEL,
   TOUR_STATUS_LABEL,
   tourWhenLabel,
@@ -53,7 +54,7 @@ import { cn } from "@/lib/utils";
  */
 
 const DURATION_OPTIONS = [30, 45, 60, 90] as const;
-const DEFAULT_LOCATION = "SailFuture Academy";
+const DEFAULT_LOCATION = TOUR_DEFAULT_LOCATION;
 
 export function leadToursKey(scope: LeadNoteScope): string {
   return `/api/admin/tours?leadSource=${scope.source}&leadId=${scope.id}`;
@@ -370,13 +371,13 @@ export function TourScheduleDialog({
 
           <div className="space-y-1.5">
             <Label htmlFor="tour-notes" className="text-xs">
-              Notes for the family
+              Notes for the family (optional)
             </Label>
             <Textarea
               id="tour-notes"
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
-              placeholder="Where to park, who to ask for, what to bring — this text appears in the invite."
+              placeholder="Anything specific to this family — added to the top of the invite, above the standard tour description and parking directions."
               rows={3}
             />
           </div>

@@ -2335,7 +2335,9 @@ export interface XanoAcademicSeason {
  *
  * Xano quirks this table lives with: edit endpoints drop empty-string
  * inputs (clearing `google_event_id` after a cancel writes the
- * `TOUR_EVENT_CANCELED_PREFIX` sentinel instead).
+ * `TOUR_EVENT_CANCELED_PREFIX` sentinel instead), and an UNSET lead
+ * FK reads back as `0` rather than null (verified live) — which is
+ * why `tourLeadScope` tests `> 0` instead of a null check.
  */
 export interface XanoTour {
   id: number;

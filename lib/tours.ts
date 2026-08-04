@@ -7,6 +7,33 @@ import type { XanoTour } from "@/lib/xano";
  * (lead sheet, Campus Visits tab) can't drift.
  */
 
+/** Where tours happen — the campus street address, so the Google
+ *  Calendar invite's location pin/directions actually work. Default
+ *  for the schedule dialog AND the server-side fallback when a tour
+ *  arrives with no location. */
+export const TOUR_DEFAULT_LOCATION =
+  "SailFuture Academy, 2154 27th Ave N, St. Petersburg, FL 33712";
+
+/** Standard parent-facing invite copy — appears on every calendar
+ *  invite the app sends (wording supplied by the school). */
+export const TOUR_INVITE_DESCRIPTION = `An in-person tour is an important step in the SailFuture Academy enrollment process. During this 60-minute guided visit, prospective students and families will learn about our nationally recognized school model, curriculum, graduation requirements, and experience-based approach to education.
+
+We strongly encourage applicants to attend with their child to ensure SailFuture Academy is the right fit for the entire family.
+
+Please park near the school’s north entrance by the interstate overpass. For directions or questions, contact our school directly at (727) 209-7846.
+
+We look forward to meeting you!`;
+
+/** Full invite description: the admin's tour-specific notes (if any)
+ *  on top — they're the part written for THIS family — then the
+ *  standard copy. Used on create and kept through reschedules. */
+export function tourInviteDescription(notes: string): string {
+  const custom = notes.trim();
+  return custom
+    ? `${custom}\n\n${TOUR_INVITE_DESCRIPTION}`
+    : TOUR_INVITE_DESCRIPTION;
+}
+
 export const TOUR_STATUS_LABEL: Record<string, string> = {
   scheduled: "Scheduled",
   completed: "Completed",
@@ -51,6 +78,7 @@ export function tourNoteBody(
   event:
     | "scheduled"
     | "booked"
+    | "linked"
     | "rescheduled"
     | "completed"
     | "no_show"
@@ -61,6 +89,14 @@ export function tourNoteBody(
   const when = tourWhenLabel(tour.scheduled_at, tour.duration_minutes);
   const where = tour.location ? ` at ${tour.location}` : "";
   switch (event) {
+    case "linked":
+      // Admin attached an existing (usually website-booked) tour to
+      // this lead by hand — backfills the comms log the email
+      // matcher couldn't write automatically.
+      return (
+        `Campus tour linked to this lead — ${when}${where}.` +
+        (tour.parent_email ? ` Booked by ${tour.parent_email}.` : "")
+      );
     case "booked":
       // Self-service: the family picked the slot on the website
       // booking page — Google already confirmed it to their email.

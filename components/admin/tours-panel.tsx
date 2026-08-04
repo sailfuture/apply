@@ -6,9 +6,11 @@ import { toast } from "sonner";
 import {
   CalendarX2,
   Check,
+  Link2,
   Loader2,
   MoreHorizontal,
   RefreshCw,
+  Search,
   UserX,
 } from "lucide-react";
 import { DataTable, type ColumnDef } from "@/components/admin/data-table";
@@ -49,10 +51,24 @@ import {
   TOUR_STATUS_LABEL,
   tourWhenLabel,
 } from "@/lib/tours";
-import { liveTourEventId, type XanoTour } from "@/lib/xano";
+import {
+  liveTourEventId,
+  tourLeadScope,
+  type LeadNoteSource,
+  type XanoTour,
+} from "@/lib/xano";
+import type { AllLeadRow } from "@/app/api/admin/all-leads/route";
 import type { ToursResponse } from "@/app/api/admin/tours/route";
 import type { TourSyncResult } from "@/app/api/admin/tours/sync/route";
 import { cn } from "@/lib/utils";
+
+/** Short label per lead source — the Lead column's vocabulary. */
+const LEAD_LABEL: Record<LeadNoteSource, string> = {
+  inquiry: "Inquiry",
+  camp: "Summer Camp",
+  visit: "Waiver Visit",
+  tasco: "TASCO",
+};
 
 /**
  * Scheduled tours — the operational list on Campus Visits. Upcoming
@@ -77,6 +93,8 @@ type TourRow = {
   rsvp: string;
   hasInvite: boolean;
   duration_minutes: number;
+  /** Which lead the tour is linked to; null = unlinked import. */
+  lead: { source: LeadNoteSource; id: number } | null;
 };
 
 export function ToursPanel() {
@@ -101,6 +119,7 @@ export function ToursPanel() {
       rsvp: t.rsvp_status,
       hasInvite: Boolean(liveTourEventId(t.google_event_id) && t.parent_email),
       duration_minutes: t.duration_minutes,
+      lead: tourLeadScope(t),
     }));
   }, [data]);
 
@@ -120,6 +139,7 @@ export function ToursPanel() {
   const [search, setSearch] = useState("");
   const [pendingAction, setPendingAction] = useState<number | null>(null);
   const [reschedule, setReschedule] = useState<TourRow | null>(null);
+  const [linking, setLinking] = useState<TourRow | null>(null);
   const [syncing, setSyncing] = useState(false);
 
   /** Pull website bookings (the sailfutureacademy.org/tour Google
@@ -219,7 +239,7 @@ export function ToursPanel() {
       key: "scheduled_at",
       header: "When",
       sortable: true,
-      width: "w-[19%]",
+      width: "w-[17%]",
       render: (r) => (
         <span
           className={cn(
@@ -258,7 +278,7 @@ export function ToursPanel() {
       key: "parent_email",
       header: "Contact",
       searchable: true,
-      width: "w-[18%]",
+      width: "w-[15%]",
       render: (r) => (
         <span className="block truncate text-sm" title={r.parent_email}>
           {r.parent_email ||
@@ -272,7 +292,7 @@ export function ToursPanel() {
       key: "location",
       header: "Location",
       searchable: true,
-      width: "w-[13%]",
+      width: "w-[11%]",
       render: (r) => (
         <span
           className="block truncate text-sm text-muted-foreground"
@@ -281,6 +301,25 @@ export function ToursPanel() {
           {r.location || "—"}
         </span>
       ),
+    },
+    {
+      key: "lead",
+      header: "Lead",
+      width: "w-[10%]",
+      accessor: (r) => (r.lead ? LEAD_LABEL[r.lead.source] : ""),
+      render: (r) =>
+        r.lead ? (
+          <span className="text-xs text-muted-foreground">
+            {LEAD_LABEL[r.lead.source]}
+          </span>
+        ) : (
+          <Badge
+            className="bg-amber-100 text-amber-800 hover:bg-amber-100"
+            title="No matching lead — use the row menu to link one"
+          >
+            Unlinked
+          </Badge>
+        ),
     },
     {
       key: "status",
@@ -312,7 +351,7 @@ export function ToursPanel() {
       width: "w-[44px]",
       align: "right",
       render: (r) =>
-        r.status === "scheduled" ? (
+        r.status === "scheduled" || !r.lead ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
@@ -330,38 +369,51 @@ export function ToursPanel() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem
-                onClick={() =>
-                  void patchTour(r, { action: "complete" }, "Tour marked completed.")
-                }
-              >
-                <Check className="size-4" />
-                Mark completed
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() =>
-                  void patchTour(r, { action: "no_show" }, "Marked as a no-show.")
-                }
-              >
-                <UserX className="size-4" />
-                Mark no-show
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setReschedule(r)}>
-                <CalendarX2 className="size-4" />
-                Reschedule…
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                variant="destructive"
-                onClick={() =>
-                  void patchTour(
-                    r,
-                    { action: "cancel" },
-                    "Tour canceled — the parent was notified."
-                  )
-                }
-              >
-                Cancel tour
-              </DropdownMenuItem>
+              {/* Linking is offered on ANY unlinked tour (even past
+                  ones — the visit still belongs on the lead's
+                  timeline); lifecycle actions only while scheduled. */}
+              {!r.lead ? (
+                <DropdownMenuItem onClick={() => setLinking(r)}>
+                  <Link2 className="size-4" />
+                  Link to lead…
+                </DropdownMenuItem>
+              ) : null}
+              {r.status === "scheduled" ? (
+                <>
+                  <DropdownMenuItem
+                    onClick={() =>
+                      void patchTour(r, { action: "complete" }, "Tour marked completed.")
+                    }
+                  >
+                    <Check className="size-4" />
+                    Mark completed
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() =>
+                      void patchTour(r, { action: "no_show" }, "Marked as a no-show.")
+                    }
+                  >
+                    <UserX className="size-4" />
+                    Mark no-show
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setReschedule(r)}>
+                    <CalendarX2 className="size-4" />
+                    Reschedule…
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    variant="destructive"
+                    onClick={() =>
+                      void patchTour(
+                        r,
+                        { action: "cancel" },
+                        "Tour canceled — the parent was notified."
+                      )
+                    }
+                  >
+                    Cancel tour
+                  </DropdownMenuItem>
+                </>
+              ) : null}
             </DropdownMenuContent>
           </DropdownMenu>
         ) : null,
@@ -440,7 +492,135 @@ export function ToursPanel() {
           );
         }}
       />
+
+      <TourLinkDialog
+        row={linking}
+        onOpenChange={(o) => !o && setLinking(null)}
+        onPick={async (lead) => {
+          const row = linking;
+          setLinking(null);
+          if (!row) return;
+          await patchTour(
+            row,
+            { action: "link", leadSource: lead.source, leadId: lead.id },
+            "Tour linked — it now shows on that lead's timeline."
+          );
+        }}
+      />
     </Card>
+  );
+}
+
+/**
+ * Pick which lead an unlinked tour belongs to — searchable across all
+ * four sources, seeded with the booker's email so the likely match is
+ * on screen immediately. Picking PATCHes `action: "link"`, which also
+ * writes the "tour linked" note onto that lead's comms log.
+ */
+function TourLinkDialog({
+  row,
+  onOpenChange,
+  onPick,
+}: {
+  row: TourRow | null;
+  onOpenChange: (open: boolean) => void;
+  onPick: (lead: { source: LeadNoteSource; id: number }) => void | Promise<void>;
+}) {
+  const { data: leads, isLoading } = useSWR<AllLeadRow[]>(
+    row ? "/api/admin/all-leads" : null,
+    adminFetcher,
+    { revalidateOnFocus: false }
+  );
+
+  const [query, setQuery] = useState("");
+  // Seed the search with the booker's email (else name) when the
+  // dialog opens for a tour — render-phase adjust on row change.
+  const [prevRowId, setPrevRowId] = useState<number | null>(null);
+  if ((row?.id ?? null) !== prevRowId) {
+    setPrevRowId(row?.id ?? null);
+    setQuery(row ? row.parent_email || row.parent_name : "");
+  }
+
+  const q = query.trim().toLowerCase();
+  const qDigits = q.replace(/\D/g, "");
+  const matches = (leads ?? [])
+    .filter((l) => {
+      if (!q) return true;
+      return (
+        l.parent_name.toLowerCase().includes(q) ||
+        l.student_name.toLowerCase().includes(q) ||
+        l.email.toLowerCase().includes(q) ||
+        l.school.toLowerCase().includes(q) ||
+        (qDigits.length >= 3 && l.phone.replace(/\D/g, "").includes(qDigits))
+      );
+    })
+    .slice(0, 30);
+
+  return (
+    <Dialog open={row !== null} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Link tour to a lead</DialogTitle>
+          <DialogDescription>
+            {row
+              ? `${row.parent_name || row.parent_email || "This booking"} — ${row.when}. Pick the lead this tour belongs to; it will appear on their timeline.`
+              : ""}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search by parent, student, email, phone, or school…"
+            className="h-9 bg-white pl-8"
+          />
+        </div>
+        <div className="max-h-[45vh] space-y-1 overflow-y-auto overscroll-contain">
+          {isLoading && !leads ? (
+            <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" />
+              Loading leads…
+            </div>
+          ) : matches.length === 0 ? (
+            <p className="py-8 text-center text-sm text-muted-foreground">
+              {q
+                ? "No leads match this search."
+                : "No leads found."}
+            </p>
+          ) : (
+            matches.map((l) => (
+              <button
+                key={l.key}
+                type="button"
+                onClick={() => void onPick({ source: l.source, id: l.id })}
+                className="w-full rounded-md border bg-white px-3 py-2 text-left transition-colors hover:bg-muted/50"
+              >
+                <span className="flex items-baseline justify-between gap-2">
+                  <span className="min-w-0 truncate text-sm font-medium">
+                    {l.parent_name || l.student_name || `#${l.id}`}
+                  </span>
+                  <span className="shrink-0 text-[10px] uppercase tracking-wider text-muted-foreground">
+                    {LEAD_LABEL[l.source]}
+                  </span>
+                </span>
+                <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+                  {[
+                    l.student_name && l.parent_name
+                      ? `Student: ${l.student_name}`
+                      : null,
+                    l.email || null,
+                    formatUSPhone(l.phone) || null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ") || "No contact info"}
+                </span>
+              </button>
+            ))
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 

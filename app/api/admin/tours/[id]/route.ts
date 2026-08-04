@@ -3,9 +3,11 @@ import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import {
   xano,
   liveTourEventId,
+  LEAD_NOTE_SOURCES,
   TOUR_EVENT_CANCELED_PREFIX,
   tourLeadFk,
   tourLeadScope,
+  type LeadNoteSource,
   type XanoTour,
 } from "@/lib/xano";
 import { bumpLeadReachOut } from "@/lib/leads";
@@ -14,7 +16,7 @@ import {
   isGoogleCalendarConfigured,
   updateTourEvent,
 } from "@/lib/google-calendar";
-import { tourNoteBody } from "@/lib/tours";
+import { tourInviteDescription, tourNoteBody } from "@/lib/tours";
 
 /**
  * One tour's lifecycle. PATCH takes an explicit `action` rather than
@@ -32,7 +34,13 @@ import { tourNoteBody } from "@/lib/tours";
  * of truth and always reflects the admin's intent.
  */
 
-const ACTIONS = ["complete", "no_show", "cancel", "reschedule"] as const;
+const ACTIONS = [
+  "complete",
+  "no_show",
+  "cancel",
+  "reschedule",
+  "link",
+] as const;
 type TourAction = (typeof ACTIONS)[number];
 
 export async function PATCH(
@@ -61,7 +69,52 @@ export async function PATCH(
     let tour: XanoTour;
     let noteEvent: Parameters<typeof tourNoteBody>[0];
 
-    if (action === "complete" || action === "no_show") {
+    if (action === "link") {
+      // Attach an UNLINKED tour (usually a website booking the email
+      // matcher couldn't place) to a lead. Only unlinked tours: Xano's
+      // edit endpoints drop null/empty inputs, so an already-set FK
+      // column can't be cleared from here — re-linking a wrongly
+      // linked tour is a hand edit in the Xano data browser.
+      const source = body?.leadSource as LeadNoteSource;
+      const leadId = Number(body?.leadId);
+      if (
+        !LEAD_NOTE_SOURCES.includes(source) ||
+        !Number.isFinite(leadId) ||
+        leadId <= 0
+      ) {
+        return NextResponse.json(
+          {
+            error:
+              "leadSource must be inquiry|camp|visit|tasco and leadId a positive number",
+          },
+          { status: 400 }
+        );
+      }
+      const already = tourLeadScope(existing);
+      if (already) {
+        return NextResponse.json(
+          {
+            error:
+              "This tour is already linked to a lead. To move it, clear the " +
+              "old link in the Xano data browser first.",
+          },
+          { status: 400 }
+        );
+      }
+      tour = await xano.tours.update(id, tourLeadFk({ source, id: leadId }));
+      const linked = tourLeadScope(tour);
+      if (linked?.source !== source || linked.id !== leadId) {
+        return NextResponse.json(
+          {
+            error:
+              "The lead FK columns aren't wired on the registration_tours " +
+              "Edit Record endpoint — expose all four as inputs in Xano.",
+          },
+          { status: 501 }
+        );
+      }
+      noteEvent = "linked";
+    } else if (action === "complete" || action === "no_show") {
       tour = await xano.tours.update(id, {
         status: action === "complete" ? "completed" : "no_show",
       });
@@ -116,7 +169,9 @@ export async function PATCH(
             summary: `Campus tour — ${
               tour.student_name || tour.parent_name || "prospective family"
             }`,
-            description: tour.notes,
+            // Same standard copy the original invite carried — a
+            // reschedule must not strip the address/parking blurb.
+            description: tourInviteDescription(tour.notes),
             location: tour.location,
             startMs: tour.scheduled_at,
             endMs:

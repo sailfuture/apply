@@ -59,6 +59,7 @@ const NAV_ITEMS: NavItem[] = [
     title: "Recruitment",
     children: [
       { title: "All Leads", href: "/admin/all-leads" },
+      { title: "Campus Tours", href: "/admin/campus-visits?tab=tours" },
       { title: "Inquiries", href: "/admin/inquiries" },
       { title: "Summer Camp", href: "/admin/summer-camp" },
       { title: "Liability Waiver Visits", href: "/admin/campus-visits" },
@@ -135,7 +136,12 @@ export function AdminTopNav({ admin }: { admin: AdminUser | null }) {
     badge === "messages" ? unreadMessages : 0;
 
   const buildHref = React.useCallback(
-    (base: string) => (yearId ? `${base}?yearId=${yearId}` : base),
+    // "&" when the base already carries a query (e.g. the Campus
+    // Tours item's ?tab=tours) so the yearId doesn't corrupt it.
+    (base: string) =>
+      yearId
+        ? `${base}${base.includes("?") ? "&" : "?"}yearId=${yearId}`
+        : base,
     [yearId]
   );
 
@@ -218,7 +224,10 @@ export function AdminTopNav({ admin }: { admin: AdminUser | null }) {
                           <Link
                             href={buildHref(child.href)}
                             className={cn(
-                              "flex w-full cursor-pointer items-center gap-2",
+                              // nowrap: long titles ("Liability Waiver
+                              // Visits") widen the menu instead of
+                              // wrapping to two lines.
+                              "flex w-full cursor-pointer items-center gap-2 whitespace-nowrap",
                               childActive && "font-semibold"
                             )}
                           >
