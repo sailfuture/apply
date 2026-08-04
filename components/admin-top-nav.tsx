@@ -59,11 +59,11 @@ const NAV_ITEMS: NavItem[] = [
     title: "Recruitment",
     children: [
       { title: "All Leads", href: "/admin/all-leads" },
-      { title: "Campus Tours", href: "/admin/campus-visits?tab=tours" },
+      { title: "Campus Tours", href: "/admin/campus-tours" },
       { title: "Inquiries", href: "/admin/inquiries" },
       { title: "Summer Camp", href: "/admin/summer-camp" },
-      { title: "Liability Waiver Visits", href: "/admin/campus-visits" },
-      { title: "TASCO Summer Visits", href: "/admin/tasco-summer-visits" },
+      { title: "Liability Waiver", href: "/admin/campus-visits" },
+      { title: "Visit Form", href: "/admin/tasco-summer-visits" },
     ],
   },
   // Admissions — the apply-through-enrolled pipeline. Applications

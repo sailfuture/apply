@@ -35,22 +35,31 @@ const API_BASE = "https://www.googleapis.com/calendar/v3";
  *  so this only controls how Google renders them. */
 const TIME_ZONE = process.env.GOOGLE_CALENDAR_TIMEZONE || "America/New_York";
 
+/** First whitespace-delimited token of an env value. Dashboard paste
+ *  accidents (the same address pasted twice, a trailing newline)
+ *  otherwise reach Google verbatim and fail with a cryptic
+ *  invalid_request — an email can never contain whitespace, so the
+ *  first token is always the intended value. */
+function cleanEmail(v: string): string {
+  return v.trim().split(/\s+/)[0] ?? "";
+}
+
 function getConfig(): {
   clientEmail: string;
   privateKey: string;
   impersonate: string;
   calendarId: string;
 } | null {
-  const clientEmail = process.env.GOOGLE_CALENDAR_CLIENT_EMAIL;
+  const clientEmail = cleanEmail(process.env.GOOGLE_CALENDAR_CLIENT_EMAIL ?? "");
   const rawKey = process.env.GOOGLE_CALENDAR_PRIVATE_KEY;
-  const impersonate = process.env.GOOGLE_CALENDAR_IMPERSONATE;
+  const impersonate = cleanEmail(process.env.GOOGLE_CALENDAR_IMPERSONATE ?? "");
   if (!clientEmail || !rawKey || !impersonate) return null;
   return {
     clientEmail,
     // Vercel/.env values carry the PEM newlines as literal "\n".
     privateKey: rawKey.replace(/\\n/g, "\n"),
     impersonate,
-    calendarId: process.env.GOOGLE_CALENDAR_ID || "primary",
+    calendarId: (process.env.GOOGLE_CALENDAR_ID ?? "").trim() || "primary",
   };
 }
 
