@@ -4169,6 +4169,23 @@ export const xano = {
   },
 
   studentRegistration: {
+    /**
+     * Every registration packet. Used by aggregate surfaces (the
+     * dashboard's 30-day enrollment trend) that need confirm
+     * timestamps across the whole table rather than one student's
+     * row. Retried — it sits on a dashboard fan-out path.
+     */
+    async getAll(): Promise<XanoStudentRegistration[]> {
+      const res = await fetchRetry(
+        `${getBaseUrl()}/registration_student_registration`
+      );
+      if (!res.ok) {
+        throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      }
+      const items = await res.json();
+      return Array.isArray(items) ? items : [];
+    },
+
     async create(data: Omit<XanoStudentRegistration, "id" | "created_at">): Promise<XanoStudentRegistration> {
       const res = await fetch(`${getBaseUrl()}/registration_student_registration`, {
         method: "POST",

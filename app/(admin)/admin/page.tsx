@@ -5,6 +5,8 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import {
+  ArrowDownRight,
+  ArrowUpRight,
   CheckCircle,
   ChevronRight,
   ClipboardList,
@@ -13,7 +15,12 @@ import {
   LogOut,
   MessageSquare,
 } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { StatsCard } from "@/components/admin/stats-card";
+import {
+  TrendAreaChart,
+  TrendBarChart,
+} from "@/components/admin/trend-charts";
 import {
   Card,
   CardContent,
@@ -21,6 +28,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import type { DashboardTrendsResponse } from "@/app/api/admin/dashboard-trends/route";
 import {
   Table,
   TableBody,
@@ -157,6 +165,15 @@ export default function AdminDashboardPage() {
     "/api/admin/school-years",
     fetcher
   );
+  // 30-day trend series for the two charts. Year-scoped for
+  // enrollment; inquiries have no year column so they're global.
+  const { data: trends, isLoading: trendsLoading } =
+    useSWR<DashboardTrendsResponse>(
+      yearId
+        ? `/api/admin/dashboard-trends?yearId=${yearId}`
+        : "/api/admin/dashboard-trends",
+      fetcher
+    );
 
   const yearName = useMemo(() => {
     if (!yearIdNum || !schoolYears) return null;
@@ -329,6 +346,53 @@ export default function AdminDashboardPage() {
         />
       </div>
 
+      {/* 30-day trends. Two separate charts (never a dual axis):
+          inquiries are per-day counts, the roster is a running total,
+          so they're different measures on different scales. */}
+      <div className="grid gap-4 lg:grid-cols-2">
+        <TrendCard
+          title="Inquiries"
+          subtitle="New inquiries per day · last 30 days"
+          value={trends?.inquiries.total ?? 0}
+          valueLabel="in the last 30 days"
+          delta={
+            trends
+              ? trends.inquiries.total - trends.inquiries.previousTotal
+              : null
+          }
+          deltaLabel="vs the prior 30 days"
+          loading={trendsLoading && !trends}
+        >
+          {trends ? (
+            <TrendBarChart
+              days={trends.days}
+              values={trends.inquiries.daily}
+              color={INQUIRY_COLOR}
+              unitLabel="inquiries"
+            />
+          ) : null}
+        </TrendCard>
+
+        <TrendCard
+          title="Enrolled students"
+          subtitle={`Roster size · last 30 days${yearName ? ` · ${yearName}` : ""}`}
+          value={trends?.enrollment.current ?? 0}
+          valueLabel="enrolled today"
+          delta={trends ? trends.enrollment.addedInWindow : null}
+          deltaLabel="newly enrolled in this window"
+          loading={trendsLoading && !trends}
+        >
+          {trends ? (
+            <TrendAreaChart
+              days={trends.days}
+              values={trends.enrollment.cumulative}
+              color={ENROLLED_COLOR}
+              unitLabel="enrolled"
+            />
+          ) : null}
+        </TrendCard>
+      </div>
+
       {/* Year-required notice — both subsequent tables need a year
           to mean anything. Sits between the stat tiles (which work
           un-scoped) and the tables to make the requirement obvious. */}
@@ -417,6 +481,85 @@ export default function AdminDashboardPage() {
         </>
       ) : null}
     </div>
+  );
+}
+
+/* ─────────────────────── Trend cards ─────────────────────── */
+
+/** Series colors, validated against the white card surface: both
+ *  clear 3:1 contrast and sit ΔE 26.5 apart under CVD simulation. */
+const INQUIRY_COLOR = "#2a78d6";
+const ENROLLED_COLOR = "#008300";
+
+/**
+ * Chart card — a period figure with a delta chip above the plot.
+ * Single series per card, so no legend: the title names what's
+ * plotted. The figure uses proportional (not tabular) numerals since
+ * it's a standalone value, not a column.
+ */
+function TrendCard({
+  title,
+  subtitle,
+  value,
+  valueLabel,
+  delta,
+  deltaLabel,
+  loading,
+  children,
+}: {
+  title: string;
+  subtitle: string;
+  value: number;
+  valueLabel: string;
+  /** Signed change vs the comparison period; null while loading. */
+  delta: number | null;
+  deltaLabel: string;
+  loading: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <Card className="overflow-hidden bg-white py-0 gap-0">
+      <CardHeader className="py-4 border-b bg-white">
+        <CardTitle className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+          {title}
+        </CardTitle>
+        <p className="text-xs text-muted-foreground">{subtitle}</p>
+        <div className="mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <span className="text-3xl font-semibold leading-none">
+            {loading ? "—" : value.toLocaleString()}
+          </span>
+          <span className="text-xs text-muted-foreground">{valueLabel}</span>
+          {delta !== null && !loading ? (
+            <span
+              className={cn(
+                "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium",
+                delta > 0
+                  ? "bg-green-50 text-green-700"
+                  : delta < 0
+                    ? "bg-red-50 text-red-700"
+                    : "bg-muted text-muted-foreground"
+              )}
+            >
+              {delta > 0 ? (
+                <ArrowUpRight className="size-3" />
+              ) : delta < 0 ? (
+                <ArrowDownRight className="size-3" />
+              ) : null}
+              {delta > 0 ? "+" : ""}
+              {delta.toLocaleString()}
+              <span className="font-normal opacity-80">{deltaLabel}</span>
+            </span>
+          ) : null}
+        </div>
+      </CardHeader>
+      <CardContent className="px-2 py-3 bg-white">
+        {loading ? (
+          <Skeleton className="h-[190px] w-full rounded-md" />
+        ) : (
+          children
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
