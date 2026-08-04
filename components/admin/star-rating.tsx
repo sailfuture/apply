@@ -41,7 +41,27 @@ export function StarRating({
       role="radiogroup"
       aria-label="Interest level"
     >
-      {[1, 2, 3, 4, 5].map((n) => (
+      {[1, 2, 3, 4, 5].map((n) => {
+        // Direction-aware hover preview:
+        //  - raising (hover ≥ value): the saved amber stays put and
+        //    gray fills only the stars being added
+        //  - lowering (hover < value): gray shows the would-be rating
+        //    and the stars being dropped go muted, so a 5→1 change is
+        //    visible instead of hiding under the amber
+        const starClass = !previewing
+          ? n <= value
+            ? "fill-amber-400 text-amber-400"
+            : "text-muted-foreground/30"
+          : hover >= value
+            ? n <= value
+              ? "fill-amber-400 text-amber-400"
+              : n <= hover
+                ? "fill-gray-400 text-gray-400"
+                : "text-muted-foreground/30"
+            : n <= hover
+              ? "fill-gray-400 text-gray-400"
+              : "text-muted-foreground/30";
+        return (
         <button
           key={n}
           type="button"
@@ -61,21 +81,10 @@ export function StarRating({
               : "cursor-default"
           )}
         >
-          <Star
-            className={cn(
-              "size-4 transition-colors",
-              // The saved rating stays amber ON TOP of any hover
-              // preview — gray only fills the hovered stars beyond
-              // it, so the current value never disappears mid-hover.
-              n <= value
-                ? "fill-amber-400 text-amber-400"
-                : previewing && n <= hover
-                  ? "fill-gray-400 text-gray-400"
-                  : "text-muted-foreground/30"
-            )}
-          />
+          <Star className={cn("size-4 transition-colors", starClass)} />
         </button>
-      ))}
+        );
+      })}
     </div>
   );
 }
