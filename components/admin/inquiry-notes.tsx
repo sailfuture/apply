@@ -9,7 +9,10 @@ import {
   Loader2,
   MessageSquareText,
   NotebookPen,
+  RotateCw,
+  TriangleAlert,
 } from "lucide-react";
+import { describeSmsError, isFailedStatus } from "@/lib/sms/errors";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Marker, MarkerContent } from "@/components/ui/marker";
 import {
@@ -288,6 +291,30 @@ export function InquiryNotes({
   // happened" — the draft is still in the box but nothing says why.
   const [sendError, setSendError] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<number | null>(null);
+  // Text currently being re-sent, so the spinner lands on the right
+  // bubble without threading row ids through the render list.
+  const [retryingBody, setRetryingBody] = useState<string | null>(null);
+
+  /** Re-send a failed text to this lead. Goes through the same
+   *  endpoint as a fresh send, so opt-out and phone checks re-run. */
+  async function retrySms(text: string) {
+    if (retryingBody) return;
+    setRetryingBody(text);
+    try {
+      const { warning } = await postLeadEntry(leadScope, "sms", text);
+      await mutateSms();
+      onNoteAdded?.();
+      if (warning) toast.warning(warning);
+      else toast.success("Text resent.");
+    } catch (err) {
+      console.error("Failed to resend text:", err);
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't resend the text."
+      );
+    } finally {
+      setRetryingBody(null);
+    }
+  }
 
   async function submitNote() {
     if (!body.trim() || saving) return;
@@ -447,7 +474,13 @@ export function InquiryNotes({
       rows.push({
         id: `sms-${e.msg.id}`,
         anchor: e.msg.direction === "outbound",
-        node: <SmsBubble msg={e.msg} />,
+        node: (
+          <SmsBubble
+            msg={e.msg}
+            onRetry={(text) => void retrySms(text)}
+            retrying={retryingBody === e.msg.body}
+          />
+        ),
       });
     }
   }
@@ -915,9 +948,18 @@ const SMS_STATUS_LABEL: Record<string, string> = {
  * message log records what was actually sent/received. Header carries
  * the from-number (our Twilio number outbound, the parent's inbound).
  */
-function SmsBubble({ msg }: { msg: XanoSmsMessage }) {
+function SmsBubble({
+  msg,
+  onRetry,
+  retrying,
+}: {
+  msg: XanoSmsMessage;
+  onRetry?: (body: string) => void;
+  retrying?: boolean;
+}) {
   const outbound = msg.direction === "outbound";
-  const failed = msg.status === "failed" || msg.status === "undelivered";
+  const failed = outbound && isFailedStatus(msg.status);
+  const error = failed ? describeSmsError(msg.error_code) : null;
   const fromLabel = formatUSPhone(msg.from_number) || msg.from_number;
   return (
     <Message align={outbound ? "end" : "start"}>
@@ -956,6 +998,38 @@ function SmsBubble({ msg }: { msg: XanoSmsMessage }) {
           )}
           <span>&nbsp;·&nbsp;{timeLabel(msg.created_at)}</span>
         </MessageFooter>
+        {/* Failed sends explain themselves in red and offer a retry —
+            a status word alone doesn't tell you whether to try again
+            or fix something first. */}
+        {failed ? (
+          <div
+            role="alert"
+            className="mt-1 rounded-md border border-destructive/30 bg-destructive/5 px-2.5 py-2 text-xs text-destructive"
+          >
+            <p className="flex items-start gap-1.5">
+              <TriangleAlert className="mt-px size-3.5 shrink-0" />
+              <span>
+                <span className="font-medium">Not delivered.</span>{" "}
+                {error?.message ?? "The carrier rejected it."}
+              </span>
+            </p>
+            {onRetry && error?.retryable !== false ? (
+              <button
+                type="button"
+                disabled={retrying}
+                onClick={() => onRetry(msg.body)}
+                className="mt-1.5 inline-flex items-center gap-1 font-medium underline underline-offset-2 hover:text-destructive/80 disabled:opacity-60"
+              >
+                {retrying ? (
+                  <Loader2 className="size-3 animate-spin" />
+                ) : (
+                  <RotateCw className="size-3" />
+                )}
+                {retrying ? "Resending…" : "Retry"}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
       </MessageContent>
     </Message>
   );

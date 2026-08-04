@@ -3,7 +3,8 @@
 import { useMemo, useState } from "react";
 import useSWR from "swr";
 import { toast } from "sonner";
-import { Send, Loader2, Ban } from "lucide-react";
+import { Send, Loader2, Ban, RotateCw, TriangleAlert } from "lucide-react";
+import { describeSmsError, isFailedStatus } from "@/lib/sms/errors";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
@@ -125,6 +126,45 @@ export function FamilyMessageThread({
   const [body, setBody] = useState("");
   const [sending, setSending] = useState(false);
   const [optingIn, setOptingIn] = useState(false);
+  // Body of the message currently being retried — keyed on the text
+  // rather than the row id so the spinner lands on the right bubble
+  // without threading ids through the row component.
+  const [retryingBody, setRetryingBody] = useState<string | null>(null);
+
+  /** Re-send a failed message's text to the same contact. */
+  async function retrySend(text: string) {
+    if (retryingBody) return;
+    setRetryingBody(text);
+    try {
+      const res = await fetch("/api/admin/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contactType,
+          contactId,
+          body: text,
+          studentId: defaultStudentId ?? null,
+          yearId: defaultYearId ?? null,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        throw new Error(err?.error ?? `Resend failed (${res.status})`);
+      }
+      const sent = await res.json().catch(() => null);
+      await mutate();
+      onSent?.();
+      if (sent?.warning) toast.warning(sent.warning);
+      else toast.success("Text resent.");
+    } catch (err) {
+      console.error("Failed to resend text:", err);
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't resend the text."
+      );
+    } finally {
+      setRetryingBody(null);
+    }
+  }
 
   const canSend = Boolean(recipient?.e164) && !recipient?.optedOut;
 
@@ -265,6 +305,8 @@ export function FamilyMessageThread({
                         <MessageRow
                           msg={item.msg}
                           recipientName={recipient?.name}
+                          onRetry={(text) => void retrySend(text)}
+                          retrying={retryingBody === item.msg.body}
                         />
                       </MessageScrollerItem>
                     )
@@ -382,20 +424,6 @@ const STATUS_LABEL: Record<string, string> = {
   received: "Received",
 };
 
-/** Human text for the Twilio error codes we actually see — shown in
- *  the footer beside the code so staff know what went wrong without
- *  looking it up. Unknown codes fall back to "Delivery error". */
-const ERROR_TEXT: Record<string, string> = {
-  "21211": "Invalid phone number",
-  "21610": "Recipient has opted out",
-  "30003": "Phone unreachable or off",
-  "30004": "Blocked by the recipient",
-  "30005": "Unknown or inactive number",
-  "30006": "Landline — can't receive texts",
-  "30007": "Filtered by the carrier",
-  "30034": "Number not A2P-registered",
-};
-
 /**
  * Outbound bubble variant: red for a failed/undelivered send, a subtle
  * primary tint for automated trigger texts AND group blasts (so both
@@ -416,9 +444,14 @@ function outboundVariant(
 function MessageRow({
   msg,
   recipientName,
+  onRetry,
+  retrying,
 }: {
   msg: XanoSmsMessage;
   recipientName?: string;
+  /** Re-send this message's text to the same contact. */
+  onRetry?: (body: string) => void;
+  retrying?: boolean;
 }) {
   const outbound = msg.direction === "outbound";
   const align = outbound ? "end" : "start";
@@ -430,6 +463,8 @@ function MessageRow({
     ? msg.author_name || (automated ? "SailFuture (automated)" : "SailFuture")
     : recipientName || "Family";
   const statusText = outbound ? (STATUS_LABEL[msg.status] ?? msg.status) : null;
+  const failed = outbound && isFailedStatus(msg.status);
+  const error = failed ? describeSmsError(msg.error_code) : null;
 
   return (
     <Message align={align}>
@@ -446,14 +481,39 @@ function MessageRow({
         <MessageFooter title={new Date(msg.created_at).toLocaleString()}>
           {statusText ? <span>{statusText}&nbsp;·&nbsp;</span> : null}
           <span>{timeLabel(msg.created_at)}</span>
-          {msg.error_code ? (
-            <span className={cn("text-destructive")}>
-              &nbsp;·&nbsp;
-              {ERROR_TEXT[msg.error_code] ?? "Delivery error"} (
-              {msg.error_code})
-            </span>
-          ) : null}
         </MessageFooter>
+        {/* A failed send gets its own red block rather than a footer
+            aside — the reason is a sentence, and the retry has to be
+            reachable. */}
+        {failed ? (
+          <div
+            role="alert"
+            className="mt-1 max-w-[85%] rounded-md border border-destructive/30 bg-destructive/5 px-2.5 py-2 text-xs text-destructive"
+          >
+            <p className="flex items-start gap-1.5">
+              <TriangleAlert className="mt-px size-3.5 shrink-0" />
+              <span>
+                <span className="font-medium">Not delivered.</span>{" "}
+                {error?.message ?? "The carrier rejected it."}
+              </span>
+            </p>
+            {onRetry && error?.retryable !== false ? (
+              <button
+                type="button"
+                disabled={retrying}
+                onClick={() => onRetry(msg.body)}
+                className="mt-1.5 inline-flex items-center gap-1 font-medium underline underline-offset-2 hover:text-destructive/80 disabled:opacity-60"
+              >
+                {retrying ? (
+                  <Loader2 className="size-3 animate-spin" />
+                ) : (
+                  <RotateCw className="size-3" />
+                )}
+                {retrying ? "Resending…" : "Retry"}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
       </MessageContent>
     </Message>
   );
