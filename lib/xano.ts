@@ -2408,9 +2408,16 @@ export function tourLeadScope(
   return null;
 }
 
-/** The four tour lead-FK columns with exactly one set (or none, for
- *  an unlinked import) — the write-side counterpart of
- *  `tourLeadScope`. */
+/**
+ * The four tour lead-FK columns with exactly one set — the write-side
+ * counterpart of `tourLeadScope`. Pass null to clear every link.
+ *
+ * Unset columns are written as `0`, NOT null: 0 is what Xano stores
+ * for an unset reference, and (verified live) PATCHing 0 actually
+ * clears a previously-set column. That's what makes re-linking work —
+ * writing the new source also zeroes whichever one was set before,
+ * so a tour can never end up claimed by two leads.
+ */
 export function tourLeadFk(
   lead: { source: LeadNoteSource; id: number } | null
 ): Pick<
@@ -2421,10 +2428,10 @@ export function tourLeadFk(
   | "tasco_summer_visit_id"
 > {
   return {
-    registration_inquiry_id: lead?.source === "inquiry" ? lead.id : null,
-    registration_summer_camp_id: lead?.source === "camp" ? lead.id : null,
-    website_liability_waiver_id: lead?.source === "visit" ? lead.id : null,
-    tasco_summer_visit_id: lead?.source === "tasco" ? lead.id : null,
+    registration_inquiry_id: lead?.source === "inquiry" ? lead.id : 0,
+    registration_summer_camp_id: lead?.source === "camp" ? lead.id : 0,
+    website_liability_waiver_id: lead?.source === "visit" ? lead.id : 0,
+    tasco_summer_visit_id: lead?.source === "tasco" ? lead.id : 0,
   };
 }
 

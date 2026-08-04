@@ -79,6 +79,7 @@ export function tourNoteBody(
     | "scheduled"
     | "booked"
     | "linked"
+    | "unlinked"
     | "rescheduled"
     | "completed"
     | "no_show"
@@ -95,6 +96,13 @@ export function tourNoteBody(
       // matcher couldn't write automatically.
       return (
         `Campus tour linked to this lead — ${when}${where}.` +
+        (tour.parent_email ? ` Booked by ${tour.parent_email}.` : "")
+      );
+    case "unlinked":
+      // Written on the lead the tour was detached FROM, so its
+      // timeline explains why the tour stopped appearing there.
+      return (
+        `Campus tour (${when}) unlinked from this lead.` +
         (tour.parent_email ? ` Booked by ${tour.parent_email}.` : "")
       );
     case "booked":

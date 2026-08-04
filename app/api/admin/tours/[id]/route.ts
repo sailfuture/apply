@@ -40,6 +40,7 @@ const ACTIONS = [
   "cancel",
   "reschedule",
   "link",
+  "unlink",
 ] as const;
 type TourAction = (typeof ACTIONS)[number];
 
@@ -69,41 +70,48 @@ export async function PATCH(
     let tour: XanoTour;
     let noteEvent: Parameters<typeof tourNoteBody>[0];
 
-    if (action === "link") {
-      // Attach an UNLINKED tour (usually a website booking the email
-      // matcher couldn't place) to a lead. Only unlinked tours: Xano's
-      // edit endpoints drop null/empty inputs, so an already-set FK
-      // column can't be cleared from here — re-linking a wrongly
-      // linked tour is a hand edit in the Xano data browser.
-      const source = body?.leadSource as LeadNoteSource;
-      const leadId = Number(body?.leadId);
-      if (
-        !LEAD_NOTE_SOURCES.includes(source) ||
-        !Number.isFinite(leadId) ||
-        leadId <= 0
-      ) {
+    // The lead this tour was attached to BEFORE this request — the
+    // link actions need it to write the "unlinked" note on the old
+    // lead's timeline once the FK has moved.
+    const previousLead = tourLeadScope(existing);
+
+    if (action === "link" || action === "unlink") {
+      // Attach, move, or detach a tour's lead. Re-linking works
+      // because `tourLeadFk` writes 0 to the columns it isn't
+      // setting, and a 0 genuinely clears a reference column
+      // (verified live) — so a tour can never be claimed by two.
+      let target: { source: LeadNoteSource; id: number } | null = null;
+      if (action === "link") {
+        const source = body?.leadSource as LeadNoteSource;
+        const leadId = Number(body?.leadId);
+        if (
+          !LEAD_NOTE_SOURCES.includes(source) ||
+          !Number.isFinite(leadId) ||
+          leadId <= 0
+        ) {
+          return NextResponse.json(
+            {
+              error:
+                "leadSource must be inquiry|camp|visit|tasco and leadId a positive number",
+            },
+            { status: 400 }
+          );
+        }
+        target = { source, id: leadId };
+      }
+      if (!target && !previousLead) {
         return NextResponse.json(
-          {
-            error:
-              "leadSource must be inquiry|camp|visit|tasco and leadId a positive number",
-          },
+          { error: "This tour isn't linked to a lead." },
           { status: 400 }
         );
       }
-      const already = tourLeadScope(existing);
-      if (already) {
-        return NextResponse.json(
-          {
-            error:
-              "This tour is already linked to a lead. To move it, clear the " +
-              "old link in the Xano data browser first.",
-          },
-          { status: 400 }
-        );
-      }
-      tour = await xano.tours.update(id, tourLeadFk({ source, id: leadId }));
-      const linked = tourLeadScope(tour);
-      if (linked?.source !== source || linked.id !== leadId) {
+
+      tour = await xano.tours.update(id, tourLeadFk(target));
+      const now = tourLeadScope(tour);
+      const landed = target
+        ? now?.source === target.source && now.id === target.id
+        : now === null;
+      if (!landed) {
         return NextResponse.json(
           {
             error:
@@ -112,6 +120,21 @@ export async function PATCH(
           },
           { status: 501 }
         );
+      }
+
+      // Tell the OLD lead's timeline the tour left, whether this was
+      // a detach or a move to a different lead.
+      const movedAway =
+        previousLead &&
+        (!target ||
+          previousLead.source !== target.source ||
+          previousLead.id !== target.id);
+      if (movedAway) {
+        await writeLeadNote(previousLead, tour, "unlinked", admin);
+      }
+      // A detach has no new lead to annotate; the response is enough.
+      if (!target) {
+        return NextResponse.json({ tour });
       }
       noteEvent = "linked";
     } else if (action === "complete" || action === "no_show") {
@@ -195,40 +218,52 @@ export async function PATCH(
     // Every transition is worth a line in the lead's comms log —
     // best-effort, the state change above is already real. Tours
     // imported from the website booking page can be UNLINKED (all
-    // four lead FKs null); those have no timeline to write to, so
-    // skip rather than creating an orphan note.
+    // four lead FKs 0); those have no timeline to write to, so skip
+    // rather than creating an orphan note.
     const lead = tourLeadScope(tour);
-    if (!lead) {
-      return NextResponse.json({ tour, warning });
-    }
-    try {
-      await xano.adminNotes.create({
-        registration_families_id: 0,
-        registration_students_id: null,
-        registration_school_years_id: null,
-        // Same four FK column names as the tour row itself.
-        ...tourLeadFk(lead),
-        registration_student_registration_progress_id: null,
-        registration_family_application_progress_id: null,
-        author_email: admin.email,
-        author_name: admin.name,
-        body: tourNoteBody(noteEvent, tour, warning === undefined),
-        category: "tour",
-        is_pinned: false,
-        section: null,
-        is_shared_with_parent: false,
-      });
+    if (lead) {
+      await writeLeadNote(lead, tour, noteEvent, admin, warning === undefined);
       // Cancel/reschedule touch the family; outcome bookkeeping after
       // the fact isn't a fresh reach-out.
       if (noteEvent === "rescheduled" || noteEvent === "canceled") {
         await bumpLeadReachOut(lead.source, lead.id);
       }
-    } catch (err) {
-      console.error("[/api/admin/tours PATCH] activity note failed:", err);
     }
 
     return NextResponse.json({ tour, warning });
   } catch (err) {
     return handleAdminError(err);
+  }
+}
+
+/** Append a tour event to one lead's comms log. Best-effort by
+ *  contract — the tour state change has already landed, and a failed
+ *  note must never turn a successful action into an error. */
+async function writeLeadNote(
+  lead: { source: LeadNoteSource; id: number },
+  tour: XanoTour,
+  event: Parameters<typeof tourNoteBody>[0],
+  admin: { email: string; name: string },
+  inviteSent = true
+): Promise<void> {
+  try {
+    await xano.adminNotes.create({
+      registration_families_id: 0,
+      registration_students_id: null,
+      registration_school_years_id: null,
+      // Same four FK column names as the tour row itself.
+      ...tourLeadFk(lead),
+      registration_student_registration_progress_id: null,
+      registration_family_application_progress_id: null,
+      author_email: admin.email,
+      author_name: admin.name,
+      body: tourNoteBody(event, tour, inviteSent),
+      category: "tour",
+      is_pinned: false,
+      section: null,
+      is_shared_with_parent: false,
+    });
+  } catch (err) {
+    console.error("[/api/admin/tours PATCH] activity note failed:", err);
   }
 }

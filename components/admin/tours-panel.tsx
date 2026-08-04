@@ -7,6 +7,7 @@ import {
   CalendarX2,
   Check,
   Link2,
+  Link2Off,
   Loader2,
   MoreHorizontal,
   RefreshCw,
@@ -44,6 +45,7 @@ import {
   timeInputToMs,
 } from "@/components/admin/event-upsert-dialog";
 import { tourStatusBadgeClass } from "@/components/admin/tour-section";
+import { LeadTriageSheet } from "@/components/admin/lead-triage";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { formatUSPhone } from "@/lib/phone";
 import {
@@ -141,6 +143,39 @@ export function ToursPanel() {
   const [reschedule, setReschedule] = useState<TourRow | null>(null);
   const [linking, setLinking] = useState<TourRow | null>(null);
   const [syncing, setSyncing] = useState(false);
+
+  // Clicking a tour opens ITS LEAD's triage sheet — the inquiry
+  // details plus the full comms/activity log — rather than a
+  // tour-only view: the tour is one event in that lead's story. The
+  // all-leads fetch is lazy (first row click) like the Messages page.
+  const [openLead, setOpenLead] = useState<{
+    source: LeadNoteSource;
+    id: number;
+  } | null>(null);
+  const { data: leadRows, mutate: mutateLeadRows } = useSWR<AllLeadRow[]>(
+    openLead ? "/api/admin/all-leads" : null,
+    adminFetcher,
+    {
+      revalidateOnFocus: false,
+      onSuccess: (rows) => {
+        const found =
+          openLead &&
+          rows.some(
+            (l) => l.source === openLead.source && l.id === openLead.id
+          );
+        if (!found) {
+          toast.error("Couldn't find this tour's lead record.");
+          setOpenLead(null);
+        }
+      },
+    }
+  );
+  const leadRow =
+    openLead && Array.isArray(leadRows)
+      ? (leadRows.find(
+          (l) => l.source === openLead.source && l.id === openLead.id
+        ) ?? null)
+      : null;
 
   /** Pull website bookings (the sailfutureacademy.org/tour Google
    *  appointment schedule) into the app. Auto-runs quietly on mount;
@@ -350,8 +385,10 @@ export function ToursPanel() {
       header: "",
       width: "w-[44px]",
       align: "right",
-      render: (r) =>
-        r.status === "scheduled" || !r.lead ? (
+      render: (r) => (
+        // stopPropagation: the row itself opens the lead sheet, and
+        // clicking the actions button must not do both.
+        <span onClick={(e) => e.stopPropagation()}>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
@@ -368,16 +405,38 @@ export function ToursPanel() {
                 )}
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              {/* Linking is offered on ANY unlinked tour (even past
-                  ones — the visit still belongs on the lead's
-                  timeline); lifecycle actions only while scheduled. */}
-              {!r.lead ? (
+            {/* w-auto overrides the base content width, which is
+                pinned to the TRIGGER's width — a size-7 icon button,
+                so every label wrapped to two lines. */}
+            <DropdownMenuContent align="end" className="w-auto [&_*]:whitespace-nowrap">
+              {/* Link actions are offered on ANY tour (even past ones
+                  — the visit still belongs on the lead's timeline);
+                  lifecycle actions only while scheduled. */}
+              {r.lead ? (
+                <>
+                  <DropdownMenuItem onClick={() => setLinking(r)}>
+                    <Link2 className="size-4" />
+                    Change lead…
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() =>
+                      void patchTour(
+                        r,
+                        { action: "unlink" },
+                        "Tour unlinked from that lead."
+                      )
+                    }
+                  >
+                    <Link2Off className="size-4" />
+                    Unlink from lead
+                  </DropdownMenuItem>
+                </>
+              ) : (
                 <DropdownMenuItem onClick={() => setLinking(r)}>
                   <Link2 className="size-4" />
                   Link to lead…
                 </DropdownMenuItem>
-              ) : null}
+              )}
               {r.status === "scheduled" ? (
                 <>
                   <DropdownMenuItem
@@ -416,7 +475,8 @@ export function ToursPanel() {
               ) : null}
             </DropdownMenuContent>
           </DropdownMenu>
-        ) : null,
+        </span>
+      ),
     },
   ];
 
@@ -474,6 +534,21 @@ export function ToursPanel() {
             data={sorted}
             isLoading={isLoading && !data}
             externalSearch={search}
+            // A tour is one event in a lead's story, so the row opens
+            // that lead's details + activity. An unlinked tour has no
+            // lead to open — offer the picker instead of doing
+            // nothing, which would read as a broken row.
+            onRowClick={(r) => {
+              if (r.lead) setOpenLead(r.lead);
+              else setLinking(r);
+            }}
+            rowClassName={(r) =>
+              openLead &&
+              r.lead?.source === openLead.source &&
+              r.lead.id === openLead.id
+                ? "bg-muted hover:bg-muted"
+                : "hover:bg-muted/50"
+            }
           />
         )}
       </CardContent>
@@ -503,10 +578,56 @@ export function ToursPanel() {
           await patchTour(
             row,
             { action: "link", leadSource: lead.source, leadId: lead.id },
-            "Tour linked — it now shows on that lead's timeline."
+            row.lead
+              ? "Tour moved to that lead."
+              : "Tour linked — it now shows on that lead's timeline."
           );
         }}
       />
+
+      {/* The clicked tour's lead — the same triage sheet All Leads
+          and the dashboard use: details, stars, tour section, and the
+          full comms/activity log. */}
+      {leadRow ? (
+        <LeadTriageSheet
+          open
+          onOpenChange={(o) => !o && setOpenLead(null)}
+          scope={{ source: leadRow.source, id: leadRow.id }}
+          title={
+            leadRow.student_name ||
+            leadRow.parent_name ||
+            `${LEAD_LABEL[leadRow.source]} #${leadRow.id}`
+          }
+          subtitle={[
+            LEAD_LABEL[leadRow.source],
+            leadRow.parent_name || null,
+            formatUSPhone(leadRow.phone) || null,
+            leadRow.detail || null,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+          rating={leadRow.rating}
+          isFollowedUp={leadRow.followed_up}
+          lastReachOut={leadRow.last_reach_out || null}
+          details={{
+            student_name: leadRow.student_name,
+            parent_name:
+              leadRow.source === "tasco" ? null : leadRow.parent_name,
+            phone: leadRow.phone,
+            email: leadRow.email,
+            grade: leadRow.grade_raw,
+            school: leadRow.school,
+            opt_in: leadRow.opt_in,
+            opt_in_editable: leadRow.source !== "camp",
+          }}
+          onChanged={() => {
+            void mutateLeadRows();
+            // Scheduling or canceling from inside the sheet changes
+            // this very table — keep it in step.
+            void mutate();
+          }}
+        />
+      ) : null}
     </Card>
   );
 }

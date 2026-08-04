@@ -214,7 +214,9 @@ export function AdminTopNav({ admin }: { admin: AdminUser | null }) {
                     <NotificationBadge count={badgeCount(item.badge)} />
                     <ChevronDown className="size-3.5 opacity-60" />
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start">
+                  {/* w-auto: the base content width is pinned to the
+                      trigger pill, which clipped longer child labels. */}
+                  <DropdownMenuContent align="start" className="w-auto">
                     {item.children.map((child) => {
                       const childActive = child.matchExact
                         ? pathname === child.href
