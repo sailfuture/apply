@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import useSWR from "swr";
+import useSWR, { useSWRConfig } from "swr";
 import { toast } from "sonner";
 import {
+  CalendarPlus,
   CalendarX2,
   Check,
   Link2,
@@ -50,9 +51,11 @@ import { adminFetcher } from "@/lib/admin-fetcher";
 import { formatUSPhone } from "@/lib/phone";
 import {
   TOUR_STATUS_LABEL,
+  isTourAffectedKey,
   tourRsvpBadge,
   tourWhenLabel,
 } from "@/lib/tours";
+import { TourScheduleDialog } from "@/components/admin/tour-section";
 import {
   liveTourEventId,
   tourLeadScope,
@@ -143,6 +146,18 @@ export function ToursPanel() {
   const [reschedule, setReschedule] = useState<TourRow | null>(null);
   const [linking, setLinking] = useState<TourRow | null>(null);
   const [syncing, setSyncing] = useState(false);
+  // Scheduling is two steps: pick who the tour is for, then the
+  // date/time dialog seeded with that lead's contact details.
+  const [pickingForSchedule, setPickingForSchedule] = useState(false);
+  const [scheduleFor, setScheduleFor] = useState<AllLeadRow | null>(null);
+
+  // One invalidation for every surface a tour touches — the lead's
+  // activity log (which animates the new entry in), the dashboard
+  // feed, the All Leads tour column, and this table.
+  const { mutate: globalMutate } = useSWRConfig();
+  const refreshTourSurfaces = () => {
+    void globalMutate(isTourAffectedKey);
+  };
 
   // Clicking a tour opens ITS LEAD's triage sheet — the inquiry
   // details plus the full comms/activity log — rather than a
@@ -198,7 +213,7 @@ export function ToursPanel() {
       const result: TourSyncResult = await res.json();
       const changed =
         result.imported + result.rsvpUpdated + result.canceled > 0;
-      if (changed) await mutate();
+      if (changed) refreshTourSurfaces();
       if (manual) {
         if (!result.configured) {
           toast.warning(
@@ -265,7 +280,9 @@ export function ToursPanel() {
       const result = await res.json().catch(() => null);
       if (result?.warning) toast.warning(result.warning);
       else toast.success(successMsg);
-      await mutate();
+      // Refresh everything the change shows up in, so an open lead
+      // sheet animates the new activity-log entry immediately.
+      refreshTourSurfaces();
     } catch (err) {
       console.error("[ToursPanel.patchTour]", err);
       toast.error(
@@ -506,6 +523,10 @@ export function ToursPanel() {
               onChange={(e) => setSearch(e.target.value)}
               className="h-9 w-full sm:w-72"
             />
+            <Button onClick={() => setPickingForSchedule(true)}>
+              <CalendarPlus className="size-4" />
+              Schedule tour
+            </Button>
             <Button
               variant="outline"
               className="bg-white"
@@ -575,8 +596,15 @@ export function ToursPanel() {
         }}
       />
 
-      <TourLinkDialog
-        row={linking}
+      <LeadPickerDialog
+        open={linking !== null}
+        title={linking?.lead ? "Move tour to another lead" : "Link tour to a lead"}
+        description={
+          linking
+            ? `${linking.parent_name || linking.parent_email || "This booking"} — ${linking.when}. Pick the lead this tour belongs to; it will appear on their activity log.`
+            : ""
+        }
+        seed={linking ? linking.parent_email || linking.parent_name : ""}
         onOpenChange={(o) => !o && setLinking(null)}
         onPick={async (lead) => {
           const row = linking;
@@ -587,10 +615,38 @@ export function ToursPanel() {
             { action: "link", leadSource: lead.source, leadId: lead.id },
             row.lead
               ? "Tour moved to that lead."
-              : "Tour linked — it now shows on that lead's timeline."
+              : "Tour linked — it now shows on that lead's activity log."
           );
         }}
       />
+
+      {/* Scheduling: pick the lead, then the date/time dialog. */}
+      <LeadPickerDialog
+        open={pickingForSchedule}
+        title="Schedule a campus tour"
+        description="Who is the tour for? Pick a lead and you'll set the date and time next."
+        onOpenChange={setPickingForSchedule}
+        onPick={(lead) => {
+          setPickingForSchedule(false);
+          setScheduleFor(lead);
+        }}
+      />
+      {scheduleFor ? (
+        <TourScheduleDialog
+          open
+          onOpenChange={(o) => !o && setScheduleFor(null)}
+          scope={{ source: scheduleFor.source, id: scheduleFor.id }}
+          parentName={scheduleFor.parent_name}
+          parentEmail={scheduleFor.email}
+          parentPhone={scheduleFor.phone}
+          studentName={scheduleFor.student_name}
+          calendarConfigured={data?.calendarConfigured ?? false}
+          onScheduled={() => {
+            setScheduleFor(null);
+            refreshTourSurfaces();
+          }}
+        />
+      ) : null}
 
       {/* The clicked tour's lead — the same triage sheet All Leads
           and the dashboard use: details, stars, tour section, and the
@@ -640,33 +696,40 @@ export function ToursPanel() {
 }
 
 /**
- * Pick which lead an unlinked tour belongs to — searchable across all
- * four sources, seeded with the booker's email so the likely match is
- * on screen immediately. Picking PATCHes `action: "link"`, which also
- * writes the "tour linked" note onto that lead's comms log.
+ * Searchable lead picker across all four recruitment sources — used
+ * both to attach an orphaned booking to its lead and to choose who a
+ * newly scheduled tour is for. `seed` pre-fills the search (the
+ * booker's email, when linking) so the likely match is already on
+ * screen.
  */
-function TourLinkDialog({
-  row,
+function LeadPickerDialog({
+  open,
+  title,
+  description,
+  seed,
   onOpenChange,
   onPick,
 }: {
-  row: TourRow | null;
+  open: boolean;
+  title: string;
+  description: string;
+  seed?: string;
   onOpenChange: (open: boolean) => void;
-  onPick: (lead: { source: LeadNoteSource; id: number }) => void | Promise<void>;
+  onPick: (lead: AllLeadRow) => void | Promise<void>;
 }) {
   const { data: leads, isLoading } = useSWR<AllLeadRow[]>(
-    row ? "/api/admin/all-leads" : null,
+    open ? "/api/admin/all-leads" : null,
     adminFetcher,
     { revalidateOnFocus: false }
   );
 
   const [query, setQuery] = useState("");
-  // Seed the search with the booker's email (else name) when the
-  // dialog opens for a tour — render-phase adjust on row change.
-  const [prevRowId, setPrevRowId] = useState<number | null>(null);
-  if ((row?.id ?? null) !== prevRowId) {
-    setPrevRowId(row?.id ?? null);
-    setQuery(row ? row.parent_email || row.parent_name : "");
+  // Re-seed each time the dialog opens — render-phase adjust, not an
+  // effect (the repo lint bans setState in effects).
+  const [prevOpen, setPrevOpen] = useState(false);
+  if (open !== prevOpen) {
+    setPrevOpen(open);
+    if (open) setQuery(seed ?? "");
   }
 
   const q = query.trim().toLowerCase();
@@ -685,15 +748,11 @@ function TourLinkDialog({
     .slice(0, 30);
 
   return (
-    <Dialog open={row !== null} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Link tour to a lead</DialogTitle>
-          <DialogDescription>
-            {row
-              ? `${row.parent_name || row.parent_email || "This booking"} — ${row.when}. Pick the lead this tour belongs to; it will appear on their timeline.`
-              : ""}
-          </DialogDescription>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
         <div className="relative">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -721,7 +780,7 @@ function TourLinkDialog({
               <button
                 key={l.key}
                 type="button"
-                onClick={() => void onPick({ source: l.source, id: l.id })}
+                onClick={() => void onPick(l)}
                 className="w-full rounded-md border bg-white px-3 py-2 text-left transition-colors hover:bg-muted/50"
               >
                 <span className="flex items-baseline justify-between gap-2">

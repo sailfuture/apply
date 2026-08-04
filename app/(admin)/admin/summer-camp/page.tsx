@@ -609,7 +609,7 @@ export default function SummerCampPage() {
                 />
               </div>
               <div className="flex-1 overflow-y-auto overscroll-contain px-6 py-5 space-y-6">
-                <SectionLabel>Communication log</SectionLabel>
+                <SectionLabel>Activity log</SectionLabel>
                 <div className="space-y-2.5">
                   <InquiryNotes
                     scope={{ source: "camp", id: active.id }}

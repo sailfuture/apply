@@ -7,6 +7,23 @@ import type { XanoTour } from "@/lib/xano";
  * (lead sheet, Campus Visits tab) can't drift.
  */
 
+/**
+ * SWR keys whose data changes when a tour does. A tour write lands in
+ * the lead's activity log, the dashboard's lead-activity feed, the
+ * All Leads tour column, and the tours list itself — so every tour
+ * mutation invalidates this whole family and any mounted timeline
+ * animates the new entry in immediately.
+ */
+export function isTourAffectedKey(key: unknown): boolean {
+  if (typeof key !== "string") return false;
+  return (
+    key.startsWith("/api/admin/notes") ||
+    key.startsWith("/api/admin/lead-activity") ||
+    key.startsWith("/api/admin/all-leads") ||
+    key.startsWith("/api/admin/tours")
+  );
+}
+
 /** Where tours happen — the campus street address, so the Google
  *  Calendar invite's location pin/directions actually work. Default
  *  for the schedule dialog AND the server-side fallback when a tour

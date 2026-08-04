@@ -713,7 +713,7 @@ export function LeadTriageSheet({
             docked below it. */}
         <div className="flex min-h-0 flex-1 flex-col">
           <p className="shrink-0 border-b px-4 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-            Communication log
+            Activity log
           </p>
           <div className="min-h-0 flex-1">
             <InquiryNotes scope={scope} variant="timeline" />

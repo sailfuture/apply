@@ -462,7 +462,7 @@ export default function CampusVisitsPage() {
                   submitted record below is reference. */}
               <section className="space-y-2.5">
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Communication log
+                  Activity log
                 </h3>
                 <InquiryNotes
                   scope={{ source: "visit", id: activeRow.id }}
