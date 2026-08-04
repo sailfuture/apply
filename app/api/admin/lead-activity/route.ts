@@ -62,6 +62,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   email: "Email",
   "in-person": "In-person",
   sms: "Text message",
+  tour: "Campus tour",
   other: "Note",
 };
 

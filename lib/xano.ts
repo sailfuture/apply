@@ -2317,6 +2317,115 @@ export interface XanoAcademicSeason {
   registration_academic_terms_id: number;
 }
 
+/**
+ * A scheduled campus tour (`registration_tours`) for a recruitment
+ * lead. Deliberately NOT a `school_calendar_events` row — those are
+ * school-wide and pinned to seeded day rows; a tour belongs to one
+ * lead and syncs to Google Calendar instead.
+ *
+ * Lead linkage uses the SAME four nullable table-reference columns as
+ * `registration_admin_notes` (one per source, at most one set — see
+ * `LEAD_NOTE_COLUMN`), so a tour is a real linked record in the Xano
+ * data browser: admin can inspect — or hand-link an imported website
+ * booking the email matcher couldn't place — right in Xano, and the
+ * app reads whatever the columns say via `tourLeadScope`. A tour with
+ * all four null is "unlinked" (website booking with no matching
+ * lead). The snapshot columns below keep rows self-describing even if
+ * the lead is later edited or deleted.
+ *
+ * Xano quirks this table lives with: edit endpoints drop empty-string
+ * inputs (clearing `google_event_id` after a cancel writes the
+ * `TOUR_EVENT_CANCELED_PREFIX` sentinel instead).
+ */
+export interface XanoTour {
+  id: number;
+  created_at: number;
+  registration_inquiry_id?: number | null;
+  registration_summer_camp_id?: number | null;
+  website_liability_waiver_id?: number | null;
+  tasco_summer_visit_id?: number | null;
+  /** Tour start, unix ms. */
+  scheduled_at: number;
+  duration_minutes: number;
+  location: string;
+  /** Free-form details — included in the Google Calendar invite
+   *  description the parent sees, so write accordingly. */
+  notes: string;
+  /** "scheduled" | "completed" | "no_show" | "canceled". */
+  status: string;
+  /** Google Calendar event id once the invite is created; "" until
+   *  then (or when Google Calendar isn't configured). After a cancel
+   *  the id is preserved behind the `canceled:` sentinel — read
+   *  through `liveTourEventId`. */
+  google_event_id: string;
+  /** Parent's RSVP from the Google invite ("accepted" | "declined" |
+   *  "tentative" | "needsAction"); "" when unknown / no invite. */
+  rsvp_status: string;
+  /** Contact snapshot at scheduling time — the invite went to THIS
+   *  email even if the lead row is edited later. */
+  parent_name: string;
+  parent_email: string;
+  parent_phone: string;
+  student_name: string;
+  /** Staff member who scheduled it (denormalized, like notes). */
+  author_email: string;
+  author_name: string;
+}
+
+/**
+ * Prefix sentinel for a canceled tour's Google event id. Same Xano
+ * constraint as the Stripe sentinels below: PATCHing ""/null silently
+ * no-ops, so "clearing" the id after the Google event is deleted
+ * would leave a live-looking id behind. Write `canceled:<old id>` and
+ * read through `liveTourEventId`.
+ */
+export const TOUR_EVENT_CANCELED_PREFIX = "canceled:";
+
+/** Normalize a stored `google_event_id` into "the live Google event
+ *  id, or null" — null for empty values and the `canceled:` sentinel. */
+export function liveTourEventId(
+  value: string | null | undefined
+): string | null {
+  if (!value) return null;
+  if (value.startsWith(TOUR_EVENT_CANCELED_PREFIX)) return null;
+  return value;
+}
+
+/** Which lead (if any) a tour is linked to — reads the four FK
+ *  columns through the shared `LEAD_NOTE_COLUMN` map. Null =
+ *  unlinked (imported website booking with no matching lead). Xano
+ *  may return an expanded relation object instead of the raw id, so
+ *  coerce via `toIdOrNull`. */
+export function tourLeadScope(
+  tour: XanoTour
+): { source: LeadNoteSource; id: number } | null {
+  for (const source of LEAD_NOTE_SOURCES) {
+    const id = toIdOrNull(tour[LEAD_NOTE_COLUMN[source]]);
+    if (id !== null && id > 0) return { source, id };
+  }
+  return null;
+}
+
+/** The four tour lead-FK columns with exactly one set (or none, for
+ *  an unlinked import) — the write-side counterpart of
+ *  `tourLeadScope`. */
+export function tourLeadFk(
+  lead: { source: LeadNoteSource; id: number } | null
+): Pick<
+  XanoTour,
+  | "registration_inquiry_id"
+  | "registration_summer_camp_id"
+  | "website_liability_waiver_id"
+  | "tasco_summer_visit_id"
+> {
+  return {
+    registration_inquiry_id: lead?.source === "inquiry" ? lead.id : null,
+    registration_summer_camp_id: lead?.source === "camp" ? lead.id : null,
+    website_liability_waiver_id: lead?.source === "visit" ? lead.id : null,
+    tasco_summer_visit_id: lead?.source === "tasco" ? lead.id : null,
+  };
+}
+
 export const xano = {
   parents: {
     async create(data: Omit<XanoParent, "id" | "created_at">) {
@@ -5845,6 +5954,73 @@ export const xano = {
     async delete(id: number): Promise<void> {
       const res = await fetch(
         `${getBaseUrl()}/registration_academic_seasons/${id}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+    },
+  },
+
+  /** Scheduled campus tours — see `XanoTour`. NOTE: the table lives
+   *  on the `2GcBXyoA` API group (like `tasco_summer_visit`), so
+   *  every call goes through `getXanoHost()` rather than the base
+   *  group URL. */
+  tours: {
+    /** Every tour, newest-scheduled first. Fail-soft like the other
+     *  recruitment reads — a Xano blip (or the table not existing yet)
+     *  degrades the Tours surfaces to empty instead of 500-ing them. */
+    async getAll(): Promise<XanoTour[]> {
+      try {
+        const res = await fetchRetry(
+          `${getXanoHost()}/api:2GcBXyoA/registration_tours`
+        );
+        if (!res.ok) return [];
+        const rows: XanoTour[] = await res.json();
+        return Array.isArray(rows) ? rows : [];
+      } catch {
+        return [];
+      }
+    },
+
+    async getById(id: number): Promise<XanoTour> {
+      const res = await fetch(
+        `${getXanoHost()}/api:2GcBXyoA/registration_tours/${id}`,
+        { cache: "no-store" }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async create(
+      data: Omit<XanoTour, "id" | "created_at">
+    ): Promise<XanoTour> {
+      const res = await fetch(
+        `${getXanoHost()}/api:2GcBXyoA/registration_tours`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async update(id: number, patch: Partial<XanoTour>): Promise<XanoTour> {
+      const res = await fetch(
+        `${getXanoHost()}/api:2GcBXyoA/registration_tours/${id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch),
+        }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async delete(id: number): Promise<void> {
+      const res = await fetch(
+        `${getXanoHost()}/api:2GcBXyoA/registration_tours/${id}`,
         { method: "DELETE" }
       );
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);

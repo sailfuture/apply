@@ -28,7 +28,10 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LeadTriageControls } from "@/components/admin/lead-triage";
+import { LeadTourSection } from "@/components/admin/tour-section";
+import { ToursPanel } from "@/components/admin/tours-panel";
 import {
   InquiryNoteComposer,
   InquiryNotes,
@@ -328,10 +331,10 @@ export default function CampusVisitsPage() {
     <div className="p-6 space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold">Liability Waiver Visits</h1>
+          <h1 className="text-2xl font-bold">Campus Visits</h1>
           <p className="text-sm text-muted-foreground">
-            Liability waivers signed on the website before a campus tour.
-            Click a row for the visitor&rsquo;s full details.
+            Signed liability waivers and scheduled campus tours. Click a
+            waiver row for the visitor&rsquo;s full details.
           </p>
         </div>
         <div className="w-44">
@@ -351,6 +354,17 @@ export default function CampusVisitsPage() {
         </div>
       </div>
 
+      {/* Two surfaces, one page: the waiver database (this card) and
+          the scheduled-tours operational list. */}
+      <Tabs defaultValue="waivers">
+        <TabsList>
+          <TabsTrigger value="waivers">Signed waivers</TabsTrigger>
+          <TabsTrigger value="tours">Scheduled tours</TabsTrigger>
+        </TabsList>
+        <TabsContent value="tours" className="mt-4">
+          <ToursPanel />
+        </TabsContent>
+        <TabsContent value="waivers" className="mt-4">
       <Card className="overflow-hidden bg-white py-0 gap-0">
         <CardHeader className="py-4 border-b bg-white">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -411,6 +425,8 @@ export default function CampusVisitsPage() {
           )}
         </CardContent>
       </Card>
+        </TabsContent>
+      </Tabs>
 
       {/* Visitor detail sheet — everything the table trims (email,
           school, academic year, waiver) plus the signature, and the
@@ -439,6 +455,19 @@ export default function CampusVisitsPage() {
                 rating={activeRow.rating}
                 isFollowedUp={activeRow.followed_up}
                 lastReachOut={activeRow.last_reach_out || null}
+                onChanged={() => void mutate()}
+              />
+            </div>
+
+            {/* Campus tour — schedule (Google Calendar invite) or
+                manage this visitor's upcoming tour. */}
+            <div className="border-b px-4 py-4">
+              <LeadTourSection
+                scope={{ source: "visit", id: activeRow.id }}
+                parentName={activeRow.parent_name}
+                parentEmail={activeRow.parent_email}
+                parentPhone={activeRow.parent_phone}
+                studentName={activeRow.student_name}
                 onChanged={() => void mutate()}
               />
             </div>

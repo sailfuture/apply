@@ -20,6 +20,7 @@ import {
   InquiryNotes,
   type LeadNoteScope,
 } from "@/components/admin/inquiry-notes";
+import { LeadTourSection } from "@/components/admin/tour-section";
 import { StarRating } from "@/components/admin/star-rating";
 import { cn } from "@/lib/utils";
 
@@ -691,6 +692,20 @@ export function LeadTriageSheet({
             rating={rating}
             isFollowedUp={isFollowedUp}
             lastReachOut={lastReachOut}
+            onChanged={onChanged}
+          />
+        </div>
+
+        {/* Campus tour — schedule (Google Calendar invite to the
+            parent) or manage the upcoming one. Contact defaults come
+            from the same editable details block below. */}
+        <div className="border-b px-4 py-4">
+          <LeadTourSection
+            scope={scope}
+            parentName={details?.parent_name ?? ""}
+            parentEmail={details?.email ?? ""}
+            parentPhone={details?.phone ?? ""}
+            studentName={details?.student_name ?? ""}
             onChanged={onChanged}
           />
         </div>
