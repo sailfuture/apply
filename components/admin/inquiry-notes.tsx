@@ -474,8 +474,11 @@ export function InquiryNotes({
     return (
       <>
         {isLoading ? (
-          <div className="flex h-full items-center justify-center">
-            <Loader2 className="size-4 animate-spin text-muted-foreground" />
+          <div className="flex h-full flex-col items-center justify-center gap-2">
+            <Loader2 className="size-5 animate-spin text-muted-foreground" />
+            <p className="text-xs text-muted-foreground">
+              Loading communication log…
+            </p>
           </div>
         ) : rows.length === 0 ? (
           <div className="flex h-full items-center justify-center px-8 text-center">

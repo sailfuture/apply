@@ -353,8 +353,13 @@ export default function AdminMessagesPage() {
               </button>
             </div>
           ) : isLoading && !data ? (
-            <div className="flex justify-center p-6">
-              <Loader2 className="size-4 animate-spin text-muted-foreground" />
+            // Centered in the pane (not hugging the top) with a label
+            // so the wait reads as "working", not "empty".
+            <div className="flex h-full flex-col items-center justify-center gap-2 p-6">
+              <Loader2 className="size-5 animate-spin text-muted-foreground" />
+              <p className="text-xs text-muted-foreground">
+                Loading conversations…
+              </p>
             </div>
           ) : conversations.length === 0 ? (
             <div className="p-6 text-center text-sm text-muted-foreground">

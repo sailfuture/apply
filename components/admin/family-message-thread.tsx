@@ -231,8 +231,11 @@ export function FamilyMessageThread({
     <div className={cn("flex min-h-0 flex-col", className)}>
       <div className="min-h-0 flex-1">
         {isLoading ? (
-          <div className="flex h-full items-center justify-center">
-            <Loader2 className="size-4 animate-spin text-muted-foreground" />
+          <div className="flex h-full flex-col items-center justify-center gap-2">
+            <Loader2 className="size-5 animate-spin text-muted-foreground" />
+            <p className="text-xs text-muted-foreground">
+              Loading message history…
+            </p>
           </div>
         ) : messages.length === 0 ? (
           <div className="flex h-full items-center justify-center px-8 text-center">
