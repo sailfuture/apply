@@ -227,17 +227,25 @@ export default function AllLeadsPage() {
             : "active";
       (out[key] ?? out.active).push(r);
     }
-    // Active Leads is the working queue, so it orders by LAST CONTACT
-    // (most recent first) rather than by submission date — the
-    // conversations in flight sit at the top. Never-contacted leads
-    // (`last_reach_out` 0) fall below them, newest sign-up first so
-    // the freshest untouched lead leads that block. Every other group
-    // keeps the API's newest-submitted order. Clicking the Last
-    // contact header still re-sorts either way.
-    out.active.sort(
-      (a, b) =>
-        b.last_reach_out - a.last_reach_out || b.submitted_ts - a.submitted_ts
-    );
+    // Every group orders by MOST RECENT ACTIVITY — the later of the
+    // lead's last contact and its sign-up date.
+    //
+    // Sorting on last contact alone buried the new arrivals: a lead
+    // nobody has called yet has `last_reach_out` 0, so it sank below
+    // every lead ever contacted and a sign-up from this morning
+    // landed pages deep. Taking the max of the two keeps both kinds
+    // of "new" at the top — a fresh sign-up and a conversation from
+    // an hour ago sit side by side, which is what the queue is for.
+    // Ties break on the newer sign-up. Clicking either column header
+    // still re-sorts on that column alone.
+    const lastActivity = (r: AllLeadRow) =>
+      Math.max(r.last_reach_out, r.submitted_ts);
+    for (const list of Object.values(out)) {
+      list.sort(
+        (a, b) =>
+          lastActivity(b) - lastActivity(a) || b.submitted_ts - a.submitted_ts
+      );
+    }
     return out;
   }, [visible]);
 
