@@ -55,9 +55,10 @@ const SOURCE_FILTERS: LeadSource[] = ["inquiry", "camp", "visit", "tasco"];
  * reflows as selections change — picking "Liability Waiver Visit"
  * can't shove the buttons beside it around. Labels truncate inside
  * (the full text stays on the `title`) and the chevron is pinned
- * right by `justify-between` + `shrink-0`.
+ * right by `justify-between` + `shrink-0`. `h-9` matches the search
+ * Input's height so the whole row sits on one baseline.
  */
-const FILTER_TRIGGER_CLASS = "w-40 shrink-0 justify-between bg-white";
+const FILTER_TRIGGER_CLASS = "h-9 w-40 shrink-0 justify-between bg-white";
 
 /** Tour-state display: label + badge tint + sort rank (higher =
  *  further along). Vocabulary matches the Campus Tours tab. */
@@ -594,34 +595,30 @@ export default function AllLeadsPage() {
       </div>
 
       {/* Conversion funnel rollup — the whole pool, unaffected by the
-          filters below. Four full-width cards; percentages are of ALL
-          leads, so the stages read as a funnel narrowing left to
-          right. */}
+          filters below. Four full-width cards reading as the funnel
+          narrowing left to right; bare counts (percentages came off
+          by user request). */}
       <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
         {(
           [
             {
               label: "Leads",
               value: funnel.total,
-              pct: null,
               hint: "All four recruitment sources",
             },
             {
               label: "Converted",
               value: funnel.converted,
-              pct: true,
               hint: "Linked to an applying family",
             },
             {
               label: "Applied",
               value: funnel.applied,
-              pct: true,
               hint: "Application submitted or beyond",
             },
             {
               label: "Enrolled",
               value: funnel.enrolled,
-              pct: true,
               hint: "Registration packet confirmed",
             },
           ] as const
@@ -632,11 +629,6 @@ export default function AllLeadsPage() {
             </p>
             <p className="mt-1 text-3xl font-bold tabular-nums leading-tight">
               {s.value.toLocaleString()}
-              {s.pct && funnel.total > 0 ? (
-                <span className="ml-2 text-sm font-normal text-muted-foreground">
-                  {Math.round((s.value / funnel.total) * 100)}%
-                </span>
-              ) : null}
             </p>
             <p className="mt-1 text-xs text-muted-foreground">{s.hint}</p>
           </div>
@@ -849,7 +841,7 @@ export default function AllLeadsPage() {
           type="button"
           variant="outline"
           size="sm"
-          className="ml-auto bg-white"
+          className="ml-auto h-9 bg-white"
           disabled={matching}
           onClick={() => void runAutoMatch()}
           title="Match unlinked leads to registration families by parent email and phone"
