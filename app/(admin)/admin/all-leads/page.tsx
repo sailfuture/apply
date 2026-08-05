@@ -585,52 +585,53 @@ export default function AllLeadsPage() {
       </div>
 
       {/* Conversion funnel rollup — the whole pool, unaffected by the
-          filters below. Percentages are of ALL leads, so the three
-          stages read as a funnel narrowing left to right. */}
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="flex flex-wrap items-stretch gap-2">
-          {(
-            [
-              { label: "Leads", value: funnel.total, pct: null },
-              { label: "Converted", value: funnel.converted, pct: true },
-              { label: "Applied", value: funnel.applied, pct: true },
-              { label: "Enrolled", value: funnel.enrolled, pct: true },
-            ] as const
-          ).map((s) => (
-            <div
-              key={s.label}
-              className="min-w-24 rounded-lg border bg-white px-3 py-2"
-            >
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                {s.label}
-              </p>
-              <p className="text-lg font-bold tabular-nums leading-tight">
-                {s.value}
-                {s.pct && funnel.total > 0 ? (
-                  <span className="ml-1.5 text-xs font-normal text-muted-foreground">
-                    {Math.round((s.value / funnel.total) * 100)}%
-                  </span>
-                ) : null}
-              </p>
-            </div>
-          ))}
-        </div>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="bg-white"
-          disabled={matching}
-          onClick={() => void runAutoMatch()}
-          title="Match unlinked leads to registration families by parent email and phone"
-        >
-          {matching ? (
-            <Loader2 className="size-3.5 mr-1.5 animate-spin" />
-          ) : (
-            <Wand2 className="size-3.5 mr-1.5" />
-          )}
-          Run auto-match
-        </Button>
+          filters below. Four full-width cards; percentages are of ALL
+          leads, so the stages read as a funnel narrowing left to
+          right. */}
+      <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
+        {(
+          [
+            {
+              label: "Leads",
+              value: funnel.total,
+              pct: null,
+              hint: "All four recruitment sources",
+            },
+            {
+              label: "Converted",
+              value: funnel.converted,
+              pct: true,
+              hint: "Linked to an applying family",
+            },
+            {
+              label: "Applied",
+              value: funnel.applied,
+              pct: true,
+              hint: "Application submitted or beyond",
+            },
+            {
+              label: "Enrolled",
+              value: funnel.enrolled,
+              pct: true,
+              hint: "Registration packet confirmed",
+            },
+          ] as const
+        ).map((s) => (
+          <div key={s.label} className="rounded-lg border bg-white px-4 py-4">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              {s.label}
+            </p>
+            <p className="mt-1 text-3xl font-bold tabular-nums leading-tight">
+              {s.value.toLocaleString()}
+              {s.pct && funnel.total > 0 ? (
+                <span className="ml-2 text-sm font-normal text-muted-foreground">
+                  {Math.round((s.value / funnel.total) * 100)}%
+                </span>
+              ) : null}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">{s.hint}</p>
+          </div>
+        ))}
       </div>
 
       {/* One search + dropdown filters, spanning the same width as the
@@ -813,6 +814,25 @@ export default function AllLeadsPage() {
             </DropdownMenuRadioGroup>
           </DropdownMenuContent>
         </DropdownMenu>
+
+        {/* Auto-match lives at the row's far end — it's an action,
+            not a filter, and the gap keeps it from reading as one. */}
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="ml-auto bg-white"
+          disabled={matching}
+          onClick={() => void runAutoMatch()}
+          title="Match unlinked leads to registration families by parent email and phone"
+        >
+          {matching ? (
+            <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+          ) : (
+            <Wand2 className="size-3.5 mr-1.5" />
+          )}
+          Run auto-match
+        </Button>
       </div>
 
       {error && !data ? (
