@@ -75,14 +75,17 @@ interface SchoolYearOption {
 }
 
 /**
- * Every filter trigger is the SAME fixed width, so the row never
- * reflows as selections change — picking "Liability Waiver Visit"
- * can't shove the buttons beside it around. Labels truncate inside
+ * Every filter trigger is the SAME width (equal flex shares, zero
+ * basis), so the row never reflows as selections change — picking
+ * "Liability Waiver Visit" can't shove the buttons beside it around.
+ * Labels truncate inside
  * (the full text stays on the `title`) and the chevron is pinned
  * right by `justify-between` + `shrink-0`. `h-9` matches the search
- * Input's height so the whole row sits on one baseline.
+ * Input's height so the whole row sits on one baseline. The triggers
+ * share the filter row equally (`flex-1`); `min-w-28` lets them wrap
+ * instead of crushing on narrow screens.
  */
-const FILTER_TRIGGER_CLASS = "h-9 w-40 shrink-0 justify-between bg-white";
+const FILTER_TRIGGER_CLASS = "h-9 min-w-28 flex-1 justify-between bg-white";
 
 /** Tour-state display: label + badge tint + sort rank (higher =
  *  further along). Vocabulary matches the Campus Tours tab. */
@@ -797,269 +800,274 @@ export default function AllLeadsPage() {
         })}
       </div>
 
-      {/* One search + dropdown filters, spanning the same width as the
-          group cards below. Each dropdown's trigger echoes its active
-          selection so a narrowed list is never a mystery. */}
-      <div className="flex flex-wrap items-center gap-2">
-        <Input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search by student, parent, school, phone, or email…"
-          className="min-w-64 flex-1 bg-white"
-        />
+      {/* Toolbar in two rows: the search box stretches across the top
+          beside the auto-match action, and the dropdown filters share
+          the full row below it, growing equally. Each dropdown's
+          trigger echoes its active selection so a narrowed list is
+          never a mystery. */}
+      <div className="space-y-2">
+        <div className="flex items-center gap-2">
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search by student, parent, school, phone, or email…"
+            className="min-w-0 flex-1 bg-white"
+          />
+          {/* Auto-match rides with the search — it's an action, not a
+              filter, so it stays off the filter row. */}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-9 shrink-0 bg-white"
+            disabled={matching}
+            onClick={() => void runAutoMatch()}
+            title="Match unlinked leads to registration families by parent email and phone"
+          >
+            {matching ? (
+              <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+            ) : (
+              <Wand2 className="size-3.5 mr-1.5" />
+            )}
+            Run auto-match
+          </Button>
+        </div>
 
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="outline"
-              size="sm"
-              className={cn(
-                FILTER_TRIGGER_CLASS,
-                sourceFilter.length > 0 && "border-foreground"
-              )}
-              title={
-                sourceFilter.length === 0
-                  ? "Filter by lead source"
-                  : sourceFilter.map((s) => SOURCE_META[s].label).join(", ")
-              }
-            >
-              <span className="min-w-0 truncate">
-                {sourceFilter.length === 0
-                  ? "Source"
-                  : sourceFilter.length === 1
-                    ? SOURCE_META[sourceFilter[0]].label
-                    : `Source (${sourceFilter.length})`}
-              </span>
-              <ChevronDown className="ml-1 size-3.5 shrink-0 opacity-50" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-56">
-            <DropdownMenuLabel>Lead source</DropdownMenuLabel>
-            {SOURCE_FILTERS.map((s) => (
-              <DropdownMenuCheckboxItem
-                key={s}
-                checked={sourceFilter.includes(s)}
-                // Keep the menu open — sources are multi-select and
-                // closing per click makes picking two of them a chore.
-                onSelect={(e) => e.preventDefault()}
-                onCheckedChange={() =>
-                  setSourceFilter((prev) =>
-                    prev.includes(s)
-                      ? prev.filter((x) => x !== s)
-                      : [...prev, s]
+        <div className="flex flex-wrap items-center gap-2">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className={cn(
+                  FILTER_TRIGGER_CLASS,
+                  sourceFilter.length > 0 && "border-foreground"
+                )}
+                title={
+                  sourceFilter.length === 0
+                    ? "Filter by lead source"
+                    : sourceFilter.map((s) => SOURCE_META[s].label).join(", ")
+                }
+              >
+                <span className="min-w-0 truncate">
+                  {sourceFilter.length === 0
+                    ? "Source"
+                    : sourceFilter.length === 1
+                      ? SOURCE_META[sourceFilter[0]].label
+                      : `Source (${sourceFilter.length})`}
+                </span>
+                <ChevronDown className="ml-1 size-3.5 shrink-0 opacity-50" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-56">
+              <DropdownMenuLabel>Lead source</DropdownMenuLabel>
+              {SOURCE_FILTERS.map((s) => (
+                <DropdownMenuCheckboxItem
+                  key={s}
+                  checked={sourceFilter.includes(s)}
+                  // Keep the menu open — sources are multi-select and
+                  // closing per click makes picking two of them a chore.
+                  onSelect={(e) => e.preventDefault()}
+                  onCheckedChange={() =>
+                    setSourceFilter((prev) =>
+                      prev.includes(s)
+                        ? prev.filter((x) => x !== s)
+                        : [...prev, s]
+                    )
+                  }
+                >
+                  {SOURCE_META[s].label}
+                </DropdownMenuCheckboxItem>
+              ))}
+              {sourceFilter.length > 0 ? (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onSelect={() => setSourceFilter([])}>
+                    Clear
+                  </DropdownMenuItem>
+                </>
+              ) : null}
+            </DropdownMenuContent>
+          </DropdownMenu>
+  
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className={cn(
+                  FILTER_TRIGGER_CLASS,
+                  minRating > 0 && "border-foreground"
+                )}
+                title="Filter by minimum rating"
+              >
+                <span className="min-w-0 truncate">
+                  {minRating > 0
+                    ? `Rating: ${minRating}${minRating < 5 ? "+" : ""}`
+                    : "Rating"}
+                </span>
+                <ChevronDown className="ml-1 size-3.5 shrink-0 opacity-50" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-44">
+              <DropdownMenuLabel>Minimum rating</DropdownMenuLabel>
+              <DropdownMenuRadioGroup
+                value={String(minRating)}
+                onValueChange={(v) => setMinRating(Number(v))}
+              >
+                <DropdownMenuRadioItem value="0">
+                  Any rating
+                </DropdownMenuRadioItem>
+                {[1, 2, 3, 4, 5].map((n) => (
+                  <DropdownMenuRadioItem key={n} value={String(n)}>
+                    {n}
+                    {n < 5 ? "+" : ""} stars
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+  
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className={cn(
+                  FILTER_TRIGGER_CLASS,
+                  followUpFilter !== null && "border-foreground"
+                )}
+                title="Filter by follow-up state"
+              >
+                <span className="min-w-0 truncate">
+                  {followUpFilter === null
+                    ? "Follow-up"
+                    : followUpFilter
+                      ? "Followed up"
+                      : "Needs follow-up"}
+                </span>
+                <ChevronDown className="ml-1 size-3.5 shrink-0 opacity-50" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-48">
+              <DropdownMenuLabel>Follow-up</DropdownMenuLabel>
+              <DropdownMenuRadioGroup
+                value={
+                  followUpFilter === null
+                    ? "any"
+                    : followUpFilter
+                      ? "done"
+                      : "needs"
+                }
+                onValueChange={(v) =>
+                  setFollowUpFilter(v === "any" ? null : v === "done")
+                }
+              >
+                <DropdownMenuRadioItem value="any">Any</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="needs">
+                  Needs follow-up
+                </DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="done">
+                  Followed up
+                </DropdownMenuRadioItem>
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+  
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className={cn(
+                  FILTER_TRIGGER_CLASS,
+                  tourFilter !== null && "border-foreground"
+                )}
+                title="Filter by campus-tour state"
+              >
+                <span className="min-w-0 truncate">
+                  {tourFilter === null
+                    ? "Tour"
+                    : tourFilter === "completed"
+                      ? "Toured"
+                      : tourFilter === "scheduled"
+                        ? "Tour scheduled"
+                        : "No tour"}
+                </span>
+                <ChevronDown className="ml-1 size-3.5 shrink-0 opacity-50" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-44">
+              <DropdownMenuLabel>Campus tour</DropdownMenuLabel>
+              <DropdownMenuRadioGroup
+                value={tourFilter ?? "any"}
+                onValueChange={(v) =>
+                  setTourFilter(
+                    v === "any"
+                      ? null
+                      : (v as "completed" | "scheduled" | "none")
                   )
                 }
               >
-                {SOURCE_META[s].label}
-              </DropdownMenuCheckboxItem>
-            ))}
-            {sourceFilter.length > 0 ? (
-              <>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onSelect={() => setSourceFilter([])}>
-                  Clear
-                </DropdownMenuItem>
-              </>
-            ) : null}
-          </DropdownMenuContent>
-        </DropdownMenu>
-
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="outline"
-              size="sm"
-              className={cn(
-                FILTER_TRIGGER_CLASS,
-                minRating > 0 && "border-foreground"
-              )}
-              title="Filter by minimum rating"
-            >
-              <span className="min-w-0 truncate">
-                {minRating > 0
-                  ? `Rating: ${minRating}${minRating < 5 ? "+" : ""}`
-                  : "Rating"}
-              </span>
-              <ChevronDown className="ml-1 size-3.5 shrink-0 opacity-50" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-44">
-            <DropdownMenuLabel>Minimum rating</DropdownMenuLabel>
-            <DropdownMenuRadioGroup
-              value={String(minRating)}
-              onValueChange={(v) => setMinRating(Number(v))}
-            >
-              <DropdownMenuRadioItem value="0">
-                Any rating
-              </DropdownMenuRadioItem>
-              {[1, 2, 3, 4, 5].map((n) => (
-                <DropdownMenuRadioItem key={n} value={String(n)}>
-                  {n}
-                  {n < 5 ? "+" : ""} stars
+                <DropdownMenuRadioItem value="any">Any</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="completed">
+                  Toured
                 </DropdownMenuRadioItem>
-              ))}
-            </DropdownMenuRadioGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
-
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="outline"
-              size="sm"
-              className={cn(
-                FILTER_TRIGGER_CLASS,
-                followUpFilter !== null && "border-foreground"
-              )}
-              title="Filter by follow-up state"
-            >
-              <span className="min-w-0 truncate">
-                {followUpFilter === null
-                  ? "Follow-up"
-                  : followUpFilter
-                    ? "Followed up"
-                    : "Needs follow-up"}
-              </span>
-              <ChevronDown className="ml-1 size-3.5 shrink-0 opacity-50" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-48">
-            <DropdownMenuLabel>Follow-up</DropdownMenuLabel>
-            <DropdownMenuRadioGroup
-              value={
-                followUpFilter === null
-                  ? "any"
-                  : followUpFilter
-                    ? "done"
-                    : "needs"
-              }
-              onValueChange={(v) =>
-                setFollowUpFilter(v === "any" ? null : v === "done")
-              }
-            >
-              <DropdownMenuRadioItem value="any">Any</DropdownMenuRadioItem>
-              <DropdownMenuRadioItem value="needs">
-                Needs follow-up
-              </DropdownMenuRadioItem>
-              <DropdownMenuRadioItem value="done">
-                Followed up
-              </DropdownMenuRadioItem>
-            </DropdownMenuRadioGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
-
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="outline"
-              size="sm"
-              className={cn(
-                FILTER_TRIGGER_CLASS,
-                tourFilter !== null && "border-foreground"
-              )}
-              title="Filter by campus-tour state"
-            >
-              <span className="min-w-0 truncate">
-                {tourFilter === null
-                  ? "Tour"
-                  : tourFilter === "completed"
-                    ? "Toured"
-                    : tourFilter === "scheduled"
-                      ? "Tour scheduled"
-                      : "No tour"}
-              </span>
-              <ChevronDown className="ml-1 size-3.5 shrink-0 opacity-50" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-44">
-            <DropdownMenuLabel>Campus tour</DropdownMenuLabel>
-            <DropdownMenuRadioGroup
-              value={tourFilter ?? "any"}
-              onValueChange={(v) =>
-                setTourFilter(
-                  v === "any"
-                    ? null
-                    : (v as "completed" | "scheduled" | "none")
-                )
-              }
-            >
-              <DropdownMenuRadioItem value="any">Any</DropdownMenuRadioItem>
-              <DropdownMenuRadioItem value="completed">
-                Toured
-              </DropdownMenuRadioItem>
-              <DropdownMenuRadioItem value="scheduled">
-                Tour scheduled
-              </DropdownMenuRadioItem>
-              <DropdownMenuRadioItem value="none">
-                No tour
-              </DropdownMenuRadioItem>
-            </DropdownMenuRadioGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
-
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="outline"
-              size="sm"
-              className={cn(
-                FILTER_TRIGGER_CLASS,
-                yearFilter !== null && "border-foreground"
-              )}
-              title="Filter by the academic year the family is asking about"
-            >
-              <span className="min-w-0 truncate">
-                {yearFilter === null
-                  ? "Year"
-                  : yearFilter === 0
-                    ? "No year set"
-                    : (schoolYears.find((y) => y.id === yearFilter)
-                        ?.year_name ?? "Year")}
-              </span>
-              <ChevronDown className="ml-1 size-3.5 shrink-0 opacity-50" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-48">
-            <DropdownMenuLabel>Interested in</DropdownMenuLabel>
-            <DropdownMenuRadioGroup
-              value={yearFilter === null ? "any" : String(yearFilter)}
-              onValueChange={(v) =>
-                setYearFilter(v === "any" ? null : Number(v))
-              }
-            >
-              <DropdownMenuRadioItem value="any">Any</DropdownMenuRadioItem>
-              {schoolYears.map((y) => (
-                <DropdownMenuRadioItem key={y.id} value={String(y.id)}>
-                  {y.year_name}
-                  {y.isActive ? " (current)" : y.isNextYear ? " (next)" : ""}
+                <DropdownMenuRadioItem value="scheduled">
+                  Tour scheduled
                 </DropdownMenuRadioItem>
-              ))}
-              {/* The working bucket: everything still untagged. */}
-              <DropdownMenuRadioItem value="0">
-                No year set
-              </DropdownMenuRadioItem>
-            </DropdownMenuRadioGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
-
-        {/* Auto-match lives at the row's far end — it's an action,
-            not a filter, and the gap keeps it from reading as one. */}
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="ml-auto h-9 bg-white"
-          disabled={matching}
-          onClick={() => void runAutoMatch()}
-          title="Match unlinked leads to registration families by parent email and phone"
-        >
-          {matching ? (
-            <Loader2 className="size-3.5 mr-1.5 animate-spin" />
-          ) : (
-            <Wand2 className="size-3.5 mr-1.5" />
-          )}
-          Run auto-match
-        </Button>
+                <DropdownMenuRadioItem value="none">
+                  No tour
+                </DropdownMenuRadioItem>
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+  
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className={cn(
+                  FILTER_TRIGGER_CLASS,
+                  yearFilter !== null && "border-foreground"
+                )}
+                title="Filter by the academic year the family is asking about"
+              >
+                <span className="min-w-0 truncate">
+                  {yearFilter === null
+                    ? "Year"
+                    : yearFilter === 0
+                      ? "No year set"
+                      : (schoolYears.find((y) => y.id === yearFilter)
+                          ?.year_name ?? "Year")}
+                </span>
+                <ChevronDown className="ml-1 size-3.5 shrink-0 opacity-50" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-48">
+              <DropdownMenuLabel>Interested in</DropdownMenuLabel>
+              <DropdownMenuRadioGroup
+                value={yearFilter === null ? "any" : String(yearFilter)}
+                onValueChange={(v) =>
+                  setYearFilter(v === "any" ? null : Number(v))
+                }
+              >
+                <DropdownMenuRadioItem value="any">Any</DropdownMenuRadioItem>
+                {schoolYears.map((y) => (
+                  <DropdownMenuRadioItem key={y.id} value={String(y.id)}>
+                    {y.year_name}
+                    {y.isActive ? " (current)" : y.isNextYear ? " (next)" : ""}
+                  </DropdownMenuRadioItem>
+                ))}
+                {/* The working bucket: everything still untagged. */}
+                <DropdownMenuRadioItem value="0">
+                  No year set
+                </DropdownMenuRadioItem>
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
 
       {error && !data ? (
