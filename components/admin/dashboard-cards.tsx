@@ -174,10 +174,11 @@ function activityIcon(kind: ActivityRow["kind"]) {
 }
 
 /**
- * Newest notes + texts across every recruitment lead, merged into one
- * stream — "what's happened lately", and by absence, who has gone
- * quiet. Clicking a row deep-links to that lead's triage sheet on All
- * Leads.
+ * Leads with recent activity — one row per lead, showing its newest
+ * note or text (the API dedupes to latest-per-lead). "Who has
+ * something happening lately", and by absence, who has gone quiet.
+ * Clicking a row deep-links to that lead's triage sheet on All Leads,
+ * where the full activity history lives.
  */
 export function LeadActivityCard({
   rows,

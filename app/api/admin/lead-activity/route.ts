@@ -10,14 +10,16 @@ import { counterpartyPhone, messageContactRef } from "@/lib/sms/contacts";
 import { formatUSPhone } from "@/lib/phone";
 
 /**
- * Recent activity across every recruitment lead — one merged, newest-
- * first stream of the two things that actually constitute "contact":
- * admin notes (calls, visits, logged context) and real text messages
- * in either direction.
+ * Recent activity across every recruitment lead — ONE row per lead,
+ * carrying that lead's newest contact event: an admin note (call,
+ * visit, logged context) or a real text message in either direction.
  *
- * This is the dashboard's answer to "what's happened lately, and who
- * has gone quiet". It deliberately reads the same two tables the lead
- * triage sheet renders, so a row here and the sheet can't disagree.
+ * This is the dashboard's answer to "which leads have something
+ * happening lately, and who has gone quiet" — a roster of recently
+ * active leads, not a raw event log (the per-lead activity sheet is
+ * where the full history lives). It deliberately reads the same two
+ * tables the lead triage sheet renders, so a row here and the sheet
+ * can't disagree.
  *
  * Rows carry the lead's `source` + `id`, so the client can deep-link
  * straight into that lead's triage sheet
@@ -197,9 +199,23 @@ export async function GET(req: NextRequest) {
     }
 
     rows.sort((a, b) => b.ts - a.ts);
+
+    // One row per LEAD, carrying its newest activity. The card answers
+    // "which leads have something happening lately" — a burst of notes
+    // on one family was rendering as a stack of near-identical rows,
+    // drowning out every other lead. Rows are sorted newest-first, so
+    // keeping the first occurrence per lead keeps the latest item.
+    const seen = new Set<string>();
+    const latestPerLead = rows.filter((r) => {
+      const leadKey = `${r.source}-${r.leadId}`;
+      if (seen.has(leadKey)) return false;
+      seen.add(leadKey);
+      return true;
+    });
+
     return NextResponse.json({
-      rows: rows.slice(0, limit),
-      truncated: rows.length > limit,
+      rows: latestPerLead.slice(0, limit),
+      truncated: latestPerLead.length > limit,
     } satisfies LeadActivityResponse);
   } catch (err) {
     return handleAdminError(err);
