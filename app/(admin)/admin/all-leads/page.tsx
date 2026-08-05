@@ -1,12 +1,20 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { toast } from "sonner";
-import { ChevronDown, ChevronRight, Loader2, Wand2 } from "lucide-react";
+import {
+  ArrowUpRight,
+  ChevronDown,
+  ChevronRight,
+  Loader2,
+  Wand2,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import { DataTable, type ColumnDef } from "@/components/admin/data-table";
 import { LeadTriageSheet } from "@/components/admin/lead-triage";
 import {
@@ -222,24 +230,21 @@ export default function AllLeadsPage() {
     return out;
   }, [visible]);
 
-  // Funnel rollup over the WHOLE lead pool (not the filtered view) —
-  // the strip answers "how is recruitment converting overall".
+  // Rollup over the WHOLE lead pool (not the filtered view) — every
+  // figure counts LEADS, so the four read against one denominator.
   const funnel = useMemo(() => {
     let converted = 0;
-    let applied = 0;
-    let enrolled = 0;
+    let toured = 0;
+    let notInterested = 0;
     for (const r of rows) {
       if (r.funnel_stage !== "") converted++;
-      if (
-        r.funnel_stage === "applied" ||
-        r.funnel_stage === "accepted" ||
-        r.funnel_stage === "enrolled"
-      ) {
-        applied++;
-      }
-      if (r.funnel_stage === "enrolled") enrolled++;
+      // Any tour on record — booked, completed, or otherwise. The
+      // per-lead `tour_status` is already the best of that lead's
+      // tours, so a non-empty value means at least one exists.
+      if (r.tour_status !== "") toured++;
+      if (r.lead_status === "not_interested") notInterested++;
     }
-    return { total: rows.length, converted, applied, enrolled };
+    return { total: rows.length, converted, toured, notInterested };
   }, [rows]);
 
   // Keep the open sheet's snapshot fresh after a rating/follow-up/note
@@ -581,23 +586,28 @@ export default function AllLeadsPage() {
       },
   ];
 
+  // First load: skeleton the whole page rather than showing real
+  // chrome around zeroes — the stat cards would otherwise read "0
+  // leads" for a beat, which is a wrong answer, not a loading state.
+  // (A revalidation with data already in hand falls through to the
+  // normal render, so refreshes never flash the skeleton.)
+  if (isLoading && !data && !error) {
+    return (
+      <div className="p-6 space-y-6">
+        <AllLeadsIntro />
+        <AllLeadsSkeleton />
+      </div>
+    );
+  }
+
   return (
     <div className="p-6 space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">All Leads</h1>
-        <p className="text-sm text-muted-foreground">
-          Every recruitment lead in one place, grouped by how far it has
-          converted — active leads to triage on top, then each funnel
-          stage through Enrolled. Rate each lead 1–5 stars on likelihood
-          of conversion; click a row to log a call and mark it followed
-          up.
-        </p>
-      </div>
+      <AllLeadsIntro />
 
-      {/* Conversion funnel rollup — the whole pool, unaffected by the
-          filters below. Four full-width cards reading as the funnel
-          narrowing left to right; bare counts (percentages came off
-          by user request). */}
+      {/* Rollup over the whole pool, unaffected by the filters below.
+          Every card counts LEADS against one denominator; bare counts
+          (percentages came off by user request). Tours links out to
+          the Campus Tours page. */}
       <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
         {(
           [
@@ -605,34 +615,55 @@ export default function AllLeadsPage() {
               label: "Leads",
               value: funnel.total,
               hint: "All four recruitment sources",
+              href: null,
             },
             {
               label: "Converted",
               value: funnel.converted,
               hint: "Linked to an applying family",
+              href: null,
             },
             {
-              label: "Applied",
-              value: funnel.applied,
-              hint: "Application submitted or beyond",
+              label: "Tours",
+              value: funnel.toured,
+              hint: "Leads with a tour on record",
+              href: "/admin/campus-tours",
             },
             {
-              label: "Enrolled",
-              value: funnel.enrolled,
-              hint: "Registration packet confirmed",
+              label: "Not Interested",
+              value: funnel.notInterested,
+              hint: "Declined — reason on each lead",
+              href: null,
             },
           ] as const
-        ).map((s) => (
-          <div key={s.label} className="rounded-lg border bg-white px-4 py-4">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-              {s.label}
-            </p>
-            <p className="mt-1 text-3xl font-bold tabular-nums leading-tight">
-              {s.value.toLocaleString()}
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">{s.hint}</p>
-          </div>
-        ))}
+        ).map((s) => {
+          const body = (
+            <>
+              <p className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                {s.label}
+                {s.href ? <ArrowUpRight className="size-3" /> : null}
+              </p>
+              <p className="mt-1 text-3xl font-bold tabular-nums leading-tight">
+                {s.value.toLocaleString()}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">{s.hint}</p>
+            </>
+          );
+          return s.href ? (
+            <Link
+              key={s.label}
+              href={s.href}
+              className="rounded-lg border bg-white px-4 py-4 transition-colors hover:border-foreground/30 hover:bg-muted/30"
+              title="Open Campus Tours"
+            >
+              {body}
+            </Link>
+          ) : (
+            <div key={s.label} className="rounded-lg border bg-white px-4 py-4">
+              {body}
+            </div>
+          );
+        })}
       </div>
 
       {/* One search + dropdown filters, spanning the same width as the
@@ -859,19 +890,6 @@ export default function AllLeadsPage() {
         <div className="rounded-lg border bg-white p-8 text-center text-sm text-muted-foreground">
           Couldn&rsquo;t load leads. Refresh to try again.
         </div>
-      ) : isLoading && !data ? (
-        // One skeleton card while the first load is in flight — the
-        // real group split isn't known yet.
-        <Card className="overflow-hidden bg-white py-0 gap-0">
-          <CardContent className="p-4 bg-white">
-            <DataTable<AllLeadRow>
-              columns={columns}
-              data={[]}
-              isLoading
-              externalSearch={search}
-            />
-          </CardContent>
-        </Card>
       ) : visible.length === 0 ? (
         <div className="rounded-lg border bg-white px-6 py-12 text-center text-sm text-muted-foreground">
           No leads match the current filters.
@@ -944,6 +962,73 @@ export default function AllLeadsPage() {
         />
       ) : null}
     </div>
+  );
+}
+
+/** Page title + blurb — shared by the loaded page and the skeleton so
+ *  the two can't drift (and so the heading never flashes in late). */
+function AllLeadsIntro() {
+  return (
+    <div>
+      <h1 className="text-2xl font-bold">All Leads</h1>
+      <p className="text-sm text-muted-foreground">
+        Every recruitment lead in one place, grouped by how far it has
+        converted — active leads to triage on top, then each funnel stage
+        through Enrolled. Rate each lead 1–5 stars on likelihood of
+        conversion; click a row to log a call and mark it followed up.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * First-load skeleton, laid out to match the real page block for
+ * block — four stat cards, the filter row, then two group cards with
+ * a table inside. Same widths and heights as the live chrome, so the
+ * page doesn't jump when the data lands.
+ */
+function AllLeadsSkeleton() {
+  return (
+    <>
+      <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div key={i} className="rounded-xl border bg-white px-4 py-4">
+            <Skeleton className="h-3 w-24" />
+            <Skeleton className="mt-2 h-8 w-16" />
+            <Skeleton className="mt-2 h-3 w-32" />
+          </div>
+        ))}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <Skeleton className="h-9 min-w-64 flex-1" />
+        {Array.from({ length: 4 }).map((_, i) => (
+          <Skeleton key={i} className="h-9 w-40 shrink-0" />
+        ))}
+        <Skeleton className="ml-auto h-9 w-36" />
+      </div>
+
+      {/* Two cards — the usual shape while loading (Active Leads plus
+          at least one converted stage); more appear as data lands. */}
+      <div className="space-y-8">
+        {[6, 3].map((rowCount, i) => (
+          <div key={i} className="overflow-hidden rounded-xl border bg-white">
+            <div className="flex items-center gap-3 border-b px-6 py-4">
+              <Skeleton className="size-2.5 rounded-full" />
+              <Skeleton className="h-4 w-28" />
+              <Skeleton className="h-3 w-8" />
+              <Skeleton className="h-3 w-64" />
+            </div>
+            <div className="space-y-2 p-4">
+              <Skeleton className="h-9 w-full rounded-md" />
+              {Array.from({ length: rowCount }).map((_, r) => (
+                <Skeleton key={r} className="h-11 w-full rounded-md" />
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </>
   );
 }
 
