@@ -521,7 +521,7 @@ function EnrolledRoster({
     <Card className="overflow-hidden bg-white py-0 gap-0">
       <CardHeader className="py-4 border-b bg-white space-y-1">
         <div className="flex items-baseline gap-3">
-          <CardTitle className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+          <CardTitle className="text-sm font-semibold text-muted-foreground">
             {title}
           </CardTitle>
           <span className="text-xs tabular-nums text-muted-foreground">

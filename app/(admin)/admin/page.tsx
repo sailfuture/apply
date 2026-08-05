@@ -470,7 +470,7 @@ function TrendCard({
   return (
     <Card aria-busy={loading} className="overflow-hidden bg-white py-0 gap-0">
       <CardHeader className="py-4 border-b bg-white">
-        <CardTitle className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+        <CardTitle className="text-sm font-semibold text-muted-foreground">
           {title}
         </CardTitle>
         <p className="text-xs text-muted-foreground">{subtitle}</p>

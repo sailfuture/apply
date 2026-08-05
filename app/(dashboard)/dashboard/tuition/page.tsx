@@ -746,22 +746,22 @@ function BillingScheduleCard({ slots }: { slots: ParentScheduleSlot[] }) {
         <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[16%]">
+              <TableHead className="text-[10px] text-muted-foreground w-[16%]">
                 Month
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[18%]">
-                Invoice sent
+              <TableHead className="text-[10px] text-muted-foreground w-[18%]">
+                Invoice Sent
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[18%]">
-                Due by
+              <TableHead className="text-[10px] text-muted-foreground w-[18%]">
+                Due By
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[14%] text-right">
+              <TableHead className="text-[10px] text-muted-foreground w-[14%] text-right">
                 Amount
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[16%]">
+              <TableHead className="text-[10px] text-muted-foreground w-[16%]">
                 Status
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[18%] text-right">
+              <TableHead className="text-[10px] text-muted-foreground w-[18%] text-right">
                 Invoice
               </TableHead>
             </TableRow>

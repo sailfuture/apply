@@ -288,10 +288,10 @@ export function DocumentsToReviewBlock({
         <Table className="text-sm table-fixed">
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead className="w-[28%] text-[10px] uppercase tracking-wider text-muted-foreground">
+              <TableHead className="w-[28%] text-[10px] text-muted-foreground">
                 Document
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              <TableHead className="text-[10px] text-muted-foreground">
                 File(s)
               </TableHead>
               {/* Audit columns — pulled out of the Confirmation cell
@@ -299,13 +299,13 @@ export function DocumentsToReviewBlock({
                   of stacking a long caption under each button. The
                   Time column gets a fixed narrow width since
                   relative-time strings are short and predictable. */}
-              <TableHead className="w-[15%] text-[10px] uppercase tracking-wider text-muted-foreground">
-                Confirmed by
+              <TableHead className="w-[15%] text-[10px] text-muted-foreground">
+                Confirmed By
               </TableHead>
-              <TableHead className="w-[80px] text-[10px] uppercase tracking-wider text-muted-foreground">
+              <TableHead className="w-[80px] text-[10px] text-muted-foreground">
                 Time
               </TableHead>
-              <TableHead className="w-[170px] text-right text-[10px] uppercase tracking-wider text-muted-foreground">
+              <TableHead className="w-[170px] text-right text-[10px] text-muted-foreground">
                 Confirmation
               </TableHead>
             </TableRow>

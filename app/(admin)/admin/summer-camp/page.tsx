@@ -380,7 +380,7 @@ export default function SummerCampPage() {
       // Last grade completed, not current grade — the camp form asks
       // what the student just finished.
       key: "last_grade_completed",
-      header: "Grade done",
+      header: "Grade Done",
       sortable: true,
       width: "w-[8%]",
       render: (row) => (
@@ -465,7 +465,7 @@ export default function SummerCampPage() {
       // this says which summer. Editable in the row — recording camp
       // history is bulk work.
       key: "summer_camp_year_attended",
-      header: "Camp year",
+      header: "Camp Year",
       sortable: true,
       width: "w-[10%]",
       accessor: (row) => yearNameOf(row),
@@ -775,7 +775,7 @@ function SummerCampGroup({
             )}
             aria-hidden
           />
-          <CardTitle className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+          <CardTitle className="text-sm font-semibold text-muted-foreground">
             {title}
           </CardTitle>
           <span className="text-xs tabular-nums text-muted-foreground">

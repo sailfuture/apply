@@ -150,28 +150,28 @@ export default function AdminSchoolYearsPage() {
         <Table>
           <TableHeader className="bg-muted/40">
             <TableRow>
-              <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              <TableHead className="text-xs font-semibold text-muted-foreground">
                 Year
               </TableHead>
-              <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              <TableHead className="text-xs font-semibold text-muted-foreground">
                 Status
               </TableHead>
-              <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              <TableHead className="text-xs font-semibold text-muted-foreground">
                 Dates
               </TableHead>
-              <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              <TableHead className="text-xs font-semibold text-muted-foreground">
                 Tuition
               </TableHead>
-              <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              <TableHead className="text-xs font-semibold text-muted-foreground">
                 Annual Fees
               </TableHead>
-              <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              <TableHead className="text-xs font-semibold text-muted-foreground">
                 Transport
               </TableHead>
-              <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              <TableHead className="text-xs font-semibold text-muted-foreground">
                 App Deadline
               </TableHead>
-              <TableHead className="text-right text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              <TableHead className="text-right text-xs font-semibold text-muted-foreground">
                 Actions
               </TableHead>
             </TableRow>

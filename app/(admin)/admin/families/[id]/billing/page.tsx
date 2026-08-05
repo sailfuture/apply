@@ -294,25 +294,25 @@ function ScheduleCard({
         <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[14%]">
+              <TableHead className="text-[10px] text-muted-foreground w-[14%]">
                 Month
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[16%]">
-                Invoice sent
+              <TableHead className="text-[10px] text-muted-foreground w-[16%]">
+                Invoice Sent
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[16%]">
-                Due by
+              <TableHead className="text-[10px] text-muted-foreground w-[16%]">
+                Due By
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[12%] text-right">
+              <TableHead className="text-[10px] text-muted-foreground w-[12%] text-right">
                 Amount
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[12%] text-right">
+              <TableHead className="text-[10px] text-muted-foreground w-[12%] text-right">
                 Paid
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[14%]">
+              <TableHead className="text-[10px] text-muted-foreground w-[14%]">
                 Status
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[16%] text-right">
+              <TableHead className="text-[10px] text-muted-foreground w-[16%] text-right">
                 Invoice
               </TableHead>
             </TableRow>

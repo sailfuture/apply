@@ -304,19 +304,19 @@ export default function FamilyPage() {
               <table className="w-full">
                 <thead>
                   <tr className="border-b">
-                    <th className="text-muted-foreground px-4 py-3 text-left text-xs font-medium uppercase tracking-wider">
+                    <th className="text-muted-foreground px-4 py-3 text-left text-xs font-medium">
                       Member
                     </th>
-                    <th className="text-muted-foreground hidden px-4 py-3 text-left text-xs font-medium uppercase tracking-wider sm:table-cell">
+                    <th className="text-muted-foreground hidden px-4 py-3 text-left text-xs font-medium sm:table-cell">
                       Email
                     </th>
-                    <th className="text-muted-foreground hidden px-4 py-3 text-left text-xs font-medium uppercase tracking-wider md:table-cell">
+                    <th className="text-muted-foreground hidden px-4 py-3 text-left text-xs font-medium md:table-cell">
                       Phone
                     </th>
-                    <th className="text-muted-foreground hidden px-4 py-3 text-left text-xs font-medium uppercase tracking-wider lg:table-cell">
+                    <th className="text-muted-foreground hidden px-4 py-3 text-left text-xs font-medium lg:table-cell">
                       Relationship
                     </th>
-                    <th className="text-muted-foreground px-4 py-3 text-left text-xs font-medium uppercase tracking-wider">
+                    <th className="text-muted-foreground px-4 py-3 text-left text-xs font-medium">
                       Status
                     </th>
                   </tr>
@@ -404,19 +404,19 @@ export default function FamilyPage() {
               <table className="w-full">
                 <thead>
                   <tr className="border-b">
-                    <th className="text-muted-foreground px-4 py-3 text-left text-xs font-medium uppercase tracking-wider">
+                    <th className="text-muted-foreground px-4 py-3 text-left text-xs font-medium">
                       Student
                     </th>
-                    <th className="text-muted-foreground hidden px-4 py-3 text-left text-xs font-medium uppercase tracking-wider md:table-cell">
+                    <th className="text-muted-foreground hidden px-4 py-3 text-left text-xs font-medium md:table-cell">
                       Date of Birth
                     </th>
-                    <th className="text-muted-foreground hidden px-4 py-3 text-left text-xs font-medium uppercase tracking-wider sm:table-cell">
+                    <th className="text-muted-foreground hidden px-4 py-3 text-left text-xs font-medium sm:table-cell">
                       Age
                     </th>
-                    <th className="text-muted-foreground hidden px-4 py-3 text-left text-xs font-medium uppercase tracking-wider lg:table-cell">
+                    <th className="text-muted-foreground hidden px-4 py-3 text-left text-xs font-medium lg:table-cell">
                       Gender
                     </th>
-                    <th className="text-muted-foreground hidden px-4 py-3 text-left text-xs font-medium uppercase tracking-wider lg:table-cell">
+                    <th className="text-muted-foreground hidden px-4 py-3 text-left text-xs font-medium lg:table-cell">
                       Ethnicity
                     </th>
                   </tr>

@@ -538,7 +538,7 @@ function ApplicationsGroup({
             )}
             aria-hidden
           />
-          <CardTitle className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+          <CardTitle className="text-sm font-semibold text-muted-foreground">
             {title}
           </CardTitle>
           <span className="text-xs tabular-nums text-muted-foreground">

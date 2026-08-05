@@ -62,8 +62,8 @@ export function UnreadMessagesCard({
       <CardHeader className="py-4 border-b bg-white">
         <div className="flex items-baseline justify-between gap-3">
           <div className="flex items-baseline gap-3">
-            <CardTitle className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-              Needs a reply
+            <CardTitle className="text-sm font-semibold text-muted-foreground">
+              Needs a Reply
             </CardTitle>
             {/* The headline number matches the nav badge (new only);
                 viewed-but-unanswered threads are counted separately so
@@ -195,8 +195,8 @@ export function LeadActivityCard({
       <CardHeader className="py-4 border-b bg-white">
         <div className="flex items-baseline justify-between gap-3">
           <div className="flex items-baseline gap-3">
-            <CardTitle className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-              Recent lead activity
+            <CardTitle className="text-sm font-semibold text-muted-foreground">
+              Recent Lead Activity
             </CardTitle>
             <span className="text-xs tabular-nums text-muted-foreground">
               ({rows.length}
@@ -226,22 +226,22 @@ export function LeadActivityCard({
           <Table className="table-fixed">
             <TableHeader>
               <TableRow className="hover:bg-transparent">
-                <TableHead className="w-[20%] text-[10px] uppercase tracking-wider text-muted-foreground">
+                <TableHead className="w-[20%] text-[10px] text-muted-foreground">
                   Lead
                 </TableHead>
-                <TableHead className="w-[12%] text-[10px] uppercase tracking-wider text-muted-foreground">
+                <TableHead className="w-[12%] text-[10px] text-muted-foreground">
                   Rating
                 </TableHead>
-                <TableHead className="w-[14%] text-[10px] uppercase tracking-wider text-muted-foreground">
+                <TableHead className="w-[14%] text-[10px] text-muted-foreground">
                   Activity
                 </TableHead>
-                <TableHead className="w-[32%] text-[10px] uppercase tracking-wider text-muted-foreground">
+                <TableHead className="w-[32%] text-[10px] text-muted-foreground">
                   Detail
                 </TableHead>
-                <TableHead className="w-[12%] text-[10px] uppercase tracking-wider text-muted-foreground">
+                <TableHead className="w-[12%] text-[10px] text-muted-foreground">
                   By
                 </TableHead>
-                <TableHead className="w-[10%] text-right text-[10px] uppercase tracking-wider text-muted-foreground">
+                <TableHead className="w-[10%] text-right text-[10px] text-muted-foreground">
                   When
                 </TableHead>
               </TableRow>

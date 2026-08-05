@@ -669,7 +669,7 @@ export default function InquiriesPage() {
       // for rows written before `last_reach_out` was server-stamped,
       // matching how the All Leads feed resolves it.
       key: "last_reach_out",
-      header: "Last contact",
+      header: "Last Contact",
       sortable: true,
       width: "w-[8%]",
       accessor: (row) => lastContactAt(row),
@@ -852,7 +852,7 @@ export default function InquiriesPage() {
       // Sheet). Full text on hover; sorts on the note's timestamp so
       // admin can surface the most- or least-recently touched families.
       key: "last_note",
-      header: "Last note",
+      header: "Last Note",
       sortable: true,
       width: "w-[200px]",
       accessor: (row) => row.last_note_at ?? 0,
@@ -1247,7 +1247,7 @@ function InquiriesGroup({
             )}
             aria-hidden
           />
-          <CardTitle className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+          <CardTitle className="text-sm font-semibold text-muted-foreground">
             {title}
           </CardTitle>
           <span className="text-xs tabular-nums text-muted-foreground">

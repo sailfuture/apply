@@ -253,19 +253,19 @@ export default function FamilyOverviewPage() {
             <Table>
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
-                  <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <TableHead className="text-[10px] text-muted-foreground">
                     Name
                   </TableHead>
-                  <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <TableHead className="text-[10px] text-muted-foreground">
                     Email
                   </TableHead>
-                  <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <TableHead className="text-[10px] text-muted-foreground">
                     Phone
                   </TableHead>
-                  <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <TableHead className="text-[10px] text-muted-foreground">
                     Relationship
                   </TableHead>
-                  <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <TableHead className="text-[10px] text-muted-foreground">
                     Address
                   </TableHead>
                 </TableRow>
@@ -355,22 +355,22 @@ export default function FamilyOverviewPage() {
             <Table>
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
-                  <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <TableHead className="text-[10px] text-muted-foreground">
                     Name
                   </TableHead>
-                  <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                    Date of birth
+                  <TableHead className="text-[10px] text-muted-foreground">
+                    Date of Birth
                   </TableHead>
-                  <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <TableHead className="text-[10px] text-muted-foreground">
                     Gender
                   </TableHead>
-                  <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <TableHead className="text-[10px] text-muted-foreground">
                     Ethnicity
                   </TableHead>
-                  <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <TableHead className="text-[10px] text-muted-foreground">
                     Status
                   </TableHead>
-                  <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground text-right w-10" />
+                  <TableHead className="text-[10px] text-muted-foreground text-right w-10" />
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -453,19 +453,19 @@ export default function FamilyOverviewPage() {
             <Table>
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
-                  <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <TableHead className="text-[10px] text-muted-foreground">
                     Name
                   </TableHead>
-                  <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <TableHead className="text-[10px] text-muted-foreground">
                     Email
                   </TableHead>
-                  <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <TableHead className="text-[10px] text-muted-foreground">
                     Phone
                   </TableHead>
-                  <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <TableHead className="text-[10px] text-muted-foreground">
                     Relationship
                   </TableHead>
-                  <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <TableHead className="text-[10px] text-muted-foreground">
                     Address
                   </TableHead>
                 </TableRow>
@@ -548,20 +548,20 @@ export default function FamilyOverviewPage() {
             <Table>
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
-                  <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <TableHead className="text-[10px] text-muted-foreground">
                     Submitted
                   </TableHead>
-                  <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <TableHead className="text-[10px] text-muted-foreground">
                     Parent
                   </TableHead>
-                  <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <TableHead className="text-[10px] text-muted-foreground">
                     Student
                   </TableHead>
-                  <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <TableHead className="text-[10px] text-muted-foreground">
                     Grade
                   </TableHead>
-                  <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                    Followed up
+                  <TableHead className="text-[10px] text-muted-foreground">
+                    Followed Up
                   </TableHead>
                 </TableRow>
               </TableHeader>
@@ -636,19 +636,19 @@ export default function FamilyOverviewPage() {
             <Table className="table-fixed">
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
-                  <TableHead className="w-[15%] text-[10px] uppercase tracking-wider text-muted-foreground">
-                    School year
+                  <TableHead className="w-[15%] text-[10px] text-muted-foreground">
+                    School Year
                   </TableHead>
-                  <TableHead className="w-[20%] text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <TableHead className="w-[20%] text-[10px] text-muted-foreground">
                     Type
                   </TableHead>
-                  <TableHead className="w-[30%] text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <TableHead className="w-[30%] text-[10px] text-muted-foreground">
                     Status
                   </TableHead>
-                  <TableHead className="w-[25%] text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <TableHead className="w-[25%] text-[10px] text-muted-foreground">
                     Submitted
                   </TableHead>
-                  <TableHead className="w-[10%] text-[10px] uppercase tracking-wider text-muted-foreground" />
+                  <TableHead className="w-[10%] text-[10px] text-muted-foreground" />
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -731,19 +731,19 @@ export default function FamilyOverviewPage() {
             <Table className="table-fixed">
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
-                  <TableHead className="w-[15%] text-[10px] uppercase tracking-wider text-muted-foreground">
-                    School year
+                  <TableHead className="w-[15%] text-[10px] text-muted-foreground">
+                    School Year
                   </TableHead>
-                  <TableHead className="w-[20%] text-[10px] uppercase tracking-wider text-muted-foreground">
-                    Sections complete
+                  <TableHead className="w-[20%] text-[10px] text-muted-foreground">
+                    Sections Complete
                   </TableHead>
-                  <TableHead className="w-[30%] text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <TableHead className="w-[30%] text-[10px] text-muted-foreground">
                     Status
                   </TableHead>
-                  <TableHead className="w-[25%] text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <TableHead className="w-[25%] text-[10px] text-muted-foreground">
                     Submitted
                   </TableHead>
-                  <TableHead className="w-[10%] text-[10px] uppercase tracking-wider text-muted-foreground" />
+                  <TableHead className="w-[10%] text-[10px] text-muted-foreground" />
                 </TableRow>
               </TableHeader>
               <TableBody>

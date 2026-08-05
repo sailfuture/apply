@@ -462,8 +462,8 @@ function NotStartedTable({
     <Card className="overflow-hidden border-amber-200 bg-white py-0 gap-0">
       <CardHeader className="py-4 border-b border-amber-200 bg-amber-50/50">
         <div className="flex items-baseline gap-3">
-          <CardTitle className="text-sm font-semibold uppercase tracking-wider text-amber-800">
-            Billing not started
+          <CardTitle className="text-sm font-semibold text-amber-800">
+            Billing Not Started
           </CardTitle>
           <span className="text-xs tabular-nums text-amber-800/70">
             ({rows.length})
@@ -478,16 +478,16 @@ function NotStartedTable({
         <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[30%]">
+              <TableHead className="text-[10px] text-muted-foreground w-[30%]">
                 Family
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[34%]">
+              <TableHead className="text-[10px] text-muted-foreground w-[34%]">
                 Primary Contact
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[18%] text-right">
-                Monthly (once started)
+              <TableHead className="text-[10px] text-muted-foreground w-[18%] text-right">
+                Monthly (Once Started)
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[14%]">
+              <TableHead className="text-[10px] text-muted-foreground w-[14%]">
                 Readiness
               </TableHead>
               <TableHead className="w-[4%]" />
@@ -619,8 +619,8 @@ function BillingTable({
     <Card className="overflow-hidden bg-white py-0 gap-0">
       <CardHeader className="py-4 border-b bg-white">
         <div className="flex items-baseline gap-3">
-          <CardTitle className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-            Subscriptions on file
+          <CardTitle className="text-sm font-semibold text-muted-foreground">
+            Subscriptions on File
           </CardTitle>
           <span className="text-xs tabular-nums text-muted-foreground">
             ({rows.length})
@@ -640,31 +640,31 @@ function BillingTable({
         <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[16%]">
+              <TableHead className="text-[10px] text-muted-foreground w-[16%]">
                 Family
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[16%]">
+              <TableHead className="text-[10px] text-muted-foreground w-[16%]">
                 Primary Contact
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[10%]">
+              <TableHead className="text-[10px] text-muted-foreground w-[10%]">
                 Status
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[10%] text-right">
+              <TableHead className="text-[10px] text-muted-foreground w-[10%] text-right">
                 Monthly
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[10%] text-right">
-                Year total
+              <TableHead className="text-[10px] text-muted-foreground w-[10%] text-right">
+                Year Total
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[10%] text-right">
+              <TableHead className="text-[10px] text-muted-foreground w-[10%] text-right">
                 Paid
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[12%] text-right">
+              <TableHead className="text-[10px] text-muted-foreground w-[12%] text-right">
                 Outstanding
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[12%] text-right">
-                Next invoice
+              <TableHead className="text-[10px] text-muted-foreground w-[12%] text-right">
+                Next Invoice
               </TableHead>
-              <TableHead className="text-[10px] uppercase tracking-wider text-muted-foreground w-[4%] text-right" />
+              <TableHead className="text-[10px] text-muted-foreground w-[4%] text-right" />
             </TableRow>
           </TableHeader>
           <TableBody>

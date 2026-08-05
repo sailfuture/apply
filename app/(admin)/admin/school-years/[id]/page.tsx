@@ -1965,10 +1965,10 @@ function BracketListCard({
                         percentage cell. The trash + edit affordances
                         live inside `BracketHeader`, so no separate
                         actions column. */}
-                    <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground px-4 py-3 w-1/2">
+                    <TableHead className="text-xs font-semibold text-muted-foreground px-4 py-3 w-1/2">
                       {bracketAxisLabel}
                     </TableHead>
-                    <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground px-4 py-3 w-1/2">
+                    <TableHead className="text-xs font-semibold text-muted-foreground px-4 py-3 w-1/2">
                       Tuition Percentage
                     </TableHead>
                   </TableRow>
@@ -2085,10 +2085,10 @@ function CalculatedListCard({
             <Table>
               <TableHeader className="bg-muted">
                 <TableRow className="hover:bg-muted">
-                  <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground px-4 py-3 w-1/2">
+                  <TableHead className="text-xs font-semibold text-muted-foreground px-4 py-3 w-1/2">
                     {bracketAxisLabel}
                   </TableHead>
-                  <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground px-4 py-3 w-1/2">
+                  <TableHead className="text-xs font-semibold text-muted-foreground px-4 py-3 w-1/2">
                     Calculated
                   </TableHead>
                 </TableRow>

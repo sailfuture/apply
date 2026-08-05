@@ -224,22 +224,22 @@ export default function ApplyIndexPage() {
             <table className="w-full">
               <thead>
                 <tr className="border-b">
-                  <th className="text-muted-foreground px-4 py-3 text-left text-xs font-medium uppercase tracking-wider">
+                  <th className="text-muted-foreground px-4 py-3 text-left text-xs font-medium">
                     School Year
                   </th>
-                  <th className="text-muted-foreground hidden px-4 py-3 text-left text-xs font-medium uppercase tracking-wider sm:table-cell">
+                  <th className="text-muted-foreground hidden px-4 py-3 text-left text-xs font-medium sm:table-cell">
                     Dates
                   </th>
-                  <th className="text-muted-foreground hidden px-4 py-3 text-right text-xs font-medium uppercase tracking-wider md:table-cell">
+                  <th className="text-muted-foreground hidden px-4 py-3 text-right text-xs font-medium md:table-cell">
                     Tuition
                   </th>
-                  <th className="text-muted-foreground hidden px-4 py-3 text-right text-xs font-medium uppercase tracking-wider lg:table-cell">
+                  <th className="text-muted-foreground hidden px-4 py-3 text-right text-xs font-medium lg:table-cell">
                     Fees
                   </th>
-                  <th className="text-muted-foreground hidden px-4 py-3 text-right text-xs font-medium uppercase tracking-wider lg:table-cell">
+                  <th className="text-muted-foreground hidden px-4 py-3 text-right text-xs font-medium lg:table-cell">
                     Transport
                   </th>
-                  <th className="text-muted-foreground px-4 py-3 text-left text-xs font-medium uppercase tracking-wider">
+                  <th className="text-muted-foreground px-4 py-3 text-left text-xs font-medium">
                     Status
                   </th>
                 </tr>

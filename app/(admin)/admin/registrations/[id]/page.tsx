@@ -4185,16 +4185,16 @@ function RequiredDocumentSlotCard({
                   card into horizontal scroll. Keep these in sync
                   across all required-doc cards so the columns line up
                   card-to-card. */}
-              <TableHead className="w-[44%] text-[10px] uppercase tracking-wider text-muted-foreground">
+              <TableHead className="w-[44%] text-[10px] text-muted-foreground">
                 File
               </TableHead>
-              <TableHead className="w-[12%] text-[10px] uppercase tracking-wider text-muted-foreground">
+              <TableHead className="w-[12%] text-[10px] text-muted-foreground">
                 Size
               </TableHead>
-              <TableHead className="w-[20%] text-[10px] uppercase tracking-wider text-muted-foreground">
-                Confirmed by
+              <TableHead className="w-[20%] text-[10px] text-muted-foreground">
+                Confirmed By
               </TableHead>
-              <TableHead className="w-[24%] text-right text-[10px] uppercase tracking-wider text-muted-foreground">
+              <TableHead className="w-[24%] text-right text-[10px] text-muted-foreground">
                 Confirmation
               </TableHead>
             </TableRow>

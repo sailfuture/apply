@@ -689,7 +689,7 @@ export default function AllLeadsPage() {
       },
       {
         key: "last_reach_out",
-        header: "Last contact",
+        header: "Last Contact",
         sortable: true,
         width: "w-[8%]",
         accessor: (r) => r.last_reach_out,
@@ -1250,7 +1250,7 @@ function LeadsGroup({
             )}
             aria-hidden
           />
-          <CardTitle className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+          <CardTitle className="text-sm font-semibold text-muted-foreground">
             {title}
           </CardTitle>
           <span className="text-xs tabular-nums text-muted-foreground">
