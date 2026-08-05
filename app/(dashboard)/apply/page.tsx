@@ -77,12 +77,16 @@ export default function ApplyIndexPage() {
   const [schoolYears, setSchoolYears] = useState<SchoolYear[]>([]);
   const [loading, setLoading] = useState(true);
   const [isAccepted, setIsAccepted] = useState<boolean | null>(null);
+  // Years this family already has an application on — badged in the
+  // table so a mid-application family can spot theirs instantly.
+  const [appYears, setAppYears] = useState<number[]>([]);
 
   const fetchData = useCallback(async () => {
     try {
-      const [familyRes, yearsRes] = await Promise.all([
+      const [familyRes, yearsRes, appsRes] = await Promise.all([
         fetch("/api/families"),
         fetch("/api/school-years"),
+        fetch("/api/applications"),
       ]);
 
       let accepted = false;
@@ -92,6 +96,23 @@ export default function ApplyIndexPage() {
       }
       setIsAccepted(accepted);
 
+      // Which years this family already has applications for. Xano
+      // may return the year FK as a raw id or an expanded object.
+      const appYearIds = new Set<number>();
+      if (appsRes.ok) {
+        const apps = await appsRes.json();
+        if (Array.isArray(apps)) {
+          for (const a of apps) {
+            const raw = a?.registration_school_years_id;
+            const id = Number(
+              typeof raw === "object" && raw !== null ? raw.id : raw
+            );
+            if (Number.isFinite(id) && id > 0) appYearIds.add(id);
+          }
+        }
+      }
+      setAppYears([...appYearIds]);
+
       if (yearsRes.ok) {
         const allYears: SchoolYear[] = await yearsRes.json();
 
@@ -99,7 +120,14 @@ export default function ApplyIndexPage() {
           const upcoming = allYears.find((y) => y.isNextYear);
           const active = allYears.find((y) => y.isActive);
           const target = upcoming ?? active;
-          if (target) {
+          // Auto-redirect only when it can't strand anyone: a family
+          // with an application on a DIFFERENT year (e.g. still
+          // finishing last cycle) must get the year table instead —
+          // this page is their only route back to that application.
+          const hasOtherYearApp = [...appYearIds].some(
+            (id) => id !== target?.id
+          );
+          if (target && !hasOtherYearApp) {
             router.replace(`/apply/year/${target.id}`);
             return;
           }
@@ -245,13 +273,20 @@ export default function ApplyIndexPage() {
                         {formatCurrency(year.transportation_fees)}
                       </td>
                       <td className="px-4 py-3">
-                        {badge && (
-                          <span
-                            className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${badge.className}`}
-                          >
-                            {badge.label}
-                          </span>
-                        )}
+                        <span className="flex flex-wrap items-center gap-1.5">
+                          {badge && (
+                            <span
+                              className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${badge.className}`}
+                            >
+                              {badge.label}
+                            </span>
+                          )}
+                          {appYears.includes(year.id) && (
+                            <span className="inline-flex rounded-full bg-indigo-100 px-2.5 py-0.5 text-xs font-medium text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-400">
+                              Your application
+                            </span>
+                          )}
+                        </span>
                       </td>
                     </tr>
                   );

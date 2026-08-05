@@ -540,19 +540,40 @@ export interface PerStudentSubscriptionResult {
  * touch Xano here so this helper stays pure-Stripe and reusable
  * from any orchestration site.
  */
+/** Unix timestamp of the 1st of next month, on the SCHOOL's calendar
+ *  (America/New_York) — so a family enrolled late in the evening of
+ *  the 31st doesn't get pushed an extra month by the UTC date already
+ *  having rolled over. 05:00 UTC ≈ midnight Eastern; the exact hour
+ *  only needs to land on the right calendar day. */
+function firstOfNextMonthUnix(): number {
+  const nyNow = new Date(
+    new Date().toLocaleString("en-US", { timeZone: "America/New_York" })
+  );
+  return Math.floor(
+    Date.UTC(nyNow.getFullYear(), nyNow.getMonth() + 1, 1, 5) / 1000
+  );
+}
+
 export async function createSubscriptionWithStudentItems(
   input: CreatePerStudentSubscriptionInput
 ): Promise<PerStudentSubscriptionResult> {
   const stripe = getStripeClient();
 
-  // First-invoice anchoring. Three regimes:
+  // First-invoice anchoring. Four regimes:
   //   - start date > 48h out  → `trial_end` (proven path; Stripe
   //     requires trial_end comfortably in the future)
   //   - start date in the future but ≤ 48h → `billing_cycle_anchor` +
   //     no proration. The old behavior silently DROPPED the anchor
   //     here, invoicing the family immediately (up to 2 days early)
   //     and anchoring all 12 invoices to the wrong day of month.
-  //   - start date passed / missing / unparsable → invoice now.
+  //   - start date PASSED (family enrolled after the year's billing
+  //     run went out) → anchor to the FIRST OF NEXT MONTH, no
+  //     proration. They missed this month's deadline, so they join
+  //     billing at the next one — and their cycle stays on the 1sts
+  //     with everyone else, instead of invoicing immediately and
+  //     riding the enrollment date for the rest of the year.
+  //   - start date missing / unparsable → invoice now (the year has
+  //     no billing policy to align to).
   const { trialEndUnix, cycleAnchorUnix } = (() => {
     if (!input.billingStartDate) {
       return { trialEndUnix: null, cycleAnchorUnix: null };
@@ -563,7 +584,9 @@ export async function createSubscriptionWithStudentItems(
     }
     const unix = Math.floor(ms / 1000);
     const nowUnix = Math.floor(Date.now() / 1000);
-    if (unix <= nowUnix) return { trialEndUnix: null, cycleAnchorUnix: null };
+    if (unix <= nowUnix) {
+      return { trialEndUnix: null, cycleAnchorUnix: firstOfNextMonthUnix() };
+    }
     if (unix <= nowUnix + 48 * 60 * 60) {
       return { trialEndUnix: null, cycleAnchorUnix: unix };
     }
