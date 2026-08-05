@@ -1348,7 +1348,7 @@ export function LeadTriageSheet({
         side="right"
         className="flex w-full flex-col gap-0 p-0 sm:max-w-lg"
       >
-        <SheetHeader className="border-b px-4 py-3">
+        <SheetHeader className="shrink-0 border-b px-4 py-3">
           <SheetTitle className="flex flex-wrap items-center gap-2 text-base">
             {title}
             {headerBadges}
@@ -1360,7 +1360,7 @@ export function LeadTriageSheet({
           ) : null}
         </SheetHeader>
 
-        <div className="space-y-3 border-b px-4 py-4">
+        <div className="shrink-0 space-y-3 border-b px-4 py-4">
           {/* Rating on its own row, then the two triage ACTIONS
               (followed-up toggle + book a tour) side by side. */}
           <LeadTriageControls
@@ -1383,7 +1383,14 @@ export function LeadTriageSheet({
         </div>
 
         {details || conversion ? (
-          <div className="space-y-3 border-b bg-muted/10 px-4 py-4">
+          // `min-h-0 + overflow-y-auto` makes THIS section the sheet's
+          // pressure valve: when the details outgrow the viewport (an
+          // inquiry's "About the student" runs to paragraphs), this
+          // block shrinks and scrolls internally instead of shoving
+          // the activity log + composer off-screen with no scrollbar
+          // anywhere. The header, triage controls, and composer stay
+          // pinned (shrink-0); the timeline keeps its own floor below.
+          <div className="min-h-0 space-y-3 overflow-y-auto border-b bg-muted/10 px-4 py-4">
             {/* Keyed by lead so switching rows resets any in-progress
                 edit instead of carrying a stale draft across leads. */}
             {details ? (
@@ -1448,8 +1455,10 @@ export function LeadTriageSheet({
 
         {/* Timeline — a chat stream pinned to the newest message
             (MessageScroller inside InquiryNotes); composer stays
-            docked below it. */}
-        <div className="flex min-h-0 flex-1 flex-col">
+            docked below it. `min-h-56` guarantees the log a usable
+            window even when a long details block is competing for
+            room — the details scroll for the remainder. */}
+        <div className="flex min-h-56 flex-1 flex-col">
           <p className="shrink-0 border-b px-4 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
             Activity log
           </p>
@@ -1457,7 +1466,7 @@ export function LeadTriageSheet({
             <InquiryNotes scope={scope} variant="timeline" />
           </div>
         </div>
-        <div className="border-t bg-muted/20 px-4 py-3">
+        <div className="shrink-0 border-t bg-muted/20 px-4 py-3">
           <InquiryNoteComposer scope={scope} onNoteAdded={onChanged} />
         </div>
       </SheetContent>
