@@ -8,6 +8,7 @@ import {
   type XanoAdminNote,
   type XanoTour,
 } from "@/lib/xano";
+import { leadConvertedFamilyId } from "@/lib/lead-conversion";
 
 /**
  * All Leads — every pre-application lead across the four recruitment
@@ -73,20 +74,62 @@ export type AllLeadRow = {
   tour_status: string;
   /** `scheduled_at` of the tour behind `tour_status`; 0 when none. */
   tour_at: number;
+  /** Conversion link — the `registration_families` row this lead
+   *  became, stamped by the on-submit auto-matcher / re-match sweep /
+   *  manual link in the triage sheet. 0 = not converted. */
+  converted_family_id: number;
+  converted_family_name: string;
+  /** When the link was stamped; 0 when unlinked. */
+  converted_at: number;
+  /** Funnel stage DERIVED live from the linked family's application
+   *  data (never stored — same philosophy as `deriveApplicationStatus`):
+   *  "" not converted · "linked" family exists but no application row
+   *  yet · "started" application in draft · "applied" submitted ·
+   *  "accepted" admin approved · "enrolled" a student's registration
+   *  packet is confirmed. Highest stage across every school year wins. */
+  funnel_stage: LeadFunnelStage;
 };
+
+export type LeadFunnelStage =
+  | ""
+  | "linked"
+  | "started"
+  | "applied"
+  | "accepted"
+  | "enrolled";
 
 export async function GET() {
   try {
     await requireAdmin();
-    const [inquiries, campRows, waivers, tascoRows, leadNotes, tours] =
-      await Promise.all([
-        xano.inquiries.getAll().catch(() => []),
-        xano.summerCamp.getAll().catch(() => []),
-        xano.websiteWaivers.getAll().catch(() => []),
-        xano.tascoSummerVisits.getAll().catch(() => []),
-        xano.adminNotes.getAllLeadNotes().catch(() => [] as XanoAdminNote[]),
-        xano.tours.getAll().catch(() => [] as XanoTour[]),
-      ]);
+    const [
+      inquiries,
+      campRows,
+      waivers,
+      tascoRows,
+      leadNotes,
+      tours,
+      families,
+      progressRows,
+      packets,
+      students,
+    ] = await Promise.all([
+      xano.inquiries.getAll().catch(() => []),
+      xano.summerCamp.getAll().catch(() => []),
+      xano.websiteWaivers.getAll().catch(() => []),
+      xano.tascoSummerVisits.getAll().catch(() => []),
+      xano.adminNotes.getAllLeadNotes().catch(() => [] as XanoAdminNote[]),
+      xano.tours.getAll().catch(() => [] as XanoTour[]),
+      // The funnel joins — family names for the Converted badge plus
+      // the application/packet facts the stage derives from. Students
+      // ride along because packets carry no family FK (they're per
+      // student+year); the student row bridges packet → family. All
+      // fail-soft: a blip degrades converted rows to a bare "Linked"
+      // badge rather than dropping the leads list.
+      xano.families.getAll().catch(() => []),
+      xano.familyApplicationProgress.getAll(),
+      xano.studentRegistration.getAll().catch(() => []),
+      xano.students.getAll().catch(() => []),
+    ]);
 
     // Best tour per lead. Rank: a COMPLETED tour is the fact this
     // page filters on ("who has toured"), then an upcoming booking,
@@ -132,10 +175,58 @@ export async function GET() {
     const reachOut = (key: string, stored: number | null | undefined): number =>
       Number(stored) || newestNoteAt.get(key) || 0;
 
-    // The per-source mappers build rows without the tour fields —
-    // those are stamped on afterward from the one tours map, so four
-    // mappers don't each repeat the lookup.
-    type BareRow = Omit<AllLeadRow, "tour_status" | "tour_at">;
+    // Funnel stage per family, highest across every school year.
+    // Derived fresh on each read (nothing stored) so a withdrawn or
+    // re-opened application is reflected immediately. Archived
+    // progress rows still count — the family DID apply; the funnel
+    // measures conversion, not current standing.
+    const STAGE_RANK: Record<LeadFunnelStage, number> = {
+      "": 0,
+      linked: 1,
+      started: 2,
+      applied: 3,
+      accepted: 4,
+      enrolled: 5,
+    };
+    const stageByFamily = new Map<number, LeadFunnelStage>();
+    const raiseStage = (familyId: number, stage: LeadFunnelStage) => {
+      if (!familyId) return;
+      const cur = stageByFamily.get(familyId) ?? "";
+      if (STAGE_RANK[stage] > STAGE_RANK[cur]) {
+        stageByFamily.set(familyId, stage);
+      }
+    };
+    for (const p of progressRows) {
+      const fid = Number(p.registration_families_id) || 0;
+      raiseStage(
+        fid,
+        p.isAccepted ? "accepted" : p.isSubmitted ? "applied" : "started"
+      );
+    }
+    // Packets have no family FK — bridge through the student row.
+    const familyByStudent = new Map(
+      students.map((s) => [s.id, Number(s.registration_families_id) || 0])
+    );
+    for (const pkt of packets) {
+      if (pkt.registrationConfirmed === true) {
+        raiseStage(
+          familyByStudent.get(Number(pkt.registration_students_id)) ?? 0,
+          "enrolled"
+        );
+      }
+    }
+    const familyNameById = new Map(
+      families.map((f) => [f.id, (f.family_name ?? "").trim()])
+    );
+
+    // The per-source mappers build rows without the tour or derived
+    // funnel fields — those are stamped on afterward from the shared
+    // maps, so four mappers don't each repeat the lookups. They DO
+    // carry the raw conversion link, which is a per-source column.
+    type BareRow = Omit<
+      AllLeadRow,
+      "tour_status" | "tour_at" | "converted_family_name" | "funnel_stage"
+    >;
     const bare: BareRow[] = [
       ...inquiries.map((i): BareRow => {
         const status = (i.status ?? "").trim();
@@ -163,6 +254,8 @@ export async function GET() {
                 : "",
           opt_in: i.messaging_opt_in !== false,
           grade_raw: (i.starting_grade || i.current_grade || "").trim(),
+          converted_family_id: leadConvertedFamilyId(i),
+          converted_at: Number(i.converted_at) || 0,
         };
       }),
       ...campRows.map(
@@ -193,6 +286,8 @@ export async function GET() {
               : "",
           opt_in: true,
           grade_raw: (c.last_grade_completed ?? "").trim(),
+          converted_family_id: leadConvertedFamilyId(c),
+          converted_at: Number(c.converted_at) || 0,
         })
       ),
       ...waivers.map(
@@ -213,6 +308,8 @@ export async function GET() {
           detail: w.marketing_opt_in ? "" : "No marketing opt-in",
           opt_in: w.marketing_opt_in === true,
           grade_raw: (w.student_grade ?? "").trim(),
+          converted_family_id: leadConvertedFamilyId(w),
+          converted_at: Number(w.converted_at) || 0,
         })
       ),
       ...tascoRows.map(
@@ -233,6 +330,8 @@ export async function GET() {
           detail: (t.recreation_center ?? "").trim(),
           opt_in: t.marketing_opt_in === true,
           grade_raw: (t.current_grade ?? "").trim(),
+          converted_family_id: leadConvertedFamilyId(t),
+          converted_at: Number(t.converted_at) || 0,
         })
       ),
     ];
@@ -240,7 +339,19 @@ export async function GET() {
     const rows: AllLeadRow[] = bare
       .map((r) => {
         const tour = tourFor(r.key);
-        return { ...r, tour_status: tour.status, tour_at: tour.at };
+        const fid = r.converted_family_id;
+        return {
+          ...r,
+          tour_status: tour.status,
+          tour_at: tour.at,
+          converted_family_name: fid
+            ? familyNameById.get(fid) || `Family #${fid}`
+            : "",
+          // Linked but no application data at all = the family row
+          // exists (or the joins blipped) — still worth showing as
+          // further along than an untouched lead.
+          funnel_stage: fid ? (stageByFamily.get(fid) ?? "linked") : "",
+        };
       })
       .sort((a, b) => b.submitted_ts - a.submitted_ts);
 

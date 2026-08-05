@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { xano } from "@/lib/xano";
 import { sendApplicationReceivedEmail } from "@/lib/emails/triggers";
 import { sendApplicationReceivedSms } from "@/lib/sms/triggers";
+import { matchLeadsToFamilies } from "@/lib/lead-conversion";
 
 /**
  * Read-or-create the progress row for the current Clerk user's family + a
@@ -194,6 +195,16 @@ export async function PATCH(req: NextRequest) {
     sendApplicationReceivedSms(familyId, yearId).catch((err) => {
       console.error(
         `[/api/family-progress] sendApplicationReceivedSms failed for family=${familyId} year=${yearId}:`,
+        err
+      );
+    });
+    // Link any recruitment leads (inquiry / camp / waiver / TASCO)
+    // whose email or phone matches this family's parents — the
+    // moment a lead "converts" is exactly this submit. Best-effort
+    // like the sends above: a match failure never fails the submit.
+    matchLeadsToFamilies({ familyId }).catch((err) => {
+      console.error(
+        `[/api/family-progress] lead auto-match failed for family=${familyId}:`,
         err
       );
     });

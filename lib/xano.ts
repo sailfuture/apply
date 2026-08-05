@@ -1293,6 +1293,17 @@ export interface XanoInquiry {
    *  clears back to 0. Unlike empty strings/null, integer 0 IS
    *  applied by the Xano edit endpoint (verified live). */
   interest_level?: number | null;
+  /** FK → `registration_families` once this lead is known to have
+   *  converted into an applying family. 0/undefined = not linked
+   *  (0 is the clear sentinel — Xano's edit endpoints skip empty
+   *  inputs, so null can never be written back). Stamped by the
+   *  auto-matcher on application submit, the admin re-match sweep,
+   *  or a manual link in the triage sheet. Same pair exists on all
+   *  four lead tables. */
+  registration_families_id?: number | null;
+  /** Epoch ms when the conversion link was stamped; 0/undefined =
+   *  never linked. */
+  converted_at?: number | null;
 }
 
 /** One summer-camp registration/inquiry row (`registration_summer_camp`).
@@ -1317,6 +1328,9 @@ export interface XanoSummerCampInquiry {
    *  Bumped by the notes POST endpoint; never hand-edited (the admin
    *  PATCH allowlists exclude it). */
   last_reach_out?: number | null;
+  /** Conversion link + stamp — see the matching pair on `XanoInquiry`. */
+  registration_families_id?: number | null;
+  converted_at?: number | null;
   student_first_name: string;
   student_last_name: string;
   gender: string;
@@ -1371,6 +1385,9 @@ export interface XanoWebsiteLiabilityWaiver {
   isFollowedUp?: boolean;
   /** Server-managed timestamp of the most recent note on this lead. */
   last_reach_out?: number | null;
+  /** Conversion link + stamp — see the matching pair on `XanoInquiry`. */
+  registration_families_id?: number | null;
+  converted_at?: number | null;
 }
 
 /** One TASCO summer-visit sign-up (`tasco_summer_visit`). Public form
@@ -1400,6 +1417,9 @@ export interface XanoTascoSummerVisit {
   isFollowedUp?: boolean;
   /** Server-managed timestamp of the most recent note on this lead. */
   last_reach_out?: number | null;
+  /** Conversion link + stamp — see the matching pair on `XanoInquiry`. */
+  registration_families_id?: number | null;
+  converted_at?: number | null;
 }
 
 /** Lookup table — distinguishes new applicants from returning enrollments. */
@@ -5208,6 +5228,27 @@ export const xano = {
           `[xano.familyApplicationProgress.getByYear] threw for yearId=${yearId}:`,
           err
         );
+        return [];
+      }
+    },
+
+    /** Every progress row across all families and years — backs the
+     *  All Leads conversion funnel, which needs "has this family ever
+     *  applied, any year" rather than a per-year slice. The plain
+     *  CRUD endpoint returns the whole table (the query params on the
+     *  `_getAllMatches` URL above are ignored server-side — filtering
+     *  happens in code there too). Fail-soft like the other bulk
+     *  reads: a Xano blip degrades the funnel to "no data" instead of
+     *  500ing the leads list. */
+    async getAll(): Promise<XanoFamilyApplicationProgress[]> {
+      try {
+        const res = await fetchRetry(
+          `${getBaseUrl()}/registration_family_application_progress`
+        );
+        if (!res.ok) return [];
+        const items = await res.json();
+        return Array.isArray(items) ? items : [];
+      } catch {
         return [];
       }
     },

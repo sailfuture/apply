@@ -7,6 +7,7 @@ import {
   type LeadAdminPatch,
   type LeadContactFields,
 } from "@/lib/leads";
+import { writeLeadConversion } from "@/lib/lead-conversion";
 
 /**
  * Admin writes for any recruitment lead, routed to the lead's own
@@ -14,7 +15,14 @@ import {
  *
  *   PATCH { source, id, interest_level?, isFollowedUp?, opt_in?,
  *           student_name?, parent_name?, phone?, email?, grade?,
- *           school? }
+ *           school?, family_id? }
+ *
+ * `family_id` is the manual conversion link — the
+ * `registration_families` row this lead became (0 unlinks; the
+ * columns clear with integer-0 sentinels because Xano skips empty
+ * inputs). Routed through `writeLeadConversion` so the manual path,
+ * the on-submit auto-matcher, and the re-match sweep all write and
+ * echo-verify identically.
  *
  * Admin-owned triage fields, shared by all four lead tables:
  *   - `interest_level` — 1–5 conversion stars; 0 clears (integer 0 IS
@@ -114,14 +122,38 @@ export async function PATCH(req: NextRequest) {
     }
     Object.assign(patch, contactPatch);
 
-    if (Object.keys(patch).length === 0 && skippedEmpty.length === 0) {
+    // Conversion link — written through the shared helper (its own
+    // updateLead call) so the stamp/clear sentinels + inquiry status
+    // side-effect + echo verification match the auto-match paths.
+    let conversionRow: Record<string, unknown> | null = null;
+    let conversionWarning: string | null = null;
+    if ("family_id" in body) {
+      const v = body.family_id;
+      if (typeof v !== "number" || !Number.isInteger(v) || v < 0) {
+        return NextResponse.json(
+          { error: "family_id must be a non-negative integer (0 unlinks)" },
+          { status: 400 }
+        );
+      }
+      const { row, dropped } = await writeLeadConversion(source, id, v);
+      conversionRow = row;
+      if (dropped.length > 0) {
+        conversionWarning = `Xano ignored ${dropped.join(", ")} — expose these as inputs on the ${source} table's edit endpoint.`;
+      }
+    }
+
+    if (
+      Object.keys(patch).length === 0 &&
+      skippedEmpty.length === 0 &&
+      conversionRow === null
+    ) {
       return NextResponse.json({ error: "Nothing to update" }, { status: 400 });
     }
 
     const updated =
       Object.keys(patch).length > 0
         ? await updateLead(source, id, patch)
-        : null;
+        : conversionRow;
 
     // Echo verification on the contact columns — Xano silently drops
     // inputs its edit endpoint doesn't declare, so a mis-wired column
@@ -151,6 +183,7 @@ export async function PATCH(req: NextRequest) {
         `Xano ignored ${dropped.join(", ")} — expose these as inputs on the ${source} table's edit endpoint.`
       );
     }
+    if (conversionWarning) warnings.push(conversionWarning);
     return NextResponse.json(
       warnings.length > 0
         ? { ...row, warning: warnings.join(" ") }

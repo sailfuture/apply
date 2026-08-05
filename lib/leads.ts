@@ -48,7 +48,10 @@ function splitName(full: string): { first: string; last: string } {
     : { first: t.slice(0, i), last: t.slice(i + 1) };
 }
 
-function digitsOnly(raw: string): string {
+/** Bare US phone digits (strips a leading country-code 1). Exported for
+ *  the lead-conversion matcher, which compares lead phones against
+ *  parent phones in this same canonical form. */
+export function digitsOnly(raw: string): string {
   const d = raw.replace(/\D/g, "");
   return d.length === 11 && d.startsWith("1") ? d.slice(1) : d;
 }

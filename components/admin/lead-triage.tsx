@@ -1,11 +1,37 @@
 "use client";
 
 import { useState } from "react";
+import useSWR from "swr";
 import { toast } from "sonner";
-import { Check, Copy, Loader2, Mail, Pencil, Phone } from "lucide-react";
+import {
+  Check,
+  ChevronsUpDown,
+  Copy,
+  Link2,
+  Loader2,
+  Mail,
+  Pencil,
+  Phone,
+  Unlink,
+} from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { adminFetcher } from "@/lib/admin-fetcher";
 import { formatUSPhone } from "@/lib/phone";
 import { formatNoteTimestamp } from "@/lib/format-note-time";
 import {
@@ -178,6 +204,227 @@ export function LeadTriageControls({
           ? `Last contacted ${formatNoteTimestamp(lastReachOut)}`
           : "No contact logged yet."}
       </p>
+    </div>
+  );
+}
+
+/**
+ * Funnel-stage badge vocabulary, shared by the All Leads table and the
+ * triage sheet's conversion section so the two surfaces can't drift.
+ * Ranks order table sorting (further along = higher). Stage semantics
+ * live on `AllLeadRow.funnel_stage` in the all-leads route.
+ */
+export const LEAD_FUNNEL_META: Record<
+  string,
+  { label: string; chip: string; rank: number }
+> = {
+  linked: {
+    label: "Linked",
+    chip: "bg-muted text-muted-foreground hover:bg-muted",
+    rank: 1,
+  },
+  started: {
+    label: "Started",
+    chip: "bg-amber-100 text-amber-800 hover:bg-amber-100",
+    rank: 2,
+  },
+  applied: {
+    label: "Applied",
+    chip: "bg-blue-100 text-blue-800 hover:bg-blue-100",
+    rank: 3,
+  },
+  accepted: {
+    label: "Accepted",
+    chip: "bg-emerald-100 text-emerald-800 hover:bg-emerald-100",
+    rank: 4,
+  },
+  enrolled: {
+    label: "Enrolled",
+    chip: "bg-green-100 text-green-800 hover:bg-green-100",
+    rank: 5,
+  },
+};
+
+/** The lead's conversion link as the host list knows it — passed into
+ *  the sheet so the section renders without its own fetch. */
+export interface LeadConversionInfo {
+  /** 0 = not linked. */
+  family_id: number;
+  family_name: string;
+  /** "" | "linked" | "started" | "applied" | "accepted" | "enrolled" */
+  stage: string;
+  /** Epoch ms the link was stamped; 0 when unlinked. */
+  converted_at: number;
+}
+
+/** Slim row shape from `/api/admin/families` — just the fields the
+ *  link picker searches and displays. */
+interface FamilyPickerRow {
+  id: number;
+  family_name: string;
+  primary_name: string;
+  primary_email: string;
+  student_names: string;
+}
+
+/**
+ * Conversion section — shows whether this lead became an applying
+ * family (with the derived funnel stage), and lets admin fix what the
+ * auto-matcher couldn't: link to a family by hand, or unlink a false
+ * match (writes the 0 sentinel). Writes go through `/api/admin/leads`
+ * `family_id`, same path for link and unlink.
+ */
+function LeadConversionEditor({
+  scope,
+  conversion,
+  onChanged,
+}: {
+  scope: LeadNoteScope;
+  conversion: LeadConversionInfo;
+  onChanged?: () => void;
+}) {
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  // Families load lazily — only once the admin opens the picker, so
+  // every sheet open doesn't pay for the full families list.
+  const { data: familyRows, isLoading: familiesLoading } = useSWR<
+    FamilyPickerRow[]
+  >(pickerOpen ? "/api/admin/families" : null, adminFetcher);
+
+  async function saveLink(familyId: number) {
+    setSaving(true);
+    try {
+      const res = await fetch("/api/admin/leads", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source: scope.source,
+          id: scope.id,
+          family_id: familyId,
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(data?.error ?? `Save failed (${res.status})`);
+      }
+      if (data?.warning) toast.warning(data.warning);
+      else if (familyId > 0) toast.success("Lead linked to family.");
+      else toast.success("Lead unlinked.");
+      onChanged?.();
+    } catch (err) {
+      console.error("[LeadConversionEditor.saveLink]", err);
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't save the link."
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const meta = LEAD_FUNNEL_META[conversion.stage];
+  const linked = conversion.family_id > 0;
+
+  return (
+    <div>
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        Conversion
+      </p>
+      {linked ? (
+        <div className="mt-1 flex flex-wrap items-center gap-2">
+          {meta ? (
+            <Badge className={cn(meta.chip, "whitespace-nowrap")}>
+              {meta.label}
+            </Badge>
+          ) : null}
+          <a
+            href={`/admin/families/${conversion.family_id}`}
+            className="min-w-0 truncate text-sm font-medium text-foreground hover:underline"
+            title={
+              conversion.converted_at
+                ? `Linked ${new Date(conversion.converted_at).toLocaleString()}`
+                : undefined
+            }
+          >
+            {conversion.family_name || `Family #${conversion.family_id}`}
+          </a>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2 text-muted-foreground"
+            disabled={saving}
+            onClick={() => void saveLink(0)}
+            title="Remove the link — this lead didn't actually become this family"
+          >
+            {saving ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <Unlink className="size-3.5" />
+            )}
+            Unlink
+          </Button>
+        </div>
+      ) : (
+        <div className="mt-1 flex items-center gap-2">
+          <span className="text-sm text-muted-foreground">
+            Not converted yet.
+          </span>
+          <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
+            <PopoverTrigger asChild>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 bg-white"
+                disabled={saving}
+              >
+                {saving ? (
+                  <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                ) : (
+                  <Link2 className="size-3.5 mr-1.5" />
+                )}
+                Link to family
+                <ChevronsUpDown className="ml-1 size-3 opacity-50" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-80 p-0" align="start">
+              <Command>
+                <CommandInput placeholder="Search family, parent, or student…" />
+                <CommandList>
+                  <CommandEmpty>
+                    {familiesLoading ? "Loading families…" : "No family found."}
+                  </CommandEmpty>
+                  <CommandGroup>
+                    {(familyRows ?? []).map((f) => (
+                      <CommandItem
+                        key={f.id}
+                        // Search across everything an admin might
+                        // remember about the family, not just its name.
+                        value={`${f.family_name} ${f.primary_name} ${f.primary_email} ${f.student_names} #${f.id}`}
+                        onSelect={() => {
+                          setPickerOpen(false);
+                          void saveLink(f.id);
+                        }}
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium">
+                            {f.family_name}
+                          </p>
+                          <p className="truncate text-xs text-muted-foreground">
+                            {[f.primary_name, f.student_names]
+                              .filter(Boolean)
+                              .join(" · ") || f.primary_email}
+                          </p>
+                        </div>
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                </CommandList>
+              </Command>
+            </PopoverContent>
+          </Popover>
+        </div>
+      )}
     </div>
   );
 }
@@ -656,6 +903,7 @@ export function LeadTriageSheet({
   isFollowedUp,
   lastReachOut,
   details,
+  conversion,
   onChanged,
 }: {
   open: boolean;
@@ -669,6 +917,10 @@ export function LeadTriageSheet({
   /** When provided, the sheet renders an editable Lead details block
    *  between the triage controls and the comms log. */
   details?: LeadEditableDetails;
+  /** When provided, the sheet renders the Conversion section — the
+   *  lead's link to the registration family it became, with manual
+   *  link/unlink. */
+  conversion?: LeadConversionInfo;
   onChanged?: () => void;
 }) {
   return (
@@ -705,6 +957,16 @@ export function LeadTriageSheet({
             studentName={details?.student_name ?? ""}
             onChanged={onChanged}
           />
+          {conversion ? (
+            <LeadConversionEditor
+              // Keyed by lead so the picker/save state resets when the
+              // sheet switches rows, same as the details editor.
+              key={`${scope.source}-${scope.id}`}
+              scope={scope}
+              conversion={conversion}
+              onChanged={onChanged}
+            />
+          ) : null}
         </div>
 
         {details ? (

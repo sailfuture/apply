@@ -4,9 +4,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { toast } from "sonner";
-import { ChevronRight, Star } from "lucide-react";
+import { ChevronRight, Loader2, Star, Wand2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { DataTable, type ColumnDef } from "@/components/admin/data-table";
-import { LeadTriageSheet } from "@/components/admin/lead-triage";
+import {
+  LEAD_FUNNEL_META,
+  LeadTriageSheet,
+} from "@/components/admin/lead-triage";
 import {
   Card,
   CardContent,
@@ -89,7 +93,14 @@ export default function AllLeadsPage() {
   const [tourFilter, setTourFilter] = useState<
     "completed" | "scheduled" | "none" | null
   >(null);
+  // null = no funnel filter. "converted" = any link; "applied" =
+  // submitted or beyond; "enrolled" = fully enrolled; "none" = still
+  // just a lead.
+  const [funnelFilter, setFunnelFilter] = useState<
+    "none" | "converted" | "applied" | "enrolled" | null
+  >(null);
   const [selected, setSelected] = useState<AllLeadRow | null>(null);
+  const [matching, setMatching] = useState(false);
 
   const visible = useMemo(
     () =>
@@ -108,10 +119,76 @@ export default function AllLeadsPage() {
             return false;
           }
         }
+        if (funnelFilter !== null) {
+          const rank = r.funnel_stage
+            ? (LEAD_FUNNEL_META[r.funnel_stage]?.rank ?? 0)
+            : 0;
+          if (funnelFilter === "none" && rank !== 0) return false;
+          if (funnelFilter === "converted" && rank === 0) return false;
+          if (
+            funnelFilter === "applied" &&
+            rank < LEAD_FUNNEL_META.applied.rank
+          ) {
+            return false;
+          }
+          if (funnelFilter === "enrolled" && r.funnel_stage !== "enrolled") {
+            return false;
+          }
+        }
         return true;
       }),
-    [rows, sourceFilter, minRating, followUpFilter, tourFilter]
+    [rows, sourceFilter, minRating, followUpFilter, tourFilter, funnelFilter]
   );
+
+  // Funnel rollup over the WHOLE lead pool (not the filtered view) —
+  // the strip answers "how is recruitment converting overall".
+  const funnel = useMemo(() => {
+    const appliedRank = LEAD_FUNNEL_META.applied.rank;
+    let converted = 0;
+    let applied = 0;
+    let enrolled = 0;
+    for (const r of rows) {
+      const rank = r.funnel_stage
+        ? (LEAD_FUNNEL_META[r.funnel_stage]?.rank ?? 0)
+        : 0;
+      if (rank > 0) converted++;
+      if (rank >= appliedRank) applied++;
+      if (r.funnel_stage === "enrolled") enrolled++;
+    }
+    return { total: rows.length, converted, applied, enrolled };
+  }, [rows]);
+
+  // Re-run the server-side email/phone auto-match across every
+  // unlinked lead. Idempotent — safe to click whenever the numbers
+  // look stale (e.g. a family applied with a different email and was
+  // linked by hand elsewhere, or leads arrived after the family).
+  async function runAutoMatch() {
+    setMatching(true);
+    try {
+      const res = await fetch("/api/admin/lead-conversion", {
+        method: "POST",
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(data?.error ?? `Auto-match failed (${res.status})`);
+      }
+      for (const w of data?.wiringWarnings ?? []) toast.warning(w);
+      const linked = Number(data?.linked) || 0;
+      toast.success(
+        linked > 0
+          ? `Auto-match linked ${linked} lead${linked === 1 ? "" : "s"}.`
+          : "No new matches found."
+      );
+      mutate();
+    } catch (err) {
+      console.error("[AllLeads.runAutoMatch]", err);
+      toast.error(
+        err instanceof Error ? err.message : "Auto-match failed."
+      );
+    } finally {
+      setMatching(false);
+    }
+  }
 
   // Keep the open sheet's snapshot fresh after a rating/follow-up/note
   // write revalidates the list.
@@ -240,7 +317,7 @@ export default function AllLeadsPage() {
         header: "Student",
         sortable: true,
         searchable: true,
-        width: "w-[15%]",
+        width: "w-[14%]",
         render: (r) => (
           <span className="block truncate text-sm font-medium">
             {r.student_name || "—"}
@@ -281,7 +358,7 @@ export default function AllLeadsPage() {
         header: "School",
         sortable: true,
         searchable: true,
-        width: "w-[15%]",
+        width: "w-[13%]",
         render: (r) => (
           <span className="block truncate text-sm" title={r.school}>
             {r.school || "—"}
@@ -365,6 +442,41 @@ export default function AllLeadsPage() {
         },
       },
       {
+        // Conversion funnel stage — DERIVED server-side from the
+        // lead's linked family's live application data. Sorts
+        // furthest-along first so wins rank to the top.
+        key: "funnel_stage",
+        header: "Converted",
+        sortable: true,
+        width: "w-[9%]",
+        accessor: (r) =>
+          r.funnel_stage
+            ? (LEAD_FUNNEL_META[r.funnel_stage]?.rank ?? 0)
+            : 0,
+        render: (r) => {
+          const meta = r.funnel_stage
+            ? LEAD_FUNNEL_META[r.funnel_stage]
+            : null;
+          return meta ? (
+            <Badge
+              className={cn(
+                meta.chip,
+                "max-w-full overflow-hidden whitespace-nowrap"
+              )}
+              title={
+                r.converted_family_name
+                  ? `${meta.label} — ${r.converted_family_name}`
+                  : meta.label
+              }
+            >
+              <span className="truncate">{meta.label}</span>
+            </Badge>
+          ) : (
+            <span className="text-sm text-muted-foreground">—</span>
+          );
+        },
+      },
+      {
         // Follow-up state + when we last logged contact — the two
         // facts that decide who to call next.
         key: "followed_up",
@@ -428,6 +540,55 @@ export default function AllLeadsPage() {
           each lead 1–5 stars on likelihood of conversion; click a row
           to log a call and mark it followed up.
         </p>
+      </div>
+
+      {/* Conversion funnel rollup — the whole pool, unaffected by the
+          filters below. Percentages are of ALL leads, so the three
+          stages read as a funnel narrowing left to right. */}
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-stretch gap-2">
+          {(
+            [
+              { label: "Leads", value: funnel.total, pct: null },
+              { label: "Converted", value: funnel.converted, pct: true },
+              { label: "Applied", value: funnel.applied, pct: true },
+              { label: "Enrolled", value: funnel.enrolled, pct: true },
+            ] as const
+          ).map((s) => (
+            <div
+              key={s.label}
+              className="min-w-24 rounded-lg border bg-white px-3 py-2"
+            >
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                {s.label}
+              </p>
+              <p className="text-lg font-bold tabular-nums leading-tight">
+                {s.value}
+                {s.pct && funnel.total > 0 ? (
+                  <span className="ml-1.5 text-xs font-normal text-muted-foreground">
+                    {Math.round((s.value / funnel.total) * 100)}%
+                  </span>
+                ) : null}
+              </p>
+            </div>
+          ))}
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="bg-white"
+          disabled={matching}
+          onClick={() => void runAutoMatch()}
+          title="Match unlinked leads to registration families by parent email and phone"
+        >
+          {matching ? (
+            <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+          ) : (
+            <Wand2 className="size-3.5 mr-1.5" />
+          )}
+          Run auto-match
+        </Button>
       </div>
 
       {/* Source + rating filter chips — empty selection = everything. */}
@@ -546,6 +707,36 @@ export default function AllLeadsPage() {
             </button>
           );
         })}
+        <span className="mx-1 h-4 w-px bg-border" aria-hidden />
+        <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          Converted
+        </span>
+        {(
+          [
+            { value: "none", label: "Not converted" },
+            { value: "converted", label: "Converted" },
+            { value: "applied", label: "Applied" },
+            { value: "enrolled", label: "Enrolled" },
+          ] as const
+        ).map((f) => {
+          const on = funnelFilter === f.value;
+          return (
+            <button
+              key={f.value}
+              type="button"
+              aria-pressed={on}
+              onClick={() => setFunnelFilter(on ? null : f.value)}
+              className={cn(
+                "rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors",
+                on
+                  ? "border-foreground bg-foreground text-background"
+                  : "border-border bg-white text-muted-foreground hover:border-foreground/40 hover:text-foreground"
+              )}
+            >
+              {f.label}
+            </button>
+          );
+        })}
       </div>
 
       <Card className="overflow-hidden bg-white py-0 gap-0">
@@ -620,6 +811,12 @@ export default function AllLeadsPage() {
             opt_in: activeRow.opt_in,
             // Camp has no consent column — implied by sign-up.
             opt_in_editable: activeRow.source !== "camp",
+          }}
+          conversion={{
+            family_id: activeRow.converted_family_id,
+            family_name: activeRow.converted_family_name,
+            stage: activeRow.funnel_stage,
+            converted_at: activeRow.converted_at,
           }}
           onChanged={() => void mutate()}
         />
