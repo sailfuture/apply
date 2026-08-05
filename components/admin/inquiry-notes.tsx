@@ -7,12 +7,14 @@ import { toast } from "sonner";
 import {
   AlertTriangle,
   CalendarDays,
+  CalendarX2,
   Check,
   Loader2,
   MessageSquareText,
   NotebookPen,
   RotateCw,
   TriangleAlert,
+  UserX,
 } from "lucide-react";
 import { describeSmsError, isFailedStatus } from "@/lib/sms/errors";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
@@ -63,6 +65,7 @@ import {
   tourWhenLabel,
 } from "@/lib/tours";
 import type { ToursResponse } from "@/app/api/admin/tours/route";
+import { liveTourEventId } from "@/lib/xano";
 import type {
   LeadNoteSource,
   XanoAdminNote,
@@ -995,6 +998,51 @@ function entryTs(e: TimelineEntry): number {
   return e.tour.created_at || e.tour.scheduled_at;
 }
 
+/** Outcomes recordable straight from the timeline. Deeper moves
+ *  (reschedule, re-link, delete) stay on the Campus Tours page —
+ *  these three are the ones that come up mid-conversation. */
+type TourMarkerAction = "complete" | "no_show" | "cancel";
+
+/** Compact inline action for a tour marker — sized to sit in a line
+ *  of timeline text rather than read as a page-level button. Spins in
+ *  place while its own write is in flight; the siblings just disable
+ *  so two outcomes can't race. */
+function TourActionButton({
+  icon,
+  label,
+  busy,
+  disabled,
+  onClick,
+  title,
+  destructive,
+}: {
+  icon: ReactNode;
+  label: string;
+  busy: boolean;
+  disabled: boolean;
+  onClick: () => void;
+  title: string;
+  destructive?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      title={title}
+      className={cn(
+        "ml-1.5 inline-flex items-center gap-1 rounded border border-border bg-white px-1.5 py-0.5 align-middle text-[11px] font-medium transition-colors disabled:opacity-60",
+        destructive
+          ? "text-destructive hover:bg-destructive/10"
+          : "text-foreground/70 hover:bg-muted hover:text-foreground"
+      )}
+    >
+      {busy ? <Loader2 className="size-3 animate-spin" /> : icon}
+      {busy ? "Saving…" : label}
+    </button>
+  );
+}
+
 /** Campus tour as a timeline marker — read straight from the tours
  *  table rather than from a note, so every tour a lead has ever had
  *  shows here, including ones booked before this log existed and any
@@ -1002,73 +1050,125 @@ function entryTs(e: TimelineEntry): number {
  *  tour now, not what it was when it was booked. */
 function TourMarker({ tour }: { tour: XanoTour }) {
   const { mutate: globalMutate } = useSWRConfig();
-  const [saving, setSaving] = useState(false);
+  // Which action is in flight, so only that button spins while the
+  // others simply disable.
+  const [pending, setPending] = useState<TourMarkerAction | null>(null);
+  const [confirmCancel, setConfirmCancel] = useState(false);
   const state = tourDisplayStatus(tour);
   const author = tourAuthorLabel(tour.author_name);
 
-  /** Record the outcome without leaving the log. Invalidates every
+  /** Record an outcome without leaving the log. Invalidates every
    *  tour-affected key, so this marker re-renders from the updated
    *  row (and the Tours tab / All Leads column follow) rather than
    *  us hand-patching local state. */
-  async function markComplete() {
-    setSaving(true);
+  async function runAction(action: TourMarkerAction, successMsg: string) {
+    setPending(action);
     try {
       const res = await fetch(`/api/admin/tours/${tour.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "complete" }),
+        body: JSON.stringify({ action }),
       });
       const result = await res.json().catch(() => null);
       if (!res.ok) {
         throw new Error(result?.error ?? `Update failed (${res.status})`);
       }
       if (result?.warning) toast.warning(result.warning);
-      else toast.success("Tour marked completed.");
+      else toast.success(successMsg);
       void globalMutate(isTourAffectedKey);
     } catch (err) {
-      console.error("[TourMarker.markComplete]", err);
+      console.error("[TourMarker.runAction]", err);
       toast.error(
         err instanceof Error ? err.message : "Couldn't update the tour."
       );
     } finally {
-      setSaving(false);
+      setPending(null);
     }
   }
 
   return (
-    <Marker className="text-muted-foreground">
-      <MarkerIcon>
-        <CalendarDays />
-      </MarkerIcon>
-      <MarkerContent>
-        <span className="font-medium text-foreground/80">Campus tour</span>
-        {" — "}
-        {tourWhenLabel(tour.scheduled_at, tour.duration_minutes)}
-        {" · "}
-        <span className={cn("font-medium", state.className)}>
-          {state.label}
-        </span>
-        {author ? <> · {author}</> : null}
-        {/* Only offered while the outcome is still open — a completed,
-            canceled, or no-showed tour has nothing left to record. */}
-        {state.actionable ? (
-          <button
-            type="button"
-            disabled={saving}
-            onClick={() => void markComplete()}
-            title="Mark this tour completed"
-            className="ml-1.5 inline-flex items-center gap-1 rounded border border-border bg-white px-1.5 py-0.5 align-middle text-[11px] font-medium text-foreground/70 transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60"
-          >
-            {saving ? (
-              <Loader2 className="size-3 animate-spin" />
-            ) : (
-              <Check className="size-3" />
-            )}
-            {saving ? "Saving…" : "Mark complete"}
-          </button>
-        ) : null}
-      </MarkerContent>
-    </Marker>
+    <>
+      <Marker className="text-muted-foreground">
+        <MarkerIcon>
+          <CalendarDays />
+        </MarkerIcon>
+        <MarkerContent>
+          <span className="font-medium text-foreground/80">Campus tour</span>
+          {" — "}
+          {tourWhenLabel(tour.scheduled_at, tour.duration_minutes)}
+          {" · "}
+          <span className={cn("font-medium", state.className)}>
+            {state.label}
+          </span>
+          {author ? <> · {author}</> : null}
+          {/* Only offered while the outcome is still open — a
+              completed, canceled, or no-showed tour has nothing left
+              to record. */}
+          {state.actionable ? (
+            <>
+              <TourActionButton
+                icon={<Check className="size-3" />}
+                label="Complete"
+                busy={pending === "complete"}
+                disabled={pending !== null}
+                onClick={() =>
+                  void runAction("complete", "Tour marked completed.")
+                }
+                title="Mark this tour completed"
+              />
+              <TourActionButton
+                icon={<UserX className="size-3" />}
+                label="No-show"
+                busy={pending === "no_show"}
+                disabled={pending !== null}
+                onClick={() =>
+                  void runAction("no_show", "Marked as a no-show.")
+                }
+                title="The family didn't show up"
+              />
+              {/* Cancel goes through a confirm: Google emails the
+                  family the cancellation, so a stray click on a
+                  timeline reaches a real person. */}
+              <TourActionButton
+                icon={<CalendarX2 className="size-3" />}
+                label="Cancel"
+                busy={pending === "cancel"}
+                disabled={pending !== null}
+                onClick={() => setConfirmCancel(true)}
+                title="Cancel this tour"
+                destructive
+              />
+            </>
+          ) : null}
+        </MarkerContent>
+      </Marker>
+
+      <AlertDialog open={confirmCancel} onOpenChange={setConfirmCancel}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Cancel this campus tour?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {tourWhenLabel(tour.scheduled_at, tour.duration_minutes)}
+              {liveTourEventId(tour.google_event_id) && tour.parent_email
+                ? ` — Google emails the cancellation to ${tour.parent_email}.`
+                : " — there's no calendar invite, so nobody is emailed. Tell the family directly."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep it</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90"
+              onClick={() => {
+                setConfirmCancel(false);
+                void runAction("cancel", "Tour canceled.");
+              }}
+            >
+              Cancel tour
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }
 
