@@ -5,11 +5,7 @@ import useSWR from "swr";
 import { toast } from "sonner";
 import { Bus, Car, Download, Loader2, Mail, Phone, Undo2, X } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
-import { LeadTriageControls } from "@/components/admin/lead-triage";
-import {
-  InquiryNoteComposer,
-  InquiryNotes,
-} from "@/components/admin/inquiry-notes";
+import { LeadSheet } from "@/components/admin/lead-sheet";
 import { StarRating } from "@/components/admin/star-rating";
 import {
   DataTable,
@@ -21,13 +17,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-  SheetDescription,
-} from "@/components/ui/sheet";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { adminFetcher } from "@/lib/admin-fetcher";
@@ -562,172 +551,66 @@ export default function SummerCampPage() {
         />
       </div>
 
-      <Sheet
-        open={active !== null}
-        onOpenChange={(open) => {
-          if (!open) setActive(null);
-        }}
-      >
-        <SheetContent className="w-full sm:max-w-xl flex flex-col p-0 gap-0">
-          {active ? (
+      {/* Detail sheet — the shared one every recruitment surface
+          opens, so a camp registration reads identically here and on
+          All Leads. Camp's own record (health, logistics, swim level)
+          rides along as extra fields; the attendance and EpiPen flags
+          stay pinned beside the title where staff can't miss them. */}
+      <LeadSheet
+        lead={active ? { source: "camp", id: active.id } : null}
+        onOpenChange={(o) => !o && setActive(null)}
+        headerBadges={
+          active ? (
             <>
-              <SheetHeader className="border-b px-6 py-4">
-                <SheetTitle className="flex flex-wrap items-center gap-2">
-                  {active.student_name || "Summer camp registration"}
-                  {active.isNotAttending ? (
-                    <Badge variant="secondary" className="font-normal">
-                      Not attending
-                    </Badge>
-                  ) : null}
-                  {active.attended_camp ? (
-                    <Badge className="bg-green-100 text-green-800 border-green-200 font-medium">
-                      Attended camp
-                    </Badge>
-                  ) : null}
-                  {active.carry_epi_pen ? (
-                    // Epi-pen carriers get a loud badge up top — this
-                    // is the one health fact staff must never miss.
-                    <Badge className="bg-red-100 text-red-700 border-red-200 font-medium">
-                      Carries EpiPen
-                    </Badge>
-                  ) : null}
-                </SheetTitle>
-                <SheetDescription>
-                  Submitted {new Date(active.created_at).toLocaleString()}
-                </SheetDescription>
-              </SheetHeader>
-              {/* Shared lead triage — rating + follow-up, pinned above
-                  the scrolling record so it's always the first thing
-                  admin can act on. */}
-              <div className="border-b px-6 py-4">
-                <LeadTriageControls
-                  scope={{ source: "camp", id: active.id }}
-                  rating={active.interest_level ?? 0}
-                  isFollowedUp={active.isFollowedUp === true}
-                  lastReachOut={active.last_reach_out ?? null}
-                  onChanged={() => void mutate()}
-                />
-              </div>
-              <div className="flex-1 overflow-y-auto overscroll-contain px-6 py-5 space-y-6">
-                <SectionLabel>Activity log</SectionLabel>
-                <div className="space-y-2.5">
-                  <InquiryNotes
-                    scope={{ source: "camp", id: active.id }}
-                    variant="timeline"
-                  />
-                  <div className="rounded-md border bg-muted/20 p-3">
-                    <InquiryNoteComposer
-                      scope={{ source: "camp", id: active.id }}
-                      onNoteAdded={() => void mutate()}
-                    />
-                  </div>
-                </div>
-
-                <SectionLabel>Student</SectionLabel>
-                <div className="grid grid-cols-2 gap-5">
-                  <DetailRow label="Gender">{active.gender || "—"}</DetailRow>
-                  <DetailRow label="Ethnicity">
-                    {active.ethnicity || "—"}
-                  </DetailRow>
-                  <DetailRow label="Last grade completed">
-                    {active.last_grade_completed || "—"}
-                  </DetailRow>
-                  <DetailRow label="Current school">
-                    {active.current_school || "—"}
-                  </DetailRow>
-                  <DetailRow label="Swim level">
-                    {active.swim_level || "—"}
-                  </DetailRow>
-                </div>
-                <DetailRow label="About the student">
-                  {active.describe_your_student_and_behavior ? (
-                    <p className="whitespace-pre-wrap">
-                      {active.describe_your_student_and_behavior}
-                    </p>
-                  ) : (
-                    "—"
-                  )}
-                </DetailRow>
-
-                <SectionLabel>Logistics</SectionLabel>
-                <div className="grid grid-cols-2 gap-5">
-                  <DetailRow label="Transportation">
-                    {active.transportation || "—"}
-                  </DetailRow>
-                  <DetailRow label="Bus stop">
-                    {active.bus_stop || "—"}
-                  </DetailRow>
-                  <DetailRow label="Preferred hospital">
-                    {active.preferred_hospital || "—"}
-                  </DetailRow>
-                  <DetailRow label="Carries EpiPen">
-                    {active.carry_epi_pen ? "Yes" : "No"}
-                  </DetailRow>
-                </div>
-
-                <SectionLabel>Health</SectionLabel>
-                <div className="grid grid-cols-2 gap-5">
-                  <DetailRow label="Allergies">
-                    {active.allergies || "—"}
-                  </DetailRow>
-                  <DetailRow label="Dietary restrictions">
-                    {active.dietary_restrictions || "—"}
-                  </DetailRow>
-                  <DetailRow label="Health conditions">
-                    {active.health_conditions || "—"}
-                  </DetailRow>
-                  <DetailRow label="Hearing / visual impairments">
-                    {active.hearing_or_visual_impairments || "—"}
-                  </DetailRow>
-                </div>
-                <DetailRow label="Additional health information">
-                  {active.additional_health_information ? (
-                    <p className="whitespace-pre-wrap">
-                      {active.additional_health_information}
-                    </p>
-                  ) : (
-                    "—"
-                  )}
-                </DetailRow>
-
-                <SectionLabel>Parent</SectionLabel>
-                <div className="grid grid-cols-2 gap-5">
-                  <DetailRow label="Name">
-                    {active.parent_name || "—"}
-                  </DetailRow>
-                  <DetailRow label="Relationship">
-                    {active.primary_parent_relationship || "—"}
-                  </DetailRow>
-                  <DetailRow label="Phone">
-                    {formatUSPhone(active.primary_phone) ? (
-                      <a
-                        href={`tel:${digitsOnly(String(active.primary_phone ?? ""))}`}
-                        className="text-primary underline-offset-2 hover:underline"
-                      >
-                        {formatUSPhone(active.primary_phone)}
-                      </a>
-                    ) : (
-                      "—"
-                    )}
-                  </DetailRow>
-                  <DetailRow label="Email">
-                    {active.primary_email ? (
-                      <a
-                        href={`mailto:${active.primary_email}`}
-                        className="text-primary underline-offset-2 hover:underline"
-                      >
-                        {active.primary_email}
-                      </a>
-                    ) : (
-                      "—"
-                    )}
-                  </DetailRow>
-                </div>
-              </div>
+              {active.isNotAttending ? (
+                <Badge variant="secondary" className="font-normal">
+                  Not attending
+                </Badge>
+              ) : null}
+              {active.attended_camp ? (
+                <Badge className="bg-green-100 text-green-800 border-green-200 font-medium">
+                  Attended camp
+                </Badge>
+              ) : null}
+              {active.carry_epi_pen ? (
+                <Badge className="bg-red-100 text-red-700 border-red-200 font-medium">
+                  Carries EpiPen
+                </Badge>
+              ) : null}
             </>
-          ) : null}
-        </SheetContent>
-      </Sheet>
+          ) : null
+        }
+        extraFields={
+          active
+            ? [
+                { label: "Gender", value: active.gender ?? "" },
+                { label: "Ethnicity", value: active.ethnicity ?? "" },
+                { label: "Swim level", value: active.swim_level ?? "" },
+                { label: "Relationship", value: active.primary_parent_relationship ?? "" },
+                { label: "Transportation", value: active.transportation ?? "" },
+                { label: "Bus stop", value: active.bus_stop ?? "" },
+                { label: "Preferred hospital", value: active.preferred_hospital ?? "" },
+                { label: "Carries EpiPen", value: active.carry_epi_pen ? "Yes" : "" },
+                { label: "Allergies", value: active.allergies ?? "" },
+                { label: "Dietary restrictions", value: active.dietary_restrictions ?? "" },
+                { label: "Health conditions", value: active.health_conditions ?? "" },
+                {
+                  label: "Hearing / visual impairments",
+                  value: active.hearing_or_visual_impairments ?? "",
+                },
+                {
+                  label: "Additional health information",
+                  value: active.additional_health_information ?? "",
+                },
+                {
+                  label: "About the student",
+                  value: active.describe_your_student_and_behavior ?? "",
+                },
+              ]
+            : undefined
+        }
+        onChanged={() => void mutate()}
+      />
     </div>
   );
 }
@@ -788,29 +671,3 @@ function SummerCampGroup({
   );
 }
 
-/** Tiny section heading inside the sheet — groups the detail rows so
- *  staff can jump straight to Health when they need it. */
-function SectionLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <p className="border-b pb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-      {children}
-    </p>
-  );
-}
-
-function DetailRow({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div>
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-        {label}
-      </p>
-      <div className="mt-1 text-sm">{children}</div>
-    </div>
-  );
-}

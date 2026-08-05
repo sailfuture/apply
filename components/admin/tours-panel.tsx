@@ -58,7 +58,7 @@ import {
   timeInputToMs,
 } from "@/components/admin/event-upsert-dialog";
 import { tourStatusBadgeClass } from "@/components/admin/tour-section";
-import { LeadTriageSheet } from "@/components/admin/lead-triage";
+import { LeadSheet } from "@/components/admin/lead-sheet";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { formatUSPhone } from "@/lib/phone";
 import {
@@ -188,37 +188,6 @@ export function ToursPanel() {
   // to the link picker so the admin can repair it on the spot.
   const [openTour, setOpenTour] = useState<TourRow | null>(null);
   const openLead = openTour?.lead ?? null;
-  const { data: leadRows, mutate: mutateLeadRows } = useSWR<AllLeadRow[]>(
-    openLead ? "/api/admin/all-leads" : null,
-    adminFetcher,
-    {
-      revalidateOnFocus: false,
-      onSuccess: (rows) => {
-        if (!openLead) return;
-        // adminFetcher resolves whatever the route returned — guard
-        // the shape before .some so an error payload can't throw.
-        const found =
-          Array.isArray(rows) &&
-          rows.some(
-            (l) => l.source === openLead.source && l.id === openLead.id
-          );
-        if (!found) {
-          const tour = openTour;
-          setOpenTour(null);
-          toast.warning(
-            "This tour's linked lead no longer exists — pick the lead it belongs to."
-          );
-          if (tour) setLinking(tour);
-        }
-      },
-    }
-  );
-  const leadRow =
-    openLead && Array.isArray(leadRows)
-      ? (leadRows.find(
-          (l) => l.source === openLead.source && l.id === openLead.id
-        ) ?? null)
-      : null;
 
   /** Pull website bookings (the sailfutureacademy.org/tour Google
    *  appointment schedule) into the app. Auto-runs quietly on mount;
@@ -775,49 +744,28 @@ export function ToursPanel() {
         />
       ) : null}
 
-      {/* The clicked tour's lead — the same triage sheet All Leads
-          and the dashboard use: details, stars, tour section, and the
-          full comms/activity log. */}
-      {leadRow ? (
-        <LeadTriageSheet
-          open
-          onOpenChange={(o) => !o && setOpenTour(null)}
-          scope={{ source: leadRow.source, id: leadRow.id }}
-          title={
-            leadRow.student_name ||
-            leadRow.parent_name ||
-            `${LEAD_LABEL[leadRow.source]} #${leadRow.id}`
-          }
-          subtitle={[
-            LEAD_LABEL[leadRow.source],
-            leadRow.parent_name || null,
-            formatUSPhone(leadRow.phone) || null,
-            leadRow.detail || null,
-          ]
-            .filter(Boolean)
-            .join(" · ")}
-          rating={leadRow.rating}
-          isFollowedUp={leadRow.followed_up}
-          lastReachOut={leadRow.last_reach_out || null}
-          details={{
-            student_name: leadRow.student_name,
-            parent_name:
-              leadRow.source === "tasco" ? null : leadRow.parent_name,
-            phone: leadRow.phone,
-            email: leadRow.email,
-            grade: leadRow.grade_raw,
-            school: leadRow.school,
-            opt_in: leadRow.opt_in,
-            opt_in_editable: leadRow.source !== "camp",
-          }}
-          onChanged={() => {
-            void mutateLeadRows();
-            // Scheduling or canceling from inside the sheet changes
-            // this very table — keep it in step.
-            void mutate();
-          }}
-        />
-      ) : null}
+      {/* The clicked tour's lead — the shared triage sheet, so a
+          lead reached from a tour row is identical to one opened on
+          All Leads or its own source page. A tour whose linked lead
+          no longer exists falls back to the link picker so the admin
+          can repair it on the spot. */}
+      <LeadSheet
+        lead={openLead}
+        onOpenChange={(o) => !o && setOpenTour(null)}
+        onMissing={() => {
+          const tour = openTour;
+          setOpenTour(null);
+          toast.warning(
+            "This tour's linked lead no longer exists — pick the lead it belongs to."
+          );
+          if (tour) setLinking(tour);
+        }}
+        onChanged={() => {
+          // Scheduling or canceling from inside the sheet changes
+          // this very table — keep it in step.
+          void mutate();
+        }}
+      />
     </div>
   );
 }

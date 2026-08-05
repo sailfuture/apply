@@ -21,18 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
-import { LeadTriageControls } from "@/components/admin/lead-triage";
-import {
-  InquiryNoteComposer,
-  InquiryNotes,
-} from "@/components/admin/inquiry-notes";
+import { LeadSheet } from "@/components/admin/lead-sheet";
 import { StarRating } from "@/components/admin/star-rating";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { formatUSPhone } from "@/lib/phone";
@@ -426,182 +415,57 @@ export default function CampusVisitsPage() {
         </CardContent>
       </Card>
 
-      {/* Visitor detail sheet — everything the table trims (email,
-          school, academic year, waiver) plus the signature, and the
-          shared lead triage block (rating, follow-up, comms log). */}
-      {activeRow ? (
-        <Sheet open onOpenChange={(o) => !o && setSelected(null)}>
-          <SheetContent
-            side="right"
-            className="flex w-full flex-col gap-0 overflow-y-auto overscroll-contain p-0 sm:max-w-lg"
-          >
-            <SheetHeader className="border-b px-4 py-3">
-              <SheetTitle className="text-base">
-                {activeRow.parent_name || "Campus visitor"}
-              </SheetTitle>
-              <SheetDescription className="text-xs">
-                Signed {new Date(activeRow.signed_ts).toLocaleString()}
-                {activeRow.academic_year
-                  ? ` · ${activeRow.academic_year}`
-                  : ""}
-              </SheetDescription>
-            </SheetHeader>
-
-            <div className="border-b px-4 py-4">
-              <LeadTriageControls
-                scope={{ source: "visit", id: activeRow.id }}
-                rating={activeRow.rating}
-                isFollowedUp={activeRow.followed_up}
-                lastReachOut={activeRow.last_reach_out || null}
-                onChanged={() => void mutate()}
-              />
+      {/* Visitor detail sheet — the shared one every recruitment
+          surface opens, so a waiver visit reads identically here and
+          on All Leads. The waiver's own facts (academic year, when it
+          was signed) ride along as extra fields, and the signature
+          image as extra content. */}
+      <LeadSheet
+        lead={activeRow ? { source: "visit", id: activeRow.id } : null}
+        onOpenChange={(o) => !o && setSelected(null)}
+        extraFields={
+          activeRow
+            ? [
+                { label: "Academic year", value: activeRow.academic_year ?? "" },
+                {
+                  label: "Waiver signed",
+                  value: activeRow.signed_ts
+                    ? new Date(activeRow.signed_ts).toLocaleString()
+                    : "",
+                },
+              ]
+            : undefined
+        }
+        extraContent={
+          activeRow?.signature_url ? (
+            <div className="min-w-0">
+              <p className="mb-1 text-[11px] text-muted-foreground">
+                Signature
+              </p>
+              <div className="rounded-md border bg-muted/20 p-3">
+                {/* Signature capture — plain img (Xano-hosted, with
+                    arbitrary dimensions). */}
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={activeRow.signature_url}
+                  alt={`Signature — ${activeRow.parent_name}`}
+                  className="max-h-28 w-auto"
+                />
+              </div>
+              <a
+                href={activeRow.signature_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-1.5 inline-flex items-center gap-1 text-xs font-medium text-foreground underline underline-offset-2 hover:no-underline"
+              >
+                Open signature
+                <ExternalLink className="size-3" />
+              </a>
             </div>
-
-            <div className="space-y-5 px-4 py-4">
-              {/* Comms log first — it's the working surface; the
-                  submitted record below is reference. */}
-              <section className="space-y-2.5">
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Activity log
-                </h3>
-                <InquiryNotes
-                  scope={{ source: "visit", id: activeRow.id }}
-                  variant="timeline"
-                />
-                <div className="rounded-md border bg-muted/20 p-3">
-                  <InquiryNoteComposer
-                    scope={{ source: "visit", id: activeRow.id }}
-                    onNoteAdded={() => void mutate()}
-                  />
-                </div>
-              </section>
-
-              <section className="space-y-2.5 border-t pt-4">
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Parent
-                </h3>
-                <DetailRow label="Name" value={activeRow.parent_name} />
-                <DetailRow
-                  label="Email"
-                  value={
-                    activeRow.parent_email ? (
-                      <a
-                        href={`mailto:${activeRow.parent_email}`}
-                        className="hover:underline"
-                      >
-                        {activeRow.parent_email}
-                      </a>
-                    ) : null
-                  }
-                />
-                <DetailRow
-                  label="Phone"
-                  value={
-                    activeRow.parent_phone ? (
-                      <a
-                        href={`tel:${activeRow.parent_phone}`}
-                        className="tabular-nums hover:underline"
-                      >
-                        {formatUSPhone(activeRow.parent_phone) ||
-                          activeRow.parent_phone}
-                      </a>
-                    ) : null
-                  }
-                />
-                <DetailRow
-                  label="Marketing"
-                  value={
-                    activeRow.marketing_opt_in ? (
-                      <Badge className="bg-green-100 text-green-800 hover:bg-green-100">
-                        Opted in
-                      </Badge>
-                    ) : (
-                      "Not opted in"
-                    )
-                  }
-                />
-              </section>
-
-              <section className="space-y-2.5 border-t pt-4">
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Student
-                </h3>
-                <DetailRow label="Name" value={activeRow.student_name} />
-                <DetailRow
-                  label="Grade"
-                  value={
-                    activeRow.student_grade
-                      ? `Grade ${activeRow.student_grade}`
-                      : null
-                  }
-                />
-                <DetailRow
-                  label="Current school"
-                  value={activeRow.student_school}
-                />
-                <DetailRow
-                  label="Academic year"
-                  value={activeRow.academic_year}
-                />
-              </section>
-
-              <section className="space-y-2.5 border-t pt-4">
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Waiver
-                </h3>
-                <DetailRow
-                  label="Signed"
-                  value={new Date(activeRow.signed_ts).toLocaleString()}
-                />
-                {activeRow.signature_url ? (
-                  <>
-                    <div className="rounded-md border bg-muted/20 p-3">
-                      {/* Signature capture — plain img (Xano-hosted,
-                          arbitrary dimensions). */}
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={activeRow.signature_url}
-                        alt={`Signature — ${activeRow.parent_name}`}
-                        className="max-h-28 w-auto"
-                      />
-                    </div>
-                    <a
-                      href={activeRow.signature_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 text-xs font-medium text-foreground underline underline-offset-2 hover:no-underline"
-                    >
-                      Open signature
-                      <ExternalLink className="size-3" />
-                    </a>
-                  </>
-                ) : (
-                  <p className="text-sm text-muted-foreground">
-                    No signature image on file.
-                  </p>
-                )}
-              </section>
-            </div>
-          </SheetContent>
-        </Sheet>
-      ) : null}
-    </div>
-  );
-}
-
-function DetailRow({
-  label,
-  value,
-}: {
-  label: string;
-  value: React.ReactNode | null;
-}) {
-  return (
-    <div className="flex items-baseline justify-between gap-3 text-sm">
-      <span className="shrink-0 text-muted-foreground">{label}</span>
-      <span className="min-w-0 truncate text-right font-medium">
-        {value || <span className="font-normal text-muted-foreground">—</span>}
-      </span>
+          ) : null
+        }
+        onChanged={() => void mutate()}
+      />
     </div>
   );
 }

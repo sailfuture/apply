@@ -14,8 +14,11 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FamilyProfileSheet } from "@/components/admin/family-profile-sheet";
-import { LeadTriageSheet } from "@/components/admin/lead-triage";
-import type { AllLeadRow } from "@/app/api/admin/all-leads/route";
+import { LeadSheet } from "@/components/admin/lead-sheet";
+import type {
+  AllLeadRow,
+  LeadSource,
+} from "@/app/api/admin/all-leads/route";
 import { cn } from "@/lib/utils";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { formatUSPhone } from "@/lib/phone";
@@ -210,11 +213,11 @@ export default function AdminMessagesPage() {
     selected !== null &&
     selected.type !== "family" &&
     selected.type !== "adhoc";
-  const {
-    data: leadRows,
-    isLoading: leadRowsLoading,
-    mutate: mutateLeadRows,
-  } = useSWR<AllLeadRow[]>(
+  // Data is read by <LeadSheet/> (same SWR key, so this doesn't
+  // double-fetch); this hook stays for the header button's loading
+  // state and the deleted-record toast.
+  const { isLoading: leadRowsLoading, mutate: mutateLeadRows } =
+    useSWR<AllLeadRow[]>(
     wantLeadProfile ? "/api/admin/all-leads" : null,
     adminFetcher,
     {
@@ -233,12 +236,6 @@ export default function AdminMessagesPage() {
       },
     }
   );
-  const leadRow =
-    wantLeadProfile && Array.isArray(leadRows)
-      ? (leadRows.find(
-          (r) => r.source === selected.type && r.id === selected.id
-        ) ?? null)
-      : null;
 
   // Reconcile against Twilio's own log once per visit — texts sent
   // outside the app (Twilio console, legacy forwarder) and inbound
@@ -592,53 +589,23 @@ export default function AdminMessagesPage() {
           onOpenChange={setProfileOpen}
         />
       ) : null}
-      {profileOpen && leadRow ? (
-        <LeadTriageSheet
-          open
-          onOpenChange={(o) => !o && setProfileOpen(false)}
-          scope={{ source: leadRow.source, id: leadRow.id }}
-          title={
-            leadRow.student_name ||
-            leadRow.parent_name ||
-            `${LEAD_LABEL[leadRow.source]} #${leadRow.id}`
-          }
-          subtitle={[
-            LEAD_LABEL[leadRow.source],
-            leadRow.parent_name || null,
-            formatUSPhone(leadRow.phone) || null,
-            leadRow.detail || null,
-          ]
-            .filter(Boolean)
-            .join(" · ")}
-          rating={leadRow.rating}
-          isFollowedUp={leadRow.followed_up}
-          lastReachOut={leadRow.last_reach_out || null}
-          details={{
-            student_name: leadRow.student_name,
-            parent_name:
-              leadRow.source === "tasco" ? null : leadRow.parent_name,
-            phone: leadRow.phone,
-            email: leadRow.email,
-            grade: leadRow.grade_raw,
-            school: leadRow.school,
-            opt_in: leadRow.opt_in,
-            opt_in_editable: leadRow.source !== "camp",
-          }}
-          onChanged={() => void mutateLeadRows()}
-        />
-      ) : null}
+      {/* The shared lead sheet — identical to All Leads and every
+          per-source page. It fetches the all-leads row itself; the
+          hook above shares the same SWR key (so no second request)
+          and stays for the header button's loading state. */}
+      <LeadSheet
+        lead={
+          wantLeadProfile && selected
+            ? { source: selected.type as LeadSource, id: selected.id }
+            : null
+        }
+        onOpenChange={(o) => !o && setProfileOpen(false)}
+        onChanged={() => void mutateLeadRows()}
+      />
     </div>
   );
 }
 
-/** Full label per lead source — the triage sheet's subtitle. Mirrors
- *  the All Leads page's vocabulary. */
-const LEAD_LABEL: Record<AllLeadRow["source"], string> = {
-  inquiry: "Inquiry",
-  camp: "Summer Camp",
-  visit: "Liability Waiver Visit",
-  tasco: "TASCO",
-};
 
 /** Ad-hoc conversations are NAMED by their raw 10-digit number —
  *  pretty-print it; every other type shows its record name. */

@@ -16,9 +16,8 @@ import {
   TrendingUp,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { formatUSPhone } from "@/lib/phone";
 import { StatsCard } from "@/components/admin/stats-card";
-import { LeadTriageSheet } from "@/components/admin/lead-triage";
+import { LeadSheet } from "@/components/admin/lead-sheet";
 import type { AllLeadRow } from "@/app/api/admin/all-leads/route";
 import {
   TrendAreaChart,
@@ -164,29 +163,6 @@ export default function AdminDashboardPage() {
     source: AllLeadRow["source"];
     id: number;
   } | null>(null);
-  const { data: leadRows, mutate: mutateLeadRows } = useSWR<AllLeadRow[]>(
-    selectedLead ? "/api/admin/all-leads" : null,
-    fetcher,
-    {
-      onSuccess: (rows) => {
-        const found =
-          selectedLead &&
-          rows.some(
-            (r) => r.source === selectedLead.source && r.id === selectedLead.id
-          );
-        if (!found) {
-          toast.error("Couldn't find this lead's record.");
-          setSelectedLead(null);
-        }
-      },
-    }
-  );
-  const leadRow =
-    selectedLead && Array.isArray(leadRows)
-      ? (leadRows.find(
-          (r) => r.source === selectedLead.source && r.id === selectedLead.id
-        ) ?? null)
-      : null;
 
   const yearName = useMemo(() => {
     if (!yearIdNum || !schoolYears) return null;
@@ -433,60 +409,26 @@ export default function AdminDashboardPage() {
         }
       />
 
-      {/* The clicked lead's triage sheet — the same one All Leads and
-          Messages use (rating, editable details, comms log). */}
-      {leadRow ? (
-        <LeadTriageSheet
-          open
-          onOpenChange={(o) => !o && setSelectedLead(null)}
-          scope={{ source: leadRow.source, id: leadRow.id }}
-          title={
-            leadRow.student_name ||
-            leadRow.parent_name ||
-            `${LEAD_LABEL[leadRow.source]} #${leadRow.id}`
-          }
-          subtitle={[
-            LEAD_LABEL[leadRow.source],
-            leadRow.parent_name || null,
-            formatUSPhone(leadRow.phone) || null,
-            leadRow.detail || null,
-          ]
-            .filter(Boolean)
-            .join(" · ")}
-          rating={leadRow.rating}
-          isFollowedUp={leadRow.followed_up}
-          lastReachOut={leadRow.last_reach_out || null}
-          details={{
-            student_name: leadRow.student_name,
-            parent_name:
-              leadRow.source === "tasco" ? null : leadRow.parent_name,
-            phone: leadRow.phone,
-            email: leadRow.email,
-            grade: leadRow.grade_raw,
-            school: leadRow.school,
-            opt_in: leadRow.opt_in,
-            opt_in_editable: leadRow.source !== "camp",
-          }}
-          onChanged={() => {
-            void mutateLeadRows();
-            // Ratings and notes written in the sheet show up in the
-            // activity table too — keep it in step.
-            void mutateActivity();
-          }}
-        />
-      ) : null}
+      {/* The clicked lead's triage sheet — the shared one, so a lead
+          opened from here is identical to one opened from All Leads
+          or its own source page. */}
+      <LeadSheet
+        lead={selectedLead}
+        onOpenChange={(o) => !o && setSelectedLead(null)}
+        onMissing={() => {
+          toast.error("Couldn't find this lead's record.");
+          setSelectedLead(null);
+        }}
+        onChanged={() => {
+          // Ratings and notes written in the sheet show up in the
+          // activity table too — keep it in step.
+          void mutateActivity();
+        }}
+      />
     </div>
   );
 }
 
-/** Full label per lead source — the triage sheet's subtitle. Same
- *  vocabulary as All Leads and the Messages page. */
-const LEAD_LABEL: Record<AllLeadRow["source"], string> = {
-  inquiry: "Inquiry",
-  camp: "Summer Camp",
-  visit: "Liability Waiver Visit",
-  tasco: "TASCO",
-};
 
 /* ─────────────────────── Trend cards ─────────────────────── */
 

@@ -43,12 +43,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import { LeadTriageSheet } from "@/components/admin/lead-triage";
+import { LeadSheet } from "@/components/admin/lead-sheet";
 import { StarRating } from "@/components/admin/star-rating";
 import { adminFetcher } from "@/lib/admin-fetcher";
-import { formatUSPhone } from "@/lib/phone";
 import { cn } from "@/lib/utils";
-import type { AllLeadRow } from "@/app/api/admin/all-leads/route";
 
 /**
  * Real shape of `/api/admin/inquiries` rows. Mirrors `registration_inquiry`
@@ -195,22 +193,6 @@ export default function InquiriesPage() {
   const { mutate: globalMutate } = useSWRConfig();
   const [active, setActive] = useState<Inquiry | null>(null);
 
-  // The detail sheet is the shared LeadTriageSheet, and it reads the
-  // ALL-LEADS row rather than this page's `Inquiry` shape — that feed
-  // carries the derived facts the sheet needs (conversion link, funnel
-  // stage, normalized lifecycle status) which this page's row doesn't.
-  // Fetched lazily on first open, the same pattern the dashboard and
-  // Campus Tours use, so the list itself never pays for it.
-  const { data: leadRows, mutate: mutateSheetRow } = useSWR<AllLeadRow[]>(
-    active ? "/api/admin/all-leads" : null,
-    adminFetcher,
-    { revalidateOnFocus: false }
-  );
-  const sheetRow =
-    active && Array.isArray(leadRows)
-      ? (leadRows.find((l) => l.source === "inquiry" && l.id === active.id) ??
-        null)
-      : null;
   const [filter, setFilter] = useState<InquiryFilter>("all");
   // Per-row pending state so the toggle UI is responsive while the
   // PATCH is in flight. We optimistically mutate the SWR cache, then
@@ -878,54 +860,25 @@ export default function InquiriesPage() {
           rather than this page's row shape, so the conversion link,
           funnel stage, and lifecycle controls behave exactly as they
           do there. Inquiry-only facts ride along as extraFields. */}
-      {active && sheetRow ? (
-        <LeadTriageSheet
-          open
-          onOpenChange={(o) => !o && setActive(null)}
-          scope={{ source: "inquiry", id: sheetRow.id }}
-          title={
-            sheetRow.student_name ||
-            sheetRow.parent_name ||
-            `Inquiry #${sheetRow.id}`
-          }
-          subtitle={[
-            "Inquiry",
-            sheetRow.parent_name || null,
-            formatUSPhone(sheetRow.phone) || null,
-          ]
-            .filter(Boolean)
-            .join(" · ")}
-          rating={sheetRow.rating}
-          isFollowedUp={sheetRow.followed_up}
-          lastReachOut={sheetRow.last_reach_out || null}
-          details={{
-            student_name: sheetRow.student_name,
-            parent_name: sheetRow.parent_name,
-            phone: sheetRow.phone,
-            email: sheetRow.email,
-            grade: sheetRow.grade_raw,
-            school: sheetRow.school,
-            opt_in: sheetRow.opt_in,
-            opt_in_editable: true,
-          }}
-          conversion={{
-            family_id: sheetRow.converted_family_id,
-            family_name: sheetRow.converted_family_name,
-            stage: sheetRow.funnel_stage,
-            converted_at: sheetRow.converted_at,
-          }}
-          leadStatus={sheetRow.lead_status}
-          statusReason={sheetRow.status_reason}
-          extraFields={[
-            { label: "How they heard about us", value: active.hear_about_us ?? "" },
-            { label: "About the student", value: active.about_student ?? "" },
-          ]}
-          onChanged={() => {
-            void mutateSheetRow();
-            void globalMutate("/api/admin/inquiries");
-          }}
-        />
-      ) : null}
+      <LeadSheet
+        lead={active ? { source: "inquiry", id: active.id } : null}
+        onOpenChange={(o) => !o && setActive(null)}
+        extraFields={
+          active
+            ? [
+                {
+                  label: "How they heard about us",
+                  value: active.hear_about_us ?? "",
+                },
+                {
+                  label: "About the student",
+                  value: active.about_student ?? "",
+                },
+              ]
+            : undefined
+        }
+        onChanged={() => void globalMutate("/api/admin/inquiries")}
+      />
 
       {/* "Mark not interested" dialog — forces a reason to be picked
           (or typed, via "Other") before the status saves, so the Not

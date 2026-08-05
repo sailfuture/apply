@@ -1192,6 +1192,8 @@ export function LeadTriageSheet({
   leadStatus,
   statusReason,
   extraFields,
+  extraContent,
+  headerBadges,
   onChanged,
 }: {
   open: boolean;
@@ -1220,6 +1222,14 @@ export function LeadTriageSheet({
    *  hosts keep their own data without diverging on layout. Blank
    *  values are dropped rather than rendered as an empty row. */
   extraFields?: Array<{ label: string; value: string }>;
+  /** Source-specific markup for facts a label/value pair can't carry
+   *  — the liability waiver's signature image, for one. Rendered at
+   *  the foot of the details block, below `extraFields`. */
+  extraContent?: React.ReactNode;
+  /** Badges pinned beside the title. For facts that must be seen
+   *  before anything else — a camp registration's "Carries EpiPen",
+   *  say — which would lose their urgency buried in a field list. */
+  headerBadges?: React.ReactNode;
   onChanged?: () => void;
 }) {
   return (
@@ -1229,7 +1239,10 @@ export function LeadTriageSheet({
         className="flex w-full flex-col gap-0 p-0 sm:max-w-lg"
       >
         <SheetHeader className="border-b px-4 py-3">
-          <SheetTitle className="text-base">{title}</SheetTitle>
+          <SheetTitle className="flex flex-wrap items-center gap-2 text-base">
+            {title}
+            {headerBadges}
+          </SheetTitle>
           {subtitle ? (
             <SheetDescription className="text-xs">
               {subtitle}
@@ -1308,6 +1321,7 @@ export function LeadTriageSheet({
                   </p>
                 </div>
               ))}
+            {extraContent}
           </div>
         ) : null}
 

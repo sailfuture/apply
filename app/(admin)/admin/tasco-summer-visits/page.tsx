@@ -11,7 +11,7 @@ import {
   ExternalLink,
 } from "lucide-react";
 import { DataTable, type ColumnDef } from "@/components/admin/data-table";
-import { LeadTriageSheet } from "@/components/admin/lead-triage";
+import { LeadSheet } from "@/components/admin/lead-sheet";
 import { StarRating } from "@/components/admin/star-rating";
 import {
   Card,
@@ -434,27 +434,25 @@ export default function TascoSummerVisitsPage() {
         </CardContent>
       </Card>
 
-      {/* Triage sheet — rating, follow-up, and the comms log for this
-          sign-up. Same surface every recruitment list uses. */}
-      {activeRow ? (
-        <LeadTriageSheet
-          open
-          onOpenChange={(o) => !o && setSelected(null)}
-          scope={{ source: "tasco", id: activeRow.id }}
-          title={activeRow.student_name || `TASCO sign-up #${activeRow.id}`}
-          subtitle={[
-            activeRow.recreation_center || null,
-            activeRow.current_grade || null,
-            formatUSPhone(activeRow.parent_phone) || null,
-          ]
-            .filter(Boolean)
-            .join(" · ")}
-          rating={activeRow.rating}
-          isFollowedUp={activeRow.followed_up}
-          lastReachOut={activeRow.last_reach_out || null}
-          onChanged={() => void mutate()}
-        />
-      ) : null}
+      {/* Triage sheet — the shared one every recruitment surface
+          opens, so a TASCO sign-up reads identically here and on All
+          Leads. The rec center is TASCO's own fact, so it rides along
+          as an extra field. */}
+      <LeadSheet
+        lead={activeRow ? { source: "tasco", id: activeRow.id } : null}
+        onOpenChange={(o) => !o && setSelected(null)}
+        extraFields={
+          activeRow
+            ? [
+                {
+                  label: "Recreation center",
+                  value: activeRow.recreation_center ?? "",
+                },
+              ]
+            : undefined
+        }
+        onChanged={() => void mutate()}
+      />
     </div>
   );
 }
