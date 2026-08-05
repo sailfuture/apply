@@ -50,6 +50,15 @@ const SOURCE_META: Record<LeadSource, { label: string; short: string }> = {
 
 const SOURCE_FILTERS: LeadSource[] = ["inquiry", "camp", "visit", "tasco"];
 
+/**
+ * Every filter trigger is the SAME fixed width, so the row never
+ * reflows as selections change — picking "Liability Waiver Visit"
+ * can't shove the buttons beside it around. Labels truncate inside
+ * (the full text stays on the `title`) and the chevron is pinned
+ * right by `justify-between` + `shrink-0`.
+ */
+const FILTER_TRIGGER_CLASS = "w-40 shrink-0 justify-between bg-white";
+
 /** Tour-state display: label + badge tint + sort rank (higher =
  *  further along). Vocabulary matches the Campus Tours tab. */
 const TOUR_META: Record<
@@ -510,7 +519,7 @@ export default function AllLeadsPage() {
                   : meta.label
               }
             >
-              <span className="truncate">{meta.label}</span>
+              <span className="min-w-0 truncate">{meta.label}</span>
             </Badge>
           ) : (
             <span className="text-sm text-muted-foreground">—</span>
@@ -651,16 +660,23 @@ export default function AllLeadsPage() {
               variant="outline"
               size="sm"
               className={cn(
-                "bg-white",
+                FILTER_TRIGGER_CLASS,
                 sourceFilter.length > 0 && "border-foreground"
               )}
+              title={
+                sourceFilter.length === 0
+                  ? "Filter by lead source"
+                  : sourceFilter.map((s) => SOURCE_META[s].label).join(", ")
+              }
             >
-              {sourceFilter.length === 0
-                ? "Source"
-                : sourceFilter.length === 1
-                  ? SOURCE_META[sourceFilter[0]].label
-                  : `Source (${sourceFilter.length})`}
-              <ChevronDown className="ml-1 size-3.5 opacity-50" />
+              <span className="min-w-0 truncate">
+                {sourceFilter.length === 0
+                  ? "Source"
+                  : sourceFilter.length === 1
+                    ? SOURCE_META[sourceFilter[0]].label
+                    : `Source (${sourceFilter.length})`}
+              </span>
+              <ChevronDown className="ml-1 size-3.5 shrink-0 opacity-50" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-56">
@@ -699,12 +715,18 @@ export default function AllLeadsPage() {
             <Button
               variant="outline"
               size="sm"
-              className={cn("bg-white", minRating > 0 && "border-foreground")}
+              className={cn(
+                FILTER_TRIGGER_CLASS,
+                minRating > 0 && "border-foreground"
+              )}
+              title="Filter by minimum rating"
             >
-              {minRating > 0
-                ? `Rating: ${minRating}${minRating < 5 ? "+" : ""}`
-                : "Rating"}
-              <ChevronDown className="ml-1 size-3.5 opacity-50" />
+              <span className="min-w-0 truncate">
+                {minRating > 0
+                  ? `Rating: ${minRating}${minRating < 5 ? "+" : ""}`
+                  : "Rating"}
+              </span>
+              <ChevronDown className="ml-1 size-3.5 shrink-0 opacity-50" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-44">
@@ -732,16 +754,19 @@ export default function AllLeadsPage() {
               variant="outline"
               size="sm"
               className={cn(
-                "bg-white",
+                FILTER_TRIGGER_CLASS,
                 followUpFilter !== null && "border-foreground"
               )}
+              title="Filter by follow-up state"
             >
-              {followUpFilter === null
-                ? "Follow-up"
-                : followUpFilter
-                  ? "Followed up"
-                  : "Needs follow-up"}
-              <ChevronDown className="ml-1 size-3.5 opacity-50" />
+              <span className="min-w-0 truncate">
+                {followUpFilter === null
+                  ? "Follow-up"
+                  : followUpFilter
+                    ? "Followed up"
+                    : "Needs follow-up"}
+              </span>
+              <ChevronDown className="ml-1 size-3.5 shrink-0 opacity-50" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-48">
@@ -775,18 +800,21 @@ export default function AllLeadsPage() {
               variant="outline"
               size="sm"
               className={cn(
-                "bg-white",
+                FILTER_TRIGGER_CLASS,
                 tourFilter !== null && "border-foreground"
               )}
+              title="Filter by campus-tour state"
             >
-              {tourFilter === null
-                ? "Tour"
-                : tourFilter === "completed"
-                  ? "Toured"
-                  : tourFilter === "scheduled"
-                    ? "Tour scheduled"
-                    : "No tour"}
-              <ChevronDown className="ml-1 size-3.5 opacity-50" />
+              <span className="min-w-0 truncate">
+                {tourFilter === null
+                  ? "Tour"
+                  : tourFilter === "completed"
+                    ? "Toured"
+                    : tourFilter === "scheduled"
+                      ? "Tour scheduled"
+                      : "No tour"}
+              </span>
+              <ChevronDown className="ml-1 size-3.5 shrink-0 opacity-50" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-44">
