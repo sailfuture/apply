@@ -3,15 +3,28 @@
 import { Fragment, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
+import { toast } from "sonner";
 import {
   ChevronDown,
   ChevronRight,
   CreditCard,
   Download,
   ExternalLink,
+  Loader2,
+  OctagonAlert,
   Search,
 } from "lucide-react";
 import { ActivityLogSheet } from "@/components/admin/activity-log-sheet";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -60,7 +73,7 @@ export default function AdminBillingPage() {
   const searchParams = useSearchParams();
   const yearId = searchParams.get("yearId");
 
-  const { data, isLoading, error } = useSWR<BillingListResponse>(
+  const { data, isLoading, error, mutate } = useSWR<BillingListResponse>(
     yearId ? `/api/admin/billing?yearId=${yearId}` : null,
     adminFetcher
   );
@@ -97,6 +110,49 @@ export default function AdminBillingPage() {
       console.error("Billing export failed:", err);
     } finally {
       setExporting(false);
+    }
+  }
+
+  // Year-end close-out: cancel-at-period-end on every live
+  // subscription for the year. Guarded by the warning modal below —
+  // it touches every paying family at once.
+  const [closeConfirmOpen, setCloseConfirmOpen] = useState(false);
+  const [closingYear, setClosingYear] = useState(false);
+  async function closeYearBilling() {
+    if (!yearId || closingYear) return;
+    setClosingYear(true);
+    try {
+      const res = await fetch("/api/admin/billing/close-year", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ yearId: Number(yearId) }),
+      });
+      const result = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(result?.error ?? `Close-out failed (${res.status})`);
+      }
+      const failed: Array<{ familyId: number }> = result?.failures ?? [];
+      if (failed.length > 0) {
+        toast.warning(
+          `Set ${result.canceled} of ${result.total} subscriptions to cancel — ` +
+            `${failed.length} failed (family ids ${failed
+              .map((f: { familyId: number }) => f.familyId)
+              .join(", ")}). Handle those from their family billing pages.`
+        );
+      } else {
+        toast.success(
+          `All ${result.canceled} subscription${result.canceled === 1 ? "" : "s"} set to cancel at period end.`
+        );
+      }
+      setCloseConfirmOpen(false);
+      void mutate();
+    } catch (err) {
+      console.error("[Billing.closeYearBilling]", err);
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't close out the year."
+      );
+    } finally {
+      setClosingYear(false);
     }
   }
 
@@ -139,8 +195,89 @@ export default function AdminBillingPage() {
               View invoices in Stripe
             </a>
           </Button>
+          {/* Year-end close-out — subscriptions are open-ended
+              monthly (Stripe doesn't know when the school year
+              ends), so ending the year's billing is a deliberate
+              act. Modal-guarded: it touches every paying family. */}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="border-red-200 bg-white text-red-700 hover:bg-red-50 hover:text-red-800"
+            disabled={rows.length === 0 || closingYear}
+            onClick={() => setCloseConfirmOpen(true)}
+          >
+            <OctagonAlert className="size-3.5 mr-1.5" aria-hidden="true" />
+            Close out year billing
+          </Button>
         </div>
       </div>
+
+      {/* Close-out warning modal — spells out exactly what happens
+          before anything touches Stripe. */}
+      <AlertDialog
+        open={closeConfirmOpen}
+        onOpenChange={(o) => !closingYear && setCloseConfirmOpen(o)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Close out this year&rsquo;s billing?
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-sm">
+                <p>
+                  This sets{" "}
+                  <span className="font-semibold text-foreground">
+                    {rows.length} famil{rows.length === 1 ? "y" : "ies"}
+                  </span>{" "}
+                  with a live subscription to{" "}
+                  <span className="font-semibold text-foreground">
+                    cancel at the end of their current billing period
+                  </span>
+                  . Each family&rsquo;s current invoice plays out
+                  normally; no further monthly invoices will be
+                  generated after that.
+                </p>
+                <p>
+                  Until a family&rsquo;s period actually ends, this is
+                  reversible per family with the Uncancel button on
+                  their billing page. Outstanding balances remain
+                  collectible — this stops future invoices, it
+                  doesn&rsquo;t forgive existing ones.
+                </p>
+                <p className="font-medium text-red-700">
+                  Only do this when the school year is truly wrapping
+                  up. Restarting billing later means creating fresh
+                  subscriptions family-by-family.
+                </p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={closingYear}>
+              Keep billing running
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={closingYear}
+              className="bg-red-600 text-white hover:bg-red-700"
+              onClick={(e) => {
+                e.preventDefault();
+                void closeYearBilling();
+              }}
+            >
+              {closingYear ? (
+                <>
+                  <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                  Closing out…
+                </>
+              ) : (
+                `Cancel ${rows.length} subscription${rows.length === 1 ? "" : "s"}`
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Row-click billing activity — the family stream filtered to
           Stripe subscription/invoice/payment events. */}
