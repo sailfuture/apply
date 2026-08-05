@@ -6,6 +6,7 @@ import useSWR, { useSWRConfig } from "swr";
 import { toast } from "sonner";
 import {
   AlertTriangle,
+  Ban,
   CalendarDays,
   Check,
   Loader2,
@@ -13,7 +14,6 @@ import {
   NotebookPen,
   RotateCw,
   TriangleAlert,
-  UserX,
   X,
 } from "lucide-react";
 import { describeSmsError, isFailedStatus } from "@/lib/sms/errors";
@@ -1124,15 +1124,19 @@ function TourMarker({ tour }: { tour: XanoTour }) {
                 title="Mark this tour completed"
                 iconOnly
               />
+              {/* Circle-slash, not an X: the plain X beside it means
+                  "cancel the tour", and two X glyphs in a row would
+                  read as the same action twice. */}
               <TourActionButton
-                icon={<UserX className="size-3" />}
-                label="No-show"
+                icon={<Ban className="size-3" />}
+                label="Mark no-show"
                 busy={pending === "no_show"}
                 disabled={pending !== null}
                 onClick={() =>
                   void runAction("no_show", "Marked as a no-show.")
                 }
                 title="The family didn't show up"
+                iconOnly
               />
               {/* Cancel goes through a confirm: Google emails the
                   family the cancellation, so a stray click on a
