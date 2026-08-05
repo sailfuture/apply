@@ -152,28 +152,43 @@ export function buildLeadContactPatch(
     patch[column] = v;
   };
 
+  /**
+   * Split a full name across the source's first/last column pair.
+   *
+   * A ONE-WORD name ("Kashe") splits to an empty last name. Sending
+   * `""` would be dropped by Xano's field mapping anyway — but worse,
+   * the caller's echo check would then see the old value still on the
+   * row and report "Xano ignored student_last_name", accusing the
+   * endpoint of a wiring fault that doesn't exist. So omit the empty
+   * half and report it as skipped, which is what actually happened:
+   * the last name is left as it was.
+   */
+  const setPair = (
+    field: string,
+    pair: [string, string],
+    raw: string
+  ) => {
+    const v = raw.trim();
+    if (!v) {
+      skippedEmpty.push(field);
+      return;
+    }
+    const n = splitName(v);
+    patch[pair[0]] = n.first;
+    if (n.last) patch[pair[1]] = n.last;
+    else skippedEmpty.push(`${field.replace(/_/g, " ")} (last name)`);
+  };
+
   if (fields.student_name !== undefined) {
     if (cols.studentPair) {
-      const v = fields.student_name.trim();
-      if (!v) skippedEmpty.push("student_name");
-      else {
-        const n = splitName(v);
-        patch[cols.studentPair[0]] = n.first;
-        patch[cols.studentPair[1]] = n.last;
-      }
+      setPair("student_name", cols.studentPair, fields.student_name);
     } else if (cols.studentSingle) {
       setString("student_name", cols.studentSingle, fields.student_name);
     }
   }
   if (fields.parent_name !== undefined) {
     if (cols.parentPair) {
-      const v = fields.parent_name.trim();
-      if (!v) skippedEmpty.push("parent_name");
-      else {
-        const n = splitName(v);
-        patch[cols.parentPair[0]] = n.first;
-        patch[cols.parentPair[1]] = n.last;
-      }
+      setPair("parent_name", cols.parentPair, fields.parent_name);
     } else if (cols.parentSingle) {
       setString("parent_name", cols.parentSingle, fields.parent_name);
     } else {
