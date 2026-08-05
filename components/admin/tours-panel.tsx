@@ -58,6 +58,7 @@ import {
   timeInputToMs,
 } from "@/components/admin/event-upsert-dialog";
 import { tourStatusBadgeClass } from "@/components/admin/tour-section";
+import { LEAD_FUNNEL_META } from "@/components/admin/lead-triage";
 import { LeadSheet } from "@/components/admin/lead-sheet";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { formatUSPhone } from "@/lib/phone";
@@ -74,7 +75,10 @@ import {
   type LeadNoteSource,
   type XanoTour,
 } from "@/lib/xano";
-import type { AllLeadRow } from "@/app/api/admin/all-leads/route";
+import type {
+  AllLeadRow,
+  LeadFunnelStage,
+} from "@/app/api/admin/all-leads/route";
 import type { ToursResponse } from "@/app/api/admin/tours/route";
 import type { TourSyncResult } from "@/app/api/admin/tours/sync/route";
 import { cn } from "@/lib/utils";
@@ -112,6 +116,15 @@ type TourRow = {
   duration_minutes: number;
   /** Which lead the tour is linked to; null = unlinked import. */
   lead: { source: LeadNoteSource; id: number } | null;
+  /** The linked lead's application funnel stage, joined client-side
+   *  from `/api/admin/all-leads` (the same derivation All Leads and
+   *  the triage sheet show, so the surfaces can't drift):
+   *  "" = not converted · "linked" | "started" | "applied" |
+   *  "accepted" | "enrolled". `undefined` while the leads list is
+   *  still loading (render a placeholder, not "Not converted"). */
+  funnel_stage: LeadFunnelStage | undefined;
+  /** Family the lead converted into — badge tooltip context. */
+  converted_family_name: string;
 };
 
 export function ToursPanel() {
@@ -121,24 +134,66 @@ export function ToursPanel() {
     { refreshInterval: 60_000 }
   );
 
+  // The Application column joins each tour's lead to its funnel stage
+  // from the all-leads endpoint — the SAME derivation All Leads and
+  // the triage sheet render, so a tour row can't disagree with the
+  // lead it opens. Shares the SWR key (and cache) with the lead
+  // picker below; `isTourAffectedKey` already revalidates it whenever
+  // a lead is linked/unlinked, so the column tracks changes live.
+  const { data: leads } = useSWR<AllLeadRow[]>(
+    "/api/admin/all-leads",
+    adminFetcher,
+    { revalidateOnFocus: false }
+  );
+  const conversionByLead = useMemo(() => {
+    if (!leads) return null;
+    const map = new Map<
+      string,
+      { stage: LeadFunnelStage; family: string }
+    >();
+    for (const l of leads) {
+      map.set(`${l.source}-${l.id}`, {
+        stage: l.funnel_stage,
+        family: l.converted_family_name,
+      });
+    }
+    return map;
+  }, [leads]);
+
   const rows: TourRow[] = useMemo(() => {
     const tours = data?.tours ?? [];
-    return tours.map((t: XanoTour) => ({
-      id: t.id,
-      scheduled_at: t.scheduled_at,
-      when: tourWhenLabel(t.scheduled_at, t.duration_minutes),
-      parent_name: t.parent_name,
-      parent_email: t.parent_email,
-      parent_phone: t.parent_phone,
-      student_name: t.student_name,
-      location: t.location,
-      status: t.status,
-      rsvp: t.rsvp_status,
-      hasInvite: Boolean(liveTourEventId(t.google_event_id) && t.parent_email),
-      duration_minutes: t.duration_minutes,
-      lead: tourLeadScope(t),
-    }));
-  }, [data]);
+    return tours.map((t: XanoTour) => {
+      const lead = tourLeadScope(t);
+      // No lead → nothing to convert ("" renders as a plain dash);
+      // leads list still loading → undefined (placeholder). A linked
+      // lead missing from the list (deleted row) reads "" too.
+      const conv = lead
+        ? conversionByLead?.get(`${lead.source}-${lead.id}`)
+        : undefined;
+      const funnel_stage: LeadFunnelStage | undefined = !lead
+        ? ""
+        : conversionByLead
+          ? (conv?.stage ?? "")
+          : undefined;
+      return {
+        id: t.id,
+        scheduled_at: t.scheduled_at,
+        when: tourWhenLabel(t.scheduled_at, t.duration_minutes),
+        parent_name: t.parent_name,
+        parent_email: t.parent_email,
+        parent_phone: t.parent_phone,
+        student_name: t.student_name,
+        location: t.location,
+        status: t.status,
+        rsvp: t.rsvp_status,
+        hasInvite: Boolean(liveTourEventId(t.google_event_id) && t.parent_email),
+        duration_minutes: t.duration_minutes,
+        lead,
+        funnel_stage,
+        converted_family_name: conv?.family ?? "",
+      };
+    });
+  }, [data, conversionByLead]);
 
   // Two sections split on DATE, not just status: a tour still flagged
   // "scheduled" whose slot already passed isn't upcoming — it's
@@ -321,7 +376,7 @@ export function ToursPanel() {
       key: "scheduled_at",
       header: "When",
       sortable: true,
-      width: "w-[17%]",
+      width: "w-[15%]",
       render: (r) => (
         <span
           className={cn(
@@ -339,7 +394,7 @@ export function ToursPanel() {
       header: "Parent",
       sortable: true,
       searchable: true,
-      width: "w-[15%]",
+      width: "w-[13%]",
       render: (r) => (
         <span className="block truncate text-sm font-medium">
           {r.parent_name || "—"}
@@ -351,7 +406,7 @@ export function ToursPanel() {
       header: "Student",
       sortable: true,
       searchable: true,
-      width: "w-[13%]",
+      width: "w-[12%]",
       render: (r) => (
         <span className="block truncate text-sm">{r.student_name || "—"}</span>
       ),
@@ -360,7 +415,7 @@ export function ToursPanel() {
       key: "parent_email",
       header: "Contact",
       searchable: true,
-      width: "w-[15%]",
+      width: "w-[13%]",
       render: (r) => (
         <span className="block truncate text-sm" title={r.parent_email}>
           {r.parent_email ||
@@ -374,7 +429,7 @@ export function ToursPanel() {
       key: "location",
       header: "Location",
       searchable: true,
-      width: "w-[11%]",
+      width: "w-[10%]",
       render: (r) => (
         <span
           className="block truncate text-sm text-muted-foreground"
@@ -387,7 +442,7 @@ export function ToursPanel() {
     {
       key: "lead",
       header: "Lead",
-      width: "w-[10%]",
+      width: "w-[9%]",
       accessor: (r) => (r.lead ? LEAD_LABEL[r.lead.source] : ""),
       render: (r) =>
         r.lead ? (
@@ -402,6 +457,49 @@ export function ToursPanel() {
             Unlinked
           </Badge>
         ),
+    },
+    {
+      key: "funnel_stage",
+      header: "Application",
+      sortable: true,
+      width: "w-[10%]",
+      // Sort by funnel rank (numeric-aware compare), not label
+      // alphabet — "Enrolled" belongs above "Applied", not between
+      // "Accepted" and "Linked".
+      accessor: (r) =>
+        r.funnel_stage ? LEAD_FUNNEL_META[r.funnel_stage]?.rank ?? 0 : 0,
+      render: (r) => {
+        // Unlinked tour — no lead, so no application to speak of.
+        if (!r.lead) {
+          return <span className="text-xs text-muted-foreground">—</span>;
+        }
+        // Leads list still loading — placeholder, not "Not converted".
+        if (r.funnel_stage === undefined) {
+          return <span className="text-xs text-muted-foreground">…</span>;
+        }
+        const meta = r.funnel_stage
+          ? LEAD_FUNNEL_META[r.funnel_stage]
+          : undefined;
+        if (!meta) {
+          return (
+            <span className="text-xs text-muted-foreground">
+              Not converted
+            </span>
+          );
+        }
+        return (
+          <Badge
+            className={cn(meta.chip)}
+            title={
+              r.converted_family_name
+                ? `Converted → ${r.converted_family_name}`
+                : undefined
+            }
+          >
+            {meta.label}
+          </Badge>
+        );
+      },
     },
     {
       key: "status",
