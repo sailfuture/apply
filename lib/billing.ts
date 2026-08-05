@@ -321,6 +321,10 @@ async function startMonthlyBillingInner({
     yearName: year.year_name,
     students: studentItems,
     billingStartDate: year.billing_start_date ?? null,
+    // First day of school — the pivot for the late-enrollment rule
+    // (enrolled before/on it: owes the current month now; after it:
+    // billing starts the 1st of next month).
+    yearStartDate: year.start_date ?? null,
     familyId,
     yearId,
     // Deterministic per (family, year, prior-subscription-state, item

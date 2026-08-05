@@ -477,6 +477,12 @@ interface CreatePerStudentSubscriptionInput {
   /** Same `trial_end` semantics as `createInvoiceSubscription` —
    *  ISO date, defers the first invoice when in the future. */
   billingStartDate: string | null;
+  /** The year's FIRST DAY OF SCHOOL (`school_years.start_date`, ISO
+   *  date). The pivot for late enrollments once billing has begun:
+   *  enrolled on/before this day → the family owes the current month
+   *  and is invoiced immediately; enrolled after it → billing starts
+   *  on the 1st of next month. */
+  yearStartDate?: string | null;
   familyId: number;
   yearId: number;
   /** Defaults to 15 (SailFuture's standard net-15 terms). */
@@ -540,6 +546,19 @@ export interface PerStudentSubscriptionResult {
  * touch Xano here so this helper stays pure-Stripe and reusable
  * from any orchestration site.
  */
+/** Has the year's first day of school fully passed? "Enrolled ON the
+ *  first day" still counts as before — the family attended from day
+ *  one and owes the current month. Missing/unparsable start date
+ *  reads as "not started", which falls back to invoice-now (the
+ *  pre-start behavior) rather than silently deferring a month. */
+function schoolYearHasStarted(yearStartDate: string | null | undefined): boolean {
+  if (!yearStartDate) return false;
+  const startMs = Date.parse(`${yearStartDate}T00:00:00Z`);
+  if (!Number.isFinite(startMs)) return false;
+  // End of that calendar day, Eastern (~05:00 UTC next day).
+  return Date.now() > startMs + (24 + 5) * 60 * 60 * 1000;
+}
+
 /** Unix timestamp of the 1st of next month, on the SCHOOL's calendar
  *  (America/New_York) — so a family enrolled late in the evening of
  *  the 31st doesn't get pushed an extra month by the UTC date already
@@ -559,21 +578,26 @@ export async function createSubscriptionWithStudentItems(
 ): Promise<PerStudentSubscriptionResult> {
   const stripe = getStripeClient();
 
-  // First-invoice anchoring. Four regimes:
-  //   - start date > 48h out  → `trial_end` (proven path; Stripe
+  // First-invoice anchoring. Four regimes (the school's rule — the
+  // pivot for late enrollments is the FIRST DAY OF SCHOOL, not the
+  // billing date):
+  //   - billing start > 48h out  → `trial_end` (proven path; Stripe
   //     requires trial_end comfortably in the future)
-  //   - start date in the future but ≤ 48h → `billing_cycle_anchor` +
-  //     no proration. The old behavior silently DROPPED the anchor
+  //   - billing start in the future but ≤ 48h → `billing_cycle_anchor`
+  //     + no proration. The old behavior silently DROPPED the anchor
   //     here, invoicing the family immediately (up to 2 days early)
   //     and anchoring all 12 invoices to the wrong day of month.
-  //   - start date PASSED (family enrolled after the year's billing
-  //     run went out) → anchor to the FIRST OF NEXT MONTH, no
-  //     proration. They missed this month's deadline, so they join
-  //     billing at the next one — and their cycle stays on the 1sts
-  //     with everyone else, instead of invoicing immediately and
-  //     riding the enrollment date for the rest of the year.
-  //   - start date missing / unparsable → invoice now (the year has
-  //     no billing policy to align to).
+  //   - billing start PASSED, but school hasn't started yet (or
+  //     starts today) → invoice IMMEDIATELY: the family is joining
+  //     for the current month and owes it. (Their later invoices ride
+  //     the enrollment day-of-month rather than the 1st — acceptable;
+  //     invoicing the current month is the priority.)
+  //   - billing start passed AND the first day of school has passed →
+  //     anchor to the FIRST OF NEXT MONTH, no proration. They joined
+  //     mid-term after the month's run, so they start with the next
+  //     month, aligned to the 1sts with everyone else.
+  //   - (billing start missing / unparsable → invoice now; there's no
+  //     year billing policy to align to.)
   const { trialEndUnix, cycleAnchorUnix } = (() => {
     if (!input.billingStartDate) {
       return { trialEndUnix: null, cycleAnchorUnix: null };
@@ -585,7 +609,9 @@ export async function createSubscriptionWithStudentItems(
     const unix = Math.floor(ms / 1000);
     const nowUnix = Math.floor(Date.now() / 1000);
     if (unix <= nowUnix) {
-      return { trialEndUnix: null, cycleAnchorUnix: firstOfNextMonthUnix() };
+      return schoolYearHasStarted(input.yearStartDate)
+        ? { trialEndUnix: null, cycleAnchorUnix: firstOfNextMonthUnix() }
+        : { trialEndUnix: null, cycleAnchorUnix: null };
     }
     if (unix <= nowUnix + 48 * 60 * 60) {
       return { trialEndUnix: null, cycleAnchorUnix: unix };
