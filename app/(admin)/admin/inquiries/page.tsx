@@ -139,6 +139,17 @@ function formatRelative(
   return unit(Math.floor(diff / YEAR), "year", "y");
 }
 
+/** When this inquiry was last contacted. `last_reach_out` is stamped
+ *  server-side by the notes endpoint; rows predating that fall back
+ *  to their newest note. 0 = never contacted. Same resolution the
+ *  All Leads feed uses, so the two surfaces agree. */
+function lastContactAt(row: {
+  last_reach_out?: number | null;
+  last_note_at?: number | null;
+}): number {
+  return Number(row.last_reach_out) || Number(row.last_note_at) || 0;
+}
+
 type InquiryFilter =
   | "all"
   | "not_followed_up"
@@ -240,6 +251,22 @@ export default function InquiriesPage() {
       else if (r.status === "converted") converted.push(r);
       else if (r.isFollowedUp) followedUp.push(r);
       else notFollowedUp.push(r);
+    }
+    // Order every section by MOST RECENT ACTIVITY — the later of the
+    // last contact and the sign-up date — so conversations in flight
+    // and brand-new inquiries both sit at the top. Sorting on last
+    // contact alone would bury every inquiry nobody has called yet
+    // (their `last_reach_out` is 0) below the handful that have been.
+    // Same rule All Leads uses. The Last contact and Added headers
+    // still re-sort on either column alone.
+    const activity = (r: Inquiry) =>
+      Math.max(lastContactAt(r), Number(r.created_at) || 0);
+    for (const list of [followedUp, notFollowedUp, converted, notInterested]) {
+      list.sort(
+        (a, b) =>
+          activity(b) - activity(a) ||
+          (Number(b.created_at) || 0) - (Number(a.created_at) || 0)
+      );
     }
     return { followedUp, notFollowedUp, converted, notInterested };
   }, [rows]);
@@ -556,8 +583,29 @@ export default function InquiriesPage() {
         </span>
       ),
     },
-    // Last contact column stays dropped — it still shows in the detail
-    // Sheet's header subtitle.
+    {
+      // When we last actually spoke to this family. Relative, like
+      // Added, because "3d" is what triage needs — the exact datetime
+      // is one hover away. Falls back to the newest note's timestamp
+      // for rows written before `last_reach_out` was server-stamped,
+      // matching how the All Leads feed resolves it.
+      key: "last_reach_out",
+      header: "Last contact",
+      sortable: true,
+      width: "w-[8%]",
+      accessor: (row) => lastContactAt(row),
+      render: (row) => {
+        const ts = lastContactAt(row);
+        return (
+          <span
+            className="block truncate text-muted-foreground"
+            title={ts ? new Date(ts).toLocaleString() : undefined}
+          >
+            {ts ? formatRelative(ts, { compact: true }) : "—"}
+          </span>
+        );
+      },
+    },
     {
       // 1–5 gut-feel interest rating, clickable right in the row —
       // rating is a quick triage action, not worth a dialog. Sorts

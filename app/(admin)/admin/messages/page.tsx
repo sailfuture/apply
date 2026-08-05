@@ -175,7 +175,6 @@ export default function AdminMessagesPage() {
     if (openedFromParam.current || !openParam || conversations.length === 0) {
       return;
     }
-    openedFromParam.current = true;
     const sep = openParam.indexOf(":");
     if (sep === -1) return;
     const type = openParam.slice(0, sep);
@@ -183,13 +182,25 @@ export default function AdminMessagesPage() {
     const match = conversations.find(
       (c) => c.contactType === type && c.contactId === id
     );
-    if (!match) return; // stale link — leave the inbox as-is
-    setSelected({
-      type: match.contactType,
-      id: match.contactId,
-      name: match.name,
-    });
-    markViewed(match.contactType, match.contactId, match.lastAt);
+    // Stale link, or the thread hasn't arrived in this page of the
+    // list yet — leave the inbox alone and let a later load retry
+    // (the one-shot latch below only closes once we've matched).
+    if (!match) return;
+    openedFromParam.current = true;
+    // Deferred a tick rather than written straight from the effect
+    // body: a synchronous setState there cascades an extra render
+    // pass, which is what `react-hooks/set-state-in-effect` flags.
+    // Same shape as the viewedMap load above. Cleanup cancels it if
+    // the param changes (or we unmount) before it fires.
+    const t = setTimeout(() => {
+      setSelected({
+        type: match.contactType,
+        id: match.contactId,
+        name: match.name,
+      });
+      markViewed(match.contactType, match.contactId, match.lastAt);
+    }, 0);
+    return () => clearTimeout(t);
   }, [openParam, conversations]);
   const active = selected
     ? (conversations.find(
