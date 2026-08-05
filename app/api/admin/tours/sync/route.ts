@@ -258,7 +258,7 @@ export async function POST(req: NextRequest) {
         parent_phone: "",
         student_name: "",
         author_email: "",
-        author_name: "Website booking",
+        author_name: "Website",
       });
       result.imported++;
       if (lead) {

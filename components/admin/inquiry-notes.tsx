@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import {
   AlertTriangle,
   CalendarDays,
+  Check,
   Loader2,
   MessageSquareText,
   NotebookPen,
@@ -54,9 +55,11 @@ import {
   type MessagesResponse,
 } from "@/components/admin/family-message-thread";
 import {
-  TOUR_STATUS_LABEL,
   isRedundantTourBookingNote,
+  isTourAffectedKey,
   leadToursKey,
+  tourAuthorLabel,
+  tourDisplayStatus,
   tourWhenLabel,
 } from "@/lib/tours";
 import type { ToursResponse } from "@/app/api/admin/tours/route";
@@ -998,7 +1001,40 @@ function entryTs(e: TimelineEntry): number {
  *  whose note write failed. Always current: the status reflects the
  *  tour now, not what it was when it was booked. */
 function TourMarker({ tour }: { tour: XanoTour }) {
-  const status = TOUR_STATUS_LABEL[tour.status] ?? tour.status;
+  const { mutate: globalMutate } = useSWRConfig();
+  const [saving, setSaving] = useState(false);
+  const state = tourDisplayStatus(tour);
+  const author = tourAuthorLabel(tour.author_name);
+
+  /** Record the outcome without leaving the log. Invalidates every
+   *  tour-affected key, so this marker re-renders from the updated
+   *  row (and the Tours tab / All Leads column follow) rather than
+   *  us hand-patching local state. */
+  async function markComplete() {
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/admin/tours/${tour.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "complete" }),
+      });
+      const result = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(result?.error ?? `Update failed (${res.status})`);
+      }
+      if (result?.warning) toast.warning(result.warning);
+      else toast.success("Tour marked completed.");
+      void globalMutate(isTourAffectedKey);
+    } catch (err) {
+      console.error("[TourMarker.markComplete]", err);
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't update the tour."
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <Marker className="text-muted-foreground">
       <MarkerIcon>
@@ -1008,8 +1044,29 @@ function TourMarker({ tour }: { tour: XanoTour }) {
         <span className="font-medium text-foreground/80">Campus tour</span>
         {" — "}
         {tourWhenLabel(tour.scheduled_at, tour.duration_minutes)}
-        {status ? <> · {status}</> : null}
-        {tour.author_name ? <> · {tour.author_name}</> : null}
+        {" · "}
+        <span className={cn("font-medium", state.className)}>
+          {state.label}
+        </span>
+        {author ? <> · {author}</> : null}
+        {/* Only offered while the outcome is still open — a completed,
+            canceled, or no-showed tour has nothing left to record. */}
+        {state.actionable ? (
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => void markComplete()}
+            title="Mark this tour completed"
+            className="ml-1.5 inline-flex items-center gap-1 rounded border border-border bg-white px-1.5 py-0.5 align-middle text-[11px] font-medium text-foreground/70 transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60"
+          >
+            {saving ? (
+              <Loader2 className="size-3 animate-spin" />
+            ) : (
+              <Check className="size-3" />
+            )}
+            {saving ? "Saving…" : "Mark complete"}
+          </button>
+        ) : null}
       </MarkerContent>
     </Marker>
   );

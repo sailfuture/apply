@@ -104,6 +104,51 @@ export const TOUR_STATUS_LABEL: Record<string, string> = {
   canceled: "Canceled",
 };
 
+/**
+ * How a tour's state reads in a timeline: a label plus a text colour,
+ * with the one distinction the raw status can't make — a tour still
+ * flagged "scheduled" whose slot has already passed is NOT upcoming,
+ * it's waiting on someone to record what happened. `actionable` marks
+ * exactly those states where "Mark complete" is worth offering.
+ */
+export function tourDisplayStatus(tour: {
+  status: string;
+  scheduled_at: number;
+}): { label: string; className: string; actionable: boolean } {
+  if (tour.status === "completed") {
+    return { label: "Completed", className: "text-green-700", actionable: false };
+  }
+  if (tour.status === "no_show") {
+    return { label: "No-show", className: "text-amber-700", actionable: false };
+  }
+  if (tour.status === "canceled") {
+    return {
+      label: "Canceled",
+      className: "text-red-700",
+      actionable: false,
+    };
+  }
+  if (tour.status === "scheduled") {
+    return tour.scheduled_at > Date.now()
+      ? { label: "Scheduled", className: "text-sky-700", actionable: true }
+      : { label: "Past due", className: "text-amber-700", actionable: true };
+  }
+  return {
+    label: TOUR_STATUS_LABEL[tour.status] ?? tour.status,
+    className: "text-muted-foreground",
+    actionable: false,
+  };
+}
+
+/** Who booked a tour, for display. Website bookings are stored with
+ *  `author_name` "Website booking"; the log only wants "Website" —
+ *  normalized on READ so rows already in Xano read right without a
+ *  migration (new imports store "Website" directly). */
+export function tourAuthorLabel(authorName: string): string {
+  const name = (authorName ?? "").trim();
+  return /^website\b/i.test(name) ? "Website" : name;
+}
+
 /** Parent RSVP from the Google invite → short admin-facing label. */
 export const TOUR_RSVP_LABEL: Record<string, string> = {
   accepted: "Accepted",
