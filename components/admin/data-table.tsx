@@ -218,6 +218,18 @@ export function DataTable<T extends Record<string, unknown>>({
                 <TableRow
                   key={i}
                   className={cn(
+                    // Fixed row height so a page's height depends on
+                    // its ROW COUNT alone, never on what's in the
+                    // cells. Without it, cells whose content is an
+                    // inline-level box (a Badge, a Checkbox) sit on
+                    // the text baseline and need descender space
+                    // under them, so a row carrying one renders a few
+                    // pixels taller than a row showing plain text —
+                    // and a table would visibly change height as you
+                    // paged through rows with different mixes. In
+                    // table layout `height` behaves as a MINIMUM, so
+                    // this never clips a table with taller content.
+                    "h-10",
                     onRowClick && "cursor-pointer",
                     // A custom row class owns the background + hover;
                     // otherwise fall back to the default hover tint.

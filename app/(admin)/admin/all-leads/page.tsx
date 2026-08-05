@@ -227,6 +227,17 @@ export default function AllLeadsPage() {
             : "active";
       (out[key] ?? out.active).push(r);
     }
+    // Active Leads is the working queue, so it orders by LAST CONTACT
+    // (most recent first) rather than by submission date — the
+    // conversations in flight sit at the top. Never-contacted leads
+    // (`last_reach_out` 0) fall below them, newest sign-up first so
+    // the freshest untouched lead leads that block. Every other group
+    // keeps the API's newest-submitted order. Clicking the Last
+    // contact header still re-sorts either way.
+    out.active.sort(
+      (a, b) =>
+        b.last_reach_out - a.last_reach_out || b.submitted_ts - a.submitted_ts
+    );
     return out;
   }, [visible]);
 
