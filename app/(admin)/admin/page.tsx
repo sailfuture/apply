@@ -306,18 +306,19 @@ export default function AdminDashboardPage() {
           description={`${tourStats.completed} completed · ${tourStats.scheduled} upcoming`}
           href="/admin/campus-tours"
         />
-        {/* Family-level pipeline, same buckets as the Applications
-            page: headline = accepted families, breakdown = the rest
-            of the funnel still moving. */}
+        {/* Apps = the pipeline still MOVING: families that have
+            started but not submitted, with the submitted count
+            alongside. Accepted lives in its own tile next door, so
+            it isn't repeated here. Same buckets the Applications
+            page uses. */}
         <StatsCard
           title="Apps"
-          value={familyStats.accepted}
+          value={familyStats.inProgress}
           icon={<FileText className="size-5" />}
-          description={`accepted · ${familyStats.inProgress} in progress · ${familyStats.submitted} submitted`}
+          description={`in progress · ${familyStats.submitted} submitted`}
           href={yearId ? `/admin/applications?yearId=${yearId}` : "/admin/applications"}
         />
-        {/* Accepted counts per-student application rows, so this is
-            students (not families) accepted for the selected year. */}
+        {/* Accepted applications for the selected year. */}
         <StatsCard
           title="Accepted"
           value={safeStats.applications.accepted}

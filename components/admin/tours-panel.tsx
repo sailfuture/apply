@@ -568,143 +568,109 @@ export function ToursPanel() {
     },
   ];
 
+  // Row click: a tour is one event in a lead's story, so it opens
+  // that lead's details + activity. An unlinked tour has no lead to
+  // open — offer the picker instead of doing nothing, which would
+  // read as a broken row. Shared by both group tables.
+  const onRowClick = (r: TourRow) => {
+    if (r.lead) setOpenTour(r);
+    else setLinking(r);
+  };
+  const rowClassName = (r: TourRow) =>
+    openLead &&
+    r.lead?.source === openLead.source &&
+    r.lead.id === openLead.id
+      ? "bg-muted hover:bg-muted"
+      : "hover:bg-muted/50";
+
   return (
-    <Card className="overflow-hidden bg-white py-0 gap-0">
-      <CardHeader className="py-4 border-b bg-white">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <CardTitle className="text-base">
-            Scheduled tours
-            <span className="ml-2 text-sm font-normal text-muted-foreground">
-              {upcoming.length} upcoming
-            </span>
-          </CardTitle>
-          <div className="flex flex-wrap items-center gap-2">
-            <Input
-              placeholder="Search by parent, student, email, or location…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="h-9 w-full sm:w-72"
-            />
-            <Button onClick={() => setPickingForSchedule(true)}>
-              <CalendarPlus className="size-4" />
-              Schedule tour
-            </Button>
-            {/* Straight to the admissions calendar the events land
-                on — the ?cid= link opens (or offers to add) that
-                calendar in the admin's own Google Calendar. */}
-            {data?.calendarEmail ? (
-              <Button asChild variant="outline" className="bg-white">
-                <a
-                  href={`https://calendar.google.com/calendar/u/0/r?cid=${encodeURIComponent(data.calendarEmail)}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  title={`Open ${data.calendarEmail} in Google Calendar`}
-                >
-                  <ExternalLink className="size-4" />
-                  Google Calendar
-                </a>
-              </Button>
-            ) : null}
-            <Button
-              variant="outline"
-              className="bg-white"
-              disabled={syncing}
-              onClick={() => void runSync(true)}
-              title="Pull every booking since Jan 1 2026, plus RSVP changes, from Google Calendar"
+    <div className="space-y-6">
+      {/* Toolbar lives ABOVE the cards (matching Applications / All
+          Leads): one search box drives every group's table. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Input
+          placeholder="Search by parent, student, email, or location…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="min-w-64 flex-1"
+        />
+        <Button className="h-9" onClick={() => setPickingForSchedule(true)}>
+          <CalendarPlus className="size-4" />
+          Schedule tour
+        </Button>
+        {/* Straight to the admissions calendar the events land on —
+            the ?cid= link opens (or offers to add) that calendar in
+            the admin's own Google Calendar. */}
+        {data?.calendarEmail ? (
+          <Button asChild variant="outline" className="h-9 bg-white">
+            <a
+              href={`https://calendar.google.com/calendar/u/0/r?cid=${encodeURIComponent(data.calendarEmail)}`}
+              target="_blank"
+              rel="noreferrer"
+              title={`Open ${data.calendarEmail} in Google Calendar`}
             >
-              <RefreshCw className={cn("size-4", syncing && "animate-spin")} />
-              {syncing ? "Syncing…" : "Sync Google"}
-            </Button>
-          </div>
-        </div>
-        {data && !data.calendarConfigured ? (
-          <p className="text-xs text-amber-700">
-            Google Calendar sync isn&rsquo;t configured — tours are logged
-            here, but no invites are emailed.
-          </p>
+              <ExternalLink className="size-4" />
+              Google Calendar
+            </a>
+          </Button>
         ) : null}
-      </CardHeader>
-      <CardContent className="space-y-6 p-4 bg-white">
-        {error && !data ? (
-          <div className="p-8 text-center text-sm text-muted-foreground">
-            Couldn&rsquo;t load tours. Refresh to try again.
-          </div>
-        ) : upcoming.length + past.length === 0 && !isLoading ? (
-          <div className="p-8 text-center text-sm text-muted-foreground">
-            No tours yet. Bookings from the website tour page import
-            here automatically — use Sync Google to pull them in now.
-          </div>
-        ) : (
-          // Two sections split on the tour's DATE — upcoming above,
-          // everything already past below (including still-"scheduled"
-          // rows whose slot passed without an outcome; their badge +
-          // row menu say what's left to resolve).
-          (
-            [
-              {
-                key: "upcoming",
-                title: "Upcoming",
-                dot: "bg-sky-500",
-                description: "On the calendar ahead — soonest first.",
-                data: upcoming,
-              },
-              {
-                key: "past",
-                title: "Past",
-                dot: "bg-slate-400",
-                description:
-                  "Completed, canceled, no-shows — and scheduled tours whose date has passed without an outcome.",
-                data: past,
-              },
-            ] as const
-          ).map((section) =>
-            section.data.length === 0 && !isLoading ? null : (
-              <div key={section.key} className="space-y-3">
-                <div className="flex items-baseline gap-3">
-                  <span
-                    className={cn(
-                      "size-2.5 shrink-0 self-center rounded-full",
-                      section.dot
-                    )}
-                    aria-hidden
-                  />
-                  <p className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-                    {section.title}
-                  </p>
-                  <span className="text-xs tabular-nums text-muted-foreground">
-                    ({section.data.length})
-                  </span>
-                  <p className="text-xs text-muted-foreground">
-                    {section.description}
-                  </p>
-                </div>
-                <DataTable<TourRow>
-                  columns={columns}
-                  data={section.data}
-                  isLoading={isLoading && !data}
-                  externalSearch={search}
-                  // A tour is one event in a lead's story, so the row
-                  // opens that lead's details + activity. An unlinked
-                  // tour has no lead to open — offer the picker
-                  // instead of doing nothing, which would read as a
-                  // broken row.
-                  onRowClick={(r) => {
-                    if (r.lead) setOpenTour(r);
-                    else setLinking(r);
-                  }}
-                  rowClassName={(r) =>
-                    openLead &&
-                    r.lead?.source === openLead.source &&
-                    r.lead.id === openLead.id
-                      ? "bg-muted hover:bg-muted"
-                      : "hover:bg-muted/50"
-                  }
-                />
-              </div>
-            )
-          )
-        )}
-      </CardContent>
+        <Button
+          variant="outline"
+          className="h-9 bg-white"
+          disabled={syncing}
+          onClick={() => void runSync(true)}
+          title="Pull every booking since Jan 1 2026, plus RSVP changes, from Google Calendar"
+        >
+          <RefreshCw className={cn("size-4", syncing && "animate-spin")} />
+          {syncing ? "Syncing…" : "Sync Google"}
+        </Button>
+      </div>
+      {data && !data.calendarConfigured ? (
+        <p className="text-xs text-amber-700">
+          Google Calendar sync isn&rsquo;t configured — tours are logged
+          here, but no invites are emailed.
+        </p>
+      ) : null}
+
+      {error && !data ? (
+        <div className="rounded-lg border bg-white p-8 text-center text-sm text-muted-foreground">
+          Couldn&rsquo;t load tours. Refresh to try again.
+        </div>
+      ) : upcoming.length + past.length === 0 && !isLoading ? (
+        <div className="rounded-lg border bg-white p-8 text-center text-sm text-muted-foreground">
+          No tours yet. Bookings from the website tour page import here
+          automatically — use Sync Google to pull them in now.
+        </div>
+      ) : (
+        // Two CARDS split on the tour's DATE — upcoming above,
+        // everything already past below (including still-"scheduled"
+        // rows whose slot passed without an outcome; their badge +
+        // row menu say what's left to resolve).
+        <div className="space-y-8">
+          <ToursGroup
+            title="Upcoming"
+            description="On the calendar ahead — soonest first."
+            dotColor="bg-sky-500"
+            rows={upcoming}
+            columns={columns}
+            search={search}
+            isLoading={isLoading && !data}
+            onRowClick={onRowClick}
+            rowClassName={rowClassName}
+          />
+          <ToursGroup
+            title="Past"
+            description="Completed, canceled, no-shows — and scheduled tours whose date has passed without an outcome."
+            dotColor="bg-slate-400"
+            rows={past}
+            columns={columns}
+            search={search}
+            isLoading={isLoading && !data}
+            onRowClick={onRowClick}
+            rowClassName={rowClassName}
+          />
+        </div>
+      )}
 
       {/* Delete confirm — deleting removes the record everywhere
           (Tours tab + the lead's activity timeline), so it gets the
@@ -852,6 +818,73 @@ export function ToursPanel() {
           }}
         />
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * One tour group as its own card — dot + title + count header over
+ * the shared tours table. Mirrors the Applications / All Leads group
+ * cards so the admin surfaces read identically. Hides entirely when
+ * the group has no rows (the page-level search still filters inside
+ * each table).
+ */
+function ToursGroup({
+  title,
+  description,
+  dotColor,
+  rows,
+  columns,
+  search,
+  isLoading,
+  onRowClick,
+  rowClassName,
+}: {
+  title: string;
+  description: string;
+  /** Tailwind bg-... class for the dot before the title. */
+  dotColor: string;
+  rows: TourRow[];
+  columns: ColumnDef<TourRow>[];
+  /** Page-level search value — drives every card's table at once. */
+  search: string;
+  isLoading: boolean;
+  onRowClick: (row: TourRow) => void;
+  rowClassName: (row: TourRow) => string | undefined;
+}) {
+  if (rows.length === 0 && !isLoading) return null;
+  return (
+    <Card className="overflow-hidden bg-white py-0 gap-0">
+      <CardHeader className="py-4 border-b bg-white">
+        <div className="flex items-baseline gap-3">
+          {/* `self-center` so the dot aligns to the uppercase title
+              text rather than its baseline. */}
+          <span
+            className={cn(
+              "size-2.5 shrink-0 self-center rounded-full",
+              dotColor
+            )}
+            aria-hidden
+          />
+          <CardTitle className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+            {title}
+          </CardTitle>
+          <span className="text-xs tabular-nums text-muted-foreground">
+            ({rows.length})
+          </span>
+          <p className="text-xs text-muted-foreground">{description}</p>
+        </div>
+      </CardHeader>
+      <CardContent className="p-4 bg-white">
+        <DataTable<TourRow>
+          columns={columns}
+          data={rows}
+          isLoading={isLoading}
+          externalSearch={search}
+          onRowClick={onRowClick}
+          rowClassName={rowClassName}
+        />
+      </CardContent>
     </Card>
   );
 }
