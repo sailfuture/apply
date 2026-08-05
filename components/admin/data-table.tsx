@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef } from "react";
 import {
   Table,
   TableBody,
@@ -68,6 +68,50 @@ export function DataTable<T extends Record<string, unknown>>({
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [page, setPage] = useState(0);
+
+  // Drag-to-resize column widths (px), keyed by column. Only columns
+  // the user has actually dragged get an entry — the rest keep their
+  // `width` class / auto sizing. Session-local by design: a resize is
+  // a "let me read this now" gesture, not configuration.
+  const [userWidths, setUserWidths] = useState<Record<string, number>>({});
+  const headerRefs = useRef<Record<string, HTMLTableCellElement | null>>({});
+  const resizingRef = useRef<{
+    key: string;
+    startX: number;
+    startW: number;
+  } | null>(null);
+  const hasUserWidths = Object.keys(userWidths).length > 0;
+
+  function startResize(e: React.PointerEvent<HTMLDivElement>, key: string) {
+    // The handle sits inside the (sortable) header — a drag must not
+    // read as a sort click, and text selection would fight the drag.
+    e.preventDefault();
+    e.stopPropagation();
+    const th = headerRefs.current[key];
+    if (!th) return;
+    resizingRef.current = {
+      key,
+      startX: e.clientX,
+      startW: th.getBoundingClientRect().width,
+    };
+    // Pointer capture keeps move/up events (and the col-resize cursor)
+    // on the handle even when the pointer leaves it mid-drag.
+    e.currentTarget.setPointerCapture(e.pointerId);
+  }
+
+  function moveResize(e: React.PointerEvent<HTMLDivElement>, key: string) {
+    const r = resizingRef.current;
+    if (!r || r.key !== key) return;
+    const w = Math.max(56, Math.round(r.startW + e.clientX - r.startX));
+    setUserWidths((prev) => (prev[key] === w ? prev : { ...prev, [key]: w }));
+  }
+
+  function endResize(e: React.PointerEvent<HTMLDivElement>) {
+    resizingRef.current = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+  }
 
   const searchableKeys = useMemo(
     () => columns.filter((c) => c.searchable).map((c) => c),
@@ -154,16 +198,31 @@ export function DataTable<T extends Record<string, unknown>>({
           width-less columns; with `auto`, those classes are
           suggestions and content can override them. */}
       <div className="rounded-md border bg-white overflow-hidden">
+        {/* `table-fixed` also kicks in once any column has been
+            drag-resized — pixel widths are only honoured under fixed
+            layout (auto layout treats them as suggestions). */}
         <Table
-          className={cn(columns.some((c) => c.width) && "table-fixed")}
+          className={cn(
+            (columns.some((c) => c.width) || hasUserWidths) && "table-fixed"
+          )}
         >
           <TableHeader className="bg-muted/40">
             <TableRow className="hover:bg-muted/40">
               {columns.map((col) => (
                 <TableHead
                   key={col.key}
+                  ref={(el) => {
+                    headerRefs.current[col.key] = el;
+                  }}
+                  // A dragged width (inline style) beats the Tailwind
+                  // width class; columns never dragged keep the class.
+                  style={
+                    userWidths[col.key] !== undefined
+                      ? { width: userWidths[col.key] }
+                      : undefined
+                  }
                   className={cn(
-                    "text-xs font-semibold uppercase tracking-wider text-muted-foreground",
+                    "relative text-xs font-semibold text-muted-foreground",
                     col.width,
                     col.align === "right" && "text-right",
                     col.align === "center" && "text-center"
@@ -199,6 +258,28 @@ export function DataTable<T extends Record<string, unknown>>({
                   ) : (
                     <span className="block truncate">{col.header}</span>
                   )}
+                  {/* Drag handle on the column's right edge. Double-
+                      click resets that column to its default width. */}
+                  <div
+                    role="separator"
+                    aria-orientation="vertical"
+                    aria-label={`Resize ${col.header || col.key} column`}
+                    onPointerDown={(e) => startResize(e, col.key)}
+                    onPointerMove={(e) => moveResize(e, col.key)}
+                    onPointerUp={endResize}
+                    onPointerCancel={endResize}
+                    onClick={(e) => e.stopPropagation()}
+                    onDoubleClick={() =>
+                      setUserWidths((prev) => {
+                        const next = { ...prev };
+                        delete next[col.key];
+                        return next;
+                      })
+                    }
+                    className="group absolute inset-y-0 right-0 z-10 w-2 cursor-col-resize touch-none select-none"
+                  >
+                    <div className="absolute inset-y-1.5 right-[3px] w-px bg-border opacity-0 transition-opacity group-hover:opacity-100" />
+                  </div>
                 </TableHead>
               ))}
             </TableRow>
