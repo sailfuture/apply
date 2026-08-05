@@ -66,6 +66,7 @@ import { ActivityLogSheet } from "@/components/admin/activity-log-sheet";
 import { FamilyMessagesSheet } from "@/components/admin/family-messages-sheet";
 import { EmailParentButton } from "@/components/admin/email-parent-button";
 import { DocumentsToReviewBlock } from "@/components/admin/documents-to-review-block";
+import { LinkedLeadsButton } from "@/components/admin/linked-leads-button";
 import { InviteStatusBadge, ResendInviteButton } from "@/components/invite-status";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { cn } from "@/lib/utils";
@@ -631,6 +632,10 @@ export default function FamilyDetailPage() {
                 </Link>
               </Button>
             ) : null}
+            {/* The recruitment lead(s) this family converted from —
+                jumps to the lead's triage sheet on All Leads. Hidden
+                when no lead is linked (family-scoped, not per-year). */}
+            <LinkedLeadsButton familyId={Number(familyId)} />
             {yearId ? (
               <FamilyDecisionActions
                 familyId={Number(familyId)}

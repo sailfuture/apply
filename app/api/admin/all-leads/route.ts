@@ -74,6 +74,15 @@ export type AllLeadRow = {
   tour_status: string;
   /** `scheduled_at` of the tour behind `tour_status`; 0 when none. */
   tour_at: number;
+  /** Lifecycle bucket from the lead's own table: "" active pipeline,
+   *  "not_interested" family declined (see `status_reason`),
+   *  "converted" legacy hand-marked win. Only inquiry is guaranteed
+   *  to have the columns; other sources read "" until they're added
+   *  in Xano. */
+  lead_status: string;
+  /** Why the family declined — only meaningful when `lead_status`
+   *  is "not_interested" (restore leaves the old value in place). */
+  status_reason: string;
   /** Conversion link — the `registration_families` row this lead
    *  became, stamped by the on-submit auto-matcher / re-match sweep /
    *  manual link in the triage sheet. 0 = not converted. */
@@ -219,6 +228,14 @@ export async function GET() {
       families.map((f) => [f.id, (f.family_name ?? "").trim()])
     );
 
+    // Normalized lifecycle bucket — "active" and "" both mean the
+    // working pipeline, so collapse them; anything else passes
+    // through ("not_interested", legacy "converted").
+    const leadStatus = (raw: string | null | undefined): string => {
+      const s = (raw ?? "").trim();
+      return s === "active" ? "" : s;
+    };
+
     // The per-source mappers build rows without the tour or derived
     // funnel fields — those are stamped on afterward from the shared
     // maps, so four mappers don't each repeat the lookups. They DO
@@ -254,6 +271,8 @@ export async function GET() {
                 : "",
           opt_in: i.messaging_opt_in !== false,
           grade_raw: (i.starting_grade || i.current_grade || "").trim(),
+          lead_status: status === "active" ? "" : status,
+          status_reason: (i.status_reason ?? "").trim(),
           converted_family_id: leadConvertedFamilyId(i),
           converted_at: Number(i.converted_at) || 0,
         };
@@ -286,6 +305,8 @@ export async function GET() {
               : "",
           opt_in: true,
           grade_raw: (c.last_grade_completed ?? "").trim(),
+          lead_status: leadStatus(c.status),
+          status_reason: (c.status_reason ?? "").trim(),
           converted_family_id: leadConvertedFamilyId(c),
           converted_at: Number(c.converted_at) || 0,
         })
@@ -308,6 +329,8 @@ export async function GET() {
           detail: w.marketing_opt_in ? "" : "No marketing opt-in",
           opt_in: w.marketing_opt_in === true,
           grade_raw: (w.student_grade ?? "").trim(),
+          lead_status: leadStatus(w.status),
+          status_reason: (w.status_reason ?? "").trim(),
           converted_family_id: leadConvertedFamilyId(w),
           converted_at: Number(w.converted_at) || 0,
         })
@@ -330,6 +353,8 @@ export async function GET() {
           detail: (t.recreation_center ?? "").trim(),
           opt_in: t.marketing_opt_in === true,
           grade_raw: (t.current_grade ?? "").trim(),
+          lead_status: leadStatus(t.status),
+          status_reason: (t.status_reason ?? "").trim(),
           converted_family_id: leadConvertedFamilyId(t),
           converted_at: Number(t.converted_at) || 0,
         })

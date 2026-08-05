@@ -12,7 +12,9 @@ import {
   Mail,
   Pencil,
   Phone,
+  Undo2,
   Unlink,
+  UserX,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -426,6 +428,208 @@ function LeadConversionEditor({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Preset reasons for the "mark not interested" flow. Stored verbatim
+ * into `status_reason` so reporting can group on the exact label —
+ * same list the Inquiries page uses. "Other" swaps in a free-text
+ * input.
+ */
+const NOT_INTERESTED_REASONS = [
+  "Tuition / cost",
+  "Chose another school",
+  "Distance / transportation",
+  "Program not the right fit",
+  "Timing — may apply later",
+  "Stopped responding",
+  "Other",
+] as const;
+
+/**
+ * Lifecycle status control — lets admin mark any lead "not
+ * interested" with a reason (preset list, free text under "Other"),
+ * or restore a declined lead back to the active pipeline. Writes
+ * `status`/`status_reason` through `/api/admin/leads`; the route
+ * echo-verifies, so a source table missing the columns comes back as
+ * a warning toast naming what to add in Xano instead of silently
+ * saving nothing.
+ */
+function LeadStatusEditor({
+  scope,
+  status,
+  reason,
+  onChanged,
+}: {
+  scope: LeadNoteScope;
+  /** "" = active pipeline; "not_interested" = declined;
+   *  "converted" = legacy hand-marked win (treated as active here). */
+  status: string;
+  reason: string;
+  onChanged?: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [customReason, setCustomReason] = useState("");
+  const [showCustom, setShowCustom] = useState(false);
+
+  async function save(patch: { status: string; status_reason?: string }) {
+    setSaving(true);
+    try {
+      const res = await fetch("/api/admin/leads", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source: scope.source, id: scope.id, ...patch }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error ?? `Save failed (${res.status})`);
+      if (data?.warning) toast.warning(data.warning);
+      else if (patch.status === "not_interested") {
+        toast.success("Marked not interested.");
+      } else {
+        toast.success("Lead restored to the active pipeline.");
+      }
+      setOpen(false);
+      setShowCustom(false);
+      setCustomReason("");
+      onChanged?.();
+    } catch (err) {
+      console.error("[LeadStatusEditor.save]", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't save.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (status === "not_interested") {
+    return (
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge className="bg-red-100 text-red-800 hover:bg-red-100 whitespace-nowrap">
+          Not interested
+        </Badge>
+        {reason ? (
+          <span className="text-xs text-muted-foreground">{reason}</span>
+        ) : null}
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-7 px-2 text-muted-foreground"
+          disabled={saving}
+          onClick={() => void save({ status: "active" })}
+          title="Put this lead back in the active pipeline"
+        >
+          {saving ? (
+            <Loader2 className="size-3.5 animate-spin" />
+          ) : (
+            <Undo2 className="size-3.5" />
+          )}
+          Restore
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o);
+        if (!o) {
+          setShowCustom(false);
+          setCustomReason("");
+        }
+      }}
+    >
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-7 bg-white text-muted-foreground"
+          disabled={saving}
+        >
+          {saving ? (
+            <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+          ) : (
+            <UserX className="size-3.5 mr-1.5" />
+          )}
+          Mark not interested
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-64 p-2" align="start">
+        <p className="px-1 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          Why not interested?
+        </p>
+        {showCustom ? (
+          <div className="space-y-2 p-1">
+            <Input
+              autoFocus
+              value={customReason}
+              disabled={saving}
+              placeholder="Reason…"
+              className="h-8 border-input bg-white text-sm"
+              onChange={(e) => setCustomReason(e.target.value)}
+            />
+            <div className="flex justify-end gap-1.5">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 bg-white"
+                disabled={saving}
+                onClick={() => setShowCustom(false)}
+              >
+                Back
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                className="h-7"
+                disabled={saving || !customReason.trim()}
+                onClick={() =>
+                  void save({
+                    status: "not_interested",
+                    status_reason: customReason.trim(),
+                  })
+                }
+              >
+                Save
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex flex-col">
+            {NOT_INTERESTED_REASONS.map((r) =>
+              r === "Other" ? (
+                <button
+                  key={r}
+                  type="button"
+                  disabled={saving}
+                  className="rounded-sm px-2 py-1.5 text-left text-sm hover:bg-muted"
+                  onClick={() => setShowCustom(true)}
+                >
+                  Other…
+                </button>
+              ) : (
+                <button
+                  key={r}
+                  type="button"
+                  disabled={saving}
+                  className="rounded-sm px-2 py-1.5 text-left text-sm hover:bg-muted"
+                  onClick={() =>
+                    void save({ status: "not_interested", status_reason: r })
+                  }
+                >
+                  {r}
+                </button>
+              )
+            )}
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -904,6 +1108,8 @@ export function LeadTriageSheet({
   lastReachOut,
   details,
   conversion,
+  leadStatus,
+  statusReason,
   onChanged,
 }: {
   open: boolean;
@@ -921,6 +1127,11 @@ export function LeadTriageSheet({
    *  lead's link to the registration family it became, with manual
    *  link/unlink. */
   conversion?: LeadConversionInfo;
+  /** When provided ("", "not_interested", …), the sheet renders the
+   *  lifecycle control — mark not interested with a reason, or
+   *  restore. Omit to hide (hosts without the status data). */
+  leadStatus?: string;
+  statusReason?: string;
   onChanged?: () => void;
 }) {
   return (
@@ -964,6 +1175,15 @@ export function LeadTriageSheet({
               key={`${scope.source}-${scope.id}`}
               scope={scope}
               conversion={conversion}
+              onChanged={onChanged}
+            />
+          ) : null}
+          {leadStatus !== undefined ? (
+            <LeadStatusEditor
+              key={`status-${scope.source}-${scope.id}`}
+              scope={scope}
+              status={leadStatus}
+              reason={statusReason ?? ""}
               onChanged={onChanged}
             />
           ) : null}

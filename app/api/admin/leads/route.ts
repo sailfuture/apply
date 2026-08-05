@@ -15,7 +15,14 @@ import { writeLeadConversion } from "@/lib/lead-conversion";
  *
  *   PATCH { source, id, interest_level?, isFollowedUp?, opt_in?,
  *           student_name?, parent_name?, phone?, email?, grade?,
- *           school?, family_id? }
+ *           school?, family_id?, status?, status_reason? }
+ *
+ * `status` is the lead's lifecycle bucket: "not_interested" (family
+ * declined — pair it with a `status_reason`) or "active" (restore;
+ * "active" rather than "" because Xano drops empty inputs). Only the
+ * inquiry table is guaranteed to have the columns — the other three
+ * need them added in Xano, and the echo check below warns when a
+ * write didn't land.
  *
  * `family_id` is the manual conversion link — the
  * `registration_families` row this lead became (0 unlinks; the
@@ -88,6 +95,30 @@ export async function PATCH(req: NextRequest) {
       patch.isFollowedUp = body.isFollowedUp;
     }
 
+    // Lifecycle status + decline reason. Folded into the main patch
+    // AND the echo verification below (via `verifyPatch`) so a source
+    // table missing the columns warns instead of silently no-oping.
+    const statusPatch: Record<string, string> = {};
+    if ("status" in body) {
+      if (body.status !== "active" && body.status !== "not_interested") {
+        return NextResponse.json(
+          { error: 'status must be "active" or "not_interested"' },
+          { status: 400 }
+        );
+      }
+      statusPatch.status = body.status;
+    }
+    if ("status_reason" in body) {
+      if (typeof body.status_reason !== "string" || !body.status_reason.trim()) {
+        return NextResponse.json(
+          { error: "status_reason must be a non-empty string" },
+          { status: 400 }
+        );
+      }
+      statusPatch.status_reason = body.status_reason.trim();
+    }
+    Object.assign(patch, statusPatch);
+
     // Generic contact fields → the source table's own columns.
     const contactFields: LeadContactFields = {};
     for (const field of CONTACT_STRING_FIELDS) {
@@ -155,16 +186,17 @@ export async function PATCH(req: NextRequest) {
         ? await updateLead(source, id, patch)
         : conversionRow;
 
-    // Echo verification on the contact columns — Xano silently drops
-    // inputs its edit endpoint doesn't declare, so a mis-wired column
-    // would report success while saving nothing. Booleans compare as
-    // booleans; everything else through String() (Xano stores some
-    // phones as numbers).
+    // Echo verification on the contact + status columns — Xano
+    // silently drops inputs its edit endpoint doesn't declare, so a
+    // mis-wired column would report success while saving nothing.
+    // Booleans compare as booleans; everything else through String()
+    // (Xano stores some phones as numbers).
+    const verifyPatch = { ...contactPatch, ...statusPatch };
     const row = (updated ?? {}) as Record<string, unknown>;
     const dropped =
       updated == null
         ? []
-        : Object.entries(contactPatch)
+        : Object.entries(verifyPatch)
             .filter(([col, v]) =>
               typeof v === "boolean"
                 ? Boolean(row[col]) !== v

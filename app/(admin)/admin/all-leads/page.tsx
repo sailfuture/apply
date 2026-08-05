@@ -4,19 +4,28 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { toast } from "sonner";
-import { ChevronRight, Loader2, Star, Wand2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Loader2, Wand2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { DataTable, type ColumnDef } from "@/components/admin/data-table";
-import {
-  LEAD_FUNNEL_META,
-  LeadTriageSheet,
-} from "@/components/admin/lead-triage";
+import { LeadTriageSheet } from "@/components/admin/lead-triage";
 import {
   Card,
   CardContent,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { StarRating } from "@/components/admin/star-rating";
@@ -31,7 +40,7 @@ import type {
 /** Source chip vocabulary — mirrors the messaging composer's labels so
  *  the two surfaces speak the same language. `short` is the acronym
  *  the table's Source column renders (full label on hover + in the
- *  filter chips / sheet subtitle). */
+ *  filter dropdown / sheet subtitle). */
 const SOURCE_META: Record<LeadSource, { label: string; short: string }> = {
   inquiry: { label: "Inquiry", short: "INQ" },
   camp: { label: "Summer Camp", short: "CAMP" },
@@ -69,12 +78,68 @@ const TOUR_META: Record<
   },
 };
 
+/** The page's group cards, in render order — the active triage queue
+ *  leads (it's the work), then the converted stages ascending so the
+ *  page reads as the funnel deepening toward Enrolled. Keys match
+ *  `AllLeadRow.funnel_stage`, with "active" standing in for the
+ *  unconverted `""` stage. Empty groups hide entirely. */
+const GROUP_DEFS = [
+  {
+    key: "active",
+    title: "Active Leads",
+    dot: "bg-sky-500",
+    description: "Haven't converted yet — the working triage queue.",
+  },
+  {
+    key: "linked",
+    title: "Linked",
+    dot: "bg-slate-400",
+    description:
+      "Matched to a family that hasn't started an application yet.",
+  },
+  {
+    key: "started",
+    title: "Application Started",
+    dot: "bg-amber-500",
+    description: "Converted — the family's application is still in draft.",
+  },
+  {
+    key: "applied",
+    title: "Applied",
+    dot: "bg-blue-500",
+    description: "Application submitted; awaiting admissions decision.",
+  },
+  {
+    key: "accepted",
+    title: "Accepted",
+    dot: "bg-emerald-500",
+    description: "Family approved — registration packet pending.",
+  },
+  {
+    key: "enrolled",
+    title: "Enrolled",
+    dot: "bg-green-500",
+    description:
+      "Fully enrolled — a student's registration packet is confirmed.",
+  },
+  {
+    key: "notInterested",
+    title: "Not Interested",
+    dot: "bg-red-500",
+    description:
+      "Family declined — the reason is on each lead's sheet, where Restore brings one back.",
+  },
+] as const;
+
+type GroupKey = (typeof GROUP_DEFS)[number]["key"];
+
 /**
  * All Leads — the four recruitment sources (website inquiries, summer
  * camp, liability-waiver visits, TASCO summer visits) flattened into
- * one list. Every lead takes a 1–5 conversion-likelihood star rating
- * inline (stored on its own source table's `interest_level`), and the
- * list filters by source and minimum rating; sort any column to rank.
+ * one page, grouped by conversion stage: the active triage queue on
+ * top, then a card per funnel stage (linked → started → applied →
+ * accepted → enrolled). One search box + dropdown filters drive every
+ * group at once.
  */
 export default function AllLeadsPage() {
   const { data, isLoading, error, mutate } = useSWR<AllLeadRow[]>(
@@ -84,6 +149,9 @@ export default function AllLeadsPage() {
   );
   const rows = useMemo(() => (Array.isArray(data) ? data : []), [data]);
 
+  // ONE search input drives every group card (via DataTable's
+  // externalSearch); the dropdowns narrow before grouping.
+  const [search, setSearch] = useState("");
   const [sourceFilter, setSourceFilter] = useState<LeadSource[]>([]);
   const [minRating, setMinRating] = useState(0);
   // null = no follow-up filter; false = needs follow-up; true = done.
@@ -92,12 +160,6 @@ export default function AllLeadsPage() {
   // "none" = leads with no tour on record at all.
   const [tourFilter, setTourFilter] = useState<
     "completed" | "scheduled" | "none" | null
-  >(null);
-  // null = no funnel filter. "converted" = any link; "applied" =
-  // submitted or beyond; "enrolled" = fully enrolled; "none" = still
-  // just a lead.
-  const [funnelFilter, setFunnelFilter] = useState<
-    "none" | "converted" | "applied" | "enrolled" | null
   >(null);
   const [selected, setSelected] = useState<AllLeadRow | null>(null);
   const [matching, setMatching] = useState(false);
@@ -119,44 +181,76 @@ export default function AllLeadsPage() {
             return false;
           }
         }
-        if (funnelFilter !== null) {
-          const rank = r.funnel_stage
-            ? (LEAD_FUNNEL_META[r.funnel_stage]?.rank ?? 0)
-            : 0;
-          if (funnelFilter === "none" && rank !== 0) return false;
-          if (funnelFilter === "converted" && rank === 0) return false;
-          if (
-            funnelFilter === "applied" &&
-            rank < LEAD_FUNNEL_META.applied.rank
-          ) {
-            return false;
-          }
-          if (funnelFilter === "enrolled" && r.funnel_stage !== "enrolled") {
-            return false;
-          }
-        }
         return true;
       }),
-    [rows, sourceFilter, minRating, followUpFilter, tourFilter, funnelFilter]
+    [rows, sourceFilter, minRating, followUpFilter, tourFilter]
   );
+
+  // Split the filtered rows into the funnel group cards. A real
+  // conversion link outranks a "not interested" mark (linking means
+  // the family demonstrably applied); declined-and-unconverted rows
+  // drop out of Active Leads into their own card at the bottom.
+  const groups = useMemo(() => {
+    const out: Record<GroupKey, AllLeadRow[]> = {
+      active: [],
+      linked: [],
+      started: [],
+      applied: [],
+      accepted: [],
+      enrolled: [],
+      notInterested: [],
+    };
+    for (const r of visible) {
+      const key: GroupKey =
+        r.funnel_stage !== ""
+          ? (r.funnel_stage as GroupKey)
+          : r.lead_status === "not_interested"
+            ? "notInterested"
+            : "active";
+      (out[key] ?? out.active).push(r);
+    }
+    return out;
+  }, [visible]);
 
   // Funnel rollup over the WHOLE lead pool (not the filtered view) —
   // the strip answers "how is recruitment converting overall".
   const funnel = useMemo(() => {
-    const appliedRank = LEAD_FUNNEL_META.applied.rank;
     let converted = 0;
     let applied = 0;
     let enrolled = 0;
     for (const r of rows) {
-      const rank = r.funnel_stage
-        ? (LEAD_FUNNEL_META[r.funnel_stage]?.rank ?? 0)
-        : 0;
-      if (rank > 0) converted++;
-      if (rank >= appliedRank) applied++;
+      if (r.funnel_stage !== "") converted++;
+      if (
+        r.funnel_stage === "applied" ||
+        r.funnel_stage === "accepted" ||
+        r.funnel_stage === "enrolled"
+      ) {
+        applied++;
+      }
       if (r.funnel_stage === "enrolled") enrolled++;
     }
     return { total: rows.length, converted, applied, enrolled };
   }, [rows]);
+
+  // Keep the open sheet's snapshot fresh after a rating/follow-up/note
+  // write revalidates the list.
+  const activeRow = selected
+    ? (rows.find((r) => r.key === selected.key) ?? selected)
+    : null;
+
+  // Deep link: `?open=<source>-<id>` opens that lead's triage sheet
+  // once the rows load — the Messages inbox's "View lead" button
+  // lands here. Consumed once so closing the sheet doesn't reopen it.
+  const searchParams = useSearchParams();
+  const openedFromUrl = useRef(false);
+  useEffect(() => {
+    if (openedFromUrl.current || rows.length === 0) return;
+    const openParam = searchParams.get("open");
+    if (!openParam) return;
+    openedFromUrl.current = true;
+    const row = rows.find((r) => r.key === openParam);
+    if (row) setSelected(row);
+  }, [rows, searchParams]);
 
   // Re-run the server-side email/phone auto-match across every
   // unlinked lead. Idempotent — safe to click whenever the numbers
@@ -189,26 +283,6 @@ export default function AllLeadsPage() {
       setMatching(false);
     }
   }
-
-  // Keep the open sheet's snapshot fresh after a rating/follow-up/note
-  // write revalidates the list.
-  const activeRow = selected
-    ? (rows.find((r) => r.key === selected.key) ?? selected)
-    : null;
-
-  // Deep link: `?open=<source>-<id>` opens that lead's triage sheet
-  // once the rows load — the Messages inbox's "View lead" button
-  // lands here. Consumed once so closing the sheet doesn't reopen it.
-  const searchParams = useSearchParams();
-  const openedFromUrl = useRef(false);
-  useEffect(() => {
-    if (openedFromUrl.current || rows.length === 0) return;
-    const openParam = searchParams.get("open");
-    if (!openParam) return;
-    openedFromUrl.current = true;
-    const row = rows.find((r) => r.key === openParam);
-    if (row) setSelected(row);
-  }, [rows, searchParams]);
 
   // Rate a lead with an optimistic mutate so the stars fill in
   // immediately; a failed write re-fetches authoritative data. The
@@ -277,6 +351,8 @@ export default function AllLeadsPage() {
 
   // Defined inline (not memoized) like the other recruitment lists —
   // the render closures need `setRating`'s latest SWR bindings.
+  // Every column carries a width so the group cards' tables line up
+  // vertically down the page (same trick as the applications list).
   const columns: ColumnDef<AllLeadRow>[] = [
       {
         // Rating first — this page exists to triage, so the action
@@ -317,7 +393,7 @@ export default function AllLeadsPage() {
         header: "Student",
         sortable: true,
         searchable: true,
-        width: "w-[14%]",
+        width: "w-[15%]",
         render: (r) => (
           <span className="block truncate text-sm font-medium">
             {r.student_name || "—"}
@@ -358,7 +434,7 @@ export default function AllLeadsPage() {
         header: "School",
         sortable: true,
         searchable: true,
-        width: "w-[13%]",
+        width: "w-[15%]",
         render: (r) => (
           <span className="block truncate text-sm" title={r.school}>
             {r.school || "—"}
@@ -442,41 +518,6 @@ export default function AllLeadsPage() {
         },
       },
       {
-        // Conversion funnel stage — DERIVED server-side from the
-        // lead's linked family's live application data. Sorts
-        // furthest-along first so wins rank to the top.
-        key: "funnel_stage",
-        header: "Converted",
-        sortable: true,
-        width: "w-[9%]",
-        accessor: (r) =>
-          r.funnel_stage
-            ? (LEAD_FUNNEL_META[r.funnel_stage]?.rank ?? 0)
-            : 0,
-        render: (r) => {
-          const meta = r.funnel_stage
-            ? LEAD_FUNNEL_META[r.funnel_stage]
-            : null;
-          return meta ? (
-            <Badge
-              className={cn(
-                meta.chip,
-                "max-w-full overflow-hidden whitespace-nowrap"
-              )}
-              title={
-                r.converted_family_name
-                  ? `${meta.label} — ${r.converted_family_name}`
-                  : meta.label
-              }
-            >
-              <span className="truncate">{meta.label}</span>
-            </Badge>
-          ) : (
-            <span className="text-sm text-muted-foreground">—</span>
-          );
-        },
-      },
-      {
         // Follow-up state + when we last logged contact — the two
         // facts that decide who to call next.
         key: "followed_up",
@@ -535,10 +576,11 @@ export default function AllLeadsPage() {
       <div>
         <h1 className="text-2xl font-bold">All Leads</h1>
         <p className="text-sm text-muted-foreground">
-          Every recruitment lead in one list — website inquiries, summer
-          camp, liability waiver visits, and TASCO summer visits. Rate
-          each lead 1–5 stars on likelihood of conversion; click a row
-          to log a call and mark it followed up.
+          Every recruitment lead in one place, grouped by how far it has
+          converted — active leads to triage on top, then each funnel
+          stage through Enrolled. Rate each lead 1–5 stars on likelihood
+          of conversion; click a row to log a call and mark it followed
+          up.
         </p>
       </div>
 
@@ -591,192 +633,230 @@ export default function AllLeadsPage() {
         </Button>
       </div>
 
-      {/* Source + rating filter chips — empty selection = everything. */}
-      <div className="flex flex-wrap items-center gap-1.5">
-        <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-          Source
-        </span>
-        {SOURCE_FILTERS.map((s) => {
-          const on = sourceFilter.includes(s);
-          return (
-            <button
-              key={s}
-              type="button"
-              aria-pressed={on}
-              onClick={() =>
-                setSourceFilter((prev) =>
-                  prev.includes(s)
-                    ? prev.filter((x) => x !== s)
-                    : [...prev, s]
+      {/* One search + dropdown filters, spanning the same width as the
+          group cards below. Each dropdown's trigger echoes its active
+          selection so a narrowed list is never a mystery. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search by student, parent, school, phone, or email…"
+          className="min-w-64 flex-1 bg-white"
+        />
+
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="outline"
+              size="sm"
+              className={cn(
+                "bg-white",
+                sourceFilter.length > 0 && "border-foreground"
+              )}
+            >
+              {sourceFilter.length === 0
+                ? "Source"
+                : sourceFilter.length === 1
+                  ? SOURCE_META[sourceFilter[0]].label
+                  : `Source (${sourceFilter.length})`}
+              <ChevronDown className="ml-1 size-3.5 opacity-50" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-56">
+            <DropdownMenuLabel>Lead source</DropdownMenuLabel>
+            {SOURCE_FILTERS.map((s) => (
+              <DropdownMenuCheckboxItem
+                key={s}
+                checked={sourceFilter.includes(s)}
+                // Keep the menu open — sources are multi-select and
+                // closing per click makes picking two of them a chore.
+                onSelect={(e) => e.preventDefault()}
+                onCheckedChange={() =>
+                  setSourceFilter((prev) =>
+                    prev.includes(s)
+                      ? prev.filter((x) => x !== s)
+                      : [...prev, s]
+                  )
+                }
+              >
+                {SOURCE_META[s].label}
+              </DropdownMenuCheckboxItem>
+            ))}
+            {sourceFilter.length > 0 ? (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={() => setSourceFilter([])}>
+                  Clear
+                </DropdownMenuItem>
+              </>
+            ) : null}
+          </DropdownMenuContent>
+        </DropdownMenu>
+
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="outline"
+              size="sm"
+              className={cn("bg-white", minRating > 0 && "border-foreground")}
+            >
+              {minRating > 0
+                ? `Rating: ${minRating}${minRating < 5 ? "+" : ""}`
+                : "Rating"}
+              <ChevronDown className="ml-1 size-3.5 opacity-50" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-44">
+            <DropdownMenuLabel>Minimum rating</DropdownMenuLabel>
+            <DropdownMenuRadioGroup
+              value={String(minRating)}
+              onValueChange={(v) => setMinRating(Number(v))}
+            >
+              <DropdownMenuRadioItem value="0">
+                Any rating
+              </DropdownMenuRadioItem>
+              {[1, 2, 3, 4, 5].map((n) => (
+                <DropdownMenuRadioItem key={n} value={String(n)}>
+                  {n}
+                  {n < 5 ? "+" : ""} stars
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="outline"
+              size="sm"
+              className={cn(
+                "bg-white",
+                followUpFilter !== null && "border-foreground"
+              )}
+            >
+              {followUpFilter === null
+                ? "Follow-up"
+                : followUpFilter
+                  ? "Followed up"
+                  : "Needs follow-up"}
+              <ChevronDown className="ml-1 size-3.5 opacity-50" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-48">
+            <DropdownMenuLabel>Follow-up</DropdownMenuLabel>
+            <DropdownMenuRadioGroup
+              value={
+                followUpFilter === null
+                  ? "any"
+                  : followUpFilter
+                    ? "done"
+                    : "needs"
+              }
+              onValueChange={(v) =>
+                setFollowUpFilter(v === "any" ? null : v === "done")
+              }
+            >
+              <DropdownMenuRadioItem value="any">Any</DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="needs">
+                Needs follow-up
+              </DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="done">
+                Followed up
+              </DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="outline"
+              size="sm"
+              className={cn(
+                "bg-white",
+                tourFilter !== null && "border-foreground"
+              )}
+            >
+              {tourFilter === null
+                ? "Tour"
+                : tourFilter === "completed"
+                  ? "Toured"
+                  : tourFilter === "scheduled"
+                    ? "Tour scheduled"
+                    : "No tour"}
+              <ChevronDown className="ml-1 size-3.5 opacity-50" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-44">
+            <DropdownMenuLabel>Campus tour</DropdownMenuLabel>
+            <DropdownMenuRadioGroup
+              value={tourFilter ?? "any"}
+              onValueChange={(v) =>
+                setTourFilter(
+                  v === "any"
+                    ? null
+                    : (v as "completed" | "scheduled" | "none")
                 )
               }
-              className={cn(
-                "rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors",
-                on
-                  ? "border-foreground bg-foreground text-background"
-                  : "border-border bg-white text-muted-foreground hover:border-foreground/40 hover:text-foreground"
-              )}
             >
-              {SOURCE_META[s].label}
-            </button>
-          );
-        })}
-        <span className="mx-1 h-4 w-px bg-border" aria-hidden />
-        <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-          Rating
-        </span>
-        {[1, 2, 3, 4, 5].map((n) => {
-          const on = minRating === n;
-          return (
-            <button
-              key={n}
-              type="button"
-              aria-pressed={on}
-              onClick={() => setMinRating(on ? 0 : n)}
-              className={cn(
-                "inline-flex items-center gap-0.5 rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors",
-                on
-                  ? "border-foreground bg-foreground text-background"
-                  : "border-border bg-white text-muted-foreground hover:border-foreground/40 hover:text-foreground"
-              )}
-              title={`Rated ${n}${n < 5 ? " or more" : ""} stars`}
-            >
-              {n}
-              <Star
-                className={cn(
-                  "size-3",
-                  on ? "fill-background" : "fill-amber-400 text-amber-400"
-                )}
-              />
-              {n < 5 ? "+" : ""}
-            </button>
-          );
-        })}
-        <span className="mx-1 h-4 w-px bg-border" aria-hidden />
-        <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-          Follow-up
-        </span>
-        {[
-          { value: false, label: "Needs follow-up" },
-          { value: true, label: "Followed up" },
-        ].map((f) => {
-          const on = followUpFilter === f.value;
-          return (
-            <button
-              key={String(f.value)}
-              type="button"
-              aria-pressed={on}
-              onClick={() => setFollowUpFilter(on ? null : f.value)}
-              className={cn(
-                "rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors",
-                on
-                  ? "border-foreground bg-foreground text-background"
-                  : "border-border bg-white text-muted-foreground hover:border-foreground/40 hover:text-foreground"
-              )}
-            >
-              {f.label}
-            </button>
-          );
-        })}
-        <span className="mx-1 h-4 w-px bg-border" aria-hidden />
-        <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-          Tour
-        </span>
-        {(
-          [
-            { value: "completed", label: "Toured" },
-            { value: "scheduled", label: "Tour scheduled" },
-            { value: "none", label: "No tour" },
-          ] as const
-        ).map((f) => {
-          const on = tourFilter === f.value;
-          return (
-            <button
-              key={f.value}
-              type="button"
-              aria-pressed={on}
-              onClick={() => setTourFilter(on ? null : f.value)}
-              className={cn(
-                "rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors",
-                on
-                  ? "border-foreground bg-foreground text-background"
-                  : "border-border bg-white text-muted-foreground hover:border-foreground/40 hover:text-foreground"
-              )}
-            >
-              {f.label}
-            </button>
-          );
-        })}
-        <span className="mx-1 h-4 w-px bg-border" aria-hidden />
-        <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-          Converted
-        </span>
-        {(
-          [
-            { value: "none", label: "Not converted" },
-            { value: "converted", label: "Converted" },
-            { value: "applied", label: "Applied" },
-            { value: "enrolled", label: "Enrolled" },
-          ] as const
-        ).map((f) => {
-          const on = funnelFilter === f.value;
-          return (
-            <button
-              key={f.value}
-              type="button"
-              aria-pressed={on}
-              onClick={() => setFunnelFilter(on ? null : f.value)}
-              className={cn(
-                "rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors",
-                on
-                  ? "border-foreground bg-foreground text-background"
-                  : "border-border bg-white text-muted-foreground hover:border-foreground/40 hover:text-foreground"
-              )}
-            >
-              {f.label}
-            </button>
-          );
-        })}
+              <DropdownMenuRadioItem value="any">Any</DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="completed">
+                Toured
+              </DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="scheduled">
+                Tour scheduled
+              </DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="none">
+                No tour
+              </DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
-      <Card className="overflow-hidden bg-white py-0 gap-0">
-        <CardHeader className="py-4 border-b bg-white">
-          <CardTitle className="text-base">
-            Leads
-            <span className="ml-2 text-sm font-normal text-muted-foreground">
-              {visible.length}
-            </span>
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="p-4 bg-white">
-          {error && !data ? (
-            <div className="p-8 text-center text-sm text-muted-foreground">
-              Couldn&rsquo;t load leads. Refresh to try again.
-            </div>
-          ) : (
+      {error && !data ? (
+        <div className="rounded-lg border bg-white p-8 text-center text-sm text-muted-foreground">
+          Couldn&rsquo;t load leads. Refresh to try again.
+        </div>
+      ) : isLoading && !data ? (
+        // One skeleton card while the first load is in flight — the
+        // real group split isn't known yet.
+        <Card className="overflow-hidden bg-white py-0 gap-0">
+          <CardContent className="p-4 bg-white">
             <DataTable<AllLeadRow>
               columns={columns}
-              data={visible}
-              isLoading={isLoading && !data}
-              searchPlaceholder="Search by student, parent, school, phone, or email…"
-              onRowClick={(r) => setSelected(r)}
-              // Keep the open lead's row tinted so it's obvious which
-              // one the sheet belongs to; clears when the sheet
-              // closes (`selected` back to null). Returning a value
-              // takes over the row's background AND hover, so
-              // unselected rows have to restate the default hover.
-              rowClassName={(r) =>
-                selected?.key === r.key
-                  ? "bg-muted hover:bg-muted"
-                  : "hover:bg-muted/50"
-              }
+              data={[]}
+              isLoading
+              externalSearch={search}
             />
-          )}
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+      ) : visible.length === 0 ? (
+        <div className="rounded-lg border bg-white px-6 py-12 text-center text-sm text-muted-foreground">
+          No leads match the current filters.
+        </div>
+      ) : (
+        <div className="space-y-8">
+          {GROUP_DEFS.map((g) => (
+            <LeadsGroup
+              key={g.key}
+              title={g.title}
+              description={g.description}
+              dotColor={g.dot}
+              rows={groups[g.key]}
+              columns={columns}
+              search={search}
+              selectedKey={selected?.key ?? null}
+              onRowClick={(r) => setSelected(r)}
+            />
+          ))}
+        </div>
+      )}
 
-      {/* Triage sheet — stars, follow-up, and the comms log for the
-          clicked lead, whichever source it came from. */}
+      {/* Triage sheet — stars, follow-up, conversion link, and the
+          comms log for the clicked lead, whichever source it came
+          from. */}
       {activeRow ? (
         <LeadTriageSheet
           open
@@ -818,10 +898,84 @@ export default function AllLeadsPage() {
             stage: activeRow.funnel_stage,
             converted_at: activeRow.converted_at,
           }}
+          leadStatus={activeRow.lead_status}
+          statusReason={activeRow.status_reason}
           onChanged={() => void mutate()}
         />
       ) : null}
     </div>
+  );
+}
+
+/**
+ * One funnel-stage card — dot + title + count header over the shared
+ * lead table. Hides entirely when the stage has no rows under the
+ * current dropdown filters (the page-level search still filters
+ * inside the table, matching the applications list's behavior).
+ */
+function LeadsGroup({
+  title,
+  description,
+  dotColor,
+  rows,
+  columns,
+  search,
+  selectedKey,
+  onRowClick,
+}: {
+  title: string;
+  description: string;
+  /** Tailwind bg-... class for the stage dot before the title. */
+  dotColor: string;
+  rows: AllLeadRow[];
+  columns: ColumnDef<AllLeadRow>[];
+  /** Page-level search value — drives every card's table at once. */
+  search: string;
+  /** Key of the lead whose triage sheet is open, for the row tint. */
+  selectedKey: string | null;
+  onRowClick: (row: AllLeadRow) => void;
+}) {
+  if (rows.length === 0) return null;
+  return (
+    <Card className="overflow-hidden bg-white py-0 gap-0">
+      <CardHeader className="py-4 border-b bg-white">
+        <div className="flex items-baseline gap-3">
+          {/* `self-center` so the dot vertically aligns to the
+              uppercase title text rather than its baseline. */}
+          <span
+            className={cn(
+              "size-2.5 shrink-0 self-center rounded-full",
+              dotColor
+            )}
+            aria-hidden
+          />
+          <CardTitle className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+            {title}
+          </CardTitle>
+          <span className="text-xs tabular-nums text-muted-foreground">
+            ({rows.length})
+          </span>
+          <p className="text-xs text-muted-foreground">{description}</p>
+        </div>
+      </CardHeader>
+      <CardContent className="p-4 bg-white">
+        <DataTable<AllLeadRow>
+          columns={columns}
+          data={rows}
+          externalSearch={search}
+          onRowClick={onRowClick}
+          // Keep the open lead's row tinted so it's obvious which one
+          // the sheet belongs to; clears when the sheet closes.
+          // Returning a value takes over the row's background AND
+          // hover, so unselected rows restate the default hover.
+          rowClassName={(r) =>
+            selectedKey === r.key
+              ? "bg-muted hover:bg-muted"
+              : "hover:bg-muted/50"
+          }
+        />
+      </CardContent>
+    </Card>
   );
 }
 

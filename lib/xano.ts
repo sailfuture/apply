@@ -1331,6 +1331,14 @@ export interface XanoSummerCampInquiry {
   /** Conversion link + stamp — see the matching pair on `XanoInquiry`. */
   registration_families_id?: number | null;
   converted_at?: number | null;
+  /** Lifecycle bucket + decline reason — same semantics as
+   *  `XanoInquiry.status`/`status_reason` (""/undefined/"active" =
+   *  active pipeline, "not_interested" = family declined; restore
+   *  writes "active" because Xano drops empty inputs). Columns must
+   *  exist in Xano before writes land; the leads PATCH route
+   *  echo-verifies and warns when they don't. */
+  status?: string | null;
+  status_reason?: string | null;
   student_first_name: string;
   student_last_name: string;
   gender: string;
@@ -1388,6 +1396,9 @@ export interface XanoWebsiteLiabilityWaiver {
   /** Conversion link + stamp — see the matching pair on `XanoInquiry`. */
   registration_families_id?: number | null;
   converted_at?: number | null;
+  /** Lifecycle bucket + decline reason — see `XanoInquiry`. */
+  status?: string | null;
+  status_reason?: string | null;
 }
 
 /** One TASCO summer-visit sign-up (`tasco_summer_visit`). Public form
@@ -1420,6 +1431,9 @@ export interface XanoTascoSummerVisit {
   /** Conversion link + stamp — see the matching pair on `XanoInquiry`. */
   registration_families_id?: number | null;
   converted_at?: number | null;
+  /** Lifecycle bucket + decline reason — see `XanoInquiry`. */
+  status?: string | null;
+  status_reason?: string | null;
 }
 
 /** Lookup table — distinguishes new applicants from returning enrollments. */
