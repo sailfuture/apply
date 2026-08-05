@@ -3,15 +3,7 @@
 import { useMemo, useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import { toast } from "sonner";
-import {
-  Check,
-  Loader2,
-  Trash2,
-  Undo2,
-  UserCheck,
-  UserX,
-  X,
-} from "lucide-react";
+import { Check, Loader2, Trash2, Undo2, UserX, X } from "lucide-react";
 import {
   DataTable,
   type ColumnDef,
@@ -30,13 +22,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-  SheetDescription,
-} from "@/components/ui/sheet";
-import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -54,18 +39,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import {
-  InquiryNoteComposer,
-  InquiryNotes,
-} from "@/components/admin/inquiry-notes";
+import { LeadTriageSheet } from "@/components/admin/lead-triage";
 import { StarRating } from "@/components/admin/star-rating";
 import { adminFetcher } from "@/lib/admin-fetcher";
+import { formatUSPhone } from "@/lib/phone";
 import { cn } from "@/lib/utils";
+import type { AllLeadRow } from "@/app/api/admin/all-leads/route";
 
 /**
  * Real shape of `/api/admin/inquiries` rows. Mirrors `registration_inquiry`
@@ -194,25 +177,6 @@ const NOT_INTERESTED_REASONS = [
 ] as const;
 
 /**
- * Format a phone number stored as `number` in Xano. We see three shapes
- * in real data:
- *   - 10 digits  → "(813) 505-3539"
- *   - 11 digits starting with 1 → "+1 (813) 505-3539"
- *   - garbage (too long, leading non-1) → render raw so we don't lose info
- */
-function formatPhone(raw: number | string | null | undefined): string {
-  if (raw === null || raw === undefined) return "";
-  const digits = String(raw).replace(/\D/g, "");
-  if (digits.length === 10) {
-    return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
-  }
-  if (digits.length === 11 && digits.startsWith("1")) {
-    return `+1 (${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7)}`;
-  }
-  return digits || "";
-}
-
-/**
  * Defensive: if an email arrives wrapped in markdown link syntax
  * (`[email](mailto:email)` — common copy/paste artifact), pull the
  * plain email back out so links and display behave.
@@ -230,6 +194,23 @@ export default function InquiriesPage() {
   );
   const { mutate: globalMutate } = useSWRConfig();
   const [active, setActive] = useState<Inquiry | null>(null);
+
+  // The detail sheet is the shared LeadTriageSheet, and it reads the
+  // ALL-LEADS row rather than this page's `Inquiry` shape — that feed
+  // carries the derived facts the sheet needs (conversion link, funnel
+  // stage, normalized lifecycle status) which this page's row doesn't.
+  // Fetched lazily on first open, the same pattern the dashboard and
+  // Campus Tours use, so the list itself never pays for it.
+  const { data: leadRows, mutate: mutateSheetRow } = useSWR<AllLeadRow[]>(
+    active ? "/api/admin/all-leads" : null,
+    adminFetcher,
+    { revalidateOnFocus: false }
+  );
+  const sheetRow =
+    active && Array.isArray(leadRows)
+      ? (leadRows.find((l) => l.source === "inquiry" && l.id === active.id) ??
+        null)
+      : null;
   const [filter, setFilter] = useState<InquiryFilter>("all");
   // Per-row pending state so the toggle UI is responsive while the
   // PATCH is in flight. We optimistically mutate the SWR cache, then
@@ -890,247 +871,61 @@ export default function InquiriesPage() {
         />
       </div>
 
-      <Sheet
-        open={active !== null}
-        onOpenChange={(open) => {
-          if (!open) setActive(null);
-        }}
-      >
-        {/*  Wider Sheet — the Notes log + the inquiry summary share
-             this drawer, and the previous `sm:max-w-lg` made the
-             notes timeline cramped. Bumped to `xl` so the comms log
-             is readable without horizontal compression while still
-             leaving room on the left for the underlying table.
-             Three-region flex column: header, scrollable middle
-             (summary + timeline), fixed-bottom composer — same
-             layout shape as the family-side `FamilyNotesSheet` so
-             the comms log composer is always reachable while admin
-             scrolls through the inquiry details. */}
-        <SheetContent className="w-full sm:max-w-xl flex flex-col p-0 gap-0">
-          {active ? (
-            <>
-              <SheetHeader className="border-b px-6 py-4">
-                <SheetTitle>{active.parent_name || "Inquiry"}</SheetTitle>
-                <SheetDescription>
-                  Submitted {new Date(active.created_at).toLocaleString()}
-                  {active.last_reach_out
-                    ? ` · last contact ${formatRelative(active.last_reach_out)}`
-                    : ""}
-                </SheetDescription>
-              </SheetHeader>
-              {/* `overflow-x-hidden` is a hard backstop: with only
-                  `overflow-y-auto`, the browser promotes overflow-x to
-                  `auto`, so any over-wide child (a long note/reason,
-                  an unbroken email) would add a horizontal scrollbar.
-                  Content wraps, so nothing legitimate gets clipped. */}
-              <div className="flex-1 overflow-y-auto overflow-x-hidden px-6 py-5 space-y-6 min-w-0">
-                <DetailRow label="Followed up">
-                  <div className="flex items-center gap-2">
-                    <Switch
-                      checked={!!active.isFollowedUp}
-                      disabled={savingId === active.id || isTerminal(active)}
-                      onCheckedChange={(v) => {
-                        // Sheet keeps its own snapshot of the row — flip
-                        // it locally too so the toggle reflects the
-                        // pending value while the PATCH is in flight.
-                        setActive({ ...active, isFollowedUp: v });
-                        toggleFollowedUp(active, v);
-                      }}
-                      aria-label="Mark inquiry followed up"
-                    />
-                    <span className="text-xs text-muted-foreground">
-                      {active.isFollowedUp ? "Yes" : "Not yet"}
-                    </span>
-                  </div>
-                </DetailRow>
-
-                <DetailRow label="Interest level">
-                  <div className="flex items-center gap-2">
-                    <StarRating
-                      value={active.interest_level ?? 0}
-                      disabled={savingId === active.id}
-                      onChange={(v) => void updateInterest(active, v)}
-                    />
-                    <span className="text-xs text-muted-foreground">
-                      {active.interest_level
-                        ? `${active.interest_level}/5`
-                        : "Not rated"}
-                    </span>
-                  </div>
-                </DetailRow>
-
-                <DetailRow label="Status">
-                  {active.status === "not_interested" ? (
-                    // Reason lives on its own wrapping line, NOT inside
-                    // the badge — the Badge is `whitespace-nowrap w-fit
-                    // shrink-0`, so a long free-text reason there would
-                    // force the whole Sheet to scroll horizontally.
-                    <div className="space-y-2">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Badge variant="secondary" className="font-normal">
-                          Not interested
-                        </Badge>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          className="h-7 text-xs"
-                          disabled={savingId === active.id}
-                          onClick={() => void restoreInquiry(active)}
-                        >
-                          <Undo2 className="size-3 mr-1" />
-                          Restore to active
-                        </Button>
-                      </div>
-                      {active.status_reason ? (
-                        <p className="text-xs text-muted-foreground break-words">
-                          Reason: {active.status_reason}
-                        </p>
-                      ) : null}
-                    </div>
-                  ) : active.status === "converted" ? (
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge
-                        variant="secondary"
-                        className="border-blue-200 bg-blue-50 font-normal text-blue-700"
-                      >
-                        <Check className="size-3 mr-0.5" />
-                        Converted
-                      </Badge>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-7 text-xs"
-                        disabled={savingId === active.id}
-                        onClick={() => void restoreInquiry(active)}
-                      >
-                        <Undo2 className="size-3 mr-1" />
-                        Restore to active
-                      </Button>
-                    </div>
-                  ) : (
-                    <div className="space-y-1.5">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Badge variant="outline" className="font-normal">
-                          Active
-                        </Badge>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          className="h-7 text-xs text-muted-foreground"
-                          disabled={savingId === active.id}
-                          onClick={() => void markConverted(active)}
-                        >
-                          <Check className="size-3 mr-1" />
-                          Mark converted
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          className="h-7 text-xs text-muted-foreground"
-                          disabled={savingId === active.id}
-                          onClick={() => openNotInterestedDialog(active)}
-                        >
-                          <UserX className="size-3 mr-1" />
-                          Mark not interested
-                        </Button>
-                      </div>
-                      {active.hasParentAccount ? (
-                        <p className="flex items-center gap-1 text-xs text-blue-700">
-                          <UserCheck className="size-3 shrink-0" />
-                          A parent account with this email exists — this
-                          family likely applied.
-                        </p>
-                      ) : null}
-                    </div>
-                  )}
-                </DetailRow>
-
-                <div className="grid grid-cols-1 gap-5">
-                  <DetailRow label="Parent">
-                    {active.parent_name || "—"}
-                  </DetailRow>
-                  <DetailRow label="Email">
-                    {active.primary_email ? (
-                      <a
-                        href={`mailto:${active.primary_email}`}
-                        className="text-primary underline-offset-2 hover:underline break-all"
-                      >
-                        {active.primary_email}
-                      </a>
-                    ) : (
-                      "—"
-                    )}
-                  </DetailRow>
-                  <DetailRow label="Phone">
-                    {formatPhone(active.primary_phone) || "—"}
-                  </DetailRow>
-                  <DetailRow label="Student">
-                    {active.student_name || "—"}
-                  </DetailRow>
-                  <DetailRow label="Grade">
-                    {active.current_grade || "—"}
-                    {active.starting_grade
-                      ? ` → ${active.starting_grade}`
-                      : ""}
-                  </DetailRow>
-                  <DetailRow label="Previous school">
-                    {active.previous_school || "—"}
-                  </DetailRow>
-                  <DetailRow label="Source">
-                    {active.hear_about_us || "—"}
-                  </DetailRow>
-                  <DetailRow label="SMS opt-in">
-                    {active.messaging_opt_in ? "Yes" : "No"}
-                  </DetailRow>
-                  <DetailRow label="About the student">
-                    {active.about_student ? (
-                      <p className="whitespace-pre-wrap break-words">
-                        {active.about_student}
-                      </p>
-                    ) : (
-                      "—"
-                    )}
-                  </DetailRow>
-                </div>
-
-                {/* Notes timeline — list only. The composer renders
-                    below in the fixed-bottom region so it stays put
-                    while admin scrolls through the timeline. */}
-                <div>
-                  <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">
-                    Notes &amp; communication log
-                  </p>
-                  <InquiryNotes inquiryId={active.id} variant="timeline" />
-                </div>
-              </div>
-
-              {/* Fixed-bottom composer. Submitting bumps the inquiry's
-                  `last_reach_out` server-side; we revalidate the
-                  inquiries list cache so the "Last contact" column
-                  updates without a full refresh. */}
-              <div className="border-t bg-muted/20 px-6 py-4 shrink-0">
-                <InquiryNoteComposer
-                  inquiryId={active.id}
-                  onNoteAdded={() => {
-                    globalMutate("/api/admin/inquiries");
-                    // The Sheet's own row snapshot is independent of
-                    // the SWR cache — patch it locally too so the
-                    // header subtitle's "last contact" string
-                    // updates immediately.
-                    setActive((curr) =>
-                      curr ? { ...curr, last_reach_out: Date.now() } : curr
-                    );
-                  }}
-                />
-              </div>
-            </>
-          ) : null}
-        </SheetContent>
-      </Sheet>
+      {/* Detail sheet — the SHARED LeadTriageSheet, the same one All
+          Leads, Campus Tours, and the dashboard open, so an inquiry
+          reads identically wherever an admin reaches it. Its data
+          comes from the all-leads feed (fetched lazily on first open)
+          rather than this page's row shape, so the conversion link,
+          funnel stage, and lifecycle controls behave exactly as they
+          do there. Inquiry-only facts ride along as extraFields. */}
+      {active && sheetRow ? (
+        <LeadTriageSheet
+          open
+          onOpenChange={(o) => !o && setActive(null)}
+          scope={{ source: "inquiry", id: sheetRow.id }}
+          title={
+            sheetRow.student_name ||
+            sheetRow.parent_name ||
+            `Inquiry #${sheetRow.id}`
+          }
+          subtitle={[
+            "Inquiry",
+            sheetRow.parent_name || null,
+            formatUSPhone(sheetRow.phone) || null,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+          rating={sheetRow.rating}
+          isFollowedUp={sheetRow.followed_up}
+          lastReachOut={sheetRow.last_reach_out || null}
+          details={{
+            student_name: sheetRow.student_name,
+            parent_name: sheetRow.parent_name,
+            phone: sheetRow.phone,
+            email: sheetRow.email,
+            grade: sheetRow.grade_raw,
+            school: sheetRow.school,
+            opt_in: sheetRow.opt_in,
+            opt_in_editable: true,
+          }}
+          conversion={{
+            family_id: sheetRow.converted_family_id,
+            family_name: sheetRow.converted_family_name,
+            stage: sheetRow.funnel_stage,
+            converted_at: sheetRow.converted_at,
+          }}
+          leadStatus={sheetRow.lead_status}
+          statusReason={sheetRow.status_reason}
+          extraFields={[
+            { label: "How they heard about us", value: active.hear_about_us ?? "" },
+            { label: "About the student", value: active.about_student ?? "" },
+          ]}
+          onChanged={() => {
+            void mutateSheetRow();
+            void globalMutate("/api/admin/inquiries");
+          }}
+        />
+      ) : null}
 
       {/* "Mark not interested" dialog — forces a reason to be picked
           (or typed, via "Other") before the status saves, so the Not
@@ -1334,19 +1129,3 @@ function InquiriesGroup({
   );
 }
 
-function DetailRow({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div>
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-        {label}
-      </p>
-      <div className="mt-1 text-sm">{children}</div>
-    </div>
-  );
-}

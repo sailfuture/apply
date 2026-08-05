@@ -1191,6 +1191,7 @@ export function LeadTriageSheet({
   conversion,
   leadStatus,
   statusReason,
+  extraFields,
   onChanged,
 }: {
   open: boolean;
@@ -1213,6 +1214,12 @@ export function LeadTriageSheet({
    *  restore. Omit to hide (hosts without the status data). */
   leadStatus?: string;
   statusReason?: string;
+  /** Read-only facts a particular source carries that the shared
+   *  details block doesn't — e.g. an inquiry's "About the student".
+   *  Rendered at the foot of the details block in the same style, so
+   *  hosts keep their own data without diverging on layout. Blank
+   *  values are dropped rather than rendered as an empty row. */
+  extraFields?: Array<{ label: string; value: string }>;
   onChanged?: () => void;
 }) {
   return (
@@ -1285,6 +1292,22 @@ export function LeadTriageSheet({
                 onChanged={onChanged}
               />
             ) : null}
+            {/* Source-specific read-only facts, in the same style as
+                the fields above. `whitespace-pre-wrap` because these
+                can be free text the family typed (an inquiry's
+                "About the student" runs to paragraphs). */}
+            {extraFields
+              ?.filter((f) => f.value.trim())
+              .map((f) => (
+                <div key={f.label} className="min-w-0">
+                  <p className="text-[11px] text-muted-foreground">
+                    {f.label}
+                  </p>
+                  <p className="whitespace-pre-wrap break-words text-sm text-foreground">
+                    {f.value}
+                  </p>
+                </div>
+              ))}
           </div>
         ) : null}
 
