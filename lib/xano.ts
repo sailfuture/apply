@@ -2539,9 +2539,10 @@ export const xano = {
     },
 
     async getById(id: number): Promise<XanoParent> {
-      const res = await fetch(`${getBaseUrl()}/registration_parents/${id}`, {
-        cache: "no-store",
-      });
+      // fetchRetry — this call sits on the sign-in critical path (family
+      // GET → resolveParents), where a single transient Xano failure
+      // used to strand parents on a loading screen.
+      const res = await fetchRetry(`${getBaseUrl()}/registration_parents/${id}`);
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
       return res.json();
     },
@@ -2684,9 +2685,10 @@ export const xano = {
     },
 
     async getById(id: number): Promise<XanoFamily> {
-      const res = await fetch(`${getBaseUrl()}/registration_families/${id}`, {
-        cache: "no-store",
-      });
+      // fetchRetry — the family GET route depends on this on every
+      // signed-in page load; retry transient failures instead of
+      // surfacing them.
+      const res = await fetchRetry(`${getBaseUrl()}/registration_families/${id}`);
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
       return res.json();
     },

@@ -21,7 +21,18 @@ export async function GET() {
     return NextResponse.json([], { status: 200 });
   }
 
-  const students = await xano.students.getByFamilyId(familyId);
+  let students;
+  try {
+    students = await xano.students.getByFamilyId(familyId);
+  } catch (err) {
+    // 503 (not an unhandled 500) so SWR's error-retry treats it as
+    // transient and recovers without a hard reload.
+    console.error(`Student lookup failed for family ${familyId}:`, err);
+    return NextResponse.json(
+      { error: "Student lookup failed, please retry" },
+      { status: 503 }
+    );
+  }
   // Strip large photo data from list response to reduce payload size.
   // Keep only the URL if photo is a Xano file object, otherwise null.
   const trimmed = students.map((s) => {

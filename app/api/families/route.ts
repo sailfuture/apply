@@ -13,7 +13,19 @@ async function resolveParents(family: ReturnType<typeof xano.families.getById> e
   if (embeddedIsComplete) return embedded;
 
   const ids = xano.families.getParentIds(family);
-  return await Promise.all(ids.map((id) => xano.parents.getById(id)));
+  // A family row can reference a parent id that no longer exists (e.g. a
+  // duplicate row removed by the sign-up dedupe). Skip unresolvable ids
+  // instead of failing the whole response — one stale reference used to
+  // take down the entire GET for that family on every request.
+  const settled = await Promise.allSettled(
+    ids.map((id) => xano.parents.getById(id))
+  );
+  return settled
+    .filter(
+      (r): r is PromiseFulfilledResult<Awaited<ReturnType<typeof xano.parents.getById>>> =>
+        r.status === "fulfilled"
+    )
+    .map((r) => r.value);
 }
 
 export async function POST(req: NextRequest) {
@@ -157,8 +169,18 @@ export async function GET() {
         registration_parents_id: xano.families.getParentIds(family),
         parents,
       }, { status: 200 });
-    } catch {
-      return NextResponse.json(null, { status: 200 });
+    } catch (err) {
+      // The metadata says this user HAS a family — a failed lookup is a
+      // transient Xano error, not "no family". Returning 200-null here
+      // poisoned the client SWR cache (null caches as a *successful*
+      // response, which never retries and never revalidates), leaving
+      // parents on an indefinite loading screen until a hard reload.
+      // 503 lets SWR's error-retry recover on its own.
+      console.error(`Family lookup failed for family ${familyId}:`, err);
+      return NextResponse.json(
+        { error: "Family lookup failed, please retry" },
+        { status: 503 }
+      );
     }
   }
 

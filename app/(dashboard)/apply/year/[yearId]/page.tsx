@@ -475,7 +475,7 @@ export default function YearOverviewPage() {
   const { user } = useUser();
   const firstName = user?.firstName ?? "";
 
-  const { steps, registrationSteps, registrationCompletedCount, allRegistrationSectionsComplete, allComplete, loading, stage, schoolYear, yearApps } =
+  const { steps, registrationSteps, registrationCompletedCount, allRegistrationSectionsComplete, allComplete, loading, stage, schoolYear, yearApps, family } =
     useApplicationSteps(yearId);
   const { data: students } = useStudents();
   const studentsLoading = students === undefined;
@@ -525,7 +525,14 @@ export default function YearOverviewPage() {
     isRegistrationSubmitted
       ? `/api/student-registration?yearId=${yearId}`
       : null,
-    (url: string) => fetch(url).then((r) => r.json()),
+    async (url: string) => {
+      const res = await fetch(url);
+      // Throw on non-2xx so SWR retries instead of caching an
+      // `{error}` object where an array belongs (`.filter` on it
+      // would crash the page).
+      if (!res.ok) throw new Error(`API error ${res.status}`);
+      return res.json();
+    },
     // Live-poll the per-student packets while the parent waits on
     // admin to confirm each one. Without this the "Registration in
     // review" view stays stuck on the snapshot the page was loaded
@@ -579,6 +586,16 @@ export default function YearOverviewPage() {
     isRegistrationConfirmed &&
     isRegistrationSubmitted &&
     allStudentsConfirmed;
+
+  // A settled `null` family means this signed-in user has no family row
+  // at all (never finished onboarding, or their Clerk metadata points
+  // nowhere). Nothing on this page can render for them — send them to
+  // /welcome to create one instead of holding the spinner forever.
+  useEffect(() => {
+    if (!loading && family === null) {
+      router.replace("/welcome");
+    }
+  }, [loading, family, router]);
 
   // URL routing effect — see comment near the top of the component for
   // the lifecycle → URL mapping. Lives down here so it can read the
@@ -762,7 +779,9 @@ export default function YearOverviewPage() {
     ((stage === "accepted" && onApplyPath) ||
       (stage !== "accepted" && onRegistrationPath));
 
-  if (initialDataLoading || willRedirect || stageJustChanged) {
+  // `family === null` → the no-family effect above is about to replace
+  // the URL with /welcome; keep the spinner up through that hop.
+  if (initialDataLoading || willRedirect || stageJustChanged || family === null) {
     return (
       <div className="flex min-h-[calc(100vh-7.5rem)] items-center justify-center px-4 bg-gray-50 dark:bg-background">
         <LoadingScreen />

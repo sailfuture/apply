@@ -7,7 +7,14 @@ import {
   useScholarship,
 } from "@/hooks/use-api";
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
+const fetcher = async (url: string) => {
+  const res = await fetch(url);
+  // Throw on non-2xx so SWR treats it as an error and retries — without
+  // this, a 401 during the post-signup cookie-propagation window caches
+  // `{error: "Unauthorized"}` as if it were the progress row.
+  if (!res.ok) throw new Error(`API error ${res.status}`);
+  return res.json();
+};
 
 export type StepStatus = "complete" | "in_progress" | "not_started";
 
@@ -76,7 +83,15 @@ export function useApplicationSteps(yearId: number) {
     { revalidateOnFocus: false, dedupingInterval: 10000 }
   );
 
-  const loading = !familyData || !yearsData || !appsData;
+  // `undefined` = SWR hasn't settled yet; `null` (families) = settled,
+  // user genuinely has no family. The old `!familyData` conflated the
+  // two, so a settled null held the page's loading screen forever. A
+  // settled null is now surfaced via `family` below so the page can
+  // route to /welcome instead of spinning.
+  const loading =
+    familyData === undefined ||
+    yearsData === undefined ||
+    appsData === undefined;
 
   const schoolYear = useMemo(() => {
     if (!yearsData) return null;
@@ -346,5 +361,8 @@ export function useApplicationSteps(yearId: number) {
     isSubmitted,
     isOffered,
     isAccepted,
+    /** `undefined` while loading, `null` once settled with no family —
+     *  pages should bounce a settled-null user to /welcome. */
+    family: familyData,
   };
 }

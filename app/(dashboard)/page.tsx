@@ -76,12 +76,34 @@ export default async function Page() {
   } catch {
     /* leave null; degenerate-state fallback below */
   }
-  // No target year configured — render the no-year landing (the
-  // degenerate state). Avoid recursing back into this page by
-  // redirecting to /welcome where the parent at least sees something
-  // meaningful. (This shouldn't happen in practice — Xano should
-  // always have an upcoming or active year.)
-  if (!targetYearId) redirect("/welcome");
+  // No target year resolved — either Xano's school-years lookup failed
+  // or no year is flagged upcoming/active. Render an explicit message
+  // instead of redirecting: this page used to bounce to /welcome here,
+  // but /welcome bounces family-having users straight back to `/`, so a
+  // school-years outage produced an infinite `/` ↔ `/welcome` loop that
+  // looked like an endless loading screen.
+  if (!targetYearId) {
+    return (
+      <div className="flex min-h-[calc(100vh-7.5rem)] items-center justify-center px-4">
+        <div className="max-w-md text-center space-y-2">
+          <h1 className="text-xl font-semibold">
+            No enrollment period is currently open
+          </h1>
+          <p className="text-muted-foreground text-sm">
+            We couldn&apos;t load the current school year. Please refresh
+            the page in a moment, or contact us at{" "}
+            <a
+              href="mailto:tward@sailfuture.org"
+              className="text-primary underline underline-offset-2"
+            >
+              tward@sailfuture.org
+            </a>{" "}
+            if this keeps happening.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   // Step 4 — fan out the lifecycle queries in parallel. We need all
   // four to compute the final destination without bouncing through
