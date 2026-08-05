@@ -18,14 +18,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
-  LocationInput,
   TimeSelect,
   timeInputToMs,
 } from "@/components/admin/event-upsert-dialog";
@@ -54,7 +46,12 @@ import { cn } from "@/lib/utils";
  * happen mid-conversation with a parent.
  */
 
-const DURATION_OPTIONS = [30, 45, 60, 90] as const;
+/** Every tour is 60 minutes at the campus address, so the schedule
+ *  dialog no longer asks — these ride along on the POST unchanged.
+ *  Reschedules from the Tours tab can still move the time; a tour
+ *  that genuinely needs a different length or venue is edited in
+ *  Google Calendar. */
+const DEFAULT_DURATION_MINUTES = 60;
 const DEFAULT_LOCATION = TOUR_DEFAULT_LOCATION;
 
 /** Status → badge tint, matching the app's existing badge idiom. */
@@ -296,8 +293,6 @@ export function TourScheduleDialog({
 }) {
   const [date, setDate] = useState("");
   const [time, setTime] = useState("10:00");
-  const [duration, setDuration] = useState("60");
-  const [location, setLocation] = useState(DEFAULT_LOCATION);
   const [email, setEmail] = useState(parentEmail);
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
@@ -311,8 +306,6 @@ export function TourScheduleDialog({
     setEmail(parentEmail);
     setDate("");
     setTime("10:00");
-    setDuration("60");
-    setLocation(DEFAULT_LOCATION);
     setNotes("");
   }
 
@@ -330,8 +323,8 @@ export function TourScheduleDialog({
           leadSource: scope.source,
           leadId: scope.id,
           scheduled_at: scheduledAt,
-          duration_minutes: Number(duration),
-          location,
+          duration_minutes: DEFAULT_DURATION_MINUTES,
+          location: DEFAULT_LOCATION,
           notes,
           parent_name: parentName,
           parent_email: email,
@@ -396,27 +389,6 @@ export function TourScheduleDialog({
                 clearable={false}
               />
             </div>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label className="text-xs">Duration</Label>
-            <Select value={duration} onValueChange={setDuration}>
-              <SelectTrigger className="h-9 w-full bg-white">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {DURATION_OPTIONS.map((m) => (
-                  <SelectItem key={m} value={String(m)}>
-                    {m} minutes
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label className="text-xs">Location</Label>
-            <LocationInput value={location} onChange={setLocation} />
           </div>
 
           <div className="space-y-1.5">
