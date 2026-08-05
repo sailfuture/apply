@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
+import { leadConvertedFamilyId } from "@/lib/lead-conversion";
 
 const BASE = process.env.XANO_API_BASE_URL;
 
@@ -28,6 +29,7 @@ export async function GET(req: NextRequest) {
       inquiriesResult,
       registrationsResult,
       studentsResult,
+      toursResult,
     ] = await Promise.allSettled([
       xano.applications.getAll(),
       fetch(`${BASE}/registration_inquiry`, { cache: "no-store" }).then((r) =>
@@ -39,6 +41,7 @@ export async function GET(req: NextRequest) {
       fetch(`${BASE}/registration_students`, { cache: "no-store" }).then((r) =>
         r.ok ? r.json() : []
       ),
+      xano.tours.getAll(),
     ]);
 
     if (appsResult.status === "rejected") {
@@ -65,13 +68,28 @@ export async function GET(req: NextRequest) {
         studentsResult.reason
       );
     }
+    if (toursResult.status === "rejected") {
+      console.error(
+        "[/api/admin/stats] failed to load tours:",
+        toursResult.reason
+      );
+    }
 
     const allApplications =
       appsResult.status === "fulfilled" ? appsResult.value : [];
     const inquiries =
       inquiriesResult.status === "fulfilled"
-        ? (inquiriesResult.value as { created_at: number }[])
+        ? (inquiriesResult.value as {
+            created_at: number;
+            status?: string | null;
+            registration_families_id?: unknown;
+          }[])
         : [];
+    // Blank wiring rows (scheduled_at <= 0) are excluded the same way
+    // the tours GET route excludes them.
+    const tours = (
+      toursResult.status === "fulfilled" ? toursResult.value : []
+    ).filter((t) => Number(t.scheduled_at) > 0);
     const registrations =
       registrationsResult.status === "fulfilled"
         ? (registrationsResult.value as { is_submitted: boolean }[])
@@ -139,8 +157,38 @@ export async function GET(req: NextRequest) {
       (i) => i.created_at > thirtyDaysAgo
     ).length;
 
+    // Inquiry → application conversions. The structural fact is the
+    // conversion link (`registration_families_id` stamped by the
+    // auto-matcher / manual link); legacy rows an admin hand-marked
+    // "converted" before the link existed count too so history isn't
+    // understated.
+    const convertedInquiries = inquiries.filter(
+      (i) =>
+        leadConvertedFamilyId(i) > 0 || (i.status ?? "").trim() === "converted"
+    ).length;
+
+    // Campus tours — global like inquiries (the table has no year
+    // column). `total` is every real booking ever, including
+    // cancellations/no-shows; the completed/scheduled split is what
+    // the tile's description surfaces.
+    const completedTours = tours.filter(
+      (t) => t.status === "completed"
+    ).length;
+    const scheduledTours = tours.filter(
+      (t) => t.status === "scheduled"
+    ).length;
+
     return NextResponse.json({
-      inquiries: { total: totalInquiries, recent: recentInquiries },
+      inquiries: {
+        total: totalInquiries,
+        recent: recentInquiries,
+        converted: convertedInquiries,
+      },
+      tours: {
+        total: tours.length,
+        completed: completedTours,
+        scheduled: scheduledTours,
+      },
       applications: {
         total: totalApplications,
         draft,

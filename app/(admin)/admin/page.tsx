@@ -8,11 +8,12 @@ import { toast } from "sonner";
 import {
   ArrowDownRight,
   ArrowUpRight,
+  CalendarDays,
   CheckCircle,
   FileText,
   GraduationCap,
-  LogOut,
   MessageSquare,
+  TrendingUp,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatUSPhone } from "@/lib/phone";
@@ -48,8 +49,9 @@ const TREND_WINDOWS = [7, 14, 30, 60, 90];
  * Admin dashboard — what's moving, and what's waiting on you.
  *
  * Top to bottom:
- *   1. Stat tiles — inquiry / application / accepted counts plus
- *      year-scoped enrollment + withdrawal totals.
+ *   1. Stat tiles — the recruitment funnel: inquiries, inquiry →
+ *      application conversions, campus tours, completed applications,
+ *      students accepted, students enrolled.
  *   2. Trends — new inquiries per day and roster size, over a
  *      selectable window (one control drives both charts so they stay
  *      directly comparable).
@@ -69,7 +71,17 @@ const TREND_WINDOWS = [7, 14, 30, 60, 90];
  */
 
 interface StatsResponse {
-  inquiries: { total: number; recent: number };
+  inquiries: {
+    total: number;
+    recent: number;
+    /** Inquiries that became an applying family — the conversion link
+     *  (`registration_families_id` on the inquiry row) plus legacy
+     *  rows hand-marked `status: "converted"`. */
+    converted?: number;
+  };
+  /** Campus tours from `registration_tours` — global (the table has
+   *  no year column), blank wiring rows excluded. */
+  tours?: { total: number; completed: number; scheduled: number };
   applications: {
     total: number;
     draft: number;
@@ -186,8 +198,8 @@ export default function AdminDashboardPage() {
     return (
       <div className="space-y-6 p-6">
         <Skeleton className="h-8 w-48" />
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-          {Array.from({ length: 5 }).map((_, i) => (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+          {Array.from({ length: 6 }).map((_, i) => (
             <Skeleton key={i} className="h-28 rounded-lg" />
           ))}
         </div>
@@ -198,7 +210,8 @@ export default function AdminDashboardPage() {
   }
 
   const safeStats: StatsResponse = stats ?? {
-    inquiries: { total: 0, recent: 0 },
+    inquiries: { total: 0, recent: 0, converted: 0 },
+    tours: { total: 0, completed: 0, scheduled: 0 },
     applications: {
       total: 0,
       draft: 0,
@@ -212,7 +225,18 @@ export default function AdminDashboardPage() {
     enrollment: { enrolled: 0, withdrawn: 0 },
   };
   const enrolledCount = safeStats.enrollment?.enrolled ?? 0;
-  const withdrawnCount = safeStats.enrollment?.withdrawn ?? 0;
+  const convertedCount = safeStats.inquiries.converted ?? 0;
+  const tourStats = safeStats.tours ?? {
+    total: 0,
+    completed: 0,
+    scheduled: 0,
+  };
+  // Conversion rate reads better than a bare count next to the
+  // Inquiries tile; guard the division for an empty pipeline.
+  const conversionPct =
+    safeStats.inquiries.total > 0
+      ? Math.round((convertedCount / safeStats.inquiries.total) * 100)
+      : 0;
 
   // Truncate each table to a manageable preview length on the
   // dashboard. The full list pages handle the long-tail.
@@ -244,11 +268,13 @@ export default function AdminDashboardPage() {
         </div>
       ) : null}
 
-      {/* Five stat tiles in a single row on wide viewports. Two
-          enrollment-lifecycle tiles (Enrolled / Withdrawn) sit beside
-          the funnel tiles so admin sees both the intake and the
-          steady-state cohort at a glance. */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+      {/* Six stat tiles — the recruitment-to-enrollment funnel read
+          left to right: Inquiries → Conversions → Tours → Completed
+          applications → Students accepted → Students enrolled.
+          Inquiries / conversions / tours are global (no year column
+          on those tables); the application and enrollment tiles scope
+          to the year picker. */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         <StatsCard
           title="Inquiries"
           value={safeStats.inquiries.total}
@@ -256,35 +282,40 @@ export default function AdminDashboardPage() {
           description={`${safeStats.inquiries.recent} this month`}
         />
         <StatsCard
-          title="Applications"
+          title="Conversions"
+          value={convertedCount}
+          icon={<TrendingUp className="size-5" />}
+          description={`${conversionPct}% of inquiries applied`}
+        />
+        <StatsCard
+          title="Tours"
+          value={tourStats.total}
+          icon={<CalendarDays className="size-5" />}
+          description={`${tourStats.completed} completed · ${tourStats.scheduled} upcoming`}
+        />
+        <StatsCard
+          title="Completed Apps"
           value={safeStats.applications.submitted}
           icon={<FileText className="size-5" />}
-          description={`${safeStats.applications.draft} drafts, ${safeStats.applications.total} total`}
+          description={`${safeStats.applications.draft} still in draft`}
         />
+        {/* Accepted counts per-student application rows, so this is
+            students (not families) accepted for the selected year. */}
         <StatsCard
           title="Accepted"
           value={safeStats.applications.accepted}
           icon={<CheckCircle className="size-5" />}
           description={`${safeStats.applications.offered} offered`}
         />
-        {/* Enrollments / Withdrawals are per-year — joined to the
-            applications list so a student "belongs to" the year via
-            their app, then their student-row `isEnrolled` /
-            `isArchived` flags drive the buckets. */}
+        {/* Enrollment is per-year — joined to the applications list so
+            a student "belongs to" the year via their app, then the
+            student-row `isEnrolled` / `isArchived` flags decide. */}
         <StatsCard
           title="Enrolled"
           value={enrolledCount}
           icon={<GraduationCap className="size-5" />}
           description={
             yearName ? `For ${yearName}` : "Pick a year for context"
-          }
-        />
-        <StatsCard
-          title="Withdrawn"
-          value={withdrawnCount}
-          icon={<LogOut className="size-5" />}
-          description={
-            withdrawnCount === 1 ? "1 student" : `${withdrawnCount} students`
           }
         />
       </div>
