@@ -238,10 +238,12 @@ export default function AllLeadsPage() {
     let notInterested = 0;
     for (const r of rows) {
       if (r.funnel_stage !== "") converted++;
-      // Any tour on record — booked, completed, or otherwise. The
-      // per-lead `tour_status` is already the best of that lead's
-      // tours, so a non-empty value means at least one exists.
-      if (r.tour_status !== "") toured++;
+      // COMPLETED tours only — a booking that was canceled, no-showed,
+      // or is still upcoming isn't a tour that happened. `tour_status`
+      // is already the best of that lead's tours, and "completed"
+      // outranks every other state, so this catches any lead who has
+      // toured at least once.
+      if (r.tour_status === "completed") toured++;
       if (r.lead_status === "not_interested") notInterested++;
     }
     return { total: rows.length, converted, toured, notInterested };
@@ -626,7 +628,7 @@ export default function AllLeadsPage() {
             {
               label: "Tours",
               value: funnel.toured,
-              hint: "Leads with a tour on record",
+              hint: "Leads who completed a tour",
               href: "/admin/campus-tours",
             },
             {
