@@ -16,11 +16,15 @@ import { writeLeadConversion } from "@/lib/lead-conversion";
  *   PATCH { source, id, interest_level?, isFollowedUp?, opt_in?,
  *           student_name?, parent_name?, phone?, email?, grade?,
  *           school?, family_id?, status?, status_reason?,
- *           school_year_id? }
+ *           school_year_id?, camp_year_attended? }
  *
  * `school_year_id` is the academic year the family is interested in
  * (FK to `registration_school_years`; 0 = unassigned). Hand-set from
  * the lead lists — never inferred from the submission date.
+ *
+ * `camp_year_attended` is the camp the student actually attended
+ * (same FK target, camp leads only) — a record of what happened,
+ * where `school_year_id` is a statement of intent.
  *
  * `status` is the lead's lifecycle bucket: "not_interested" (family
  * declined — pair it with a `status_reason`) or "active" (restore;
@@ -117,6 +121,31 @@ export async function PATCH(req: NextRequest) {
         );
       }
       yearPatch.registration_school_years_id = v;
+    }
+    // Which summer camp the student actually attended — camp rows
+    // only (the other three sources have no camp to attend, so this
+    // is a 400 rather than a write Xano would silently drop). Also
+    // an FK to `registration_school_years`; 0 clears it.
+    if ("camp_year_attended" in body) {
+      if (source !== "camp") {
+        return NextResponse.json(
+          {
+            error: `camp_year_attended only applies to summer-camp leads, not ${source}.`,
+          },
+          { status: 400 }
+        );
+      }
+      const v = body.camp_year_attended;
+      if (typeof v !== "number" || !Number.isInteger(v) || v < 0) {
+        return NextResponse.json(
+          {
+            error:
+              "camp_year_attended must be a non-negative integer (0 = not recorded)",
+          },
+          { status: 400 }
+        );
+      }
+      yearPatch.summer_camp_year_attended = v;
     }
     Object.assign(patch, yearPatch);
 

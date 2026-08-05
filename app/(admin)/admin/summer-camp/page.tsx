@@ -17,6 +17,13 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { adminFetcher } from "@/lib/admin-fetcher";
@@ -31,6 +38,27 @@ import { cn } from "@/lib/utils";
  * strings. `isNotAttending` is the archive flag that splits the two
  * sections.
  */
+/** School-year row as the camp-year picker needs it. */
+interface SchoolYearOption {
+  id: number;
+  year_name: string;
+  isActive?: boolean;
+  isNextYear?: boolean;
+}
+
+/** The camp-attended FK, coerced whether Xano hands back a raw id or
+ *  an expanded relation object. 0 = not recorded. */
+function campYearOf(row: { summer_camp_year_attended?: unknown }): number {
+  const v = row.summer_camp_year_attended;
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string") return Number(v) || 0;
+  if (v && typeof v === "object") {
+    const id = (v as { id?: unknown }).id;
+    return typeof id === "number" ? id : Number(id) || 0;
+  }
+  return 0;
+}
+
 interface SummerCampRow {
   id: number;
   created_at: number;
@@ -38,6 +66,10 @@ interface SummerCampRow {
   /** Admin flag — student actually showed up to camp. Optional
    *  because legacy rows predate the column. */
   attended_camp?: boolean;
+  /** Which camp they attended, as an FK to `registration_school_years`
+   *  (0/undefined = not recorded). Camp runs in June/July, inside the
+   *  school year ending that summer. */
+  summer_camp_year_attended?: number | null;
   /** Admin's 1–5 conversion stars; 0/undefined = unrated. */
   interest_level?: number | null;
   /** Admin's "we've reached out" flag. */
@@ -99,6 +131,17 @@ export default function SummerCampPage() {
     adminFetcher
   );
   const [active, setActive] = useState<SummerCampRow | null>(null);
+  const { data: yearData } = useSWR<SchoolYearOption[]>(
+    "/api/admin/school-years",
+    adminFetcher,
+    { revalidateOnFocus: false }
+  );
+  const schoolYears = useMemo(
+    () => (Array.isArray(yearData) ? yearData : []),
+    [yearData]
+  );
+  const yearNameOf = (row: SummerCampRow) =>
+    schoolYears.find((y) => y.id === campYearOf(row))?.year_name ?? "";
   // Per-row pending state for the attendance toggle so the button
   // spins while the PATCH is in flight.
   const [savingId, setSavingId] = useState<number | null>(null);
@@ -173,6 +216,48 @@ export default function SummerCampPage() {
   // as the attendance toggle. Separate pending id so both controls on
   // one row can't wedge each other's spinner.
   const [attendSavingId, setAttendSavingId] = useState<number | null>(null);
+  /** Record WHICH camp the student attended. Routed through the
+   *  shared `/api/admin/leads` endpoint so the same echo check covers
+   *  it as every other lead write — the camp-only PATCH route has no
+   *  such verification. */
+  async function setCampYear(row: SummerCampRow, yearId: number) {
+    try {
+      mutate(
+        (curr) =>
+          (curr ?? []).map((r) =>
+            r.id === row.id
+              ? { ...r, summer_camp_year_attended: yearId }
+              : r
+          ),
+        { revalidate: false }
+      );
+      setActive((curr) =>
+        curr && curr.id === row.id
+          ? { ...curr, summer_camp_year_attended: yearId }
+          : curr
+      );
+      const res = await fetch("/api/admin/leads", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source: "camp",
+          id: row.id,
+          camp_year_attended: yearId,
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error ?? `Save failed (${res.status})`);
+      if (data?.warning) toast.warning(data.warning);
+      mutate();
+    } catch (err) {
+      console.error("[SummerCamp.setCampYear]", err);
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't save the camp year."
+      );
+      mutate();
+    }
+  }
+
   async function setAttendedCamp(row: SummerCampRow, attended: boolean) {
     setAttendSavingId(row.id);
     try {
@@ -372,6 +457,43 @@ export default function SummerCampPage() {
         ) : (
           <span>—</span>
         ),
+    },
+    {
+      // WHICH camp they attended. Sits beside the Attended checkbox
+      // because the two are one thought: the box says it happened,
+      // this says which summer. Editable in the row — recording camp
+      // history is bulk work.
+      key: "summer_camp_year_attended",
+      header: "Camp year",
+      sortable: true,
+      width: "w-[10%]",
+      accessor: (row) => yearNameOf(row),
+      render: (row) => (
+        <span onClick={(e) => e.stopPropagation()}>
+          <Select
+            value={campYearOf(row) > 0 ? String(campYearOf(row)) : "0"}
+            onValueChange={(v) => void setCampYear(row, Number(v))}
+          >
+            <SelectTrigger
+              size="sm"
+              className={cn(
+                "h-7 w-full border-transparent bg-transparent px-1.5 text-xs shadow-none hover:border-input hover:bg-white",
+                !campYearOf(row) && "text-muted-foreground"
+              )}
+            >
+              <SelectValue placeholder="—" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="0">—</SelectItem>
+              {schoolYears.map((y) => (
+                <SelectItem key={y.id} value={String(y.id)}>
+                  {y.year_name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </span>
+      ),
     },
     {
       // Admin checkbox — did the student actually show up to camp?
@@ -583,6 +705,12 @@ export default function SummerCampPage() {
         extraFields={
           active
             ? [
+                {
+                  label: "Camp attended",
+                  value: active.attended_camp
+                    ? yearNameOf(active) || "Yes (year not recorded)"
+                    : "",
+                },
                 { label: "Gender", value: active.gender ?? "" },
                 { label: "Ethnicity", value: active.ethnicity ?? "" },
                 { label: "Swim level", value: active.swim_level ?? "" },

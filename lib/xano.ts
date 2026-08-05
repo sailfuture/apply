@@ -1346,6 +1346,15 @@ export interface XanoSummerCampInquiry {
   /** Academic year this family is interested in (hand-assigned FK to
    *  `registration_school_years`; 0 = unassigned) — see `XanoInquiry`. */
   registration_school_years_id?: number | null;
+  /** WHICH camp the student actually attended, as an FK to
+   *  `registration_school_years` (0 = not recorded). Distinct from
+   *  the column above: that one is the year the family is ASKING
+   *  about, this one is a camp they've already been to. Camp runs in
+   *  June/July, which falls inside the school year ending that
+   *  summer — so a summer-2026 camp reads as "2025-2026".
+   *
+   *  Camp-table only; the other three lead sources have no camp. */
+  summer_camp_year_attended?: number | null;
   /** Lifecycle bucket + decline reason — same semantics as
    *  `XanoInquiry.status`/`status_reason` (""/undefined/"active" =
    *  active pipeline, "not_interested" = family declined; restore
