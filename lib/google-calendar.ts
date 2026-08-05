@@ -338,6 +338,18 @@ export function impersonatedEmail(): string {
   return getConfig()?.impersonate ?? "";
 }
 
+/** The calendar tour events actually land on, as an address usable in
+ *  a calendar.google.com link — the explicit GOOGLE_CALENDAR_ID when
+ *  one is set, otherwise the impersonated account (whose "primary"
+ *  calendar is the default target). Empty when sync isn't configured. */
+export function tourCalendarEmail(): string {
+  const config = getConfig();
+  if (!config) return "";
+  return config.calendarId !== "primary"
+    ? config.calendarId
+    : config.impersonate;
+}
+
 /** The parent's RSVP on an event ("accepted" | "declined" |
  *  "tentative" | "needsAction"), or null when the event/attendee
  *  can't be read. Never throws — RSVP display is decoration. */

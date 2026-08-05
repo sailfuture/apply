@@ -16,7 +16,11 @@ import {
   isGoogleCalendarConfigured,
   updateTourEvent,
 } from "@/lib/google-calendar";
-import { tourInviteDescription, tourNoteBody } from "@/lib/tours";
+import {
+  tourEventDescription,
+  tourEventSummary,
+  tourNoteBody,
+} from "@/lib/tours";
 import { writeTourNote } from "@/lib/tour-notes";
 
 /**
@@ -208,12 +212,11 @@ export async function PATCH(
       if (eventId && isGoogleCalendarConfigured()) {
         try {
           await updateTourEvent(eventId, {
-            summary: `Campus tour — ${
-              tour.student_name || tour.parent_name || "prospective family"
-            }`,
-            // Same standard copy the original invite carried — a
-            // reschedule must not strip the address/parking blurb.
-            description: tourInviteDescription(tour.notes),
+            summary: tourEventSummary(tour.student_name, tour.parent_name),
+            // Same copy the original invite carried (custom notes +
+            // standard blurb + parent-contact block) — a reschedule
+            // must not strip any of it.
+            description: tourEventDescription(tour),
             location: tour.location,
             startMs: tour.scheduled_at,
             endMs:
@@ -260,6 +263,49 @@ export async function PATCH(
     }
 
     return NextResponse.json({ tour, warning });
+  } catch (err) {
+    return handleAdminError(err);
+  }
+}
+
+/**
+ * Hard-delete a tour — any status, including canceled. Removes the
+ * row entirely (it stops appearing on the Tours tab AND the lead's
+ * activity timeline, which renders tours straight from this table).
+ * A still-live Google event is canceled first (Google emails the
+ * attendee, `sendUpdates=all`); a canceled tour's event is already
+ * gone from Google, so only the row goes. Deliberately writes no
+ * comms-log note — delete means "remove the record", and a note
+ * about a record that no longer exists would dangle.
+ */
+export async function DELETE(
+  _req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    await requireAdmin();
+    const { id: idParam } = await params;
+    const id = Number(idParam);
+    if (!Number.isFinite(id) || id <= 0) {
+      return NextResponse.json({ error: "Invalid tour id" }, { status: 400 });
+    }
+
+    const existing = await xano.tours.getById(id);
+    const eventId = liveTourEventId(existing.google_event_id);
+    let warning: string | undefined;
+    if (eventId && isGoogleCalendarConfigured()) {
+      try {
+        await cancelTourEvent(eventId);
+      } catch (err) {
+        console.error("[/api/admin/tours DELETE] Google cancel failed:", err);
+        warning =
+          "The tour was deleted here, but its Google Calendar event " +
+          "couldn't be removed — delete it from the calendar by hand.";
+      }
+    }
+
+    await xano.tours.delete(id);
+    return NextResponse.json({ ok: true, warning });
   } catch (err) {
     return handleAdminError(err);
   }

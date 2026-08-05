@@ -61,6 +61,42 @@ export function tourInviteDescription(notes: string): string {
     : TOUR_INVITE_DESCRIPTION;
 }
 
+/** Google event title — "SailFuture Academy Campus Tour - Student
+ *  (Parent)", degrading gracefully when either name is missing. One
+ *  helper so create and reschedule can't drift on format. */
+export function tourEventSummary(
+  studentName: string,
+  parentName: string
+): string {
+  const student = studentName.trim();
+  const parent = parentName.trim();
+  const who =
+    student && parent
+      ? `${student} (${parent})`
+      : student || parent || "Prospective Family";
+  return `SailFuture Academy Campus Tour - ${who}`;
+}
+
+/** Event description: the invite copy (custom notes on top) plus a
+ *  parent-contact block at the bottom, so staff opening the calendar
+ *  event have the family's details without switching to the app. */
+export function tourEventDescription(tour: {
+  notes: string;
+  parent_name: string;
+  parent_email: string;
+  parent_phone: string;
+}): string {
+  const contact = [
+    tour.parent_name.trim(),
+    tour.parent_email.trim(),
+    tour.parent_phone.trim(),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const base = tourInviteDescription(tour.notes);
+  return contact ? `${base}\n\n—\nParent contact: ${contact}` : base;
+}
+
 export const TOUR_STATUS_LABEL: Record<string, string> = {
   scheduled: "Scheduled",
   completed: "Completed",

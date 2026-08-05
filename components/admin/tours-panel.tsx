@@ -7,14 +7,26 @@ import {
   CalendarPlus,
   CalendarX2,
   Check,
+  ExternalLink,
   Link2,
   Link2Off,
   Loader2,
   MoreHorizontal,
   RefreshCw,
   Search,
+  Trash2,
   UserX,
 } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { DataTable, type ColumnDef } from "@/components/admin/data-table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -128,23 +140,30 @@ export function ToursPanel() {
     }));
   }, [data]);
 
-  // Upcoming (still-scheduled, soonest first) above history (newest
-  // first) — one table, a status filter would hide the history admins
-  // scan for "did they ever tour?".
-  const sorted = useMemo(() => {
-    const upcoming = rows
-      .filter((r) => r.status === "scheduled")
-      .sort((a, b) => a.scheduled_at - b.scheduled_at);
-    const past = rows
-      .filter((r) => r.status !== "scheduled")
-      .sort((a, b) => b.scheduled_at - a.scheduled_at);
-    return [...upcoming, ...past];
+  // Two sections split on DATE, not just status: a tour still flagged
+  // "scheduled" whose slot already passed isn't upcoming — it's
+  // unresolved bookkeeping and belongs with the past ones (its
+  // Scheduled badge + lifecycle menu say what's left to do). Upcoming
+  // sorts soonest-first; past newest-first.
+  const { upcoming, past } = useMemo(() => {
+    const now = Date.now();
+    const isUpcoming = (r: TourRow) =>
+      r.status === "scheduled" && r.scheduled_at > now;
+    return {
+      upcoming: rows
+        .filter(isUpcoming)
+        .sort((a, b) => a.scheduled_at - b.scheduled_at),
+      past: rows
+        .filter((r) => !isUpcoming(r))
+        .sort((a, b) => b.scheduled_at - a.scheduled_at),
+    };
   }, [rows]);
 
   const [search, setSearch] = useState("");
   const [pendingAction, setPendingAction] = useState<number | null>(null);
   const [reschedule, setReschedule] = useState<TourRow | null>(null);
   const [linking, setLinking] = useState<TourRow | null>(null);
+  const [deleting, setDeleting] = useState<TourRow | null>(null);
   const [syncing, setSyncing] = useState(false);
   // Scheduling is two steps: pick who the tour is for, then the
   // date/time dialog seeded with that lead's contact details.
@@ -163,24 +182,33 @@ export function ToursPanel() {
   // details plus the full comms/activity log — rather than a
   // tour-only view: the tour is one event in that lead's story. The
   // all-leads fetch is lazy (first row click) like the Messages page.
-  const [openLead, setOpenLead] = useState<{
-    source: LeadNoteSource;
-    id: number;
-  } | null>(null);
+  // We keep the whole TOUR row (not just its lead pointer): when the
+  // linked lead turns out not to exist anymore — deleted inquiry,
+  // FK hand-edited to a bad id — the row is what lets us fall back
+  // to the link picker so the admin can repair it on the spot.
+  const [openTour, setOpenTour] = useState<TourRow | null>(null);
+  const openLead = openTour?.lead ?? null;
   const { data: leadRows, mutate: mutateLeadRows } = useSWR<AllLeadRow[]>(
     openLead ? "/api/admin/all-leads" : null,
     adminFetcher,
     {
       revalidateOnFocus: false,
       onSuccess: (rows) => {
+        if (!openLead) return;
+        // adminFetcher resolves whatever the route returned — guard
+        // the shape before .some so an error payload can't throw.
         const found =
-          openLead &&
+          Array.isArray(rows) &&
           rows.some(
             (l) => l.source === openLead.source && l.id === openLead.id
           );
         if (!found) {
-          toast.error("Couldn't find this tour's lead record.");
-          setOpenLead(null);
+          const tour = openTour;
+          setOpenTour(null);
+          toast.warning(
+            "This tour's linked lead no longer exists — pick the lead it belongs to."
+          );
+          if (tour) setLinking(tour);
         }
       },
     }
@@ -287,6 +315,32 @@ export function ToursPanel() {
       console.error("[ToursPanel.patchTour]", err);
       toast.error(
         err instanceof Error ? err.message : "Couldn't update the tour."
+      );
+    } finally {
+      setPendingAction(null);
+    }
+  }
+
+  /** Hard-delete a tour row (any status, canceled included) — the
+   *  API cancels any still-live Google event first, then removes the
+   *  record from the table and every timeline that renders it. */
+  async function deleteTour(row: TourRow) {
+    setPendingAction(row.id);
+    try {
+      const res = await fetch(`/api/admin/tours/${row.id}`, {
+        method: "DELETE",
+      });
+      const result = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(result?.error ?? `Delete failed (${res.status})`);
+      }
+      if (result?.warning) toast.warning(result.warning);
+      else toast.success("Tour deleted.");
+      refreshTourSurfaces();
+    } catch (err) {
+      console.error("[ToursPanel.deleteTour]", err);
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't delete the tour."
       );
     } finally {
       setPendingAction(null);
@@ -497,14 +551,22 @@ export function ToursPanel() {
                   </DropdownMenuItem>
                 </>
               ) : null}
+              {/* Delete is offered on EVERY status — canceled rows
+                  included; that's the whole point (cancel keeps the
+                  record, delete removes it). Confirmed via dialog. */}
+              <DropdownMenuItem
+                variant="destructive"
+                onClick={() => setDeleting(r)}
+              >
+                <Trash2 className="size-4" />
+                Delete tour…
+              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </span>
       ),
     },
   ];
-
-  const upcomingCount = rows.filter((r) => r.status === "scheduled").length;
 
   return (
     <Card className="overflow-hidden bg-white py-0 gap-0">
@@ -513,7 +575,7 @@ export function ToursPanel() {
           <CardTitle className="text-base">
             Scheduled tours
             <span className="ml-2 text-sm font-normal text-muted-foreground">
-              {upcomingCount} upcoming
+              {upcoming.length} upcoming
             </span>
           </CardTitle>
           <div className="flex flex-wrap items-center gap-2">
@@ -527,6 +589,22 @@ export function ToursPanel() {
               <CalendarPlus className="size-4" />
               Schedule tour
             </Button>
+            {/* Straight to the admissions calendar the events land
+                on — the ?cid= link opens (or offers to add) that
+                calendar in the admin's own Google Calendar. */}
+            {data?.calendarEmail ? (
+              <Button asChild variant="outline" className="bg-white">
+                <a
+                  href={`https://calendar.google.com/calendar/u/0/r?cid=${encodeURIComponent(data.calendarEmail)}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  title={`Open ${data.calendarEmail} in Google Calendar`}
+                >
+                  <ExternalLink className="size-4" />
+                  Google Calendar
+                </a>
+              </Button>
+            ) : null}
             <Button
               variant="outline"
               className="bg-white"
@@ -546,40 +624,123 @@ export function ToursPanel() {
           </p>
         ) : null}
       </CardHeader>
-      <CardContent className="p-4 bg-white">
+      <CardContent className="space-y-6 p-4 bg-white">
         {error && !data ? (
           <div className="p-8 text-center text-sm text-muted-foreground">
             Couldn&rsquo;t load tours. Refresh to try again.
           </div>
-        ) : sorted.length === 0 && !isLoading ? (
+        ) : upcoming.length + past.length === 0 && !isLoading ? (
           <div className="p-8 text-center text-sm text-muted-foreground">
             No tours yet. Bookings from the website tour page import
             here automatically — use Sync Google to pull them in now.
           </div>
         ) : (
-          <DataTable<TourRow>
-            columns={columns}
-            data={sorted}
-            isLoading={isLoading && !data}
-            externalSearch={search}
-            // A tour is one event in a lead's story, so the row opens
-            // that lead's details + activity. An unlinked tour has no
-            // lead to open — offer the picker instead of doing
-            // nothing, which would read as a broken row.
-            onRowClick={(r) => {
-              if (r.lead) setOpenLead(r.lead);
-              else setLinking(r);
-            }}
-            rowClassName={(r) =>
-              openLead &&
-              r.lead?.source === openLead.source &&
-              r.lead.id === openLead.id
-                ? "bg-muted hover:bg-muted"
-                : "hover:bg-muted/50"
-            }
-          />
+          // Two sections split on the tour's DATE — upcoming above,
+          // everything already past below (including still-"scheduled"
+          // rows whose slot passed without an outcome; their badge +
+          // row menu say what's left to resolve).
+          (
+            [
+              {
+                key: "upcoming",
+                title: "Upcoming",
+                dot: "bg-sky-500",
+                description: "On the calendar ahead — soonest first.",
+                data: upcoming,
+              },
+              {
+                key: "past",
+                title: "Past",
+                dot: "bg-slate-400",
+                description:
+                  "Completed, canceled, no-shows — and scheduled tours whose date has passed without an outcome.",
+                data: past,
+              },
+            ] as const
+          ).map((section) =>
+            section.data.length === 0 && !isLoading ? null : (
+              <div key={section.key} className="space-y-3">
+                <div className="flex items-baseline gap-3">
+                  <span
+                    className={cn(
+                      "size-2.5 shrink-0 self-center rounded-full",
+                      section.dot
+                    )}
+                    aria-hidden
+                  />
+                  <p className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+                    {section.title}
+                  </p>
+                  <span className="text-xs tabular-nums text-muted-foreground">
+                    ({section.data.length})
+                  </span>
+                  <p className="text-xs text-muted-foreground">
+                    {section.description}
+                  </p>
+                </div>
+                <DataTable<TourRow>
+                  columns={columns}
+                  data={section.data}
+                  isLoading={isLoading && !data}
+                  externalSearch={search}
+                  // A tour is one event in a lead's story, so the row
+                  // opens that lead's details + activity. An unlinked
+                  // tour has no lead to open — offer the picker
+                  // instead of doing nothing, which would read as a
+                  // broken row.
+                  onRowClick={(r) => {
+                    if (r.lead) setOpenTour(r);
+                    else setLinking(r);
+                  }}
+                  rowClassName={(r) =>
+                    openLead &&
+                    r.lead?.source === openLead.source &&
+                    r.lead.id === openLead.id
+                      ? "bg-muted hover:bg-muted"
+                      : "hover:bg-muted/50"
+                  }
+                />
+              </div>
+            )
+          )
         )}
       </CardContent>
+
+      {/* Delete confirm — deleting removes the record everywhere
+          (Tours tab + the lead's activity timeline), so it gets the
+          heavyweight dialog rather than a one-click menu action. */}
+      <AlertDialog
+        open={deleting !== null}
+        onOpenChange={(o) => !o && setDeleting(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this tour?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {deleting
+                ? `${deleting.parent_name || deleting.student_name || "This booking"} — ${deleting.when}. The record disappears from the Tours tab and the lead's activity log.${
+                    deleting.status === "scheduled" && deleting.hasInvite
+                      ? " Its calendar invite is canceled and the parent is emailed."
+                      : ""
+                  }`
+                : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep it</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90"
+              onClick={() => {
+                const row = deleting;
+                setDeleting(null);
+                if (row) void deleteTour(row);
+              }}
+            >
+              Delete tour
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <TourRescheduleDialog
         row={reschedule}
@@ -654,7 +815,7 @@ export function ToursPanel() {
       {leadRow ? (
         <LeadTriageSheet
           open
-          onOpenChange={(o) => !o && setOpenLead(null)}
+          onOpenChange={(o) => !o && setOpenTour(null)}
           scope={{ source: leadRow.source, id: leadRow.id }}
           title={
             leadRow.student_name ||

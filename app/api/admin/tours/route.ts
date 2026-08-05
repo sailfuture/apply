@@ -12,10 +12,12 @@ import { bumpLeadReachOut } from "@/lib/leads";
 import {
   createTourEvent,
   isGoogleCalendarConfigured,
+  tourCalendarEmail,
 } from "@/lib/google-calendar";
 import {
   TOUR_DEFAULT_LOCATION,
-  tourInviteDescription,
+  tourEventDescription,
+  tourEventSummary,
 } from "@/lib/tours";
 import { writeTourNote } from "@/lib/tour-notes";
 
@@ -42,6 +44,9 @@ export const dynamic = "force-dynamic";
 export interface ToursResponse {
   tours: XanoTour[];
   calendarConfigured: boolean;
+  /** Address of the calendar tour events land on (the admissions
+   *  account) — the Tours tab links to it. "" when unconfigured. */
+  calendarEmail: string;
 }
 
 export async function GET(req: NextRequest) {
@@ -80,6 +85,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       tours,
       calendarConfigured: isGoogleCalendarConfigured(),
+      calendarEmail: tourCalendarEmail(),
     } satisfies ToursResponse);
   } catch (err) {
     return handleAdminError(err);
@@ -196,8 +202,13 @@ export async function POST(req: NextRequest) {
     if (isGoogleCalendarConfigured()) {
       try {
         const event = await createTourEvent({
-          summary: `Campus tour — ${studentName || parentName || "prospective family"}`,
-          description: tourInviteDescription(notes),
+          summary: tourEventSummary(studentName, parentName),
+          description: tourEventDescription({
+            notes,
+            parent_name: parentName,
+            parent_email: parentEmail,
+            parent_phone: parentPhone,
+          }),
           location,
           startMs: scheduledAt,
           endMs: scheduledAt + durationMinutes * 60_000,
