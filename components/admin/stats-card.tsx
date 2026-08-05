@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import {
   Card,
   CardHeader,
@@ -14,6 +15,9 @@ interface StatsCardProps {
   description?: string;
   icon: React.ReactNode;
   trend?: { value: number; label: string };
+  /** When set, the whole card is a link to that page — the dashboard
+   *  tiles each jump to the list they summarize. */
+  href?: string;
 }
 
 export function StatsCard({
@@ -22,9 +26,15 @@ export function StatsCard({
   description,
   icon,
   trend,
+  href,
 }: StatsCardProps) {
-  return (
-    <Card>
+  const card = (
+    <Card
+      className={cn(
+        href &&
+          "h-full transition-colors hover:border-foreground/30 hover:bg-muted/30"
+      )}
+    >
       <CardHeader className="flex flex-row items-center justify-between pb-2">
         <CardTitle className="text-sm font-medium text-muted-foreground">
           {title}
@@ -54,5 +64,12 @@ export function StatsCard({
         )}
       </CardContent>
     </Card>
+  );
+  return href ? (
+    <Link href={href} className="block h-full">
+      {card}
+    </Link>
+  ) : (
+    card
   );
 }

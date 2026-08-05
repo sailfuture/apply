@@ -30,6 +30,7 @@ export async function GET(req: NextRequest) {
       registrationsResult,
       studentsResult,
       toursResult,
+      progressResult,
     ] = await Promise.allSettled([
       xano.applications.getAll(),
       fetch(`${BASE}/registration_inquiry`, { cache: "no-store" }).then((r) =>
@@ -42,6 +43,10 @@ export async function GET(req: NextRequest) {
         r.ok ? r.json() : []
       ),
       xano.tours.getAll(),
+      // Family-level application pipeline — the same rows the
+      // /admin/applications page buckets, so the dashboard's Apps
+      // tile and that page can't disagree on counts.
+      xano.familyApplicationProgress.getAll(),
     ]);
 
     if (appsResult.status === "rejected") {
@@ -72,6 +77,12 @@ export async function GET(req: NextRequest) {
       console.error(
         "[/api/admin/stats] failed to load tours:",
         toursResult.reason
+      );
+    }
+    if (progressResult.status === "rejected") {
+      console.error(
+        "[/api/admin/stats] failed to load family progress:",
+        progressResult.reason
       );
     }
 
@@ -169,14 +180,39 @@ export async function GET(req: NextRequest) {
 
     // Campus tours — global like inquiries (the table has no year
     // column). `total` is every real booking ever, including
-    // cancellations/no-shows; the completed/scheduled split is what
-    // the tile's description surfaces.
+    // cancellations/no-shows. "Upcoming" is DATE-based, not
+    // status-based: a tour still flagged "scheduled" whose slot has
+    // already passed is stale bookkeeping, not something on the
+    // calendar ahead.
+    const now = Date.now();
     const completedTours = tours.filter(
       (t) => t.status === "completed"
     ).length;
-    const scheduledTours = tours.filter(
-      (t) => t.status === "scheduled"
+    const upcomingTours = tours.filter(
+      (t) => t.status === "scheduled" && Number(t.scheduled_at) > now
     ).length;
+
+    // Family application pipeline for the Apps tile — mirrors the
+    // /admin/applications page's buckets: archived rows drop out,
+    // accepted wins over submitted (accept auto-flips isSubmitted),
+    // everything else still unsubmitted is "in progress".
+    const progressAll =
+      progressResult.status === "fulfilled" ? progressResult.value : [];
+    const progressRows = (
+      yearId
+        ? progressAll.filter(
+            (p) => Number(p.registration_school_years_id) === yearId
+          )
+        : progressAll
+    ).filter((p) => p.is_archived !== true);
+    const familiesAccepted = progressRows.filter(
+      (p) => p.isAccepted === true
+    ).length;
+    const familiesSubmitted = progressRows.filter(
+      (p) => p.isSubmitted === true && p.isAccepted !== true
+    ).length;
+    const familiesInProgress =
+      progressRows.length - familiesAccepted - familiesSubmitted;
 
     return NextResponse.json({
       inquiries: {
@@ -187,7 +223,14 @@ export async function GET(req: NextRequest) {
       tours: {
         total: tours.length,
         completed: completedTours,
-        scheduled: scheduledTours,
+        scheduled: upcomingTours,
+      },
+      // Family-level pipeline (progress rows, archived excluded) —
+      // the Apps tile's numbers, matching /admin/applications.
+      families: {
+        accepted: familiesAccepted,
+        submitted: familiesSubmitted,
+        inProgress: familiesInProgress,
       },
       applications: {
         total: totalApplications,

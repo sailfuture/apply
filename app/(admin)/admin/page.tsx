@@ -80,8 +80,12 @@ interface StatsResponse {
     converted?: number;
   };
   /** Campus tours from `registration_tours` — global (the table has
-   *  no year column), blank wiring rows excluded. */
+   *  no year column), blank wiring rows excluded. `scheduled` is
+   *  date-based upcoming: still-scheduled AND in the future. */
   tours?: { total: number; completed: number; scheduled: number };
+  /** Family-level application pipeline (progress rows, archived
+   *  excluded) — the Apps tile, matching /admin/applications. */
+  families?: { accepted: number; submitted: number; inProgress: number };
   applications: {
     total: number;
     draft: number;
@@ -212,6 +216,7 @@ export default function AdminDashboardPage() {
   const safeStats: StatsResponse = stats ?? {
     inquiries: { total: 0, recent: 0, converted: 0 },
     tours: { total: 0, completed: 0, scheduled: 0 },
+    families: { accepted: 0, submitted: 0, inProgress: 0 },
     applications: {
       total: 0,
       draft: 0,
@@ -230,6 +235,11 @@ export default function AdminDashboardPage() {
     total: 0,
     completed: 0,
     scheduled: 0,
+  };
+  const familyStats = safeStats.families ?? {
+    accepted: 0,
+    submitted: 0,
+    inProgress: 0,
   };
   // Conversion rate reads better than a bare count next to the
   // Inquiries tile; guard the division for an empty pipeline.
@@ -280,24 +290,31 @@ export default function AdminDashboardPage() {
           value={safeStats.inquiries.total}
           icon={<MessageSquare className="size-5" />}
           description={`${safeStats.inquiries.recent} this month`}
+          href="/admin/inquiries"
         />
         <StatsCard
           title="Conversions"
           value={convertedCount}
           icon={<TrendingUp className="size-5" />}
           description={`${conversionPct}% of inquiries applied`}
+          href="/admin/all-leads"
         />
         <StatsCard
           title="Tours"
           value={tourStats.total}
           icon={<CalendarDays className="size-5" />}
           description={`${tourStats.completed} completed · ${tourStats.scheduled} upcoming`}
+          href="/admin/campus-tours"
         />
+        {/* Family-level pipeline, same buckets as the Applications
+            page: headline = accepted families, breakdown = the rest
+            of the funnel still moving. */}
         <StatsCard
-          title="Completed Apps"
-          value={safeStats.applications.submitted}
+          title="Apps"
+          value={familyStats.accepted}
           icon={<FileText className="size-5" />}
-          description={`${safeStats.applications.draft} still in draft`}
+          description={`accepted · ${familyStats.inProgress} in progress · ${familyStats.submitted} submitted`}
+          href={yearId ? `/admin/applications?yearId=${yearId}` : "/admin/applications"}
         />
         {/* Accepted counts per-student application rows, so this is
             students (not families) accepted for the selected year. */}
@@ -306,6 +323,7 @@ export default function AdminDashboardPage() {
           value={safeStats.applications.accepted}
           icon={<CheckCircle className="size-5" />}
           description={`${safeStats.applications.offered} offered`}
+          href={yearId ? `/admin/applications?yearId=${yearId}` : "/admin/applications"}
         />
         {/* Enrollment is per-year — joined to the applications list so
             a student "belongs to" the year via their app, then the
@@ -317,6 +335,7 @@ export default function AdminDashboardPage() {
           description={
             yearName ? `For ${yearName}` : "Pick a year for context"
           }
+          href={yearId ? `/admin/enrolled?yearId=${yearId}` : "/admin/enrolled"}
         />
       </div>
 
