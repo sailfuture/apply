@@ -5,15 +5,16 @@ import useSWR from "swr";
 import { toast } from "sonner";
 import {
   Check,
+  CheckCircle2,
   ChevronsUpDown,
+  Circle,
   Copy,
-  Link2,
+  ExternalLink,
   Loader2,
   Mail,
   Pencil,
   Phone,
   Undo2,
-  Unlink,
   UserX,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -70,6 +71,7 @@ export function LeadTriageControls({
   rating,
   isFollowedUp,
   lastReachOut,
+  actions,
   onChanged,
   className,
 }: {
@@ -79,6 +81,11 @@ export function LeadTriageControls({
   /** Server-stamped timestamp of the most recent note; null when the
    *  lead has never been contacted. */
   lastReachOut?: number | null;
+  /** Extra controls rendered inline with the Followed-up button —
+   *  the sheet passes Book campus tour so the two sit on one row.
+   *  Hosts that don't (Summer Camp, Liability Waiver) get just the
+   *  toggle. */
+  actions?: React.ReactNode;
   onChanged?: () => void;
   className?: string;
 }) {
@@ -181,19 +188,36 @@ export function LeadTriageControls({
           ) : null}
         </div>
       </div>
-      {/* Follow-up — checkbox under the rating (was a header button). */}
-      <label className="flex w-fit cursor-pointer items-center gap-2 text-sm">
-        <Checkbox
-          checked={shownFollowedUp}
+      {/* Follow-up toggle + whatever the host docks beside it (the
+          sheet passes Book campus tour). A pressed button rather than
+          a checkbox: the label stays fixed so the row never reflows,
+          and the filled state carries the "on" meaning. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          type="button"
+          variant={shownFollowedUp ? "default" : "outline"}
+          size="sm"
+          aria-pressed={shownFollowedUp}
           disabled={savingFollowUp}
-          aria-label="Followed up"
-          onCheckedChange={() => void toggleFollowUp()}
-        />
-        <span className="font-medium">Followed up</span>
-        {savingFollowUp ? (
-          <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
-        ) : null}
-      </label>
+          className={cn("h-8", !shownFollowedUp && "bg-white")}
+          title={
+            shownFollowedUp
+              ? "Followed up — click to clear"
+              : "Mark this lead as followed up"
+          }
+          onClick={() => void toggleFollowUp()}
+        >
+          {savingFollowUp ? (
+            <Loader2 className="size-3.5 animate-spin" />
+          ) : shownFollowedUp ? (
+            <CheckCircle2 className="size-3.5" />
+          ) : (
+            <Circle className="size-3.5" />
+          )}
+          Followed up
+        </Button>
+        {actions}
+      </div>
       <p
         className="text-xs text-muted-foreground"
         title={
@@ -270,11 +294,15 @@ interface FamilyPickerRow {
 }
 
 /**
- * Conversion section — shows whether this lead became an applying
- * family (with the derived funnel stage), and lets admin fix what the
- * auto-matcher couldn't: link to a family by hand, or unlink a false
- * match (writes the 0 sentinel). Writes go through `/api/admin/leads`
- * `family_id`, same path for link and unlink.
+ * Conversion combobox — one control for the whole link state. The
+ * trigger reads as a field (funnel-stage badge + family name, or a
+ * "Link to family…" placeholder), and the dropdown both picks a
+ * family and offers Unlink when one is already linked. Writes go
+ * through `/api/admin/leads` `family_id`, same path for link, re-link,
+ * and unlink (0 sentinel).
+ *
+ * Sits under Opt-in in the Lead details block, styled to match the
+ * fields around it rather than as its own titled section.
  */
 function LeadConversionEditor({
   scope,
@@ -327,106 +355,130 @@ function LeadConversionEditor({
   const linked = conversion.family_id > 0;
 
   return (
-    <div>
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-        Conversion
-      </p>
-      {linked ? (
-        <div className="mt-1 flex flex-wrap items-center gap-2">
-          {meta ? (
-            <Badge className={cn(meta.chip, "whitespace-nowrap")}>
-              {meta.label}
-            </Badge>
-          ) : null}
-          <a
-            href={`/admin/families/${conversion.family_id}`}
-            className="min-w-0 truncate text-sm font-medium text-foreground hover:underline"
-            title={
-              conversion.converted_at
-                ? `Linked ${new Date(conversion.converted_at).toLocaleString()}`
-                : undefined
-            }
-          >
-            {conversion.family_name || `Family #${conversion.family_id}`}
-          </a>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="h-7 px-2 text-muted-foreground"
-            disabled={saving}
-            onClick={() => void saveLink(0)}
-            title="Remove the link — this lead didn't actually become this family"
-          >
-            {saving ? (
-              <Loader2 className="size-3.5 animate-spin" />
-            ) : (
-              <Unlink className="size-3.5" />
-            )}
-            Unlink
-          </Button>
-        </div>
-      ) : (
-        <div className="mt-1 flex items-center gap-2">
-          <span className="text-sm text-muted-foreground">
-            Not converted yet.
-          </span>
-          <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
-            <PopoverTrigger asChild>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="h-7 bg-white"
-                disabled={saving}
-              >
+    <div className="min-w-0">
+      <p className="mb-1 text-[11px] text-muted-foreground">Conversion</p>
+      <div className="flex items-center gap-1">
+        <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
+          <PopoverTrigger asChild>
+            <Button
+              type="button"
+              variant="outline"
+              role="combobox"
+              aria-expanded={pickerOpen}
+              disabled={saving}
+              className="h-8 min-w-0 flex-1 justify-between bg-white px-2 font-normal"
+              title={
+                linked && conversion.converted_at
+                  ? `Linked ${new Date(conversion.converted_at).toLocaleString()}`
+                  : undefined
+              }
+            >
+              <span className="flex min-w-0 items-center gap-1.5">
                 {saving ? (
-                  <Loader2 className="size-3.5 mr-1.5 animate-spin" />
-                ) : (
-                  <Link2 className="size-3.5 mr-1.5" />
-                )}
-                Link to family
-                <ChevronsUpDown className="ml-1 size-3 opacity-50" />
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-80 p-0" align="start">
-              <Command>
-                <CommandInput placeholder="Search family, parent, or student…" />
-                <CommandList>
-                  <CommandEmpty>
-                    {familiesLoading ? "Loading families…" : "No family found."}
-                  </CommandEmpty>
-                  <CommandGroup>
-                    {(familyRows ?? []).map((f) => (
-                      <CommandItem
-                        key={f.id}
-                        // Search across everything an admin might
-                        // remember about the family, not just its name.
-                        value={`${f.family_name} ${f.primary_name} ${f.primary_email} ${f.student_names} #${f.id}`}
-                        onSelect={() => {
-                          setPickerOpen(false);
-                          void saveLink(f.id);
-                        }}
+                  <Loader2 className="size-3.5 shrink-0 animate-spin" />
+                ) : null}
+                {linked ? (
+                  <>
+                    {meta ? (
+                      <Badge
+                        className={cn(
+                          meta.chip,
+                          "shrink-0 px-1.5 py-0 text-[10px] font-medium"
+                        )}
                       >
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-medium">
-                            {f.family_name}
-                          </p>
-                          <p className="truncate text-xs text-muted-foreground">
-                            {[f.primary_name, f.student_names]
-                              .filter(Boolean)
-                              .join(" · ") || f.primary_email}
-                          </p>
-                        </div>
-                      </CommandItem>
-                    ))}
+                        {meta.label}
+                      </Badge>
+                    ) : null}
+                    <span className="truncate">
+                      {conversion.family_name ||
+                        `Family #${conversion.family_id}`}
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-muted-foreground">
+                    Link to family…
+                  </span>
+                )}
+              </span>
+              <ChevronsUpDown className="ml-1 size-3.5 shrink-0 opacity-50" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent
+            className="w-(--radix-popover-trigger-width) min-w-72 p-0"
+            align="start"
+          >
+            <Command>
+              <CommandInput placeholder="Search family, parent, or student…" />
+              <CommandList>
+                <CommandEmpty>
+                  {familiesLoading ? "Loading families…" : "No family found."}
+                </CommandEmpty>
+                {linked ? (
+                  <CommandGroup>
+                    <CommandItem
+                      value="unlink remove clear conversion link"
+                      onSelect={() => {
+                        setPickerOpen(false);
+                        void saveLink(0);
+                      }}
+                    >
+                      <Undo2 className="size-3.5 text-muted-foreground" />
+                      <span className="text-sm">
+                        Unlink — this lead didn&rsquo;t become this family
+                      </span>
+                    </CommandItem>
                   </CommandGroup>
-                </CommandList>
-              </Command>
-            </PopoverContent>
-          </Popover>
-        </div>
-      )}
+                ) : null}
+                <CommandGroup>
+                  {(familyRows ?? []).map((f) => (
+                    <CommandItem
+                      key={f.id}
+                      // Search across everything an admin might
+                      // remember about the family, not just its name.
+                      value={`${f.family_name} ${f.primary_name} ${f.primary_email} ${f.student_names} #${f.id}`}
+                      onSelect={() => {
+                        setPickerOpen(false);
+                        void saveLink(f.id);
+                      }}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium">
+                          {f.family_name}
+                        </p>
+                        <p className="truncate text-xs text-muted-foreground">
+                          {[f.primary_name, f.student_names]
+                            .filter(Boolean)
+                            .join(" · ") || f.primary_email}
+                        </p>
+                      </div>
+                      {f.id === conversion.family_id ? (
+                        <Check className="size-3.5 shrink-0" />
+                      ) : null}
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              </CommandList>
+            </Command>
+          </PopoverContent>
+        </Popover>
+        {/* Jump to the family this lead became — the mirror of the
+            family page's "View inquiry" button. Icon-only so the
+            combobox stays the one substantive control on the row. */}
+        {linked ? (
+          <Button
+            asChild
+            variant="ghost"
+            size="icon"
+            className="size-8 shrink-0 text-muted-foreground"
+            title="Open this family"
+          >
+            <a href={`/admin/families/${conversion.family_id}`}>
+              <ExternalLink className="size-3.5" />
+              <span className="sr-only">Open this family</span>
+            </a>
+          </Button>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -502,34 +554,7 @@ function LeadStatusEditor({
     }
   }
 
-  if (status === "not_interested") {
-    return (
-      <div className="flex flex-wrap items-center gap-2">
-        <Badge className="bg-red-100 text-red-800 hover:bg-red-100 whitespace-nowrap">
-          Not interested
-        </Badge>
-        {reason ? (
-          <span className="text-xs text-muted-foreground">{reason}</span>
-        ) : null}
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="h-7 px-2 text-muted-foreground"
-          disabled={saving}
-          onClick={() => void save({ status: "active" })}
-          title="Put this lead back in the active pipeline"
-        >
-          {saving ? (
-            <Loader2 className="size-3.5 animate-spin" />
-          ) : (
-            <Undo2 className="size-3.5" />
-          )}
-          Restore
-        </Button>
-      </div>
-    );
-  }
+  const declined = status === "not_interested";
 
   return (
     <Popover
@@ -542,23 +567,69 @@ function LeadStatusEditor({
         }
       }}
     >
+      {/* Icon-only so it sits beside Edit in the Lead details header
+          without competing with it. Red when the lead is declined —
+          that tint IS the status indicator, and the popover carries
+          the reason plus Restore. */}
       <PopoverTrigger asChild>
         <Button
           type="button"
           variant="outline"
-          size="sm"
-          className="h-7 bg-white text-muted-foreground"
+          size="icon"
+          aria-pressed={declined}
+          className={cn(
+            "size-7",
+            declined
+              ? "border-red-200 bg-red-50 text-red-700 hover:bg-red-100 hover:text-red-800"
+              : "bg-white text-muted-foreground"
+          )}
           disabled={saving}
+          title={
+            declined
+              ? `Not interested${reason ? ` — ${reason}` : ""}`
+              : "Mark not interested"
+          }
         >
           {saving ? (
-            <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+            <Loader2 className="size-3.5 animate-spin" />
           ) : (
-            <UserX className="size-3.5 mr-1.5" />
+            <UserX className="size-3.5" />
           )}
-          Mark not interested
+          <span className="sr-only">
+            {declined ? "Not interested" : "Mark not interested"}
+          </span>
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-64 p-2" align="start">
+      <PopoverContent className="w-64 p-2" align="end">
+        {declined ? (
+          <div className="space-y-2 p-1">
+            <div className="flex items-center gap-2">
+              <Badge className="bg-red-100 text-red-800 hover:bg-red-100 whitespace-nowrap">
+                Not interested
+              </Badge>
+            </div>
+            {reason ? (
+              <p className="text-xs text-muted-foreground">{reason}</p>
+            ) : null}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 w-full bg-white"
+              disabled={saving}
+              onClick={() => void save({ status: "active" })}
+              title="Put this lead back in the active pipeline"
+            >
+              {saving ? (
+                <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+              ) : (
+                <Undo2 className="size-3.5 mr-1.5" />
+              )}
+              Restore to active
+            </Button>
+          </div>
+        ) : (
+          <>
         <p className="px-1 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
           Why not interested?
         </p>
@@ -627,6 +698,8 @@ function LeadStatusEditor({
               )
             )}
           </div>
+        )}
+          </>
         )}
       </PopoverContent>
     </Popover>
@@ -747,10 +820,15 @@ function ContactRow({
 function LeadDetailsEditor({
   scope,
   details,
+  headerActions,
   onChanged,
 }: {
   scope: LeadNoteScope;
   details: LeadEditableDetails;
+  /** Rendered inline just left of Edit — the sheet docks the
+   *  not-interested icon button here. Hidden while editing so the
+   *  Cancel/Save pair owns the row. */
+  headerActions?: React.ReactNode;
   onChanged?: () => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -946,16 +1024,19 @@ function LeadDetailsEditor({
             </Button>
           </div>
         ) : (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-7 bg-white"
-            onClick={enterEdit}
-          >
-            <Pencil className="size-3 mr-1.5" />
-            Edit
-          </Button>
+          <div className="flex items-center gap-1.5">
+            {headerActions}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 bg-white"
+              onClick={enterEdit}
+            >
+              <Pencil className="size-3 mr-1.5" />
+              Edit
+            </Button>
+          </div>
         )}
       </div>
       <div className="grid grid-cols-2 gap-x-4 gap-y-2.5">
@@ -1150,55 +1231,60 @@ export function LeadTriageSheet({
         </SheetHeader>
 
         <div className="space-y-3 border-b px-4 py-4">
+          {/* Rating on its own row, then the two triage ACTIONS
+              (followed-up toggle + book a tour) side by side. */}
           <LeadTriageControls
             scope={scope}
             rating={rating}
             isFollowedUp={isFollowedUp}
             lastReachOut={lastReachOut}
             onChanged={onChanged}
+            actions={
+              <LeadTourButton
+                scope={scope}
+                parentName={details?.parent_name ?? ""}
+                parentEmail={details?.email ?? ""}
+                parentPhone={details?.phone ?? ""}
+                studentName={details?.student_name ?? ""}
+                onChanged={onChanged}
+              />
+            }
           />
-          {/* Booking a tour is a triage action like rating or
-              following up — the tour itself then shows in the
-              activity log below. */}
-          <LeadTourButton
-            scope={scope}
-            parentName={details?.parent_name ?? ""}
-            parentEmail={details?.email ?? ""}
-            parentPhone={details?.phone ?? ""}
-            studentName={details?.student_name ?? ""}
-            onChanged={onChanged}
-          />
-          {conversion ? (
-            <LeadConversionEditor
-              // Keyed by lead so the picker/save state resets when the
-              // sheet switches rows, same as the details editor.
-              key={`${scope.source}-${scope.id}`}
-              scope={scope}
-              conversion={conversion}
-              onChanged={onChanged}
-            />
-          ) : null}
-          {leadStatus !== undefined ? (
-            <LeadStatusEditor
-              key={`status-${scope.source}-${scope.id}`}
-              scope={scope}
-              status={leadStatus}
-              reason={statusReason ?? ""}
-              onChanged={onChanged}
-            />
-          ) : null}
         </div>
 
-        {details ? (
-          <div className="border-b bg-muted/10 px-4 py-4">
+        {details || conversion ? (
+          <div className="space-y-3 border-b bg-muted/10 px-4 py-4">
             {/* Keyed by lead so switching rows resets any in-progress
                 edit instead of carrying a stale draft across leads. */}
-            <LeadDetailsEditor
-              key={`${scope.source}-${scope.id}`}
-              scope={scope}
-              details={details}
-              onChanged={onChanged}
-            />
+            {details ? (
+              <LeadDetailsEditor
+                key={`${scope.source}-${scope.id}`}
+                scope={scope}
+                details={details}
+                headerActions={
+                  leadStatus !== undefined ? (
+                    <LeadStatusEditor
+                      key={`status-${scope.source}-${scope.id}`}
+                      scope={scope}
+                      status={leadStatus}
+                      reason={statusReason ?? ""}
+                      onChanged={onChanged}
+                    />
+                  ) : null
+                }
+                onChanged={onChanged}
+              />
+            ) : null}
+            {/* Conversion reads as the last field of the details
+                block — one combobox under Opt-in. */}
+            {conversion ? (
+              <LeadConversionEditor
+                key={`conversion-${scope.source}-${scope.id}`}
+                scope={scope}
+                conversion={conversion}
+                onChanged={onChanged}
+              />
+            ) : null}
           </div>
         ) : null}
 
