@@ -7,7 +7,6 @@ import { toast } from "sonner";
 import {
   AlertTriangle,
   CalendarDays,
-  CalendarX2,
   Check,
   Loader2,
   MessageSquareText,
@@ -15,6 +14,7 @@ import {
   RotateCw,
   TriangleAlert,
   UserX,
+  X,
 } from "lucide-react";
 import { describeSmsError, isFailedStatus } from "@/lib/sms/errors";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
@@ -1015,6 +1015,7 @@ function TourActionButton({
   onClick,
   title,
   destructive,
+  iconOnly,
 }: {
   icon: ReactNode;
   label: string;
@@ -1023,6 +1024,10 @@ function TourActionButton({
   onClick: () => void;
   title: string;
   destructive?: boolean;
+  /** Drop the visible text and render the glyph alone. The label
+   *  survives as the accessible name + tooltip, so an icon-only
+   *  control is still announced and still explains itself on hover. */
+  iconOnly?: boolean;
 }) {
   return (
     <button
@@ -1030,15 +1035,17 @@ function TourActionButton({
       disabled={disabled}
       onClick={onClick}
       title={title}
+      aria-label={iconOnly ? label : undefined}
       className={cn(
-        "ml-1.5 inline-flex items-center gap-1 rounded border border-border bg-white px-1.5 py-0.5 align-middle text-[11px] font-medium transition-colors disabled:opacity-60",
+        "ml-1.5 inline-flex items-center gap-1 rounded border border-border bg-white py-0.5 align-middle text-[11px] font-medium transition-colors disabled:opacity-60",
+        iconOnly ? "px-1" : "px-1.5",
         destructive
           ? "text-destructive hover:bg-destructive/10"
           : "text-foreground/70 hover:bg-muted hover:text-foreground"
       )}
     >
       {busy ? <Loader2 className="size-3 animate-spin" /> : icon}
-      {busy ? "Saving…" : label}
+      {iconOnly ? null : busy ? "Saving…" : label}
     </button>
   );
 }
@@ -1108,13 +1115,14 @@ function TourMarker({ tour }: { tour: XanoTour }) {
             <>
               <TourActionButton
                 icon={<Check className="size-3" />}
-                label="Complete"
+                label="Mark complete"
                 busy={pending === "complete"}
                 disabled={pending !== null}
                 onClick={() =>
                   void runAction("complete", "Tour marked completed.")
                 }
                 title="Mark this tour completed"
+                iconOnly
               />
               <TourActionButton
                 icon={<UserX className="size-3" />}
@@ -1130,13 +1138,14 @@ function TourMarker({ tour }: { tour: XanoTour }) {
                   family the cancellation, so a stray click on a
                   timeline reaches a real person. */}
               <TourActionButton
-                icon={<CalendarX2 className="size-3" />}
-                label="Cancel"
+                icon={<X className="size-3" />}
+                label="Cancel tour"
                 busy={pending === "cancel"}
                 disabled={pending !== null}
                 onClick={() => setConfirmCancel(true)}
                 title="Cancel this tour"
                 destructive
+                iconOnly
               />
             </>
           ) : null}
