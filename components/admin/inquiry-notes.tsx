@@ -55,6 +55,7 @@ import {
 } from "@/components/admin/family-message-thread";
 import {
   TOUR_STATUS_LABEL,
+  isRedundantTourBookingNote,
   leadToursKey,
   tourWhenLabel,
 } from "@/lib/tours";
@@ -303,6 +304,11 @@ export function InquiryNotes({
   const stream: TimelineEntry[] = [
     ...notes
       .filter((n) => !n.is_pinned)
+      // Legacy "booked via the website" notes duplicate the tour
+      // marker rendered right beside them (same timestamp, same
+      // fact) — hidden here, kept in the DB. Pinned ones survive:
+      // pinning was an explicit admin choice.
+      .filter((n) => !isRedundantTourBookingNote(n))
       .map((note) => ({ kind: "note" as const, note })),
     ...smsMessages.map((msg) => ({ kind: "sms" as const, msg })),
     ...tours.map((tour) => ({ kind: "tour" as const, tour })),

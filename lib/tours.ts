@@ -100,35 +100,54 @@ export function tourRsvpBadge(rsvp: string): {
   };
 }
 
+/** Tours happen at the St. Pete campus, so every rendered tour time
+ *  is pinned to Eastern — critically for NOTE BODIES, which are
+ *  formatted on the SERVER (UTC in production) and were coming out
+ *  hours off the actual slot ("5:00 PM" for a 1:00 PM tour). Pinning
+ *  the client renders too keeps every surface saying the same time. */
+export const TOUR_TIME_ZONE = "America/New_York";
+
 /** "Mon, Aug 10 · 10:00 AM–11:00 AM" — the one way a tour's time is
- *  written everywhere (notes, invite description, UI rows). */
+ *  written everywhere (notes, invite description, UI rows). Always
+ *  Eastern time, regardless of where it's rendered. */
 export function tourWhenLabel(
   scheduledAt: number,
   durationMinutes: number
 ): string {
   const start = new Date(scheduledAt);
   const end = new Date(scheduledAt + (durationMinutes || 60) * 60_000);
+  const yearOf = (d: Date) =>
+    d.toLocaleDateString([], { timeZone: TOUR_TIME_ZONE, year: "numeric" });
   const day = start.toLocaleDateString([], {
+    timeZone: TOUR_TIME_ZONE,
     weekday: "short",
     month: "short",
     day: "numeric",
-    year:
-      start.getFullYear() === new Date().getFullYear()
-        ? undefined
-        : "numeric",
+    year: yearOf(start) === yearOf(new Date()) ? undefined : "numeric",
   });
   const t = (d: Date) =>
-    d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    d.toLocaleTimeString([], {
+      timeZone: TOUR_TIME_ZONE,
+      hour: "numeric",
+      minute: "2-digit",
+    });
   return `${day} · ${t(start)}–${t(end)}`;
 }
 
 /** Comms-log note body for a tour lifecycle event. `inviteSent`
  *  matters only for "scheduled"/"rescheduled" — it appends whether
- *  the parent actually got a calendar invite. */
+ *  the parent actually got a calendar invite.
+ *
+ *  There is deliberately NO "booked" event anymore: the activity
+ *  timeline renders every tour straight from the tours table, so a
+ *  "booked via the website" note landed at the same timeline position
+ *  as the tour marker saying the same thing. The remaining events all
+ *  record a CHANGE the always-current marker can't show (the old time
+ *  of a reschedule, when a cancel/no-show happened, a manual
+ *  link/unlink). */
 export function tourNoteBody(
   event:
     | "scheduled"
-    | "booked"
     | "linked"
     | "unlinked"
     | "rescheduled"
@@ -158,13 +177,6 @@ export function tourNoteBody(
         `Campus tour (${when}) unlinked from this lead.` +
         (tour.parent_email ? ` Booked by ${tour.parent_email}.` : "")
       );
-    case "booked":
-      // Self-service: the family picked the slot on the website
-      // booking page and Google emailed them the confirmation.
-      return (
-        `Campus tour booked via the website for ${when}.` +
-        (tour.parent_email ? ` Sent to ${tour.parent_email}.` : "")
-      );
     case "scheduled":
       return (
         `Campus tour scheduled for ${when}.` +
@@ -191,4 +203,21 @@ export function tourNoteBody(
           : "")
       );
   }
+}
+
+/** True for the retired "Campus tour booked via the website…" notes.
+ *  New bookings no longer write them (the tour marker at the same
+ *  timeline position says the same thing — see `tourNoteBody`), and
+ *  the triage-sheet timeline uses this to hide the historical ones
+ *  already sitting in the notes table. They stay in the DB and in
+ *  surfaces that have no tour markers (the dashboard activity feed),
+ *  where they're the only trace of the booking. */
+export function isRedundantTourBookingNote(note: {
+  category?: string | null;
+  body?: string | null;
+}): boolean {
+  return (
+    note.category === "tour" &&
+    (note.body ?? "").startsWith("Campus tour booked via the website")
+  );
 }

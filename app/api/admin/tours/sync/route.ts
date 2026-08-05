@@ -273,7 +273,10 @@ export async function POST(req: NextRequest) {
           );
         }
         result.matched++;
-        await syncNote(tour, "booked", admin, true);
+        // No "booked" note — the activity timeline renders the tour
+        // row itself at this same position, so a note here was a
+        // duplicate (user-flagged). The reach-out bump still records
+        // that contact happened.
         await bumpLeadReachOut(lead.source, lead.id);
       } else {
         result.unmatched++;
@@ -286,28 +289,21 @@ export async function POST(req: NextRequest) {
   }
 }
 
-/** Comms-log note for a synced tour — only when the tour is linked to
- *  a real lead (an unmatched booking has no timeline to land on).
- *  Goes through the shared guarded writer, so a note that can't be
- *  scoped is removed rather than left as an invisible orphan. */
+/** Comms-log note for an externally-canceled tour — only when the
+ *  tour is linked to a real lead (an unmatched booking has no
+ *  timeline to land on). Cancellations are the one sync event still
+ *  worth a note: the always-current tour marker silently flips to
+ *  Canceled, and the note is what records WHEN in the lead's story
+ *  that happened. Goes through the shared guarded writer, so a note
+ *  that can't be scoped is removed rather than left as an invisible
+ *  orphan. */
 async function syncNote(
   tour: XanoTour,
-  event: "booked" | "canceled",
+  event: "canceled",
   admin: { email: string; name: string },
   notified: boolean
 ): Promise<void> {
   const lead = tourLeadScope(tour);
   if (!lead) return;
-  await writeTourNote({
-    lead,
-    tour,
-    event,
-    // Attributed to the booking pipeline, not whichever admin
-    // happened to open the Tours page and trigger the sync.
-    admin: {
-      email: admin.email,
-      name: event === "booked" ? "Website booking" : admin.name,
-    },
-    notified,
-  });
+  await writeTourNote({ lead, tour, event, admin, notified });
 }
