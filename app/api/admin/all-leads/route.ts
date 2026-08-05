@@ -83,6 +83,12 @@ export type AllLeadRow = {
   /** Why the family declined — only meaningful when `lead_status`
    *  is "not_interested" (restore leaves the old value in place). */
   status_reason: string;
+  /** Academic year this family is interested in — hand-assigned
+   *  (never inferred from the submission date). 0 = unassigned, and
+   *  `school_year_name` is "" then, so the UI shows a blank rather
+   *  than a guess. */
+  school_year_id: number;
+  school_year_name: string;
   /** Conversion link — the `registration_families` row this lead
    *  became, stamped by the on-submit auto-matcher / re-match sweep /
    *  manual link in the triage sheet. 0 = not converted. */
@@ -121,6 +127,7 @@ export async function GET() {
       progressRows,
       packets,
       students,
+      schoolYears,
     ] = await Promise.all([
       xano.inquiries.getAll().catch(() => []),
       xano.summerCamp.getAll().catch(() => []),
@@ -138,6 +145,8 @@ export async function GET() {
       xano.familyApplicationProgress.getAll(),
       xano.studentRegistration.getAll().catch(() => []),
       xano.students.getAll().catch(() => []),
+      // Year names for the hand-assigned academic-year column.
+      xano.schoolYears.getAll().catch(() => []),
     ]);
 
     // Best tour per lead. Rank: a COMPLETED tour is the fact this
@@ -228,6 +237,22 @@ export async function GET() {
       families.map((f) => [f.id, (f.family_name ?? "").trim()])
     );
 
+    const yearNameById = new Map(
+      schoolYears.map((y) => [y.id, (y.year_name ?? "").trim()])
+    );
+    // The lead's hand-assigned year FK, coerced whether Xano hands
+    // back a raw id or an expanded relation object. 0 = unassigned.
+    const yearIdOf = (row: { registration_school_years_id?: unknown }) => {
+      const v = row.registration_school_years_id;
+      if (typeof v === "number" && Number.isFinite(v)) return v;
+      if (typeof v === "string") return Number(v) || 0;
+      if (v && typeof v === "object") {
+        const id = (v as { id?: unknown }).id;
+        return typeof id === "number" ? id : Number(id) || 0;
+      }
+      return 0;
+    };
+
     // Normalized lifecycle bucket — "active" and "" both mean the
     // working pipeline, so collapse them; anything else passes
     // through ("not_interested", legacy "converted").
@@ -273,6 +298,8 @@ export async function GET() {
           grade_raw: (i.starting_grade || i.current_grade || "").trim(),
           lead_status: status === "active" ? "" : status,
           status_reason: (i.status_reason ?? "").trim(),
+          school_year_id: yearIdOf(i),
+          school_year_name: yearNameById.get(yearIdOf(i)) ?? "",
           converted_family_id: leadConvertedFamilyId(i),
           converted_at: Number(i.converted_at) || 0,
         };
@@ -307,6 +334,8 @@ export async function GET() {
           grade_raw: (c.last_grade_completed ?? "").trim(),
           lead_status: leadStatus(c.status),
           status_reason: (c.status_reason ?? "").trim(),
+          school_year_id: yearIdOf(c),
+          school_year_name: yearNameById.get(yearIdOf(c)) ?? "",
           converted_family_id: leadConvertedFamilyId(c),
           converted_at: Number(c.converted_at) || 0,
         })
@@ -331,6 +360,8 @@ export async function GET() {
           grade_raw: (w.student_grade ?? "").trim(),
           lead_status: leadStatus(w.status),
           status_reason: (w.status_reason ?? "").trim(),
+          school_year_id: yearIdOf(w),
+          school_year_name: yearNameById.get(yearIdOf(w)) ?? "",
           converted_family_id: leadConvertedFamilyId(w),
           converted_at: Number(w.converted_at) || 0,
         })
@@ -355,6 +386,8 @@ export async function GET() {
           grade_raw: (t.current_grade ?? "").trim(),
           lead_status: leadStatus(t.status),
           status_reason: (t.status_reason ?? "").trim(),
+          school_year_id: yearIdOf(t),
+          school_year_name: yearNameById.get(yearIdOf(t)) ?? "",
           converted_family_id: leadConvertedFamilyId(t),
           converted_at: Number(t.converted_at) || 0,
         })

@@ -34,6 +34,13 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { formatUSPhone } from "@/lib/phone";
 import { formatNoteTimestamp } from "@/lib/format-note-time";
@@ -479,6 +486,103 @@ function LeadConversionEditor({
           </Button>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+/** School-year row as the year picker needs it. */
+interface SchoolYearOption {
+  id: number;
+  year_name: string;
+  isActive?: boolean;
+  isNextYear?: boolean;
+}
+
+/**
+ * Academic-year picker — which year this family is asking about.
+ *
+ * Deliberately HAND-SET and blank until chosen: a family inquiring in
+ * August could mean the year starting this month or the one after,
+ * and only a person knows which. Inferring it from the submission
+ * date would fill the column with confident-looking guesses and make
+ * the year filter untrustworthy, which defeats the point.
+ *
+ * Writes `school_year_id` through `/api/admin/leads` (0 clears back
+ * to unassigned); the route echo-verifies like every other lead write.
+ */
+function LeadYearPicker({
+  scope,
+  yearId,
+  onChanged,
+}: {
+  scope: LeadNoteScope;
+  yearId: number;
+  onChanged?: () => void;
+}) {
+  const [saving, setSaving] = useState(false);
+  const { data: years } = useSWR<SchoolYearOption[]>(
+    "/api/admin/school-years",
+    adminFetcher,
+    { revalidateOnFocus: false }
+  );
+  const options = Array.isArray(years) ? years : [];
+
+  async function save(next: number) {
+    setSaving(true);
+    try {
+      const res = await fetch("/api/admin/leads", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source: scope.source,
+          id: scope.id,
+          school_year_id: next,
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error ?? `Save failed (${res.status})`);
+      if (data?.warning) toast.warning(data.warning);
+      else if (next > 0) toast.success("Academic year set.");
+      else toast.success("Academic year cleared.");
+      onChanged?.();
+    } catch (err) {
+      console.error("[LeadYearPicker.save]", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't save.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="min-w-0">
+      <p className="mb-1 text-[11px] text-muted-foreground">
+        Interested in
+      </p>
+      <Select
+        value={yearId > 0 ? String(yearId) : "0"}
+        disabled={saving}
+        onValueChange={(v) => void save(Number(v))}
+      >
+        <SelectTrigger className="h-8 w-full bg-white">
+          {saving ? (
+            <span className="flex items-center gap-1.5 text-muted-foreground">
+              <Loader2 className="size-3.5 animate-spin" />
+              Saving…
+            </span>
+          ) : (
+            <SelectValue placeholder="Not set" />
+          )}
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="0">Not set</SelectItem>
+          {options.map((y) => (
+            <SelectItem key={y.id} value={String(y.id)}>
+              {y.year_name}
+              {y.isActive ? " (current)" : y.isNextYear ? " (next)" : ""}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </div>
   );
 }
@@ -1191,6 +1295,7 @@ export function LeadTriageSheet({
   conversion,
   leadStatus,
   statusReason,
+  schoolYearId,
   extraFields,
   extraContent,
   headerBadges,
@@ -1216,6 +1321,10 @@ export function LeadTriageSheet({
    *  restore. Omit to hide (hosts without the status data). */
   leadStatus?: string;
   statusReason?: string;
+  /** Academic year the family is asking about (FK id; 0 = unset).
+   *  When provided the sheet renders the year picker beside the
+   *  conversion combobox. */
+  schoolYearId?: number;
   /** Read-only facts a particular source carries that the shared
    *  details block doesn't — e.g. an inquiry's "About the student".
    *  Rendered at the foot of the details block in the same style, so
@@ -1292,6 +1401,17 @@ export function LeadTriageSheet({
                     />
                   ) : null
                 }
+                onChanged={onChanged}
+              />
+            ) : null}
+            {/* Which year they're asking about, then whether they
+                actually converted — the two pipeline facts, read in
+                that order. */}
+            {schoolYearId !== undefined ? (
+              <LeadYearPicker
+                key={`year-${scope.source}-${scope.id}`}
+                scope={scope}
+                yearId={schoolYearId}
                 onChanged={onChanged}
               />
             ) : null}

@@ -95,6 +95,10 @@ interface Inquiry {
   /** 1–5 star gut-feel interest rating; 0/undefined = not rated.
    *  Clicking the current rating clears back to 0. */
   interest_level?: number | null;
+  /** Academic year this family is asking about — a hand-assigned FK
+   *  to `registration_school_years`; 0/undefined = not set (never
+   *  guessed from the submission date). */
+  registration_school_years_id?: number | null;
   /** Computed by the admin inquiries API route (not a Xano column):
    *  true when this inquiry's email matches a registered parent
    *  account. Rendered as an "applied?" hint badge — suggestion only;
@@ -137,6 +141,27 @@ function formatRelative(
   if (diff < MONTH) return unit(Math.floor(diff / WEEK), "week", "w");
   if (diff < YEAR) return unit(Math.floor(diff / MONTH), "month", "mo");
   return unit(Math.floor(diff / YEAR), "year", "y");
+}
+
+/** The inquiry's hand-assigned year FK, coerced whether Xano returns
+ *  a raw id or an expanded relation object. 0 = not set. */
+function yearIdOf(row: { registration_school_years_id?: unknown }): number {
+  const v = row.registration_school_years_id;
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string") return Number(v) || 0;
+  if (v && typeof v === "object") {
+    const id = (v as { id?: unknown }).id;
+    return typeof id === "number" ? id : Number(id) || 0;
+  }
+  return 0;
+}
+
+/** School-year row as the year filter + inline picker need it. */
+interface SchoolYearOption {
+  id: number;
+  year_name: string;
+  isActive?: boolean;
+  isNextYear?: boolean;
 }
 
 /** When this inquiry was last contacted. `last_reach_out` is stamped
@@ -203,6 +228,17 @@ export default function InquiriesPage() {
   );
   const { mutate: globalMutate } = useSWRConfig();
   const [active, setActive] = useState<Inquiry | null>(null);
+  // null = any year; 0 = only the untagged ones (the working bucket).
+  const [yearFilter, setYearFilter] = useState<number | null>(null);
+  const { data: yearData } = useSWR<SchoolYearOption[]>(
+    "/api/admin/school-years",
+    adminFetcher,
+    { revalidateOnFocus: false }
+  );
+  const schoolYears = useMemo(
+    () => (Array.isArray(yearData) ? yearData : []),
+    [yearData]
+  );
 
   const [filter, setFilter] = useState<InquiryFilter>("all");
   // Per-row pending state so the toggle UI is responsive while the
@@ -243,7 +279,13 @@ export default function InquiriesPage() {
     const notFollowedUp: Inquiry[] = [];
     const converted: Inquiry[] = [];
     const notInterested: Inquiry[] = [];
-    for (const r of rows) {
+    // 0 selects the still-untagged inquiries — the bucket to work
+    // through, since the year is only ever set by hand.
+    const yearMatched =
+      yearFilter === null
+        ? rows
+        : rows.filter((r) => yearIdOf(r) === yearFilter);
+    for (const r of yearMatched) {
       // Terminal statuses win over the follow-up split — a converted
       // or declined family leaves the working pipeline regardless of
       // whether we had already reached out.
@@ -269,7 +311,7 @@ export default function InquiriesPage() {
       );
     }
     return { followedUp, notFollowedUp, converted, notInterested };
-  }, [rows]);
+  }, [rows, yearFilter]);
 
   const visibleGroups = useMemo(() => {
     if (filter === "all") {
@@ -413,6 +455,42 @@ export default function InquiriesPage() {
   // so the stars fill in immediately. Clicking the current rating
   // again clears it to 0 — verified that the Xano edit endpoint
   // applies integer 0 (only empty strings / null get dropped).
+  /** Assign the academic year from the row. Routed through the shared
+   *  `/api/admin/leads` endpoint (not the inquiry-only PATCH) so the
+   *  same echo verification covers it as every other lead write. */
+  async function setYear(row: Inquiry, yearId: number) {
+    try {
+      mutate(
+        (curr) =>
+          (curr ?? []).map((r) =>
+            r.id === row.id
+              ? { ...r, registration_school_years_id: yearId }
+              : r
+          ),
+        { revalidate: false }
+      );
+      const res = await fetch("/api/admin/leads", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source: "inquiry",
+          id: row.id,
+          school_year_id: yearId,
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error ?? `Save failed (${res.status})`);
+      if (data?.warning) toast.warning(data.warning);
+      mutate();
+    } catch (err) {
+      console.error("[Inquiries.setYear]", err);
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't save the year."
+      );
+      mutate();
+    }
+  }
+
   async function updateInterest(row: Inquiry, level: number) {
     setSavingId(row.id);
     const optimistic = (curr: Inquiry[] | undefined) =>
@@ -605,6 +683,43 @@ export default function InquiriesPage() {
           </span>
         );
       },
+    },
+    {
+      // Which year the family is asking about — editable in the row
+      // so tagging a backlog doesn't mean opening every sheet. Only
+      // ever set by hand, so an unset row reads "—", never a guess.
+      key: "registration_school_years_id",
+      header: "Year",
+      sortable: true,
+      width: "w-[10%]",
+      accessor: (row) =>
+        schoolYears.find((y) => y.id === yearIdOf(row))?.year_name ?? "",
+      render: (row) => (
+        <span onClick={(e) => e.stopPropagation()}>
+          <Select
+            value={yearIdOf(row) > 0 ? String(yearIdOf(row)) : "0"}
+            onValueChange={(v) => void setYear(row, Number(v))}
+          >
+            <SelectTrigger
+              size="sm"
+              className={cn(
+                "h-7 w-full border-transparent bg-transparent px-1.5 text-xs shadow-none hover:border-input hover:bg-white",
+                !yearIdOf(row) && "text-muted-foreground"
+              )}
+            >
+              <SelectValue placeholder="—" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="0">—</SelectItem>
+              {schoolYears.map((y) => (
+                <SelectItem key={y.id} value={String(y.id)}>
+                  {y.year_name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </span>
+      ),
     },
     {
       // 1–5 gut-feel interest rating, clickable right in the row —
@@ -812,29 +927,53 @@ export default function InquiriesPage() {
             account with that email already exists — likely converted.
           </p>
         </div>
-        <Select
-          value={filter}
-          onValueChange={(v) => setFilter(v as InquiryFilter)}
-        >
-          <SelectTrigger className="w-[200px] bg-white">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {(
-              [
-                "all",
-                "not_followed_up",
-                "followed_up",
-                "converted",
-                "not_interested",
-              ] as const
-            ).map((f) => (
-              <SelectItem key={f} value={f}>
-                {FILTER_LABEL[f]} ({counts[f]})
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <div className="flex shrink-0 items-center gap-2">
+          {/* Which year the family is asking about. "No year set" is
+              the working bucket — everything still untagged. */}
+          <Select
+            value={yearFilter === null ? "any" : String(yearFilter)}
+            onValueChange={(v) =>
+              setYearFilter(v === "any" ? null : Number(v))
+            }
+          >
+            <SelectTrigger className="w-[170px] bg-white">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="any">Any year</SelectItem>
+              {schoolYears.map((y) => (
+                <SelectItem key={y.id} value={String(y.id)}>
+                  {y.year_name}
+                  {y.isActive ? " (current)" : y.isNextYear ? " (next)" : ""}
+                </SelectItem>
+              ))}
+              <SelectItem value="0">No year set</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select
+            value={filter}
+            onValueChange={(v) => setFilter(v as InquiryFilter)}
+          >
+            <SelectTrigger className="w-[200px] bg-white">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {(
+                [
+                  "all",
+                  "not_followed_up",
+                  "followed_up",
+                  "converted",
+                  "not_interested",
+                ] as const
+              ).map((f) => (
+                <SelectItem key={f} value={f}>
+                  {FILTER_LABEL[f]} ({counts[f]})
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </div>
 
       {error ? (

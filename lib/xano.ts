@@ -1304,6 +1304,18 @@ export interface XanoInquiry {
   /** Epoch ms when the conversion link was stamped; 0/undefined =
    *  never linked. */
   converted_at?: number | null;
+  /** Which academic year this family is interested in — an FK to
+   *  `registration_school_years`, set BY HAND from the lead lists.
+   *  0/undefined = unassigned (left blank rather than guessed from
+   *  the submission date: a family inquiring today may well be asking
+   *  about the year after next, and only a person knows which).
+   *
+   *  Distinct from the year on `registration_application`: this is
+   *  pre-application INTENT, and the two can legitimately disagree
+   *  once the family actually applies. The application's year is
+   *  authoritative from that point on. Same column on all four lead
+   *  tables. */
+  registration_school_years_id?: number | null;
 }
 
 /** One summer-camp registration/inquiry row (`registration_summer_camp`).
@@ -1331,6 +1343,9 @@ export interface XanoSummerCampInquiry {
   /** Conversion link + stamp — see the matching pair on `XanoInquiry`. */
   registration_families_id?: number | null;
   converted_at?: number | null;
+  /** Academic year this family is interested in (hand-assigned FK to
+   *  `registration_school_years`; 0 = unassigned) — see `XanoInquiry`. */
+  registration_school_years_id?: number | null;
   /** Lifecycle bucket + decline reason — same semantics as
    *  `XanoInquiry.status`/`status_reason` (""/undefined/"active" =
    *  active pipeline, "not_interested" = family declined; restore
@@ -1396,6 +1411,9 @@ export interface XanoWebsiteLiabilityWaiver {
   /** Conversion link + stamp — see the matching pair on `XanoInquiry`. */
   registration_families_id?: number | null;
   converted_at?: number | null;
+  /** Academic year this family is interested in (hand-assigned FK to
+   *  `registration_school_years`; 0 = unassigned) — see `XanoInquiry`. */
+  registration_school_years_id?: number | null;
   /** Lifecycle bucket + decline reason — see `XanoInquiry`. */
   status?: string | null;
   status_reason?: string | null;
@@ -1431,6 +1449,9 @@ export interface XanoTascoSummerVisit {
   /** Conversion link + stamp — see the matching pair on `XanoInquiry`. */
   registration_families_id?: number | null;
   converted_at?: number | null;
+  /** Academic year this family is interested in (hand-assigned FK to
+   *  `registration_school_years`; 0 = unassigned) — see `XanoInquiry`. */
+  registration_school_years_id?: number | null;
   /** Lifecycle bucket + decline reason — see `XanoInquiry`. */
   status?: string | null;
   status_reason?: string | null;

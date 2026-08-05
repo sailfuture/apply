@@ -15,7 +15,12 @@ import { writeLeadConversion } from "@/lib/lead-conversion";
  *
  *   PATCH { source, id, interest_level?, isFollowedUp?, opt_in?,
  *           student_name?, parent_name?, phone?, email?, grade?,
- *           school?, family_id?, status?, status_reason? }
+ *           school?, family_id?, status?, status_reason?,
+ *           school_year_id? }
+ *
+ * `school_year_id` is the academic year the family is interested in
+ * (FK to `registration_school_years`; 0 = unassigned). Hand-set from
+ * the lead lists — never inferred from the submission date.
  *
  * `status` is the lead's lifecycle bucket: "not_interested" (family
  * declined — pair it with a `status_reason`) or "active" (restore;
@@ -94,6 +99,26 @@ export async function PATCH(req: NextRequest) {
       }
       patch.isFollowedUp = body.isFollowedUp;
     }
+
+    // Academic year the family is interested in — a hand-assigned FK
+    // to `registration_school_years`. 0 clears it back to unassigned
+    // (integer 0 DOES land on a Xano reference column, unlike an
+    // empty string). Verified in the echo check below like the rest.
+    const yearPatch: Record<string, number> = {};
+    if ("school_year_id" in body) {
+      const v = body.school_year_id;
+      if (typeof v !== "number" || !Number.isInteger(v) || v < 0) {
+        return NextResponse.json(
+          {
+            error:
+              "school_year_id must be a non-negative integer (0 = unassigned)",
+          },
+          { status: 400 }
+        );
+      }
+      yearPatch.registration_school_years_id = v;
+    }
+    Object.assign(patch, yearPatch);
 
     // Lifecycle status + decline reason. Folded into the main patch
     // AND the echo verification below (via `verifyPatch`) so a source
@@ -191,7 +216,7 @@ export async function PATCH(req: NextRequest) {
     // mis-wired column would report success while saving nothing.
     // Booleans compare as booleans; everything else through String()
     // (Xano stores some phones as numbers).
-    const verifyPatch = { ...contactPatch, ...statusPatch };
+    const verifyPatch = { ...contactPatch, ...statusPatch, ...yearPatch };
     const row = (updated ?? {}) as Record<string, unknown>;
     const dropped =
       updated == null

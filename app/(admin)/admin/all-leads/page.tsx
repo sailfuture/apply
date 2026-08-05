@@ -34,6 +34,13 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { StarRating } from "@/components/admin/star-rating";
@@ -57,6 +64,14 @@ const SOURCE_META: Record<LeadSource, { label: string; short: string }> = {
 };
 
 const SOURCE_FILTERS: LeadSource[] = ["inquiry", "camp", "visit", "tasco"];
+
+/** School-year row as the year filter + inline picker need it. */
+interface SchoolYearOption {
+  id: number;
+  year_name: string;
+  isActive?: boolean;
+  isNextYear?: boolean;
+}
 
 /**
  * Every filter trigger is the SAME fixed width, so the row never
@@ -179,8 +194,22 @@ export default function AllLeadsPage() {
   const [tourFilter, setTourFilter] = useState<
     "completed" | "scheduled" | "none" | null
   >(null);
+  // null = no year filter; 0 = only leads with no year assigned;
+  // any other id = that school year.
+  const [yearFilter, setYearFilter] = useState<number | null>(null);
   const [selected, setSelected] = useState<AllLeadRow | null>(null);
   const [matching, setMatching] = useState(false);
+
+  // School years for the filter + the inline per-row picker.
+  const { data: yearData } = useSWR<SchoolYearOption[]>(
+    "/api/admin/school-years",
+    adminFetcher,
+    { revalidateOnFocus: false }
+  );
+  const schoolYears = useMemo(
+    () => (Array.isArray(yearData) ? yearData : []),
+    [yearData]
+  );
 
   const visible = useMemo(
     () =>
@@ -199,9 +228,14 @@ export default function AllLeadsPage() {
             return false;
           }
         }
+        // 0 matches the unassigned leads — the bucket to work
+        // through, since a year is only ever set by hand.
+        if (yearFilter !== null && r.school_year_id !== yearFilter) {
+          return false;
+        }
         return true;
       }),
-    [rows, sourceFilter, minRating, followUpFilter, tourFilter]
+    [rows, sourceFilter, minRating, followUpFilter, tourFilter, yearFilter]
   );
 
   // Split the filtered rows into the funnel group cards. A real
@@ -346,6 +380,44 @@ export default function AllLeadsPage() {
     } catch (err) {
       console.error("Failed to save lead rating:", err);
       toast.error("Couldn't save the rating.");
+      mutate();
+    }
+  }
+
+  // Assign the academic year straight from the table — same optimistic
+  // shape as the rating. This is the bulk-tagging path: with the year
+  // hand-set by design, opening a sheet per lead would be punishing.
+  async function setYear(row: AllLeadRow, yearId: number) {
+    const name =
+      schoolYears.find((y) => y.id === yearId)?.year_name ?? "";
+    try {
+      mutate(
+        (curr) =>
+          (curr ?? []).map((r) =>
+            r.key === row.key
+              ? { ...r, school_year_id: yearId, school_year_name: name }
+              : r
+          ),
+        { revalidate: false }
+      );
+      const res = await fetch("/api/admin/leads", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source: row.source,
+          id: row.id,
+          school_year_id: yearId,
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error ?? `Save failed (${res.status})`);
+      if (data?.warning) toast.warning(data.warning);
+      mutate();
+    } catch (err) {
+      console.error("Failed to save lead year:", err);
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't save the year."
+      );
       mutate();
     }
   }
@@ -552,6 +624,43 @@ export default function AllLeadsPage() {
             <span className="text-sm text-muted-foreground">—</span>
           );
         },
+      },
+      {
+        // Which year the family is asking about — editable right in
+        // the row. It's only ever set by hand, so the fast path
+        // matters: a dropdown here beats opening each sheet. Unset
+        // rows read "—" rather than a guessed year.
+        key: "school_year_id",
+        header: "Year",
+        sortable: true,
+        width: "w-[11%]",
+        accessor: (r) => r.school_year_name,
+        render: (r) => (
+          <span onClick={(e) => e.stopPropagation()}>
+            <Select
+              value={r.school_year_id > 0 ? String(r.school_year_id) : "0"}
+              onValueChange={(v) => void setYear(r, Number(v))}
+            >
+              <SelectTrigger
+                size="sm"
+                className={cn(
+                  "h-7 w-full border-transparent bg-transparent px-1.5 text-xs shadow-none hover:border-input hover:bg-white",
+                  !r.school_year_id && "text-muted-foreground"
+                )}
+              >
+                <SelectValue placeholder="—" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="0">—</SelectItem>
+                {schoolYears.map((y) => (
+                  <SelectItem key={y.id} value={String(y.id)}>
+                    {y.year_name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </span>
+        ),
       },
       {
         // Follow-up state + when we last logged contact — the two
@@ -882,6 +991,51 @@ export default function AllLeadsPage() {
               </DropdownMenuRadioItem>
               <DropdownMenuRadioItem value="none">
                 No tour
+              </DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="outline"
+              size="sm"
+              className={cn(
+                FILTER_TRIGGER_CLASS,
+                yearFilter !== null && "border-foreground"
+              )}
+              title="Filter by the academic year the family is asking about"
+            >
+              <span className="min-w-0 truncate">
+                {yearFilter === null
+                  ? "Year"
+                  : yearFilter === 0
+                    ? "No year set"
+                    : (schoolYears.find((y) => y.id === yearFilter)
+                        ?.year_name ?? "Year")}
+              </span>
+              <ChevronDown className="ml-1 size-3.5 shrink-0 opacity-50" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-48">
+            <DropdownMenuLabel>Interested in</DropdownMenuLabel>
+            <DropdownMenuRadioGroup
+              value={yearFilter === null ? "any" : String(yearFilter)}
+              onValueChange={(v) =>
+                setYearFilter(v === "any" ? null : Number(v))
+              }
+            >
+              <DropdownMenuRadioItem value="any">Any</DropdownMenuRadioItem>
+              {schoolYears.map((y) => (
+                <DropdownMenuRadioItem key={y.id} value={String(y.id)}>
+                  {y.year_name}
+                  {y.isActive ? " (current)" : y.isNextYear ? " (next)" : ""}
+                </DropdownMenuRadioItem>
+              ))}
+              {/* The working bucket: everything still untagged. */}
+              <DropdownMenuRadioItem value="0">
+                No year set
               </DropdownMenuRadioItem>
             </DropdownMenuRadioGroup>
           </DropdownMenuContent>

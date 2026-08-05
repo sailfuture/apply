@@ -130,6 +130,7 @@ export function LeadSheet({
       }}
       leadStatus={row.lead_status}
       statusReason={row.status_reason}
+      schoolYearId={row.school_year_id}
       extraFields={extraFields}
       extraContent={extraContent}
       headerBadges={headerBadges}
