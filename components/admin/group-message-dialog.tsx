@@ -52,6 +52,7 @@ import {
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { adminFetcher } from "@/lib/admin-fetcher";
+import { sortYearsOldestFirst } from "@/lib/school-years";
 import { formatUSPhone, validateUSPhone } from "@/lib/phone";
 import type {
   GroupAudienceResponse,
@@ -175,7 +176,7 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
     adminFetcher
   );
   const years = useMemo<SchoolYear[]>(
-    () => (Array.isArray(yearsData) ? yearsData : []),
+    () => sortYearsOldestFirst(Array.isArray(yearsData) ? yearsData : []),
     [yearsData]
   );
 

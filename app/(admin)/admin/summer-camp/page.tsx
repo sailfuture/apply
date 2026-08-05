@@ -27,6 +27,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { adminFetcher } from "@/lib/admin-fetcher";
+import { sortYearsOldestFirst } from "@/lib/school-years";
 import { formatUSPhone, digitsOnly } from "@/lib/phone";
 import { exportSummerCampXlsx } from "@/lib/summer-camp-export";
 import { cn } from "@/lib/utils";
@@ -137,7 +138,7 @@ export default function SummerCampPage() {
     { revalidateOnFocus: false }
   );
   const schoolYears = useMemo(
-    () => (Array.isArray(yearData) ? yearData : []),
+    () => sortYearsOldestFirst(Array.isArray(yearData) ? yearData : []),
     [yearData]
   );
   const yearNameOf = (row: SummerCampRow) =>

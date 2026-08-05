@@ -46,6 +46,7 @@ import { Switch } from "@/components/ui/switch";
 import { LeadSheet } from "@/components/admin/lead-sheet";
 import { StarRating } from "@/components/admin/star-rating";
 import { adminFetcher } from "@/lib/admin-fetcher";
+import { sortYearsOldestFirst } from "@/lib/school-years";
 import { cn } from "@/lib/utils";
 
 /**
@@ -236,7 +237,7 @@ export default function InquiriesPage() {
     { revalidateOnFocus: false }
   );
   const schoolYears = useMemo(
-    () => (Array.isArray(yearData) ? yearData : []),
+    () => sortYearsOldestFirst(Array.isArray(yearData) ? yearData : []),
     [yearData]
   );
 

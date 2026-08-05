@@ -45,6 +45,7 @@ import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { StarRating } from "@/components/admin/star-rating";
 import { adminFetcher } from "@/lib/admin-fetcher";
+import { sortYearsOldestFirst } from "@/lib/school-years";
 import { formatUSPhone } from "@/lib/phone";
 import { cn } from "@/lib/utils";
 import type {
@@ -207,7 +208,7 @@ export default function AllLeadsPage() {
     { revalidateOnFocus: false }
   );
   const schoolYears = useMemo(
-    () => (Array.isArray(yearData) ? yearData : []),
+    () => sortYearsOldestFirst(Array.isArray(yearData) ? yearData : []),
     [yearData]
   );
 

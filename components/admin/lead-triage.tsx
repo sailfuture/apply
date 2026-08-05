@@ -42,6 +42,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { adminFetcher } from "@/lib/admin-fetcher";
+import { sortYearsOldestFirst } from "@/lib/school-years";
 import { formatUSPhone } from "@/lib/phone";
 import { formatNoteTimestamp } from "@/lib/format-note-time";
 import {
@@ -525,7 +526,7 @@ function LeadYearPicker({
     adminFetcher,
     { revalidateOnFocus: false }
   );
-  const options = Array.isArray(years) ? years : [];
+  const options = sortYearsOldestFirst(Array.isArray(years) ? years : []);
 
   async function save(next: number) {
     setSaving(true);
