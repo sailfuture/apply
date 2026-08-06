@@ -20,10 +20,10 @@ import {
 import {
   Pencil,
   HandHeart,
+  Bell,
   CalendarDays,
   CreditCard,
   ChevronRight,
-  ExternalLink,
   Plus,
   ShoppingBag,
   Trash2,
@@ -31,7 +31,6 @@ import {
   Circle,
   Clock,
 } from "lucide-react";
-import { formatPriceCents, storeCheckoutUrl } from "@/lib/store";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -94,34 +93,6 @@ type Application = {
   is_residential_addition?: boolean;
 };
 
-/** One admin-logged volunteer-hour entry. Mirrors `XanoVolunteerHours`
- *  on lib/xano.ts — kept local so the component doesn't pull a
- *  server-only module into the client bundle. */
-type VolunteerHoursEntry = {
-  id: number;
-  registration_families_id: number;
-  registration_school_years_id: number;
-  entry_date: string;
-  hours: number;
-  activity_description: string;
-  activity_category: string;
-  is_approved: boolean;
-};
-
-/** Annual goal — 40 hours per family per academic year. Surfaced as a
- *  constant so the summary card and detail page stay in sync if the
- *  policy changes. */
-const VOLUNTEER_HOURS_GOAL = 40;
-
-/** Format a fractional hour value for display — trims trailing zeros so
- *  whole numbers render as "12" instead of "12.00", and partial hours
- *  show as "12.5". Mirrors the same helper on the detail page. */
-function formatHours(value: number): string {
-  if (!Number.isFinite(value)) return "0";
-  if (Number.isInteger(value)) return String(value);
-  return value.toFixed(2).replace(/\.?0+$/, "");
-}
-
 const fetcher = async (url: string) => {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Fetch failed (${res.status})`);
@@ -173,27 +144,6 @@ export function EnrolledFamilyDashboard({
     fetcher,
     { revalidateOnFocus: false, dedupingInterval: 10000 }
   );
-  // Volunteer hours — admin-logged entries across every year the family
-  // has on file. Filtered to the dashboard's current `yearId` below so
-  // the summary card always reflects the year the parent is viewing.
-  const { data: volunteerHoursData } = useSWR<VolunteerHoursEntry[]>(
-    "/api/volunteer-hours",
-    fetcher,
-    { revalidateOnFocus: false, dedupingInterval: 10000 }
-  );
-  const volunteerHoursSummary = useMemo(() => {
-    if (!volunteerHoursData) return { approved: 0, pending: 0 };
-    let approved = 0;
-    let pending = 0;
-    for (const entry of volunteerHoursData) {
-      if (entry.registration_school_years_id !== yearId) continue;
-      const hours = Number(entry.hours) || 0;
-      if (entry.is_approved) approved += hours;
-      else pending += hours;
-    }
-    return { approved, pending };
-  }, [volunteerHoursData, yearId]);
-
   // Re-application affordance: surface a banner card on the dashboard
   // pointing at the next academic year's apply flow once admin has
   // explicitly *opened* re-applications for that year. Returning
@@ -644,8 +594,9 @@ export function EnrolledFamilyDashboard({
           edited there. */}
       {currentYearMode === "enrolled" ? (
       <>
-      {/* Tuition & Fees + Volunteer Hours + School Calendar — buttons
-          that route to the dedicated detail pages. */}
+      {/* Tuition & Fees + Volunteer Hours + School Calendar + School
+          Store + Notifications — buttons that route to the dedicated
+          detail pages. */}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <button
           type="button"
@@ -672,49 +623,15 @@ export function EnrolledFamilyDashboard({
           }
           className="flex items-center justify-between gap-3 rounded-xl border bg-white px-5 py-4 text-left shadow-sm hover:bg-muted/30 transition-colors cursor-pointer"
         >
-          <div className="flex items-center gap-3 min-w-0 flex-1">
+          <div className="flex items-center gap-3 min-w-0">
             <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-muted/50">
               <HandHeart className="size-5 text-muted-foreground" />
             </div>
-            <div className="min-w-0 flex-1">
-              <div className="flex items-baseline justify-between gap-2">
-                <p className="text-sm font-medium">Volunteer Hours</p>
-                {volunteerHoursData ? (
-                  <p className="text-xs font-medium text-muted-foreground shrink-0">
-                    <span className="text-foreground">
-                      {formatHours(volunteerHoursSummary.approved)}
-                    </span>
-                    {" / "}
-                    {VOLUNTEER_HOURS_GOAL}
-                  </p>
-                ) : null}
-              </div>
-              {volunteerHoursData ? (
-                <>
-                  <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-muted">
-                    <div
-                      className="h-full rounded-full bg-emerald-500 transition-all"
-                      style={{
-                        width: `${Math.min(
-                          100,
-                          (volunteerHoursSummary.approved /
-                            VOLUNTEER_HOURS_GOAL) *
-                            100
-                        )}%`,
-                      }}
-                    />
-                  </div>
-                  <p className="text-xs text-muted-foreground mt-1 truncate">
-                    {volunteerHoursSummary.pending > 0
-                      ? `${formatHours(volunteerHoursSummary.pending)} pending review`
-                      : "40 per year · 8 per term"}
-                  </p>
-                </>
-              ) : (
-                <p className="text-xs text-muted-foreground truncate">
-                  40 per year &middot; 8 per term
-                </p>
-              )}
+            <div className="min-w-0">
+              <p className="text-sm font-medium">Volunteer Hours</p>
+              <p className="text-xs text-muted-foreground truncate">
+                Progress, history, event sign-ups
+              </p>
             </div>
           </div>
           <ChevronRight className="size-4 text-muted-foreground shrink-0" />
@@ -732,6 +649,44 @@ export function EnrolledFamilyDashboard({
               <p className="text-sm font-medium">School Calendar</p>
               <p className="text-xs text-muted-foreground truncate">
                 Events, breaks, key dates
+              </p>
+            </div>
+          </div>
+          <ChevronRight className="size-4 text-muted-foreground shrink-0" />
+        </button>
+        <button
+          type="button"
+          onClick={() => router.push(`/dashboard/store?yearId=${yearId}`)}
+          className="flex items-center justify-between gap-3 rounded-xl border bg-white px-5 py-4 text-left shadow-sm hover:bg-muted/30 transition-colors cursor-pointer"
+        >
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-muted/50">
+              <ShoppingBag className="size-5 text-muted-foreground" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-medium">School Store</p>
+              <p className="text-xs text-muted-foreground truncate">
+                Uniforms, purchases, devices
+              </p>
+            </div>
+          </div>
+          <ChevronRight className="size-4 text-muted-foreground shrink-0" />
+        </button>
+        <button
+          type="button"
+          onClick={() =>
+            router.push(`/dashboard/notifications?yearId=${yearId}`)
+          }
+          className="flex items-center justify-between gap-3 rounded-xl border bg-white px-5 py-4 text-left shadow-sm hover:bg-muted/30 transition-colors cursor-pointer"
+        >
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-muted/50">
+              <Bell className="size-5 text-muted-foreground" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-medium">Notifications</p>
+              <p className="text-xs text-muted-foreground truncate">
+                Emails &amp; texts from the school
               </p>
             </div>
           </div>
@@ -900,19 +855,6 @@ export function EnrolledFamilyDashboard({
           Create New Registration
         </Button>
       ) : null}
-
-      {/* School Store — admin-managed catalog of purchasable items
-          (uniform shirts, sweatshirts, …). Each item opens its Stripe
-          Payment Link with the family reference + parent email
-          appended so the purchase lands attributed on the admin Store
-          page. Hidden entirely when the catalog is empty/unreachable. */}
-      <StoreSection
-        familyId={
-          (familyData as { id?: number } | null | undefined)?.id ?? null
-        }
-        yearId={yearId}
-        email={user?.primaryEmailAddress?.emailAddress ?? null}
-      />
 
       {/* Parents / Guardians — primary first, then secondary (if
           present). Family is capped at two parents total; primary is
@@ -1298,161 +1240,6 @@ function ReApplicationProgressCard({
           </p>
         </div>
       )}
-    </div>
-  );
-}
-
-type StoreItem = {
-  id: number;
-  name: string;
-  description: string;
-  price_cents: number;
-  payment_link_url: string;
-};
-
-type StoreOrder = {
-  id: number;
-  item: string;
-  quantity: number;
-  total_amount_cents: number;
-  paid_at: number;
-  distributed: boolean;
-  distributed_at: number | null;
-};
-
-/**
- * School Store — catalog rows with Purchase buttons (Stripe Payment
- * Links, opened in a new tab with family attribution appended) plus
- * the family's own purchase history with a Paid → Delivered status
- * chip. Both fetches degrade to [] server-side, so the section simply
- * doesn't render until admin has added items.
- */
-function StoreSection({
-  familyId,
-  yearId,
-  email,
-}: {
-  familyId: number | null;
-  yearId: number;
-  email: string | null;
-}) {
-  const { data: items } = useSWR<StoreItem[]>("/api/store/items", fetcher, {
-    revalidateOnFocus: false,
-    dedupingInterval: 30000,
-  });
-  const { data: orders } = useSWR<StoreOrder[]>("/api/store/orders", fetcher, {
-    revalidateOnFocus: false,
-    dedupingInterval: 10000,
-  });
-
-  if (!items || items.length === 0 || familyId === null) return null;
-
-  return (
-    <div>
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="text-sm font-semibold">School Store</h2>
-        <p className="text-xs text-muted-foreground">
-          Payments are processed securely by Stripe.
-        </p>
-      </div>
-      <div className="rounded-xl bg-background p-1.5 shadow-sm border">
-        <div className="overflow-hidden rounded-lg border">
-          <Table className="text-sm">
-            <TableBody>
-              {items.map((item) => (
-                <TableRow key={item.id} className="hover:bg-transparent">
-                  <TableCell className="px-4 py-3">
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-muted/50">
-                        <ShoppingBag className="size-5 text-muted-foreground" />
-                      </div>
-                      <div className="min-w-0">
-                        <p className="font-medium">
-                          {item.name}
-                          <span className="ml-2 font-normal text-muted-foreground">
-                            {formatPriceCents(item.price_cents)}
-                          </span>
-                        </p>
-                        {item.description.trim() ? (
-                          <p className="text-xs text-muted-foreground mt-0.5 truncate">
-                            {item.description}
-                          </p>
-                        ) : null}
-                      </div>
-                    </div>
-                  </TableCell>
-                  <TableCell className="px-4 py-3 text-right whitespace-nowrap">
-                    <Button
-                      asChild
-                      size="sm"
-                      variant="outline"
-                      className="bg-white"
-                    >
-                      <a
-                        href={storeCheckoutUrl(
-                          item.payment_link_url,
-                          familyId,
-                          yearId,
-                          email
-                        )}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                      >
-                        Purchase
-                        <ExternalLink className="size-3.5 ml-1.5" />
-                      </a>
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
-
-        {/* Purchase history — only once the family has bought something. */}
-        {orders && orders.length > 0 ? (
-          <div className="mt-1.5 overflow-hidden rounded-lg border">
-            <p className="border-b bg-muted/40 px-4 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Your purchases
-            </p>
-            <Table className="text-sm">
-              <TableBody>
-                {orders.map((o) => (
-                  <TableRow key={o.id} className="hover:bg-transparent">
-                    <TableCell className="px-4 py-2.5">
-                      <p className="font-medium">{o.item}</p>
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        {o.paid_at
-                          ? new Date(o.paid_at).toLocaleDateString("en-US", {
-                              month: "short",
-                              day: "numeric",
-                              year: "numeric",
-                            })
-                          : "—"}
-                        {" · "}
-                        ${(o.total_amount_cents / 100).toFixed(2)}
-                      </p>
-                    </TableCell>
-                    <TableCell className="px-4 py-2.5 text-right whitespace-nowrap">
-                      {o.distributed ? (
-                        <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-emerald-200">
-                          <CheckCircle2 className="size-3.5" />
-                          Delivered
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-700 ring-1 ring-blue-200">
-                          <Clock className="size-3.5" />
-                          Paid
-                        </span>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        ) : null}
-      </div>
     </div>
   );
 }

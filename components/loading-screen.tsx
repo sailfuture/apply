@@ -8,14 +8,15 @@ import { cn } from "@/lib/utils";
 /**
  * Default sequence used by every parent-flow loading boundary
  * (root, dashboard segment, layout hydration gates, page-level SWR
- * spinners). Sized to span ~9 seconds before settling on "Almost
+ * spinners). Sized to span ~7 seconds before settling on "Almost
  * there..." so realistic post-sign-in waits stay reassured the whole
  * way through.
  */
 export const LOGIN_FLOW_MESSAGES = [
-  "Loading your application...",
+  // Deliberately generic — enrolled parents see this same sequence,
+  // and "your application" reads like admissions paperwork to them.
+  "Loading...",
   "Collecting your details...",
-  "Loading student details...",
   "Getting things ready...",
   "Almost there...",
 ];
@@ -85,8 +86,8 @@ interface LoadingScreenProps {
  * across remounts via sessionStorage — the post-sign-in flow renders
  * three back-to-back loading screens (root segment, dashboard
  * segment, page-level SWR), and without persistence each one would
- * restart from "Loading your application..." while the user keeps
- * waiting on the same underlying work.
+ * restart from "Loading..." while the user keeps waiting on the
+ * same underlying work.
  *
  * Sequence stops on the final message — looping back to "Loading..."
  * after "Almost there..." reads as a regression.

@@ -763,6 +763,23 @@ export interface XanoStoreOrder {
   distributed_by: string;
 }
 
+/**
+ * One school laptop assigned to a student
+ * (`registration_student_laptops`). Admin assigns devices from the
+ * Store page; parents see their students' devices on the parent
+ * store page. `assigned_date` is YYYY-MM-DD.
+ */
+export interface XanoStudentLaptop {
+  id: number;
+  created_at: number;
+  registration_students_id: number;
+  make_model: string;
+  serial_number: string;
+  asset_tag: string;
+  assigned_date: string;
+  notes: string;
+}
+
 export interface XanoScholarship {
   id: number;
   created_at: number;
@@ -4538,6 +4555,60 @@ export const xano = {
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
       return res.json();
+    },
+  },
+
+  /** Laptops assigned to students — see `XanoStudentLaptop`. Plain
+   *  CRUD on `registration_student_laptops`; callers filter by
+   *  student in code. */
+  studentLaptops: {
+    async getAll(): Promise<XanoStudentLaptop[]> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_student_laptops`,
+        { cache: "no-store" }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      const rows = await res.json();
+      return Array.isArray(rows) ? rows : [];
+    },
+
+    async create(
+      data: Omit<XanoStudentLaptop, "id" | "created_at">
+    ): Promise<XanoStudentLaptop> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_student_laptops`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async update(
+      id: number,
+      patch: Partial<XanoStudentLaptop>
+    ): Promise<XanoStudentLaptop> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_student_laptops/${id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch),
+        }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async delete(id: number): Promise<void> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_student_laptops/${id}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
     },
   },
 

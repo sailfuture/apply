@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import {
   Check,
   ExternalLink,
+  Laptop,
   Loader2,
   Pencil,
   Plus,
@@ -51,9 +52,21 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { formatPriceCents } from "@/lib/store";
 import type { AdminStoreOrderRow } from "@/app/api/admin/store/orders/route";
+import type {
+  AdminLaptopRow,
+  AdminLaptopsResponse,
+  LaptopStudentOption,
+} from "@/app/api/admin/laptops/route";
 import type { XanoStoreItem } from "@/lib/xano";
 
 function fmtDateTime(ms: number | null | undefined): string {
@@ -198,6 +211,9 @@ export default function AdminStorePage() {
         orders={orders}
         onChanged={() => void mutateItems()}
       />
+
+      {/* ── Laptops ── */}
+      <LaptopsCard />
     </div>
   );
 }
@@ -677,6 +693,345 @@ function ItemUpsertDialog({
               "Save changes"
             ) : (
               "Add item"
+            )}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/* ─────────────────── Laptop assignments ─────────────────── */
+
+/**
+ * School devices assigned to students — assign, edit, and unassign.
+ * Parents see their own students' devices on the parent Store page.
+ */
+function LaptopsCard() {
+  const { data, mutate } = useSWR<AdminLaptopsResponse>(
+    "/api/admin/laptops",
+    adminFetcher
+  );
+  const laptops = data?.laptops ?? [];
+  const students = data?.students ?? [];
+
+  const [editing, setEditing] = useState<AdminLaptopRow | "new" | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<AdminLaptopRow | null>(
+    null
+  );
+  const [deleting, setDeleting] = useState(false);
+
+  async function deleteLaptop() {
+    if (!deleteTarget || deleting) return;
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/admin/laptops/${deleteTarget.id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error ?? `Delete failed (${res.status})`);
+      }
+      void mutate();
+      toast.success("Assignment removed.");
+      setDeleteTarget(null);
+    } catch (err) {
+      console.error("Failed to delete laptop assignment:", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't delete.");
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  return (
+    <Card className="overflow-hidden gap-0 py-0 bg-white">
+      <CardHeader className="py-3 !pb-3 border-b">
+        <div className="flex items-center justify-between gap-3">
+          <CardTitle className="text-base">Assigned laptops</CardTitle>
+          <Button size="sm" onClick={() => setEditing("new")}>
+            <Plus className="size-4 mr-1" />
+            Assign laptop
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="px-0 pb-0">
+        {!data ? (
+          <div className="flex items-center justify-center py-10">
+            <Loader2 className="size-5 animate-spin text-muted-foreground" />
+          </div>
+        ) : laptops.length === 0 ? (
+          <p className="px-6 py-10 text-center text-sm text-muted-foreground">
+            No devices assigned yet — assignments appear on the family&rsquo;s
+            Store page.
+          </p>
+        ) : (
+          <Table className="text-sm">
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="pl-4">Student</TableHead>
+                <TableHead>Family</TableHead>
+                <TableHead>Device</TableHead>
+                <TableHead>Serial #</TableHead>
+                <TableHead>Assigned</TableHead>
+                <TableHead className="pr-4 text-right">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {laptops.map((l) => (
+                <TableRow key={l.id} className="hover:bg-muted/30">
+                  <TableCell className="pl-4 font-medium whitespace-nowrap">
+                    {l.student_name}
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {l.family_name || "—"}
+                  </TableCell>
+                  <TableCell>
+                    <span className="inline-flex items-center gap-1.5">
+                      <Laptop className="size-3.5 text-muted-foreground" />
+                      {l.make_model}
+                      {l.asset_tag?.trim() ? (
+                        <span className="text-xs text-muted-foreground">
+                          · Tag {l.asset_tag.trim()}
+                        </span>
+                      ) : null}
+                    </span>
+                  </TableCell>
+                  <TableCell className="font-mono text-xs">
+                    {l.serial_number}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap tabular-nums text-muted-foreground">
+                    {l.assigned_date || "—"}
+                  </TableCell>
+                  <TableCell className="pr-4 text-right whitespace-nowrap">
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="size-8 text-muted-foreground hover:text-foreground"
+                      onClick={() => setEditing(l)}
+                      aria-label={`Edit laptop for ${l.student_name}`}
+                    >
+                      <Pencil className="size-4" />
+                    </Button>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="size-8 text-muted-foreground hover:text-red-600 ml-1"
+                      onClick={() => setDeleteTarget(l)}
+                      aria-label={`Remove laptop for ${l.student_name}`}
+                    >
+                      <Trash2 className="size-4" />
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </CardContent>
+
+      {editing !== null ? (
+        <LaptopUpsertDialog
+          existing={editing === "new" ? null : editing}
+          students={students}
+          onDone={(saved) => {
+            setEditing(null);
+            if (saved) void mutate();
+          }}
+        />
+      ) : null}
+
+      <AlertDialog
+        open={deleteTarget !== null}
+        onOpenChange={(o) => !deleting && !o && setDeleteTarget(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Remove {deleteTarget?.student_name}&rsquo;s laptop?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Removes the assignment record — the device disappears from
+              the family&rsquo;s Store page.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Keep</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={deleting}
+              className="bg-red-600 hover:bg-red-700"
+              onClick={(e) => {
+                e.preventDefault();
+                void deleteLaptop();
+              }}
+            >
+              {deleting ? "Removing…" : "Remove"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </Card>
+  );
+}
+
+/** Assign / edit one laptop. */
+function LaptopUpsertDialog({
+  existing,
+  students,
+  onDone,
+}: {
+  existing: AdminLaptopRow | null;
+  students: LaptopStudentOption[];
+  onDone: (saved: boolean) => void;
+}) {
+  const [studentId, setStudentId] = useState(
+    existing ? String(existing.registration_students_id) : ""
+  );
+  const [makeModel, setMakeModel] = useState(existing?.make_model ?? "");
+  const [serial, setSerial] = useState(existing?.serial_number ?? "");
+  const [assetTag, setAssetTag] = useState(
+    (existing?.asset_tag ?? "").trim()
+  );
+  const [assignedDate, setAssignedDate] = useState(
+    existing?.assigned_date ?? new Date().toISOString().slice(0, 10)
+  );
+  const [notes, setNotes] = useState((existing?.notes ?? "").trim());
+  const [saving, setSaving] = useState(false);
+
+  const canSave =
+    Number(studentId) > 0 &&
+    makeModel.trim().length > 0 &&
+    serial.trim().length > 0;
+
+  async function save() {
+    if (!canSave || saving) return;
+    setSaving(true);
+    try {
+      const payload = {
+        registration_students_id: Number(studentId),
+        make_model: makeModel.trim(),
+        serial_number: serial.trim(),
+        asset_tag: assetTag.trim(),
+        assigned_date: assignedDate,
+        notes: notes.trim(),
+      };
+      const res = await fetch(
+        existing ? `/api/admin/laptops/${existing.id}` : "/api/admin/laptops",
+        {
+          method: existing ? "PATCH" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        }
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error ?? `Save failed (${res.status})`);
+      }
+      toast.success(existing ? "Assignment updated." : "Laptop assigned.");
+      onDone(true);
+    } catch (err) {
+      console.error("Failed to save laptop assignment:", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't save.");
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && !saving && onDone(false)}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>
+            {existing ? "Edit laptop assignment" : "Assign a laptop"}
+          </DialogTitle>
+          <DialogDescription>
+            The device shows on the student&rsquo;s family Store page.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label>Student</Label>
+            <Select value={studentId} onValueChange={setStudentId}>
+              <SelectTrigger className="w-full bg-white">
+                <SelectValue placeholder="Pick a student…" />
+              </SelectTrigger>
+              <SelectContent>
+                {students.map((s) => (
+                  <SelectItem key={s.id} value={String(s.id)}>
+                    {s.name}
+                    {s.family_name ? ` — ${s.family_name}` : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="laptop-model">Make &amp; model</Label>
+            <Input
+              id="laptop-model"
+              value={makeModel}
+              onChange={(e) => setMakeModel(e.target.value)}
+              placeholder="Lenovo 300e Chromebook"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="laptop-serial">Serial number</Label>
+              <Input
+                id="laptop-serial"
+                value={serial}
+                onChange={(e) => setSerial(e.target.value)}
+                placeholder="5CD1234XYZ"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="laptop-tag">Asset tag (optional)</Label>
+              <Input
+                id="laptop-tag"
+                value={assetTag}
+                onChange={(e) => setAssetTag(e.target.value)}
+                placeholder="SFA-042"
+              />
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="laptop-date">Assigned date</Label>
+            <Input
+              id="laptop-date"
+              type="date"
+              value={assignedDate}
+              onChange={(e) => setAssignedDate(e.target.value)}
+              className="w-44"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="laptop-notes">Notes (optional)</Label>
+            <Textarea
+              id="laptop-notes"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              rows={2}
+              placeholder="Condition, charger included, etc. Internal — not shown to parents."
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button
+            variant="outline"
+            className="bg-white"
+            disabled={saving}
+            onClick={() => onDone(false)}
+          >
+            Cancel
+          </Button>
+          <Button disabled={!canSave || saving} onClick={() => void save()}>
+            {saving ? (
+              <>
+                <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                Saving
+              </>
+            ) : existing ? (
+              "Save changes"
+            ) : (
+              "Assign laptop"
             )}
           </Button>
         </DialogFooter>

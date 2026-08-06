@@ -30,6 +30,7 @@ export async function GET() {
         description: i.description ?? "",
         price_cents: i.price_cents ?? 0,
         payment_link_url: i.payment_link_url,
+        image_url: i.image_url,
       }));
     return NextResponse.json(active, { status: 200 });
   } catch (err) {
