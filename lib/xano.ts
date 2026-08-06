@@ -46,6 +46,13 @@ function getXanoHost(): string {
   return getBaseUrl().replace(/\/api:[^/]+\/?$/, "");
 }
 
+/** The staff-side operations API group (laptop inventory +
+ *  assignments). Same Xano instance as the main group, different
+ *  API-group path. */
+function getOpsBaseUrl(): string {
+  return `${getXanoHost()}/api:jzQ2liPL`;
+}
+
 export interface XanoParent {
   id: number;
   created_at: number;
@@ -764,20 +771,48 @@ export interface XanoStoreOrder {
 }
 
 /**
- * One school laptop assigned to a student
- * (`registration_student_laptops`). Admin assigns devices from the
- * Store page; parents see their students' devices on the parent
- * store page. `assigned_date` is YYYY-MM-DD.
+ * One physical device in the school's laptop inventory (`laptops`
+ * on the operations API group `jzQ2liPL` — a DIFFERENT Xano group
+ * from this app's tables; the inventory + assignment flow lives in
+ * the staff-side system, this app only reads it and stamps the
+ * enrolled-student linkage).
  */
-export interface XanoStudentLaptop {
+export interface XanoLaptop {
   id: number;
   created_at: number;
-  registration_students_id: number;
-  make_model: string;
+  asset_number: string;
   serial_number: string;
-  asset_tag: string;
-  assigned_date: string;
+  device_management_url: string;
+  model: string;
+  year_purchase: string;
+  isArchived: boolean;
+  reason_for_archive: string;
+}
+
+/**
+ * One assignment of a device to a student (`laptop_assignments`,
+ * same operations group). `students_id` is the staff system's own
+ * student UUID — meaningless to this app. `enrolled_students_id` /
+ * `enrolled_families_id` are the bridge columns admin stamps from
+ * the Store page (0 = not linked) so the parent portal can show the
+ * family their devices. `assigned_date` / `returned_date` are unix
+ * ms; `returned_date` null/0 = still checked out. Conditions are
+ * letter grades ("A"…).
+ */
+export interface XanoLaptopAssignment {
+  id: number;
+  created_at: number;
+  laptops_id: number;
+  students_id: string | null;
+  assigned_date: number | null;
+  assigned_condition: string;
+  returned_date: number | null;
+  returned_condition: string;
   notes: string;
+  /** FK → registration_students (this app). 0 = not linked. */
+  enrolled_students_id: number;
+  /** FK → registration_families (this app). 0 = not linked. */
+  enrolled_families_id: number;
 }
 
 export interface XanoScholarship {
@@ -4558,41 +4593,45 @@ export const xano = {
     },
   },
 
-  /** Laptops assigned to students — see `XanoStudentLaptop`. Plain
-   *  CRUD on `registration_student_laptops`; callers filter by
-   *  student in code. */
-  studentLaptops: {
-    async getAll(): Promise<XanoStudentLaptop[]> {
-      const res = await fetch(
-        `${getBaseUrl()}/registration_student_laptops`,
-        { cache: "no-store" }
-      );
+  /** Device inventory + assignments from the staff-side operations
+   *  system (Xano group `jzQ2liPL`) — see `XanoLaptop` /
+   *  `XanoLaptopAssignment`. Read-mostly: this app never creates or
+   *  deletes devices/assignments (the staff system owns that flow);
+   *  the only write is stamping the enrolled-student bridge columns
+   *  on an assignment. */
+  laptops: {
+    async getAll(): Promise<XanoLaptop[]> {
+      const res = await fetch(`${getOpsBaseUrl()}/laptops`, {
+        cache: "no-store",
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      const rows = await res.json();
+      return Array.isArray(rows) ? rows : [];
+    },
+  },
+
+  laptopAssignments: {
+    async getAll(): Promise<XanoLaptopAssignment[]> {
+      const res = await fetch(`${getOpsBaseUrl()}/laptop_assignments`, {
+        cache: "no-store",
+      });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
       const rows = await res.json();
       return Array.isArray(rows) ? rows : [];
     },
 
-    async create(
-      data: Omit<XanoStudentLaptop, "id" | "created_at">
-    ): Promise<XanoStudentLaptop> {
-      const res = await fetch(
-        `${getBaseUrl()}/registration_student_laptops`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(data),
-        }
-      );
-      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
-      return res.json();
-    },
-
+    /** Stamp / clear the enrolled-student bridge columns. Values of 0
+     *  are real writes (unlink), not sentinels — the columns are ints
+     *  and Xano int inputs accept 0. */
     async update(
       id: number,
-      patch: Partial<XanoStudentLaptop>
-    ): Promise<XanoStudentLaptop> {
+      patch: Pick<
+        XanoLaptopAssignment,
+        "enrolled_students_id" | "enrolled_families_id"
+      >
+    ): Promise<XanoLaptopAssignment> {
       const res = await fetch(
-        `${getBaseUrl()}/registration_student_laptops/${id}`,
+        `${getOpsBaseUrl()}/laptop_assignments/${id}`,
         {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
@@ -4601,14 +4640,6 @@ export const xano = {
       );
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
       return res.json();
-    },
-
-    async delete(id: number): Promise<void> {
-      const res = await fetch(
-        `${getBaseUrl()}/registration_student_laptops/${id}`,
-        { method: "DELETE" }
-      );
-      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
     },
   },
 

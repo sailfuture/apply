@@ -701,57 +701,58 @@ function ItemUpsertDialog({
   );
 }
 
-/* ─────────────────── Laptop assignments ─────────────────── */
+/* ─── Laptop assignments ─── */
 
 /**
- * School devices assigned to students — assign, edit, and unassign.
- * Parents see their own students' devices on the parent Store page.
+ * Laptop assignments read from the staff-side inventory system.
+ * Devices and check-outs are managed there (RFID flow) — the job
+ * HERE is linking each assignment to an enrolled student so the
+ * device shows on the family's Store page.
  */
 function LaptopsCard() {
   const { data, mutate } = useSWR<AdminLaptopsResponse>(
     "/api/admin/laptops",
     adminFetcher
   );
-  const laptops = data?.laptops ?? [];
+  const assignments = data?.assignments ?? [];
   const students = data?.students ?? [];
 
-  const [editing, setEditing] = useState<AdminLaptopRow | "new" | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<AdminLaptopRow | null>(
-    null
-  );
-  const [deleting, setDeleting] = useState(false);
+  const [showReturned, setShowReturned] = useState(false);
+  const [linkTarget, setLinkTarget] = useState<AdminLaptopRow | null>(null);
 
-  async function deleteLaptop() {
-    if (!deleteTarget || deleting) return;
-    setDeleting(true);
-    try {
-      const res = await fetch(`/api/admin/laptops/${deleteTarget.id}`, {
-        method: "DELETE",
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        throw new Error(body?.error ?? `Delete failed (${res.status})`);
-      }
-      void mutate();
-      toast.success("Assignment removed.");
-      setDeleteTarget(null);
-    } catch (err) {
-      console.error("Failed to delete laptop assignment:", err);
-      toast.error(err instanceof Error ? err.message : "Couldn't delete.");
-    } finally {
-      setDeleting(false);
-    }
-  }
+  const active = assignments.filter((a) => !a.returned);
+  const returned = assignments.filter((a) => a.returned);
+  const unlinked = active.filter((a) => !a.enrolled_students_id).length;
+  const visible = showReturned ? assignments : active;
 
   return (
     <Card className="overflow-hidden gap-0 py-0 bg-white">
       <CardHeader className="py-3 !pb-3 border-b">
-        <div className="flex items-center justify-between gap-3">
-          <CardTitle className="text-base">Assigned laptops</CardTitle>
-          <Button size="sm" onClick={() => setEditing("new")}>
-            <Plus className="size-4 mr-1" />
-            Assign laptop
-          </Button>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <CardTitle className="text-base">Laptop assignments</CardTitle>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Checked out in the device system — link each one to an
+              enrolled student so the family sees it on their Store page.
+              {unlinked > 0 ? (
+                <span className="ml-1 font-medium text-amber-700">
+                  {unlinked} active not linked yet.
+                </span>
+              ) : null}
+            </p>
+          </div>
+          {returned.length > 0 ? (
+            <Button
+              size="sm"
+              variant="outline"
+              className="bg-white"
+              onClick={() => setShowReturned((v) => !v)}
+            >
+              {showReturned
+                ? "Hide returned"
+                : `Show returned (${returned.length})`}
+            </Button>
+          ) : null}
         </div>
       </CardHeader>
       <CardContent className="px-0 pb-0">
@@ -759,67 +760,95 @@ function LaptopsCard() {
           <div className="flex items-center justify-center py-10">
             <Loader2 className="size-5 animate-spin text-muted-foreground" />
           </div>
-        ) : laptops.length === 0 ? (
+        ) : visible.length === 0 ? (
           <p className="px-6 py-10 text-center text-sm text-muted-foreground">
-            No devices assigned yet — assignments appear on the family&rsquo;s
-            Store page.
+            No active laptop assignments in the device system.
           </p>
         ) : (
           <Table className="text-sm">
             <TableHeader>
               <TableRow className="hover:bg-transparent">
-                <TableHead className="pl-4">Student</TableHead>
-                <TableHead>Family</TableHead>
-                <TableHead>Device</TableHead>
+                <TableHead className="pl-4">Device</TableHead>
                 <TableHead>Serial #</TableHead>
                 <TableHead>Assigned</TableHead>
-                <TableHead className="pr-4 text-right">Actions</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Enrolled student</TableHead>
+                <TableHead className="pr-4 text-right">Link</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {laptops.map((l) => (
-                <TableRow key={l.id} className="hover:bg-muted/30">
-                  <TableCell className="pl-4 font-medium whitespace-nowrap">
-                    {l.student_name}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {l.family_name || "—"}
-                  </TableCell>
-                  <TableCell>
+              {visible.map((a) => (
+                <TableRow
+                  key={a.id}
+                  className={
+                    a.returned
+                      ? "opacity-60 hover:bg-muted/30"
+                      : "hover:bg-muted/30"
+                  }
+                >
+                  <TableCell className="pl-4 whitespace-nowrap">
                     <span className="inline-flex items-center gap-1.5">
                       <Laptop className="size-3.5 text-muted-foreground" />
-                      {l.make_model}
-                      {l.asset_tag?.trim() ? (
-                        <span className="text-xs text-muted-foreground">
-                          · Tag {l.asset_tag.trim()}
-                        </span>
-                      ) : null}
+                      <span className="font-medium">
+                        {a.asset_number || "—"}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        {a.model}
+                      </span>
                     </span>
                   </TableCell>
                   <TableCell className="font-mono text-xs">
-                    {l.serial_number}
+                    {a.serial_number || "—"}
                   </TableCell>
                   <TableCell className="whitespace-nowrap tabular-nums text-muted-foreground">
-                    {l.assigned_date || "—"}
+                    {a.assigned_date ? fmtDateTime(a.assigned_date) : "—"}
+                    {a.assigned_condition ? (
+                      <span className="ml-1.5 rounded bg-muted px-1 py-px text-[10px] font-semibold">
+                        {a.assigned_condition}
+                      </span>
+                    ) : null}
+                  </TableCell>
+                  <TableCell>
+                    {a.returned ? (
+                      <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground ring-1 ring-border">
+                        Returned
+                        {a.returned_date
+                          ? ` · ${fmtDateTime(a.returned_date)}`
+                          : ""}
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-emerald-200">
+                        Checked out
+                      </span>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    {a.enrolled_students_id ? (
+                      <span>
+                        <span className="font-medium">{a.student_name}</span>
+                        {a.family_name ? (
+                          <span className="text-xs text-muted-foreground">
+                            {" "}
+                            — {a.family_name}
+                          </span>
+                        ) : null}
+                      </span>
+                    ) : a.returned ? (
+                      <span className="text-muted-foreground">—</span>
+                    ) : (
+                      <span className="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-amber-200">
+                        Not linked
+                      </span>
+                    )}
                   </TableCell>
                   <TableCell className="pr-4 text-right whitespace-nowrap">
                     <Button
-                      size="icon"
-                      variant="ghost"
-                      className="size-8 text-muted-foreground hover:text-foreground"
-                      onClick={() => setEditing(l)}
-                      aria-label={`Edit laptop for ${l.student_name}`}
+                      size="sm"
+                      variant="outline"
+                      className="bg-white"
+                      onClick={() => setLinkTarget(a)}
                     >
-                      <Pencil className="size-4" />
-                    </Button>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="size-8 text-muted-foreground hover:text-red-600 ml-1"
-                      onClick={() => setDeleteTarget(l)}
-                      aria-label={`Remove laptop for ${l.student_name}`}
-                    >
-                      <Trash2 className="size-4" />
+                      {a.enrolled_students_id ? "Change" : "Link student"}
                     </Button>
                   </TableCell>
                 </TableRow>
@@ -829,107 +858,55 @@ function LaptopsCard() {
         )}
       </CardContent>
 
-      {editing !== null ? (
-        <LaptopUpsertDialog
-          existing={editing === "new" ? null : editing}
+      {linkTarget ? (
+        <LaptopLinkDialog
+          key={linkTarget.id}
+          assignment={linkTarget}
           students={students}
           onDone={(saved) => {
-            setEditing(null);
+            setLinkTarget(null);
             if (saved) void mutate();
           }}
         />
       ) : null}
-
-      <AlertDialog
-        open={deleteTarget !== null}
-        onOpenChange={(o) => !deleting && !o && setDeleteTarget(null)}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              Remove {deleteTarget?.student_name}&rsquo;s laptop?
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              Removes the assignment record — the device disappears from
-              the family&rsquo;s Store page.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={deleting}>Keep</AlertDialogCancel>
-            <AlertDialogAction
-              disabled={deleting}
-              className="bg-red-600 hover:bg-red-700"
-              onClick={(e) => {
-                e.preventDefault();
-                void deleteLaptop();
-              }}
-            >
-              {deleting ? "Removing…" : "Remove"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </Card>
   );
 }
 
-/** Assign / edit one laptop. */
-function LaptopUpsertDialog({
-  existing,
+/** Pick which enrolled student a device assignment belongs to. */
+function LaptopLinkDialog({
+  assignment,
   students,
   onDone,
 }: {
-  existing: AdminLaptopRow | null;
+  assignment: AdminLaptopRow;
   students: LaptopStudentOption[];
   onDone: (saved: boolean) => void;
 }) {
   const [studentId, setStudentId] = useState(
-    existing ? String(existing.registration_students_id) : ""
+    assignment.enrolled_students_id
+      ? String(assignment.enrolled_students_id)
+      : ""
   );
-  const [makeModel, setMakeModel] = useState(existing?.make_model ?? "");
-  const [serial, setSerial] = useState(existing?.serial_number ?? "");
-  const [assetTag, setAssetTag] = useState(
-    (existing?.asset_tag ?? "").trim()
-  );
-  const [assignedDate, setAssignedDate] = useState(
-    existing?.assigned_date ?? new Date().toISOString().slice(0, 10)
-  );
-  const [notes, setNotes] = useState((existing?.notes ?? "").trim());
   const [saving, setSaving] = useState(false);
 
-  const canSave =
-    Number(studentId) > 0 &&
-    makeModel.trim().length > 0 &&
-    serial.trim().length > 0;
-
-  async function save() {
-    if (!canSave || saving) return;
+  async function save(targetId: number) {
+    if (saving) return;
     setSaving(true);
     try {
-      const payload = {
-        registration_students_id: Number(studentId),
-        make_model: makeModel.trim(),
-        serial_number: serial.trim(),
-        asset_tag: assetTag.trim(),
-        assigned_date: assignedDate,
-        notes: notes.trim(),
-      };
-      const res = await fetch(
-        existing ? `/api/admin/laptops/${existing.id}` : "/api/admin/laptops",
-        {
-          method: existing ? "PATCH" : "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        }
-      );
+      const res = await fetch(`/api/admin/laptops/${assignment.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enrolled_students_id: targetId }),
+      });
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         throw new Error(body?.error ?? `Save failed (${res.status})`);
       }
-      toast.success(existing ? "Assignment updated." : "Laptop assigned.");
+      toast.success(targetId ? "Assignment linked." : "Link removed.");
       onDone(true);
     } catch (err) {
-      console.error("Failed to save laptop assignment:", err);
+      console.error("Failed to link laptop assignment:", err);
       toast.error(err instanceof Error ? err.message : "Couldn't save.");
       setSaving(false);
     }
@@ -940,100 +917,66 @@ function LaptopUpsertDialog({
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>
-            {existing ? "Edit laptop assignment" : "Assign a laptop"}
+            Link {assignment.asset_number || assignment.model}
           </DialogTitle>
           <DialogDescription>
-            The device shows on the student&rsquo;s family Store page.
+            Serial {assignment.serial_number || "unknown"} — pick the
+            enrolled student holding this device so it appears on their
+            family&rsquo;s Store page.
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-4">
-          <div className="space-y-1.5">
-            <Label>Student</Label>
-            <Select value={studentId} onValueChange={setStudentId}>
-              <SelectTrigger className="w-full bg-white">
-                <SelectValue placeholder="Pick a student…" />
-              </SelectTrigger>
-              <SelectContent>
-                {students.map((s) => (
-                  <SelectItem key={s.id} value={String(s.id)}>
-                    {s.name}
-                    {s.family_name ? ` — ${s.family_name}` : ""}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="laptop-model">Make &amp; model</Label>
-            <Input
-              id="laptop-model"
-              value={makeModel}
-              onChange={(e) => setMakeModel(e.target.value)}
-              placeholder="Lenovo 300e Chromebook"
-            />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="laptop-serial">Serial number</Label>
-              <Input
-                id="laptop-serial"
-                value={serial}
-                onChange={(e) => setSerial(e.target.value)}
-                placeholder="5CD1234XYZ"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="laptop-tag">Asset tag (optional)</Label>
-              <Input
-                id="laptop-tag"
-                value={assetTag}
-                onChange={(e) => setAssetTag(e.target.value)}
-                placeholder="SFA-042"
-              />
-            </div>
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="laptop-date">Assigned date</Label>
-            <Input
-              id="laptop-date"
-              type="date"
-              value={assignedDate}
-              onChange={(e) => setAssignedDate(e.target.value)}
-              className="w-44"
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="laptop-notes">Notes (optional)</Label>
-            <Textarea
-              id="laptop-notes"
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              rows={2}
-              placeholder="Condition, charger included, etc. Internal — not shown to parents."
-            />
-          </div>
+        <div className="space-y-1.5">
+          <Label>Enrolled student</Label>
+          <Select value={studentId} onValueChange={setStudentId}>
+            <SelectTrigger className="w-full bg-white">
+              <SelectValue placeholder="Pick a student…" />
+            </SelectTrigger>
+            <SelectContent>
+              {students.map((s) => (
+                <SelectItem key={s.id} value={String(s.id)}>
+                  {s.name}
+                  {s.family_name ? ` — ${s.family_name}` : ""}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
-        <DialogFooter>
-          <Button
-            variant="outline"
-            className="bg-white"
-            disabled={saving}
-            onClick={() => onDone(false)}
-          >
-            Cancel
-          </Button>
-          <Button disabled={!canSave || saving} onClick={() => void save()}>
-            {saving ? (
-              <>
-                <Loader2 className="size-3.5 mr-1.5 animate-spin" />
-                Saving
-              </>
-            ) : existing ? (
-              "Save changes"
-            ) : (
-              "Assign laptop"
-            )}
-          </Button>
+        <DialogFooter className="gap-2 sm:justify-between">
+          {assignment.enrolled_students_id ? (
+            <Button
+              variant="outline"
+              className="bg-white text-red-600 hover:bg-red-50 hover:text-red-700"
+              disabled={saving}
+              onClick={() => void save(0)}
+            >
+              Unlink
+            </Button>
+          ) : (
+            <span />
+          )}
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              className="bg-white"
+              disabled={saving}
+              onClick={() => onDone(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              disabled={!Number(studentId) || saving}
+              onClick={() => void save(Number(studentId))}
+            >
+              {saving ? (
+                <>
+                  <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                  Saving
+                </>
+              ) : (
+                "Link student"
+              )}
+            </Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -55,24 +55,13 @@ interface StudentLaptop {
   make_model: string;
   serial_number: string;
   asset_tag: string;
-  assigned_date: string;
+  /** Unix ms; 0 = unknown. */
+  assigned_date: number;
 }
 
 function fmtDate(ms: number | null | undefined): string {
   if (!ms) return "—";
   return new Date(ms).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-}
-
-/** "YYYY-MM-DD" → "Aug 6, 2026" without the UTC off-by-one. */
-function fmtIsoDate(iso: string): string {
-  if (!iso) return "—";
-  const [y, m, d] = iso.split("-").map(Number);
-  if (!y || !m || !d) return iso;
-  return new Date(y, m - 1, d).toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
     year: "numeric",
@@ -300,7 +289,7 @@ export default function StorePage() {
                       {laptops.map((l) => (
                         <TableRow key={l.id} className="hover:bg-transparent">
                           <TableCell className="px-4 py-3 font-medium whitespace-nowrap">
-                            {l.student_name}
+                            {l.student_name || "—"}
                           </TableCell>
                           <TableCell className="px-4 py-3">
                             <span className="inline-flex items-center gap-1.5">
@@ -317,7 +306,7 @@ export default function StorePage() {
                             {l.serial_number}
                           </TableCell>
                           <TableCell className="px-4 py-3 text-right whitespace-nowrap tabular-nums">
-                            {fmtIsoDate(l.assigned_date)}
+                            {fmtDate(l.assigned_date)}
                           </TableCell>
                         </TableRow>
                       ))}

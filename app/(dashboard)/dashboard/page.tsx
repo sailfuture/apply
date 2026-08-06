@@ -128,12 +128,27 @@ export default function EnrolledHomePage() {
   } = useSWR<Record<number, { mode: YearMode }>>(
     swrKey,
     async () => {
+      // Fault tolerance: 3 fetches × N candidate years means one flaky
+      // endpoint (or one year whose Xano lookup 500s) shouldn't take
+      // down the whole dashboard. Each fetch degrades to null for its
+      // year; we only hard-fail (→ SWR retry → ServiceUnavailable)
+      // when a failure occurred AND no year resolved to a usable mode
+      // — i.e. we genuinely couldn't determine anything, and silently
+      // redirecting an enrolled family back to the apply flow would be
+      // wrong.
+      let anyFetchFailed = false;
+      const safe = (url: string) =>
+        fetcher(url).catch((err: unknown) => {
+          anyFetchFailed = true;
+          console.error(`[enrolled-resolver] ${url} failed:`, err);
+          return null;
+        });
       const entries = await Promise.all(
         candidateYearIds.map(async (yid) => {
           const [progressRes, packetsRes, applyRes] = await Promise.all([
-            fetcher(`/api/student-registration-progress?yearId=${yid}`),
-            fetcher(`/api/student-registration?yearId=${yid}`),
-            fetcher(`/api/family-progress?yearId=${yid}`),
+            safe(`/api/student-registration-progress?yearId=${yid}`),
+            safe(`/api/student-registration?yearId=${yid}`),
+            safe(`/api/family-progress?yearId=${yid}`),
           ]);
           const progress = progressRes as YearProgress | null;
           const packets = (packetsRes as YearPacket[] | null) ?? [];
@@ -183,7 +198,16 @@ export default function EnrolledHomePage() {
           return [yid, { mode }] as const;
         })
       );
-      return Object.fromEntries(entries);
+      const map = Object.fromEntries(entries);
+      if (
+        anyFetchFailed &&
+        !entries.some(([, v]) => v.mode !== null)
+      ) {
+        throw new Error(
+          "enrolled-resolver: year lookups failed and no year resolved"
+        );
+      }
+      return map;
     },
     { revalidateOnFocus: false, dedupingInterval: 10000 }
   );
