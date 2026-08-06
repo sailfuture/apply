@@ -24,10 +24,23 @@ export interface VolunteerFamily {
  *  `school_calendar` day row, which owns the date). */
 export type VolunteerEvent = XanoSchoolCalendarEvent & { date: string };
 
+/** One family's RSVP, family name joined for display. */
+export interface EventRsvpRow {
+  id: number;
+  school_calendar_events_id: number;
+  registration_families_id: number;
+  family_name: string;
+  spots: number;
+  comment: string;
+}
+
 export interface AdminVolunteerHoursResponse {
   entries: XanoVolunteerHours[];
   families: VolunteerFamily[];
   events: VolunteerEvent[];
+  /** Parent RSVPs across all events (page groups by event). Empty
+   *  when the `school_event_rsvps` table doesn't exist yet. */
+  rsvps: EventRsvpRow[];
   /** The year's day rows — the shared event dialog needs them to
    *  resolve a picked date to its `school_calendar_id`. */
   days: XanoSchoolCalendarDay[];
@@ -67,6 +80,7 @@ export async function GET(req: NextRequest) {
       srpR,
       appsR,
       studentsR,
+      rsvpsR,
     ] = await Promise.allSettled([
       xano.volunteerHours.getAll(),
       xano.families.getAll(),
@@ -76,6 +90,7 @@ export async function GET(req: NextRequest) {
       xano.studentRegistrationProgress.getByYear(yearId),
       xano.applications.getAll(),
       xano.students.getAll(),
+      xano.eventRsvps.getAll(),
     ]);
     const val = <T,>(r: PromiseSettledResult<T[]>): T[] =>
       r.status === "fulfilled" ? r.value : [];
@@ -150,11 +165,28 @@ export async function GET(req: NextRequest) {
           (a.start_time ?? 0) - (b.start_time ?? 0)
       );
 
+    // RSVPs joined with family names for the per-event sign-up list.
+    // Degrades to [] while the rsvps table doesn't exist yet.
+    const familyNameById = new Map(
+      val(familiesR).map((f) => [f.id, f.family_name?.trim() || `Family #${f.id}`])
+    );
+    const rsvps: EventRsvpRow[] = val(rsvpsR).map((r) => ({
+      id: r.id,
+      school_calendar_events_id: Number(r.school_calendar_events_id),
+      registration_families_id: Number(r.registration_families_id),
+      family_name:
+        familyNameById.get(Number(r.registration_families_id)) ??
+        `Family #${r.registration_families_id}`,
+      spots: Number(r.spots) || 0,
+      comment: (r.comment ?? "").trim(),
+    }));
+
     days.sort((a, b) => a.date.localeCompare(b.date));
     return NextResponse.json({
       entries,
       families,
       events,
+      rsvps,
       days,
     } satisfies AdminVolunteerHoursResponse);
   } catch (err) {

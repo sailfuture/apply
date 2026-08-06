@@ -52,6 +52,10 @@ export async function POST(req: NextRequest) {
       mandatory: body.mandatory === true,
       parent_volunteer_hours: body.parent_volunteer_hours === true,
       volunteer_hour_total: coerceHours(body.volunteer_hour_total),
+      // Parent RSVP capacity — 0 = sign-ups not offered.
+      parent_spots: coerceSpots(body.parent_spots),
+      // Event needs — one per line; rendered as a list to parents.
+      needs: typeof body.needs === "string" ? body.needs.trim() : "",
       color: coerceColor(body.color),
     });
     return NextResponse.json(created, { status: 201 });
@@ -70,6 +74,12 @@ function coerceMs(v: unknown): number {
 function coerceHours(v: unknown): number {
   const n = Number(v);
   return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/** Whole-number RSVP capacity, capped at 500; 0 = sign-ups closed. */
+function coerceSpots(v: unknown): number {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? Math.min(Math.round(n), 500) : 0;
 }
 
 /** Known event-category color slugs; anything else stores as "". */

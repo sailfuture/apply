@@ -3,11 +3,13 @@ import type Stripe from "stripe";
 import { xano, STRIPE_SUB_CANCELED_PREFIX, activeStripeSubscriptionId } from "@/lib/xano";
 import type { XanoPaymentTransaction } from "@/lib/xano";
 import {
+  getStripeClient,
   verifyWebhookSignature,
   extractInvoiceSubscriptionId,
   extractInvoiceSubscriptionMetadata,
 } from "@/lib/stripe";
 import { sendBillingAlert } from "@/lib/billing-alerts";
+import { parseStoreReference } from "@/lib/store";
 
 /**
  * Stripe webhook receiver. Stripe signs every event with a secret
@@ -88,6 +90,10 @@ export async function POST(req: NextRequest) {
       case "invoice.voided":
       case "invoice.marked_uncollectible":
         await upsertInvoiceFromEvent(event.type, event.data.object);
+        break;
+      case "checkout.session.completed":
+      case "checkout.session.async_payment_succeeded":
+        await recordStoreOrderFromSession(event.type, event.data.object);
         break;
       default:
         // Acknowledge unhandled types so Stripe stops retrying. The
@@ -466,6 +472,127 @@ async function findFamilyPaymentBySubscriptionId(
     }
   }
   return null;
+}
+
+/* ─────────────────────── School-store orders ─────────────────────── */
+
+/**
+ * Mirror a Payment Link checkout into the `store_orders` table.
+ * Fires on `checkout.session.completed` (card payments — already paid)
+ * and `checkout.session.async_payment_succeeded` (delayed methods).
+ *
+ * Attribution comes from the `client_reference_id` the parent portal
+ * appends to the store links (`family-<id>-year-<yid>`); sessions
+ * without it (bare link shared elsewhere) are still recorded with
+ * family 0 so staff see every purchase. Sessions with no
+ * `payment_link` aren't ours to mirror — the tuition pipeline runs on
+ * subscriptions/invoices, so payment links are the only checkout
+ * sessions this account produces.
+ *
+ * Same retry contract as the invoice mirror: transient Xano failures
+ * (including the table not existing yet) THROW so Stripe retries;
+ * genuine no-ops return normally.
+ */
+async function recordStoreOrderFromSession(
+  eventType: string,
+  session: Stripe.Checkout.Session
+): Promise<void> {
+  const paymentLinkId = idOrString(session.payment_link);
+  if (!paymentLinkId) {
+    console.log(
+      `[/api/webhooks/stripe] ${eventType}: session ${session.id} has no payment_link — skipping.`
+    );
+    return;
+  }
+  if (session.payment_status !== "paid") {
+    // A completed session with an async payment method still pending —
+    // the async_payment_succeeded event will land here again once the
+    // money clears.
+    console.log(
+      `[/api/webhooks/stripe] ${eventType}: session ${session.id} payment_status=${session.payment_status} — waiting for payment.`
+    );
+    return;
+  }
+
+  // Idempotency — one row per Checkout Session; retries and the
+  // completed/async-succeeded double-fire are no-ops.
+  const existing = await xano.storeOrders.findBySessionIdStrict(session.id);
+  if (existing) return;
+
+  const { familyId, yearId } = parseStoreReference(
+    session.client_reference_id
+  );
+
+  // Line items give the human-readable "what did they buy" summary.
+  // Best-effort — a failed lookup falls back to a generic label
+  // rather than losing the order.
+  let item = "Store purchase";
+  let quantity = 1;
+  try {
+    const stripe = getStripeClient();
+    const lineItems = await stripe.checkout.sessions.listLineItems(
+      session.id,
+      { limit: 20 }
+    );
+    if (lineItems.data.length > 0) {
+      item = lineItems.data
+        .map((li) =>
+          (li.quantity ?? 1) > 1
+            ? `${li.description} ×${li.quantity}`
+            : li.description
+        )
+        .filter(Boolean)
+        .join(", ");
+      quantity = lineItems.data.reduce(
+        (sum, li) => sum + (li.quantity ?? 1),
+        0
+      );
+    }
+  } catch (err) {
+    console.error(
+      `[/api/webhooks/stripe] failed to list line items for ${session.id}:`,
+      err
+    );
+  }
+
+  // Resolve which catalog item this purchase was — the session only
+  // carries the Payment Link id, so fetch its URL from Stripe and
+  // match it against the catalog. Best-effort: 0 = unresolved (a
+  // multi-product link, a deleted item, or a lookup failure); the
+  // order still records with its text summary, it just stays outside
+  // the per-product sold/awaiting rollups on the admin Store page.
+  let storeItemId = 0;
+  try {
+    const stripe = getStripeClient();
+    const [link, catalog] = await Promise.all([
+      stripe.paymentLinks.retrieve(paymentLinkId),
+      xano.storeItems.getAll(),
+    ]);
+    storeItemId =
+      catalog.find((i) => i.payment_link_url === link.url)?.id ?? 0;
+  } catch (err) {
+    console.error(
+      `[/api/webhooks/stripe] failed to resolve store item for ${paymentLinkId}:`,
+      err
+    );
+  }
+
+  await xano.storeOrders.create({
+    registration_families_id: familyId,
+    registration_school_years_id: yearId,
+    registration_store_items_id: storeItemId,
+    stripe_checkout_session_id: session.id,
+    stripe_payment_link_id: paymentLinkId,
+    item,
+    quantity,
+    total_amount_cents: session.amount_total ?? 0,
+    purchaser_email:
+      session.customer_details?.email ?? session.customer_email ?? "",
+    paid_at: (session.created ?? Math.floor(Date.now() / 1000)) * 1000,
+    distributed: false,
+    distributed_at: 0,
+    distributed_by: " ",
+  });
 }
 
 /* ─────────────────────── Helpers ─────────────────────── */

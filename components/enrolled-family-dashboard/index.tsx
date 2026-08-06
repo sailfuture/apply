@@ -23,12 +23,15 @@ import {
   CalendarDays,
   CreditCard,
   ChevronRight,
+  ExternalLink,
   Plus,
+  ShoppingBag,
   Trash2,
   CheckCircle2,
   Circle,
   Clock,
 } from "lucide-react";
+import { formatPriceCents, storeCheckoutUrl } from "@/lib/store";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -898,6 +901,19 @@ export function EnrolledFamilyDashboard({
         </Button>
       ) : null}
 
+      {/* School Store — admin-managed catalog of purchasable items
+          (uniform shirts, sweatshirts, …). Each item opens its Stripe
+          Payment Link with the family reference + parent email
+          appended so the purchase lands attributed on the admin Store
+          page. Hidden entirely when the catalog is empty/unreachable. */}
+      <StoreSection
+        familyId={
+          (familyData as { id?: number } | null | undefined)?.id ?? null
+        }
+        yearId={yearId}
+        email={user?.primaryEmailAddress?.emailAddress ?? null}
+      />
+
       {/* Parents / Guardians — primary first, then secondary (if
           present). Family is capped at two parents total; primary is
           never deletable. Each row has a pencil edit button that opens
@@ -1282,6 +1298,161 @@ function ReApplicationProgressCard({
           </p>
         </div>
       )}
+    </div>
+  );
+}
+
+type StoreItem = {
+  id: number;
+  name: string;
+  description: string;
+  price_cents: number;
+  payment_link_url: string;
+};
+
+type StoreOrder = {
+  id: number;
+  item: string;
+  quantity: number;
+  total_amount_cents: number;
+  paid_at: number;
+  distributed: boolean;
+  distributed_at: number | null;
+};
+
+/**
+ * School Store — catalog rows with Purchase buttons (Stripe Payment
+ * Links, opened in a new tab with family attribution appended) plus
+ * the family's own purchase history with a Paid → Delivered status
+ * chip. Both fetches degrade to [] server-side, so the section simply
+ * doesn't render until admin has added items.
+ */
+function StoreSection({
+  familyId,
+  yearId,
+  email,
+}: {
+  familyId: number | null;
+  yearId: number;
+  email: string | null;
+}) {
+  const { data: items } = useSWR<StoreItem[]>("/api/store/items", fetcher, {
+    revalidateOnFocus: false,
+    dedupingInterval: 30000,
+  });
+  const { data: orders } = useSWR<StoreOrder[]>("/api/store/orders", fetcher, {
+    revalidateOnFocus: false,
+    dedupingInterval: 10000,
+  });
+
+  if (!items || items.length === 0 || familyId === null) return null;
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-sm font-semibold">School Store</h2>
+        <p className="text-xs text-muted-foreground">
+          Payments are processed securely by Stripe.
+        </p>
+      </div>
+      <div className="rounded-xl bg-background p-1.5 shadow-sm border">
+        <div className="overflow-hidden rounded-lg border">
+          <Table className="text-sm">
+            <TableBody>
+              {items.map((item) => (
+                <TableRow key={item.id} className="hover:bg-transparent">
+                  <TableCell className="px-4 py-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-muted/50">
+                        <ShoppingBag className="size-5 text-muted-foreground" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="font-medium">
+                          {item.name}
+                          <span className="ml-2 font-normal text-muted-foreground">
+                            {formatPriceCents(item.price_cents)}
+                          </span>
+                        </p>
+                        {item.description.trim() ? (
+                          <p className="text-xs text-muted-foreground mt-0.5 truncate">
+                            {item.description}
+                          </p>
+                        ) : null}
+                      </div>
+                    </div>
+                  </TableCell>
+                  <TableCell className="px-4 py-3 text-right whitespace-nowrap">
+                    <Button
+                      asChild
+                      size="sm"
+                      variant="outline"
+                      className="bg-white"
+                    >
+                      <a
+                        href={storeCheckoutUrl(
+                          item.payment_link_url,
+                          familyId,
+                          yearId,
+                          email
+                        )}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        Purchase
+                        <ExternalLink className="size-3.5 ml-1.5" />
+                      </a>
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+
+        {/* Purchase history — only once the family has bought something. */}
+        {orders && orders.length > 0 ? (
+          <div className="mt-1.5 overflow-hidden rounded-lg border">
+            <p className="border-b bg-muted/40 px-4 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Your purchases
+            </p>
+            <Table className="text-sm">
+              <TableBody>
+                {orders.map((o) => (
+                  <TableRow key={o.id} className="hover:bg-transparent">
+                    <TableCell className="px-4 py-2.5">
+                      <p className="font-medium">{o.item}</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        {o.paid_at
+                          ? new Date(o.paid_at).toLocaleDateString("en-US", {
+                              month: "short",
+                              day: "numeric",
+                              year: "numeric",
+                            })
+                          : "—"}
+                        {" · "}
+                        ${(o.total_amount_cents / 100).toFixed(2)}
+                      </p>
+                    </TableCell>
+                    <TableCell className="px-4 py-2.5 text-right whitespace-nowrap">
+                      {o.distributed ? (
+                        <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-emerald-200">
+                          <CheckCircle2 className="size-3.5" />
+                          Delivered
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-700 ring-1 ring-blue-200">
+                          <Clock className="size-3.5" />
+                          Paid
+                        </span>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }

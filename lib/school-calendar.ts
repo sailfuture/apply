@@ -47,3 +47,13 @@ export function eventColor(color: string | null | undefined) {
   const slug = (color ?? "").trim();
   return EVENT_COLORS.find((c) => c.value === slug) ?? null;
 }
+
+/** Split an event's `needs` text (one per line, " " = cleared
+ *  sentinel) into display-ready list items. */
+export function parseNeeds(needs: string | null | undefined): string[] {
+  return (needs ?? "")
+    .trim()
+    .split(/\r?\n/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}

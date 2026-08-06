@@ -1,10 +1,31 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
+import { toast } from "sonner";
+import {
+  CalendarDays,
+  CheckCircle2,
+  Clock,
+  Loader2,
+  MapPin,
+  Users,
+} from "lucide-react";
 import { DashboardPageHeader } from "@/components/dashboard-page-header";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Table,
   TableBody,
@@ -13,7 +34,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { useApplications, useSchoolYears } from "@/hooks/use-api";
+import { useApplications, useSchoolYears, apiFetcher } from "@/hooks/use-api";
+import { cn } from "@/lib/utils";
+import { eventColor, parseDate, parseNeeds } from "@/lib/school-calendar";
+import type {
+  ParentVolunteerEvent,
+  VolunteerEventsResponse,
+} from "@/app/api/volunteer-events/route";
 
 /** Annual goal — kept in lockstep with the constant on the dashboard
  *  summary card so the two surfaces show the same target. */
@@ -217,6 +244,11 @@ export default function VolunteerHoursPage() {
         </div>
       )}
 
+      {/* Upcoming sign-up events — events admin opened parent spots
+          on. Families RSVP (spots + a note about who's coming) right
+          here; volunteering at these events is how hours get logged. */}
+      <UpcomingEventsSection yearId={yearId} />
+
       {/* Entry history — every admin-logged row for the year, newest
           first. Pending entries get a status pill so parents can tell at
           a glance which ones still need ratification. */}
@@ -294,5 +326,345 @@ export default function VolunteerHoursPage() {
         .
       </p>
     </div>
+  );
+}
+
+/* ─────────────────── Upcoming events + RSVP ─────────────────── */
+
+function fmtEventTime(ms: number): string {
+  if (!ms) return "";
+  return new Date(ms).toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+/**
+ * Upcoming events with parent sign-up spots. Each row shows the live
+ * spot count and the family's own reservation; Sign up / Edit opens
+ * the RSVP dialog (spots + who's-coming comment). Hidden entirely
+ * when no upcoming events offer sign-ups.
+ */
+function UpcomingEventsSection({ yearId }: { yearId: number | null }) {
+  const { data, mutate } = useSWR<VolunteerEventsResponse>(
+    yearId ? `/api/volunteer-events?yearId=${yearId}` : null,
+    apiFetcher,
+    { revalidateOnFocus: true, dedupingInterval: 10000 }
+  );
+  const [rsvpTarget, setRsvpTarget] = useState<ParentVolunteerEvent | null>(
+    null
+  );
+
+  const events = data?.events ?? [];
+  if (!data || events.length === 0) return null;
+
+  return (
+    <div>
+      <div className="flex items-baseline justify-between mb-3">
+        <h2 className="text-sm font-semibold">Upcoming events</h2>
+        <p className="text-xs text-muted-foreground">
+          Reserve your spot — volunteering here earns your hours.
+        </p>
+      </div>
+      <div className="rounded-xl bg-background p-1.5 shadow-sm border">
+        <div className="overflow-hidden rounded-lg border bg-white divide-y">
+          {events.map((ev) => {
+            const c = eventColor(ev.color);
+            const needs = parseNeeds(ev.needs);
+            const left = Math.max(ev.spots_total - ev.spots_taken, 0);
+            const dateObj = parseDate(ev.date);
+            return (
+              <div key={ev.id} className="flex gap-4 px-4 py-4">
+                {/* Date block */}
+                <div className="flex h-14 w-14 shrink-0 flex-col items-center justify-center rounded-lg border bg-muted/30">
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    {dateObj.toLocaleDateString("en-US", { month: "short" })}
+                  </span>
+                  <span className="text-lg font-semibold leading-tight tabular-nums">
+                    {dateObj.getDate()}
+                  </span>
+                </div>
+
+                {/* Details */}
+                <div className="min-w-0 flex-1">
+                  <p className="flex flex-wrap items-center gap-1.5 text-sm font-semibold">
+                    <span
+                      className={cn(
+                        "size-2 shrink-0 rounded-full",
+                        c ? c.dot : "bg-slate-300"
+                      )}
+                      aria-hidden
+                    />
+                    {ev.title}
+                    {ev.parent_volunteer_hours ? (
+                      <span className="rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-emerald-700">
+                        {ev.volunteer_hour_total || 0} vol hrs
+                      </span>
+                    ) : null}
+                  </p>
+                  <p className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+                    <span className="inline-flex items-center gap-1">
+                      <Clock className="size-3" />
+                      {ev.start_time
+                        ? `${fmtEventTime(ev.start_time)}${
+                            ev.end_time
+                              ? ` – ${fmtEventTime(ev.end_time)}`
+                              : ""
+                          }`
+                        : "All day"}
+                    </span>
+                    {ev.location ? (
+                      <span className="inline-flex items-center gap-1">
+                        <MapPin className="size-3" />
+                        {ev.location}
+                      </span>
+                    ) : null}
+                    <span className="inline-flex items-center gap-1">
+                      <Users className="size-3" />
+                      {left > 0
+                        ? `${left} of ${ev.spots_total} spots open`
+                        : "Full"}
+                    </span>
+                  </p>
+                  {ev.description ? (
+                    <p className="mt-1.5 text-xs text-muted-foreground whitespace-pre-wrap">
+                      {ev.description}
+                    </p>
+                  ) : null}
+                  {needs.length > 0 ? (
+                    <div className="mt-1.5">
+                      <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                        Event needs
+                      </p>
+                      <ul className="mt-0.5 list-disc pl-4 text-xs text-muted-foreground marker:text-muted-foreground/60">
+                        {needs.map((n) => (
+                          <li key={n}>{n}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                  {ev.my_rsvp ? (
+                    <p className="mt-1.5 inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 ring-1 ring-emerald-200">
+                      <CheckCircle2 className="size-3" />
+                      You reserved {ev.my_rsvp.spots} spot
+                      {ev.my_rsvp.spots === 1 ? "" : "s"}
+                    </p>
+                  ) : null}
+                </div>
+
+                {/* Action */}
+                <div className="shrink-0 self-center">
+                  {ev.my_rsvp ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="bg-white"
+                      onClick={() => setRsvpTarget(ev)}
+                    >
+                      Edit RSVP
+                    </Button>
+                  ) : left > 0 ? (
+                    <Button size="sm" onClick={() => setRsvpTarget(ev)}>
+                      <CalendarDays className="size-3.5 mr-1.5" />
+                      Sign up
+                    </Button>
+                  ) : (
+                    <span className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground">
+                      Full
+                    </span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {rsvpTarget ? (
+        <RsvpDialog
+          key={rsvpTarget.id}
+          event={rsvpTarget}
+          onDone={(changed) => {
+            setRsvpTarget(null);
+            if (changed) void mutate();
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/** Reserve / edit / cancel the family's RSVP for one event. */
+function RsvpDialog({
+  event,
+  onDone,
+}: {
+  event: ParentVolunteerEvent;
+  onDone: (changed: boolean) => void;
+}) {
+  const existing = event.my_rsvp;
+  // Spots still available to this family = open spots + what they
+  // already hold (editing down releases, editing up consumes).
+  const maxSpots = Math.min(
+    Math.max(event.spots_total - event.spots_taken, 0) +
+      (existing?.spots ?? 0),
+    20
+  );
+  const [spots, setSpots] = useState(String(existing?.spots ?? 1));
+  const [comment, setComment] = useState(existing?.comment ?? "");
+  const [saving, setSaving] = useState(false);
+  const [canceling, setCanceling] = useState(false);
+
+  const spotsNum = Number(spots);
+  const valid =
+    Number.isInteger(spotsNum) && spotsNum >= 1 && spotsNum <= maxSpots;
+
+  async function save() {
+    if (!valid || saving || canceling) return;
+    setSaving(true);
+    try {
+      const res = await fetch("/api/volunteer-events/rsvp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          eventId: event.id,
+          spots: spotsNum,
+          comment: comment.trim(),
+        }),
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(body?.error ?? `Sign-up failed (${res.status})`);
+      }
+      toast.success(
+        existing ? "RSVP updated." : "You're signed up — see you there!"
+      );
+      onDone(true);
+    } catch (err) {
+      console.error("RSVP failed:", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't sign up.");
+      setSaving(false);
+    }
+  }
+
+  async function cancelRsvp() {
+    if (saving || canceling) return;
+    setCanceling(true);
+    try {
+      const res = await fetch(
+        `/api/volunteer-events/rsvp?eventId=${event.id}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error ?? `Cancel failed (${res.status})`);
+      }
+      toast.success("RSVP canceled.");
+      onDone(true);
+    } catch (err) {
+      console.error("RSVP cancel failed:", err);
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't cancel the RSVP."
+      );
+      setCanceling(false);
+    }
+  }
+
+  const dateLabel = parseDate(event.date).toLocaleDateString("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+  });
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && !saving && !canceling && onDone(false)}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>
+            {existing ? "Edit your RSVP" : `Sign up — ${event.title}`}
+          </DialogTitle>
+          <DialogDescription>
+            {dateLabel}
+            {event.start_time ? ` · ${fmtEventTime(event.start_time)}` : ""}
+            {event.location ? ` · ${event.location}` : ""}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="rsvp-spots">Parent spots to reserve</Label>
+            <Input
+              id="rsvp-spots"
+              type="number"
+              min={1}
+              max={maxSpots}
+              step={1}
+              value={spots}
+              onChange={(e) => setSpots(e.target.value)}
+              className="w-24"
+            />
+            <p className="text-[11px] text-muted-foreground">
+              {maxSpots} available to your family.
+            </p>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="rsvp-comment">Who&rsquo;s coming? (optional)</Label>
+            <Textarea
+              id="rsvp-comment"
+              value={comment}
+              onChange={(e) => setComment(e.target.value)}
+              rows={2}
+              maxLength={500}
+              placeholder="Names of the adults attending, or anything we should know."
+            />
+          </div>
+        </div>
+        <DialogFooter className="gap-2 sm:justify-between">
+          {existing ? (
+            <Button
+              variant="outline"
+              className="bg-white text-red-600 hover:bg-red-50 hover:text-red-700"
+              disabled={saving || canceling}
+              onClick={() => void cancelRsvp()}
+            >
+              {canceling ? (
+                <>
+                  <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                  Canceling
+                </>
+              ) : (
+                "Cancel RSVP"
+              )}
+            </Button>
+          ) : (
+            <span />
+          )}
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              className="bg-white"
+              disabled={saving || canceling}
+              onClick={() => onDone(false)}
+            >
+              Close
+            </Button>
+            <Button
+              disabled={!valid || saving || canceling}
+              onClick={() => void save()}
+            >
+              {saving ? (
+                <>
+                  <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                  Saving
+                </>
+              ) : existing ? (
+                "Save changes"
+              ) : (
+                "Reserve spots"
+              )}
+            </Button>
+          </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

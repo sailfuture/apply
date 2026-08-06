@@ -60,6 +60,16 @@ export async function PATCH(
     if ("volunteer_hour_total" in body) {
       patch.volunteer_hour_total = coerceHours(body.volunteer_hour_total);
     }
+    if ("parent_spots" in body) {
+      patch.parent_spots = coerceSpots(body.parent_spots);
+    }
+    if ("needs" in body) {
+      // Single-space sentinel when clearing — Xano's edit endpoints
+      // drop empty-string inputs. Readers trim before splitting.
+      const needs =
+        typeof body.needs === "string" ? body.needs.trim() : "";
+      patch.needs = needs || " ";
+    }
     if ("color" in body) {
       // Single-space sentinel when clearing — Xano's edit endpoints
       // silently DROP empty-string inputs, so "" would leave the old
@@ -112,6 +122,12 @@ function coerceMs(v: unknown): number {
 function coerceHours(v: unknown): number {
   const n = Number(v);
   return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/** Whole-number RSVP capacity, capped at 500; 0 = sign-ups closed. */
+function coerceSpots(v: unknown): number {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? Math.min(Math.round(n), 500) : 0;
 }
 
 /** Known event-category color slugs; anything else coerces to "". */

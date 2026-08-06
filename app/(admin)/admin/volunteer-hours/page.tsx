@@ -74,6 +74,7 @@ import {
 import { EventReminderDialog } from "@/components/admin/event-reminder-dialog";
 import type {
   AdminVolunteerHoursResponse,
+  EventRsvpRow,
   VolunteerEvent,
   VolunteerFamily,
 } from "@/app/api/admin/volunteer-hours/route";
@@ -127,6 +128,22 @@ export default function AdminVolunteerHoursPage() {
   const families = useMemo(() => data?.families ?? [], [data]);
   const events = useMemo(() => data?.events ?? [], [data]);
   const days = useMemo(() => data?.days ?? [], [data]);
+  const rsvps = useMemo(() => data?.rsvps ?? [], [data]);
+
+  /** event id → its RSVP rows (family name, spots, comment). */
+  const rsvpsByEvent = useMemo(() => {
+    const m = new Map<number, EventRsvpRow[]>();
+    for (const r of rsvps) {
+      const list = m.get(r.school_calendar_events_id) ?? [];
+      list.push(r);
+      m.set(r.school_calendar_events_id, list);
+    }
+    return m;
+  }, [rsvps]);
+  /** Event whose RSVP list dialog is open. */
+  const [rsvpListEvent, setRsvpListEvent] = useState<VolunteerEvent | null>(
+    null
+  );
 
   const familyById = useMemo(
     () => new Map(families.map((f) => [f.id, f])),
@@ -553,6 +570,7 @@ export default function AdminVolunteerHoursPage() {
                     <TableHead>Date</TableHead>
                     <TableHead>Event</TableHead>
                     <TableHead className="text-right">Credit</TableHead>
+                    <TableHead className="text-right">RSVPs</TableHead>
                     <TableHead className="text-right">
                       Families credited
                     </TableHead>
@@ -565,7 +583,7 @@ export default function AdminVolunteerHoursPage() {
                   {parentEvents.length === 0 ? (
                     <TableRow>
                       <TableCell
-                        colSpan={5}
+                        colSpan={6}
                         className="py-6 text-center text-sm text-muted-foreground"
                       >
                         No volunteer-credit events on the calendar yet —
@@ -578,6 +596,11 @@ export default function AdminVolunteerHoursPage() {
                       const c = eventColor(ev.color);
                       const credited =
                         entriesByEvent.get(ev.id)?.length ?? 0;
+                      const evRsvps = rsvpsByEvent.get(ev.id) ?? [];
+                      const spotsReserved = evRsvps.reduce(
+                        (s, r) => s + r.spots,
+                        0
+                      );
                       return (
                         <TableRow key={ev.id}>
                           <TableCell className="whitespace-nowrap tabular-nums">
@@ -602,6 +625,28 @@ export default function AdminVolunteerHoursPage() {
                           </TableCell>
                           <TableCell className="text-right tabular-nums">
                             {formatHours(ev.volunteer_hour_total || 0)} hrs
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {(ev.parent_spots ?? 0) > 0 || evRsvps.length > 0 ? (
+                              <button
+                                type="button"
+                                onClick={() => setRsvpListEvent(ev)}
+                                className={cn(
+                                  "tabular-nums underline-offset-2 hover:underline",
+                                  spotsReserved > 0
+                                    ? "font-medium text-foreground"
+                                    : "text-muted-foreground"
+                                )}
+                                title="View sign-ups"
+                              >
+                                {spotsReserved}
+                                {(ev.parent_spots ?? 0) > 0
+                                  ? ` / ${ev.parent_spots}`
+                                  : ""}
+                              </button>
+                            ) : (
+                              <span className="text-muted-foreground">—</span>
+                            )}
                           </TableCell>
                           <TableCell className="text-right tabular-nums">
                             {credited}
@@ -724,6 +769,16 @@ export default function AdminVolunteerHoursPage() {
           yearId={yearId}
           event={remindEvent}
           onDone={() => setRemindEvent(null)}
+        />
+      ) : null}
+
+      {/* ── Event RSVP list (parent sign-ups) ── */}
+      {rsvpListEvent ? (
+        <RsvpListDialog
+          key={rsvpListEvent.id}
+          event={rsvpListEvent}
+          rsvps={rsvpsByEvent.get(rsvpListEvent.id) ?? []}
+          onClose={() => setRsvpListEvent(null)}
         />
       ) : null}
 
@@ -1666,6 +1721,75 @@ function BulkHoursDialog({
             )}
           </Button>
         </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/* ─────────────────── Event RSVP list ─────────────────── */
+
+/**
+ * Read-only list of a parent event's sign-ups — family, spots
+ * reserved, and the parent's who's-coming comment. Reservations are
+ * made by families on the parent volunteer page; staff use this list
+ * for headcounts and at-the-door check-in.
+ */
+function RsvpListDialog({
+  event,
+  rsvps,
+  onClose,
+}: {
+  event: VolunteerEvent;
+  rsvps: EventRsvpRow[];
+  onClose: () => void;
+}) {
+  const totalSpots = rsvps.reduce((s, r) => s + r.spots, 0);
+  const capacity = event.parent_spots ?? 0;
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Sign-ups — {event.title}</DialogTitle>
+          <DialogDescription>
+            {fmtDate(event.date)} ·{" "}
+            {capacity > 0
+              ? `${totalSpots} of ${capacity} parent spots reserved`
+              : `${totalSpots} spots reserved`}{" "}
+            · {rsvps.length} famil{rsvps.length === 1 ? "y" : "ies"}
+          </DialogDescription>
+        </DialogHeader>
+        {rsvps.length === 0 ? (
+          <p className="py-4 text-center text-sm text-muted-foreground">
+            No sign-ups yet.
+          </p>
+        ) : (
+          <div className="max-h-80 overflow-y-auto overscroll-contain rounded-lg border">
+            <Table>
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead className="pl-3">Family</TableHead>
+                  <TableHead className="w-16 text-right">Spots</TableHead>
+                  <TableHead>Comment</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {rsvps.map((r) => (
+                  <TableRow key={r.id} className="hover:bg-transparent">
+                    <TableCell className="pl-3 font-medium">
+                      {r.family_name}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {r.spots}
+                    </TableCell>
+                    <TableCell className="whitespace-pre-wrap text-muted-foreground">
+                      {r.comment || "—"}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   );

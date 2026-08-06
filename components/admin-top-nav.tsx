@@ -99,6 +99,7 @@ const NAV_ITEMS: NavItem[] = [
       { title: "Messages", href: "/admin/messages", badge: "messages" },
       { title: "Calendar", href: "/admin/school-calendar" },
       { title: "Volunteer Hours", href: "/admin/volunteer-hours" },
+      { title: "Store", href: "/admin/store" },
     ],
   },
   // Settings — year-scoped configuration (tuition, fees, SUFS award

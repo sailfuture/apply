@@ -566,6 +566,10 @@ export function EventUpsertDialog({
   const [hours, setHours] = useState(
     ev?.volunteer_hour_total ? String(ev.volunteer_hour_total) : ""
   );
+  const [spots, setSpots] = useState(
+    ev?.parent_spots ? String(ev.parent_spots) : ""
+  );
+  const [needs, setNeeds] = useState((ev?.needs ?? "").trim());
   const [saving, setSaving] = useState(false);
 
   const dayByDate = useMemo(
@@ -593,6 +597,8 @@ export function EventUpsertDialog({
         mandatory,
         parent_volunteer_hours: volunteer,
         volunteer_hour_total: volunteer ? Number(hours) || 0 : 0,
+        parent_spots: Number(spots) || 0,
+        needs: needs.trim(),
       };
       const res = await fetch(
         existing
@@ -753,6 +759,34 @@ export function EventUpsertDialog({
               />
             </div>
           ) : null}
+          <div className="space-y-1.5">
+            <Label className="text-xs">Parent sign-up spots</Label>
+            <Input
+              type="number"
+              min="0"
+              step="1"
+              value={spots}
+              onChange={(e) => setSpots(e.target.value)}
+              placeholder="0"
+            />
+            <p className="text-[11px] text-muted-foreground">
+              How many parent spots families can reserve. Blank or 0 =
+              no sign-up — the event won&rsquo;t offer an RSVP.
+            </p>
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs">Event needs</Label>
+            <Textarea
+              value={needs}
+              onChange={(e) => setNeeds(e.target.value)}
+              rows={3}
+              placeholder={"One need per line:\n4 chaperones\nWater jugs"}
+            />
+            <p className="text-[11px] text-muted-foreground">
+              One per line — shown to families as a list of what the
+              event needs.
+            </p>
+          </div>
         </div>
         <DialogFooter className="border-t px-5 py-3">
           <Button

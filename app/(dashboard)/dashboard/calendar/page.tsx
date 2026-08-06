@@ -7,7 +7,6 @@ import {
   CalendarDays,
   ChevronLeft,
   ChevronRight,
-  Clock,
   ExternalLink,
   List,
   MapPin,
@@ -24,7 +23,7 @@ import {
 } from "@/components/ui/sheet";
 import { DashboardPageHeader } from "@/components/dashboard-page-header";
 import { cn } from "@/lib/utils";
-import { eventColor, parseDate } from "@/lib/school-calendar";
+import { eventColor, parseDate, parseNeeds } from "@/lib/school-calendar";
 import type { ParentSchoolCalendarResponse } from "@/app/api/school-calendar/route";
 import type {
   XanoSchoolCalendarDay,
@@ -745,61 +744,73 @@ function DayDetailsSheet({
           </SheetDescription>
         </SheetHeader>
 
-        <div className="space-y-3 px-4 py-4">
+        {/* Events as flat line sections — one block per event divided
+            by hairlines, each detail on its own labelled row (no inner
+            cards). */}
+        <div className="divide-y">
           {events.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
+            <p className="px-4 py-4 text-sm text-muted-foreground">
               No events on this day.
             </p>
           ) : (
-            <ul className="space-y-3">
-              {events.map((e) => {
-                const c = eventColor(e.color);
-                return (
-                  <li key={e.id} className="rounded-lg border bg-white p-4">
-                    <div className="flex items-center gap-2">
+            events.map((e) => {
+              const c = eventColor(e.color);
+              const needs = parseNeeds(e.needs);
+              return (
+                <section key={e.id} className="px-4 py-4">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={cn(
+                        "size-2.5 shrink-0 rounded-full",
+                        c ? c.dot : "bg-slate-300"
+                      )}
+                      aria-hidden
+                    />
+                    <h3 className="min-w-0 flex-1 truncate text-sm font-semibold">
+                      {e.title}
+                    </h3>
+                    {c ? (
                       <span
                         className={cn(
-                          "size-2.5 shrink-0 rounded-full",
-                          c ? c.dot : "bg-slate-300"
+                          "shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium",
+                          c.chip
                         )}
-                        aria-hidden
-                      />
-                      <p className="min-w-0 flex-1 truncate text-sm font-semibold">
-                        {e.title}
-                      </p>
-                      {c ? (
-                        <span
-                          className={cn(
-                            "shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium",
-                            c.chip
-                          )}
-                        >
-                          {c.label}
-                        </span>
-                      ) : null}
-                    </div>
-                    <div className="mt-2.5 space-y-1.5">
-                      <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
-                        <Clock className="size-3.5 shrink-0" />
-                        {e.start_time
-                          ? `${fmtTime(e.start_time)}${
-                              e.end_time ? ` – ${fmtTime(e.end_time)}` : ""
-                            }`
-                          : "All day"}
-                      </p>
-                      {e.location ? (
-                        <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
-                          <MapPin className="size-3.5 shrink-0" />
-                          <span className="truncate">{e.location}</span>
-                        </p>
-                      ) : null}
-                      {e.description ? (
-                        <p className="whitespace-pre-wrap text-sm text-muted-foreground">
+                      >
+                        {c.label}
+                      </span>
+                    ) : null}
+                  </div>
+
+                  <dl className="mt-3 space-y-2.5 text-sm">
+                    <DetailLine label="Time">
+                      {e.start_time
+                        ? `${fmtTime(e.start_time)}${
+                            e.end_time ? ` – ${fmtTime(e.end_time)}` : ""
+                          }`
+                        : "All day"}
+                    </DetailLine>
+                    {e.location ? (
+                      <DetailLine label="Location">{e.location}</DetailLine>
+                    ) : null}
+                    {e.description ? (
+                      <DetailLine label="Description">
+                        <span className="whitespace-pre-wrap">
                           {e.description}
-                        </p>
-                      ) : null}
-                      {e.mandatory || e.parent_volunteer_hours ? (
-                        <p className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                        </span>
+                      </DetailLine>
+                    ) : null}
+                    {needs.length > 0 ? (
+                      <DetailLine label="Needs">
+                        <ul className="list-disc space-y-0.5 pl-4 marker:text-muted-foreground/60">
+                          {needs.map((n) => (
+                            <li key={n}>{n}</li>
+                          ))}
+                        </ul>
+                      </DetailLine>
+                    ) : null}
+                    {e.mandatory || e.parent_volunteer_hours ? (
+                      <DetailLine label="Notes">
+                        <span className="flex flex-wrap items-center gap-1.5">
                           {e.mandatory ? (
                             <span className="rounded-full border border-red-200 bg-red-50 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-red-700">
                               Mandatory
@@ -810,17 +821,34 @@ function DayDetailsSheet({
                               {e.volunteer_hour_total || 0} vol hrs
                             </span>
                           ) : null}
-                        </p>
-                      ) : null}
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
+                        </span>
+                      </DetailLine>
+                    ) : null}
+                  </dl>
+                </section>
+              );
+            })
           )}
         </div>
       </SheetContent>
     </Sheet>
+  );
+}
+
+/** One labelled row in the day sheet's event details — label column
+ *  left, value right. */
+function DetailLine({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="grid grid-cols-[5.5rem_1fr] gap-3">
+      <dt className="text-xs leading-5 text-muted-foreground">{label}</dt>
+      <dd className="min-w-0">{children}</dd>
+    </div>
   );
 }
 

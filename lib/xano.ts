@@ -701,6 +701,68 @@ export interface XanoVolunteerHours {
   activity_category?: string;
 }
 
+/**
+ * One school-store product (`registration_store_items`) —
+ * admin-managed catalog of things parents can buy in the portal
+ * (uniform shirts, sweatshirts, …). Each item wraps a Stripe Payment
+ * Link created in the Stripe Dashboard; the portal appends family
+ * attribution to the URL at click time. `price_cents` is display-only
+ * — the Payment Link's Stripe price is what actually gets charged.
+ */
+export interface XanoStoreItem {
+  id: number;
+  created_at: number;
+  name: string;
+  description: string;
+  price_cents: number;
+  payment_link_url: string;
+  /** Hidden from parents when false — soft delete / seasonal items. */
+  is_active: boolean;
+  /** Parent-facing sort — ascending, ties broken by id. */
+  sort_order: number;
+}
+
+/**
+ * One school-store purchase (`registration_store_orders`) — mirrored
+ * from Stripe by the webhook when a `checkout.session.completed`
+ * event arrives for a Payment Link checkout. The parent portal
+ * appends `client_reference_id=family-<id>-year-<yid>` to the store
+ * links so the webhook can attribute the purchase; rows with
+ * `registration_families_id: 0` are unattributed (someone paid via a
+ * bare link shared outside the portal).
+ *
+ * `distributed` is the staff hand-out latch: flipping it stamps
+ * `distributed_at` / `distributed_by` (0 / " " sentinels on undo —
+ * Xano edits drop null and empty-string inputs).
+ */
+export interface XanoStoreOrder {
+  id: number;
+  created_at: number;
+  /** FK to `registration_families` — 0 = unattributed purchase. */
+  registration_families_id: number;
+  /** FK to `registration_school_years` — 0 = unknown. */
+  registration_school_years_id: number;
+  /** FK to `registration_store_items` — resolved by matching the
+   *  session's Payment Link URL against the catalog. 0 = unresolved
+   *  (multi-product link, or the item was deleted). Drives the
+   *  per-product sold / awaiting-pickup rollups. */
+  registration_store_items_id: number;
+  /** Natural idempotency key — one row per Stripe Checkout Session. */
+  stripe_checkout_session_id: string;
+  stripe_payment_link_id: string;
+  /** Human summary of the line items, e.g. "Uniform Shirt ×2". */
+  item: string;
+  quantity: number;
+  total_amount_cents: number;
+  purchaser_email: string;
+  /** Unix ms. Typed loose because the Xano column may be text —
+   *  normalize with `Number()` before comparing/formatting. */
+  paid_at: number | string;
+  distributed: boolean;
+  distributed_at: number | null;
+  distributed_by: string;
+}
+
 export interface XanoScholarship {
   id: number;
   created_at: number;
@@ -2344,11 +2406,39 @@ export interface XanoSchoolCalendarEvent {
   mandatory: boolean;
   parent_volunteer_hours: boolean;
   volunteer_hour_total: number;
+  /** Parent sign-up capacity for the RSVP flow — how many parent
+   *  spots families can reserve. 0 = sign-ups not offered (the event
+   *  doesn't appear on the parent volunteer page's Upcoming list).
+   *  Optional because legacy rows predate the column. */
+  parent_spots?: number;
+  /** What the event needs from families — one need per line
+   *  ("4 chaperones", "Water jugs", …). Rendered as a bulleted list
+   *  on the parent calendar + volunteer surfaces. " " = cleared
+   *  (Xano edits drop empty strings). Optional: legacy rows predate
+   *  the column. */
+  needs?: string;
   /** Event-category color slug ("sky" | "emerald" | "violet" |
    *  "amber" | …) — "" / " " = uncategorized. The single-space form
    *  exists because Xano's edit endpoints drop empty-string inputs,
    *  so clearing a color PATCHes " " (trim before comparing). */
   color: string;
+}
+
+/**
+ * One family's RSVP to a calendar event (`school_event_rsvps`).
+ * One row per (event, family) — the parent RSVP endpoint upserts, so
+ * re-submitting edits the existing reservation. `spots` is how many
+ * parent seats the family reserved; the endpoint enforces the event's
+ * `parent_spots` capacity across all families at write time.
+ * `comment` is free text from the parent ("Maria + grandma Ana").
+ */
+export interface XanoEventRsvp {
+  id: number;
+  created_at: number;
+  school_calendar_events_id: number;
+  registration_families_id: number;
+  spots: number;
+  comment: string;
 }
 
 /**
@@ -4352,6 +4442,105 @@ export const xano = {
     },
   },
 
+  /** School-store catalog — see `XanoStoreItem`. Plain CRUD on
+   *  `registration_store_items`. */
+  storeItems: {
+    async getAll(): Promise<XanoStoreItem[]> {
+      const res = await fetch(`${getBaseUrl()}/registration_store_items`, {
+        cache: "no-store",
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      const rows = await res.json();
+      return Array.isArray(rows) ? rows : [];
+    },
+
+    async create(
+      data: Omit<XanoStoreItem, "id" | "created_at">
+    ): Promise<XanoStoreItem> {
+      const res = await fetch(`${getBaseUrl()}/registration_store_items`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async update(
+      id: number,
+      patch: Partial<XanoStoreItem>
+    ): Promise<XanoStoreItem> {
+      const res = await fetch(`${getBaseUrl()}/registration_store_items/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async delete(id: number): Promise<void> {
+      const res = await fetch(`${getBaseUrl()}/registration_store_items/${id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+    },
+  },
+
+  /** School-store purchases — see `XanoStoreOrder`. Plain CRUD on
+   *  `registration_store_orders`; callers filter by family / session in
+   *  (order volume is small). */
+  storeOrders: {
+    async getAll(): Promise<XanoStoreOrder[]> {
+      const res = await fetch(`${getBaseUrl()}/registration_store_orders`, {
+        cache: "no-store",
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      const rows = await res.json();
+      return Array.isArray(rows) ? rows : [];
+    },
+
+    /**
+     * Find the order mirrored from one Checkout Session. THROWS on a
+     * failed list fetch rather than returning null — the webhook uses
+     * null as "never seen → CREATE", so a swallowed error would
+     * duplicate the row on retry.
+     */
+    async findBySessionIdStrict(
+      sessionId: string
+    ): Promise<XanoStoreOrder | null> {
+      const rows = await xano.storeOrders.getAll();
+      return (
+        rows.find((r) => r.stripe_checkout_session_id === sessionId) ?? null
+      );
+    },
+
+    async create(
+      data: Omit<XanoStoreOrder, "id" | "created_at">
+    ): Promise<XanoStoreOrder> {
+      const res = await fetch(`${getBaseUrl()}/registration_store_orders`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async update(
+      id: number,
+      patch: Partial<XanoStoreOrder>
+    ): Promise<XanoStoreOrder> {
+      const res = await fetch(`${getBaseUrl()}/registration_store_orders/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+  },
+
   studentRegistration: {
     /**
      * Every registration packet. Used by aggregate surfaces (the
@@ -5931,6 +6120,56 @@ export const xano = {
       const res = await fetch(`${getBaseUrl()}/school_calendar_events/${id}`, {
         method: "DELETE",
       });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+    },
+  },
+
+  /** Family RSVPs to calendar events — see `XanoEventRsvp`. Plain
+   *  CRUD on `school_event_rsvps`; callers filter by event /
+   *  family in code. */
+  eventRsvps: {
+    async getAll(): Promise<XanoEventRsvp[]> {
+      const res = await fetch(`${getBaseUrl()}/school_event_rsvps`, {
+        cache: "no-store",
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      const rows = await res.json();
+      return Array.isArray(rows) ? rows : [];
+    },
+
+    async create(
+      data: Omit<XanoEventRsvp, "id" | "created_at">
+    ): Promise<XanoEventRsvp> {
+      const res = await fetch(`${getBaseUrl()}/school_event_rsvps`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async update(
+      id: number,
+      patch: Partial<XanoEventRsvp>
+    ): Promise<XanoEventRsvp> {
+      const res = await fetch(
+        `${getBaseUrl()}/school_event_rsvps/${id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch),
+        }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async delete(id: number): Promise<void> {
+      const res = await fetch(
+        `${getBaseUrl()}/school_event_rsvps/${id}`,
+        { method: "DELETE" }
+      );
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
     },
   },
