@@ -48,6 +48,21 @@ export async function GET(
 
   try {
     const { data, error } = await getResend().emails.get(row.resend_id);
+    // Resend only retains message content for a limited window (per
+    // the account's data-retention setting) — older sends return
+    // `not_found`. That's expected, not a fault: report it as a 410
+    // so the viewer can say "no longer available" instead of showing
+    // a scary error. See the `expired` flag consumers key off.
+    if (error?.name === "not_found") {
+      return NextResponse.json(
+        {
+          error:
+            "This email is no longer available to view — we only keep the full message for a short time after sending.",
+          expired: true,
+        },
+        { status: 410 }
+      );
+    }
     if (error || !data) {
       throw new Error(error?.message ?? "Resend returned no data");
     }

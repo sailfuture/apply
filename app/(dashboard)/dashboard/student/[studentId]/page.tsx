@@ -410,7 +410,8 @@ export default function StudentDetailPage() {
 
       {/* Documents — uploadable. Split into two tables so parents see at a
           glance what's mandatory vs nice-to-have. Same DocRow renderer for
-          both groups; the `required` flag drives the per-row badge. */}
+          both groups; only the required group passes `approved`, so only
+          it shows review-status pills. */}
       <div>
         <div className="flex items-baseline justify-between mb-3">
           <h2 className="text-sm font-semibold">Required Documents</h2>
@@ -422,12 +423,11 @@ export default function StudentDetailPage() {
           <div className="overflow-hidden rounded-lg border">
             <table className="w-full text-sm">
               <tbody className="divide-y">
-                {requiredDocs.map(({ key, label, required, confirmKey }) => (
+                {requiredDocs.map(({ key, label, confirmKey }) => (
                   <DocRow
                     key={key}
                     field={key}
                     label={label}
-                    required={required}
                     approved={
                       confirmKey ? student[confirmKey] === true : undefined
                     }
@@ -455,12 +455,11 @@ export default function StudentDetailPage() {
           <div className="overflow-hidden rounded-lg border">
             <table className="w-full text-sm">
               <tbody className="divide-y">
-                {optionalDocs.map(({ key, label, required }) => (
+                {optionalDocs.map(({ key, label }) => (
                   <DocRow
                     key={key}
                     field={key}
                     label={label}
-                    required={required}
                     files={(student[key] as FileMetadata[] | undefined) ?? []}
                     studentId={student.id}
                     onChanged={() => {
@@ -566,7 +565,6 @@ function DetailTable({ rows }: { rows: [string, string][] }) {
 function DocRow({
   field,
   label,
-  required,
   approved,
   files,
   studentId,
@@ -574,7 +572,6 @@ function DocRow({
 }: {
   field: DocField;
   label: string;
-  required: boolean;
   /** Admin review state for required docs — true = approved, false =
    *  not yet reviewed. Undefined for optional docs (no review flag),
    *  which hides the status pill entirely. */
@@ -652,11 +649,6 @@ function DocRow({
           <p className="font-medium flex items-center gap-2 flex-wrap">
             <FileText className="size-4 text-muted-foreground" />
             {label}
-            {required ? (
-              <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">
-                Required
-              </span>
-            ) : null}
           </p>
           {/* Review status — required docs only. Three states: no file
               yet (missing), uploaded awaiting admin review, approved. */}

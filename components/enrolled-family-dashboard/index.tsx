@@ -905,7 +905,7 @@ export function EnrolledFamilyDashboard({
               <p className="px-4 py-6 text-sm text-muted-foreground text-center">
                 No parents on file.{" "}
                 <a
-                  href="mailto:tward@sailfuture.org?subject=Missing%20contacts"
+                  href="mailto:dean@sailfuture.org?subject=Missing%20contacts"
                   className="text-primary underline underline-offset-2"
                 >
                   Contact the office
@@ -1004,10 +1004,10 @@ export function EnrolledFamilyDashboard({
       <p className="text-xs text-muted-foreground text-center pt-4 border-t">
         Need to change anything else? Reach us at{" "}
         <a
-          href="mailto:tward@sailfuture.org"
+          href="mailto:dean@sailfuture.org"
           className="text-primary underline underline-offset-2"
         >
-          tward@sailfuture.org
+          dean@sailfuture.org
         </a>{" "}
         or{" "}
         <a

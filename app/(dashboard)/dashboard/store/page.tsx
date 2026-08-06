@@ -327,7 +327,7 @@ export default function StorePage() {
         Purchased items are handed out at school. Questions about an order
         or device?{" "}
         <a
-          href="mailto:tward@sailfuture.org?subject=School%20store"
+          href="mailto:dean@sailfuture.org?subject=School%20store"
           className="text-primary underline underline-offset-2"
         >
           Contact the office

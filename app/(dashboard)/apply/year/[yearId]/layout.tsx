@@ -197,8 +197,8 @@ function LayoutInner({ children }: { children: React.ReactNode }) {
                       <path d="M19 8.839l-7.831 3.916a2.75 2.75 0 01-2.338 0L1 8.839V14a2 2 0 002 2h14a2 2 0 002-2V8.839z" />
                     </svg>
                   </div>
-                  <a href="mailto:tward@sailfuture.org" className="text-sm underline underline-offset-2">
-                    tward@sailfuture.org
+                  <a href="mailto:dean@sailfuture.org" className="text-sm underline underline-offset-2">
+                    dean@sailfuture.org
                   </a>
                 </div>
                 <div className="flex items-center gap-2.5">

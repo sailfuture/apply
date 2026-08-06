@@ -318,7 +318,7 @@ export default function VolunteerHoursPage() {
       <p className="text-xs text-muted-foreground text-center pt-4 border-t">
         Hours are logged by the admissions team. If something looks off,{" "}
         <a
-          href="mailto:tward@sailfuture.org?subject=Volunteer%20hours%20question"
+          href="mailto:dean@sailfuture.org?subject=Volunteer%20hours%20question"
           className="text-primary underline underline-offset-2"
         >
           contact the office

@@ -27,7 +27,11 @@ export async function GET() {
     | undefined;
   if (!familyId) {
     return NextResponse.json(
-      { entries: [], read_at: 0 } satisfies ParentNotificationsResponse,
+      {
+        entries: [],
+        read_at: 0,
+        sms_number: "",
+      } satisfies ParentNotificationsResponse,
       { status: 200 }
     );
   }
@@ -70,9 +74,21 @@ export async function GET() {
     })),
   ].sort((a, b) => b.at - a.at);
 
+  // The number to tell parents to text back. Prefer the one THIS
+  // family actually received texts from (their thread's most recent
+  // outbound `from_number`) — sends route through a Twilio Messaging
+  // Service whose pool can hold more than one number, so the env var
+  // is only a fallback for families with no texts yet.
+  const lastOutbound = [...texts]
+    .reverse()
+    .find((t) => t.direction !== "inbound" && t.from_number);
+  const smsNumber =
+    lastOutbound?.from_number || process.env.TWILIO_PHONE_NUMBER || "";
+
   return NextResponse.json({
     entries,
     read_at: family?.notifications_read_at ?? 0,
+    sms_number: smsNumber,
   } satisfies ParentNotificationsResponse);
 }
 
@@ -97,4 +113,7 @@ export interface ParentNotificationsResponse {
   entries: ParentNotificationEntry[];
   /** Family-level read watermark (unix ms; 0 = never marked). */
   read_at: number;
+  /** E.164 number the school texts this family from — what they
+   *  reply to. "" when unknown (no texts yet and no env fallback). */
+  sms_number: string;
 }

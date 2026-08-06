@@ -93,10 +93,10 @@ export default async function Page() {
             We couldn&apos;t load the current school year. Please refresh
             the page in a moment, or contact us at{" "}
             <a
-              href="mailto:tward@sailfuture.org"
+              href="mailto:dean@sailfuture.org"
               className="text-primary underline underline-offset-2"
             >
-              tward@sailfuture.org
+              dean@sailfuture.org
             </a>{" "}
             if this keeps happening.
           </p>

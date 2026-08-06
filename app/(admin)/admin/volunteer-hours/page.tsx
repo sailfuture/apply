@@ -645,7 +645,15 @@ export default function AdminVolunteerHoursPage() {
                                   : ""}
                               </button>
                             ) : (
-                              <span className="text-muted-foreground">—</span>
+                              // No capacity set → parents can't sign up.
+                              // Say so plainly; a bare dash read as
+                              // "nothing here" and hid the feature.
+                              <span
+                                className="text-xs text-muted-foreground"
+                                title="Set “Parent sign-up spots” on this event to open RSVPs"
+                              >
+                                Sign-ups off
+                              </span>
                             )}
                           </TableCell>
                           <TableCell className="text-right tabular-nums">

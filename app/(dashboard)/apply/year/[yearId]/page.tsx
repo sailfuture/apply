@@ -238,10 +238,10 @@ function RegistrationPendingView({
         <p className="text-xs text-muted-foreground text-center mt-6">
           Questions? Contact us at{" "}
           <a
-            href="mailto:tward@sailfuture.org"
+            href="mailto:dean@sailfuture.org"
             className="text-primary underline underline-offset-2"
           >
-            tward@sailfuture.org
+            dean@sailfuture.org
           </a>{" "}
           or call{" "}
           <a
@@ -447,10 +447,10 @@ function AcceptedView({ firstName, yearId, yearName, applicationDeadline, regist
         <p className="text-xs text-muted-foreground text-center mt-6">
           If you have any questions, please contact us at{" "}
           <a
-            href="mailto:tward@sailfuture.org"
+            href="mailto:dean@sailfuture.org"
             className="text-primary underline underline-offset-2"
           >
-            tward@sailfuture.org
+            dean@sailfuture.org
           </a>{" "}
           or call{" "}
           <a
@@ -1114,10 +1114,10 @@ export default function YearOverviewPage() {
         <p className="text-xs text-muted-foreground text-center mt-6">
           If you require assistance with your application, please contact us at{" "}
           <a
-            href="mailto:tward@sailfuture.org"
+            href="mailto:dean@sailfuture.org"
             className="text-primary underline underline-offset-2"
           >
-            tward@sailfuture.org
+            dean@sailfuture.org
           </a>{" "}
           or call{" "}
           <a

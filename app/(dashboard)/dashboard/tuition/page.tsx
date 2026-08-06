@@ -554,7 +554,7 @@ export default function DashboardTuitionPage() {
       <p className="text-xs text-muted-foreground text-center pt-4 border-t">
         For questions about your account, please{" "}
         <a
-          href="mailto:tward@sailfuture.org?subject=Tuition%20question"
+          href="mailto:dean@sailfuture.org?subject=Tuition%20question"
           className="text-primary underline underline-offset-2"
         >
           contact the office

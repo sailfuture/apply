@@ -16,6 +16,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetcher } from "@/hooks/use-api";
 import { getLocalReadAt, setLocalReadAt } from "@/lib/notifications";
+import { formatUSPhone } from "@/lib/phone";
 import { cn } from "@/lib/utils";
 import type {
   ParentNotificationEntry,
@@ -77,6 +78,7 @@ export default function NotificationsPage() {
   const [emailView, setEmailView] = useState<ParentNotificationEntry | null>(
     null
   );
+  const smsNumber = data?.sms_number ?? "";
 
   // Freeze the read watermark as it was BEFORE this visit stamps it,
   // so the "new" highlights stay visible for the whole session.
@@ -129,7 +131,7 @@ export default function NotificationsPage() {
   const loading = !data;
 
   return (
-    <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-3xl">
+    <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
       <DashboardPageHeader
         backHref={dashboardHref}
         backLabel="Back to Dashboard"
@@ -213,12 +215,26 @@ export default function NotificationsPage() {
       ) : null}
 
       <p className="text-xs text-muted-foreground text-center pt-4 border-t">
-        Need to reach us? Text this thread back from your phone, or email{" "}
+        Need to reach us?{" "}
+        {smsNumber ? (
+          <>
+            Text us at{" "}
+            <a
+              href={`sms:${smsNumber}`}
+              className="text-primary underline underline-offset-2"
+            >
+              {formatUSPhone(smsNumber)}
+            </a>{" "}
+            (replies come straight to this thread), or email{" "}
+          </>
+        ) : (
+          <>Text this thread back from your phone, or email{" "}</>
+        )}
         <a
-          href="mailto:tward@sailfuture.org"
+          href="mailto:dean@sailfuture.org"
           className="text-primary underline underline-offset-2"
         >
-          tward@sailfuture.org
+          dean@sailfuture.org
         </a>
         .
       </p>
@@ -283,7 +299,7 @@ function EntryBubble({
               : "cursor-default"
           )}
         >
-          <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-violet-600">
+          <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
             <Mail className="size-3.5" />
             Email
             {unread ? (
@@ -335,6 +351,25 @@ function EntryBubble({
   );
 }
 
+/**
+ * Email-content fetcher that preserves the server's message. The
+ * shared `apiFetcher` collapses every failure to "API error <status>",
+ * but this endpoint's 410 ("no longer available — we only keep the
+ * full message for a short time") is copy the parent should actually
+ * read.
+ */
+const emailFetcher = async (url: string): Promise<ParentEmailContent> => {
+  const res = await fetch(url);
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw new Error(
+      (body as { error?: string } | null)?.error ??
+        `Couldn't load this email (${res.status}).`
+    );
+  }
+  return body as ParentEmailContent;
+};
+
 /** Full delivered email content, fetched from Resend and rendered in
  *  a sandboxed iframe (no scripts). */
 function EmailViewerDialog({
@@ -346,8 +381,10 @@ function EmailViewerDialog({
 }) {
   const { data, error } = useSWR<ParentEmailContent>(
     entry.email_id !== null ? `/api/notifications/email/${entry.email_id}` : null,
-    apiFetcher,
-    { revalidateOnFocus: false }
+    emailFetcher,
+    // A 410 (content aged out of Resend's retention) is permanent —
+    // retrying just delays the explanation.
+    { revalidateOnFocus: false, shouldRetryOnError: false }
   );
 
   return (
