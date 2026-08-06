@@ -20,6 +20,7 @@ import {
 import {
   Pencil,
   HandHeart,
+  CalendarDays,
   CreditCard,
   ChevronRight,
   Plus,
@@ -640,9 +641,9 @@ export function EnrolledFamilyDashboard({
           edited there. */}
       {currentYearMode === "enrolled" ? (
       <>
-      {/* Tuition & Fees + Volunteer Hours — buttons that route to the
-          dedicated detail pages where the schedules + history live. */}
-      <div className="grid gap-3 sm:grid-cols-2">
+      {/* Tuition & Fees + Volunteer Hours + School Calendar — buttons
+          that route to the dedicated detail pages. */}
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <button
           type="button"
           onClick={() => router.push(`/dashboard/tuition?yearId=${yearId}`)}
@@ -711,6 +712,24 @@ export function EnrolledFamilyDashboard({
                   40 per year &middot; 8 per term
                 </p>
               )}
+            </div>
+          </div>
+          <ChevronRight className="size-4 text-muted-foreground shrink-0" />
+        </button>
+        <button
+          type="button"
+          onClick={() => router.push(`/dashboard/calendar?yearId=${yearId}`)}
+          className="flex items-center justify-between gap-3 rounded-xl border bg-white px-5 py-4 text-left shadow-sm hover:bg-muted/30 transition-colors cursor-pointer"
+        >
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-muted/50">
+              <CalendarDays className="size-5 text-muted-foreground" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-medium">School Calendar</p>
+              <p className="text-xs text-muted-foreground truncate">
+                Events, breaks, key dates
+              </p>
             </div>
           </div>
           <ChevronRight className="size-4 text-muted-foreground shrink-0" />
@@ -879,42 +898,32 @@ export function EnrolledFamilyDashboard({
         </Button>
       ) : null}
 
-      {/* Contacts — grouped table with section headers for primary,
-          secondary, and emergency contacts. Each row has a pencil edit
-          button that opens the shared edit sheet. */}
+      {/* Parents / Guardians — primary first, then secondary (if
+          present). Family is capped at two parents total; primary is
+          never deletable. Each row has a pencil edit button that opens
+          the shared edit sheet. */}
       <div>
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-sm font-semibold">Contacts</h2>
-          <div className="flex items-center gap-2">
-            {/* Add Parent — only renders when there's no secondary on file
-                yet, since the family already has a primary by definition. */}
-            {!secondary && (
-              <Button
-                size="sm"
-                variant="outline"
-                className="bg-white"
-                onClick={() => setAddParentOpen(true)}
-              >
-                <Plus className="size-4 mr-1.5" />
-                Add Parent
-              </Button>
-            )}
+          <h2 className="text-sm font-semibold">Parents / Guardians</h2>
+          {/* Add Parent — only renders when there's no secondary on file
+              yet, since the family already has a primary by definition. */}
+          {!secondary && (
             <Button
               size="sm"
               variant="outline"
               className="bg-white"
-              onClick={() => setAddEmergencyOpen(true)}
+              onClick={() => setAddParentOpen(true)}
             >
               <Plus className="size-4 mr-1.5" />
-              Add Emergency Contact
+              Add Parent
             </Button>
-          </div>
+          )}
         </div>
         <div className="rounded-xl bg-background p-1.5 shadow-sm border">
           <div className="overflow-hidden rounded-lg border">
-            {!primary && !secondary && (emergencyContacts ?? []).length === 0 ? (
+            {!primary && !secondary ? (
               <p className="px-4 py-6 text-sm text-muted-foreground text-center">
-                No contacts on file.{" "}
+                No parents on file.{" "}
                 <a
                   href="mailto:tward@sailfuture.org?subject=Missing%20contacts"
                   className="text-primary underline underline-offset-2"
@@ -926,10 +935,6 @@ export function EnrolledFamilyDashboard({
             ) : (
               <Table className="text-sm">
                 <TableBody>
-                  {/* Parents / Guardians group — primary first, then
-                      secondary (if present). Family is capped at two
-                      parents total; primary is never deletable. */}
-                  <ContactGroupHeader label="Parents / Guardians" />
                   {primary ? (
                     <ContactTableRow
                       contact={primary}
@@ -959,29 +964,53 @@ export function EnrolledFamilyDashboard({
                       }
                     />
                   ) : null}
+                </TableBody>
+              </Table>
+            )}
+          </div>
+        </div>
+      </div>
 
-                  {/* Emergency contacts group — all deletable. */}
-                  <ContactGroupHeader label="Emergency Contacts" />
-                  {(emergencyContacts ?? []).length === 0 ? (
-                    <ContactEmptyRow note="No emergency contacts on file." />
-                  ) : (
-                    (emergencyContacts ?? []).map((ec) => (
-                      <ContactTableRow
-                        key={ec.id}
-                        contact={ec}
-                        onEdit={() =>
-                          setEditing({ kind: "emergency", record: ec })
-                        }
-                        onDelete={() =>
-                          setPendingDelete({
-                            kind: "emergency",
-                            id: ec.id,
-                            name: `${ec.first_name} ${ec.last_name}`,
-                          })
-                        }
-                      />
-                    ))
-                  )}
+      {/* Emergency Contacts — own card, all rows deletable (behind the
+          shared confirmation dialog below). */}
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-semibold">Emergency Contacts</h2>
+          <Button
+            size="sm"
+            variant="outline"
+            className="bg-white"
+            onClick={() => setAddEmergencyOpen(true)}
+          >
+            <Plus className="size-4 mr-1.5" />
+            Add Emergency Contact
+          </Button>
+        </div>
+        <div className="rounded-xl bg-background p-1.5 shadow-sm border">
+          <div className="overflow-hidden rounded-lg border">
+            {(emergencyContacts ?? []).length === 0 ? (
+              <p className="px-4 py-6 text-sm text-muted-foreground text-center">
+                No emergency contacts on file.
+              </p>
+            ) : (
+              <Table className="text-sm">
+                <TableBody>
+                  {(emergencyContacts ?? []).map((ec) => (
+                    <ContactTableRow
+                      key={ec.id}
+                      contact={ec}
+                      onEdit={() =>
+                        setEditing({ kind: "emergency", record: ec })
+                      }
+                      onDelete={() =>
+                        setPendingDelete({
+                          kind: "emergency",
+                          id: ec.id,
+                          name: `${ec.first_name} ${ec.last_name}`,
+                        })
+                      }
+                    />
+                  ))}
                 </TableBody>
               </Table>
             )}
@@ -1257,24 +1286,10 @@ function ReApplicationProgressCard({
   );
 }
 
-/** Section header row inside the contacts table — small-caps label on a
- *  muted background so each contact group reads as its own bucket. */
-function ContactGroupHeader({ label }: { label: string }) {
-  return (
-    <TableRow className="bg-muted/40 hover:bg-muted/40">
-      <TableCell colSpan={2} className="px-4 py-2">
-        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          {label}
-        </p>
-      </TableCell>
-    </TableRow>
-  );
-}
-
 /** Empty-state row used when a group has no contacts on file. */
 function ContactEmptyRow({ note }: { note: string }) {
   return (
-    <TableRow>
+    <TableRow className="hover:bg-transparent">
       <TableCell colSpan={2} className="px-4 py-3 text-xs text-muted-foreground">
         {note}
       </TableCell>
@@ -1304,7 +1319,9 @@ function ContactTableRow({
   invite?: { status?: string | null; clerkUserId?: string | null };
 }) {
   return (
-    <TableRow>
+    // Not clickable — suppress the table's default row hover so only
+    // the action buttons read as interactive.
+    <TableRow className="hover:bg-transparent">
       <TableCell className="px-4 py-3">
         <p className="font-medium flex items-center gap-2 flex-wrap">
           <span>

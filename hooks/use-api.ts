@@ -9,11 +9,52 @@ import useSWR, { mutate as globalMutate } from "swr";
 // the browser by the time these hooks mount, so we fire fetches
 // immediately and let the API endpoints enforce auth.
 
-const fetcher = async (url: string) => {
-  const res = await fetch(url);
+// One wrinkle with firing immediately: Clerk's session JWT (the
+// `__session` cookie) is short-lived (~60s) and only refreshed by
+// clerk-js once it has hydrated. A fetch that races that refresh — a
+// cold load after the tab sat idle, or an SWR focus/interval
+// revalidation firing right as the tab wakes — presents an expired
+// token and gets a 401 from the API. Recoverable, but SWR's error
+// backoff made recovery take seconds. `refreshSessionToken` below
+// waits for clerk-js and forces a token mint (which also rewrites the
+// session cookie), so the one retry succeeds immediately. The browser
+// still logs the initial 401 in the console; that line is cosmetic.
+
+/** Wait for clerk-js to hydrate (up to ~3s), then force-mint a fresh
+ *  session token so the retried request carries a valid cookie. */
+async function refreshSessionToken(): Promise<void> {
+  if (typeof window === "undefined") return;
+  const w = window as unknown as {
+    Clerk?: {
+      session?: {
+        getToken(opts?: { skipCache?: boolean }): Promise<string | null>;
+      } | null;
+    };
+  };
+  const deadline = Date.now() + 3000;
+  while (!w.Clerk?.session && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  try {
+    await w.Clerk?.session?.getToken({ skipCache: true });
+  } catch {
+    // Ignore — the retried fetch will surface the real failure.
+  }
+}
+
+/** Shared parent-side fetcher: throws on !ok, and retries a 401 once
+ *  after refreshing the Clerk session token (see comment above). */
+export const apiFetcher = async (url: string) => {
+  let res = await fetch(url);
+  if (res.status === 401) {
+    await refreshSessionToken();
+    res = await fetch(url);
+  }
   if (!res.ok) throw new Error(`API error ${res.status}`);
   return res.json();
 };
+
+const fetcher = apiFetcher;
 
 export function useFamily() {
   return useSWR("/api/families", fetcher, {

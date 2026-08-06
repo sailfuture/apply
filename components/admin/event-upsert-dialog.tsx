@@ -24,6 +24,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import { EVENT_COLORS, eventColor, parseDate } from "@/lib/school-calendar";
 import type {
   XanoSchoolCalendarDay,
   XanoSchoolCalendarEvent,
@@ -37,12 +38,10 @@ import type {
  * Volunteer Hours page so both surfaces write events identically.
  */
 
-/** "YYYY-MM-DD" → local Date (avoids the UTC-midnight off-by-one that
- *  `new Date("YYYY-MM-DD")` gives in western timezones). */
-export function parseDate(iso: string): Date {
-  const [y, m, d] = iso.split("-").map(Number);
-  return new Date(y, (m ?? 1) - 1, d ?? 1);
-}
+// Palette + date helpers moved to lib/school-calendar so the parent
+// calendar page can share them without pulling this dialog into its
+// bundle. Re-exported here so existing admin imports keep working.
+export { EVENT_COLORS, eventColor, parseDate };
 
 /** ms → "HH:MM" for a time input ("" when unset). */
 export function msToTimeInput(ms: number | null | undefined): string {
@@ -60,43 +59,6 @@ export function timeInputToMs(dateIso: string, hhmm: string): number {
   const d = parseDate(dateIso);
   d.setHours(hh ?? 0, mm ?? 0, 0, 0);
   return d.getTime();
-}
-
-/**
- * Event categories and their colors — the brand etiquette palette.
- * The slug is what `school_calendar_events.color` stores; empty (or
- * the " " clear-sentinel) renders the neutral gray chip.
- */
-export const EVENT_COLORS = [
-  {
-    value: "sky",
-    label: "Testing",
-    dot: "bg-sky-400",
-    chip: "bg-sky-100 text-sky-900",
-  },
-  {
-    value: "emerald",
-    label: "SailFuture Serves",
-    dot: "bg-emerald-400",
-    chip: "bg-emerald-100 text-emerald-900",
-  },
-  {
-    value: "violet",
-    label: "Student Events",
-    dot: "bg-violet-400",
-    chip: "bg-violet-100 text-violet-900",
-  },
-  {
-    value: "amber",
-    label: "Parent Events",
-    dot: "bg-amber-400",
-    chip: "bg-amber-100 text-amber-900",
-  },
-] as const;
-
-export function eventColor(color: string | null | undefined) {
-  const slug = (color ?? "").trim();
-  return EVENT_COLORS.find((c) => c.value === slug) ?? null;
 }
 
 /* ── Segmented time picker (after time.openstatus.dev) ────────────── */

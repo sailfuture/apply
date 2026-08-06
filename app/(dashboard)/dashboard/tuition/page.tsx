@@ -316,7 +316,7 @@ export default function DashboardTuitionPage() {
       {yearId ? <BillingScheduleSection yearId={yearId} /> : null}
 
       {loading ? (
-        <Skeleton className="h-96 w-full rounded-xl" />
+        <BreakdownSkeleton />
       ) : studentRows.length === 0 ? (
         <div className="rounded-xl border bg-white px-6 py-12 text-center">
           <p className="text-muted-foreground text-sm">
@@ -565,6 +565,100 @@ export default function DashboardTuitionPage() {
   );
 }
 
+/* ─────────────────────── Loading skeletons ────────────────────── */
+
+/**
+ * Mirrors the Billing summary card (title + button over four stat
+ * blocks) and the Monthly invoices table so the page keeps its real
+ * shape while /api/billing/schedule loads, instead of one gray slab.
+ */
+function BillingSkeleton() {
+  return (
+    <div className="space-y-6">
+      {/* Billing summary card */}
+      <div className="rounded-xl border bg-white overflow-hidden">
+        <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
+          <Skeleton className="h-5 w-16" />
+          <Skeleton className="h-8 w-48 rounded-md" />
+        </div>
+        <div className="px-4 py-4">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="space-y-2">
+                <Skeleton className="h-3 w-20" />
+                <Skeleton className="h-6 w-24" />
+              </div>
+            ))}
+          </div>
+          <Skeleton className="mt-4 h-3 w-3/4" />
+        </div>
+      </div>
+
+      {/* Monthly invoices table */}
+      <div className="rounded-xl border bg-white overflow-hidden">
+        <div className="border-b px-4 py-3">
+          <Skeleton className="h-5 w-32" />
+        </div>
+        <div className="divide-y px-3">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="flex items-center gap-4 py-3">
+              <Skeleton className="h-4 w-[14%]" />
+              <Skeleton className="h-4 w-[16%]" />
+              <Skeleton className="h-4 w-[16%]" />
+              <Skeleton className="h-4 w-[12%] ml-auto" />
+              <Skeleton className="h-5 w-[14%] rounded-full" />
+              <Skeleton className="h-4 w-[12%]" />
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Mirrors the per-student breakdown table — a muted student header
+ * row followed by label/amount line items, then the subtotal + total
+ * rows — so the receipt appears in place instead of popping in after
+ * a featureless gray block.
+ */
+function BreakdownSkeleton() {
+  return (
+    <div className="rounded-xl bg-background p-1.5 shadow-sm border">
+      <div className="overflow-hidden rounded-lg border bg-white">
+        {/* Student group header */}
+        <div className="bg-muted/40 px-4 py-3">
+          <Skeleton className="h-4 w-52" />
+        </div>
+        {/* Line items */}
+        {Array.from({ length: 6 }).map((_, i) => (
+          <div
+            key={i}
+            className="flex items-center justify-between border-t px-4 py-3"
+          >
+            <Skeleton className="h-4 w-56 max-w-[50%]" />
+            <Skeleton className="h-4 w-20" />
+          </div>
+        ))}
+        {/* Subtotal */}
+        <div className="flex items-center justify-between border-t bg-muted/20 px-4 py-3">
+          <Skeleton className="h-4 w-44" />
+          <Skeleton className="h-4 w-24" />
+        </div>
+        {/* Total + monthly */}
+        <div className="flex items-center justify-between border-t-2 px-4 py-3">
+          <Skeleton className="h-4 w-24" />
+          <Skeleton className="h-4 w-24" />
+        </div>
+        <div className="flex items-center justify-between border-t px-4 py-3">
+          <Skeleton className="h-4 w-64 max-w-[60%]" />
+          <Skeleton className="h-4 w-28" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ─────────────────────── Billing schedule ─────────────────────── */
 
 const scheduleFetcher = async (url: string): Promise<ParentScheduleResponse> => {
@@ -581,7 +675,7 @@ function BillingScheduleSection({ yearId }: { yearId: number }) {
   );
 
   if (isLoading && !data) {
-    return <Skeleton className="h-48 w-full rounded-xl" />;
+    return <BillingSkeleton />;
   }
 
   if (error || !data) {

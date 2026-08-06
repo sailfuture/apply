@@ -9,6 +9,9 @@ import { convertHeicToJpeg } from "@/lib/heic";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import {
+  AlertCircle,
+  CheckCircle2,
+  Clock,
   ExternalLink,
   FileText,
   FileUp,
@@ -51,6 +54,12 @@ interface Student {
   student_state_id?: FileMetadata[];
   iep?: FileMetadata[];
   ssn_card?: FileMetadata[];
+  // Admin document-review flags — flipped from the admin enrolled /
+  // registrations pages once staff verify each required upload.
+  birth_certificate_admin_confirm?: boolean;
+  school_health_form_admin_confirm?: boolean;
+  transcripts_admin_confirm?: boolean;
+  immunization_admin_confirm?: boolean;
 }
 
 interface Application {
@@ -62,11 +71,23 @@ interface Application {
   current_previous_school?: string;
   is_bus_transportation?: boolean;
   bus_stop?: string;
-  describe_student_strengths?: string;
-  describe_student_opportunities_for_growth?: string;
   sufs_type?: string;
   sufs_status?: string;
+  sufs_award_id?: number;
 }
+
+/** Slug → parent-readable label for the Step Up for Students award
+ *  type. Same mapping the tuition pages use. */
+const SUFS_LABELS: Record<string, string> = {
+  fes_eo_8: "FES-EO · Grade 8",
+  fes_eo_9: "FES-EO · Grade 9",
+  ftc_8: "FTC · Grade 8",
+  ftc_9: "FTC · Grade 9",
+  fes_ua_8_ese_1_3: "FES-UA · ESE 1-3 · Grade 8",
+  fes_ua_9_ese_1_3: "FES-UA · ESE 1-3 · Grade 9",
+  fes_ua_ese_4: "FES-UA · ESE 4",
+  fes_ua_ese_5: "FES-UA · ESE 5",
+};
 
 interface RegistrationPacket {
   id: number;
@@ -107,11 +128,45 @@ type DocField = keyof Pick<
   | "student_state_id"
 >;
 
-const DOC_LABELS: { key: DocField; label: string; required: boolean }[] = [
-  { key: "birth_certificate", label: "Birth Certificate", required: true },
-  { key: "school_health_form", label: "School Health Form", required: true },
-  { key: "transcripts", label: "Transcripts", required: true },
-  { key: "immunization_forms", label: "Immunization Forms", required: true },
+/** `confirmKey` — the admin document-review flag on the student row
+ *  (only the four required docs have one; note the immunization flag
+ *  doesn't share its document field's name). */
+const DOC_LABELS: {
+  key: DocField;
+  label: string;
+  required: boolean;
+  confirmKey?: keyof Pick<
+    Student,
+    | "birth_certificate_admin_confirm"
+    | "school_health_form_admin_confirm"
+    | "transcripts_admin_confirm"
+    | "immunization_admin_confirm"
+  >;
+}[] = [
+  {
+    key: "birth_certificate",
+    label: "Birth Certificate",
+    required: true,
+    confirmKey: "birth_certificate_admin_confirm",
+  },
+  {
+    key: "school_health_form",
+    label: "School Health Form",
+    required: true,
+    confirmKey: "school_health_form_admin_confirm",
+  },
+  {
+    key: "transcripts",
+    label: "Transcripts",
+    required: true,
+    confirmKey: "transcripts_admin_confirm",
+  },
+  {
+    key: "immunization_forms",
+    label: "Immunization Forms",
+    required: true,
+    confirmKey: "immunization_admin_confirm",
+  },
   { key: "iep", label: "IEP", required: false },
   { key: "ssn_card", label: "SSN Card", required: false },
   { key: "passport", label: "Passport", required: false },
@@ -228,7 +283,7 @@ export default function StudentDetailPage() {
         backRowAction={
           <Button asChild variant="outline" size="sm" className="bg-white">
             <a
-              href={`mailto:tward@sailfuture.org?subject=${encodeURIComponent(
+              href={`mailto:dean@sailfuture.org?subject=${encodeURIComponent(
                 `Update request — ${student.first_name} ${student.last_name}`
               )}`}
             >
@@ -265,12 +320,18 @@ export default function StudentDetailPage() {
                   ? `Yes${application.bus_stop ? ` · ${application.bus_stop}` : ""}`
                   : "No",
               ],
-              ["SUFS Scholarship", val(application.sufs_type)],
-              ["SUFS Status", val(application.sufs_status)],
-              ["Strengths", val(application.describe_student_strengths)],
               [
-                "Opportunities for Growth",
-                val(application.describe_student_opportunities_for_growth),
+                "SUFS Scholarship",
+                application.sufs_type
+                  ? (SUFS_LABELS[application.sufs_type] ?? application.sufs_type)
+                  : "—",
+              ],
+              ["SUFS Status", val(application.sufs_status)],
+              [
+                "SUFS Award ID",
+                application.sufs_award_id
+                  ? String(application.sufs_award_id)
+                  : "—",
               ],
             ]}
           />
@@ -361,12 +422,15 @@ export default function StudentDetailPage() {
           <div className="overflow-hidden rounded-lg border">
             <table className="w-full text-sm">
               <tbody className="divide-y">
-                {requiredDocs.map(({ key, label, required }) => (
+                {requiredDocs.map(({ key, label, required, confirmKey }) => (
                   <DocRow
                     key={key}
                     field={key}
                     label={label}
                     required={required}
+                    approved={
+                      confirmKey ? student[confirmKey] === true : undefined
+                    }
                     files={(student[key] as FileMetadata[] | undefined) ?? []}
                     studentId={student.id}
                     onChanged={() => {
@@ -503,6 +567,7 @@ function DocRow({
   field,
   label,
   required,
+  approved,
   files,
   studentId,
   onChanged,
@@ -510,6 +575,10 @@ function DocRow({
   field: DocField;
   label: string;
   required: boolean;
+  /** Admin review state for required docs — true = approved, false =
+   *  not yet reviewed. Undefined for optional docs (no review flag),
+   *  which hides the status pill entirely. */
+  approved?: boolean;
   files: FileMetadata[];
   studentId: number;
   onChanged: () => void;
@@ -589,6 +658,28 @@ function DocRow({
               </span>
             ) : null}
           </p>
+          {/* Review status — required docs only. Three states: no file
+              yet (missing), uploaded awaiting admin review, approved. */}
+          {approved !== undefined ? (
+            <p className="mt-1.5">
+              {approved ? (
+                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 ring-1 ring-emerald-200">
+                  <CheckCircle2 className="size-3" />
+                  Approved
+                </span>
+              ) : validFiles.length > 0 ? (
+                <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 ring-1 ring-amber-200">
+                  <Clock className="size-3" />
+                  Awaiting review
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 text-[11px] font-medium text-red-700 ring-1 ring-red-200">
+                  <AlertCircle className="size-3" />
+                  Missing
+                </span>
+              )}
+            </p>
+          ) : null}
         </td>
         <td className="px-4 py-3">
           {validFiles.length === 0 ? (

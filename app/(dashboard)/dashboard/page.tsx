@@ -3,12 +3,15 @@
 import { useEffect, useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
-import { useApplications, useSchoolYears } from "@/hooks/use-api";
+import { apiFetcher, useApplications, useSchoolYears } from "@/hooks/use-api";
 import { EnrolledFamilyDashboard } from "@/components/enrolled-family-dashboard";
 import { ServiceUnavailable } from "@/components/service-unavailable";
 import { LoadingScreen } from "@/components/loading-screen";
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
+// Shared fetcher: throws on !ok (a 401/503 must not masquerade as
+// data here — the resolver treats responses as typed rows) and
+// retries an expired-session 401 once with a fresh Clerk token.
+const fetcher = apiFetcher;
 
 interface YearProgress {
   registration_school_years_id: number;
@@ -128,13 +131,9 @@ export default function EnrolledHomePage() {
       const entries = await Promise.all(
         candidateYearIds.map(async (yid) => {
           const [progressRes, packetsRes, applyRes] = await Promise.all([
-            fetch(`/api/student-registration-progress?yearId=${yid}`).then(
-              (r) => r.json()
-            ),
-            fetch(`/api/student-registration?yearId=${yid}`).then((r) =>
-              r.json()
-            ),
-            fetch(`/api/family-progress?yearId=${yid}`).then((r) => r.json()),
+            fetcher(`/api/student-registration-progress?yearId=${yid}`),
+            fetcher(`/api/student-registration?yearId=${yid}`),
+            fetcher(`/api/family-progress?yearId=${yid}`),
           ]);
           const progress = progressRes as YearProgress | null;
           const packets = (packetsRes as YearPacket[] | null) ?? [];
