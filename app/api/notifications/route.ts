@@ -26,14 +26,20 @@ export async function GET() {
     | number
     | undefined;
   if (!familyId) {
-    return NextResponse.json({ entries: [] }, { status: 200 });
+    return NextResponse.json(
+      { entries: [], read_at: 0 } satisfies ParentNotificationsResponse,
+      { status: 200 }
+    );
   }
 
-  // Both accessors already degrade to [] on failure, so a missing
-  // table or transient Xano error yields an empty (not broken) log.
-  const [emails, texts] = await Promise.all([
+  // The message accessors already degrade to [] on failure, so a
+  // missing table or transient Xano error yields an empty (not
+  // broken) log. The family row (for the read watermark) is likewise
+  // best-effort.
+  const [emails, texts, family] = await Promise.all([
     xano.emailNotifications.getByFamily(familyId),
     xano.smsMessages.getByFamilyId(familyId),
+    xano.families.getById(familyId).catch(() => null),
   ]);
 
   const entries: ParentNotificationEntry[] = [
@@ -43,6 +49,10 @@ export async function GET() {
         key: `email-${e.id}`,
         kind: "email" as const,
         at: e.created_at,
+        /** Audit-row id — pass to /api/notifications/email/[id] to
+         *  load the full email content. Null when it can't be viewed
+         *  (no Resend id on the row). */
+        email_id: e.resend_id ? e.id : null,
         subject: e.subject || "(no subject)",
         recipients: e.recipient_emails || "",
         body: null,
@@ -52,6 +62,7 @@ export async function GET() {
       key: `sms-${t.id}`,
       kind: "sms" as const,
       at: t.created_at,
+      email_id: null,
       subject: null,
       recipients: "",
       body: t.body || "",
@@ -59,7 +70,10 @@ export async function GET() {
     })),
   ].sort((a, b) => b.at - a.at);
 
-  return NextResponse.json({ entries });
+  return NextResponse.json({
+    entries,
+    read_at: family?.notifications_read_at ?? 0,
+  } satisfies ParentNotificationsResponse);
 }
 
 export interface ParentNotificationEntry {
@@ -67,6 +81,8 @@ export interface ParentNotificationEntry {
   kind: "email" | "sms";
   /** Unix ms. */
   at: number;
+  /** Audit-row id for the email-content viewer; null = not viewable. */
+  email_id: number | null;
   /** Email subject (email entries only). */
   subject: string | null;
   /** Comma-separated recipient list (email entries only). */
@@ -79,4 +95,6 @@ export interface ParentNotificationEntry {
 
 export interface ParentNotificationsResponse {
   entries: ParentNotificationEntry[];
+  /** Family-level read watermark (unix ms; 0 = never marked). */
+  read_at: number;
 }

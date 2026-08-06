@@ -106,6 +106,12 @@ export interface XanoFamily {
    *  Admin sets this from the family detail page. Optional because
    *  legacy rows pre-date the column; treat missing as `false`. */
   is_residential?: boolean;
+  /** Unix-ms watermark stamped when the family last opened their
+   *  Notifications page — the parent-side unread badge counts
+   *  entries newer than this. Optional: requires the column + the
+   *  input on the families edit endpoint in Xano; the client falls
+   *  back to a per-device localStorage watermark until then. */
+  notifications_read_at?: number | null;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

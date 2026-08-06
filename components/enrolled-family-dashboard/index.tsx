@@ -41,6 +41,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { countUnread } from "@/lib/notifications";
+import type { ParentNotificationsResponse } from "@/app/api/notifications/route";
 import { EditContactSheet } from "./edit-contact-sheet";
 import { AddParentSheet } from "./add-parent-sheet";
 import { AddEmergencyContactSheet } from "./add-emergency-contact-sheet";
@@ -143,6 +145,19 @@ export function EnrolledFamilyDashboard({
     "/api/emergency-contacts",
     fetcher,
     { revalidateOnFocus: false, dedupingInterval: 10000 }
+  );
+  // Unread badge for the Notifications card — entries newer than the
+  // family's read watermark (server stamp, mirrored in localStorage).
+  // Same SWR key as the notifications page, so opening the page (which
+  // stamps the watermark and mutates) clears the badge on return.
+  const { data: notifData } = useSWR<ParentNotificationsResponse>(
+    "/api/notifications",
+    fetcher,
+    { revalidateOnFocus: true, dedupingInterval: 30000 }
+  );
+  const unreadNotifications = countUnread(
+    notifData?.entries,
+    notifData?.read_at ?? 0
   );
   // Re-application affordance: surface a banner card on the dashboard
   // pointing at the next academic year's apply flow once admin has
@@ -680,13 +695,20 @@ export function EnrolledFamilyDashboard({
           className="flex items-center justify-between gap-3 rounded-xl border bg-white px-5 py-4 text-left shadow-sm hover:bg-muted/30 transition-colors cursor-pointer"
         >
           <div className="flex items-center gap-3 min-w-0">
-            <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-muted/50">
+            <div className="relative flex size-10 shrink-0 items-center justify-center rounded-md bg-muted/50">
               <Bell className="size-5 text-muted-foreground" />
+              {unreadNotifications > 0 ? (
+                <span className="absolute -right-1.5 -top-1.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-semibold text-white ring-2 ring-white">
+                  {unreadNotifications > 99 ? "99+" : unreadNotifications}
+                </span>
+              ) : null}
             </div>
             <div className="min-w-0">
               <p className="text-sm font-medium">Notifications</p>
               <p className="text-xs text-muted-foreground truncate">
-                Emails &amp; texts from the school
+                {unreadNotifications > 0
+                  ? `${unreadNotifications} new since your last visit`
+                  : "Emails & texts from the school"}
               </p>
             </div>
           </div>

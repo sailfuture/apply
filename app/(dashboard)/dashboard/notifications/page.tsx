@@ -1,35 +1,64 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
-import { Bell, Mail, MessageSquare, Reply } from "lucide-react";
+import { Bell, Loader2, Mail } from "lucide-react";
 import { DashboardPageHeader } from "@/components/dashboard-page-header";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetcher } from "@/hooks/use-api";
+import { getLocalReadAt, setLocalReadAt } from "@/lib/notifications";
 import { cn } from "@/lib/utils";
 import type {
   ParentNotificationEntry,
   ParentNotificationsResponse,
 } from "@/app/api/notifications/route";
+import type { ParentEmailContent } from "@/app/api/notifications/email/[id]/route";
 
 type Filter = "all" | "email" | "sms";
 
-function fmtDateTime(ms: number): string {
-  return new Date(ms).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
+function fmtTime(ms: number): string {
+  return new Date(ms).toLocaleTimeString([], {
     hour: "numeric",
     minute: "2-digit",
   });
 }
 
+function dayKey(ms: number): string {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+}
+
+function dayLabel(ms: number): string {
+  const d = new Date(ms);
+  const today = new Date();
+  const yesterday = new Date();
+  yesterday.setDate(today.getDate() - 1);
+  if (dayKey(ms) === dayKey(today.getTime())) return "Today";
+  if (dayKey(ms) === dayKey(yesterday.getTime())) return "Yesterday";
+  return d.toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: d.getFullYear() === today.getFullYear() ? undefined : "numeric",
+  });
+}
+
 /**
- * Notifications & Messages — the family's own communications log.
- * Every email the school has sent them and their full text-message
- * thread, merged newest-first with Email / Text filter pills.
- * Read-only; replies happen over text or email as usual.
+ * Notifications & Messages — messenger-style activity log of every
+ * email and text the school has sent the family (plus their text
+ * replies), grouped by day, oldest → newest like a chat thread.
+ * Emails open in a viewer dialog with the full delivered content
+ * (fetched from Resend). Opening the page stamps the family's read
+ * watermark, clearing the dashboard's unread badge.
  */
 export default function NotificationsPage() {
   const searchParams = useSearchParams();
@@ -38,18 +67,39 @@ export default function NotificationsPage() {
     ? `/dashboard?yearId=${yearIdParam}`
     : "/dashboard";
 
-  const { data } = useSWR<ParentNotificationsResponse>(
+  const { data, mutate } = useSWR<ParentNotificationsResponse>(
     "/api/notifications",
     apiFetcher,
     { revalidateOnFocus: true, dedupingInterval: 10000 }
   );
 
   const [filter, setFilter] = useState<Filter>("all");
-  const entries = useMemo(() => {
-    const all = data?.entries ?? [];
-    if (filter === "all") return all;
-    return all.filter((e) => e.kind === filter);
-  }, [data, filter]);
+  const [emailView, setEmailView] = useState<ParentNotificationEntry | null>(
+    null
+  );
+
+  // Freeze the read watermark as it was BEFORE this visit stamps it,
+  // so the "new" highlights stay visible for the whole session.
+  // Guarded set-state-during-render (React's documented pattern for
+  // deriving state from the first arrival of data) — runs exactly
+  // once, when `data` first resolves.
+  const [watermark, setWatermark] = useState<number | null>(null);
+  if (data && watermark === null) {
+    setWatermark(Math.max(data.read_at || 0, getLocalReadAt()));
+  }
+
+  const stampedRef = useRef(false);
+  useEffect(() => {
+    if (!data || stampedRef.current) return;
+    stampedRef.current = true;
+    // Mark everything read: local mirror immediately (clears the
+    // dashboard badge on this device), server stamp best-effort
+    // (clears it everywhere once the Xano column is wired).
+    setLocalReadAt(Date.now());
+    void fetch("/api/notifications/read", { method: "POST" })
+      .then(() => mutate())
+      .catch(() => {});
+  }, [data, mutate]);
 
   const counts = useMemo(() => {
     const all = data?.entries ?? [];
@@ -59,10 +109,27 @@ export default function NotificationsPage() {
     };
   }, [data]);
 
+  // Chat order: oldest first, grouped by day.
+  const dayGroups = useMemo(() => {
+    const filtered = (data?.entries ?? [])
+      .filter((e) => filter === "all" || e.kind === filter)
+      .slice()
+      .sort((a, b) => a.at - b.at);
+    const groups: { key: string; label: string; items: ParentNotificationEntry[] }[] =
+      [];
+    for (const e of filtered) {
+      const k = dayKey(e.at);
+      const last = groups[groups.length - 1];
+      if (last && last.key === k) last.items.push(e);
+      else groups.push({ key: k, label: dayLabel(e.at), items: [e] });
+    }
+    return groups;
+  }, [data, filter]);
+
   const loading = !data;
 
   return (
-    <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
+    <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-3xl">
       <DashboardPageHeader
         backHref={dashboardHref}
         backLabel="Back to Dashboard"
@@ -71,15 +138,16 @@ export default function NotificationsPage() {
           { label: "Notifications" },
         ]}
         title="Notifications & Messages"
-        subtitle="Every email and text message the school has sent your family, plus your replies — newest first."
+        subtitle="Every email and text message from the school, plus your replies — one running conversation."
       />
 
       {loading ? (
         <div className="space-y-3">
-          <Skeleton className="h-8 w-64 rounded-full" />
-          {Array.from({ length: 5 }).map((_, i) => (
-            <Skeleton key={i} className="h-16 w-full rounded-xl" />
-          ))}
+          <Skeleton className="h-7 w-64 rounded-full" />
+          <Skeleton className="h-14 w-3/4 rounded-2xl" />
+          <Skeleton className="ml-auto h-10 w-1/2 rounded-2xl" />
+          <Skeleton className="h-16 w-2/3 rounded-2xl" />
+          <Skeleton className="h-14 w-3/4 rounded-2xl" />
         </div>
       ) : (data?.entries.length ?? 0) === 0 ? (
         <div className="rounded-xl border bg-white px-6 py-12 text-center">
@@ -110,20 +178,39 @@ export default function NotificationsPage() {
             />
           </div>
 
-          {/* Timeline */}
-          <div className="rounded-xl bg-background p-1.5 shadow-sm border">
-            <div className="overflow-hidden rounded-lg border bg-white divide-y">
-              {entries.length === 0 ? (
-                <p className="px-4 py-8 text-center text-sm text-muted-foreground">
-                  No {filter === "email" ? "emails" : "text messages"} yet.
-                </p>
-              ) : (
-                entries.map((e) => <EntryRow key={e.key} entry={e} />)
-              )}
-            </div>
+          {/* Messenger log */}
+          <div className="space-y-6">
+            {dayGroups.map((g) => (
+              <div key={g.key} className="space-y-3">
+                {/* Day divider */}
+                <div className="flex items-center gap-3">
+                  <div className="h-px flex-1 bg-border" />
+                  <span className="rounded-full bg-muted px-2.5 py-0.5 text-[11px] font-medium text-muted-foreground">
+                    {g.label}
+                  </span>
+                  <div className="h-px flex-1 bg-border" />
+                </div>
+                {g.items.map((e) => (
+                  <EntryBubble
+                    key={e.key}
+                    entry={e}
+                    unread={watermark !== null && e.at > watermark}
+                    onOpenEmail={() => setEmailView(e)}
+                  />
+                ))}
+              </div>
+            ))}
           </div>
         </>
       )}
+
+      {emailView ? (
+        <EmailViewerDialog
+          key={emailView.key}
+          entry={emailView}
+          onClose={() => setEmailView(null)}
+        />
+      ) : null}
 
       <p className="text-xs text-muted-foreground text-center pt-4 border-t">
         Need to reach us? Text this thread back from your phone, or email{" "}
@@ -165,55 +252,159 @@ function FilterChip({
   );
 }
 
-/** One log row — icon bubble, title + preview, timestamp. */
-function EntryRow({ entry }: { entry: ParentNotificationEntry }) {
-  const isEmail = entry.kind === "email";
+/**
+ * One log entry, messenger-style: school messages sit left (email =
+ * card bubble that opens the full email; SMS = plain bubble), the
+ * family's text replies sit right in the primary color. Unread
+ * entries from before this visit carry a blue dot.
+ */
+function EntryBubble({
+  entry,
+  unread,
+  onOpenEmail,
+}: {
+  entry: ParentNotificationEntry;
+  unread: boolean;
+  onOpenEmail: () => void;
+}) {
   const isReply = entry.direction === "inbound";
+
+  if (entry.kind === "email") {
+    return (
+      <div className="flex justify-start">
+        <button
+          type="button"
+          onClick={onOpenEmail}
+          disabled={entry.email_id === null}
+          className={cn(
+            "group max-w-[85%] rounded-2xl rounded-tl-sm border bg-white px-4 py-3 text-left shadow-sm transition-colors sm:max-w-[70%]",
+            entry.email_id !== null
+              ? "cursor-pointer hover:border-foreground/30 hover:bg-muted/20"
+              : "cursor-default"
+          )}
+        >
+          <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-violet-600">
+            <Mail className="size-3.5" />
+            Email
+            {unread ? (
+              <span className="size-1.5 rounded-full bg-blue-500" aria-label="New" />
+            ) : null}
+          </p>
+          <p className="mt-1 text-sm font-medium">{entry.subject}</p>
+          <p className="mt-1 flex items-center justify-between gap-3 text-xs text-muted-foreground">
+            <span>
+              {entry.email_id !== null ? (
+                <span className="text-primary underline-offset-2 group-hover:underline">
+                  Read email
+                </span>
+              ) : (
+                "Sent by email"
+              )}
+            </span>
+            <span className="tabular-nums">{fmtTime(entry.at)}</span>
+          </p>
+        </button>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex gap-3 px-4 py-3">
+    <div className={cn("flex", isReply ? "justify-end" : "justify-start")}>
       <div
         className={cn(
-          "flex size-9 shrink-0 items-center justify-center rounded-full",
-          isEmail
-            ? "bg-violet-50 text-violet-600"
-            : isReply
-              ? "bg-muted text-muted-foreground"
-              : "bg-sky-50 text-sky-600"
+          "max-w-[85%] rounded-2xl px-4 py-2.5 text-sm shadow-sm sm:max-w-[70%]",
+          isReply
+            ? "rounded-tr-sm bg-primary text-primary-foreground"
+            : "rounded-tl-sm border bg-white"
         )}
       >
-        {isEmail ? (
-          <Mail className="size-4" />
-        ) : isReply ? (
-          <Reply className="size-4" />
-        ) : (
-          <MessageSquare className="size-4" />
-        )}
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-baseline justify-between gap-3">
-          <p className="min-w-0 truncate text-sm font-medium">
-            {isEmail
-              ? entry.subject
-              : isReply
-                ? "Your reply"
-                : "Text from SailFuture Academy"}
-          </p>
-          <p className="shrink-0 text-xs tabular-nums text-muted-foreground">
-            {fmtDateTime(entry.at)}
-          </p>
-        </div>
-        {isEmail ? (
-          entry.recipients ? (
-            <p className="mt-0.5 truncate text-xs text-muted-foreground">
-              Sent to {entry.recipients.split(",").join(", ")}
-            </p>
-          ) : null
-        ) : (
-          <p className="mt-0.5 whitespace-pre-wrap text-xs text-muted-foreground">
-            {entry.body}
-          </p>
-        )}
+        <p className="whitespace-pre-wrap">{entry.body}</p>
+        <p
+          className={cn(
+            "mt-1 flex items-center justify-end gap-1.5 text-[10px] tabular-nums",
+            isReply ? "text-primary-foreground/70" : "text-muted-foreground"
+          )}
+        >
+          {unread && !isReply ? (
+            <span className="size-1.5 rounded-full bg-blue-500" aria-label="New" />
+          ) : null}
+          {fmtTime(entry.at)}
+        </p>
       </div>
     </div>
+  );
+}
+
+/** Full delivered email content, fetched from Resend and rendered in
+ *  a sandboxed iframe (no scripts). */
+function EmailViewerDialog({
+  entry,
+  onClose,
+}: {
+  entry: ParentNotificationEntry;
+  onClose: () => void;
+}) {
+  const { data, error } = useSWR<ParentEmailContent>(
+    entry.email_id !== null ? `/api/notifications/email/${entry.email_id}` : null,
+    apiFetcher,
+    { revalidateOnFocus: false }
+  );
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="flex max-h-[85vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl">
+        <DialogHeader className="border-b px-5 py-4 pr-12">
+          <DialogTitle className="text-base">{entry.subject}</DialogTitle>
+          <DialogDescription className="text-xs">
+            {new Date(entry.at).toLocaleDateString("en-US", {
+              month: "long",
+              day: "numeric",
+              year: "numeric",
+              hour: "numeric",
+              minute: "2-digit",
+            })}
+            {entry.recipients
+              ? ` · Sent to ${entry.recipients.split(",").join(", ")}`
+              : ""}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="min-h-0 flex-1 overflow-hidden bg-muted/20">
+          {error ? (
+            <div className="flex h-64 flex-col items-center justify-center gap-3 px-6 text-center">
+              <p className="text-sm text-muted-foreground">
+                {error instanceof Error
+                  ? error.message
+                  : "Couldn't load this email."}
+              </p>
+              <Button
+                size="sm"
+                variant="outline"
+                className="bg-white"
+                onClick={onClose}
+              >
+                Close
+              </Button>
+            </div>
+          ) : !data ? (
+            <div className="flex h-64 items-center justify-center">
+              <Loader2 className="size-5 animate-spin text-muted-foreground" />
+            </div>
+          ) : data.html ? (
+            // Sandboxed (no scripts, no navigation) — the HTML is
+            // exactly what Resend delivered to their inbox.
+            <iframe
+              sandbox=""
+              srcDoc={data.html}
+              title={data.subject}
+              className="h-[65vh] w-full border-0 bg-white"
+            />
+          ) : (
+            <div className="h-[65vh] overflow-y-auto whitespace-pre-wrap bg-white px-5 py-4 text-sm">
+              {data.text || "This email has no viewable content."}
+            </div>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }

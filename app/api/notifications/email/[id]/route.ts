@@ -1,0 +1,79 @@
+import { auth, currentUser } from "@clerk/nextjs/server";
+import { NextRequest, NextResponse } from "next/server";
+import { getResend } from "@/lib/emails/resend";
+import { xano } from "@/lib/xano";
+
+/**
+ * Full content of one email the school sent this family — fetched
+ * from Resend by the audit row's `resend_id` so the parent can read
+ * exactly what was delivered.
+ *
+ * Ownership gate: the id is the family-scoped audit-row id, resolved
+ * through `getByFamily` — a parent can never address another
+ * family's email.
+ */
+export async function GET(
+  _req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { userId } = await auth();
+  if (!userId) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  const user = await currentUser();
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  const familyId = user.publicMetadata.registration_families_id as
+    | number
+    | undefined;
+  if (!familyId) {
+    return NextResponse.json({ error: "No family on file" }, { status: 400 });
+  }
+
+  const { id: idParam } = await params;
+  const id = Number(idParam);
+  if (!Number.isFinite(id) || id <= 0) {
+    return NextResponse.json({ error: "Invalid email id" }, { status: 400 });
+  }
+
+  const rows = await xano.emailNotifications.getByFamily(familyId);
+  const row = rows.find((r) => r.id === id);
+  if (!row || !row.resend_id) {
+    return NextResponse.json(
+      { error: "This email isn't available to view." },
+      { status: 404 }
+    );
+  }
+
+  try {
+    const { data, error } = await getResend().emails.get(row.resend_id);
+    if (error || !data) {
+      throw new Error(error?.message ?? "Resend returned no data");
+    }
+    return NextResponse.json({
+      subject: data.subject ?? row.subject,
+      html: data.html ?? "",
+      text: data.text ?? "",
+      sent_at: row.created_at,
+      recipients: row.recipient_emails,
+    } satisfies ParentEmailContent);
+  } catch (err) {
+    console.error(
+      `[/api/notifications/email] Resend fetch failed for ${row.resend_id}:`,
+      err
+    );
+    return NextResponse.json(
+      { error: "Couldn't load this email right now — please try again." },
+      { status: 502 }
+    );
+  }
+}
+
+export interface ParentEmailContent {
+  subject: string;
+  html: string;
+  text: string;
+  sent_at: number;
+  recipients: string;
+}
