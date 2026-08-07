@@ -4686,7 +4686,7 @@ export const xano = {
    *  callers filter by family / event id in code. */
   googleAppointments: {
     async getAll(): Promise<XanoGoogleAppointment[]> {
-      const res = await fetch(`${getBaseUrl()}/google_appointments`, {
+      const res = await fetch(`${getBaseUrl()}/registration_google_appointments`, {
         cache: "no-store",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -4697,7 +4697,7 @@ export const xano = {
     async create(
       data: Omit<XanoGoogleAppointment, "id" | "created_at">
     ): Promise<XanoGoogleAppointment> {
-      const res = await fetch(`${getBaseUrl()}/google_appointments`, {
+      const res = await fetch(`${getBaseUrl()}/registration_google_appointments`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -4710,7 +4710,7 @@ export const xano = {
       id: number,
       patch: Partial<XanoGoogleAppointment>
     ): Promise<XanoGoogleAppointment> {
-      const res = await fetch(`${getBaseUrl()}/google_appointments/${id}`, {
+      const res = await fetch(`${getBaseUrl()}/registration_google_appointments/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
