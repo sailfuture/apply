@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import { toast } from "sonner";
-import { Check, Loader2, Trash2, Undo2, UserX, X } from "lucide-react";
+import { Archive, Check, Loader2, Trash2, Undo2, UserX, X } from "lucide-react";
 import {
   DataTable,
   type ColumnDef,
@@ -181,7 +181,8 @@ type InquiryFilter =
   | "not_followed_up"
   | "followed_up"
   | "converted"
-  | "not_interested";
+  | "not_interested"
+  | "archived";
 
 const FILTER_LABEL: Record<InquiryFilter, string> = {
   // "All" shows every section — the working pipeline, the Converted
@@ -194,6 +195,10 @@ const FILTER_LABEL: Record<InquiryFilter, string> = {
   followed_up: "Followed up",
   converted: "Converted",
   not_interested: "Not interested",
+  // Archived rows (duplicates, junk, test submissions) are HIDDEN
+  // from "All" — unlike Not Interested they aren't pipeline history
+  // worth glancing at, just clutter parked out of the way.
+  archived: "Archived",
 };
 
 /**
@@ -280,6 +285,7 @@ export default function InquiriesPage() {
     const notFollowedUp: Inquiry[] = [];
     const converted: Inquiry[] = [];
     const notInterested: Inquiry[] = [];
+    const archived: Inquiry[] = [];
     // 0 selects the still-untagged inquiries — the bucket to work
     // through, since the year is only ever set by hand.
     const yearMatched =
@@ -290,7 +296,8 @@ export default function InquiriesPage() {
       // Terminal statuses win over the follow-up split — a converted
       // or declined family leaves the working pipeline regardless of
       // whether we had already reached out.
-      if (r.status === "not_interested") notInterested.push(r);
+      if (r.status === "archived") archived.push(r);
+      else if (r.status === "not_interested") notInterested.push(r);
       else if (r.status === "converted") converted.push(r);
       else if (r.isFollowedUp) followedUp.push(r);
       else notFollowedUp.push(r);
@@ -304,28 +311,31 @@ export default function InquiriesPage() {
     // still re-sort on either column alone.
     const activity = (r: Inquiry) =>
       Math.max(lastContactAt(r), Number(r.created_at) || 0);
-    for (const list of [followedUp, notFollowedUp, converted, notInterested]) {
+    for (const list of [followedUp, notFollowedUp, converted, notInterested, archived]) {
       list.sort(
         (a, b) =>
           activity(b) - activity(a) ||
           (Number(b.created_at) || 0) - (Number(a.created_at) || 0)
       );
     }
-    return { followedUp, notFollowedUp, converted, notInterested };
+    return { followedUp, notFollowedUp, converted, notInterested, archived };
   }, [rows, yearFilter]);
 
   const visibleGroups = useMemo(() => {
     if (filter === "all") {
       // Default view shows every section, declined families included —
       // they render in their own section at the bottom so admin can
-      // spot and restore them without switching filters.
-      return groups;
+      // spot and restore them without switching filters. Archived rows
+      // stay hidden: they're parked clutter, reachable only via the
+      // Archived filter.
+      return { ...groups, archived: [] };
     }
     return {
       followedUp: filter === "followed_up" ? groups.followedUp : [],
       notFollowedUp: filter === "not_followed_up" ? groups.notFollowedUp : [],
       converted: filter === "converted" ? groups.converted : [],
       notInterested: filter === "not_interested" ? groups.notInterested : [],
+      archived: filter === "archived" ? groups.archived : [],
     };
   }, [filter, groups]);
 
@@ -341,6 +351,7 @@ export default function InquiriesPage() {
         not_followed_up: groups.notFollowedUp.length,
         converted: groups.converted.length,
         not_interested: groups.notInterested.length,
+        archived: groups.archived.length,
       }) satisfies Record<InquiryFilter, number>,
     [groups]
   );
@@ -549,6 +560,18 @@ export default function InquiriesPage() {
     }
   }
 
+  // Park a duplicate / junk / test inquiry out of every default view
+  // without destroying it — the reversible alternative to Delete.
+  // No dialog: archiving is undoable via the Archived filter's ↩.
+  async function archiveInquiry(row: Inquiry) {
+    const ok = await updateStatus(row, { status: "archived" });
+    if (ok) {
+      toast.success(
+        `${row.parent_name || "Inquiry"} archived — find it under the Archived filter.`
+      );
+    }
+  }
+
   async function restoreInquiry(row: Inquiry) {
     // "active" sentinel, not "" — Xano's edit endpoint drops empty
     // inputs, so an empty status would never save. The old
@@ -751,7 +774,9 @@ export default function InquiriesPage() {
   // rows have left the working pipeline.
   const isConverted = (row: Inquiry) => row.status === "converted";
   const isNotInterested = (row: Inquiry) => row.status === "not_interested";
-  const isTerminal = (row: Inquiry) => isConverted(row) || isNotInterested(row);
+  const isArchived = (row: Inquiry) => row.status === "archived";
+  const isTerminal = (row: Inquiry) =>
+    isConverted(row) || isNotInterested(row) || isArchived(row);
 
   // Icon action button used in the trailing columns. Cell wrapper is
   // `flex` (block-level), NOT `inline-flex` — the DataTable puts
@@ -902,6 +927,16 @@ export default function InquiriesPage() {
       onClick: (row) => void restoreInquiry(row),
     }),
     actionButton({
+      key: "archive",
+      icon: <Archive className="size-3.5" />,
+      hoverClass: "hover:text-slate-700 hover:bg-slate-100",
+      title: "Archive (duplicate / junk)",
+      ariaLabel: (row) => `Archive inquiry from ${rowName(row)}`,
+      disabled: (row) => isArchived(row) || savingId === row.id,
+      spinning: (row) => savingId === row.id && !isArchived(row),
+      onClick: (row) => void archiveInquiry(row),
+    }),
+    actionButton({
       key: "delete",
       icon: <Trash2 className="size-3.5" />,
       hoverClass: "hover:text-red-600 hover:bg-red-50",
@@ -1039,6 +1074,19 @@ export default function InquiriesPage() {
           rowClassName={rowTint}
           onRowClick={(row) => setActive(row)}
         />
+        {filter === "archived" ? (
+          <InquiriesGroup
+            title="Archived"
+            description="Parked duplicates, junk, and test submissions — hidden everywhere else. Restore anytime with ↩."
+            dotColor="bg-slate-400"
+            rows={visibleGroups.archived}
+            isLoading={isLoading}
+            error={error}
+            columns={columns}
+            rowClassName={rowTint}
+            onRowClick={(row) => setActive(row)}
+          />
+        ) : null}
       </div>
 
       {/* Detail sheet — the SHARED LeadTriageSheet, the same one All

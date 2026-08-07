@@ -39,12 +39,14 @@ export async function GET(req: NextRequest) {
       studentsResult,
       familiesResult,
       parentsResult,
+      contactsResult,
     ] = await Promise.allSettled([
       xano.studentRegistration.getByYear(yearId),
       xano.applications.getAll(),
       xano.students.getAll(),
       xano.families.getAll(),
       xano.parents.getAll(),
+      xano.emergencyContacts.getAll(),
     ]);
 
     const packets =
@@ -56,6 +58,8 @@ export async function GET(req: NextRequest) {
       familiesResult.status === "fulfilled" ? familiesResult.value : [];
     const parents =
       parentsResult.status === "fulfilled" ? parentsResult.value : [];
+    const contacts =
+      contactsResult.status === "fulfilled" ? contactsResult.value : [];
 
     if (studentsResult.status === "rejected") {
       console.error(
@@ -75,15 +79,30 @@ export async function GET(req: NextRequest) {
     for (const p of packets) {
       packetByStudent.set(Number(p.registration_students_id), p);
     }
-    // Primary parent per family — lowest id wins, matching the other
-    // admin list endpoints.
-    const primaryByFamily = new Map<number, (typeof parents)[number] | null>();
+    // Primary + secondary parents per family — lowest id is primary,
+    // matching the other admin list endpoints.
+    const parentsByFamily = new Map<number, (typeof parents)>();
     for (const f of families) {
       const ids = xano.families.getParentIds(f);
       const matched = parents
         .filter((p) => ids.includes(p.id))
         .sort((a, b) => a.id - b.id);
-      primaryByFamily.set(f.id, matched[0] ?? null);
+      parentsByFamily.set(f.id, matched);
+    }
+    // Emergency contacts grouped by family, joined into one cell.
+    const contactsByFamily = new Map<number, string>();
+    for (const c of contacts) {
+      const fid = Number(c.registration_families_id);
+      if (!fid) continue;
+      const name = `${c.first_name ?? ""} ${c.last_name ?? ""}`.trim();
+      if (!name) continue;
+      const part = `${name}${c.relationship?.trim() ? ` (${c.relationship.trim()})` : ""}${c.phone?.toString().trim() ? ` · ${c.phone}` : ""}`;
+      contactsByFamily.set(
+        fid,
+        contactsByFamily.has(fid)
+          ? `${contactsByFamily.get(fid)}; ${part}`
+          : part
+      );
     }
 
     const rows: EnrolledExportRow[] = [];
@@ -100,7 +119,9 @@ export async function GET(req: NextRequest) {
 
       const familyId = Number(app.registration_families_id);
       const family = familyById.get(familyId) ?? null;
-      const primary = primaryByFamily.get(familyId) ?? null;
+      const familyParents = parentsByFamily.get(familyId) ?? [];
+      const primary = familyParents[0] ?? null;
+      const secondary = familyParents[1] ?? null;
       const packet = packetByStudent.get(student.id) ?? null;
       const enrolledAt =
         packet?.registration_confirmed_admin_time ??
@@ -143,11 +164,21 @@ export async function GET(req: NextRequest) {
         unenrollment_reason: student.unenrollment_reason ?? "",
         liability_waiver_status: packet?.liability_waiver_status ?? "",
 
+        bus_transportation: app.is_bus_transportation === true ? "Yes" : "No",
+        bus_stop: app.bus_stop ?? "",
+
         family_name: family?.family_name?.trim() || `Family #${familyId}`,
         primary_name: primary
           ? `${primary.first_name ?? ""} ${primary.last_name ?? ""}`.trim()
           : "",
         primary_email: primary?.email ?? "",
+        primary_phone: (primary?.phone ?? "").toString(),
+        secondary_name: secondary
+          ? `${secondary.first_name ?? ""} ${secondary.last_name ?? ""}`.trim()
+          : "",
+        secondary_email: secondary?.email ?? "",
+        secondary_phone: (secondary?.phone ?? "").toString(),
+        emergency_contacts: contactsByFamily.get(familyId) ?? "",
 
         allergies: packet?.allergies ?? "",
         health_conditions: packet?.health_conditions ?? "",
@@ -156,11 +187,35 @@ export async function GET(req: NextRequest) {
         vision_impairments: packet?.vision_impairments ?? "",
         hearing_impairments: packet?.hearing_impairments ?? "",
         carry_epi_pen: packet?.carry_epi_pen === true ? "Yes" : "No",
+        epi_pen_notes: packet?.epipen_explainer ?? "",
+        acetaminophen_permission: packet?.permission_for_acetaminophen ?? "",
+        counseling_interest: packet?.interested_in_counseling_services ?? "",
+        additional_health_notes: packet?.additional_health_information ?? "",
         on_medicaid: packet?.is_student_on_medicaid === true ? "Yes" : "No",
         medicaid_number: packet?.medicaid_number
           ? String(packet.medicaid_number)
           : "",
         medicaid_provider: packet?.medicaid_provider ?? "",
+
+        approved_pickup_adults: packet?.other_adults_approved_for_pickup ?? "",
+        prohibited_adults: packet?.prohibited_adults ?? "",
+
+        doc_birth_certificate: docState(
+          student.birth_certificate,
+          student.birth_certificate_admin_confirm
+        ),
+        doc_school_health_form: docState(
+          student.school_health_form,
+          student.school_health_form_admin_confirm
+        ),
+        doc_transcripts: docState(
+          student.transcripts,
+          student.transcripts_admin_confirm
+        ),
+        doc_immunization: docState(
+          student.immunization_forms,
+          student.immunization_admin_confirm
+        ),
 
         nwea_math: numToStr(student.initial_screening_nwea_math),
         nwea_reading: numToStr(student.initial_screening_nwea_reading),
@@ -180,6 +235,21 @@ export async function GET(req: NextRequest) {
   } catch (err) {
     return handleAdminError(err);
   }
+}
+
+/** Required-document cell: admin-approved beats merely-uploaded;
+ *  no valid file at all reads "Missing". */
+function docState(
+  files: unknown,
+  approved: boolean | undefined
+): string {
+  const uploaded =
+    Array.isArray(files) &&
+    files.some(
+      (f) => f && typeof f === "object" && (f as { path?: unknown }).path
+    );
+  if (approved === true) return "Approved";
+  return uploaded ? "Uploaded" : "Missing";
 }
 
 /** Unix-ms timestamp → "YYYY-MM-DD", or "" for missing/zero. */

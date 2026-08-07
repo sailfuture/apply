@@ -156,6 +156,21 @@ export default function AdminDashboardPage() {
       { refreshInterval: 60_000 }
     );
 
+  // Latest inquiry submissions for the Recent-inquiries table — same
+  // feed the Inquiries page uses; archived rows (parked duplicates)
+  // excluded, newest first.
+  const { data: inquiriesData, isLoading: inquiriesLoading } = useSWR<
+    RecentInquiryRow[]
+  >("/api/admin/inquiries", fetcher, { refreshInterval: 60_000 });
+  const recentInquiries = useMemo(
+    () =>
+      (Array.isArray(inquiriesData) ? inquiriesData : [])
+        .filter((r) => (r.status ?? "").trim() !== "archived")
+        .sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0))
+        .slice(0, 8),
+    [inquiriesData]
+  );
+
   // Clicking an activity row opens the lead's triage sheet IN PLACE
   // (no page navigation) — same lazy pattern the Messages page uses:
   // the all-leads fetch only fires once a lead is actually opened.
@@ -389,6 +404,16 @@ export default function AdminDashboardPage() {
         </TrendCard>
       </div>
 
+      {/* Latest inquiry submissions with when they landed — the "who
+          just reached out" glance. Rows open the shared triage sheet. */}
+      <RecentInquiriesCard
+        rows={recentInquiries}
+        loading={inquiriesLoading && !inquiriesData}
+        onRowClick={(row) =>
+          setSelectedLead({ source: "inquiry", id: row.id })
+        }
+      />
+
       {/* Unread messages — parents waiting on a reply. Replaces the
           old action queues: this is what is actually time-sensitive,
           and those queues already live on their own list pages. */}
@@ -513,3 +538,144 @@ function TrendCard({
   );
 }
 
+
+/* ─────────────────── Recent inquiries ─────────────────── */
+
+/** Minimal slice of an inquiry row the dashboard table needs — the
+ *  full shape lives with the Inquiries page. */
+interface RecentInquiryRow {
+  id: number;
+  created_at: number;
+  primary_first_name?: string;
+  primary_last_name?: string;
+  student_first_name?: string;
+  student_last_name?: string;
+  starting_grade?: string;
+  current_grade?: string;
+  isFollowedUp?: boolean;
+  status?: string | null;
+}
+
+/** "just now" / "5m ago" / "3h ago" / "2d ago"; short date past two
+ *  weeks. Absolute timestamp rides on the title attr. */
+function relTime(ms: number | null | undefined): string {
+  if (!ms) return "—";
+  const diff = Date.now() - ms;
+  if (diff < 60_000) return "just now";
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+  if (diff < 14 * 86_400_000) return `${Math.floor(diff / 86_400_000)}d ago`;
+  return new Date(ms).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function RecentInquiriesCard({
+  rows,
+  loading,
+  onRowClick,
+}: {
+  rows: RecentInquiryRow[];
+  loading: boolean;
+  onRowClick: (row: RecentInquiryRow) => void;
+}) {
+  return (
+    <Card className="overflow-hidden bg-white py-0 gap-0">
+      <CardHeader className="py-4 border-b bg-white">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <CardTitle className="text-base">Recent inquiries</CardTitle>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Latest submissions from prospective families — click one to
+              open its triage sheet.
+            </p>
+          </div>
+          <a
+            href="/admin/inquiries"
+            className="shrink-0 text-xs font-medium text-primary underline-offset-2 hover:underline"
+          >
+            View all
+          </a>
+        </div>
+      </CardHeader>
+      <CardContent className="p-0">
+        {loading ? (
+          <div className="space-y-2 p-4">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Skeleton key={i} className="h-9 w-full" />
+            ))}
+          </div>
+        ) : rows.length === 0 ? (
+          <p className="px-6 py-10 text-center text-sm text-muted-foreground">
+            No inquiries yet.
+          </p>
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b text-left text-xs text-muted-foreground">
+                <th className="py-2 pl-4 font-medium">Parent</th>
+                <th className="py-2 font-medium">Student</th>
+                <th className="py-2 font-medium">Grade</th>
+                <th className="py-2 font-medium">Status</th>
+                <th className="py-2 pr-4 text-right font-medium">
+                  Submitted
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {rows.map((r) => {
+                const parent =
+                  `${r.primary_first_name ?? ""} ${r.primary_last_name ?? ""}`.trim() ||
+                  "—";
+                const student =
+                  `${r.student_first_name ?? ""} ${r.student_last_name ?? ""}`.trim() ||
+                  "—";
+                const status = (r.status ?? "").trim();
+                return (
+                  <tr
+                    key={r.id}
+                    onClick={() => onRowClick(r)}
+                    className="cursor-pointer transition-colors hover:bg-muted/30"
+                  >
+                    <td className="py-2.5 pl-4 font-medium">{parent}</td>
+                    <td className="py-2.5">{student}</td>
+                    <td className="py-2.5 whitespace-nowrap">
+                      {(r.starting_grade || r.current_grade || "—").trim()}
+                    </td>
+                    <td className="py-2.5">
+                      {status === "converted" ? (
+                        <span className="inline-flex rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 ring-1 ring-blue-200">
+                          Converted
+                        </span>
+                      ) : status === "not_interested" ? (
+                        <span className="inline-flex rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700 ring-1 ring-red-200">
+                          Not interested
+                        </span>
+                      ) : r.isFollowedUp ? (
+                        <span className="inline-flex rounded-full bg-green-50 px-2 py-0.5 text-xs font-medium text-green-700 ring-1 ring-green-200">
+                          Followed up
+                        </span>
+                      ) : (
+                        <span className="inline-flex rounded-full bg-yellow-50 px-2 py-0.5 text-xs font-medium text-yellow-800 ring-1 ring-yellow-200">
+                          New
+                        </span>
+                      )}
+                    </td>
+                    <td
+                      className="py-2.5 pr-4 text-right tabular-nums text-muted-foreground whitespace-nowrap"
+                      title={new Date(r.created_at).toLocaleString()}
+                    >
+                      {relTime(r.created_at)}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </CardContent>
+    </Card>
+  );
+}

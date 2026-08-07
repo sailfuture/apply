@@ -51,9 +51,20 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { formatPriceCents } from "@/lib/store";
-import type { AdminStoreOrderRow } from "@/app/api/admin/store/orders/route";
+import type {
+  AdminStoreOrderRow,
+  AdminStoreOrdersResponse,
+  StoreFamilyOption,
+} from "@/app/api/admin/store/orders/route";
 import type { XanoStoreItem } from "@/lib/xano";
 
 function fmtDateTime(ms: number | null | undefined): string {
@@ -88,10 +99,15 @@ function relTime(ms: number | null | undefined): string {
  */
 export default function AdminStorePage() {
   const {
-    data: orders,
+    data: ordersData,
     error: ordersError,
     mutate: mutateOrders,
-  } = useSWR<AdminStoreOrderRow[]>("/api/admin/store/orders", adminFetcher);
+  } = useSWR<AdminStoreOrdersResponse>(
+    "/api/admin/store/orders",
+    adminFetcher
+  );
+  const orders = ordersData?.orders;
+  const families = ordersData?.families ?? [];
   const {
     data: items,
     error: itemsError,
@@ -99,6 +115,9 @@ export default function AdminStorePage() {
   } = useSWR<XanoStoreItem[]>("/api/admin/store/items", adminFetcher);
 
   const [search, setSearch] = useState("");
+  /** Order whose family assignment is being edited. */
+  const [reassignTarget, setReassignTarget] =
+    useState<AdminStoreOrderRow | null>(null);
   const filteredOrders = useMemo(() => {
     if (!orders) return [];
     const q = search.trim().toLowerCase();
@@ -204,6 +223,7 @@ export default function AdminStorePage() {
                     key={o.id}
                     order={o}
                     onChanged={() => void mutateOrders()}
+                    onReassign={() => setReassignTarget(o)}
                   />
                 ))}
               </TableBody>
@@ -218,17 +238,34 @@ export default function AdminStorePage() {
         orders={orders}
         onChanged={() => void mutateItems()}
       />
+
+      {/* Manual re-attribution — for when the automatic nets put an
+          order on the wrong family (or none). */}
+      {reassignTarget ? (
+        <ReassignFamilyDialog
+          key={reassignTarget.id}
+          order={reassignTarget}
+          families={families}
+          onDone={(saved) => {
+            setReassignTarget(null);
+            if (saved) void mutateOrders();
+          }}
+        />
+      ) : null}
     </div>
   );
 }
 
-/** One order row — read-only Stripe mirror + the Distributed latch. */
+/** One order row — read-only Stripe mirror + the Distributed latch
+ *  and the family re-attribution affordance. */
 function OrderRow({
   order,
   onChanged,
+  onReassign,
 }: {
   order: AdminStoreOrderRow;
   onChanged: () => void;
+  onReassign: () => void;
 }) {
   const [saving, setSaving] = useState(false);
 
@@ -268,12 +305,19 @@ function OrderRow({
         {relTime(Number(order.paid_at) || 0)}
       </TableCell>
       <TableCell>
-        <p className="font-medium">{order.family_name}</p>
-        {order.purchaser_email ? (
-          <p className="text-xs text-muted-foreground">
-            {order.purchaser_email}
-          </p>
-        ) : null}
+        {/* Click to reassign — attribution is automatic (portal
+            reference / purchaser email) but not infallible. */}
+        <button
+          type="button"
+          onClick={onReassign}
+          title={`Change family assignment${order.purchaser_email ? ` · purchased by ${order.purchaser_email}` : ""}`}
+          className="group inline-flex items-center gap-1.5 text-left"
+        >
+          <span className="font-medium underline-offset-2 group-hover:underline">
+            {order.family_name}
+          </span>
+          <Pencil className="size-3 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+        </button>
       </TableCell>
       <TableCell className="whitespace-nowrap">
         {(order.student_name ?? "").trim() || (
@@ -707,6 +751,109 @@ function ItemUpsertDialog({
               "Save changes"
             ) : (
               "Add item"
+            )}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * Manually assign (or clear) which family an order belongs to — the
+ * escape hatch for when automatic attribution guessed wrong.
+ */
+function ReassignFamilyDialog({
+  order,
+  families,
+  onDone,
+}: {
+  order: AdminStoreOrderRow;
+  families: StoreFamilyOption[];
+  onDone: (saved: boolean) => void;
+}) {
+  const current = Number(order.registration_families_id) || 0;
+  const [familyId, setFamilyId] = useState(current ? String(current) : "0");
+  const [saving, setSaving] = useState(false);
+
+  async function save() {
+    if (saving) return;
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/admin/store/orders/${order.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          registration_families_id: Number(familyId) || 0,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error ?? `Save failed (${res.status})`);
+      }
+      toast.success(
+        Number(familyId)
+          ? "Order reassigned."
+          : "Order marked unattributed."
+      );
+      onDone(true);
+    } catch (err) {
+      console.error("Failed to reassign order:", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't save.");
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && !saving && onDone(false)}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Change family assignment</DialogTitle>
+          <DialogDescription>
+            {order.item}
+            {order.purchaser_email
+              ? ` — purchased by ${order.purchaser_email}`
+              : ""}
+            . Reassigning also moves the order on the family&rsquo;s own
+            Store page.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-1.5">
+          <Label>Family</Label>
+          <Select value={familyId} onValueChange={setFamilyId}>
+            <SelectTrigger className="w-full bg-white">
+              <SelectValue placeholder="Pick a family…" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="0">Unattributed</SelectItem>
+              {families.map((f) => (
+                <SelectItem key={f.id} value={String(f.id)}>
+                  {f.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <DialogFooter>
+          <Button
+            variant="outline"
+            className="bg-white"
+            disabled={saving}
+            onClick={() => onDone(false)}
+          >
+            Cancel
+          </Button>
+          <Button
+            disabled={saving || Number(familyId) === current}
+            onClick={() => void save()}
+          >
+            {saving ? (
+              <>
+                <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                Saving
+              </>
+            ) : (
+              "Save assignment"
             )}
           </Button>
         </DialogFooter>

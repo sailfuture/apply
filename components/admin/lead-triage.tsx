@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import {
   Check,
   CheckCircle2,
+  ChevronDown,
   ChevronsUpDown,
   Circle,
   Copy,
@@ -926,6 +927,7 @@ function LeadDetailsEditor({
   scope,
   details,
   headerActions,
+  hideTitle = false,
   onChanged,
 }: {
   scope: LeadNoteScope;
@@ -934,6 +936,9 @@ function LeadDetailsEditor({
    *  not-interested icon button here. Hidden while editing so the
    *  Cancel/Save pair owns the row. */
   headerActions?: React.ReactNode;
+  /** The sheet's collapsible wrapper already labels the section —
+   *  suppress the editor's own micro-header so it isn't said twice. */
+  hideTitle?: boolean;
   onChanged?: () => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -1096,7 +1101,7 @@ function LeadDetailsEditor({
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-2">
         <p className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-          Lead details
+          {hideTitle ? null : "Lead details"}
           {/* The editor has already closed on the new values by the
               time this shows — it just marks the write in flight. */}
           {saving && !editing ? (
@@ -1383,14 +1388,14 @@ export function LeadTriageSheet({
         </div>
 
         {details || conversion ? (
-          // `min-h-0 + overflow-y-auto` makes THIS section the sheet's
-          // pressure valve: when the details outgrow the viewport (an
-          // inquiry's "About the student" runs to paragraphs), this
-          // block shrinks and scrolls internally instead of shoving
-          // the activity log + composer off-screen with no scrollbar
-          // anywhere. The header, triage controls, and composer stay
-          // pinned (shrink-0); the timeline keeps its own floor below.
-          <div className="min-h-0 space-y-3 overflow-y-auto border-b bg-muted/10 px-4 py-4">
+          // Collapsible, CLOSED by default (keyed per lead so switching
+          // rows re-collapses): on small screens the details block was
+          // eating the sheet and burying the activity log — now the log
+          // gets the room until the admin asks for the details. When
+          // open, `min-h-0 + overflow-y-auto` still makes the body the
+          // sheet's pressure valve: long details scroll internally
+          // instead of shoving the log + composer off-screen.
+          <LeadDetailsCollapsible key={`collapse-${scope.source}-${scope.id}`}>
             {/* Keyed by lead so switching rows resets any in-progress
                 edit instead of carrying a stale draft across leads. */}
             {details ? (
@@ -1398,6 +1403,7 @@ export function LeadTriageSheet({
                 key={`${scope.source}-${scope.id}`}
                 scope={scope}
                 details={details}
+                hideTitle
                 headerActions={
                   leadStatus !== undefined ? (
                     <LeadStatusEditor
@@ -1450,7 +1456,7 @@ export function LeadTriageSheet({
                 </div>
               ))}
             {extraContent}
-          </div>
+          </LeadDetailsCollapsible>
         ) : null}
 
         {/* Timeline — a chat stream pinned to the newest message
@@ -1471,5 +1477,48 @@ export function LeadTriageSheet({
         </div>
       </SheetContent>
     </Sheet>
+  );
+}
+
+/**
+ * Disclosure wrapper for the sheet's details block. Collapsed on
+ * every open (the sheet keys it per lead) so the activity log gets
+ * the vertical room by default — on phones the details were pushing
+ * the conversation below the fold. The bar always shows, so
+ * collapsing back is one tap.
+ */
+function LeadDetailsCollapsible({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="flex min-h-0 shrink-0 flex-col border-b bg-muted/10">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className="flex shrink-0 items-center justify-between gap-2 px-4 py-2.5 text-left transition-colors hover:bg-muted/30"
+      >
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          Lead details
+        </span>
+        <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+          {open ? "Hide" : "Show"}
+          <ChevronDown
+            className={cn(
+              "size-3.5 transition-transform",
+              open && "rotate-180"
+            )}
+          />
+        </span>
+      </button>
+      {open ? (
+        <div className="min-h-0 space-y-3 overflow-y-auto border-t px-4 py-4">
+          {children}
+        </div>
+      ) : null}
+    </div>
   );
 }

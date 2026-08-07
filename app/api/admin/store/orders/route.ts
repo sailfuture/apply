@@ -30,10 +30,32 @@ export async function GET() {
         family_name:
           nameById.get(Number(o.registration_families_id)) || "Unattributed",
       }));
-    return NextResponse.json(rows);
+
+    // Family roster for the manual re-attribution picker.
+    const familyOptions: StoreFamilyOption[] = families
+      .map((f) => ({
+        id: Number(f.id),
+        name: f.family_name?.trim() || `Family #${f.id}`,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    return NextResponse.json({
+      orders: rows,
+      families: familyOptions,
+    } satisfies AdminStoreOrdersResponse);
   } catch (err) {
     return handleAdminError(err);
   }
 }
 
 export type AdminStoreOrderRow = XanoStoreOrder & { family_name: string };
+
+export interface StoreFamilyOption {
+  id: number;
+  name: string;
+}
+
+export interface AdminStoreOrdersResponse {
+  orders: AdminStoreOrderRow[];
+  families: StoreFamilyOption[];
+}

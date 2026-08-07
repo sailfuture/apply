@@ -214,6 +214,21 @@ export default function AdminMessagesPage() {
       })
     : null;
 
+  // Keep the OPEN thread marked viewed as its `lastAt` moves — a new
+  // inbound text (or the Twilio sync backfilling one) landing in the
+  // conversation the admin is currently reading otherwise counted as
+  // unread until they re-clicked the row: the "seen but never marked
+  // read" badge bug. Deferred a tick so the setState doesn't run in
+  // the effect body (react-hooks/set-state-in-effect).
+  const activeLastAt =
+    active && "lastAt" in active ? (active.lastAt ?? 0) : 0;
+  useEffect(() => {
+    if (!selected || !activeLastAt) return;
+    const { type, id } = selected;
+    const t = setTimeout(() => markViewed(type, id, activeLastAt), 0);
+    return () => clearTimeout(t);
+  }, [selected, activeLastAt]);
+
   // In-place profile sheet for the open conversation — family details
   // for families, the full lead triage sheet for the four lead
   // sources (no page navigation). The all-leads fetch is lazy: it

@@ -270,7 +270,12 @@ export async function GET() {
       "tour_status" | "tour_at" | "converted_family_name" | "funnel_stage"
     >;
     const bare: BareRow[] = [
-      ...inquiries.map((i): BareRow => {
+      // Archived inquiries (duplicates / junk parked from the
+      // Inquiries page) stay off the leads board entirely — restore
+      // them there if they turn out to be real.
+      ...inquiries
+        .filter((i) => (i.status ?? "").trim() !== "archived")
+        .map((i): BareRow => {
         const status = (i.status ?? "").trim();
         return {
           key: `inquiry-${i.id}`,

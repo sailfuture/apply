@@ -51,10 +51,21 @@ export interface EnrolledExportRow {
   unenrollment_reason: string;
   liability_waiver_status: string;
 
+  // ── Transportation (per-year application) ──
+  bus_transportation: string;
+  bus_stop: string;
+
   // ── Contact ──
   family_name: string;
   primary_name: string;
   primary_email: string;
+  primary_phone: string;
+  secondary_name: string;
+  secondary_email: string;
+  secondary_phone: string;
+  /** All emergency contacts joined — "Name (relationship) · phone",
+   *  separated by "; ". */
+  emergency_contacts: string;
 
   // ── Medical / health (per-year packet) ──
   allergies: string;
@@ -64,9 +75,23 @@ export interface EnrolledExportRow {
   vision_impairments: string;
   hearing_impairments: string;
   carry_epi_pen: string;
+  epi_pen_notes: string;
+  acetaminophen_permission: string;
+  counseling_interest: string;
+  additional_health_notes: string;
   on_medicaid: string;
   medicaid_number: string;
   medicaid_provider: string;
+
+  // ── Pickup & safety (per-year packet) ──
+  approved_pickup_adults: string;
+  prohibited_adults: string;
+
+  // ── Documents — "Approved" | "Uploaded" | "Missing" ──
+  doc_birth_certificate: string;
+  doc_school_health_form: string;
+  doc_transcripts: string;
+  doc_immunization: string;
 
   // ── Testing ──
   nwea_math: string;
@@ -86,8 +111,11 @@ export type ExportColumnGroup =
   | "Student"
   | "Placement"
   | "Status & program"
+  | "Transportation"
   | "Contact"
   | "Medical"
+  | "Pickup & safety"
+  | "Documents"
   | "Testing";
 
 export interface ExportColumn {
@@ -104,8 +132,11 @@ export const EXPORT_COLUMN_GROUPS: ExportColumnGroup[] = [
   "Student",
   "Placement",
   "Status & program",
+  "Transportation",
   "Contact",
   "Medical",
+  "Pickup & safety",
+  "Documents",
   "Testing",
 ];
 
@@ -131,10 +162,18 @@ export const EXPORT_COLUMNS: ExportColumn[] = [
   { key: "unenrollment_date", label: "Unenrollment Date", group: "Status & program", defaultSelected: false },
   { key: "unenrollment_reason", label: "Unenrollment Reason", group: "Status & program", defaultSelected: false },
   { key: "liability_waiver_status", label: "Liability Waiver", group: "Status & program", defaultSelected: false },
+  // Transportation
+  { key: "bus_transportation", label: "Bus Transportation", group: "Transportation", defaultSelected: true },
+  { key: "bus_stop", label: "Bus Stop", group: "Transportation", defaultSelected: true },
   // Contact
   { key: "family_name", label: "Family", group: "Contact", defaultSelected: false },
   { key: "primary_name", label: "Primary Contact", group: "Contact", defaultSelected: false },
   { key: "primary_email", label: "Primary Email", group: "Contact", defaultSelected: false },
+  { key: "primary_phone", label: "Primary Phone", group: "Contact", defaultSelected: false },
+  { key: "secondary_name", label: "Secondary Contact", group: "Contact", defaultSelected: false },
+  { key: "secondary_email", label: "Secondary Email", group: "Contact", defaultSelected: false },
+  { key: "secondary_phone", label: "Secondary Phone", group: "Contact", defaultSelected: false },
+  { key: "emergency_contacts", label: "Emergency Contacts", group: "Contact", defaultSelected: false },
   // Medical
   { key: "allergies", label: "Allergies", group: "Medical", defaultSelected: false },
   { key: "health_conditions", label: "Health Conditions", group: "Medical", defaultSelected: false },
@@ -143,9 +182,21 @@ export const EXPORT_COLUMNS: ExportColumn[] = [
   { key: "vision_impairments", label: "Vision Impairments", group: "Medical", defaultSelected: false },
   { key: "hearing_impairments", label: "Hearing Impairments", group: "Medical", defaultSelected: false },
   { key: "carry_epi_pen", label: "Carries EpiPen", group: "Medical", defaultSelected: false },
+  { key: "epi_pen_notes", label: "EpiPen Notes", group: "Medical", defaultSelected: false },
+  { key: "acetaminophen_permission", label: "Acetaminophen Permission", group: "Medical", defaultSelected: false },
+  { key: "counseling_interest", label: "Counseling Interest", group: "Medical", defaultSelected: false },
+  { key: "additional_health_notes", label: "Additional Health Notes", group: "Medical", defaultSelected: false },
   { key: "on_medicaid", label: "On Medicaid", group: "Medical", defaultSelected: false },
   { key: "medicaid_number", label: "Medicaid Number", group: "Medical", defaultSelected: false },
   { key: "medicaid_provider", label: "Medicaid Provider", group: "Medical", defaultSelected: false },
+  // Pickup & safety
+  { key: "approved_pickup_adults", label: "Approved Pickup Adults", group: "Pickup & safety", defaultSelected: false },
+  { key: "prohibited_adults", label: "Prohibited Adults", group: "Pickup & safety", defaultSelected: false },
+  // Documents
+  { key: "doc_birth_certificate", label: "Birth Certificate", group: "Documents", defaultSelected: false },
+  { key: "doc_school_health_form", label: "School Health Form", group: "Documents", defaultSelected: false },
+  { key: "doc_transcripts", label: "Transcripts", group: "Documents", defaultSelected: false },
+  { key: "doc_immunization", label: "Immunization Forms", group: "Documents", defaultSelected: false },
   // Testing
   { key: "nwea_math", label: "NWEA Math", group: "Testing", defaultSelected: false },
   { key: "nwea_reading", label: "NWEA Reading", group: "Testing", defaultSelected: false },

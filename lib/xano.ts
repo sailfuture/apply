@@ -4419,6 +4419,18 @@ export const xano = {
       return res.json();
     },
 
+    /** Every contact across all families — bulk consumers (the
+     *  enrolled export) group by `registration_families_id` in code. */
+    async getAll(): Promise<XanoEmergencyContact[]> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_emergency_contacts`,
+        { cache: "no-store" }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      const rows = await res.json();
+      return Array.isArray(rows) ? rows : [];
+    },
+
     async getByFamilyId(familyId: number): Promise<XanoEmergencyContact[]> {
       try {
         const res = await fetch(

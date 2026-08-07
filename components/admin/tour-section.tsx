@@ -3,7 +3,14 @@
 import { useState } from "react";
 import useSWR from "swr";
 import { toast } from "sonner";
-import { CalendarPlus, Loader2, MapPin } from "lucide-react";
+import {
+  CalendarCheck,
+  CalendarPlus,
+  CalendarX2,
+  CheckCircle2,
+  Loader2,
+  MapPin,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -68,11 +75,59 @@ export function tourStatusBadgeClass(status: string): string {
   }
 }
 
+/** Short date for the tour-state button labels ("Aug 12"). */
+function tourShortDate(ms: number): string {
+  return new Date(ms).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+  });
+}
+
 /**
- * Just the "Book campus tour" action for a lead sheet — no status
- * card. The tour itself surfaces in the lead's activity log (which
- * reads the tours table directly), so a second card restating it was
- * redundant; what the sheet still needs is the way to start one.
+ * Which state the sheet's tour button should render, from the lead's
+ * tour history. An upcoming scheduled tour always wins; otherwise the
+ * most recent tour decides. "bookable" covers no tour at all plus
+ * canceled / no-show (both rebookable).
+ */
+function resolveTourState(
+  tours: Array<{ status: string; scheduled_at: number }>
+): {
+  state: "scheduled" | "completed" | "past" | "bookable";
+  upcoming: { status: string; scheduled_at: number } | null;
+  latest: { status: string; scheduled_at: number } | null;
+} {
+  const now = Date.now();
+  const upcoming =
+    tours
+      .filter((t) => t.status === "scheduled" && t.scheduled_at > now)
+      .sort((a, b) => a.scheduled_at - b.scheduled_at)[0] ?? null;
+  const latest =
+    [...tours].sort(
+      (a, b) => (b.scheduled_at ?? 0) - (a.scheduled_at ?? 0)
+    )[0] ?? null;
+  if (upcoming) return { state: "scheduled", upcoming, latest };
+  if (latest?.status === "completed")
+    return { state: "completed", upcoming, latest };
+  if (latest?.status === "scheduled")
+    return { state: "past", upcoming, latest };
+  return { state: "bookable", upcoming, latest };
+}
+
+/**
+ * The lead sheet's tour action — stateful on the lead's own tour
+ * history rather than a bare "Book campus tour":
+ *
+ *   - upcoming scheduled tour → blue, disabled ("Tour scheduled ·
+ *     Aug 12"; reschedules happen on the Tours tab)
+ *   - completed tour          → green, disabled
+ *   - scheduled but the date passed unresolved → gray, disabled
+ *     (mark completed / no-show on the Tours tab first)
+ *   - no tour, canceled, or no-show → the normal clickable Book
+ *     button, so the family can be (re)booked
+ *
+ * The tour itself surfaces in the lead's activity log; this button is
+ * the way to start one and the at-a-glance answer to "do they have
+ * one already".
  */
 export function LeadTourButton({
   scope,
@@ -96,6 +151,48 @@ export function LeadTourButton({
   );
   const [open, setOpen] = useState(false);
 
+  const tours = data?.tours ?? [];
+  const { state, upcoming, latest } = resolveTourState(tours);
+
+  if (state !== "bookable") {
+    const styles = {
+      scheduled:
+        "border-sky-200 bg-sky-50 text-sky-700 disabled:opacity-100",
+      completed:
+        "border-green-200 bg-green-50 text-green-700 disabled:opacity-100",
+      past: "border-border bg-muted text-muted-foreground disabled:opacity-100",
+    }[state];
+    const label =
+      state === "scheduled"
+        ? `Tour scheduled · ${tourShortDate(upcoming!.scheduled_at)}`
+        : state === "completed"
+          ? `Tour completed${latest?.scheduled_at ? ` · ${tourShortDate(latest.scheduled_at)}` : ""}`
+          : "Tour date passed";
+    const hint =
+      state === "past"
+        ? "The scheduled date passed without being resolved — mark it completed or no-show on the Campus Visits → Tours tab, then rebook if needed."
+        : "Reschedules and lifecycle changes live on the Campus Visits → Tours tab.";
+    return (
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled
+        title={hint}
+        className={cn("h-8", styles)}
+      >
+        {state === "scheduled" ? (
+          <CalendarCheck className="size-3.5" />
+        ) : state === "completed" ? (
+          <CheckCircle2 className="size-3.5" />
+        ) : (
+          <CalendarX2 className="size-3.5" />
+        )}
+        {label}
+      </Button>
+    );
+  }
+
   return (
     <>
       <Button
@@ -106,7 +203,7 @@ export function LeadTourButton({
         onClick={() => setOpen(true)}
       >
         <CalendarPlus className="size-3.5" />
-        Book campus tour
+        {latest ? "Rebook campus tour" : "Book campus tour"}
       </Button>
       <TourScheduleDialog
         open={open}
