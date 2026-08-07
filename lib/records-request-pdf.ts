@@ -203,7 +203,7 @@ export async function generateRecordsRequestPdf(
   gap();
 
   paragraph(
-    "Should you require further information to fulfill this request, please contact us at (727) 900-1436, tward@sailfuture.org, lmanke@sailfuture.org, or dean@sailfuture.org."
+    "Should you require further information to fulfill this request, please contact us at (727) 900-1436, lmanke@sailfuture.org, or dean@sailfuture.org."
   );
 
   // ── Signature ───────────────────────────────────────────────────
