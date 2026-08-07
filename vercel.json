@@ -8,6 +8,10 @@
     {
       "path": "/api/cron/sms-sync",
       "schedule": "30 13 * * *"
+    },
+    {
+      "path": "/api/cron/calendar-sync",
+      "schedule": "*/5 * * * *"
     }
   ]
 }

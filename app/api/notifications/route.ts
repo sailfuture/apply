@@ -40,6 +40,10 @@ export async function GET() {
   // missing table or transient Xano error yields an empty (not
   // broken) log. The family row (for the read watermark) is likewise
   // best-effort.
+  //
+  // Google Calendar appointments are deliberately NOT in this feed:
+  // families book tours before they have portal accounts, so the
+  // mirror only surfaces on the ADMIN side (family activity log).
   const [emails, texts, family] = await Promise.all([
     xano.emailNotifications.getByFamily(familyId),
     xano.smsMessages.getByFamilyId(familyId),

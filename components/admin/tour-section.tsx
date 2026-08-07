@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Dialog,
   DialogContent,
@@ -151,7 +152,15 @@ export function LeadTourButton({
   );
   const [open, setOpen] = useState(false);
 
-  const tours = data?.tours ?? [];
+  // Don't render ANY state until the tour history has loaded — the
+  // button used to flash clickable "Book campus tour" and then morph
+  // into its real state a beat later. A button-shaped skeleton holds
+  // the spot instead.
+  if (!data) {
+    return <Skeleton className="h-8 w-40 rounded-md" />;
+  }
+
+  const tours = data.tours ?? [];
   const { state, upcoming, latest } = resolveTourState(tours);
 
   if (state !== "bookable") {

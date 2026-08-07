@@ -64,6 +64,7 @@ export async function GET(req: NextRequest) {
       studentsResult,
       transactionsResult,
       familyResult,
+      appointmentsResult,
     ] = await Promise.allSettled([
       xano.adminNotes.getByFamilyId(familyId),
       xano.smsMessages.getByFamilyId(familyId),
@@ -76,6 +77,9 @@ export async function GET(req: NextRequest) {
       xano.students.getByFamilyId(familyId),
       xano.paymentTransactions.getByFamilyAndYear(familyId, yearId),
       xano.families.getById(familyId).catch(() => null),
+      // Google Calendar appointments mirrored by the calendar-sync
+      // cron — [] until the table exists.
+      xano.googleAppointments.getAll().catch(() => []),
     ]);
 
     const val = <T,>(r: PromiseSettledResult<T>, fallback: T): T =>
@@ -90,6 +94,9 @@ export async function GET(req: NextRequest) {
     const students = val(studentsResult, []);
     const transactions = val(transactionsResult, []);
     const family = val(familyResult, null);
+    const appointments = val(appointmentsResult, []).filter(
+      (a) => Number(a.registration_families_id) === familyId
+    );
 
     const studentIds = new Set(students.map((s) => s.id));
     const studentName = (id: number | null | undefined): string => {
@@ -193,6 +200,34 @@ export async function GET(req: NextRequest) {
         // First-open stamp from the Resend webhook (open tracking) —
         // renders as "Viewed …" in the bubble footer.
         openedAt: e.opened_at ?? undefined,
+      });
+    }
+
+    // ── Google Calendar appointments (calendar-sync mirror) ──────────
+    for (const a of appointments) {
+      const when = a.start_at
+        ? new Date(Number(a.start_at)).toLocaleString("en-US", {
+            weekday: "short",
+            month: "short",
+            day: "numeric",
+            hour: "numeric",
+            minute: "2-digit",
+            timeZone: "America/New_York",
+          })
+        : "";
+      push({
+        id: `appt-${a.id}`,
+        ts: a.created_at,
+        kind: "system",
+        scope: "general",
+        title:
+          a.status === "cancelled"
+            ? "Appointment cancelled"
+            : "Appointment booked",
+        body: [a.title, when, a.location?.trim()]
+          .filter(Boolean)
+          .join(" · "),
+        author: "Google Calendar",
       });
     }
 

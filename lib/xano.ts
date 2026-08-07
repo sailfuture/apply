@@ -834,6 +834,40 @@ export interface XanoLaptopAssignment {
   enrolled_families_id: number;
 }
 
+/**
+ * One Google Calendar appointment mirrored for a family
+ * (`google_appointments`). Written ONLY by the calendar-sync cron:
+ * every few minutes it reads the admissions@ calendar (the
+ * impersonated account all bookings land on), matches attendee
+ * emails against the parent roster, and upserts matched events here
+ * — which is what surfaces bookings on the parent Notifications log
+ * and the admin activity feed. Tour events the app created itself
+ * are skipped (they already flow through `registration_tours`).
+ */
+export interface XanoGoogleAppointment {
+  id: number;
+  created_at: number;
+  /** Natural idempotency key — one row per Google event. */
+  google_event_id: string;
+  /** Enrolled-family match (parents/students). 0 = none. */
+  registration_families_id: number;
+  /** Pre-account lead match (inquiry email / inquiry student name) —
+   *  used when the family nets miss, since families book tours
+   *  before they have portal accounts. 0 = none. Inquiry-matched
+   *  bookings also get a note written into the lead's comms log. */
+  registration_inquiry_id: number;
+  title: string;
+  location: string;
+  /** Unix ms. */
+  start_at: number;
+  end_at: number;
+  /** "confirmed" | "cancelled" — mirrors the Google event status. */
+  status: string;
+  /** The matched parent email (which attendee made this theirs). */
+  attendee_email: string;
+  last_synced_at: number;
+}
+
 export interface XanoScholarship {
   id: number;
   created_at: number;
@@ -4638,6 +4672,45 @@ export const xano = {
       patch: Partial<XanoStoreOrder>
     ): Promise<XanoStoreOrder> {
       const res = await fetch(`${getBaseUrl()}/registration_store_orders/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+  },
+
+  /** Mirrored Google Calendar appointments — see
+   *  `XanoGoogleAppointment`. Plain CRUD on `google_appointments`;
+   *  callers filter by family / event id in code. */
+  googleAppointments: {
+    async getAll(): Promise<XanoGoogleAppointment[]> {
+      const res = await fetch(`${getBaseUrl()}/google_appointments`, {
+        cache: "no-store",
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      const rows = await res.json();
+      return Array.isArray(rows) ? rows : [];
+    },
+
+    async create(
+      data: Omit<XanoGoogleAppointment, "id" | "created_at">
+    ): Promise<XanoGoogleAppointment> {
+      const res = await fetch(`${getBaseUrl()}/google_appointments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async update(
+      id: number,
+      patch: Partial<XanoGoogleAppointment>
+    ): Promise<XanoGoogleAppointment> {
+      const res = await fetch(`${getBaseUrl()}/google_appointments/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
