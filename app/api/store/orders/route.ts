@@ -35,6 +35,8 @@ export async function GET() {
         item: o.item,
         quantity: o.quantity,
         total_amount_cents: o.total_amount_cents,
+        size: (o.size ?? "").trim(),
+        student_name: (o.student_name ?? "").trim(),
         paid_at: Number(o.paid_at) || 0,
         distributed: o.distributed === true,
         distributed_at: o.distributed_at ?? null,

@@ -682,6 +682,13 @@ export interface XanoEmailNotification {
    *  tracking (stamped by /api/webhooks/resend). Null/absent = no
    *  open recorded. Optional — legacy rows predate the column. */
   opened_at?: number | null;
+  /** The rendered HTML body as sent. Stored so the parent email
+   *  viewer keeps working after Resend's retention window drops the
+   *  message from their API (the reason old emails 404'd). Optional:
+   *  requires an `html` text column + the input on the Add Record
+   *  endpoint; rows written before it exists simply fall back to the
+   *  Resend lookup. */
+  html?: string | null;
 }
 
 /** Single volunteer-hour entry for a family. Rows are created by admin
@@ -768,6 +775,12 @@ export interface XanoStoreOrder {
   quantity: number;
   total_amount_cents: number;
   purchaser_email: string;
+  /** From the Payment Link's checkout custom fields (a "Size"
+   *  dropdown / "Student name" text configured on the link in the
+   *  Stripe Dashboard). "" when the link doesn't collect them.
+   *  Optional: columns added after launch. */
+  size?: string;
+  student_name?: string;
   /** Unix ms. Typed loose because the Xano column may be text —
    *  normalize with `Number()` before comparing/formatting. */
   paid_at: number | string;
@@ -4297,6 +4310,29 @@ export const xano = {
         throw new Error(`Xano error ${res.status}: ${await res.text()}`);
       }
       return res.json();
+    },
+
+    /** One audit row by id, or null when it doesn't exist. Callers
+     *  MUST check `registration_families_id` themselves before
+     *  showing it to a parent — this does no ownership filtering.
+     *  Used by the email viewer so it doesn't have to pull the
+     *  family's whole history (each row can carry a stored HTML
+     *  body) just to render one message. */
+    async getById(id: number): Promise<XanoEmailNotification | null> {
+      try {
+        const res = await fetch(
+          `${getBaseUrl()}/registration_email_notifications/${id}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) return null;
+        return await res.json();
+      } catch (err) {
+        console.error(
+          `[xano.emailNotifications.getById] threw for id=${id}:`,
+          err
+        );
+        return null;
+      }
     },
 
     /** Every audit row — bulk consumers (records-request tags on the

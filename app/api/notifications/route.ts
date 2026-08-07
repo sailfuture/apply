@@ -54,9 +54,9 @@ export async function GET() {
         kind: "email" as const,
         at: e.created_at,
         /** Audit-row id — pass to /api/notifications/email/[id] to
-         *  load the full email content. Null when it can't be viewed
-         *  (no Resend id on the row). */
-        email_id: e.resend_id ? e.id : null,
+         *  load the full email content. Viewable when we stored the
+         *  body ourselves OR Resend still has it; null when neither. */
+        email_id: (e.html ?? "").trim() || e.resend_id ? e.id : null,
         subject: e.subject || "(no subject)",
         recipients: e.recipient_emails || "",
         body: null,

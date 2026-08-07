@@ -27,6 +27,49 @@ export function storeCheckoutUrl(
   return `${paymentLinkUrl}${paymentLinkUrl.includes("?") ? "&" : "?"}${params.toString()}`;
 }
 
+/**
+ * Pull the shopper-entered "Size" and "Student name" out of a
+ * Checkout Session's custom fields (configured per Payment Link in
+ * the Stripe Dashboard). Matching is by key/label so the exact field
+ * naming on the link doesn't matter: anything containing "size" maps
+ * to size, anything containing "student" or "name" maps to
+ * student_name. Fields the link doesn't collect come back "".
+ */
+export function extractOrderCustomFields(
+  customFields:
+    | Array<{
+        key?: string | null;
+        label?: { custom?: string | null } | null;
+        dropdown?: { value?: string | null } | null;
+        text?: { value?: string | null } | null;
+        numeric?: { value?: string | null } | null;
+      }>
+    | null
+    | undefined
+): { size: string; student_name: string } {
+  let size = "";
+  let studentName = "";
+  for (const f of customFields ?? []) {
+    const value = (
+      f.dropdown?.value ??
+      f.text?.value ??
+      f.numeric?.value ??
+      ""
+    ).trim();
+    if (!value) continue;
+    const name = `${f.key ?? ""} ${f.label?.custom ?? ""}`.toLowerCase();
+    if (!size && name.includes("size")) {
+      size = value;
+    } else if (
+      !studentName &&
+      (name.includes("student") || name.includes("name"))
+    ) {
+      studentName = value;
+    }
+  }
+  return { size, student_name: studentName };
+}
+
 /** Parse the `client_reference_id` the portal stamped onto a checkout.
  *  Returns zeros for bare/foreign references. */
 export function parseStoreReference(ref: string | null | undefined): {

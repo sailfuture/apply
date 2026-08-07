@@ -9,7 +9,8 @@ import {
   extractInvoiceSubscriptionMetadata,
 } from "@/lib/stripe";
 import { sendBillingAlert } from "@/lib/billing-alerts";
-import { parseStoreReference } from "@/lib/store";
+import { extractOrderCustomFields, parseStoreReference } from "@/lib/store";
+import { buildFamilyByParentEmail } from "@/lib/store-server";
 
 /**
  * Stripe webhook receiver. Stripe signs every event with a secret
@@ -519,9 +520,29 @@ async function recordStoreOrderFromSession(
   const existing = await xano.storeOrders.findBySessionIdStrict(session.id);
   if (existing) return;
 
-  const { familyId, yearId } = parseStoreReference(
+  const { familyId: refFamilyId, yearId } = parseStoreReference(
     session.client_reference_id
   );
+
+  // Attribution, two nets: the portal stamps `client_reference_id`
+  // on links it opens, but a checkout launched from a shared/bare
+  // link carries none — fall back to matching the purchaser's email
+  // against the parent roster. Best-effort: an unmatched email still
+  // records as unattributed (family 0).
+  const purchaserEmail = (
+    session.customer_details?.email ??
+    session.customer_email ??
+    ""
+  ).trim();
+  let familyId = refFamilyId;
+  if (!familyId && purchaserEmail) {
+    const familyByEmail = await buildFamilyByParentEmail();
+    familyId = familyByEmail?.get(purchaserEmail.toLowerCase()) ?? 0;
+  }
+
+  // Shopper-entered size / student name from the link's custom
+  // fields (configured on the Payment Link in the Stripe Dashboard).
+  const customFields = extractOrderCustomFields(session.custom_fields);
 
   // Line items give the human-readable "what did they buy" summary.
   // Best-effort — a failed lookup falls back to a generic label
@@ -586,8 +607,9 @@ async function recordStoreOrderFromSession(
     item,
     quantity,
     total_amount_cents: session.amount_total ?? 0,
-    purchaser_email:
-      session.customer_details?.email ?? session.customer_email ?? "",
+    purchaser_email: purchaserEmail,
+    size: customFields.size,
+    student_name: customFields.student_name,
     paid_at: (session.created ?? Math.floor(Date.now() / 1000)) * 1000,
     distributed: false,
     distributed_at: 0,

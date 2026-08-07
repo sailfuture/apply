@@ -1,20 +1,25 @@
 import { NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
+import { healStoreOrders } from "@/lib/store-server";
 import { xano } from "@/lib/xano";
 import type { XanoStoreOrder } from "@/lib/xano";
 
 /**
  * Every store purchase, newest first, with the family display name
- * joined in ("Unattributed" for purchases made through a bare link
- * with no family reference).
+ * joined in ("Unattributed" only when the purchaser's email matches
+ * no parent on file). `healStoreOrders` runs first — it back-fills
+ * family attribution by purchaser email and size/student_name from
+ * the Checkout Session's custom fields for rows written before those
+ * capture paths existed.
  */
 export async function GET() {
   try {
     await requireAdmin();
-    const [orders, families] = await Promise.all([
+    const [rawOrders, families] = await Promise.all([
       xano.storeOrders.getAll(),
       xano.families.getAll(),
     ]);
+    const orders = await healStoreOrders(rawOrders);
     const nameById = new Map(
       families.map((f) => [Number(f.id), f.family_name ?? ""])
     );

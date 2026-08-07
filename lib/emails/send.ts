@@ -175,6 +175,11 @@ async function logNotification({
       status,
       resend_id: resendId,
       error_message: errorMessage,
+      // Durable copy of what we sent — Resend only serves message
+      // bodies for a limited retention window, after which the
+      // parent viewer would have nothing to show. Dropped silently
+      // by Xano until the `html` column + input exist.
+      html: args.content.html,
     });
   } catch (err) {
     console.error(

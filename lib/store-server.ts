@@ -1,6 +1,7 @@
+import { extractOrderCustomFields } from "@/lib/store";
 import { getStripeClient } from "@/lib/stripe";
 import { xano } from "@/lib/xano";
-import type { XanoStoreItem } from "@/lib/xano";
+import type { XanoStoreItem, XanoStoreOrder } from "@/lib/xano";
 
 /**
  * Server-side store pricing + product media — Stripe is the single
@@ -121,4 +122,153 @@ async function getLinkInfoByUrl(): Promise<Map<string, LinkInfo> | null> {
     console.error("[store-server] failed to list payment links:", err);
     return null;
   }
+}
+
+/* ────────────────── Order healing (backfill) ────────────────── */
+
+/**
+ * lower-cased parent email → family id, for attributing checkouts
+ * that arrived without a portal `client_reference_id`. Parent rows
+ * carry no family FK — the linkage is the family row's
+ * `registration_parents_id` list, so this joins the two tables.
+ * Returns null when either roster fails to load.
+ */
+export async function buildFamilyByParentEmail(): Promise<Map<
+  string,
+  number
+> | null> {
+  try {
+    const [families, parents] = await Promise.all([
+      xano.families.getAll(),
+      xano.parents.getAll(),
+    ]);
+    const emailById = new Map<number, string>();
+    for (const p of parents) {
+      const email = (p.email ?? "").trim().toLowerCase();
+      if (email) emailById.set(p.id, email);
+    }
+    const familyByEmail = new Map<string, number>();
+    for (const f of families) {
+      for (const entry of f.registration_parents_id ?? []) {
+        // Entries are plain ids or embedded parent objects depending
+        // on the endpoint's addon config — accept both.
+        const pid =
+          typeof entry === "number"
+            ? entry
+            : entry && typeof entry === "object" && "id" in entry
+              ? Number((entry as { id: unknown }).id)
+              : NaN;
+        const email = Number.isFinite(pid) ? emailById.get(pid) : undefined;
+        if (email && !familyByEmail.has(email)) {
+          familyByEmail.set(email, f.id);
+        }
+      }
+    }
+    return familyByEmail;
+  } catch (err) {
+    console.error("[store-server] parent-email roster load failed:", err);
+    return null;
+  }
+}
+
+/** Sessions we've already asked Stripe about and found no custom
+ *  fields on — don't re-probe them every admin page load. Module
+ *  cache, per serverless instance. */
+const probedEmptySessions = new Set<string>();
+
+/** Cap Stripe lookups per healing pass so one admin load can't fan
+ *  out into dozens of API calls. */
+const HEAL_STRIPE_LOOKUP_CAP = 20;
+
+/**
+ * Retroactively repair store orders that predate a capture feature
+ * (or arrived through a bare link):
+ *
+ *   1. Unattributed rows (family 0) with a purchaser email are
+ *      matched against the parent roster and stamped with the
+ *      family id.
+ *   2. Rows missing size/student_name get their Checkout Session's
+ *      custom fields fetched from Stripe.
+ *
+ * All repairs are persisted back to Xano best-effort and reflected
+ * in the returned rows either way, so the caller renders healed data
+ * even if a write is dropped (e.g. columns not wired yet).
+ */
+export async function healStoreOrders(
+  orders: XanoStoreOrder[]
+): Promise<XanoStoreOrder[]> {
+  if (orders.length === 0) return orders;
+
+  // ── 1. Email-based attribution ──
+  const unattributed = orders.filter(
+    (o) => !Number(o.registration_families_id) && (o.purchaser_email ?? "").trim()
+  );
+  const familyByEmail =
+    unattributed.length > 0 ? await buildFamilyByParentEmail() : null;
+
+  // ── 2. Custom-field backfill ──
+  let stripeLookups = 0;
+
+  return Promise.all(
+    orders.map(async (order) => {
+      let healed = order;
+      const patch: Partial<XanoStoreOrder> = {};
+
+      if (
+        familyByEmail &&
+        !Number(healed.registration_families_id)
+      ) {
+        const fid = familyByEmail.get(
+          (healed.purchaser_email ?? "").trim().toLowerCase()
+        );
+        if (fid) {
+          patch.registration_families_id = fid;
+          healed = { ...healed, registration_families_id: fid };
+        }
+      }
+
+      const missingFields =
+        !(healed.size ?? "").trim() && !(healed.student_name ?? "").trim();
+      if (
+        missingFields &&
+        healed.stripe_checkout_session_id &&
+        !probedEmptySessions.has(healed.stripe_checkout_session_id) &&
+        stripeLookups < HEAL_STRIPE_LOOKUP_CAP
+      ) {
+        stripeLookups++;
+        try {
+          const session = await getStripeClient().checkout.sessions.retrieve(
+            healed.stripe_checkout_session_id
+          );
+          const fields = extractOrderCustomFields(session.custom_fields);
+          if (fields.size || fields.student_name) {
+            patch.size = fields.size;
+            patch.student_name = fields.student_name;
+            healed = { ...healed, ...fields };
+          } else {
+            probedEmptySessions.add(healed.stripe_checkout_session_id);
+          }
+        } catch (err) {
+          console.error(
+            `[store-server] session lookup failed for ${healed.stripe_checkout_session_id}:`,
+            err
+          );
+        }
+      }
+
+      if (Object.keys(patch).length > 0) {
+        // Best-effort persist — dropped silently if the columns/inputs
+        // aren't wired in Xano yet; the healed row still renders.
+        void xano.storeOrders
+          .update(order.id, patch)
+          .catch((err) =>
+            console.error(
+              `[store-server] failed to persist heal for order ${order.id}:`,
+              err
+            )
+          );
+      }
+      return healed;
+    })
+  );
 }

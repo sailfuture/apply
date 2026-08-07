@@ -37,9 +37,32 @@ export async function GET(
     return NextResponse.json({ error: "Invalid email id" }, { status: 400 });
   }
 
-  const rows = await xano.emailNotifications.getByFamily(familyId);
-  const row = rows.find((r) => r.id === id);
-  if (!row || !row.resend_id) {
+  // Single-row fetch + explicit ownership check — pulling the whole
+  // family history here would drag down every stored HTML body just
+  // to render one message.
+  const row = await xano.emailNotifications.getById(id);
+  if (!row || Number(row.registration_families_id) !== familyId) {
+    return NextResponse.json(
+      { error: "This email isn't available to view." },
+      { status: 404 }
+    );
+  }
+
+  // Prefer our own stored copy — it never expires, and it saves a
+  // Resend round trip. Rows sent before the `html` column existed
+  // fall through to the Resend lookup below.
+  const storedHtml = (row.html ?? "").trim();
+  if (storedHtml) {
+    return NextResponse.json({
+      subject: row.subject,
+      html: storedHtml,
+      text: "",
+      sent_at: row.created_at,
+      recipients: row.recipient_emails,
+    } satisfies ParentEmailContent);
+  }
+
+  if (!row.resend_id) {
     return NextResponse.json(
       { error: "This email isn't available to view." },
       { status: 404 }
