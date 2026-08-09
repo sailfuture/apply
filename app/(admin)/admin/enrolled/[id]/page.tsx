@@ -70,6 +70,7 @@ import {
   FileUploadList,
 } from "@/components/ui/file-upload";
 import { RequestRecordsDialog } from "@/components/admin/request-records-dialog";
+import { SyncToddleButton } from "@/components/admin/sync-toddle-button";
 import { SufsAwardCard } from "@/components/admin/sufs-award-card";
 import { ActivityLogSheet } from "@/components/admin/activity-log-sheet";
 import { InviteStatusBadge, ResendInviteButton } from "@/components/invite-status";
@@ -287,6 +288,18 @@ export default function EnrolledStudentDetailPage() {
             onChanged={() => {
               void mutate();
             }}
+          />
+          {/* Push this student into Toddle (LMS) — updates the
+              matching Toddle record or creates one. Grade comes from
+              the packet's admin placement (falling back to the
+              application's incoming grade) because Toddle requires a
+              year group on create. */}
+          <SyncToddleButton
+            studentId={student.id}
+            studentName={fullName}
+            gradeLevel={
+              packet?.grade_level?.trim() || app?.current_grade || null
+            }
           />
           {family ? (
             <Button asChild variant="outline" size="sm" className="bg-white">

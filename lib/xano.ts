@@ -297,6 +297,17 @@ export interface XanoStudent {
    *  belong in the headline reason string. Optional; saved
    *  empty-string when admin leaves it blank. */
   unenrollment_notes?: string;
+
+  /** Toddle (LMS) student id, persisted after the admin "Sync to
+   *  Toddle" action so later syncs update the same Toddle record
+   *  directly instead of re-matching. Toddle ids are large numeric
+   *  strings — stored as text. Optional: empty until the first sync,
+   *  and legacy rows pre-date the column add. The sync also works
+   *  without it (it re-matches via the `sourceId` we stamp on the
+   *  Toddle record), so a missing Xano column only costs a lookup. */
+  toddle_student_id?: string;
+  /** Unix-ms timestamp of the last successful Toddle sync. */
+  toddle_synced_at?: number | null;
 }
 
 export interface XanoApplication {

@@ -40,6 +40,7 @@ import { adminFetcher } from "@/lib/admin-fetcher";
 import { formatRelativeShort } from "@/lib/format-note-time";
 import { formatUSPhone } from "@/lib/phone";
 import { EnrolledExportDialog } from "@/components/admin/enrolled-export-dialog";
+import { SyncToddleButton } from "@/components/admin/sync-toddle-button";
 import type { EnrolledStudentRow } from "@/app/api/admin/enrolled/route";
 
 /**
@@ -843,10 +844,20 @@ function StudentDetailSheet({
             />
           </section>
 
-          <div className="border-t pt-4">
+          <div className="space-y-2 border-t pt-4">
             <Button size="sm" className="w-full" onClick={onOpenFull}>
               Open full student page
             </Button>
+            {/* Push this student into Toddle (LMS) — updates the
+                matching Toddle record or creates one, using the
+                placement grade (falling back to the application's
+                incoming grade) for the Toddle year group. */}
+            <SyncToddleButton
+              studentId={row.student_id}
+              studentName={row.student_full_name}
+              gradeLevel={row.grade_level?.trim() || row.student_grade || null}
+              className="w-full"
+            />
           </div>
         </div>
       </SheetContent>
