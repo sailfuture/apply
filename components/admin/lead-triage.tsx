@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import useSWR from "swr";
+import { AnimatePresence, motion } from "motion/react";
 import { toast } from "sonner";
 import {
   Check,
@@ -1514,11 +1515,27 @@ function LeadDetailsCollapsible({
           />
         </span>
       </button>
-      {open ? (
-        <div className="min-h-0 space-y-3 overflow-y-auto border-t px-4 py-4">
-          {children}
-        </div>
-      ) : null}
+      {/* Height 0 ↔ auto with the padding on an inner div — padding
+          on the animating element would keep ~2rem of it visible at
+          height 0. `initial={false}` keeps re-opens of an
+          already-expanded lead from replaying the animation on mount.
+          Flex still caps the panel (default shrink + min-h-0), so
+          Motion's "auto" measurement animates to the capped height,
+          and overflow clips mid-animation like it scrolls at rest. */}
+      <AnimatePresence initial={false}>
+        {open ? (
+          <motion.div
+            key="details"
+            className="min-h-0 overflow-y-auto border-t"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ type: "spring", bounce: 0, visualDuration: 0.25 }}
+          >
+            <div className="space-y-3 px-4 py-4">{children}</div>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
     </div>
   );
 }
