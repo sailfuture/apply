@@ -614,11 +614,14 @@ export function EventUpsertDialog({
           ),
         }
       );
+      const data = await res.json().catch(() => null);
       if (!res.ok) {
-        const err = await res.json().catch(() => null);
-        throw new Error(err?.error ?? `Save failed (${res.status})`);
+        throw new Error(data?.error ?? `Save failed (${res.status})`);
       }
-      toast.success(existing ? "Event updated." : "Event added.");
+      // The event routes report Google Calendar push hiccups as a
+      // `warning` on an otherwise successful save.
+      if (data?.warning) toast.warning(data.warning);
+      else toast.success(existing ? "Event updated." : "Event added.");
       onDone(true);
     } catch (err) {
       console.error("Failed to save event:", err);

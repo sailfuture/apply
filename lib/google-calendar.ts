@@ -21,6 +21,10 @@ import { createSign } from "crypto";
  *     owns tour events (e.g. hthompson@sailfuture.org)
  *   - GOOGLE_CALENDAR_ID           — optional, defaults to "primary"
  *     (the impersonated user's own calendar)
+ *   - GOOGLE_SCHOOL_CALENDAR_ID    — separate opt-in for the
+ *     school-calendar event push (see the school-event section below):
+ *     the shared school calendar's id, which the impersonated user
+ *     must be able to write to
  *
  * Unset env degrades gracefully: `isGoogleCalendarConfigured()` is
  * false, callers skip the sync, and tours still work app-side — the
@@ -129,15 +133,15 @@ async function getAccessToken(): Promise<string> {
 
 async function calendarFetch(
   path: string,
-  init: RequestInit & { query?: Record<string, string> } = {}
+  init: RequestInit & { query?: Record<string, string>; calendarId?: string } = {}
 ): Promise<Response> {
   const config = getConfig();
   if (!config) throw new Error("Google Calendar is not configured");
   const token = await getAccessToken();
-  const { query, ...rest } = init;
+  const { query, calendarId, ...rest } = init;
   const qs = new URLSearchParams(query ?? {}).toString();
   const url =
-    `${API_BASE}/calendars/${encodeURIComponent(config.calendarId)}${path}` +
+    `${API_BASE}/calendars/${encodeURIComponent(calendarId ?? config.calendarId)}${path}` +
     (qs ? `?${qs}` : "");
   return fetch(url, {
     ...rest,
@@ -348,6 +352,144 @@ export function tourCalendarEmail(): string {
   return config.calendarId !== "primary"
     ? config.calendarId
     : config.impersonate;
+}
+
+/* ── School-calendar event push ───────────────────────────────────── */
+
+/**
+ * Deterministic Google event ids for school-calendar events —
+ * `sfaschoolevent<rowId>`. Google lets clients choose event ids
+ * (lowercase a–v + digits only, which this prefix satisfies), so the
+ * app never stores a mapping: create, edit, and delete all address
+ * the same id, and a re-push after a partial failure is idempotent.
+ * The appointment-sync cron also uses the prefix to skip these events
+ * when the school calendar and the appointments calendar are one.
+ */
+export const SCHOOL_EVENT_ID_PREFIX = "sfaschoolevent";
+
+/** The shared school calendar events push to. Separate from
+ *  GOOGLE_CALENDAR_ID (the admissions appointments calendar) so
+ *  school-wide events don't flood the tour/appointment surface. The
+ *  impersonated user must have write access to this calendar. */
+function schoolCalendarId(): string {
+  return (process.env.GOOGLE_SCHOOL_CALENDAR_ID ?? "").trim();
+}
+
+/** School-event push needs the base service-account envs PLUS
+ *  GOOGLE_SCHOOL_CALENDAR_ID. Unset degrades gracefully — events keep
+ *  flowing through the ICS feed subscription. */
+export function isSchoolCalendarPushConfigured(): boolean {
+  return getConfig() !== null && schoolCalendarId() !== "";
+}
+
+export interface SchoolEventInput {
+  summary: string;
+  description: string;
+  location: string;
+  /** The calendar day, "YYYY-MM-DD" — becomes the all-day date when
+   *  no start time is set. */
+  date: string;
+  /** Unix ms; 0 = all-day. */
+  startMs: number;
+  endMs: number;
+}
+
+function schoolEventBody(input: SchoolEventInput): Record<string, unknown> {
+  const base = {
+    summary: input.summary,
+    description: input.description,
+    location: input.location,
+  };
+  if (input.startMs > 0) {
+    const endMs =
+      input.endMs > input.startMs ? input.endMs : input.startMs + 3_600_000;
+    // Explicit `date: null` — PATCHing a formerly all-day event into a
+    // timed one 400s unless the unused variant is cleared (and vice
+    // versa below).
+    return {
+      ...base,
+      start: {
+        dateTime: new Date(input.startMs).toISOString(),
+        timeZone: TIME_ZONE,
+        date: null,
+      },
+      end: {
+        dateTime: new Date(endMs).toISOString(),
+        timeZone: TIME_ZONE,
+        date: null,
+      },
+    };
+  }
+  return {
+    ...base,
+    start: { date: input.date, dateTime: null },
+    // All-day DTEND is exclusive — the next day.
+    end: { date: nextIsoDate(input.date), dateTime: null },
+  };
+}
+
+/** "YYYY-MM-DD" → the next day, same format. */
+function nextIsoDate(iso: string): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(Date.UTC(y ?? 1970, (m ?? 1) - 1, (d ?? 1) + 1))
+    .toISOString()
+    .slice(0, 10);
+}
+
+/**
+ * Create-or-update a school event on the shared school calendar.
+ * PATCH-first (edits are the repeat case, and a PATCH with
+ * `status: "confirmed"` also resurrects an event a staffer deleted by
+ * hand on Google); a 404 means never created → insert with the
+ * deterministic id. Throws on failure — callers treat the push as
+ * best-effort.
+ */
+export async function upsertSchoolEvent(
+  rowId: number,
+  input: SchoolEventInput
+): Promise<void> {
+  const calendarId = schoolCalendarId();
+  if (!calendarId) throw new Error("GOOGLE_SCHOOL_CALENDAR_ID is not set");
+  const googleId = `${SCHOOL_EVENT_ID_PREFIX}${rowId}`;
+
+  const patch = await calendarFetch(`/events/${googleId}`, {
+    method: "PATCH",
+    calendarId,
+    body: JSON.stringify({ ...schoolEventBody(input), status: "confirmed" }),
+  });
+  if (patch.ok) return;
+  if (patch.status !== 404) {
+    throw new Error(
+      `Google Calendar school-event update failed (${patch.status}): ${await patch.text()}`
+    );
+  }
+
+  const insert = await calendarFetch("/events", {
+    method: "POST",
+    calendarId,
+    body: JSON.stringify({ ...schoolEventBody(input), id: googleId }),
+  });
+  if (!insert.ok) {
+    throw new Error(
+      `Google Calendar school-event create failed (${insert.status}): ${await insert.text()}`
+    );
+  }
+}
+
+/** Remove a school event from the shared calendar. Already-gone
+ *  (404/410) counts as success — the goal state is "no event". */
+export async function deleteSchoolEvent(rowId: number): Promise<void> {
+  const calendarId = schoolCalendarId();
+  if (!calendarId) throw new Error("GOOGLE_SCHOOL_CALENDAR_ID is not set");
+  const res = await calendarFetch(
+    `/events/${SCHOOL_EVENT_ID_PREFIX}${rowId}`,
+    { method: "DELETE", calendarId }
+  );
+  if (!res.ok && res.status !== 404 && res.status !== 410) {
+    throw new Error(
+      `Google Calendar school-event delete failed (${res.status}): ${await res.text()}`
+    );
+  }
 }
 
 /** The parent's RSVP on an event ("accepted" | "declined" |

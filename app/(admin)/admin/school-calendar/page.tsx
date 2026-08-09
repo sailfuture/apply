@@ -15,6 +15,7 @@ import {
   MapPin,
   Pencil,
   Plus,
+  RefreshCw,
   Settings2,
   Trash2,
 } from "lucide-react";
@@ -247,6 +248,42 @@ export default function SchoolCalendarPage() {
   const [eventsOpen, setEventsOpen] = useState(false);
   const [termFilter, setTermFilter] = useState<number | "all">("all");
   const [termsOpen, setTermsOpen] = useState(false);
+  const [syncingGoogle, setSyncingGoogle] = useState(false);
+
+  /** Backfill/repair push of every event onto the shared school
+   *  Google Calendar. Idempotent server-side (deterministic Google
+   *  event ids), so clicking twice can't duplicate anything. */
+  async function syncGoogle() {
+    if (syncingGoogle) return;
+    setSyncingGoogle(true);
+    try {
+      const res = await fetch("/api/admin/school-calendar/events/sync", {
+        method: "POST",
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(data?.error ?? `Sync failed (${res.status})`);
+      }
+      const pushed = Number(data?.pushed) || 0;
+      const failedCount = Number(data?.failed) || 0;
+      if (failedCount > 0) {
+        toast.warning(
+          `Pushed ${pushed} event${pushed === 1 ? "" : "s"} to Google Calendar, but ${failedCount} failed — try again or check the server logs.`
+        );
+      } else {
+        toast.success(
+          `Google Calendar is up to date — ${pushed} event${pushed === 1 ? "" : "s"} pushed.`
+        );
+      }
+    } catch (err) {
+      console.error("Google Calendar sync failed:", err);
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't sync to Google Calendar."
+      );
+    } finally {
+      setSyncingGoogle(false);
+    }
+  }
   /** Event picked for an SMS reminder (from the day sheet or the
    *  events sheet) — the event plus its day's date. */
   const [remindTarget, setRemindTarget] = useState<{
@@ -366,6 +403,19 @@ export default function SchoolCalendarPage() {
               Season
             </span>
           </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="bg-white"
+            disabled={syncingGoogle}
+            onClick={() => void syncGoogle()}
+            title="Push every event to the school Google Calendar"
+          >
+            <RefreshCw
+              className={cn("size-3.5 mr-1.5", syncingGoogle && "animate-spin")}
+            />
+            {syncingGoogle ? "Syncing…" : "Sync Google"}
+          </Button>
           <Button
             variant="outline"
             size="sm"
@@ -1318,12 +1368,13 @@ function DaySheet({
         `/api/admin/school-calendar/events/${deleteTarget.id}`,
         { method: "DELETE" }
       );
+      const data = await res.json().catch(() => null);
       if (!res.ok) {
-        const err = await res.json().catch(() => null);
-        throw new Error(err?.error ?? `Delete failed (${res.status})`);
+        throw new Error(data?.error ?? `Delete failed (${res.status})`);
       }
       onChanged();
-      toast.success("Event deleted.");
+      if (data?.warning) toast.warning(data.warning);
+      else toast.success("Event deleted.");
       setDeleteTarget(null);
     } catch (err) {
       console.error("Failed to delete event:", err);
@@ -1679,11 +1730,12 @@ function EventForm({
           body: JSON.stringify(payload),
         }
       );
+      const data = await res.json().catch(() => null);
       if (!res.ok) {
-        const err = await res.json().catch(() => null);
-        throw new Error(err?.error ?? `Save failed (${res.status})`);
+        throw new Error(data?.error ?? `Save failed (${res.status})`);
       }
-      toast.success(existing ? "Event updated." : "Event added.");
+      if (data?.warning) toast.warning(data.warning);
+      else toast.success(existing ? "Event updated." : "Event added.");
       onDone(true);
     } catch (err) {
       console.error("Failed to save event:", err);

@@ -13,9 +13,16 @@ import type {
  * calendar; there's nothing family-specific in it.
  *
  *   GET /api/school-calendar?yearId=Y
- *     → { days, events, terms }
+ *     → { days, events, terms, feedUrl }
  *       (days date-ascending; events only for the returned days;
  *        terms sorted by start date with undated rows last)
+ *
+ * `feedUrl` is the tokenized ICS feed (/api/calendar-feed) parents can
+ * subscribe to from Google/Apple/Outlook — handed out here, behind
+ * sign-in, so the token never appears in public markup. Null when
+ * CALENDAR_FEED_TOKEN isn't configured (the page hides the subscribe
+ * UI). The feed spans every school year by design, so one subscription
+ * stays valid year over year.
  */
 export async function GET(req: NextRequest) {
   const { userId } = await auth();
@@ -59,10 +66,16 @@ export async function GET(req: NextRequest) {
       ) || a.term_name.localeCompare(b.term_name)
   );
 
+  const feedToken = process.env.CALENDAR_FEED_TOKEN;
+  const feedUrl = feedToken
+    ? `${req.nextUrl.origin}/api/calendar-feed?token=${encodeURIComponent(feedToken)}`
+    : null;
+
   return NextResponse.json({
     days,
     events,
     terms,
+    feedUrl,
   } satisfies ParentSchoolCalendarResponse);
 }
 
@@ -70,4 +83,7 @@ export interface ParentSchoolCalendarResponse {
   days: XanoSchoolCalendarDay[];
   events: XanoSchoolCalendarEvent[];
   terms: XanoAcademicTerm[];
+  /** Tokenized ICS subscription URL, or null when the feed isn't
+   *  configured (CALENDAR_FEED_TOKEN unset). */
+  feedUrl: string | null;
 }

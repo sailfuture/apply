@@ -5,14 +5,26 @@ import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import {
   CalendarDays,
+  CalendarPlus,
+  Check,
   ChevronLeft,
   ChevronRight,
+  Copy,
   ExternalLink,
   List,
   MapPin,
 } from "lucide-react";
+import { toast } from "sonner";
 import { apiFetcher, useApplications, useSchoolYears } from "@/hooks/use-api";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Sheet,
@@ -247,16 +259,21 @@ export default function ParentCalendarPage() {
         title={`School Calendar — ${yearName} School Year`}
         subtitle="School days, breaks, holidays, and events for the year. Event details can change — check the live calendar for the latest."
         backRowAction={
-          <Button asChild variant="outline" size="sm" className="bg-white">
-            <a
-              href={LIVE_CALENDAR_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              View live calendar
-              <ExternalLink className="size-3.5 ml-1.5" />
-            </a>
-          </Button>
+          <div className="flex items-center gap-2">
+            {data?.feedUrl ? (
+              <SubscribeButton feedUrl={data.feedUrl} />
+            ) : null}
+            <Button asChild variant="outline" size="sm" className="bg-white">
+              <a
+                href={LIVE_CALENDAR_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                View live calendar
+                <ExternalLink className="size-3.5 ml-1.5" />
+              </a>
+            </Button>
+          </div>
         }
       />
 
@@ -523,6 +540,103 @@ export default function ParentCalendarPage() {
         />
       ) : null}
     </div>
+  );
+}
+
+/**
+ * "Add to my calendar" — subscription links for the tokenized ICS
+ * feed. Subscribing (not importing) keeps the parent's calendar app
+ * refreshing on its own, so new school events flow in automatically.
+ * Google's "add by URL" screen is linked directly; Apple/Outlook get
+ * the webcal: form of the same URL, and a copy field covers everything
+ * else. Only rendered when the API reports a feed URL (token set).
+ */
+function SubscribeButton({ feedUrl }: { feedUrl: string }) {
+  const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const webcalUrl = feedUrl.replace(/^https?:\/\//, "webcal://");
+  const googleUrl = `https://calendar.google.com/calendar/r?cid=${encodeURIComponent(webcalUrl)}`;
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(feedUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast.error("Couldn't copy — select the link and copy it manually.");
+    }
+  }
+
+  return (
+    <>
+      <Button
+        variant="outline"
+        size="sm"
+        className="bg-white"
+        onClick={() => setOpen(true)}
+      >
+        <CalendarPlus className="size-3.5 mr-1.5" />
+        Add to my calendar
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Add the school calendar to your own</DialogTitle>
+            <DialogDescription>
+              Subscribe once and school events show up in your calendar
+              app — and stay updated automatically when dates change.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Button asChild variant="outline" className="w-full bg-white">
+              <a href={googleUrl} target="_blank" rel="noopener noreferrer">
+                <CalendarPlus className="size-4 mr-2" />
+                Add to Google Calendar
+              </a>
+            </Button>
+            <Button asChild variant="outline" className="w-full bg-white">
+              <a href={webcalUrl}>
+                <CalendarPlus className="size-4 mr-2" />
+                Add to Apple Calendar / Outlook
+              </a>
+            </Button>
+            <div className="space-y-1.5 pt-2">
+              <p className="text-xs text-muted-foreground">
+                Or copy the link and paste it into any calendar app that
+                supports subscriptions (&ldquo;Add calendar from
+                URL&rdquo;):
+              </p>
+              <div className="flex items-center gap-2">
+                <Input
+                  readOnly
+                  value={feedUrl}
+                  className="h-8 text-xs"
+                  onFocus={(e) => e.currentTarget.select()}
+                />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0 bg-white"
+                  onClick={() => void copy()}
+                >
+                  {copied ? (
+                    <Check className="size-3.5 text-emerald-600" />
+                  ) : (
+                    <Copy className="size-3.5" />
+                  )}
+                </Button>
+              </div>
+            </div>
+            <p className="pt-1 text-[11px] text-muted-foreground">
+              Google Calendar can take up to a day to show a new
+              subscription&rsquo;s events and refreshes it on its own
+              schedule. Apple Calendar and Outlook let you choose how
+              often to refresh.
+            </p>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 

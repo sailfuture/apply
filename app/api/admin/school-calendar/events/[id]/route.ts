@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
+import {
+  pushSchoolEventToGoogle,
+  removeSchoolEventFromGoogle,
+} from "@/lib/school-event-sync";
 import { xano } from "@/lib/xano";
 
 /**
@@ -9,6 +13,10 @@ import { xano } from "@/lib/xano";
  * deliberately NOT editable — moving an event to another day is a
  * delete + re-create so a typo'd id can't strand it on a day in a
  * different year.
+ *
+ * Both verbs mirror the change onto the shared school Google Calendar
+ * best-effort — a Google failure attaches `warning` to an otherwise
+ * successful response, never fails the Xano write.
  */
 export async function PATCH(
   req: NextRequest,
@@ -85,7 +93,18 @@ export async function PATCH(
     }
 
     const updated = await xano.schoolCalendarEvents.update(id, patch);
-    return NextResponse.json(updated);
+
+    const day = (await xano.schoolCalendar.getAll().catch(() => [])).find(
+      (d) => d.id === Number(updated.school_calendar_id)
+    );
+    const sync = await pushSchoolEventToGoogle(updated, day?.date);
+    return NextResponse.json({
+      ...updated,
+      warning:
+        sync === "failed"
+          ? "Event updated, but the change couldn't be pushed to the school Google Calendar — use Sync Google on the calendar page to retry."
+          : undefined,
+    });
   } catch (err) {
     return handleAdminError(err);
   }
@@ -106,7 +125,14 @@ export async function DELETE(
       );
     }
     await xano.schoolCalendarEvents.delete(id);
-    return NextResponse.json({ ok: true });
+    const sync = await removeSchoolEventFromGoogle(id);
+    return NextResponse.json({
+      ok: true,
+      warning:
+        sync === "failed"
+          ? "Event deleted, but it may still be on the school Google Calendar — remove it there by hand."
+          : undefined,
+    });
   } catch (err) {
     return handleAdminError(err);
   }

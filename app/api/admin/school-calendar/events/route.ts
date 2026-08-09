@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
+import { pushSchoolEventToGoogle } from "@/lib/school-event-sync";
 import { xano } from "@/lib/xano";
 
 /**
@@ -13,6 +14,10 @@ import { xano } from "@/lib/xano";
  * `volunteer_hour_total` only means anything when
  * `parent_volunteer_hours` is on, but we store whatever was sent so a
  * toggled-off event keeps its configured hours.
+ *
+ * After the Xano write the event is pushed to the shared school
+ * Google Calendar (best-effort — a Google failure attaches `warning`
+ * to the 201, never fails the create).
  */
 export async function POST(req: NextRequest) {
   try {
@@ -58,7 +63,24 @@ export async function POST(req: NextRequest) {
       needs: typeof body.needs === "string" ? body.needs.trim() : "",
       color: coerceColor(body.color),
     });
-    return NextResponse.json(created, { status: 201 });
+
+    // Mirror onto the school Google Calendar. The day's date (for
+    // all-day placement) comes from the day table — resolved here
+    // rather than trusted from the client.
+    const day = (await xano.schoolCalendar.getAll().catch(() => [])).find(
+      (d) => d.id === dayId
+    );
+    const sync = await pushSchoolEventToGoogle(created, day?.date);
+    return NextResponse.json(
+      {
+        ...created,
+        warning:
+          sync === "failed"
+            ? "Event saved, but it couldn't be pushed to the school Google Calendar — use Sync Google on the calendar page to retry."
+            : undefined,
+      },
+      { status: 201 }
+    );
   } catch (err) {
     return handleAdminError(err);
   }

@@ -3,6 +3,7 @@ import {
   isGoogleCalendarConfigured,
   listCalendarEvents,
   impersonatedEmail,
+  SCHOOL_EVENT_ID_PREFIX,
 } from "@/lib/google-calendar";
 import { buildFamilyByParentEmail } from "@/lib/store-server";
 import { liveTourEventId, xano } from "@/lib/xano";
@@ -168,6 +169,11 @@ export async function GET(req: NextRequest) {
     for (const event of events) {
       if (!event.id || !event.startMs) continue; // all-day / malformed
       if (tourEventIds.has(event.id)) continue; // app-created tour
+      // School-calendar events the app pushed (only present here when
+      // the school and appointments calendars are the same) — never
+      // appointments, and their titles can contain student names the
+      // fallback matcher would misread.
+      if (event.id.startsWith(SCHOOL_EVENT_ID_PREFIX)) continue;
 
       // The booker: first non-staff, non-resource attendee whose
       // email matches a parent on file.
