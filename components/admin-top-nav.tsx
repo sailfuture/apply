@@ -46,9 +46,6 @@ type NavItem =
   | NavLeaf
   | { title: string; children: NavLeaf[]; badge?: NavBadge };
 
-// Pipeline intentionally hidden from the nav — file still exists at
-// /admin/pipeline but we're not surfacing it while we focus on the
-// daily-job applications + inquiries + records flow.
 const NAV_ITEMS: NavItem[] = [
   { title: "Dashboard", href: "/admin", matchExact: true },
   // Recruitment — the pre-application funnel. All Leads unifies the
@@ -72,6 +69,7 @@ const NAV_ITEMS: NavItem[] = [
   {
     title: "Admissions",
     children: [
+      { title: "Pipeline", href: "/admin/pipeline" },
       { title: "Applications", href: "/admin/applications" },
       { title: "Registrations", href: "/admin/registrations" },
       { title: "Enrolled", href: "/admin/enrolled" },
