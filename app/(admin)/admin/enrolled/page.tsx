@@ -40,6 +40,7 @@ import { adminFetcher } from "@/lib/admin-fetcher";
 import { formatRelativeShort } from "@/lib/format-note-time";
 import { formatUSPhone } from "@/lib/phone";
 import { EnrolledExportDialog } from "@/components/admin/enrolled-export-dialog";
+import { SchoolAccountBackfillDialog } from "@/components/admin/school-account-backfill-dialog";
 import { SyncToddleButton } from "@/components/admin/sync-toddle-button";
 import type { EnrolledStudentRow } from "@/app/api/admin/enrolled/route";
 
@@ -390,6 +391,10 @@ export default function EnrolledStudentsPage() {
               className="pl-9 bg-white"
             />
           </div>
+          {/* Bulk school-account backfill — year-independent (it
+              covers every enrolled student), but it lives here next
+              to Export since this is the enrolled-roster home. */}
+          <SchoolAccountBackfillDialog />
           <EnrolledExportDialog
             yearId={Number(yearId)}
             yearName={schoolYear?.year_name}

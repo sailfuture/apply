@@ -308,6 +308,18 @@ export interface XanoStudent {
   toddle_student_id?: string;
   /** Unix-ms timestamp of the last successful Toddle sync. */
   toddle_synced_at?: number | null;
+
+  /** School year (registration_school_years id) the student FIRST
+   *  enrolled in — drives the two-digit suffix on the generated
+   *  school email (2024-2025 entry → "…24@sailfuture.org"). Set by
+   *  the School Account card on the enrolled detail page. Optional:
+   *  legacy rows pre-date the column add. */
+  enrollment_school_years_id?: number | null;
+  /** Generated school Google-account email
+   *  (`first.last<YY>@sailfuture.org`) — see lib/school-account.ts. */
+  school_email?: string;
+  /** Generated initial password (`<F><L>sfa<YYYY>!`). */
+  school_password?: string;
 }
 
 export interface XanoApplication {

@@ -180,6 +180,17 @@ function shapeStudent(s: XanoStudent) {
      *  Surfaced on the enrolled-detail page header so admin can see
      *  data staleness at a glance ("Last edited 3 days ago"). */
     last_edited_time: s.last_edited_time ?? null,
+    /** School Google-account fields — the enrollment year the student
+     *  came in with plus the generated email/password. Managed by the
+     *  School Account card. The years array is passed through so the
+     *  card can default the enrollment year to the student's earliest
+     *  associated school year when nothing is stored yet. */
+    enrollment_school_years_id: s.enrollment_school_years_id ?? null,
+    school_email: s.school_email ?? "",
+    school_password: s.school_password ?? "",
+    registration_school_years_id: Array.isArray(s.registration_school_years_id)
+      ? s.registration_school_years_id
+      : [],
     /** Evergreen document arrays — these live on the student row
      *  (not the per-year packet) so they survive re-enrollment. The
      *  parent flow writes here via `/api/students/[id]`; the admin

@@ -174,6 +174,14 @@ export async function PATCH(
       // can also flip this directly from this route for one-off
       // corrections.
       "isEnrolled",
+      // School Google-account credentials — the enrollment year the
+      // student came in with plus the generated email/password
+      // (`first.last<YY>@sailfuture.org` / `<F><L>sfa<YYYY>!`, see
+      // lib/school-account.ts). Written together by the School
+      // Account card on the enrolled detail page.
+      "enrollment_school_years_id",
+      "school_email",
+      "school_password",
     ];
     const patch: Record<string, unknown> = {};
     for (const key of ALLOWED) {
@@ -204,7 +212,13 @@ export async function PATCH(
       "unenrollment_reason" in patch ||
       "unenrollment_date" in patch ||
       "unenrollment_notes" in patch ||
-      "isEnrolled" in patch
+      "isEnrolled" in patch ||
+      // School-account columns are admin-added like the toddle_*
+      // pair — they live on the `2GcBXyoA` admin query, not the
+      // default group's CRUD surface.
+      "enrollment_school_years_id" in patch ||
+      "school_email" in patch ||
+      "school_password" in patch
     ) {
       touchesAdminGroupFields = true;
     }

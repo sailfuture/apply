@@ -9,6 +9,7 @@ import {
   ArrowLeft,
   CheckCircle2,
   Circle,
+  Copy,
   Download,
   ExternalLink,
   FileText,
@@ -81,6 +82,10 @@ import {
   formatRelativeShort,
 } from "@/lib/format-note-time";
 import { formatUSPhone } from "@/lib/phone";
+import {
+  generateSchoolEmail,
+  generateSchoolPassword,
+} from "@/lib/school-account";
 import { PhoneInput } from "@/components/ui/phone-input";
 import {
   Table,
@@ -331,6 +336,11 @@ export default function EnrolledStudentDetailPage() {
         schoolYear={school_year}
         onChanged={() => mutate()}
       />
+
+      {/* School account — the enrollment year the student came in
+          with plus the generated school email + starter password
+          (first.last<YY>@sailfuture.org / <F><L>sfa<YYYY>!). */}
+      <SchoolAccountCard student={student} onChanged={() => mutate()} />
 
       {/* SUFS award ID — the portal assigns it after the scholarship
           determination (often post-enrollment), so admin records it
@@ -766,6 +776,207 @@ function PlacementCard({
         )}
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * School Account card — admin-only. Generates the student's school
+ * Google-account email + starter password from their name and the
+ * school year they FIRST enrolled in ("came in with"), then stores
+ * all three on the student row. The year drives the email's
+ * two-digit suffix (2024-2025 entry → "…24@sailfuture.org") and the
+ * password's four-digit year ("HTsfa2024!") — a student who joins
+ * late in an academic year still belongs to that year's cohort, so
+ * admin picks the school year rather than us deriving it from a
+ * calendar date. See lib/school-account.ts for the exact formats.
+ */
+function SchoolAccountCard({
+  student,
+  onChanged,
+}: {
+  student: AdminEnrolledStudentResponse["student"];
+  onChanged: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [draftYearId, setDraftYearId] = useState("");
+  // Full year list for the picker — the detail payload only carries
+  // the single viewed year, and the enrollment year is often earlier.
+  const { data: years } = useSWR<Array<{ id: number; year_name: string }>>(
+    "/api/admin/school-years",
+    adminFetcher
+  );
+  const yearList = Array.isArray(years) ? years : [];
+  const yearNameById = new Map(yearList.map((y) => [y.id, y.year_name]));
+
+  const storedYearId = student.enrollment_school_years_id;
+  const storedYearName = storedYearId
+    ? (yearNameById.get(storedYearId) ?? "")
+    : "";
+
+  function enterEdit() {
+    // Default to the stored year, else the student's earliest
+    // associated school year — usually the year they first applied.
+    let next = storedYearId ? String(storedYearId) : "";
+    if (!next) {
+      const associated = yearList
+        .filter((y) => student.registration_school_years_id.includes(y.id))
+        .sort((a, b) => a.year_name.localeCompare(b.year_name));
+      next = associated[0] ? String(associated[0].id) : "";
+    }
+    setDraftYearId(next);
+    setEditing(true);
+  }
+
+  const draftYearName = draftYearId
+    ? (yearNameById.get(Number(draftYearId)) ?? "")
+    : "";
+  const previewEmail = generateSchoolEmail(
+    student.first_name,
+    student.last_name,
+    draftYearName
+  );
+  const previewPassword = generateSchoolPassword(
+    student.first_name,
+    student.last_name,
+    draftYearName
+  );
+
+  async function runSave() {
+    if (!draftYearId || !previewEmail || !previewPassword) {
+      toast.error("Pick the enrollment year first.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/admin/students/${student.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          enrollment_school_years_id: Number(draftYearId),
+          school_email: previewEmail,
+          school_password: previewPassword,
+        }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Save failed (${res.status})`);
+      }
+      toast.success("School account saved.");
+      setEditing(false);
+      onChanged();
+    } catch (err) {
+      console.error("[SchoolAccountCard.runSave]", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't save.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card className="overflow-hidden gap-0 py-0 bg-white">
+      <CardHeader className="py-3 !pb-3 border-b">
+        <div className="flex items-center justify-between gap-3">
+          <CardTitle className="text-base">
+            School Account
+            <span className="ml-2 inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground align-middle">
+              Admin only
+            </span>
+          </CardTitle>
+          <CardEditToggle
+            editing={editing}
+            saving={saving}
+            onEdit={enterEdit}
+            onCancel={() => setEditing(false)}
+            onSave={() => void runSave()}
+          />
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4 py-5 bg-white">
+        {editing ? (
+          <>
+            <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
+              <Field>
+                <FieldLabel className="text-xs">Enrollment year</FieldLabel>
+                <Select
+                  value={draftYearId}
+                  onValueChange={setDraftYearId}
+                  disabled={saving}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Select the year they came in…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {yearList.map((y) => (
+                      <SelectItem key={y.id} value={String(y.id)}>
+                        {y.year_name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+              <ReadField label="School email" value={previewEmail ?? ""} />
+              <ReadField label="Password" value={previewPassword ?? ""} />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Email and password regenerate from the student&rsquo;s name
+              and the selected enrollment year on save — a student who
+              enrolls mid-year still belongs to that school year&rsquo;s
+              cohort.
+            </p>
+          </>
+        ) : (
+          <>
+            <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
+              <ReadField label="Enrollment year" value={storedYearName} />
+              <ReadCopyField label="School email" value={student.school_email} />
+              <ReadCopyField label="Password" value={student.school_password} />
+            </div>
+            {!student.school_email ? (
+              <p className="text-xs text-muted-foreground">
+                No school account generated yet — click Edit and pick the
+                school year this student first enrolled in.
+              </p>
+            ) : null}
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Read-only field with a copy-to-clipboard button — used by the
+ *  School Account card for the generated email + password, which
+ *  admin copies straight into the Google Workspace console. */
+function ReadCopyField({ label, value }: { label: string; value: string }) {
+  return (
+    <Field>
+      <FieldLabel className="text-xs">{label}</FieldLabel>
+      <div className="flex items-center gap-1.5">
+        <Input
+          readOnly
+          tabIndex={-1}
+          value={value || "—"}
+          className={cn("bg-muted/30", value && "font-mono text-[13px]")}
+        />
+        {value ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            className="size-9 shrink-0 bg-white"
+            title={`Copy ${label.toLowerCase()}`}
+            onClick={() => {
+              void navigator.clipboard.writeText(value);
+              toast.success(`${label} copied.`);
+            }}
+          >
+            <Copy className="size-3.5" />
+            <span className="sr-only">Copy {label.toLowerCase()}</span>
+          </Button>
+        ) : null}
+      </div>
+    </Field>
   );
 }
 
