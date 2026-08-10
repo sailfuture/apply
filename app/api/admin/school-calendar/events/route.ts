@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
+import { UNLIMITED_PARENT_SPOTS } from "@/lib/school-calendar";
 import { pushSchoolEventToGoogle } from "@/lib/school-event-sync";
 import { xano } from "@/lib/xano";
 
@@ -75,8 +76,8 @@ export async function POST(req: NextRequest) {
       {
         ...created,
         warning:
-          sync === "failed"
-            ? "Event saved, but it couldn't be pushed to the school Google Calendar — use Sync Google on the calendar page to retry."
+          sync.status === "failed"
+            ? `Event saved, but it couldn't be pushed to the school Google Calendar: ${sync.error}`
             : undefined,
       },
       { status: 201 }
@@ -98,10 +99,17 @@ function coerceHours(v: unknown): number {
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
-/** Whole-number RSVP capacity, capped at 500; 0 = sign-ups closed. */
+/**
+ * Whole-number RSVP capacity, capped at 500. 0 = sign-ups closed,
+ * -1 (`UNLIMITED_PARENT_SPOTS`) = sign-ups open with no cap — see the
+ * matching note on the PATCH route: the sentinel has to survive the
+ * round trip or an uncapped event can't be created.
+ */
 function coerceSpots(v: unknown): number {
   const n = Number(v);
-  return Number.isFinite(n) && n > 0 ? Math.min(Math.round(n), 500) : 0;
+  if (!Number.isFinite(n)) return 0;
+  if (n === UNLIMITED_PARENT_SPOTS) return UNLIMITED_PARENT_SPOTS;
+  return n > 0 ? Math.min(Math.round(n), 500) : 0;
 }
 
 /** Known event-category color slugs; anything else stores as "". */

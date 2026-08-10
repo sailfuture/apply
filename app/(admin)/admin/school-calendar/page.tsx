@@ -20,14 +20,9 @@ import {
   Trash2,
 } from "lucide-react";
 import {
-  EventColorPicker,
   EventUpsertDialog,
-  LocationInput,
-  TimeSelect,
   eventColor,
-  msToTimeInput,
   parseDate,
-  timeInputToMs,
 } from "@/components/admin/event-upsert-dialog";
 import { EventReminderDialog } from "@/components/admin/event-reminder-dialog";
 import { Button } from "@/components/ui/button";
@@ -42,7 +37,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -266,20 +260,39 @@ export default function SchoolCalendarPage() {
       }
       const pushed = Number(data?.pushed) || 0;
       const failedCount = Number(data?.failed) || 0;
+      const skipped = Number(data?.skipped) || 0;
       if (failedCount > 0) {
+        // Google's own words, not "check the server logs" — the
+        // reason is almost always one fixable thing (calendar shared
+        // read-only, wrong calendar id) and the admin can only act on
+        // it if they can see it.
         toast.warning(
-          `Pushed ${pushed} event${pushed === 1 ? "" : "s"} to Google Calendar, but ${failedCount} failed — try again or check the server logs.`
+          `Pushed ${pushed} event${pushed === 1 ? "" : "s"}, ${failedCount} failed${
+            data?.aborted ? " (stopped early — same error repeating)" : ""
+          }.`,
+          {
+            description: data?.firstError ?? undefined,
+            duration: 15000,
+          }
         );
       } else {
         toast.success(
-          `Google Calendar is up to date — ${pushed} event${pushed === 1 ? "" : "s"} pushed.`
+          `Google Calendar is up to date — ${pushed} event${pushed === 1 ? "" : "s"} pushed.`,
+          {
+            description:
+              skipped > 0
+                ? `${skipped} event${skipped === 1 ? "" : "s"} skipped — their calendar day no longer exists.`
+                : undefined,
+          }
         );
       }
     } catch (err) {
       console.error("Google Calendar sync failed:", err);
-      toast.error(
-        err instanceof Error ? err.message : "Couldn't sync to Google Calendar."
-      );
+      toast.error("Couldn't sync to Google Calendar.", {
+        description:
+          err instanceof Error ? err.message : "Unknown error.",
+        duration: 15000,
+      });
     } finally {
       setSyncingGoogle(false);
     }
@@ -341,9 +354,9 @@ export default function SchoolCalendarPage() {
 
   return (
     <div className="flex h-[calc(100dvh-3.5rem)] flex-col gap-4 p-6">
-      {/* Toolbar — Today · ‹ › · month title on the left; legend and
-          the New-event dialog on the right. The month label doubles as
-          the page heading, calendar-app style. */}
+      {/* Toolbar — Today · ‹ › · month title on the left; actions on
+          the right. The month label doubles as the page heading,
+          calendar-app style. */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-1">
           <Button
@@ -379,34 +392,17 @@ export default function SchoolCalendarPage() {
             {monthKey ? monthLabel(monthKey) : "Calendar"}
           </h1>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {/* Legend — hidden on narrow viewports where it would wrap
-              the toolbar onto three lines. */}
-          <div className="mr-2 hidden items-center gap-3 text-[11px] text-muted-foreground xl:flex">
-            <LegendSwatch className="bg-white border" label="School" />
-            <LegendSwatch className="bg-muted/60" label="Weekend" />
-            <LegendSwatch className="bg-sky-100" label="Break" />
-            <span className="inline-flex items-center gap-1">
-              <span className="size-2 rounded-full bg-rose-500" />
-              Holiday
-            </span>
-            <span className="rounded-full bg-indigo-100 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-indigo-700">
-              Extern
-            </span>
-            <span className="rounded-full bg-orange-100 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-orange-700">
-              Intern
-            </span>
-            <span className="inline-flex items-center gap-1">
-              <span className="rounded-full bg-teal-100 px-1.5 py-px text-[9px] font-semibold text-teal-700">
-                S1
-              </span>
-              Season
-            </span>
-          </div>
+        {/* Actions stay pinned to the right edge — `ml-auto` +
+            `justify-end` so they hold that edge even when the row
+            wraps on a narrow viewport. */}
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
           <Button
             variant="outline"
             size="sm"
-            className="bg-white"
+            // Fixed width: the label swaps to "Syncing…" mid-request,
+            // and letting the button resize shunted every control to
+            // its right sideways on each click.
+            className="w-[122px] shrink-0 bg-white"
             disabled={syncingGoogle}
             onClick={() => void syncGoogle()}
             title="Push every event to the school Google Calendar"
@@ -549,6 +545,7 @@ export default function SchoolCalendarPage() {
         <DaySheet
           key={selectedDay.id}
           day={selectedDay}
+          days={days}
           events={eventsByDay.get(selectedDay.id) ?? []}
           termLabel={termLabel.get(selectedDay.terms_id) ?? ""}
           seasonName={
@@ -1015,21 +1012,6 @@ function EventsSheet({
   );
 }
 
-function LegendSwatch({
-  className,
-  label,
-}: {
-  className: string;
-  label: string;
-}) {
-  return (
-    <span className="inline-flex items-center gap-1">
-      <span className={cn("size-3 rounded-sm", className)} />
-      {label}
-    </span>
-  );
-}
-
 function DayCell({
   date,
   day,
@@ -1257,6 +1239,7 @@ function NewEventDialog({
 
 function DaySheet({
   day,
+  days,
   events,
   termLabel,
   seasonName,
@@ -1265,6 +1248,9 @@ function DaySheet({
   onRemind,
 }: {
   day: XanoSchoolCalendarDay;
+  /** The whole year's days — the event modal clamps its date picker
+   *  to this range. */
+  days: XanoSchoolCalendarDay[];
   events: XanoSchoolCalendarEvent[];
   termLabel: string;
   seasonName: string;
@@ -1349,9 +1335,10 @@ function DaySheet({
   });
 
   // null = not editing; 0 = new event; otherwise the event id.
-  const [editingId, setEditingId] = useState<number | null>(
-    events.length === 0 ? 0 : null
-  );
+  // Starts closed even on an empty day: the editor is a modal now, so
+  // auto-opening it would bury the day settings behind a dialog the
+  // moment you click a date.
+  const [editingId, setEditingId] = useState<number | null>(null);
   const editingEvent =
     editingId && editingId > 0
       ? (events.find((e) => e.id === editingId) ?? null)
@@ -1476,20 +1463,18 @@ function DaySheet({
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                   Events ({events.length})
                 </h3>
-                {editingId === null ? (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="bg-white"
-                    onClick={() => setEditingId(0)}
-                  >
-                    <Plus className="size-3.5 mr-1" />
-                    Add event
-                  </Button>
-                ) : null}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="bg-white"
+                  onClick={() => setEditingId(0)}
+                >
+                  <Plus className="size-3.5 mr-1" />
+                  Add event
+                </Button>
               </div>
 
-              {events.length === 0 && editingId === null ? (
+              {events.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
                   No events on this day yet.
                 </p>
@@ -1603,21 +1588,31 @@ function DaySheet({
                 })}
               </ul>
 
-              {editingId !== null ? (
-                <EventForm
-                  key={editingId}
-                  day={day}
-                  existing={editingEvent}
-                  onDone={(saved) => {
-                    setEditingId(null);
-                    if (saved) onChanged();
-                  }}
-                />
-              ) : null}
             </section>
           </div>
         </SheetContent>
       </Sheet>
+
+      {/* Add/Edit open the shared modal over the sheet — the same
+          editor the Events sheet and the Volunteer Hours page use, so
+          every surface offers the full field set (parent sign-up
+          spots, needs, all-day) instead of the trimmed inline form
+          that used to render inside the sheet. Sibling of the Sheet,
+          not a child, matching EventsSheet. */}
+      {editingId !== null ? (
+        <EventUpsertDialog
+          key={editingId}
+          days={days}
+          existing={
+            editingEvent ? { event: editingEvent, date: day.date } : null
+          }
+          defaultDate={day.date}
+          onDone={(saved) => {
+            setEditingId(null);
+            if (saved) onChanged();
+          }}
+        />
+      ) : null}
 
       {/* Delete confirm */}
       <AlertDialog
@@ -1670,188 +1665,6 @@ function FlagSwitch({
         {label}
       </Label>
       <Switch id={id} size="sm" checked={checked} onCheckedChange={onChange} />
-    </div>
-  );
-}
-
-/* ── Event add/edit form ──────────────────────────────────────────── */
-
-function EventForm({
-  day,
-  existing,
-  onDone,
-}: {
-  day: XanoSchoolCalendarDay;
-  /** Null = creating a new event on this day. */
-  existing: XanoSchoolCalendarEvent | null;
-  onDone: (saved: boolean) => void;
-}) {
-  const [title, setTitle] = useState(existing?.title ?? "");
-  const [location, setLocation] = useState(existing?.location ?? "");
-  const [description, setDescription] = useState(
-    existing?.description ?? ""
-  );
-  const [start, setStart] = useState(msToTimeInput(existing?.start_time));
-  const [end, setEnd] = useState(msToTimeInput(existing?.end_time));
-  const [color, setColor] = useState((existing?.color ?? "").trim());
-  const [mandatory, setMandatory] = useState(existing?.mandatory === true);
-  const [volunteer, setVolunteer] = useState(
-    existing?.parent_volunteer_hours === true
-  );
-  const [hours, setHours] = useState(
-    existing?.volunteer_hour_total ? String(existing.volunteer_hour_total) : ""
-  );
-  const [saving, setSaving] = useState(false);
-
-  async function save() {
-    const trimmed = title.trim();
-    if (!trimmed || saving) return;
-    setSaving(true);
-    try {
-      const payload = {
-        school_calendar_id: day.id,
-        title: trimmed,
-        location: location.trim(),
-        description: description.trim(),
-        start_time: timeInputToMs(day.date, start),
-        end_time: timeInputToMs(day.date, end),
-        color,
-        mandatory,
-        parent_volunteer_hours: volunteer,
-        volunteer_hour_total: volunteer ? Number(hours) || 0 : 0,
-      };
-      const res = await fetch(
-        existing
-          ? `/api/admin/school-calendar/events/${existing.id}`
-          : "/api/admin/school-calendar/events",
-        {
-          method: existing ? "PATCH" : "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        }
-      );
-      const data = await res.json().catch(() => null);
-      if (!res.ok) {
-        throw new Error(data?.error ?? `Save failed (${res.status})`);
-      }
-      if (data?.warning) toast.warning(data.warning);
-      else toast.success(existing ? "Event updated." : "Event added.");
-      onDone(true);
-    } catch (err) {
-      console.error("Failed to save event:", err);
-      toast.error(
-        err instanceof Error ? err.message : "Couldn't save event."
-      );
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <div className="animate-in fade-in-0 slide-in-from-top-1 space-y-3 rounded-md border bg-white p-3 duration-200">
-      <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-        {existing ? "Edit event" : "New event"}
-      </p>
-      <div className="space-y-1.5">
-        <Label className="text-xs">Event name</Label>
-        <Input
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder="Family Night, field trip, early release…"
-        />
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <div className="space-y-1.5">
-          <Label className="text-xs">Start time</Label>
-          <TimeSelect
-            value={start}
-            onChange={setStart}
-            ariaLabel="Start time"
-          />
-        </div>
-        <div className="space-y-1.5">
-          <Label className="text-xs">End time</Label>
-          <TimeSelect value={end} onChange={setEnd} ariaLabel="End time" />
-        </div>
-      </div>
-      <div className="space-y-1.5">
-        <Label className="text-xs">Location</Label>
-        <LocationInput
-          value={location}
-          onChange={setLocation}
-          placeholder="Campus, marina, address…"
-        />
-      </div>
-      <div className="space-y-1.5">
-        <Label className="text-xs">Description</Label>
-        <Textarea
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          rows={2}
-          placeholder="Details families should know…"
-        />
-      </div>
-      <EventColorPicker value={color} onChange={setColor} />
-      <div className="flex items-center justify-between gap-2">
-        <Label htmlFor="ev-mandatory" className="text-sm font-normal">
-          Mandatory attendance
-        </Label>
-        <Switch
-          id="ev-mandatory"
-          checked={mandatory}
-          onCheckedChange={setMandatory}
-        />
-      </div>
-      <div className="flex items-center justify-between gap-2">
-        <Label htmlFor="ev-volunteer" className="text-sm font-normal">
-          Counts toward parent volunteer hours
-        </Label>
-        <Switch
-          id="ev-volunteer"
-          checked={volunteer}
-          onCheckedChange={setVolunteer}
-        />
-      </div>
-      {volunteer ? (
-        <div className="space-y-1.5">
-          <Label className="text-xs">Volunteer hours credited</Label>
-          <Input
-            type="number"
-            min="0"
-            step="0.5"
-            value={hours}
-            onChange={(e) => setHours(e.target.value)}
-            placeholder="2"
-          />
-        </div>
-      ) : null}
-      <div className="flex items-center justify-end gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          className="bg-white"
-          disabled={saving}
-          onClick={() => onDone(false)}
-        >
-          Cancel
-        </Button>
-        <Button
-          size="sm"
-          onClick={() => void save()}
-          disabled={saving || !title.trim()}
-        >
-          {saving ? (
-            <>
-              <Loader2 className="size-3.5 mr-1.5 animate-spin" />
-              Saving
-            </>
-          ) : existing ? (
-            "Save changes"
-          ) : (
-            "Add event"
-          )}
-        </Button>
-      </div>
     </div>
   );
 }

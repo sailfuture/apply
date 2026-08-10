@@ -394,7 +394,18 @@ export interface SchoolEventInput {
   endMs: number;
 }
 
-function schoolEventBody(input: SchoolEventInput): Record<string, unknown> {
+/**
+ * `mode` controls the unused date variant. On PATCH the other variant
+ * must be explicitly nulled — flipping a formerly all-day event to a
+ * timed one 400s otherwise (and vice versa). On INSERT there is no
+ * prior value to clear, and the nulls are just extra surface for
+ * Google's validator to reject, so they're left out.
+ */
+function schoolEventBody(
+  input: SchoolEventInput,
+  mode: "patch" | "insert"
+): Record<string, unknown> {
+  const clear = mode === "patch";
   const base = {
     summary: input.summary,
     description: input.description,
@@ -403,28 +414,114 @@ function schoolEventBody(input: SchoolEventInput): Record<string, unknown> {
   if (input.startMs > 0) {
     const endMs =
       input.endMs > input.startMs ? input.endMs : input.startMs + 3_600_000;
-    // Explicit `date: null` — PATCHing a formerly all-day event into a
-    // timed one 400s unless the unused variant is cleared (and vice
-    // versa below).
     return {
       ...base,
       start: {
         dateTime: new Date(input.startMs).toISOString(),
         timeZone: TIME_ZONE,
-        date: null,
+        ...(clear ? { date: null } : {}),
       },
       end: {
         dateTime: new Date(endMs).toISOString(),
         timeZone: TIME_ZONE,
-        date: null,
+        ...(clear ? { date: null } : {}),
       },
     };
   }
   return {
     ...base,
-    start: { date: input.date, dateTime: null },
+    start: { date: input.date, ...(clear ? { dateTime: null } : {}) },
     // All-day DTEND is exclusive — the next day.
-    end: { date: nextIsoDate(input.date), dateTime: null },
+    end: {
+      date: nextIsoDate(input.date),
+      ...(clear ? { dateTime: null } : {}),
+    },
+  };
+}
+
+/** Pull the human-readable message out of a Google API error body,
+ *  falling back to the raw text. Keeps route-level error strings
+ *  readable instead of dumping a wall of JSON into a toast. */
+function googleErrorMessage(body: string): string {
+  try {
+    const parsed = JSON.parse(body);
+    const msg = parsed?.error?.message ?? parsed?.error_description;
+    if (typeof msg === "string" && msg) return msg;
+  } catch {
+    // Not JSON — fall through to the raw text.
+  }
+  return body.replace(/\s+/g, " ").trim().slice(0, 300);
+}
+
+/**
+ * Can the impersonated user actually reach the school calendar?
+ *
+ * Run this before a bulk push: every per-event failure in a run has
+ * the same cause when the cause is configuration, and 29 identical
+ * 404s are far less useful than one sentence naming the account and
+ * the calendar. Uses `events.list` rather than `calendars.get`
+ * because the delegated scope is `calendar.events` only — a
+ * `calendars.get` preflight would 403 on a perfectly healthy setup.
+ *
+ * Caveat: this proves the calendar is READABLE. A calendar shared as
+ * "See all event details" passes here and still 403s on write, which
+ * is why callers should surface the first write error too.
+ */
+export async function checkSchoolCalendarAccess(): Promise<
+  { ok: true } | { ok: false; reason: string }
+> {
+  const calendarId = schoolCalendarId();
+  if (!calendarId) {
+    return { ok: false, reason: "GOOGLE_SCHOOL_CALENDAR_ID is not set." };
+  }
+  const who = impersonatedEmail() || "the service account";
+  let res: Response;
+  try {
+    res = await calendarFetch("/events", {
+      method: "GET",
+      calendarId,
+      query: { maxResults: "1" },
+    });
+  } catch (err) {
+    return {
+      ok: false,
+      reason: `Couldn't reach Google Calendar: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    };
+  }
+  if (res.ok) return { ok: true };
+  const detail = googleErrorMessage(await res.text().catch(() => ""));
+  if (res.status === 404) {
+    return {
+      ok: false,
+      reason:
+        `Google can't find calendar "${calendarId}" for ${who}. Check that ` +
+        `GOOGLE_SCHOOL_CALENDAR_ID is the calendar's ID (Calendar → Settings → ` +
+        `Integrate calendar → Calendar ID), then share that calendar with ${who} ` +
+        `with "Make changes to events".`,
+    };
+  }
+  if (res.status === 403) {
+    return {
+      ok: false,
+      reason:
+        `${who} isn't allowed to use calendar "${calendarId}" (403: ${detail}). ` +
+        `Share the calendar with ${who} and set the permission to ` +
+        `"Make changes to events".`,
+    };
+  }
+  if (res.status === 401) {
+    return {
+      ok: false,
+      reason:
+        `Google rejected the service-account credentials (401: ${detail}). ` +
+        `Re-check domain-wide delegation for the calendar.events scope.`,
+    };
+  }
+  return {
+    ok: false,
+    reason: `Google Calendar returned ${res.status} for "${calendarId}": ${detail}`,
   };
 }
 
@@ -452,28 +549,65 @@ export async function upsertSchoolEvent(
   if (!calendarId) throw new Error("GOOGLE_SCHOOL_CALENDAR_ID is not set");
   const googleId = `${SCHOOL_EVENT_ID_PREFIX}${rowId}`;
 
-  const patch = await calendarFetch(`/events/${googleId}`, {
-    method: "PATCH",
-    calendarId,
-    body: JSON.stringify({ ...schoolEventBody(input), status: "confirmed" }),
-  });
+  const patchOnce = () =>
+    calendarFetch(`/events/${googleId}`, {
+      method: "PATCH",
+      calendarId,
+      body: JSON.stringify({
+        ...schoolEventBody(input, "patch"),
+        status: "confirmed",
+      }),
+    });
+
+  const patch = await patchOnce();
   if (patch.ok) return;
   if (patch.status !== 404) {
     throw new Error(
-      `Google Calendar school-event update failed (${patch.status}): ${await patch.text()}`
+      `Google Calendar school-event update failed (${patch.status}): ${googleErrorMessage(
+        await patch.text()
+      )}`
     );
   }
 
   const insert = await calendarFetch("/events", {
     method: "POST",
     calendarId,
-    body: JSON.stringify({ ...schoolEventBody(input), id: googleId }),
+    body: JSON.stringify({
+      ...schoolEventBody(input, "insert"),
+      id: googleId,
+    }),
   });
-  if (!insert.ok) {
+  if (insert.ok) return;
+
+  // 409 = the id is taken. PATCH said 404 and INSERT says "already
+  // exists", which happens when the event is in a state the direct
+  // GET/PATCH by id misses; one more PATCH resolves it rather than
+  // failing this event forever.
+  if (insert.status === 409) {
+    const retry = await patchOnce();
+    if (retry.ok) return;
     throw new Error(
-      `Google Calendar school-event create failed (${insert.status}): ${await insert.text()}`
+      `Google Calendar school-event ${googleId} already exists but can't be updated (${retry.status}): ${googleErrorMessage(
+        await retry.text()
+      )}`
     );
   }
+
+  // A 404 here is NOT "event missing" — the insert doesn't address an
+  // event id — it means the calendar itself isn't reachable by the
+  // impersonated user. Say so instead of reporting a create failure.
+  if (insert.status === 404) {
+    throw new Error(
+      `Google can't find calendar "${calendarId}" for ${
+        impersonatedEmail() || "the service account"
+      } — check GOOGLE_SCHOOL_CALENDAR_ID and that the calendar is shared with that account with "Make changes to events".`
+    );
+  }
+  throw new Error(
+    `Google Calendar school-event create failed (${insert.status}): ${googleErrorMessage(
+      await insert.text()
+    )}`
+  );
 }
 
 /** Remove a school event from the shared calendar. Already-gone

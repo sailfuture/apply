@@ -34,6 +34,17 @@ function googleDescription(e: XanoSchoolCalendarEvent): string {
     .join("\n");
 }
 
+/**
+ * Outcome of one push. `error` carries Google's own explanation on
+ * failure — the bulk-sync route reports it to the admin, because
+ * "check the server logs" is not something an admin staring at a
+ * toast can act on.
+ */
+export interface SchoolEventSyncResult {
+  status: "synced" | "failed" | "off";
+  error?: string;
+}
+
 /** Upsert one event onto the school calendar. `dayDate` is the
  *  event's `school_calendar` day ("YYYY-MM-DD") — undefined when the
  *  day row couldn't be resolved, which fails the push (an all-day
@@ -41,13 +52,12 @@ function googleDescription(e: XanoSchoolCalendarEvent): string {
 export async function pushSchoolEventToGoogle(
   event: XanoSchoolCalendarEvent,
   dayDate: string | undefined
-): Promise<"synced" | "failed" | "off"> {
-  if (!isSchoolCalendarPushConfigured()) return "off";
+): Promise<SchoolEventSyncResult> {
+  if (!isSchoolCalendarPushConfigured()) return { status: "off" };
   if (!dayDate) {
-    console.error(
-      `[school-event-sync] no calendar day found for event ${event.id} (day ${event.school_calendar_id}) — skipping Google push`
-    );
-    return "failed";
+    const error = `Event ${event.id} ("${event.title}") points at calendar day ${event.school_calendar_id}, which no longer exists — it has no date to place on Google.`;
+    console.error(`[school-event-sync] ${error}`);
+    return { status: "failed", error };
   }
   try {
     await upsertSchoolEvent(event.id, {
@@ -58,13 +68,16 @@ export async function pushSchoolEventToGoogle(
       startMs: Number(event.start_time) || 0,
       endMs: Number(event.end_time) || 0,
     });
-    return "synced";
+    return { status: "synced" };
   } catch (err) {
     console.error(
       `[school-event-sync] Google push failed for event ${event.id}:`,
       err
     );
-    return "failed";
+    return {
+      status: "failed",
+      error: err instanceof Error ? err.message : String(err),
+    };
   }
 }
 

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
+import { UNLIMITED_PARENT_SPOTS } from "@/lib/school-calendar";
 import {
   pushSchoolEventToGoogle,
   removeSchoolEventFromGoogle,
@@ -101,8 +102,8 @@ export async function PATCH(
     return NextResponse.json({
       ...updated,
       warning:
-        sync === "failed"
-          ? "Event updated, but the change couldn't be pushed to the school Google Calendar — use Sync Google on the calendar page to retry."
+        sync.status === "failed"
+          ? `Event updated, but the change couldn't be pushed to the school Google Calendar: ${sync.error}`
           : undefined,
     });
   } catch (err) {
@@ -150,10 +151,21 @@ function coerceHours(v: unknown): number {
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
-/** Whole-number RSVP capacity, capped at 500; 0 = sign-ups closed. */
+/**
+ * Whole-number RSVP capacity, capped at 500. 0 = sign-ups closed,
+ * -1 (`UNLIMITED_PARENT_SPOTS`) = sign-ups open with no cap.
+ *
+ * The sentinel has to survive the round trip: clamping everything
+ * `<= 0` to 0 (as this did) meant the editor's "Open to everyone — no
+ * attendance limit" option saved as "no sign-ups at all", so an
+ * uncapped event was impossible to create even though every reader
+ * downstream understands -1.
+ */
 function coerceSpots(v: unknown): number {
   const n = Number(v);
-  return Number.isFinite(n) && n > 0 ? Math.min(Math.round(n), 500) : 0;
+  if (!Number.isFinite(n)) return 0;
+  if (n === UNLIMITED_PARENT_SPOTS) return UNLIMITED_PARENT_SPOTS;
+  return n > 0 ? Math.min(Math.round(n), 500) : 0;
 }
 
 /** Known event-category color slugs; anything else coerces to "". */
