@@ -626,7 +626,10 @@ function LeadStatusEditor({
    *  "converted" = legacy hand-marked win (treated as active here). */
   status: string;
   reason: string;
-  onChanged?: () => void;
+  /** Fired after a successful save with the status that was written
+   *  ("not_interested" or "") so the host can react to the specific
+   *  transition — the triage sheet closes itself on a decline. */
+  onChanged?: (savedStatus: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -652,7 +655,7 @@ function LeadStatusEditor({
       setOpen(false);
       setShowCustom(false);
       setCustomReason("");
-      onChanged?.();
+      onChanged?.(patch.status);
     } catch (err) {
       console.error("[LeadStatusEditor.save]", err);
       toast.error(err instanceof Error ? err.message : "Couldn't save.");
@@ -1412,7 +1415,19 @@ export function LeadTriageSheet({
                       scope={scope}
                       status={leadStatus}
                       reason={statusReason ?? ""}
-                      onChanged={onChanged}
+                      onChanged={(savedStatus) => {
+                        // Refresh the host's list first so the row
+                        // re-buckets (Not Interested card / active
+                        // queue) behind the sheet…
+                        onChanged?.();
+                        // …then close the sheet on a decline — the
+                        // lead just left the active queue, so keeping
+                        // its sheet open only hides the move. Restores
+                        // keep the sheet open for follow-up edits.
+                        if (savedStatus === "not_interested") {
+                          onOpenChange(false);
+                        }
+                      }}
                     />
                   ) : null
                 }
