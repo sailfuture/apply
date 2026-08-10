@@ -24,6 +24,7 @@ import {
   UserRound,
   Users,
   X,
+  UserPlus,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -97,6 +98,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import type { AdminEnrolledStudentResponse } from "@/app/api/admin/enrolled/[id]/route";
+import type { StudentGoogleAccountStatus } from "@/app/api/admin/students/[id]/google-account/route";
 
 /**
  * Admin Enrolled Student detail page.
@@ -131,12 +133,11 @@ export default function EnrolledStudentDetailPage() {
   const { data, isLoading, error, mutate } =
     useSWR<AdminEnrolledStudentResponse>(swrKey, adminFetcher);
 
-  // Where the admin came FROM (the family surfaces append
-  // `from=application|registration|overview` to their student
-  // links) — the back button returns there instead of the enrolled
-  // roster. Needs the family id, so the contextual href is computed
-  // after data loads; every pre-data branch falls back to the list.
-  const from = searchParams.get("from");
+  // The family surfaces still append `from=…` to their student links,
+  // but the contextual back button it drove is gone — the stage nav in
+  // the header covers cross-surface movement now. The loading /
+  // not-found states below fall back to the enrolled roster, which is
+  // the only sensible destination when there's no family to nav with.
   const backHref = yearId
     ? `/admin/enrolled?yearId=${yearId}`
     : "/admin/enrolled";
@@ -190,23 +191,6 @@ export default function EnrolledStudentDetailPage() {
   const fullName =
     `${student.first_name ?? ""} ${student.last_name ?? ""}`.trim() ||
     `Student #${studentId}`;
-
-  const year = yearId ? `?yearId=${yearId}` : "";
-  const familyId = family ? Number(family.id) : 0;
-  const [contextBackHref, contextBackLabel] =
-    from === "application" && familyId
-      ? [`/admin/families/${familyId}${year}`, "Back to family application"]
-      : from === "registration" && familyId
-        ? [
-            `/admin/registrations/${familyId}${year}`,
-            "Back to family registration",
-          ]
-        : from === "overview" && familyId
-          ? [
-              `/admin/families/${familyId}/overview${year}`,
-              "Back to family overview",
-            ]
-          : [backHref, "Back to enrolled students"];
 
   return (
     <div className="p-6 space-y-6">
@@ -274,15 +258,15 @@ export default function EnrolledStudentDetailPage() {
           </div>
         ) : null}
       </div>
-      {/* Action row sits right above the Student Information card.
-          Back to list on the left, this page's actions on the right
-          with Unenroll pinned last — the one destructive,
-          hard-to-reverse action here, kept away from the things
-          admin clicks routinely. The page-level Edit button was
-          removed — each card ships its own Edit affordance anchored
-          to its header. */}
-      <div className="flex items-center justify-between gap-2 flex-wrap">
-        <BackLink href={contextBackHref} label={contextBackLabel} />
+      {/* Action row sits right above the Student Information card,
+          Unenroll pinned last — the one destructive, hard-to-reverse
+          action here, kept away from the things admin clicks
+          routinely. There's no back link: the stage nav in the header
+          covers cross-surface movement, and a second "back to where
+          you came from" beside it was the same journey twice. The
+          loading / not-found states above keep theirs, since the
+          stage nav can't render without a family. */}
+      <div className="flex items-center justify-end gap-2 flex-wrap">
         <div className="flex items-center gap-2 shrink-0 flex-wrap">
           {/* Unified account activity stream — notes + texts + emails
               + system milestones in one timeline. Notes composed here
@@ -369,6 +353,14 @@ export default function EnrolledStudentDetailPage() {
           (first.last<YY>@sailfuture.org / <F><L>sfa<YYYY>!). */}
       <SchoolAccountCard student={student} onChanged={() => mutate()} />
 
+      {/* Student photo — admin uploads a headshot that's compressed in
+          the browser and stored on the student row's `student_photo`
+          image column. Sits directly under the school account: the
+          two together are the student's identity record, and staff
+          setting up an account usually attach the photo in the same
+          pass. */}
+      <StudentPhotoCard student={student} onChanged={() => mutate()} />
+
       {/* SUFS award ID — the portal assigns it after the scholarship
           determination (often post-enrollment), so admin records it
           here on the application row without leaving this page. */}
@@ -388,11 +380,6 @@ export default function EnrolledStudentDetailPage() {
           onSaved={() => void mutate()}
         />
       ) : null}
-
-      {/* Student photo — admin uploads a headshot that's compressed in
-          the browser and stored on the student row's `student_photo`
-          image column. */}
-      <StudentPhotoCard student={student} onChanged={() => mutate()} />
 
       <StudentBioCard
         student={student}
@@ -972,11 +959,134 @@ function SchoolAccountCard({
                 No school account generated yet — click Edit and pick the
                 school year this student first enrolled in.
               </p>
-            ) : null}
+            ) : (
+              <CreateGoogleAccountRow
+                studentId={student.id}
+                email={student.school_email}
+              />
+            )}
           </>
         )}
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * Creates the student's Google Workspace account at the address and
+ * password the card generated, so nobody has to retype credentials
+ * into the admin console — the step where a typo becomes a student
+ * who can't log in on their first day.
+ *
+ * Renders nothing when the integration isn't configured: not every
+ * deploy manages a Workspace domain, and a permanently-dead button
+ * is just noise. Creating an account is real and outward-facing, so
+ * it asks first and names the address it's about to create.
+ */
+function CreateGoogleAccountRow({
+  studentId,
+  email,
+}: {
+  studentId: number;
+  email: string;
+}) {
+  const { data, mutate, isLoading } = useSWR<StudentGoogleAccountStatus>(
+    `/api/admin/students/${studentId}/google-account`,
+    adminFetcher,
+    { revalidateOnFocus: false }
+  );
+  const [confirming, setConfirming] = useState(false);
+  const [creating, setCreating] = useState(false);
+
+  async function runCreate() {
+    if (creating) return;
+    setCreating(true);
+    try {
+      const res = await fetch(
+        `/api/admin/students/${studentId}/google-account`,
+        { method: "POST" }
+      );
+      const payload = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(payload?.error ?? `Failed (${res.status})`);
+      }
+      toast.success(`Google account created for ${email}.`);
+      setConfirming(false);
+      void mutate();
+    } catch (err) {
+      console.error("[CreateGoogleAccountRow.runCreate]", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't create.");
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  if (isLoading || !data || !data.configured) return null;
+
+  if (data.error) {
+    return (
+      <p className="text-xs text-red-700 dark:text-red-400">{data.error}</p>
+    );
+  }
+
+  if (data.exists) {
+    return (
+      <p className="inline-flex items-center gap-1.5 text-xs text-emerald-700">
+        <CheckCircle2 className="size-3.5 shrink-0" />
+        Google account active
+        {data.orgUnitPath ? (
+          <span className="text-muted-foreground">· {data.orgUnitPath}</span>
+        ) : null}
+      </p>
+    );
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="bg-white"
+        disabled={creating}
+        onClick={() => setConfirming(true)}
+      >
+        <UserPlus className="size-3.5 mr-1.5" />
+        Create Google account
+      </Button>
+      <span className="text-xs text-muted-foreground">
+        No Google account exists at this address yet.
+      </span>
+
+      <AlertDialog
+        open={confirming}
+        onOpenChange={(o) => !creating && setConfirming(o)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Create this Google account?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This creates a real Workspace account at{" "}
+              <span className="font-mono">{email}</span> with the password
+              shown above. The student can sign in immediately — they
+              won&rsquo;t be asked to change it.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={creating}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={creating}
+              onClick={(e) => {
+                e.preventDefault();
+                void runCreate();
+              }}
+            >
+              {creating ? "Creating…" : "Create account"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
   );
 }
 

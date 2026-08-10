@@ -39,9 +39,13 @@ import { createSign } from "crypto";
  *     still sign in
  *
  * The service account's domain-wide delegation entry must authorize
- * the four SCOPES below. Unset env degrades gracefully — callers
- * check `isGoogleAdminConfigured()` and skip, same contract as the
- * calendar layer.
+ * every scope in SCOPES below. Unset env degrades gracefully —
+ * callers check `isGoogleAdminConfigured()` and skip, same contract
+ * as the calendar layer.
+ *
+ * This module also creates student Workspace accounts for the School
+ * Account card (see `createWorkspaceUser`), which is why the user
+ * scope is in the list.
  */
 
 const SCOPES = [
@@ -49,6 +53,11 @@ const SCOPES = [
   "https://www.googleapis.com/auth/admin.directory.orgunit",
   "https://www.googleapis.com/auth/admin.directory.customer.readonly",
   "https://www.googleapis.com/auth/chrome.management.policy",
+  // Creating the student's Workspace account from the School Account
+  // card. Adding a scope here means re-authorizing the service
+  // account's client ID in the Workspace admin console — the existing
+  // grant does NOT widen on its own.
+  "https://www.googleapis.com/auth/admin.directory.user",
 ].join(" ");
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const DIRECTORY_BASE = "https://admin.googleapis.com/admin/directory/v1";
@@ -411,4 +420,83 @@ export async function clearSignInRestriction(orgUnitId: string): Promise<void> {
 export function studentOuName(name: string): string {
   const base = name.trim().replace(/\//g, "-").replace(/\s+/g, " ");
   return base.slice(0, 100);
+}
+
+/* ───────────────────────── Workspace accounts ───────────────────────── */
+
+export interface WorkspaceUser {
+  primaryEmail: string;
+  fullName: string;
+  suspended: boolean;
+  orgUnitPath: string;
+  /** True until the student signs in and sets their own password. */
+  changePasswordAtNextLogin: boolean;
+}
+
+function toWorkspaceUser(u: Record<string, unknown>): WorkspaceUser {
+  const name = (u.name ?? {}) as Record<string, unknown>;
+  return {
+    primaryEmail: String(u.primaryEmail ?? ""),
+    fullName: String(name.fullName ?? ""),
+    suspended: u.suspended === true,
+    orgUnitPath: String(u.orgUnitPath ?? ""),
+    changePasswordAtNextLogin: u.changePasswordAtNextLogin === true,
+  };
+}
+
+/**
+ * Look up a Workspace account by address. Returns null on 404 — a
+ * missing account is the normal "not created yet" answer, not a
+ * failure. Every other non-ok status still throws, so a permissions
+ * problem can't masquerade as "no account".
+ */
+export async function getWorkspaceUser(
+  email: string
+): Promise<WorkspaceUser | null> {
+  const addr = email.trim().toLowerCase();
+  if (!addr) return null;
+  const res = await googleFetch(
+    `${DIRECTORY_BASE}/users/${encodeURIComponent(addr)}`
+  );
+  if (res.status === 404) return null;
+  if (!res.ok) await fail(res, "Workspace user lookup");
+  return toWorkspaceUser(await res.json());
+}
+
+/**
+ * Create the student's Workspace account at the exact address and
+ * password the School Account card generated, so what admin sees in
+ * the app is what actually works at the login screen.
+ *
+ * `changePasswordAtNextLogin` is deliberately FALSE: the generated
+ * password is handed to the student as their working credential and
+ * the card keeps displaying it. Forcing a reset at first login would
+ * make the password on screen wrong the moment it's used.
+ *
+ * Caller must check `getWorkspaceUser` first — Google answers a
+ * duplicate address with a 409 that this surfaces verbatim rather
+ * than treating as success.
+ */
+export async function createWorkspaceUser(input: {
+  email: string;
+  firstName: string;
+  lastName: string;
+  password: string;
+  orgUnitPath?: string;
+}): Promise<WorkspaceUser> {
+  const res = await googleFetch(`${DIRECTORY_BASE}/users`, {
+    method: "POST",
+    body: JSON.stringify({
+      primaryEmail: input.email.trim().toLowerCase(),
+      name: {
+        givenName: input.firstName.trim(),
+        familyName: input.lastName.trim(),
+      },
+      password: input.password,
+      changePasswordAtNextLogin: false,
+      orgUnitPath: input.orgUnitPath?.trim() || "/",
+    }),
+  });
+  if (!res.ok) await fail(res, "Workspace user create");
+  return toWorkspaceUser(await res.json());
 }
