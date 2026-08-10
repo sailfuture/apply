@@ -223,9 +223,26 @@ export default function EnrolledStudentsPage() {
       sortable: true,
       searchable: true,
       width: "w-[20%]",
-      render: (row) => (
-        <span className="block truncate">{row.family_name}</span>
-      ),
+      // Family click = family overview page; stops propagation for
+      // the same reason as the student-name link above. Legacy rows
+      // without a family id fall back to plain text.
+      render: (row) =>
+        Number(row.family_id) > 0 ? (
+          <button
+            type="button"
+            className="block max-w-full truncate text-left hover:underline"
+            onClick={(e) => {
+              e.stopPropagation();
+              router.push(
+                `/admin/families/${row.family_id}/overview?yearId=${row.year_id}`
+              );
+            }}
+          >
+            {row.family_name}
+          </button>
+        ) : (
+          <span className="block truncate">{row.family_name}</span>
+        ),
     },
     {
       key: "primary_email",
