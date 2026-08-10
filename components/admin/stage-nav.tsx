@@ -7,6 +7,7 @@ import {
   ClipboardList,
   FileText,
   GraduationCap,
+  Users,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -159,6 +160,66 @@ export function StageNav({
           </DropdownMenuContent>
         </DropdownMenu>
       )}
+    </div>
+  );
+}
+
+/**
+ * Family-scoped sibling navigation — a second segmented group for the
+ * per-student surfaces: the family overview first, then one segment
+ * per student in the family, with the student being viewed rendered
+ * as the current (filled, inert) segment. Lets admin hop between
+ * siblings without routing back through a list page.
+ *
+ * Reads the same `/api/admin/family-overview` payload as `StageNav`
+ * (same SWR key — pages showing both pay for one fetch). All of the
+ * family's students render, including archived/unenrolled ones: their
+ * detail pages are still valid destinations, and a sibling silently
+ * missing from the group reads as a bug.
+ */
+export function FamilyStudentsNav({
+  familyId,
+  yearId,
+  currentStudentId,
+}: {
+  familyId: number;
+  /** Selected school year — propagated on every link. */
+  yearId: number | string | null | undefined;
+  /** The student whose page we're on — rendered as the active segment. */
+  currentStudentId: number;
+}) {
+  const { data } = useSWR<AdminFamilyOverviewResponse>(
+    familyId ? `/api/admin/family-overview/${familyId}` : null,
+    adminFetcher,
+    { revalidateOnFocus: false, dedupingInterval: 30_000 }
+  );
+
+  if (!familyId) return null;
+  const year = yearId ? `?yearId=${yearId}` : "";
+  const students = data?.students ?? [];
+
+  return (
+    <div className="inline-flex flex-wrap items-center gap-0.5 rounded-lg border bg-muted/50 p-0.5">
+      <StageButton
+        icon={<Users className="size-3.5 mr-1.5" />}
+        label="Family"
+        active={false}
+        href={`/admin/families/${familyId}/overview${year}`}
+      />
+      {students.map((s) => {
+        const name =
+          `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim() ||
+          `Student #${s.id}`;
+        return (
+          <StageButton
+            key={s.id}
+            icon={null}
+            label={name}
+            active={s.id === currentStudentId}
+            href={`/admin/enrolled/${s.id}${year}`}
+          />
+        );
+      })}
     </div>
   );
 }

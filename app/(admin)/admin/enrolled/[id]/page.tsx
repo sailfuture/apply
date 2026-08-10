@@ -22,7 +22,6 @@ import {
   Undo2,
   UserMinus,
   UserRound,
-  Users,
   X,
   UserPlus,
 } from "lucide-react";
@@ -75,7 +74,8 @@ import { RequestRecordsDialog } from "@/components/admin/request-records-dialog"
 import { SyncToddleButton } from "@/components/admin/sync-toddle-button";
 import { SufsAwardCard } from "@/components/admin/sufs-award-card";
 import { ActivityLogSheet } from "@/components/admin/activity-log-sheet";
-import { StageNav } from "@/components/admin/stage-nav";
+import { FamilyStudentsNav, StageNav } from "@/components/admin/stage-nav";
+import { DashboardBreadcrumb } from "@/components/dashboard-breadcrumb";
 import { InviteStatusBadge, ResendInviteButton } from "@/components/invite-status";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { cn } from "@/lib/utils";
@@ -195,11 +195,21 @@ export default function EnrolledStudentDetailPage() {
   return (
     <div className="p-6 space-y-6">
       {/* Header: H1 + family/primary sub-text + last-edited captions.
-          Action row + Back button moved down to sit right above the
-          first card so the header reads as pure context and the
-          actions land closer to the content they affect. */}
-      <div className="flex items-start justify-between gap-4">
+          Action row moved down to sit right above the first card so
+          the header reads as pure context and the actions land closer
+          to the content they affect. */}
       <div className="space-y-1 min-w-0">
+        {/* Breadcrumb — the way back to the roster. Deliberately the
+            hierarchy (list → student), not the visit path: the nav
+            band below already covers sideways movement (siblings,
+            family, stages), so this stays stable no matter which
+            surface linked here. */}
+        <DashboardBreadcrumb
+          items={[
+            { label: "Enrolled Students", href: backHref },
+            { label: fullName },
+          ]}
+        />
         <h1 className="text-2xl font-semibold truncate">{fullName}</h1>
         <p className="text-sm text-muted-foreground min-w-0">
           {family?.family_name ? <span>{family.family_name}</span> : null}
@@ -245,19 +255,27 @@ export default function EnrolledStudentDetailPage() {
           </p>
         ) : null}
       </div>
-        {/* Stage nav inline on the upper right — funnel position
-            reads as part of the page's identity, not as one of the
-            actions below. */}
-        {family ? (
-          <div className="shrink-0">
-            <StageNav
-              current="enrollment"
-              familyId={Number(family.id)}
-              yearId={yearId}
-            />
-          </div>
-        ) : null}
-      </div>
+      {/* Navigation band — its own section under the title, ruled off
+          from the content below. Two segmented groups, left-justified:
+          the family group (Family overview + one segment per sibling,
+          current student filled) for moving BETWEEN students, and the
+          stage group for moving between this family's admissions
+          surfaces. Kept apart from the action row so "where can I go"
+          never reads as "what can I do". */}
+      {family ? (
+        <div className="flex flex-wrap items-center gap-2 border-b pb-4">
+          <FamilyStudentsNav
+            familyId={Number(family.id)}
+            yearId={yearId}
+            currentStudentId={student.id}
+          />
+          <StageNav
+            current="enrollment"
+            familyId={Number(family.id)}
+            yearId={yearId}
+          />
+        </div>
+      ) : null}
       {/* Action row sits right above the Student Information card,
           Unenroll pinned last — the one destructive, hard-to-reverse
           action here, kept away from the things admin clicks
@@ -315,14 +333,9 @@ export default function EnrolledStudentDetailPage() {
               packet?.grade_level?.trim() || app?.current_grade || null
             }
           />
-          {family ? (
-            <Button asChild variant="outline" size="sm" className="bg-white">
-              <Link href={`/admin/families/${family.id}/overview`}>
-                <Users className="size-3.5 mr-1.5" />
-                Family overview
-              </Link>
-            </Button>
-          ) : null}
+          {/* Family overview moved into the header's family nav group
+              — keeping a second copy here would be the same journey
+              twice. */}
           {/* Unenroll — far right, deliberately last. */}
           <UnenrollStudentButton
             studentId={student.id}
