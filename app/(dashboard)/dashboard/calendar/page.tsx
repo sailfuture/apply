@@ -42,8 +42,30 @@ import type {
   XanoSchoolCalendarEvent,
 } from "@/lib/xano";
 
-/** Public calendar on the SailFuture Academy website. */
-const LIVE_CALENDAR_URL = "https://sailfutureacademy.org/calendar";
+/** The school calendar as published in Google Calendar. Both the
+ *  "view it" link and the subscribe/download links are built from this
+ *  one id so they can never drift apart. */
+const SCHOOL_CALENDAR_ID =
+  "uvr342hf7argd0mmiobenn89rch3o7a5@import.calendar.google.com";
+const SCHOOL_CALENDAR_TZ = "America/New_York";
+
+/** Public, signed-out-safe view of the calendar.
+ *
+ *  Deliberately NOT the `/calendar/u/0/newembed?...` URL Google's embed
+ *  builder hands you: the `u/0` picks the *viewer's* first signed-in
+ *  Google account, so it lands wrong for a parent with several accounts
+ *  and can prompt a sign-in for one with none. `/calendar/embed` is the
+ *  shareable form of the same calendar and renders for anyone. */
+const LIVE_CALENDAR_URL = `https://calendar.google.com/calendar/embed?src=${encodeURIComponent(
+  SCHOOL_CALENDAR_ID
+)}&ctz=${encodeURIComponent(SCHOOL_CALENDAR_TZ)}`;
+
+/** Subscribable / downloadable ICS for the same calendar — what a
+ *  calendar app actually consumes (the embed URL is a web page and
+ *  can't be subscribed to). */
+const CALENDAR_ICS_URL = `https://calendar.google.com/calendar/ical/${encodeURIComponent(
+  SCHOOL_CALENDAR_ID
+)}/public/basic.ics`;
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -260,9 +282,7 @@ export default function ParentCalendarPage() {
         subtitle="School days, breaks, holidays, and events for the year. Event details can change — check the live calendar for the latest."
         backRowAction={
           <div className="flex items-center gap-2">
-            {data?.feedUrl ? (
-              <SubscribeButton feedUrl={data.feedUrl} />
-            ) : null}
+            <SubscribeButton />
             <Button asChild variant="outline" size="sm" className="bg-white">
               <a
                 href={LIVE_CALENDAR_URL}
@@ -544,22 +564,25 @@ export default function ParentCalendarPage() {
 }
 
 /**
- * "Add to my calendar" — subscription links for the tokenized ICS
- * feed. Subscribing (not importing) keeps the parent's calendar app
- * refreshing on its own, so new school events flow in automatically.
- * Google's "add by URL" screen is linked directly; Apple/Outlook get
- * the webcal: form of the same URL, and a copy field covers everything
- * else. Only rendered when the API reports a feed URL (token set).
+ * "Add to my calendar" — subscription links for the school's Google
+ * Calendar. Subscribing (not importing) keeps the parent's calendar
+ * app refreshing on its own, so new school events flow in
+ * automatically. Google users get Google's native "add this calendar"
+ * screen, which only needs the calendar id; Apple/Outlook get the
+ * webcal: form of the public ICS, and a copy field covers everything
+ * else.
  */
-function SubscribeButton({ feedUrl }: { feedUrl: string }) {
+function SubscribeButton() {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
-  const webcalUrl = feedUrl.replace(/^https?:\/\//, "webcal://");
-  const googleUrl = `https://calendar.google.com/calendar/r?cid=${encodeURIComponent(webcalUrl)}`;
+  const webcalUrl = CALENDAR_ICS_URL.replace(/^https?:\/\//, "webcal://");
+  const googleUrl = `https://calendar.google.com/calendar/render?cid=${encodeURIComponent(
+    SCHOOL_CALENDAR_ID
+  )}`;
 
   async function copy() {
     try {
-      await navigator.clipboard.writeText(feedUrl);
+      await navigator.clipboard.writeText(CALENDAR_ICS_URL);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
@@ -609,7 +632,7 @@ function SubscribeButton({ feedUrl }: { feedUrl: string }) {
               <div className="flex items-center gap-2">
                 <Input
                   readOnly
-                  value={feedUrl}
+                  value={CALENDAR_ICS_URL}
                   className="h-8 text-xs"
                   onFocus={(e) => e.currentTarget.select()}
                 />
