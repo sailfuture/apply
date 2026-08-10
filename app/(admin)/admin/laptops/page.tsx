@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
-import { toast } from "sonner";
-import { Laptop, Loader2 } from "lucide-react";
+import { Laptop, Loader2, Plus, Search } from "lucide-react";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -11,22 +12,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
 import {
   Table,
   TableBody,
@@ -36,197 +22,207 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { adminFetcher } from "@/lib/admin-fetcher";
+import {
+  ConditionBadge,
+  fmtLaptopDate,
+} from "@/components/admin/laptop-condition";
+import { LaptopAssignDialog } from "@/components/admin/laptop-assign-dialog";
+import { LaptopDetailSheet } from "@/components/admin/laptop-detail-sheet";
+import { LaptopUpsertDialog } from "@/components/admin/laptop-upsert-dialog";
 import type {
-  AdminLaptopRow,
+  AdminLaptopDevice,
   AdminLaptopsResponse,
-  LaptopStudentOption,
 } from "@/app/api/admin/laptops/route";
 
-function fmtDate(ms: number | null | undefined): string {
-  if (!ms) return "—";
-  return new Date(ms).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-}
-
 /**
- * Parent Engagement → Laptops. Assignments read from the staff-side
- * device-inventory system (RFID checkout flow) — devices and
- * check-outs are managed there; the job HERE is linking each
- * assignment to an enrolled student so the device shows on the
- * family's Store page.
+ * Laptop inventory — the management surface for the school's device
+ * fleet. Devices are created/edited here, RFID tags managed, and the
+ * assign/return checkout flow run from the detail panel. Three
+ * groups: currently assigned, available on the shelf, and
+ * deactivated (retired but history preserved). Assignments always
+ * link to an enrolled student, which is what surfaces the device on
+ * the family's Store page.
  */
 export default function AdminLaptopsPage() {
+  const searchParams = useSearchParams();
+  const yearId = searchParams.get("yearId");
   const { data, mutate } = useSWR<AdminLaptopsResponse>(
-    "/api/admin/laptops",
+    `/api/admin/laptops${yearId ? `?yearId=${yearId}` : ""}`,
     adminFetcher
   );
-  const assignments = data?.assignments ?? [];
+  const laptops = useMemo(() => data?.laptops ?? [], [data]);
   const students = data?.students ?? [];
 
-  const [showReturned, setShowReturned] = useState(false);
-  const [linkTarget, setLinkTarget] = useState<AdminLaptopRow | null>(null);
+  const [query, setQuery] = useState("");
+  const [detailId, setDetailId] = useState<number | null>(null);
+  const [showNew, setShowNew] = useState(false);
+  const [editTarget, setEditTarget] = useState<AdminLaptopDevice | null>(null);
+  const [assignTarget, setAssignTarget] = useState<AdminLaptopDevice | null>(
+    null
+  );
+  // Legacy staff-system checkout being linked to an enrolled student.
+  const [linkTarget, setLinkTarget] = useState<{
+    laptop: AdminLaptopDevice;
+    assignmentId: number;
+  } | null>(null);
 
-  const active = assignments.filter((a) => !a.returned);
-  const returned = assignments.filter((a) => a.returned);
-  const unlinked = active.filter((a) => !a.enrolled_students_id).length;
-  const visible = showReturned ? assignments : active;
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return laptops;
+    return laptops.filter((l) =>
+      [
+        l.asset_number,
+        l.serial_number,
+        l.model,
+        l.current?.student_name ?? "",
+        ...l.rfid_uid,
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(q)
+    );
+  }, [laptops, query]);
+
+  const assigned = filtered.filter((l) => !l.deactivated && l.current);
+  const available = filtered.filter((l) => !l.deactivated && !l.current);
+  const deactivated = filtered.filter((l) => l.deactivated);
+
+  // Detail sheet reads the live SWR row so every write re-renders it
+  // with fresh data instead of a stale snapshot.
+  const detailLaptop =
+    detailId != null ? laptops.find((l) => l.id === detailId) ?? null : null;
 
   return (
     <div className="p-6 space-y-6 max-w-6xl mx-auto">
-      <div>
-        <h1 className="text-xl font-semibold tracking-tight">Laptops</h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          Device assignments from the checkout system. Link each one to an
-          enrolled student so the family sees the device on their Store
-          page — devices themselves are managed in the device system.
-        </p>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight">Laptops</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Device inventory and student checkouts. Assignments link to
+            enrolled students, which is what shows the device on the
+            family&rsquo;s Store page.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search asset, serial, student…"
+              className="w-64 bg-white pl-8"
+            />
+          </div>
+          <Button onClick={() => setShowNew(true)}>
+            <Plus className="size-3.5" />
+            Add Laptop
+          </Button>
+        </div>
       </div>
 
-      <Card className="overflow-hidden gap-0 py-0 bg-white">
-        <CardHeader className="py-3 !pb-3 border-b">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <CardTitle className="text-base">
-                Assignments{data ? ` (${active.length} active)` : ""}
-              </CardTitle>
-              {data ? (
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  {unlinked > 0 ? (
-                    <span className="font-medium text-amber-700">
-                      {unlinked} active not linked to a student yet
-                    </span>
-                  ) : (
-                    "Every active assignment is linked"
-                  )}
-                </p>
-              ) : null}
-            </div>
-            {returned.length > 0 ? (
-              <Button
-                size="sm"
-                variant="outline"
-                className="bg-white"
-                onClick={() => setShowReturned((v) => !v)}
-              >
-                {showReturned
-                  ? "Hide returned"
-                  : `Show returned (${returned.length})`}
-              </Button>
-            ) : null}
-          </div>
-        </CardHeader>
-        <CardContent className="px-0 pb-0">
-          {!data ? (
-            <div className="flex items-center justify-center py-10">
-              <Loader2 className="size-5 animate-spin text-muted-foreground" />
-            </div>
-          ) : visible.length === 0 ? (
-            <p className="px-6 py-10 text-center text-sm text-muted-foreground">
-              No active laptop assignments in the device system.
+      {!data ? (
+        <div className="flex items-center justify-center py-16">
+          <Loader2 className="size-5 animate-spin text-muted-foreground" />
+        </div>
+      ) : laptops.length === 0 ? (
+        <Card className="bg-white">
+          <CardContent className="flex flex-col items-center gap-2 py-12 text-center">
+            <Laptop className="size-6 text-muted-foreground" />
+            <p className="text-sm font-medium">No laptops yet</p>
+            <p className="text-sm text-muted-foreground">
+              Add the first device to start tracking the fleet.
             </p>
-          ) : (
-            <Table className="text-sm">
-              <TableHeader>
-                <TableRow className="hover:bg-transparent">
-                  <TableHead className="pl-4">Device</TableHead>
-                  <TableHead>Serial #</TableHead>
-                  <TableHead>Assigned</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Enrolled student</TableHead>
-                  <TableHead className="pr-4 text-right">Link</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {visible.map((a) => (
-                  <TableRow
-                    key={a.id}
-                    className={
-                      a.returned
-                        ? "opacity-60 hover:bg-muted/30"
-                        : "hover:bg-muted/30"
-                    }
-                  >
-                    <TableCell className="pl-4 whitespace-nowrap">
-                      <span className="inline-flex items-center gap-1.5">
-                        <Laptop className="size-3.5 text-muted-foreground" />
-                        <span className="font-medium">
-                          {a.asset_number || "—"}
-                        </span>
-                        <span className="text-xs text-muted-foreground">
-                          {a.model}
-                        </span>
-                      </span>
-                    </TableCell>
-                    <TableCell className="font-mono text-xs">
-                      {a.serial_number || "—"}
-                    </TableCell>
-                    <TableCell className="whitespace-nowrap tabular-nums text-muted-foreground">
-                      {a.assigned_date ? fmtDate(a.assigned_date) : "—"}
-                      {a.assigned_condition ? (
-                        <span className="ml-1.5 rounded bg-muted px-1 py-px text-[10px] font-semibold">
-                          {a.assigned_condition}
-                        </span>
-                      ) : null}
-                    </TableCell>
-                    <TableCell>
-                      {a.returned ? (
-                        <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground ring-1 ring-border">
-                          Returned
-                          {a.returned_date
-                            ? ` · ${fmtDate(a.returned_date)}`
-                            : ""}
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-emerald-200">
-                          Checked out
-                        </span>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      {a.enrolled_students_id ? (
-                        <span>
-                          <span className="font-medium">{a.student_name}</span>
-                          {a.family_name ? (
-                            <span className="text-xs text-muted-foreground">
-                              {" "}
-                              — {a.family_name}
-                            </span>
-                          ) : null}
-                        </span>
-                      ) : a.returned ? (
-                        <span className="text-muted-foreground">—</span>
-                      ) : (
-                        <span className="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-amber-200">
-                          Not linked
-                        </span>
-                      )}
-                    </TableCell>
-                    <TableCell className="pr-4 text-right whitespace-nowrap">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="bg-white"
-                        onClick={() => setLinkTarget(a)}
-                      >
-                        {a.enrolled_students_id ? "Change" : "Link student"}
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
+            <Button className="mt-2" onClick={() => setShowNew(true)}>
+              <Plus className="size-3.5" />
+              Add Laptop
+            </Button>
+          </CardContent>
+        </Card>
+      ) : (
+        <>
+          <LaptopGroupCard
+            title="Currently Assigned"
+            count={assigned.length}
+            emptyText="No laptops are checked out right now."
+            laptops={assigned}
+            columns="assigned"
+            onRowClick={(l) => setDetailId(l.id)}
+          />
+          <LaptopGroupCard
+            title="Available"
+            count={available.length}
+            emptyText="Nothing on the shelf — every active laptop is checked out."
+            laptops={available}
+            columns="available"
+            onRowClick={(l) => setDetailId(l.id)}
+            onAssign={(l) => setAssignTarget(l)}
+          />
+          {deactivated.length > 0 ? (
+            <LaptopGroupCard
+              title="Deactivated"
+              count={deactivated.length}
+              emptyText=""
+              laptops={deactivated}
+              columns="deactivated"
+              onRowClick={(l) => setDetailId(l.id)}
+            />
+          ) : null}
+        </>
+      )}
 
-      {linkTarget ? (
-        <LaptopLinkDialog
-          key={linkTarget.id}
-          assignment={linkTarget}
+      <LaptopDetailSheet
+        laptop={detailLaptop}
+        onOpenChange={(open) => {
+          if (!open) setDetailId(null);
+        }}
+        onEdit={(l) => setEditTarget(l)}
+        onAssign={(l) => setAssignTarget(l)}
+        onLink={(l, assignmentId) =>
+          setLinkTarget({ laptop: l, assignmentId })
+        }
+        onChanged={() => void mutate()}
+        onDeleted={() => {
+          setDetailId(null);
+          void mutate();
+        }}
+      />
+
+      {showNew ? (
+        <LaptopUpsertDialog
+          existing={null}
+          onDone={(saved) => {
+            setShowNew(false);
+            if (saved) void mutate();
+          }}
+        />
+      ) : null}
+      {editTarget ? (
+        <LaptopUpsertDialog
+          key={editTarget.id}
+          existing={editTarget}
+          onDone={(saved) => {
+            setEditTarget(null);
+            if (saved) void mutate();
+          }}
+        />
+      ) : null}
+      {assignTarget ? (
+        <LaptopAssignDialog
+          key={assignTarget.id}
+          laptop={assignTarget}
           students={students}
+          onDone={(saved) => {
+            setAssignTarget(null);
+            if (saved) void mutate();
+          }}
+        />
+      ) : null}
+      {linkTarget ? (
+        <LaptopAssignDialog
+          key={`link-${linkTarget.assignmentId}`}
+          laptop={linkTarget.laptop}
+          students={students}
+          linkAssignmentId={linkTarget.assignmentId}
           onDone={(saved) => {
             setLinkTarget(null);
             if (saved) void mutate();
@@ -237,112 +233,177 @@ export default function AdminLaptopsPage() {
   );
 }
 
-/** Pick which enrolled student a device assignment belongs to. */
-function LaptopLinkDialog({
-  assignment,
-  students,
-  onDone,
+/** One inventory group (assigned / available / deactivated) as a
+ *  table card. Row click opens the detail sheet; the Available group
+ *  also gets a quick Assign shortcut per row. */
+function LaptopGroupCard({
+  title,
+  count,
+  emptyText,
+  laptops,
+  columns,
+  onRowClick,
+  onAssign,
 }: {
-  assignment: AdminLaptopRow;
-  students: LaptopStudentOption[];
-  onDone: (saved: boolean) => void;
+  title: string;
+  count: number;
+  emptyText: string;
+  laptops: AdminLaptopDevice[];
+  columns: "assigned" | "available" | "deactivated";
+  onRowClick: (laptop: AdminLaptopDevice) => void;
+  onAssign?: (laptop: AdminLaptopDevice) => void;
 }) {
-  const [studentId, setStudentId] = useState(
-    assignment.enrolled_students_id
-      ? String(assignment.enrolled_students_id)
-      : ""
-  );
-  const [saving, setSaving] = useState(false);
-
-  async function save(targetId: number) {
-    if (saving) return;
-    setSaving(true);
-    try {
-      const res = await fetch(`/api/admin/laptops/${assignment.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enrolled_students_id: targetId }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        throw new Error(body?.error ?? `Save failed (${res.status})`);
-      }
-      toast.success(targetId ? "Assignment linked." : "Link removed.");
-      onDone(true);
-    } catch (err) {
-      console.error("Failed to link laptop assignment:", err);
-      toast.error(err instanceof Error ? err.message : "Couldn't save.");
-      setSaving(false);
-    }
-  }
-
   return (
-    <Dialog open onOpenChange={(o) => !o && !saving && onDone(false)}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>
-            Link {assignment.asset_number || assignment.model}
-          </DialogTitle>
-          <DialogDescription>
-            Serial {assignment.serial_number || "unknown"} — pick the
-            enrolled student holding this device so it appears on their
-            family&rsquo;s Store page.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-1.5">
-          <Label>Enrolled student</Label>
-          <Select value={studentId} onValueChange={setStudentId}>
-            <SelectTrigger className="w-full bg-white">
-              <SelectValue placeholder="Pick a student…" />
-            </SelectTrigger>
-            <SelectContent>
-              {students.map((s) => (
-                <SelectItem key={s.id} value={String(s.id)}>
-                  {s.name}
-                  {s.family_name ? ` — ${s.family_name}` : ""}
-                </SelectItem>
+    <Card className="overflow-hidden gap-0 py-0 bg-white">
+      <CardHeader className="py-3 !pb-3 border-b">
+        <CardTitle className="text-base">
+          {title}
+          <span className="ml-2 text-sm font-normal text-muted-foreground">
+            {count}
+          </span>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="px-0 pb-0">
+        {laptops.length === 0 ? (
+          <p className="px-6 py-8 text-center text-sm text-muted-foreground">
+            {emptyText}
+          </p>
+        ) : (
+          <Table className="text-sm">
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="pl-4">Device</TableHead>
+                <TableHead>Serial #</TableHead>
+                {columns === "assigned" ? (
+                  <>
+                    <TableHead>Student</TableHead>
+                    <TableHead>Assigned</TableHead>
+                    <TableHead className="pr-4">Condition</TableHead>
+                  </>
+                ) : columns === "available" ? (
+                  <>
+                    <TableHead>Year</TableHead>
+                    <TableHead>RFID tags</TableHead>
+                    <TableHead className="pr-4 text-right"></TableHead>
+                  </>
+                ) : (
+                  <TableHead className="pr-4">Reason</TableHead>
+                )}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {laptops.map((l) => (
+                <TableRow
+                  key={l.id}
+                  className="cursor-pointer hover:bg-muted/30"
+                  onClick={() => onRowClick(l)}
+                >
+                  <TableCell className="pl-4 whitespace-nowrap">
+                    <span className="inline-flex items-center gap-1.5">
+                      <Laptop className="size-3.5 text-muted-foreground" />
+                      <span className="font-medium">
+                        {l.asset_number || `#${l.id}`}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        {l.model}
+                      </span>
+                    </span>
+                  </TableCell>
+                  <TableCell className="font-mono text-xs">
+                    {l.serial_number || "—"}
+                  </TableCell>
+                  {columns === "assigned" ? (
+                    <>
+                      <TableCell>
+                        <span className="flex items-center gap-2">
+                          <RowAvatar
+                            name={l.current?.student_name ?? ""}
+                            photoUrl={l.current?.student_photo_url ?? null}
+                          />
+                          <span>
+                            {l.current?.student_name ? (
+                              <span className="font-medium whitespace-nowrap">
+                                {l.current.student_name}
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-amber-200">
+                                Not linked
+                              </span>
+                            )}
+                            {l.current?.crew ? (
+                              <span className="ml-1.5 text-xs text-muted-foreground">
+                                {l.current.crew}
+                              </span>
+                            ) : null}
+                          </span>
+                        </span>
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap tabular-nums text-muted-foreground">
+                        {fmtLaptopDate(l.current?.assigned_date)}
+                      </TableCell>
+                      <TableCell className="pr-4">
+                        <ConditionBadge
+                          condition={l.current?.assigned_condition ?? ""}
+                        />
+                      </TableCell>
+                    </>
+                  ) : columns === "available" ? (
+                    <>
+                      <TableCell className="text-muted-foreground">
+                        {l.year_purchase || "—"}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {l.rfid_uid.length || "—"}
+                      </TableCell>
+                      <TableCell className="pr-4 text-right whitespace-nowrap">
+                        {onAssign ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="bg-white"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onAssign(l);
+                            }}
+                          >
+                            Assign
+                          </Button>
+                        ) : null}
+                      </TableCell>
+                    </>
+                  ) : (
+                    <TableCell className="pr-4 text-muted-foreground">
+                      {l.reason_for_archive || "—"}
+                    </TableCell>
+                  )}
+                </TableRow>
               ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <DialogFooter className="gap-2 sm:justify-between">
-          {assignment.enrolled_students_id ? (
-            <Button
-              variant="outline"
-              className="bg-white text-red-600 hover:bg-red-50 hover:text-red-700"
-              disabled={saving}
-              onClick={() => void save(0)}
-            >
-              Unlink
-            </Button>
-          ) : (
-            <span />
-          )}
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              className="bg-white"
-              disabled={saving}
-              onClick={() => onDone(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              disabled={!Number(studentId) || saving}
-              onClick={() => void save(Number(studentId))}
-            >
-              {saving ? (
-                <>
-                  <Loader2 className="size-3.5 mr-1.5 animate-spin" />
-                  Saving
-                </>
-              ) : (
-                "Link student"
-              )}
-            </Button>
-          </div>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+            </TableBody>
+          </Table>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function RowAvatar({
+  name,
+  photoUrl,
+}: {
+  name: string;
+  photoUrl: string | null;
+}) {
+  const initials =
+    name
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((p) => p[0]?.toUpperCase())
+      .join("") || "?";
+  return (
+    <Avatar size="sm">
+      {photoUrl ? <AvatarImage src={photoUrl} alt={name} /> : null}
+      <AvatarFallback className="text-[9px]">{initials}</AvatarFallback>
+    </Avatar>
   );
 }

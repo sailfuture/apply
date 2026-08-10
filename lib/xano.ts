@@ -815,9 +815,14 @@ export interface XanoStoreOrder {
 /**
  * One physical device in the school's laptop inventory (`laptops`
  * on the operations API group `jzQ2liPL` — a DIFFERENT Xano group
- * from this app's tables; the inventory + assignment flow lives in
- * the staff-side system, this app only reads it and stamps the
- * enrolled-student linkage).
+ * from this app's tables). This app is now the management surface
+ * for the inventory: admin creates/edits/deactivates devices and
+ * runs the assign/return flow from `/admin/laptops`. The staff-side
+ * RFID check-in system reads the same tables.
+ *
+ * Unlike the main API group, this group's generated PATCH endpoints
+ * write empty values (`false` / `[]` / `""`) through cleanly —
+ * verified live 2026-08-10 — so no clear-sentinels are needed here.
  */
 export interface XanoLaptop {
   id: number;
@@ -827,8 +832,16 @@ export interface XanoLaptop {
   device_management_url: string;
   model: string;
   year_purchase: string;
+  /** RFID tag UIDs taped to the device — what the staff scanner
+   *  matches on. Multiple because tags get re-stuck/replaced. */
+  rfid_uid?: string[] | null;
+  /** Unix ms when the RFID list last changed. */
+  rfid_assigned_at?: number | null;
   isArchived: boolean;
   reason_for_archive: string;
+  /** The ops system's own student UUID for the current holder —
+   *  maintained by the staff RFID flow, not by this app. */
+  students_id?: string | null;
 }
 
 /**
@@ -4743,12 +4756,11 @@ export const xano = {
     },
   },
 
-  /** Device inventory + assignments from the staff-side operations
-   *  system (Xano group `jzQ2liPL`) — see `XanoLaptop` /
-   *  `XanoLaptopAssignment`. Read-mostly: this app never creates or
-   *  deletes devices/assignments (the staff system owns that flow);
-   *  the only write is stamping the enrolled-student bridge columns
-   *  on an assignment. */
+  /** Device inventory + assignments on the staff-side operations
+   *  group (`jzQ2liPL`) — see `XanoLaptop` / `XanoLaptopAssignment`.
+   *  Full CRUD: the admin Laptops page is the management surface for
+   *  the inventory (create/edit/deactivate devices, assign/return
+   *  flow); the staff RFID check-in system reads the same tables. */
   laptops: {
     async getAll(): Promise<XanoLaptop[]> {
       const res = await fetch(`${getOpsBaseUrl()}/laptops`, {
@@ -4757,6 +4769,48 @@ export const xano = {
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
       const rows = await res.json();
       return Array.isArray(rows) ? rows : [];
+    },
+
+    async getById(id: number): Promise<XanoLaptop> {
+      const res = await fetch(`${getOpsBaseUrl()}/laptops/${id}`, {
+        cache: "no-store",
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async create(
+      data: Partial<Omit<XanoLaptop, "id" | "created_at">>
+    ): Promise<XanoLaptop> {
+      const res = await fetch(`${getOpsBaseUrl()}/laptops`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    /** This group's PATCH writes empties (`false`/`[]`/`""`) through
+     *  — safe for the deactivate toggle and RFID-list clears. */
+    async update(
+      id: number,
+      patch: Partial<Omit<XanoLaptop, "id" | "created_at">>
+    ): Promise<XanoLaptop> {
+      const res = await fetch(`${getOpsBaseUrl()}/laptops/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async remove(id: number): Promise<void> {
+      const res = await fetch(`${getOpsBaseUrl()}/laptops/${id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
     },
   },
 
@@ -4770,15 +4824,34 @@ export const xano = {
       return Array.isArray(rows) ? rows : [];
     },
 
-    /** Stamp / clear the enrolled-student bridge columns. Values of 0
-     *  are real writes (unlink), not sentinels — the columns are ints
-     *  and Xano int inputs accept 0. */
+    async getById(id: number): Promise<XanoLaptopAssignment> {
+      const res = await fetch(`${getOpsBaseUrl()}/laptop_assignments/${id}`, {
+        cache: "no-store",
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    /** Open a checkout. Always stamp the enrolled bridge columns so
+     *  the parent Store page can show the family its devices. */
+    async create(
+      data: Partial<Omit<XanoLaptopAssignment, "id" | "created_at">>
+    ): Promise<XanoLaptopAssignment> {
+      const res = await fetch(`${getOpsBaseUrl()}/laptop_assignments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    /** Close a checkout (returned_date + returned_condition), edit
+     *  notes, or re-stamp the enrolled bridge columns (0 = unlink —
+     *  a real write, the columns are ints). */
     async update(
       id: number,
-      patch: Pick<
-        XanoLaptopAssignment,
-        "enrolled_students_id" | "enrolled_families_id"
-      >
+      patch: Partial<Omit<XanoLaptopAssignment, "id" | "created_at">>
     ): Promise<XanoLaptopAssignment> {
       const res = await fetch(
         `${getOpsBaseUrl()}/laptop_assignments/${id}`,
@@ -4790,6 +4863,13 @@ export const xano = {
       );
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
       return res.json();
+    },
+
+    async remove(id: number): Promise<void> {
+      const res = await fetch(`${getOpsBaseUrl()}/laptop_assignments/${id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
     },
   },
 
