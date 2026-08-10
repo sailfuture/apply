@@ -686,11 +686,12 @@ export default function InquiriesPage() {
       ),
     },
     {
-      // When we last actually spoke to this family. Relative, like
-      // Added, because "3d" is what triage needs — the exact datetime
-      // is one hover away. Falls back to the newest note's timestamp
-      // for rows written before `last_reach_out` was server-stamped,
-      // matching how the All Leads feed resolves it.
+      // When we last actually spoke to this family. Absolute M/D/YY
+      // ("8/6/25") — admin wants the actual date at a glance; the
+      // full datetime stays one hover away. Falls back to the newest
+      // note's timestamp for rows written before `last_reach_out`
+      // was server-stamped, matching how the All Leads feed
+      // resolves it.
       key: "last_reach_out",
       header: "Last Contact",
       sortable: true,
@@ -700,10 +701,16 @@ export default function InquiriesPage() {
         const ts = lastContactAt(row);
         return (
           <span
-            className="block truncate text-muted-foreground"
+            className="block truncate tabular-nums text-muted-foreground"
             title={ts ? new Date(ts).toLocaleString() : undefined}
           >
-            {ts ? formatRelative(ts, { compact: true }) : "—"}
+            {ts
+              ? new Date(ts).toLocaleDateString("en-US", {
+                  month: "numeric",
+                  day: "numeric",
+                  year: "2-digit",
+                })
+              : "—"}
           </span>
         );
       },

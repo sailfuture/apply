@@ -705,7 +705,7 @@ export default function AllLeadsPage() {
                 : undefined
             }
           >
-            {r.last_reach_out ? relTime(r.last_reach_out) : "—"}
+            {r.last_reach_out ? shortDate(r.last_reach_out) : "—"}
           </span>
         ),
       },
@@ -1286,6 +1286,18 @@ function LeadsGroup({
       </CardContent>
     </Card>
   );
+}
+
+/** Compact absolute date — "8/6/25". Used by the Last Contact column,
+ *  where admin wants the actual date at a glance rather than a
+ *  relative age (the full datetime stays one hover away). */
+function shortDate(ts: number): string {
+  if (!ts) return "—";
+  return new Date(ts).toLocaleDateString("en-US", {
+    month: "numeric",
+    day: "numeric",
+    year: "2-digit",
+  });
 }
 
 /** Compact relative time ("now", "5m ago", "3h ago", "4d ago", then a
