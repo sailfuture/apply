@@ -14,18 +14,11 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { NweaBookingDialog } from "@/components/nwea-booking-dialog";
 import { ArrowLeft, Calendar, Clock, ExternalLink } from "lucide-react";
 import { ResidentialPacketForm } from "./residential-packet-form";
 
 const STEP_UP_URL = "https://www.stepupforstudents.org/scholarships/logins/";
-const NWEA_BOOKING_URL = "https://calendar.app.google/FsBaobZrsRToxuGq9";
 
 /**
  * Per-student mid-year registration flow for residential / foster
@@ -542,24 +535,10 @@ export default function AddStudentRegistrationPage() {
       </div>
 
       {/* NWEA scheduling — embeds the Google Calendar booking flow. */}
-      <Dialog open={scheduleDialogOpen} onOpenChange={setScheduleDialogOpen}>
-        <DialogContent className="sm:max-w-[95vw] w-[95vw] h-[90vh] p-0 flex flex-col overflow-hidden">
-          <DialogHeader className="px-6 pt-6 pb-2 shrink-0">
-            <DialogTitle>Schedule NWEA Testing</DialogTitle>
-            <DialogDescription>
-              Select a date and time to complete NWEA testing at SailFuture
-              Academy.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex-1 m-6 mt-0 overflow-hidden rounded-lg border">
-            <iframe
-              src={NWEA_BOOKING_URL}
-              className="h-full w-full border-0"
-              title="Schedule NWEA Testing"
-            />
-          </div>
-        </DialogContent>
-      </Dialog>
+      <NweaBookingDialog
+        open={scheduleDialogOpen}
+        onOpenChange={setScheduleDialogOpen}
+      />
     </div>
   );
 }

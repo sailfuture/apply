@@ -13,13 +13,7 @@ import {
 } from "@/components/ui/card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { NweaBookingDialog } from "@/components/nwea-booking-dialog";
 import { Calendar } from "lucide-react";
 import { useRef } from "react";
 import { toast } from "sonner";
@@ -53,8 +47,6 @@ function getPhotoUrl(photo: Student["photo"]): string | undefined {
   if (typeof photo === "object" && photo.url) return photo.url;
   return undefined;
 }
-
-const NWEA_BOOKING_URL = "https://calendar.app.google/FsBaobZrsRToxuGq9";
 
 export default function InitialTestingStepPage() {
   const params = useParams();
@@ -382,24 +374,10 @@ export default function InitialTestingStepPage() {
       </div>
 
       {/* Schedule NWEA Testing Dialog — embeds the Google Calendar booking flow */}
-      <Dialog open={scheduleDialogOpen} onOpenChange={setScheduleDialogOpen}>
-        <DialogContent className="sm:max-w-[95vw] w-[95vw] h-[90vh] p-0 flex flex-col overflow-hidden">
-          <DialogHeader className="px-6 pt-6 pb-2 shrink-0">
-            <DialogTitle>Schedule NWEA Testing</DialogTitle>
-            <DialogDescription>
-              Select a date and time to complete NWEA testing at SailFuture
-              Academy.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex-1 m-6 mt-0 overflow-hidden rounded-lg border">
-            <iframe
-              src={NWEA_BOOKING_URL}
-              className="h-full w-full border-0"
-              title="Schedule NWEA Testing"
-            />
-          </div>
-        </DialogContent>
-      </Dialog>
+      <NweaBookingDialog
+        open={scheduleDialogOpen}
+        onOpenChange={setScheduleDialogOpen}
+      />
     </>
   );
 }
