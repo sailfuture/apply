@@ -3,34 +3,79 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
-import { GraduationCap, Loader2, Search, UserRound, Users } from "lucide-react";
+import {
+  CircleHelp,
+  GraduationCap,
+  Loader2,
+  Search,
+  UserRound,
+  Users,
+} from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { adminFetcher } from "@/lib/admin-fetcher";
-import type { AdminSearchIndex } from "@/app/api/admin/search/route";
+import type {
+  AdminSearchIndex,
+  SearchStage,
+} from "@/app/api/admin/search/route";
 
 /**
  * Dashboard quick search — one box that finds any student, parent,
- * or family by name, email, or phone and jumps to the right detail
- * page. The full index loads once on first focus (Xano can't search
- * server-side, and the whole school fits in one payload), then every
- * keystroke filters locally for instant results.
+ * family, or open inquiry by name, email, or phone and jumps to the
+ * right detail page. The full index loads once on first focus (Xano
+ * can't search server-side, and the whole school fits in one
+ * payload), then every keystroke filters locally for instant
+ * results.
+ *
+ * Every result carries a stage badge — Inquiry / Application /
+ * Registration / Enrolled — so the dropdown doubles as a "where are
+ * they in the funnel" answer without clicking through. Students who
+ * were unenrolled mid-year badge "Unenrolled" instead.
  *
  * Navigation targets: families → family detail; parents → their
  * family's detail; enrolled students → the enrolled student detail
- * (needs a year in context), everyone else → their family detail.
- * The current `?yearId=` is propagated so the destination pages keep
- * the year picker's context.
+ * (needs a year in context), everyone else → their family detail;
+ * inquiries → the All Leads queue. The current `?yearId=` is
+ * propagated so the destination pages keep the year picker's
+ * context.
  */
 
 interface ResultItem {
   key: string;
-  kind: "student" | "parent" | "family";
+  kind: "student" | "parent" | "family" | "inquiry";
   title: string;
   subtitle: string;
-  badge?: "enrolled" | "unenrolled";
+  badge: BadgeKind;
   href: string;
 }
+
+type BadgeKind = SearchStage | "unenrolled";
+
+/** Badge chrome per stage — one funnel vocabulary everywhere:
+ *  Inquiry (neutral) → Application (blue) → Registration (amber) →
+ *  Enrolled (green), plus the mid-year "Unenrolled" off-ramp. */
+const BADGES: Record<BadgeKind, { label: string; className: string }> = {
+  inquiry: {
+    label: "Inquiry",
+    className: "border-border bg-muted text-muted-foreground",
+  },
+  application: {
+    label: "Application",
+    className: "border-blue-200 bg-blue-50 text-blue-700",
+  },
+  registration: {
+    label: "Registration",
+    className: "border-amber-200 bg-amber-50 text-amber-700",
+  },
+  enrollment: {
+    label: "Enrolled",
+    className: "border-emerald-200 bg-emerald-50 text-emerald-700",
+  },
+  unenrolled: {
+    label: "Unenrolled",
+    className: "border-border bg-muted text-muted-foreground",
+  },
+};
 
 const GROUP_LIMIT = 6;
 
@@ -42,7 +87,7 @@ export function DashboardSearch() {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   // The index only fetches after the admin first focuses the box —
-  // no point paying for three Xano list calls on every dashboard
+  // no point paying for the Xano list calls on every dashboard
   // visit that never searches.
   const [armed, setArmed] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -91,11 +136,7 @@ export function DashboardSearch() {
         kind: "student",
         title: s.name,
         subtitle: s.family_name,
-        badge: s.is_enrolled
-          ? "enrolled"
-          : s.is_archived
-            ? "unenrolled"
-            : undefined,
+        badge: s.is_archived ? "unenrolled" : s.stage,
         // The enrolled detail page needs a year in context; without
         // one (or for non-enrolled students) the family page is the
         // best landing spot.
@@ -120,6 +161,7 @@ export function DashboardSearch() {
         kind: "parent",
         title: p.name,
         subtitle: [p.email, p.family_name].filter(Boolean).join(" · "),
+        badge: p.stage,
         href: p.family_id
           ? withYear(`/admin/families/${p.family_id}`)
           : "#",
@@ -136,10 +178,30 @@ export function DashboardSearch() {
         kind: "family",
         title: f.name,
         subtitle: f.student_names,
+        badge: f.stage,
         href: withYear(`/admin/families/${f.id}`),
       }));
 
-    return [...students, ...parents, ...families];
+    const inquiries = (data.inquiries ?? [])
+      .filter((i) =>
+        matches(
+          `${i.name} ${i.student_name} ${i.email}`.toLowerCase(),
+          i.phone.replace(/\D/g, "")
+        )
+      )
+      .slice(0, GROUP_LIMIT)
+      .map<ResultItem>((i) => ({
+        key: `inquiry-${i.id}`,
+        kind: "inquiry",
+        title: i.name,
+        subtitle: [i.student_name, i.email].filter(Boolean).join(" · "),
+        badge: "inquiry",
+        // No per-inquiry detail page — the All Leads queue is where
+        // inquiries get worked.
+        href: withYear("/admin/all-leads"),
+      }));
+
+    return [...students, ...parents, ...families, ...inquiries];
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, query, yearId]);
 
@@ -183,10 +245,14 @@ export function DashboardSearch() {
       label: "Families",
       items: results.filter((r) => r.kind === "family"),
     },
+    {
+      label: "Inquiries",
+      items: results.filter((r) => r.kind === "inquiry"),
+    },
   ].filter((g) => g.items.length > 0);
 
   return (
-    <div ref={containerRef} className="relative max-w-xl">
+    <div ref={containerRef} className="relative w-full">
       <Search
         className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground/60"
         aria-hidden="true"
@@ -202,7 +268,7 @@ export function DashboardSearch() {
           setOpen(true);
         }}
         onKeyDown={onKeyDown}
-        placeholder="Search students, parents, families…"
+        placeholder="Search students, parents, families, inquiries…"
         className="h-10 bg-white pl-9"
         role="combobox"
         aria-expanded={showPanel}
@@ -228,6 +294,7 @@ export function DashboardSearch() {
                   </p>
                   {group.items.map((item) => {
                     const flatIndex = results.indexOf(item);
+                    const badge = BADGES[item.badge];
                     return (
                       <button
                         key={item.key}
@@ -243,8 +310,10 @@ export function DashboardSearch() {
                           <GraduationCap className="size-4 shrink-0 text-muted-foreground" />
                         ) : item.kind === "parent" ? (
                           <UserRound className="size-4 shrink-0 text-muted-foreground" />
-                        ) : (
+                        ) : item.kind === "family" ? (
                           <Users className="size-4 shrink-0 text-muted-foreground" />
+                        ) : (
+                          <CircleHelp className="size-4 shrink-0 text-muted-foreground" />
                         )}
                         <span className="min-w-0 flex-1">
                           <span className="block truncate text-sm font-medium">
@@ -256,15 +325,14 @@ export function DashboardSearch() {
                             </span>
                           ) : null}
                         </span>
-                        {item.badge === "enrolled" ? (
-                          <span className="shrink-0 rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
-                            Enrolled
-                          </span>
-                        ) : item.badge === "unenrolled" ? (
-                          <span className="shrink-0 rounded-full border border-border bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                            Unenrolled
-                          </span>
-                        ) : null}
+                        <span
+                          className={cn(
+                            "shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium",
+                            badge.className
+                          )}
+                        >
+                          {badge.label}
+                        </span>
                       </button>
                     );
                   })}

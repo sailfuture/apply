@@ -6125,6 +6125,23 @@ export const xano = {
       }
     },
 
+    /** Every registration-progress row across all families and years —
+     *  backs the dashboard search's stage derivation, which needs "has
+     *  this family ever confirmed, any year". Plain CRUD endpoint,
+     *  fail-soft like `familyApplicationProgress.getAll`. */
+    async getAll(): Promise<XanoStudentRegistrationProgress[]> {
+      try {
+        const res = await fetchRetry(
+          `${getBaseUrl()}/registration_student_registration_progress`
+        );
+        if (!res.ok) return [];
+        const items = await res.json();
+        return Array.isArray(items) ? items : [];
+      } catch {
+        return [];
+      }
+    },
+
     /**
      * Fetch the single row for this family + year, or null.
      *
