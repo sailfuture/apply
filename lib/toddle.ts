@@ -175,6 +175,35 @@ export async function updateStudent(
   return data.response.student;
 }
 
+/** PUT /public/v2/students/:id/profileImageUpload — replaces the
+ *  student's Toddle profile photo. Body is a base64-encoded image
+ *  string (raw base64, no data-URI prefix). Handled outside
+ *  `toddleFetch` because the endpoint's success response isn't
+ *  guaranteed to carry a JSON body. */
+export async function uploadStudentProfileImage(
+  id: string,
+  base64Image: string
+): Promise<void> {
+  const res = await fetch(
+    `${getBaseUrl()}/public/v2/students/${encodeURIComponent(id)}/profileImageUpload`,
+    {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${getToken()}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ base64Image }),
+      cache: "no-store",
+    }
+  );
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(
+      `Toddle profile-image error ${res.status}: ${text.slice(0, 500)}`
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Year-group resolution
 // ---------------------------------------------------------------------------

@@ -57,10 +57,19 @@ export function SyncToddleButton({
       if (!res.ok) {
         throw new Error(data?.error ?? `Sync failed (${res.status})`);
       }
-      toast.success(
+      const base =
         data?.action === "created"
           ? `${studentName} created in Toddle.`
-          : `${studentName}'s Toddle profile updated.`
+          : `${studentName}'s Toddle profile updated.`;
+      // `photo` reports the best-effort headshot push: "synced",
+      // "none" (no student_photo on file), or "failed" (sync itself
+      // still succeeded — details in the server logs).
+      toast.success(
+        data?.photo === "synced"
+          ? `${base} Photo pushed.`
+          : data?.photo === "failed"
+            ? `${base} Photo upload failed — check server logs.`
+            : base
       );
       setOpen(false);
       onSynced?.();
@@ -103,8 +112,8 @@ export function SyncToddleButton({
               {gradeLevel?.trim()
                 ? ` in the ${gradeLevel.trim()} grade year group`
                 : ""}{" "}
-              if none exists. Name, date of birth, gender, and phone
-              are pushed from the record here.
+              if none exists. Name, date of birth, gender, phone, and
+              the student photo are pushed from the record here.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
