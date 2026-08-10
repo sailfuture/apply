@@ -56,7 +56,10 @@ function dayLabel(ms: number): string {
 /**
  * Notifications & Messages — messenger-style activity log of every
  * email and text the school has sent the family (plus their text
- * replies), grouped by day, oldest → newest like a chat thread.
+ * replies), grouped by day, NEWEST first — the latest message is at
+ * the top on load and scrolling down walks back through history
+ * (feed order, not chat order: parents come here to see what's new,
+ * not to re-read June).
  * Emails open in a viewer dialog with the full delivered content
  * (fetched from Resend). Opening the page stamps the family's read
  * watermark, clearing the dashboard's unread badge.
@@ -111,12 +114,14 @@ export default function NotificationsPage() {
     };
   }, [data]);
 
-  // Chat order: oldest first, grouped by day.
+  // Feed order: newest first, grouped by day (today's divider on
+  // top, each day's latest message first). Older messages are a
+  // scroll down, not a hunt.
   const dayGroups = useMemo(() => {
     const filtered = (data?.entries ?? [])
       .filter((e) => filter === "all" || e.kind === filter)
       .slice()
-      .sort((a, b) => a.at - b.at);
+      .sort((a, b) => b.at - a.at);
     const groups: { key: string; label: string; items: ParentNotificationEntry[] }[] =
       [];
     for (const e of filtered) {
