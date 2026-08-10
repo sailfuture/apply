@@ -66,6 +66,7 @@ import {
   fmtLaptopDate,
   todayInputValue,
 } from "@/components/admin/laptop-condition";
+import { LaptopGoogleCard } from "@/components/admin/laptop-google-card";
 import type {
   AdminLaptopDevice,
   LaptopAssignmentInfo,
@@ -436,6 +437,8 @@ export function LaptopDetailSheet({
                     <p className="text-sm text-muted-foreground">—</p>
                   )}
                 </div>
+
+                <LaptopGoogleCard laptop={laptop} />
 
                 <div className="space-y-2">
                   <p className="text-sm font-semibold">
