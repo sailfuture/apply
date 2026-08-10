@@ -580,15 +580,36 @@ export default function FamilyDetailPage() {
             Action buttons live up here so admins don't have to scroll
             to act. */}
         <div className="space-y-3">
-          <div className="min-w-0">
-            <h1 className="text-2xl font-semibold truncate">
-              {family.family_name || `Family #${family.id}`}
-              {yearMeta ? (
-                <span className="ml-2 text-base font-normal text-muted-foreground">
-                  · {yearMeta.year_name}
-                </span>
-              ) : null}
-            </h1>
+          {/* Family + year on the left, stage nav inline on the upper
+              right — funnel position reads as part of the page's
+              identity ("this family, this year, this stage"), not as
+              one of the actions below. */}
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <h1 className="text-2xl font-semibold truncate">
+                {family.family_name || `Family #${family.id}`}
+                {yearMeta ? (
+                  <span className="ml-2 text-base font-normal text-muted-foreground">
+                    · {yearMeta.year_name}
+                  </span>
+                ) : null}
+              </h1>
+            </div>
+            {yearId ? (
+              <div className="shrink-0">
+                <StageNav
+                  current="application"
+                  familyId={Number(familyId)}
+                  yearId={yearId}
+                  students={students.map((s) => ({
+                    id: s.id,
+                    name:
+                      `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim() ||
+                      `Student #${s.id}`,
+                  }))}
+                />
+              </div>
+            ) : null}
           </div>
           {/* Header action row — left-to-right order is deliberate:
               Archive on the far left so admin reaches for it
@@ -599,26 +620,6 @@ export default function FamilyDetailPage() {
               most-clicked utility. All four only render when a year
               is selected — they're year-scoped. */}
           <div className="flex flex-wrap items-center gap-2">
-            {/* Stage jumps lead the row in their own segmented group —
-                funnel position, not an action. Archive moves to the
-                far right so it's reached intentionally. */}
-            {yearId ? (
-              <StageNav
-                current="application"
-                familyId={Number(familyId)}
-                yearId={yearId}
-                students={students.map((s) => ({
-                  id: s.id,
-                  name:
-                    `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim() ||
-                    `Student #${s.id}`,
-                }))}
-              />
-            ) : null}
-            {/* Divider — separates "where am I" from "what can I do". */}
-            {yearId ? (
-              <span className="h-6 w-px bg-border" aria-hidden />
-            ) : null}
             {/* Cross-surface jump to the family overview page —
                 cross-year summary + matching inquiries / applications
                 / registrations / sent emails. Year-scoped link so

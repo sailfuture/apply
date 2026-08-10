@@ -210,6 +210,7 @@ export default function FamilyRegistrationDetailPage() {
   const { data: applyProgress, mutate: refreshApplyProgress } = useSWR<{
     id: number;
     isAccepted: boolean;
+    isSubmitted: boolean;
   } | null>(applyProgressKey, adminFetcher);
   const accepted = applyProgress?.isAccepted === true;
 
@@ -522,6 +523,11 @@ export default function FamilyRegistrationDetailPage() {
             so the name gets the full width and the buttons sit just
             above the billing section. */}
         <div className="space-y-3">
+          {/* Family + year on the left, stage nav inline on the upper
+              right — funnel position reads as part of the page's
+              identity ("this family, this year, this stage"), not as
+              one of the actions below. */}
+          <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
             <h1 className="text-2xl font-semibold truncate">
               {familyName}
@@ -548,26 +554,24 @@ export default function FamilyRegistrationDetailPage() {
               </p>
             ) : null}
           </div>
+            <div className="shrink-0">
+              <StageNav
+                current="registration"
+                familyId={Number(family?.id ?? familyId)}
+                yearId={yearId}
+                students={students.map((s) => ({
+                  id: s.student_id,
+                  name: s.student_full_name,
+                }))}
+              />
+            </div>
+          </div>
+          {/* Header action row — Archive pinned last so admin reaches
+              for it intentionally rather than by muscle memory. Revoke
+              acceptance + Undo registration confirmation stay on the
+              Confirmation card's footer below since they're tied to
+              the confirmation decision. */}
           <div className="flex flex-wrap items-center gap-2">
-            {/* Header action row — the stage nav leads in its own
-                segmented group (funnel position, not an action),
-                then this page's actions, with Archive pinned last so
-                admin reaches for it intentionally rather than by
-                muscle memory. Revoke acceptance + Undo registration
-                confirmation stay on the Confirmation card's footer
-                below since they're tied to the confirmation
-                decision. */}
-            <StageNav
-              current="registration"
-              familyId={Number(family?.id ?? familyId)}
-              yearId={yearId}
-              students={students.map((s) => ({
-                id: s.student_id,
-                name: s.student_full_name,
-              }))}
-            />
-            {/* Divider — separates "where am I" from "what can I do". */}
-            <span className="h-6 w-px bg-border" aria-hidden />
             {/* Cross-surface jump to the family overview page —
                 cross-year summary + matching inquiries / applications
                 / registrations / sent emails. Year-scoped link so
@@ -609,52 +613,83 @@ export default function FamilyRegistrationDetailPage() {
           </div>
         </div>
 
-        {/* Acceptance-revoked banner — when the apply-side
-            `isAccepted` latch is missing or false, the family
-            isn't in a valid registration state. Banner sits above
-            every section so admin can't miss it; the page below
-            still renders as a read-only audit surface (existing
-            section data + verifies stay visible) but the
-            actionable affordances downstream gate off the same
-            `accepted` flag so nothing can be advanced until a
-            re-approval lands on the application page.
-            `applyProgress !== undefined` guards against flashing
-            the banner during SWR's loading window — wait until
-            we've confirmed the apply-side state one way or the
-            other before rendering the lock. */}
-        {applyProgress !== undefined && !accepted ? (
-          <div className="rounded-lg border bg-white px-4 py-3 flex items-start gap-3 shadow-sm">
-            <AlertCircle className="size-5 text-muted-foreground shrink-0 mt-0.5" />
-            <div className="min-w-0 flex-1 space-y-1">
-              <p className="text-sm font-medium text-foreground">
-                Acceptance revoked
-              </p>
-              <p className="text-xs text-muted-foreground">
-                This family isn&rsquo;t currently accepted for{" "}
-                {school_year?.year_name ?? "this year"}. The
-                registration surface is locked until the family is
-                re-approved. Existing section data + verifies stay
-                visible for audit; nothing downstream can advance
-                until acceptance is restored.
-              </p>
-              <div className="pt-1 flex items-center gap-2">
-                <Button
-                  asChild
-                  variant="outline"
-                  size="sm"
-                  className="bg-white"
-                >
-                  <Link
-                    href={`/admin/families/${family?.id ?? familyId}?yearId=${yearId}`}
-                  >
-                    <ExternalLink className="size-3.5 mr-1.5" />
-                    Re-approve on application page
-                  </Link>
-                </Button>
-              </div>
-            </div>
-          </div>
-        ) : null}
+        {/* Not-accepted banner. `isAccepted === false` covers three
+            genuinely different situations and they must not all read
+            as "revoked" — a family still filling in their application
+            has had nothing taken away from them.
+
+            Telling them apart: the registration progress row is
+            resolve-created on first view of this page, so its
+            existence proves nothing. Its latches don't — a parent can
+            only complete Tuition / Registration / Enrollment /
+            Volunteer Hours after acceptance — and per-student packets
+            are created by the acceptance cascade. Either is positive
+            evidence the family WAS accepted, which is the only case
+            where "revoked" is an honest word. Absent that we fall
+            back to the apply-side submit latch: submitted = waiting
+            on a decision, not submitted = still with the parent.
+
+            The lock itself is unchanged in all three cases (nothing
+            downstream can advance until acceptance lands); only the
+            explanation differs. `applyProgress !== undefined` guards
+            against flashing the banner during SWR's loading window. */}
+        {applyProgress !== undefined && !accepted
+          ? (() => {
+              const everRegistered =
+                progress?.isTuition === true ||
+                progress?.isRegistration === true ||
+                progress?.isEnrollment === true ||
+                progress?.isVolunteerHours === true ||
+                students.some((s) => s.packet !== null);
+              const submitted = applyProgress?.isSubmitted === true;
+              const yearLabel = school_year?.year_name ?? "this year";
+
+              const { title, body, cta } = everRegistered
+                ? {
+                    title: "Acceptance revoked",
+                    body: `This family was accepted for ${yearLabel} and isn't any longer, so registration is locked until they're re-approved. Existing section data and verifies stay visible for audit; nothing downstream can advance until acceptance is restored.`,
+                    cta: "Re-approve on application page",
+                  }
+                : submitted
+                  ? {
+                      title: "Awaiting admissions decision",
+                      body: `This family has submitted their ${yearLabel} application but hasn't been accepted yet. Registration unlocks once the application is approved — there's nothing to undo here.`,
+                      cta: "Review application",
+                    }
+                  : {
+                      title: "Application not submitted",
+                      body: `This family hasn't submitted a ${yearLabel} application yet, so there's no registration to work through. Registration opens after the application is submitted and approved.`,
+                      cta: "Open application page",
+                    };
+
+              return (
+                <div className="rounded-lg border bg-white px-4 py-3 flex items-start gap-3 shadow-sm">
+                  <AlertCircle className="size-5 text-muted-foreground shrink-0 mt-0.5" />
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <p className="text-sm font-medium text-foreground">
+                      {title}
+                    </p>
+                    <p className="text-xs text-muted-foreground">{body}</p>
+                    <div className="pt-1 flex items-center gap-2">
+                      <Button
+                        asChild
+                        variant="outline"
+                        size="sm"
+                        className="bg-white"
+                      >
+                        <Link
+                          href={`/admin/families/${family?.id ?? familyId}?yearId=${yearId}`}
+                        >
+                          <ExternalLink className="size-3.5 mr-1.5" />
+                          {cta}
+                        </Link>
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()
+          : null}
 
         {/* All page content below the banner gets dimmed +
             pointer-disabled when acceptance is revoked. Banner above

@@ -214,7 +214,8 @@ export default function EnrolledStudentDetailPage() {
           Action row + Back button moved down to sit right above the
           first card so the header reads as pure context and the
           actions land closer to the content they affect. */}
-      <div className="space-y-1">
+      <div className="flex items-start justify-between gap-4">
+      <div className="space-y-1 min-w-0">
         <h1 className="text-2xl font-semibold truncate">{fullName}</h1>
         <p className="text-sm text-muted-foreground min-w-0">
           {family?.family_name ? <span>{family.family_name}</span> : null}
@@ -260,27 +261,29 @@ export default function EnrolledStudentDetailPage() {
           </p>
         ) : null}
       </div>
-      {/* Action row sits right above the Student Information card.
-          Grouped left→right: Back to list · the stage nav (funnel
-          position, kept in its own segmented group so it doesn't
-          read as just another action) · this page's actions ·
-          Unenroll pinned last. Unenroll is the one destructive,
-          hard-to-reverse action here, so it sits at the far right
-          away from the things admin clicks routinely. The
-          page-level Edit button was removed — each card ships its
-          own Edit affordance anchored to its header. */}
-      <div className="flex items-center justify-between gap-2 flex-wrap">
-        <BackLink href={contextBackHref} label={contextBackLabel} />
-        <div className="flex items-center gap-2 shrink-0 flex-wrap">
-          {family ? (
+        {/* Stage nav inline on the upper right — funnel position
+            reads as part of the page's identity, not as one of the
+            actions below. */}
+        {family ? (
+          <div className="shrink-0">
             <StageNav
               current="enrollment"
               familyId={Number(family.id)}
               yearId={yearId}
             />
-          ) : null}
-          {/* Divider — separates "where am I" from "what can I do". */}
-          <span className="h-6 w-px bg-border" aria-hidden />
+          </div>
+        ) : null}
+      </div>
+      {/* Action row sits right above the Student Information card.
+          Back to list on the left, this page's actions on the right
+          with Unenroll pinned last — the one destructive,
+          hard-to-reverse action here, kept away from the things
+          admin clicks routinely. The page-level Edit button was
+          removed — each card ships its own Edit affordance anchored
+          to its header. */}
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <BackLink href={contextBackHref} label={contextBackLabel} />
+        <div className="flex items-center gap-2 shrink-0 flex-wrap">
           {/* Unified account activity stream — notes + texts + emails
               + system milestones in one timeline. Notes composed here
               tag this student. */}
