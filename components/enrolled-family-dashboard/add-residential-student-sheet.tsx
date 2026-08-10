@@ -115,8 +115,7 @@ export function AddResidentialStudentSheet({
           <SheetTitle>Create New Registration</SheetTitle>
           <SheetDescription>
             Add a new student to your family. You&rsquo;ll complete their
-            registration details on the next step, then our admissions team
-            reviews it.
+            details and create their registration packet on the next step.
           </SheetDescription>
         </SheetHeader>
         <form onSubmit={handleSubmit} className="flex flex-col flex-1 min-h-0">

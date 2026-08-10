@@ -38,9 +38,13 @@ const NWEA_BOOKING_URL = "https://calendar.app.google/FsBaobZrsRToxuGq9";
  * year-level progress rows, so completing it can't disturb the rest of
  * the family's enrolled state. Captures Student Details (school history,
  * strengths/growth, transport), the Step Up For Students (SUFS) Award ID,
- * and NWEA initial-testing scheduling, then submits the application for
- * admin review. The Opportunity Scholarship and tuition / enrollment-
- * signing steps are skipped — funding for these placements is external.
+ * and NWEA initial-testing scheduling. Submitting auto-accepts and
+ * creates the registration packet right away (residential families
+ * enroll placements directly — no admissions-review queue); admin's
+ * final `registrationConfirmed` on the completed packet is what folds
+ * the student into the enrolled roster. The Opportunity Scholarship and
+ * tuition / enrollment-signing steps are skipped — funding for these
+ * placements is external.
  */
 interface AppRow {
   id: number;
@@ -215,8 +219,13 @@ export default function AddStudentRegistrationPage() {
         headers: { "Content-Type": "application/json" },
       });
       if (!res.ok) throw new Error("submit failed");
-      toast.success("Registration submitted for review.");
-      router.push("/dashboard");
+      // Residential submissions are auto-accepted with their packet
+      // created server-side — stay on this page, which now renders the
+      // registration packet form, instead of bouncing to the dashboard.
+      setApp((prev) =>
+        prev ? { ...prev, isSubmitted: true, isAccepted: true } : prev
+      );
+      toast.success("Registration packet created — complete it below.");
     } catch {
       toast.error("Couldn't submit. Please try again.");
     } finally {
@@ -298,9 +307,9 @@ export default function AddStudentRegistrationPage() {
           Register {studentName}
         </h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Complete this student&rsquo;s information and submit it for
-          admissions review. They&rsquo;ll join your enrolled students once
-          confirmed.
+          Complete this student&rsquo;s information, then create their
+          registration packet. They&rsquo;ll join your enrolled students once
+          the packet is confirmed.
         </p>
       </div>
 
@@ -528,7 +537,7 @@ export default function AddStudentRegistrationPage() {
           {saving ? "Saving…" : "Save for Later"}
         </Button>
         <Button onClick={handleSubmit} disabled={submitting || saving}>
-          {submitting ? "Submitting…" : "Submit for Review"}
+          {submitting ? "Creating…" : "Create Registration Packet"}
         </Button>
       </div>
 

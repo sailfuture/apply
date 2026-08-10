@@ -10,9 +10,10 @@ import { xano } from "@/lib/xano";
  * take foster placements that enroll and unenroll throughout the year.
  * This endpoint backs the "Create New Registration" affordance on the
  * enrolled-family dashboard: it spins up the student + a marked
- * application so the parent can walk the new student through the normal
- * application → admin-accept → registration pipeline WITHOUT disturbing
- * the family's already-submitted, already-enrolled state for the year.
+ * application so the parent can complete the student's details and go
+ * straight into a registration packet (no admissions-review queue — see
+ * `/api/residential-students/[applicationId]`) WITHOUT disturbing the
+ * family's already-submitted, already-enrolled state for the year.
  *
  * Isolation choices vs. the standard `/api/applications` POST:
  *   - The application is flagged `is_residential_addition = true` so the
@@ -23,8 +24,9 @@ import { xano } from "@/lib/xano";
  *   - We deliberately do NOT append the new app to the family's
  *     `registration_family_application_progress` row — that row tracks
  *     the family's original cohort for the year and its `isSubmitted` /
- *     `isAccepted` latches must stay untouched. Admin reviews + accepts
- *     this student per-application via `/api/admin/applications/[id]`.
+ *     `isAccepted` latches must stay untouched. The application is
+ *     auto-accepted at submit; admin's per-student gate is confirming
+ *     the completed packet (`registrationConfirmed`).
  *
  * Body: { first_name, last_name, date_of_birth?, gender?, ethnicity?, yearId }
  * Returns: { student, application }
