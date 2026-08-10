@@ -549,27 +549,14 @@ export default function FamilyRegistrationDetailPage() {
             ) : null}
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {/* Header action row — Archive on the far left so admin
-                reaches for it intentionally (not as muscle memory),
-                cross-surface jumps in the middle, Notes on the far
-                right. Archive lives up here to match the apply-flow
-                family detail page's pattern — both pages keep their
-                year-scoped lifecycle action in the same header
-                slot. Revoke acceptance + Undo registration
+            {/* Header action row — the stage nav leads in its own
+                segmented group (funnel position, not an action),
+                then this page's actions, with Archive pinned last so
+                admin reaches for it intentionally rather than by
+                muscle memory. Revoke acceptance + Undo registration
                 confirmation stay on the Confirmation card's footer
                 below since they're tied to the confirmation
                 decision. */}
-            <ArchiveRegistrationButton
-              familyId={Number(family?.id ?? familyId)}
-              yearId={Number(yearId)}
-              familyName={familyName}
-              archived={progress?.isArchived === true}
-              onChanged={() => void refresh()}
-              size="sm"
-            />
-            {/* Stage jumps — Application + per-student Enrollment,
-                the same button set every admissions surface carries
-                (replaces the older one-off "View application"). */}
             <StageNav
               current="registration"
               familyId={Number(family?.id ?? familyId)}
@@ -579,6 +566,8 @@ export default function FamilyRegistrationDetailPage() {
                 name: s.student_full_name,
               }))}
             />
+            {/* Divider — separates "where am I" from "what can I do". */}
+            <span className="h-6 w-px bg-border" aria-hidden />
             {/* Cross-surface jump to the family overview page —
                 cross-year summary + matching inquiries / applications
                 / registrations / sent emails. Year-scoped link so
@@ -607,6 +596,15 @@ export default function FamilyRegistrationDetailPage() {
             <ActivityLogSheet
               familyId={Number(family?.id ?? familyId)}
               yearId={Number(yearId)}
+            />
+            {/* Archive — far right, deliberately last. */}
+            <ArchiveRegistrationButton
+              familyId={Number(family?.id ?? familyId)}
+              yearId={Number(yearId)}
+              familyName={familyName}
+              archived={progress?.isArchived === true}
+              onChanged={() => void refresh()}
+              size="sm"
             />
           </div>
         </div>

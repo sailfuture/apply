@@ -599,17 +599,25 @@ export default function FamilyDetailPage() {
               most-clicked utility. All four only render when a year
               is selected — they're year-scoped. */}
           <div className="flex flex-wrap items-center gap-2">
+            {/* Stage jumps lead the row in their own segmented group —
+                funnel position, not an action. Archive moves to the
+                far right so it's reached intentionally. */}
             {yearId ? (
-              <ArchiveApplicationButton
+              <StageNav
+                current="application"
                 familyId={Number(familyId)}
-                yearId={Number(yearId)}
-                familyName={family.family_name}
-                size="sm"
-                onArchived={() => {
-                  refreshDetail();
-                  refreshProgress();
-                }}
+                yearId={yearId}
+                students={students.map((s) => ({
+                  id: s.id,
+                  name:
+                    `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim() ||
+                    `Student #${s.id}`,
+                }))}
               />
+            ) : null}
+            {/* Divider — separates "where am I" from "what can I do". */}
+            {yearId ? (
+              <span className="h-6 w-px bg-border" aria-hidden />
             ) : null}
             {/* Cross-surface jump to the family overview page —
                 cross-year summary + matching inquiries / applications
@@ -632,21 +640,6 @@ export default function FamilyDetailPage() {
                   Family overview
                 </Link>
               </Button>
-            ) : null}
-            {/* Stage jumps — Registration + per-student Enrollment,
-                the same button set every admissions surface carries. */}
-            {yearId ? (
-              <StageNav
-                current="application"
-                familyId={Number(familyId)}
-                yearId={yearId}
-                students={students.map((s) => ({
-                  id: s.id,
-                  name:
-                    `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim() ||
-                    `Student #${s.id}`,
-                }))}
-              />
             ) : null}
             {/* The recruitment lead(s) this family converted from —
                 jumps to the lead's triage sheet on All Leads. Hidden
@@ -696,6 +689,19 @@ export default function FamilyDetailPage() {
               familyId={family.id}
               defaultYearId={yearId ? Number(yearId) : null}
             />
+            {/* Archive — far right, deliberately last. */}
+            {yearId ? (
+              <ArchiveApplicationButton
+                familyId={Number(familyId)}
+                yearId={Number(yearId)}
+                familyName={family.family_name}
+                size="sm"
+                onArchived={() => {
+                  refreshDetail();
+                  refreshProgress();
+                }}
+              />
+            ) : null}
           </div>
         </div>
 

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import useSWR from "swr";
 import {
   ChevronDown,
   ClipboardList,
@@ -14,21 +15,38 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { adminFetcher } from "@/lib/admin-fetcher";
+import { cn } from "@/lib/utils";
+import type { AdminFamilyOverviewResponse } from "@/app/api/admin/family-overview/[id]/route";
 
 /**
- * Cross-surface stage navigation — one consistent button set for
- * jumping between a family's three admissions surfaces:
+ * Cross-surface stage navigation — one consistent, self-contained
+ * control for moving between a family's three admissions surfaces:
  *
  *   Application  → /admin/families/[familyId]
  *   Registration → /admin/registrations/[familyId]
  *   Enrollment   → /admin/enrolled/[studentId]  (per student)
  *
- * Renders a button for every stage EXCEPT the one you're on
- * (`current`), in funnel order. Enrollment is per-student: one
- * student links directly, multiple render a dropdown, none hides
- * the button. Enrollment links carry `from=<current stage>` so the
- * student page's back button returns HERE instead of the enrolled
- * roster.
+ * Renders as a segmented group so it reads as "where am I in the
+ * funnel", visually distinct from the page's one-off actions. All
+ * three stages always render; the one you're on is highlighted and
+ * inert rather than hidden, so the control never changes shape as
+ * you move between surfaces.
+ *
+ * Stages gate on the funnel: Registration needs an application for
+ * the year, Enrollment needs a registration. A stage the family
+ * hasn't reached renders disabled with a reason on hover instead of
+ * linking somewhere empty.
+ *
+ * Availability is resolved here rather than passed in — the three
+ * host pages hold different slices of the family's data, and asking
+ * each to derive the same two booleans produced inconsistent gating.
+ * The overview payload is shared by key, so SWR serves it from cache
+ * on surfaces that already load it.
+ *
+ * Enrollment is per-student: one student links directly, multiple
+ * render a dropdown. Enrollment links carry `from=<current stage>`
+ * so the student page's back button returns HERE.
  */
 export type AdmissionStage = "application" | "registration" | "enrollment";
 
@@ -45,42 +63,82 @@ export function StageNav({
   /** The year's students, for the per-student Enrollment jump. */
   students?: Array<{ id: number; name: string }>;
 }) {
+  const { data } = useSWR<AdminFamilyOverviewResponse>(
+    familyId ? `/api/admin/family-overview/${familyId}` : null,
+    adminFetcher,
+    { revalidateOnFocus: false, dedupingInterval: 30_000 }
+  );
+
   if (!familyId) return null;
   const year = yearId ? `?yearId=${yearId}` : "";
+  const yearNum = Number(yearId) || 0;
+
+  // Until the payload lands we can't tell reached-from-unreached, so
+  // stages stay enabled — a button that starts disabled and flips
+  // live reads as broken.
+  const inYear = (rowYearId: unknown) =>
+    !yearNum || Number(rowYearId) === yearNum;
+  const hasApplication = data
+    ? data.applications.some((a) => inYear(a.registration_school_years_id))
+    : true;
+  const hasRegistration = data
+    ? data.registration_progress.some((p) =>
+        inYear(p.registration_school_years_id)
+      )
+    : true;
+
+  const enrollmentReady = hasRegistration && students.length > 0;
+  const enrollmentReason = !hasRegistration
+    ? "No registration for this year yet"
+    : students.length === 0
+      ? "No students on this family for this year"
+      : "";
 
   return (
-    <>
-      {current !== "application" ? (
-        <Button asChild variant="outline" size="sm" className="bg-white">
-          <Link href={`/admin/families/${familyId}${year}`}>
-            <FileText className="size-3.5 mr-1.5" />
-            Application
-          </Link>
-        </Button>
-      ) : null}
-      {current !== "registration" ? (
-        <Button asChild variant="outline" size="sm" className="bg-white">
-          <Link href={`/admin/registrations/${familyId}${year}`}>
-            <ClipboardList className="size-3.5 mr-1.5" />
-            Registration
-          </Link>
-        </Button>
-      ) : null}
-      {current !== "enrollment" && students.length === 1 ? (
-        <Button asChild variant="outline" size="sm" className="bg-white">
-          <Link
-            href={`/admin/enrolled/${students[0].id}${year}${
-              year ? "&" : "?"
-            }from=${current}`}
-          >
-            <GraduationCap className="size-3.5 mr-1.5" />
-            Enrollment
-          </Link>
-        </Button>
-      ) : current !== "enrollment" && students.length > 1 ? (
+    <div className="inline-flex items-center gap-0.5 rounded-lg border bg-muted/50 p-0.5">
+      <StageButton
+        icon={<FileText className="size-3.5 mr-1.5" />}
+        label="Application"
+        active={current === "application"}
+        href={`/admin/families/${familyId}${year}`}
+      />
+      <StageButton
+        icon={<ClipboardList className="size-3.5 mr-1.5" />}
+        label="Registration"
+        active={current === "registration"}
+        href={`/admin/registrations/${familyId}${year}`}
+        disabled={!hasApplication}
+        reason="No application for this year yet"
+      />
+      {current === "enrollment" ? (
+        <StageButton
+          icon={<GraduationCap className="size-3.5 mr-1.5" />}
+          label="Enrollment"
+          active
+          href=""
+        />
+      ) : !enrollmentReady ? (
+        <StageButton
+          icon={<GraduationCap className="size-3.5 mr-1.5" />}
+          label="Enrollment"
+          active={false}
+          href=""
+          disabled
+          reason={enrollmentReason}
+        />
+      ) : students.length === 1 ? (
+        <StageButton
+          icon={<GraduationCap className="size-3.5 mr-1.5" />}
+          label="Enrollment"
+          active={false}
+          href={`/admin/enrolled/${students[0].id}${year}${
+            year ? "&" : "?"
+          }from=${current}`}
+        />
+      ) : (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm" className="bg-white">
+            <Button variant="ghost" size="sm" className="h-8 bg-transparent">
               <GraduationCap className="size-3.5 mr-1.5" />
               Enrollment
               <ChevronDown className="size-3.5 ml-1" />
@@ -100,7 +158,66 @@ export function StageNav({
             ))}
           </DropdownMenuContent>
         </DropdownMenu>
-      ) : null}
-    </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * One segment. Three states: current (filled, inert, `aria-current`),
+ * available (ghost link), unreachable (disabled with a `title`
+ * explaining what's missing — a dead-looking button with no reason is
+ * worse than no button).
+ */
+function StageButton({
+  icon,
+  label,
+  active,
+  href,
+  disabled = false,
+  reason = "",
+}: {
+  icon: React.ReactNode;
+  label: string;
+  active: boolean;
+  href: string;
+  disabled?: boolean;
+  reason?: string;
+}) {
+  if (active) {
+    return (
+      <span
+        aria-current="page"
+        className={cn(
+          "inline-flex h-8 items-center rounded-md bg-background px-3",
+          "text-sm font-semibold shadow-sm ring-1 ring-border"
+        )}
+      >
+        {icon}
+        {label}
+      </span>
+    );
+  }
+  if (disabled) {
+    return (
+      <Button
+        variant="ghost"
+        size="sm"
+        disabled
+        title={reason}
+        className="h-8 bg-transparent"
+      >
+        {icon}
+        {label}
+      </Button>
+    );
+  }
+  return (
+    <Button asChild variant="ghost" size="sm" className="h-8 bg-transparent">
+      <Link href={href}>
+        {icon}
+        {label}
+      </Link>
+    </Button>
   );
 }

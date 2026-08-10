@@ -261,17 +261,26 @@ export default function EnrolledStudentDetailPage() {
         ) : null}
       </div>
       {/* Action row sits right above the Student Information card.
-          Order left→right: Back to list (returns to the enrolled
-          roster) · Delete (soft-remove from enrolled) · Unenroll
-          (formal "student has left") · Family overview (cross-year
-          summary) · View family registration (cross-surface jump
-          to the per-year detail). The page-level Edit button was
-          removed — each card now ships its own Edit affordance
-          anchored to its header so admin edits in place rather
-          than jumping to another surface. */}
+          Grouped left→right: Back to list · the stage nav (funnel
+          position, kept in its own segmented group so it doesn't
+          read as just another action) · this page's actions ·
+          Unenroll pinned last. Unenroll is the one destructive,
+          hard-to-reverse action here, so it sits at the far right
+          away from the things admin clicks routinely. The
+          page-level Edit button was removed — each card ships its
+          own Edit affordance anchored to its header. */}
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <BackLink href={contextBackHref} label={contextBackLabel} />
         <div className="flex items-center gap-2 shrink-0 flex-wrap">
+          {family ? (
+            <StageNav
+              current="enrollment"
+              familyId={Number(family.id)}
+              yearId={yearId}
+            />
+          ) : null}
+          {/* Divider — separates "where am I" from "what can I do". */}
+          <span className="h-6 w-px bg-border" aria-hidden />
           {/* Unified account activity stream — notes + texts + emails
               + system milestones in one timeline. Notes composed here
               tag this student. */}
@@ -307,17 +316,6 @@ export default function EnrolledStudentDetailPage() {
               }}
             />
           ) : null}
-          <UnenrollStudentButton
-            studentId={student.id}
-            studentName={fullName}
-            currentlyUnenrolled={student.isArchived === true}
-            existingReason={student.unenrollment_reason ?? ""}
-            existingDate={student.unenrollment_date ?? ""}
-            existingNotes={student.unenrollment_notes ?? ""}
-            onChanged={() => {
-              void mutate();
-            }}
-          />
           {/* Push this student into Toddle (LMS) — updates the
               matching Toddle record or creates one. Grade comes from
               the packet's admin placement (falling back to the
@@ -338,16 +336,18 @@ export default function EnrolledStudentDetailPage() {
               </Link>
             </Button>
           ) : null}
-          {/* Stage jumps — the same Application / Registration
-              buttons every admissions surface carries, replacing
-              the older one-off "View family registration" link. */}
-          {family ? (
-            <StageNav
-              current="enrollment"
-              familyId={Number(family.id)}
-              yearId={yearId}
-            />
-          ) : null}
+          {/* Unenroll — far right, deliberately last. */}
+          <UnenrollStudentButton
+            studentId={student.id}
+            studentName={fullName}
+            currentlyUnenrolled={student.isArchived === true}
+            existingReason={student.unenrollment_reason ?? ""}
+            existingDate={student.unenrollment_date ?? ""}
+            existingNotes={student.unenrollment_notes ?? ""}
+            onChanged={() => {
+              void mutate();
+            }}
+          />
         </div>
       </div>
 
