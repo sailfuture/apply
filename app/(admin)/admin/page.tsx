@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { StatsCard } from "@/components/admin/stats-card";
+import { DashboardSearch } from "@/components/admin/dashboard-search";
 import { LeadSheet } from "@/components/admin/lead-sheet";
 import type { AllLeadRow } from "@/app/api/admin/all-leads/route";
 import {
@@ -260,6 +261,12 @@ export default function AdminDashboardPage() {
           )}
         </p>
       </div>
+
+      {/* Quick search — find any student, parent, or family and jump
+          straight to their detail page. Sits above the funnel tiles
+          because "pull up this person" is the most common reason to
+          land on the dashboard mid-task. */}
+      <DashboardSearch />
 
       {statsError ? (
         <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
