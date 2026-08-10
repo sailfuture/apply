@@ -20,7 +20,12 @@ import type { AdminLaptopDevice } from "@/app/api/admin/laptops/route";
  * permanently-disabled card would just be noise.
  */
 export function LaptopGoogleCard({ laptop }: { laptop: AdminLaptopDevice }) {
-  const { data, mutate, isLoading } = useSWR<LaptopGoogleStatus>(
+  const {
+    data,
+    mutate,
+    isLoading,
+    error: loadError,
+  } = useSWR<LaptopGoogleStatus>(
     `/api/admin/laptops/${laptop.id}/google`,
     adminFetcher,
     // Each load makes live Google Admin calls — don't re-fire on
@@ -55,15 +60,28 @@ export function LaptopGoogleCard({ laptop }: { laptop: AdminLaptopDevice }) {
   return (
     <div className="space-y-2">
       <p className="text-sm font-semibold">Google Sign-in Restriction</p>
-      {isLoading || !data ? (
+      {isLoading || (!data && !loadError) ? (
         <div className="flex items-center gap-2 rounded-md border px-4 py-3 text-sm text-muted-foreground">
           <Loader2 className="size-3.5 animate-spin" />
           Checking Google Admin…
+        </div>
+      ) : !data ? (
+        <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          Couldn&rsquo;t check this device&rsquo;s Google status.{" "}
+          {loadError instanceof Error ? loadError.message : "Please retry."}
         </div>
       ) : !data.serial ? (
         <p className="text-sm text-muted-foreground">
           Add a serial number to look this device up in Google Admin.
         </p>
+      ) : data.error ? (
+        /* Checked before the device branch on purpose — when the
+           lookup itself fails, `device` is null too, and the
+           "no matching device" copy would send admin hunting for a
+           serial-number problem that doesn't exist. */
+        <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          {data.error}
+        </div>
       ) : !data.device ? (
         <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
           No enrolled ChromeOS device matches serial{" "}

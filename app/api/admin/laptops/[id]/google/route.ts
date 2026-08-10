@@ -59,6 +59,10 @@ export interface LaptopGoogleStatus {
   /** Current holder's school Google account ("" = none usable). */
   studentEmail: string;
   studentName: string;
+  /** Set when the integration is configured but Google (or Xano)
+   *  couldn't be reached. The rest of the payload is still valid —
+   *  the card shows this instead of silently spinning. */
+  error?: string;
 }
 
 export async function GET(
@@ -223,10 +227,23 @@ async function currentHolder(
   };
 }
 
+/**
+ * Read-only status probe. Every external call is caught: this backs a
+ * panel that should always render *something*, and a Google outage or
+ * an un-granted delegation scope used to escape as a bare 500, which
+ * left the card spinning on "Checking Google Admin…" with nothing but
+ * a console error to go on.
+ */
 async function buildStatus(laptopId: number): Promise<LaptopGoogleStatus> {
   const laptop = await xano.laptops.getById(laptopId).catch(() => null);
   const serial = (laptop?.serial_number ?? "").trim();
-  const holder = await currentHolder(laptopId);
+  const holder = await currentHolder(laptopId).catch((err) => {
+    console.error(
+      `[/api/admin/laptops/${laptopId}/google] holder lookup failed:`,
+      err
+    );
+    return null;
+  });
 
   const base: LaptopGoogleStatus = {
     configured: isGoogleAdminConfigured(),
@@ -240,25 +257,56 @@ async function buildStatus(laptopId: number): Promise<LaptopGoogleStatus> {
   };
   if (!base.configured || !serial) return base;
 
-  const device = await getChromeDeviceBySerial(serial);
-  if (!device) return base;
-  base.device = {
-    deviceId: device.deviceId,
-    orgUnitPath: device.orgUnitPath,
-    status: device.status,
-    recentUser: device.recentUser,
-  };
-  base.managed = device.orgUnitPath.startsWith(`${deviceOuParent()}/`);
+  try {
+    const device = await getChromeDeviceBySerial(serial);
+    if (!device) return base;
+    base.device = {
+      deviceId: device.deviceId,
+      orgUnitPath: device.orgUnitPath,
+      status: device.status,
+      recentUser: device.recentUser,
+    };
+    base.managed = device.orgUnitPath.startsWith(`${deviceOuParent()}/`);
 
-  const ou = await getOrgUnit(device.orgUnitPath).catch(() => null);
-  if (ou) {
-    const policy = await getSignInRestriction(ou.orgUnitId).catch(() => null);
-    if (policy) {
-      base.restricted = policy.restricted;
-      base.allowlist = policy.allowlist;
+    const ou = await getOrgUnit(device.orgUnitPath).catch(() => null);
+    if (ou) {
+      const policy = await getSignInRestriction(ou.orgUnitId).catch(() => null);
+      if (policy) {
+        base.restricted = policy.restricted;
+        base.allowlist = policy.allowlist;
+      }
     }
+  } catch (err) {
+    console.error(
+      `[/api/admin/laptops/${laptopId}/google] Google lookup failed:`,
+      err
+    );
+    base.error = googleErrorHint(err);
   }
   return base;
+}
+
+/**
+ * Turn a raw Google failure into something an admin can act on. The
+ * two that actually happen are worth naming explicitly: the service
+ * account exists but the domain hasn't authorized its scopes
+ * (`unauthorized_client`), and the impersonated user isn't a real
+ * super-admin.
+ */
+function googleErrorHint(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (/unauthorized_client|invalid_grant/i.test(msg)) {
+    return (
+      "Google rejected the service account. In the Workspace admin console, " +
+      "authorize its client ID for the Chrome device, org unit, customer, " +
+      "and Chrome policy scopes (Security → API controls → Domain-wide " +
+      "delegation), and confirm GOOGLE_ADMIN_IMPERSONATE is a super-admin."
+    );
+  }
+  if (/\b40[13]\b|permission|forbidden/i.test(msg)) {
+    return `Google denied the request — check the impersonated admin's privileges. (${msg})`;
+  }
+  return `Couldn't reach Google Admin: ${msg}`;
 }
 
 async function deviceId(
