@@ -120,11 +120,17 @@ export default function AdminVolunteerHoursPage() {
   const yearIdParam = searchParams.get("yearId");
   const yearId = Number(yearIdParam) || 0;
 
-  const { data, error, isLoading, mutate } =
+  const { data, error, isLoading, isValidating, mutate } =
     useSWR<AdminVolunteerHoursResponse>(
       yearId ? `/api/admin/volunteer-hours?yearId=${yearId}` : null,
       adminFetcher
     );
+  // True while a revalidation is in flight AFTER a dialog save calls
+  // `mutate()` (first load renders skeletons via `isLoading` instead).
+  // Drives the dim-and-pulse on the tables below so an edit visibly
+  // "lands" — without it the page sits on stale rows for a second or
+  // two and the change appears to have been swallowed.
+  const refreshing = isValidating && !isLoading;
   const entries = useMemo(() => data?.entries ?? [], [data]);
   const families = useMemo(() => data?.families ?? [], [data]);
   const events = useMemo(() => data?.events ?? [], [data]);
@@ -382,8 +388,14 @@ export default function AdminVolunteerHoursPage() {
                   Pending review ({pendingEntries.length})
                 </CardTitle>
               </CardHeader>
-              <CardContent className="p-0">
-                <Table>
+              <CardContent
+                aria-busy={refreshing}
+                className={cn(
+                  "p-0 transition-opacity",
+                  refreshing && "opacity-50 animate-pulse"
+                )}
+              >
+                <Table className="[&_th]:px-4 [&_td]:px-4 [&_td]:py-3">
                   <TableHeader>
                     <TableRow>
                       <TableHead>Family</TableHead>
@@ -461,102 +473,6 @@ export default function AdminVolunteerHoursPage() {
             </Card>
           ) : null}
 
-          {/* ── Family progress ── */}
-          <Card className="bg-white py-0 gap-0 overflow-hidden">
-            <CardHeader className="border-b py-4">
-              <CardTitle className="text-base">
-                Family progress ({familyRows.length})
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="p-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Family</TableHead>
-                    <TableHead className="text-right">Approved</TableHead>
-                    <TableHead className="text-right">Pending</TableHead>
-                    <TableHead className="w-64">
-                      Progress to {HOURS_GOAL} hrs
-                    </TableHead>
-                    <TableHead className="w-10">
-                      <span className="sr-only">Open</span>
-                    </TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {familyRows.length === 0 ? (
-                    <TableRow>
-                      <TableCell
-                        colSpan={5}
-                        className="py-6 text-center text-sm text-muted-foreground"
-                      >
-                        No enrolled families for this school year yet.
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    familyRows.map(({ family, approved, pending }) => {
-                      const pct = Math.min(
-                        100,
-                        (approved / HOURS_GOAL) * 100
-                      );
-                      const atGoal = approved >= HOURS_GOAL;
-                      return (
-                        <TableRow
-                          key={family.id}
-                          className="cursor-pointer"
-                          onClick={() => setOpenFamilyId(family.id)}
-                        >
-                          <TableCell className="font-medium">
-                            {family.name}
-                            {!family.enrolled ? (
-                              <span className="ml-1.5 rounded-full border px-1.5 py-px text-[10px] font-medium text-muted-foreground align-middle">
-                                Not enrolled
-                              </span>
-                            ) : null}
-                          </TableCell>
-                          <TableCell className="text-right tabular-nums">
-                            {formatHours(approved)}
-                          </TableCell>
-                          <TableCell className="text-right tabular-nums text-muted-foreground">
-                            {pending ? formatHours(pending) : "—"}
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex items-center gap-2">
-                              <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted">
-                                <div
-                                  className={cn(
-                                    "h-full rounded-full",
-                                    atGoal
-                                      ? "bg-emerald-500"
-                                      : "bg-foreground/70"
-                                  )}
-                                  style={{ width: `${pct}%` }}
-                                />
-                              </div>
-                              <span
-                                className={cn(
-                                  "w-16 shrink-0 text-right text-xs tabular-nums",
-                                  atGoal
-                                    ? "font-medium text-emerald-700"
-                                    : "text-muted-foreground"
-                                )}
-                              >
-                                {formatHours(approved)} / {HOURS_GOAL}
-                              </span>
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <ChevronRight className="size-4 text-muted-foreground" />
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })
-                  )}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
-
           {/* ── Parent events ── */}
           <Card className="bg-white py-0 gap-0 overflow-hidden">
             <CardHeader className="border-b py-4">
@@ -564,8 +480,14 @@ export default function AdminVolunteerHoursPage() {
                 Parent events ({parentEvents.length})
               </CardTitle>
             </CardHeader>
-            <CardContent className="p-0">
-              <Table>
+            <CardContent
+              aria-busy={refreshing}
+              className={cn(
+                "p-0 transition-opacity",
+                refreshing && "opacity-50 animate-pulse"
+              )}
+            >
+              <Table className="[&_th]:px-4 [&_td]:px-4 [&_td]:py-3">
                 <TableHeader>
                   <TableRow>
                     <TableHead>Date</TableHead>
@@ -702,6 +624,108 @@ export default function AdminVolunteerHoursPage() {
               </Table>
             </CardContent>
           </Card>
+          {/* ── Family progress ── */}
+          <Card className="bg-white py-0 gap-0 overflow-hidden">
+            <CardHeader className="border-b py-4">
+              <CardTitle className="text-base">
+                Family progress ({familyRows.length})
+              </CardTitle>
+            </CardHeader>
+            <CardContent
+              aria-busy={refreshing}
+              className={cn(
+                "p-0 transition-opacity",
+                refreshing && "opacity-50 animate-pulse"
+              )}
+            >
+              <Table className="[&_th]:px-4 [&_td]:px-4 [&_td]:py-3">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Family</TableHead>
+                    <TableHead className="text-right">Approved</TableHead>
+                    <TableHead className="text-right">Pending</TableHead>
+                    <TableHead className="w-64">
+                      Progress to {HOURS_GOAL} hrs
+                    </TableHead>
+                    <TableHead className="w-10">
+                      <span className="sr-only">Open</span>
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {familyRows.length === 0 ? (
+                    <TableRow>
+                      <TableCell
+                        colSpan={5}
+                        className="py-6 text-center text-sm text-muted-foreground"
+                      >
+                        No enrolled families for this school year yet.
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    familyRows.map(({ family, approved, pending }) => {
+                      const pct = Math.min(
+                        100,
+                        (approved / HOURS_GOAL) * 100
+                      );
+                      const atGoal = approved >= HOURS_GOAL;
+                      return (
+                        <TableRow
+                          key={family.id}
+                          className="cursor-pointer"
+                          onClick={() => setOpenFamilyId(family.id)}
+                        >
+                          <TableCell className="font-medium">
+                            {family.name}
+                            {!family.enrolled ? (
+                              <span className="ml-1.5 rounded-full border px-1.5 py-px text-[10px] font-medium text-muted-foreground align-middle">
+                                Not enrolled
+                              </span>
+                            ) : null}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {formatHours(approved)}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums text-muted-foreground">
+                            {pending ? formatHours(pending) : "—"}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-2">
+                              <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted">
+                                <div
+                                  className={cn(
+                                    "h-full rounded-full",
+                                    atGoal
+                                      ? "bg-emerald-500"
+                                      : "bg-foreground/70"
+                                  )}
+                                  style={{ width: `${pct}%` }}
+                                />
+                              </div>
+                              <span
+                                className={cn(
+                                  "w-16 shrink-0 text-right text-xs tabular-nums",
+                                  atGoal
+                                    ? "font-medium text-emerald-700"
+                                    : "text-muted-foreground"
+                                )}
+                              >
+                                {formatHours(approved)} / {HOURS_GOAL}
+                              </span>
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <ChevronRight className="size-4 text-muted-foreground" />
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })
+                  )}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+
         </>
       )}
 
