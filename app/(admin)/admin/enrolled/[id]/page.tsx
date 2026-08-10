@@ -74,6 +74,7 @@ import { RequestRecordsDialog } from "@/components/admin/request-records-dialog"
 import { SyncToddleButton } from "@/components/admin/sync-toddle-button";
 import { SufsAwardCard } from "@/components/admin/sufs-award-card";
 import { ActivityLogSheet } from "@/components/admin/activity-log-sheet";
+import { StageNav } from "@/components/admin/stage-nav";
 import { InviteStatusBadge, ResendInviteButton } from "@/components/invite-status";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { cn } from "@/lib/utils";
@@ -130,6 +131,12 @@ export default function EnrolledStudentDetailPage() {
   const { data, isLoading, error, mutate } =
     useSWR<AdminEnrolledStudentResponse>(swrKey, adminFetcher);
 
+  // Where the admin came FROM (the family surfaces append
+  // `from=application|registration|overview` to their student
+  // links) — the back button returns there instead of the enrolled
+  // roster. Needs the family id, so the contextual href is computed
+  // after data loads; every pre-data branch falls back to the list.
+  const from = searchParams.get("from");
   const backHref = yearId
     ? `/admin/enrolled?yearId=${yearId}`
     : "/admin/enrolled";
@@ -183,6 +190,23 @@ export default function EnrolledStudentDetailPage() {
   const fullName =
     `${student.first_name ?? ""} ${student.last_name ?? ""}`.trim() ||
     `Student #${studentId}`;
+
+  const year = yearId ? `?yearId=${yearId}` : "";
+  const familyId = family ? Number(family.id) : 0;
+  const [contextBackHref, contextBackLabel] =
+    from === "application" && familyId
+      ? [`/admin/families/${familyId}${year}`, "Back to family application"]
+      : from === "registration" && familyId
+        ? [
+            `/admin/registrations/${familyId}${year}`,
+            "Back to family registration",
+          ]
+        : from === "overview" && familyId
+          ? [
+              `/admin/families/${familyId}/overview${year}`,
+              "Back to family overview",
+            ]
+          : [backHref, "Back to enrolled students"];
 
   return (
     <div className="p-6 space-y-6">
@@ -246,7 +270,7 @@ export default function EnrolledStudentDetailPage() {
           anchored to its header so admin edits in place rather
           than jumping to another surface. */}
       <div className="flex items-center justify-between gap-2 flex-wrap">
-        <BackLink href={backHref} />
+        <BackLink href={contextBackHref} label={contextBackLabel} />
         <div className="flex items-center gap-2 shrink-0 flex-wrap">
           {/* Unified account activity stream — notes + texts + emails
               + system milestones in one timeline. Notes composed here
@@ -314,15 +338,15 @@ export default function EnrolledStudentDetailPage() {
               </Link>
             </Button>
           ) : null}
+          {/* Stage jumps — the same Application / Registration
+              buttons every admissions surface carries, replacing
+              the older one-off "View family registration" link. */}
           {family ? (
-            <Button asChild variant="outline" size="sm" className="bg-white">
-              <Link
-                href={`/admin/registrations/${family.id}?yearId=${yearId}`}
-              >
-                View family registration
-                <ExternalLink className="size-3.5 ml-1.5" />
-              </Link>
-            </Button>
+            <StageNav
+              current="enrollment"
+              familyId={Number(family.id)}
+              yearId={yearId}
+            />
           ) : null}
         </div>
       </div>
@@ -420,14 +444,22 @@ export default function EnrolledStudentDetailPage() {
  * button on the admin surface. Same `size="sm" + bg-white +
  * outline` shape as the Edit / View family registration buttons
  * in the action row below, so the page header reads as one
- * consistent button family.
+ * consistent button family. Label varies with the `from` context —
+ * "Back to family application" when the admin arrived from that
+ * surface, etc.
  */
-function BackLink({ href }: { href: string }) {
+function BackLink({
+  href,
+  label = "Back to enrolled students",
+}: {
+  href: string;
+  label?: string;
+}) {
   return (
     <Button asChild variant="outline" size="sm" className="bg-white">
       <Link href={href}>
         <ArrowLeft className="size-3.5 mr-1.5" />
-        Back to enrolled students
+        {label}
       </Link>
     </Button>
   );

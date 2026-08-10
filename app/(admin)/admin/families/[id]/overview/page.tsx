@@ -382,8 +382,10 @@ export default function FamilyOverviewPage() {
                     ? new Date(`${s.date_of_birth}T00:00:00`).toLocaleDateString()
                     : "—";
                   const latestYear = latestYearByStudent.get(s.id);
+                  // `from=overview` points the student page's back
+                  // button here instead of the enrolled roster.
                   const href = latestYear
-                    ? `/admin/enrolled/${s.id}?yearId=${latestYear}`
+                    ? `/admin/enrolled/${s.id}?yearId=${latestYear}&from=overview`
                     : null;
                   return (
                     <TableRow

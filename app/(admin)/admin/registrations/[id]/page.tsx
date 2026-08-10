@@ -70,6 +70,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ActivityLogSheet } from "@/components/admin/activity-log-sheet";
+import { StageNav } from "@/components/admin/stage-nav";
 import { BillingCard } from "@/components/admin/billing-card";
 import { TuitionBreakdownTable } from "@/components/admin/tuition-breakdown-table";
 import { SufsAwardCard } from "@/components/admin/sufs-award-card";
@@ -566,14 +567,18 @@ export default function FamilyRegistrationDetailPage() {
               onChanged={() => void refresh()}
               size="sm"
             />
-            <Button asChild variant="outline" size="sm" className="bg-white">
-              <Link
-                href={`/admin/families/${family?.id ?? familyId}?yearId=${yearId}`}
-              >
-                <ExternalLink className="size-3.5 mr-1.5" />
-                View application
-              </Link>
-            </Button>
+            {/* Stage jumps — Application + per-student Enrollment,
+                the same button set every admissions surface carries
+                (replaces the older one-off "View application"). */}
+            <StageNav
+              current="registration"
+              familyId={Number(family?.id ?? familyId)}
+              yearId={yearId}
+              students={students.map((s) => ({
+                id: s.student_id,
+                name: s.student_full_name,
+              }))}
+            />
             {/* Cross-surface jump to the family overview page —
                 cross-year summary + matching inquiries / applications
                 / registrations / sent emails. Year-scoped link so

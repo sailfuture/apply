@@ -62,6 +62,7 @@ import { Textarea } from "@/components/ui/textarea";
 // "Accepted" pill — keep the import even though
 // `StudentApplicationBlock` no longer uses it.
 import { StatusBadge } from "@/components/admin/status-badge";
+import { StageNav } from "@/components/admin/stage-nav";
 import { ActivityLogSheet } from "@/components/admin/activity-log-sheet";
 import { FamilyMessagesSheet } from "@/components/admin/family-messages-sheet";
 import { EmailParentButton } from "@/components/admin/email-parent-button";
@@ -631,6 +632,21 @@ export default function FamilyDetailPage() {
                   Family overview
                 </Link>
               </Button>
+            ) : null}
+            {/* Stage jumps — Registration + per-student Enrollment,
+                the same button set every admissions surface carries. */}
+            {yearId ? (
+              <StageNav
+                current="application"
+                familyId={Number(familyId)}
+                yearId={yearId}
+                students={students.map((s) => ({
+                  id: s.id,
+                  name:
+                    `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim() ||
+                    `Student #${s.id}`,
+                }))}
+              />
             ) : null}
             {/* The recruitment lead(s) this family converted from —
                 jumps to the lead's triage sheet on All Leads. Hidden
@@ -2521,7 +2537,9 @@ function StudentApplicationBlock({
                     size="sm"
                     className="bg-white"
                   >
-                    <Link href={`/admin/enrolled/${student.id}?yearId=${yearId}`}>
+                    <Link
+                      href={`/admin/enrolled/${student.id}?yearId=${yearId}&from=application`}
+                    >
                       <ExternalLink className="size-3.5 mr-1.5" />
                       Open
                     </Link>
