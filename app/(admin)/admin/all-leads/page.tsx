@@ -16,7 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DataTable, type ColumnDef } from "@/components/admin/data-table";
-import { LeadTriageSheet } from "@/components/admin/lead-triage";
+import { LeadRowSheet } from "@/components/admin/lead-row-sheet";
 import {
   Card,
   CardContent,
@@ -46,7 +46,6 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { StarRating } from "@/components/admin/star-rating";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { sortYearsOldestFirst } from "@/lib/school-years";
-import { formatUSPhone } from "@/lib/phone";
 import { cn } from "@/lib/utils";
 import type {
   AllLeadRow,
@@ -1100,48 +1099,9 @@ export default function AllLeadsPage() {
           comms log for the clicked lead, whichever source it came
           from. */}
       {activeRow ? (
-        <LeadTriageSheet
-          open
+        <LeadRowSheet
+          row={activeRow}
           onOpenChange={(o) => !o && setSelected(null)}
-          scope={{ source: activeRow.source, id: activeRow.id }}
-          title={
-            activeRow.student_name ||
-            activeRow.parent_name ||
-            `${SOURCE_META[activeRow.source].label} #${activeRow.id}`
-          }
-          subtitle={[
-            SOURCE_META[activeRow.source].label,
-            activeRow.parent_name || null,
-            formatUSPhone(activeRow.phone) || null,
-            activeRow.detail || null,
-          ]
-            .filter(Boolean)
-            .join(" · ")}
-          rating={activeRow.rating}
-          isFollowedUp={activeRow.followed_up}
-          lastReachOut={activeRow.last_reach_out || null}
-          details={{
-            student_name: activeRow.student_name,
-            // TASCO rows have no parent-name column — null hides the
-            // input instead of offering an edit that can't save.
-            parent_name:
-              activeRow.source === "tasco" ? null : activeRow.parent_name,
-            phone: activeRow.phone,
-            email: activeRow.email,
-            grade: activeRow.grade_raw,
-            school: activeRow.school,
-            opt_in: activeRow.opt_in,
-            // Camp has no consent column — implied by sign-up.
-            opt_in_editable: activeRow.source !== "camp",
-          }}
-          conversion={{
-            family_id: activeRow.converted_family_id,
-            family_name: activeRow.converted_family_name,
-            stage: activeRow.funnel_stage,
-            converted_at: activeRow.converted_at,
-          }}
-          leadStatus={activeRow.lead_status}
-          statusReason={activeRow.status_reason}
           onChanged={() => void mutate()}
         />
       ) : null}

@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import {
   xano,
@@ -113,7 +113,14 @@ export type LeadFunnelStage =
   | "accepted"
   | "enrolled";
 
-export async function GET() {
+/**
+ * `?familyId=N` narrows the result to leads that converted into that
+ * family, in the same `AllLeadRow` shape. Lets the family surfaces
+ * open the full triage sheet for a linked lead without shipping the
+ * entire lead table to render one row — and without a second
+ * projection of the same data drifting out of sync with this one.
+ */
+export async function GET(req: NextRequest) {
   try {
     await requireAdmin();
     const [
@@ -417,6 +424,13 @@ export async function GET() {
         };
       })
       .sort((a, b) => b.submitted_ts - a.submitted_ts);
+
+    const familyFilter = Number(req.nextUrl.searchParams.get("familyId"));
+    if (Number.isFinite(familyFilter) && familyFilter > 0) {
+      return NextResponse.json(
+        rows.filter((r) => r.converted_family_id === familyFilter)
+      );
+    }
 
     return NextResponse.json(rows);
   } catch (err) {
