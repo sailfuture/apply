@@ -10,6 +10,13 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 /** Award-tier labels — same vocabulary as the tuition breakdown and
  *  the /admin/sufs pipeline page. Keys match `sufs_type`. */
@@ -25,6 +32,18 @@ const SUFS_TYPE_LABELS: Record<string, string> = {
   custom: "Custom amount",
 };
 
+/** Radix Select forbids `value=""` on items, so the "no scholarship"
+ *  choice rides a sentinel that maps back to the empty string the
+ *  column convention stores (same convention as the family Decision
+ *  card's tier picker). */
+const NO_TIER = "none";
+
+/** SUFS status vocabulary — mirrors the family Decision card's
+ *  status picker (`SUFS_STATUSES` on the apply-flow detail page).
+ *  Same empty-string convention as the tier for "no status". */
+const NO_STATUS = "__none";
+const SUFS_STATUS_OPTIONS = ["Pending", "Approved", "Denied"];
+
 export interface SufsAwardRow {
   applicationId: number;
   studentName: string;
@@ -36,16 +55,22 @@ export interface SufsAwardRow {
 
 /**
  * Admin editor for per-student SUFS award IDs — the 9-digit number the
- * Step Up for Students portal assigns to each award. The scholarship
- * determination happens on the apply-flow Decision card, but the award
- * ID often arrives LATER (after acceptance, sometimes after
+ * Step Up for Students portal assigns to each award — plus the SUFS
+ * tier (award level) and status. The scholarship determination happens
+ * on the apply-flow Decision card, but the tier choice, status, and
+ * the award ID often arrive LATER (after acceptance, sometimes after
  * enrollment), so this card gives the registration and enrolled detail
- * pages a way to record it without reopening the application.
+ * pages a way to record all three without reopening the application —
+ * and deliberately carries NO `confirmed_scholarship` lock: award
+ * bookkeeping stays editable forever, while the signed tuition
+ * amounts keep their own lock on the Decision card.
  *
  * Writes go straight to `PATCH /api/admin/applications/[id]`
- * (`sufs_award_id` is allowlisted there); everything else on the row
- * is untouched. Type/status render read-only for context — the full
- * editor stays on the family Decision card.
+ * (`sufs_type`, `sufs_status`, and `sufs_award_id` are all
+ * allowlisted there); everything else on the row is untouched. The
+ * dollar amount is untouched on purpose — billing reads the stored
+ * `sufs_amount`, so a tier correction here never moves what the
+ * family signed for.
  */
 export function SufsAwardCard({
   rows,
@@ -89,12 +114,16 @@ function SufsAwardRowEditor({
   const [draft, setDraft] = useState(
     row.awardId ? String(row.awardId) : ""
   );
+  // Local mirrors so the selects reflect the change instantly; the
+  // host page revalidates behind them via onSaved().
+  const [tier, setTier] = useState(row.sufsType || NO_TIER);
+  const [status, setStatus] = useState(row.sufsStatus || NO_STATUS);
   const [saving, setSaving] = useState(false);
 
-  async function save() {
-    const next = Number(draft);
-    const safe = Number.isFinite(next) ? next : 0;
-    if (safe === (row.awardId ?? 0)) return;
+  async function patchApplication(
+    body: Record<string, unknown>,
+    successMessage: string
+  ) {
     setSaving(true);
     try {
       const res = await fetch(
@@ -102,44 +131,112 @@ function SufsAwardRowEditor({
         {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sufs_award_id: safe }),
+          body: JSON.stringify(body),
         }
       );
       if (!res.ok) {
         const err = await res.json().catch(() => null);
         throw new Error(err?.error ?? `Save failed (${res.status})`);
       }
-      toast.success(
-        safe
-          ? `Award ID saved for ${row.studentName}.`
-          : `Award ID cleared for ${row.studentName}.`
-      );
+      toast.success(successMessage);
       onSaved();
+      return true;
     } catch (err) {
-      console.error("[SufsAwardRowEditor.save]", err);
+      console.error("[SufsAwardRowEditor.patchApplication]", err);
       toast.error(
-        err instanceof Error ? err.message : "Couldn't save the award ID."
+        err instanceof Error ? err.message : "Couldn't save."
       );
+      return false;
     } finally {
       setSaving(false);
     }
+  }
+
+  async function saveAwardId() {
+    const next = Number(draft);
+    const safe = Number.isFinite(next) ? next : 0;
+    if (safe === (row.awardId ?? 0)) return;
+    await patchApplication(
+      { sufs_award_id: safe },
+      safe
+        ? `Award ID saved for ${row.studentName}.`
+        : `Award ID cleared for ${row.studentName}.`
+    );
+  }
+
+  async function saveTier(next: string) {
+    const prev = tier;
+    setTier(next);
+    // "" per the existing column convention for "not on a SUFS
+    // scholarship" — same value the family Decision card stores.
+    const stored = next === NO_TIER ? "" : next;
+    if (stored === row.sufsType) return;
+    const ok = await patchApplication(
+      { sufs_type: stored },
+      stored
+        ? `SUFS tier saved for ${row.studentName}.`
+        : `SUFS tier cleared for ${row.studentName}.`
+    );
+    if (!ok) setTier(prev);
+  }
+
+  async function saveStatus(next: string) {
+    const prev = status;
+    setStatus(next);
+    const stored = next === NO_STATUS ? "" : next;
+    if (stored === row.sufsStatus) return;
+    const ok = await patchApplication(
+      { sufs_status: stored },
+      stored
+        ? `SUFS status saved for ${row.studentName}.`
+        : `SUFS status cleared for ${row.studentName}.`
+    );
+    if (!ok) setStatus(prev);
   }
 
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
       <div className="min-w-0">
         <p className="truncate text-sm font-medium">{row.studentName}</p>
-        <p className="text-xs text-muted-foreground">
-          {row.sufsType
-            ? SUFS_TYPE_LABELS[row.sufsType] ?? row.sufsType
-            : "No SUFS tier selected"}
-          {row.sufsStatus ? ` · ${row.sufsStatus}` : ""}
-        </p>
       </div>
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         {saving ? (
           <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
         ) : null}
+        <Select
+          value={tier}
+          onValueChange={(v) => void saveTier(v)}
+          disabled={saving}
+        >
+          <SelectTrigger className="w-56 bg-white">
+            <SelectValue placeholder="SUFS tier" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={NO_TIER}>Not on a SUFS scholarship</SelectItem>
+            {Object.entries(SUFS_TYPE_LABELS).map(([key, label]) => (
+              <SelectItem key={key} value={key}>
+                {label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select
+          value={status}
+          onValueChange={(v) => void saveStatus(v)}
+          disabled={saving}
+        >
+          <SelectTrigger className="w-36 bg-white">
+            <SelectValue placeholder="Status" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={NO_STATUS}>No status</SelectItem>
+            {SUFS_STATUS_OPTIONS.map((s) => (
+              <SelectItem key={s} value={s}>
+                {s}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <Input
           value={draft}
           type="text"
@@ -154,7 +251,7 @@ function SufsAwardRowEditor({
           onChange={(e) =>
             setDraft(e.target.value.replace(/\D/g, "").slice(0, 9))
           }
-          onBlur={() => void save()}
+          onBlur={() => void saveAwardId()}
           onKeyDown={(e) => {
             if (e.key === "Enter") e.currentTarget.blur();
           }}

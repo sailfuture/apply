@@ -1497,40 +1497,28 @@ function SectionShell({
               )
             ) : null}
           </div>
-          {/* Notes + Edit pair, docked at the right of the section
-              header. Once the section is verified, both are
-              disabled — admin can't add notes or jump into an editor
-              on a settled section without first hitting Undo on the
-              footer to re-open it. This keeps the audit trail honest
-              ("the verified state is the source of truth, edits flow
-              through the unverify path") and prevents accidental
-              clicks from muddying a confirmed surface. */}
+          {/* Edit affordance, docked at the right of the section
+              header. Stays enabled even after the section is
+              verified — admin must be able to amend an accepted
+              family's information (testing dates, demographics,
+              contacts, …) without revoking acceptance or unwinding
+              the verification chain. The verify stamp is an audit
+              record ("who reviewed this and when"), not an edit
+              lock; the tuition/scholarship money fields keep their
+              own `confirmed_scholarship` lock independent of this. */}
           <div className="flex items-center gap-2 shrink-0">
             {editHref ? (
-              fullyDone ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="bg-white"
-                  disabled
-                >
+              <Button
+                asChild
+                variant="outline"
+                size="sm"
+                className="bg-white"
+              >
+                <Link href={editHref}>
                   <Pencil className="size-4 mr-1" />
                   Edit
-                </Button>
-              ) : (
-                <Button
-                  asChild
-                  variant="outline"
-                  size="sm"
-                  className="bg-white"
-                >
-                  <Link href={editHref}>
-                    <Pencil className="size-4 mr-1" />
-                    Edit
-                  </Link>
-                </Button>
-              )
+                </Link>
+              </Button>
             ) : null}
           </div>
         </div>

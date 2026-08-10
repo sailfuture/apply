@@ -773,16 +773,16 @@ export default function FamilyRegistrationDetailPage() {
         </section>
 
         <section id="section-enrollment" className="scroll-mt-20">
-          {/* No Edit affordance — Enrollment Agreement is owned end-
-              to-end by PandaDoc (template, signing, returned PDF).
-              Editing fields out from under the document workflow
-              would desync the PDF on file from the page state, so
-              the section stays read-only here. Admin re-sends the
-              PandaDoc envelope through its own surface if a
-              correction is needed. */}
+          {/* The Enrollment Agreement itself is owned end-to-end by
+              PandaDoc (template, signing, returned PDF); the section
+              editor exposes the envelope state read-only plus an
+              explicit admin override for OUR signed latch (webhook
+              recovery / voiding a bad record) — it never edits the
+              PandaDoc envelope. */}
           <SectionShell
             title="Enrollment Agreement"
             status={sectionStatus.enrollment.completed ? "complete" : "in_progress"}
+            editHref={regSectionHref("enrollment")}
             notes={{
               familyId: Number(family?.id ?? familyId),
               yearId: Number(yearId),
@@ -819,6 +819,7 @@ export default function FamilyRegistrationDetailPage() {
           <SectionShell
             title="Registration Packet"
             status={sectionStatus.registration.completed ? "complete" : "in_progress"}
+            editHref={regSectionHref("registration")}
             suppressVerifiedMute={isResidential}
             notes={{
               familyId: Number(family?.id ?? familyId),
@@ -912,16 +913,16 @@ export default function FamilyRegistrationDetailPage() {
         </section>
 
         <section id="section-volunteer" className="scroll-mt-20">
-          {/* No Edit affordance — Volunteer Hours captures the
-              parent's acknowledgment of the volunteer policy via a
-              printed name + signature, both written by the parent
-              flow's /volunteer-hours page. Admin override would
-              defeat the audit (the signature is supposed to be
-              the parent's). Verify on the footer is the admin
-              affordance here. */}
+          {/* Volunteer Hours captures the parent's acknowledgment of
+              the volunteer policy (printed name + signature from the
+              parent flow's /volunteer-hours page). The section editor
+              lets admin fix the printed name and override the
+              section-complete flag for out-of-band acknowledgments;
+              the parent-drawn signature itself is never editable. */}
           <SectionShell
             title="Volunteer Hours"
             status={sectionStatus.volunteer.completed ? "complete" : "in_progress"}
+            editHref={regSectionHref("volunteer")}
             notes={{
               familyId: Number(family?.id ?? familyId),
               yearId: Number(yearId),
@@ -1311,39 +1312,24 @@ function SectionShell({
               )
             ) : null}
           </div>
-          {/* Notes + Edit pair docked right of the header — same
-              affordance pair the apply-flow SectionShell exposes.
-              Notes opens a section-filtered drawer; Edit jumps to
-              a per-section editor route under
-              `/admin/registrations/[id]/[section]`. Once the
-              section is verified, both are disabled — same audit
-              treatment as the apply-flow SectionShell. */}
+          {/* Edit affordance docked right of the header — same as
+              the apply-flow SectionShell. Stays enabled even after
+              the section is verified so admin can amend an accepted
+              family's registration without revoking anything; the
+              verify stamp is an audit record, not an edit lock. */}
           <div className="flex items-center gap-2 shrink-0">
             {editHref ? (
-              fullyDone ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="bg-white"
-                  disabled
-                >
+              <Button
+                asChild
+                variant="outline"
+                size="sm"
+                className="bg-white"
+              >
+                <Link href={editHref}>
                   <Pencil className="size-4 mr-1" />
                   Edit
-                </Button>
-              ) : (
-                <Button
-                  asChild
-                  variant="outline"
-                  size="sm"
-                  className="bg-white"
-                >
-                  <Link href={editHref}>
-                    <Pencil className="size-4 mr-1" />
-                    Edit
-                  </Link>
-                </Button>
-              )
+                </Link>
+              </Button>
             ) : null}
           </div>
         </div>
@@ -2543,12 +2529,7 @@ function StudentPacketBlock({
                 variant="outline"
                 size="sm"
                 onClick={enterEdit}
-                disabled={verified}
-                title={
-                  verified
-                    ? "Undo verification below to amend this packet."
-                    : `Edit ${row.student_full_name}'s packet`
-                }
+                title={`Edit ${row.student_full_name}'s packet`}
                 className="bg-white"
               >
                 <Pencil className="size-3.5 mr-1.5" />
