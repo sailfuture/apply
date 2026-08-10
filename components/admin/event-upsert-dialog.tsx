@@ -29,6 +29,7 @@ import {
   eventColor,
   isUnlimitedSpots,
   parseDate,
+  parseNeeds,
   UNLIMITED_PARENT_SPOTS,
 } from "@/lib/school-calendar";
 import type {
@@ -578,8 +579,25 @@ export function EventUpsertDialog({
   const [spots, setSpots] = useState(
     ev?.parent_spots && ev.parent_spots > 0 ? String(ev.parent_spots) : ""
   );
-  const [needs, setNeeds] = useState((ev?.needs ?? "").trim());
+  // Needs are edited as discrete items (add box + removable rows) but
+  // stored exactly as before — one per line in the `needs` text column
+  // — so nothing downstream changes shape.
+  const [needsList, setNeedsList] = useState<string[]>(() =>
+    parseNeeds(ev?.needs)
+  );
+  const [needDraft, setNeedDraft] = useState("");
   const [saving, setSaving] = useState(false);
+
+  function addNeed() {
+    const item = needDraft.trim();
+    if (!item) return;
+    setNeedsList((prev) =>
+      prev.some((n) => n.toLowerCase() === item.toLowerCase())
+        ? prev
+        : [...prev, item]
+    );
+    setNeedDraft("");
+  }
 
   const dayByDate = useMemo(
     () => new Map(days.map((d) => [d.date, d])),
@@ -609,7 +627,17 @@ export function EventUpsertDialog({
         parent_spots: noSpotLimit
           ? UNLIMITED_PARENT_SPOTS
           : Number(spots) || 0,
-        needs: needs.trim(),
+        // Fold in an un-Added draft so typing a need and hitting Save
+        // without pressing Add doesn't silently drop it.
+        needs: [
+          ...needsList,
+          ...(needDraft.trim() &&
+          !needsList.some(
+            (n) => n.toLowerCase() === needDraft.trim().toLowerCase()
+          )
+            ? [needDraft.trim()]
+            : []),
+        ].join("\n"),
       };
       const res = await fetch(
         existing
@@ -803,15 +831,56 @@ export function EventUpsertDialog({
           </div>
           <div className="space-y-1.5">
             <Label className="text-xs">Event needs</Label>
-            <Textarea
-              value={needs}
-              onChange={(e) => setNeeds(e.target.value)}
-              rows={3}
-              placeholder={"One need per line:\n4 chaperones\nWater jugs"}
-            />
+            {needsList.length > 0 ? (
+              <ul className="space-y-1">
+                {needsList.map((n, i) => (
+                  <li
+                    key={`${n}-${i}`}
+                    className="flex items-center gap-2 rounded-md border bg-muted/30 px-2.5 py-1.5 text-sm"
+                  >
+                    <span className="min-w-0 flex-1 truncate">{n}</span>
+                    <button
+                      type="button"
+                      className="shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:text-red-600"
+                      aria-label={`Remove "${n}"`}
+                      onClick={() =>
+                        setNeedsList((prev) =>
+                          prev.filter((_, idx) => idx !== i)
+                        )
+                      }
+                    >
+                      <X className="size-3.5" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            <div className="flex gap-2">
+              <Input
+                value={needDraft}
+                onChange={(e) => setNeedDraft(e.target.value)}
+                placeholder="e.g. 4 chaperones, water jugs, grill…"
+                onKeyDown={(e) => {
+                  // Enter adds the need instead of submitting/closing.
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    addNeed();
+                  }
+                }}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                className="bg-white shrink-0"
+                disabled={!needDraft.trim()}
+                onClick={addNeed}
+              >
+                Add
+              </Button>
+            </div>
             <p className="text-[11px] text-muted-foreground">
-              One per line — shown to families as a list of what the
-              event needs.
+              Add one item at a time — families see these as a list of
+              what the event needs.
             </p>
           </div>
         </div>
