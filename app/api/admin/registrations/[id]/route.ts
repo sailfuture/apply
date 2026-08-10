@@ -370,6 +370,21 @@ export async function GET(
           // Opportunity Scholarship Award dollar value renders on
           // the tuition breakdown.
           confirmed_scholarship: app.confirmed_scholarship === true,
+          // NWEA initial-testing fields for the admin-only Testing
+          // card. Split-source on purpose: scheduled/complete bools
+          // live on the per-year application row; RIT scores + test
+          // dates live on the student row (canonical — they follow
+          // the student across re-enrollment).
+          nwea_testing_scheduled: app.nwea_testing_scheduled === true,
+          nwea_testing_complete: app.nwea_testing_complete === true,
+          initial_screening_nwea_math:
+            student?.initial_screening_nwea_math ?? null,
+          initial_screening_nwea_reading:
+            student?.initial_screening_nwea_reading ?? null,
+          initial_screening_nwea_math_date:
+            student?.initial_screening_nwea_math_date ?? null,
+          initial_screening_nwea_reading_date:
+            student?.initial_screening_nwea_reading_date ?? null,
         };
       }
     );
@@ -604,6 +619,16 @@ export interface AdminFamilyRegistrationStudentRow {
    *  tuition breakdown to gate whether the Opportunity Scholarship
    *  Award dollar value renders or shows as "—" pending. */
   confirmed_scholarship: boolean;
+  /** NWEA initial-testing state for the admin-only Testing card.
+   *  Bools come from the per-year application row; scores + dates
+   *  come from the student row (canonical). Score 0 means unset —
+   *  the Xano column defaults to 0 and real RIT scores are 100–300. */
+  nwea_testing_scheduled: boolean;
+  nwea_testing_complete: boolean;
+  initial_screening_nwea_math: number | null;
+  initial_screening_nwea_reading: number | null;
+  initial_screening_nwea_math_date: string | null;
+  initial_screening_nwea_reading_date: string | null;
 }
 
 /**

@@ -73,6 +73,7 @@ import { ActivityLogSheet } from "@/components/admin/activity-log-sheet";
 import { BillingCard } from "@/components/admin/billing-card";
 import { TuitionBreakdownTable } from "@/components/admin/tuition-breakdown-table";
 import { SufsAwardCard } from "@/components/admin/sufs-award-card";
+import { NweaTestingCard } from "@/components/admin/nwea-testing-card";
 import { RequestRecordsDialog } from "@/components/admin/request-records-dialog";
 import { EmailParentButton } from "@/components/admin/email-parent-button";
 import { adminFetcher } from "@/lib/admin-fetcher";
@@ -425,6 +426,18 @@ export default function FamilyRegistrationDetailPage() {
       completed: progress?.isRegistrationConfirmed === true,
       verified: null as boolean | null,
     },
+    // NWEA Initial Testing — admin-only card; green once every
+    // student's per-year application row is marked testing-complete.
+    // No verify latch: the card writes plain data columns
+    // (application bools + student scores/dates), never a lock, so
+    // it stays editable after acceptance AND after the family
+    // registration is confirmed.
+    testing: {
+      completed:
+        students.length > 0 &&
+        students.every((s) => s.nwea_testing_complete),
+      verified: null as boolean | null,
+    },
     // Billing — green once a LIVE Stripe subscription exists for the
     // (family, year). Sentinel-aware: a `canceled:<id>` marker on the
     // family-payment row means billing ended and the row should read
@@ -713,6 +726,28 @@ export default function FamilyRegistrationDetailPage() {
           onConfirmed={refresh}
         />
 
+        {/* NWEA Initial Testing — admin-only, one editor row per
+            student. Writes plain data columns on the application +
+            student rows (no latch), so scores and scheduling stay
+            editable after acceptance and after the family
+            registration is confirmed — no revoke needed. */}
+        <section id="section-testing" className="scroll-mt-20">
+          <NweaTestingCard
+            rows={students.map((s) => ({
+              applicationId: s.application_id,
+              studentId: s.student_id,
+              studentName: s.student_full_name,
+              scheduled: s.nwea_testing_scheduled,
+              complete: s.nwea_testing_complete,
+              math: s.initial_screening_nwea_math,
+              reading: s.initial_screening_nwea_reading,
+              mathDate: s.initial_screening_nwea_math_date ?? "",
+              readingDate: s.initial_screening_nwea_reading_date ?? "",
+            }))}
+            onSaved={() => void refresh()}
+          />
+        </section>
+
         <section id="section-tuition" className="scroll-mt-20">
           <SectionShell
             title="Tuition"
@@ -972,6 +1007,7 @@ function RegistrationSideNav({
     emergency_contacts: { completed: boolean; verified: boolean };
     volunteer: { completed: boolean; verified: boolean };
     confirmation: { completed: boolean; verified: boolean | null };
+    testing: { completed: boolean; verified: boolean | null };
     billing: { completed: boolean; verified: boolean | null };
   };
 }) {
@@ -1016,6 +1052,19 @@ function RegistrationSideNav({
       label: "Confirmation",
       href: "#section-confirmation",
       complete: sectionStatus.confirmation.completed,
+      verified: null,
+      isAdmin: true,
+    },
+    {
+      // NWEA Initial Testing — admin-only card between Confirmation
+      // and Tuition. `isAdmin` for the muted gray-check circle (the
+      // parent has no role here); `verified: null` because the card
+      // has no verify latch — the circle (every student marked
+      // testing-complete) is the only signal.
+      key: "testing",
+      label: "Initial Testing",
+      href: "#section-testing",
+      complete: sectionStatus.testing.completed,
       verified: null,
       isAdmin: true,
     },
