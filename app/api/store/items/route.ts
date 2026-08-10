@@ -7,7 +7,7 @@ import { withStripePrices } from "@/lib/store-server";
  * Parent-facing store catalog — active items only, in sort order.
  * Prices come from Stripe (the Payment Link's real amount) via
  * `withStripePrices`; the stored `price_cents` is only the fallback
- * cache. Returns [] when the `registration_store_items` table isn't
+ * cache. Returns [] when the `store_items` table isn't
  * reachable so the dashboard's Store section simply hides instead of
  * erroring.
  */

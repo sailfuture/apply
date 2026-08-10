@@ -10,7 +10,7 @@ import type { XanoStoreItem, XanoStoreOrder } from "@/lib/xano";
  * Each catalog item's displayed price and product image are resolved
  * from its Payment Link's line items (price × quantity, and the
  * Stripe Product's first image). The `price_cents` column on
- * `registration_store_items` is only a cache: whenever the resolved
+ * `store_items` is only a cache: whenever the resolved
  * price differs, we write it back (best-effort) so the stored value
  * tracks Stripe and keeps working as a fallback when Stripe is
  * unreachable. Images aren't persisted — they ride on the response.
