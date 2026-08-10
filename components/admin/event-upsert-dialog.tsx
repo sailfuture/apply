@@ -24,7 +24,13 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
-import { EVENT_COLORS, eventColor, parseDate } from "@/lib/school-calendar";
+import {
+  EVENT_COLORS,
+  eventColor,
+  isUnlimitedSpots,
+  parseDate,
+  UNLIMITED_PARENT_SPOTS,
+} from "@/lib/school-calendar";
 import type {
   XanoSchoolCalendarDay,
   XanoSchoolCalendarEvent,
@@ -566,8 +572,11 @@ export function EventUpsertDialog({
   const [hours, setHours] = useState(
     ev?.volunteer_hour_total ? String(ev.volunteer_hour_total) : ""
   );
+  const [noSpotLimit, setNoSpotLimit] = useState(
+    isUnlimitedSpots(ev?.parent_spots)
+  );
   const [spots, setSpots] = useState(
-    ev?.parent_spots ? String(ev.parent_spots) : ""
+    ev?.parent_spots && ev.parent_spots > 0 ? String(ev.parent_spots) : ""
   );
   const [needs, setNeeds] = useState((ev?.needs ?? "").trim());
   const [saving, setSaving] = useState(false);
@@ -597,7 +606,9 @@ export function EventUpsertDialog({
         mandatory,
         parent_volunteer_hours: volunteer,
         volunteer_hour_total: volunteer ? Number(hours) || 0 : 0,
-        parent_spots: Number(spots) || 0,
+        parent_spots: noSpotLimit
+          ? UNLIMITED_PARENT_SPOTS
+          : Number(spots) || 0,
         needs: needs.trim(),
       };
       const res = await fetch(
@@ -768,13 +779,26 @@ export function EventUpsertDialog({
               type="number"
               min="0"
               step="1"
-              value={spots}
+              value={noSpotLimit ? "" : spots}
+              disabled={noSpotLimit}
               onChange={(e) => setSpots(e.target.value)}
-              placeholder="0"
+              placeholder={noSpotLimit ? "No limit" : "0"}
             />
+            <label className="flex items-center gap-2 pt-0.5 cursor-pointer">
+              <input
+                type="checkbox"
+                className="size-3.5 cursor-pointer rounded accent-primary"
+                checked={noSpotLimit}
+                onChange={(e) => setNoSpotLimit(e.target.checked)}
+              />
+              <span className="text-[11px] font-medium">
+                Open to everyone — no attendance limit
+              </span>
+            </label>
             <p className="text-[11px] text-muted-foreground">
               How many parent spots families can reserve. Blank or 0 =
-              no sign-up — the event won&rsquo;t offer an RSVP.
+              no sign-up — the event won&rsquo;t offer an RSVP. Tick the
+              box to take sign-ups without capping attendance.
             </p>
           </div>
           <div className="space-y-1.5">

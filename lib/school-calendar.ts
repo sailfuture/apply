@@ -57,3 +57,35 @@ export function parseNeeds(needs: string | null | undefined): string[] {
     .map((s) => s.trim())
     .filter(Boolean);
 }
+
+/**
+ * `school_calendar_events.parent_spots` encodes three states in one
+ * int column:
+ *
+ *    0  → no parent sign-up at all (the event never reaches parents)
+ *   >0  → sign-up open, capped at that many spots
+ *   -1  → sign-up open with no cap  (`UNLIMITED_PARENT_SPOTS`)
+ *
+ * The sentinel rides in the existing column rather than a new boolean
+ * so Xano needs no schema change, matching how the rest of the app
+ * handles this (the `" "` clear-sentinel on `needs` and `color`).
+ * Read it through `isSignUpEvent` / `isUnlimitedSpots` — never
+ * compare `parent_spots > 0` directly, or unlimited events silently
+ * drop out of the list.
+ */
+export const UNLIMITED_PARENT_SPOTS = -1;
+
+/** True when parents can sign up at all — capped or uncapped. */
+export function isSignUpEvent(
+  parentSpots: number | null | undefined
+): boolean {
+  const n = Number(parentSpots ?? 0);
+  return n > 0 || n === UNLIMITED_PARENT_SPOTS;
+}
+
+/** True when sign-up is open with no attendance limit. */
+export function isUnlimitedSpots(
+  parentSpots: number | null | undefined
+): boolean {
+  return Number(parentSpots ?? 0) === UNLIMITED_PARENT_SPOTS;
+}

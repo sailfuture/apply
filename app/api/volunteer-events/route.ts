@@ -1,17 +1,22 @@
 import { auth, currentUser } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
 import { xano } from "@/lib/xano";
+import { isSignUpEvent, isUnlimitedSpots } from "@/lib/school-calendar";
 
 /**
  * Upcoming sign-up events for the parent volunteer page.
  *
  *   GET /api/volunteer-events?yearId=Y → { events: [...] }
  *
- * An event appears when admin gave it parent sign-up capacity
- * (`parent_spots > 0`) and its calendar day hasn't passed. Each row
- * carries the live spot math (total / taken) plus the family's own
- * RSVP so the page can render Sign up vs Edit states without a
- * second fetch.
+ * An event appears when admin opened it for parent sign-up — either
+ * with a capacity or with no limit at all (see `isSignUpEvent`) — and
+ * its calendar day hasn't passed. Each row carries the live spot math
+ * (total / taken) plus the family's own RSVP so the page can render
+ * Sign up vs Edit states without a second fetch.
+ *
+ * `unlimited` is surfaced explicitly so the client never has to know
+ * about the `-1` sentinel; when it's true, `spots_total` is
+ * meaningless and only `spots_taken` is worth showing.
  */
 export async function GET(req: NextRequest) {
   const { userId } = await auth();
@@ -68,7 +73,7 @@ export async function GET(req: NextRequest) {
   }
 
   const events = eventsR.value
-    .filter((e) => (e.parent_spots ?? 0) > 0)
+    .filter((e) => isSignUpEvent(e.parent_spots))
     .map((e) => ({ e, date: dateByDay.get(Number(e.school_calendar_id)) }))
     .filter(
       (x): x is { e: (typeof eventsR.value)[number]; date: string } =>
@@ -103,6 +108,7 @@ export async function GET(req: NextRequest) {
         needs: (e.needs ?? "").trim(),
         spots_total: e.parent_spots ?? 0,
         spots_taken: takenByEvent.get(e.id) ?? 0,
+        unlimited: isUnlimitedSpots(e.parent_spots),
         my_rsvp: mine
           ? { spots: Number(mine.spots) || 0, comment: (mine.comment ?? "").trim() }
           : null,
@@ -130,8 +136,13 @@ export interface ParentVolunteerEvent {
   volunteer_hour_total: number;
   /** Raw one-per-line needs text — split client-side with parseNeeds. */
   needs: string;
+  /** Capacity as stored. Meaningless when `unlimited` — read that
+   *  first. */
   spots_total: number;
   spots_taken: number;
+  /** Sign-up is open with no attendance cap, so the event is never
+   *  "Full" and `spots_total` shouldn't be shown. */
+  unlimited: boolean;
   my_rsvp: { spots: number; comment: string } | null;
 }
 

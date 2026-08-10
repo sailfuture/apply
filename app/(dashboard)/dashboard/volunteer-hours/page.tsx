@@ -371,7 +371,11 @@ function UpcomingEventsSection({ yearId }: { yearId: number | null }) {
           {events.map((ev) => {
             const c = eventColor(ev.color);
             const needs = parseNeeds(ev.needs);
-            const left = Math.max(ev.spots_total - ev.spots_taken, 0);
+            // Uncapped events are never "Full" — `left` only governs
+            // capped ones.
+            const left = ev.unlimited
+              ? Number.POSITIVE_INFINITY
+              : Math.max(ev.spots_total - ev.spots_taken, 0);
             const dateObj = parseDate(ev.date);
             return (
               <div key={ev.id} className="flex gap-4 px-4 py-4">
@@ -421,9 +425,13 @@ function UpcomingEventsSection({ yearId }: { yearId: number | null }) {
                     ) : null}
                     <span className="inline-flex items-center gap-1">
                       <Users className="size-3" />
-                      {left > 0
-                        ? `${left} of ${ev.spots_total} spots open`
-                        : "Full"}
+                      {ev.unlimited
+                        ? ev.spots_taken > 0
+                          ? `${ev.spots_taken} signed up`
+                          : "Open to all families"
+                        : left > 0
+                          ? `${left} of ${ev.spots_total} spots open`
+                          : "Full"}
                     </span>
                   </p>
                   {ev.description ? (
@@ -505,11 +513,14 @@ function RsvpDialog({
   const existing = event.my_rsvp;
   // Spots still available to this family = open spots + what they
   // already hold (editing down releases, editing up consumes).
-  const maxSpots = Math.min(
-    Math.max(event.spots_total - event.spots_taken, 0) +
-      (existing?.spots ?? 0),
-    20
-  );
+  // Uncapped events allow the full per-request maximum.
+  const maxSpots = event.unlimited
+    ? 20
+    : Math.min(
+        Math.max(event.spots_total - event.spots_taken, 0) +
+          (existing?.spots ?? 0),
+        20
+      );
   const [spots, setSpots] = useState(String(existing?.spots ?? 1));
   const [comment, setComment] = useState(existing?.comment ?? "");
   const [saving, setSaving] = useState(false);

@@ -1,6 +1,7 @@
 import { auth, currentUser } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
 import { xano } from "@/lib/xano";
+import { isSignUpEvent, isUnlimitedSpots } from "@/lib/school-calendar";
 
 /**
  * Family RSVP for one sign-up event.
@@ -42,7 +43,7 @@ export async function POST(req: NextRequest) {
     xano.eventRsvps.getAll(),
   ]);
   const event = events.find((e) => e.id === eventId);
-  if (!event || (event.parent_spots ?? 0) <= 0) {
+  if (!event || !isSignUpEvent(event.parent_spots)) {
     return NextResponse.json(
       { error: "This event isn't accepting sign-ups." },
       { status: 404 }
@@ -70,19 +71,23 @@ export async function POST(req: NextRequest) {
     )
     .reduce((sum, r) => sum + (Number(r.spots) || 0), 0);
 
-  const capacity = event.parent_spots ?? 0;
-  const available = capacity - othersTaken;
-  if (spots > available) {
-    return NextResponse.json(
-      {
-        error:
-          available <= 0
-            ? "This event is full."
-            : `Only ${available} spot${available === 1 ? "" : "s"} left.`,
-        available: Math.max(available, 0),
-      },
-      { status: 409 }
-    );
+  // Uncapped events skip the capacity check entirely — the per-request
+  // 1..20 bound above is the only ceiling.
+  if (!isUnlimitedSpots(event.parent_spots)) {
+    const capacity = event.parent_spots ?? 0;
+    const available = capacity - othersTaken;
+    if (spots > available) {
+      return NextResponse.json(
+        {
+          error:
+            available <= 0
+              ? "This event is full."
+              : `Only ${available} spot${available === 1 ? "" : "s"} left.`,
+          available: Math.max(available, 0),
+        },
+        { status: 409 }
+      );
+    }
   }
 
   if (mine && comment) {

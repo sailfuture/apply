@@ -66,6 +66,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { adminFetcher } from "@/lib/admin-fetcher";
+import { isSignUpEvent, isUnlimitedSpots } from "@/lib/school-calendar";
 import { cn } from "@/lib/utils";
 import {
   EventUpsertDialog,
@@ -627,7 +628,8 @@ export default function AdminVolunteerHoursPage() {
                             {formatHours(ev.volunteer_hour_total || 0)} hrs
                           </TableCell>
                           <TableCell className="text-right">
-                            {(ev.parent_spots ?? 0) > 0 || evRsvps.length > 0 ? (
+                            {isSignUpEvent(ev.parent_spots) ||
+                            evRsvps.length > 0 ? (
                               <button
                                 type="button"
                                 onClick={() => setRsvpListEvent(ev)}
@@ -640,9 +642,11 @@ export default function AdminVolunteerHoursPage() {
                                 title="View sign-ups"
                               >
                                 {spotsReserved}
-                                {(ev.parent_spots ?? 0) > 0
-                                  ? ` / ${ev.parent_spots}`
-                                  : ""}
+                                {isUnlimitedSpots(ev.parent_spots)
+                                  ? " / ∞"
+                                  : (ev.parent_spots ?? 0) > 0
+                                    ? ` / ${ev.parent_spots}`
+                                    : ""}
                               </button>
                             ) : (
                               // No capacity set → parents can't sign up.
@@ -1760,9 +1764,11 @@ function RsvpListDialog({
           <DialogTitle>Sign-ups — {event.title}</DialogTitle>
           <DialogDescription>
             {fmtDate(event.date)} ·{" "}
-            {capacity > 0
-              ? `${totalSpots} of ${capacity} parent spots reserved`
-              : `${totalSpots} spots reserved`}{" "}
+            {isUnlimitedSpots(event.parent_spots)
+              ? `${totalSpots} spots reserved · no limit`
+              : capacity > 0
+                ? `${totalSpots} of ${capacity} parent spots reserved`
+                : `${totalSpots} spots reserved`}{" "}
             · {rsvps.length} famil{rsvps.length === 1 ? "y" : "ies"}
           </DialogDescription>
         </DialogHeader>
