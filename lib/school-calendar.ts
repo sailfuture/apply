@@ -59,6 +59,71 @@ export function parseNeeds(needs: string | null | undefined): string[] {
 }
 
 /**
+ * An event item as the parent RSVP dialog needs it: what's wanted,
+ * what's spoken for across every family, and what this family holds.
+ *
+ * Items live in their own table keyed by id (see `XanoSchoolEventItem`),
+ * so this carries the id through to the client — a claim references
+ * it, which is what makes renaming a need safe.
+ */
+export interface EventItemAvailability {
+  id: number;
+  label: string;
+  /** How many admin asked for. */
+  quantity: number;
+  /** Claimed across every family, including this one. */
+  claimed: number;
+  /** Claimed by the viewing family. */
+  mine: number;
+}
+
+/**
+ * Join items to claims for one event.
+ *
+ * `claims` may include rows for other events — they're filtered by
+ * item id, so callers can pass the whole table without pre-slicing.
+ */
+export function eventItemAvailability(
+  items: Array<{ id: number; label: string; quantity: number; sort_order?: number }>,
+  claims: Array<{
+    registration_school_event_items_id: number;
+    registration_families_id: number;
+    quantity: number;
+  }>,
+  familyId: number
+): EventItemAvailability[] {
+  const claimedById = new Map<number, number>();
+  const mineById = new Map<number, number>();
+  for (const c of claims) {
+    const itemId = Number(c.registration_school_event_items_id);
+    const qty = Number(c.quantity) || 0;
+    if (qty <= 0) continue;
+    claimedById.set(itemId, (claimedById.get(itemId) ?? 0) + qty);
+    if (familyId > 0 && Number(c.registration_families_id) === familyId) {
+      mineById.set(itemId, (mineById.get(itemId) ?? 0) + qty);
+    }
+  }
+  return [...items]
+    .sort(
+      (a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id - b.id
+    )
+    .map((item) => ({
+      id: item.id,
+      label: item.label,
+      quantity: Math.max(1, Number(item.quantity) || 1),
+      claimed: claimedById.get(item.id) ?? 0,
+      mine: mineById.get(item.id) ?? 0,
+    }));
+}
+
+/** How many more of an item one family may take: everything not
+ *  already held by OTHER families. Editing your own claim down
+ *  releases it rather than counting against you twice. */
+export function itemHeadroom(item: EventItemAvailability): number {
+  return Math.max(item.quantity - (item.claimed - item.mine), 0);
+}
+
+/**
  * `school_calendar_events.parent_spots` encodes three states in one
  * int column:
  *
@@ -123,7 +188,14 @@ export interface CalendarDescriptionEvent {
   parent_volunteer_hours?: boolean;
   volunteer_hour_total?: number;
   parent_spots?: number;
-  needs?: string | null;
+}
+
+/** What the event needs, for the "What we need" block. Passed in
+ *  rather than read off the event: items live in their own table now,
+ *  so the caller (push or ICS feed) does the load. */
+export interface CalendarDescriptionItem {
+  label: string;
+  quantity: number;
 }
 
 /**
@@ -137,7 +209,8 @@ export interface CalendarDescriptionEvent {
  * every client handles.
  */
 export function calendarEventDescription(
-  event: CalendarDescriptionEvent
+  event: CalendarDescriptionEvent,
+  items: CalendarDescriptionItem[] = []
 ): string {
   const blocks: string[] = [];
 
@@ -152,10 +225,16 @@ export function calendarEventDescription(
   ].filter(Boolean);
   if (flags.length > 0) blocks.push(flags.join("\n"));
 
-  const needs = parseNeeds(event.needs);
-  if (needs.length > 0) {
+  if (items.length > 0) {
     blocks.push(
-      ["What we need:", ...needs.map((n) => `• ${n}`)].join("\n")
+      [
+        "What we need:",
+        ...items.map((n) =>
+          n.quantity > 1
+            ? `• ${n.label} (${n.quantity} needed)`
+            : `• ${n.label}`
+        ),
+      ].join("\n")
     );
   }
 

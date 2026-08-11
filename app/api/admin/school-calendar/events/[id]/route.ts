@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { UNLIMITED_PARENT_SPOTS } from "@/lib/school-calendar";
 import {
+  parseEventItemsInput,
+  syncEventItems,
+} from "@/lib/school-event-items";
+import {
   pushSchoolEventToGoogle,
   removeSchoolEventFromGoogle,
 } from "@/lib/school-event-sync";
@@ -72,13 +76,6 @@ export async function PATCH(
     if ("parent_spots" in body) {
       patch.parent_spots = coerceSpots(body.parent_spots);
     }
-    if ("needs" in body) {
-      // Single-space sentinel when clearing — Xano's edit endpoints
-      // drop empty-string inputs. Readers trim before splitting.
-      const needs =
-        typeof body.needs === "string" ? body.needs.trim() : "";
-      patch.needs = needs || " ";
-    }
     if ("color" in body) {
       // Single-space sentinel when clearing — Xano's edit endpoints
       // silently DROP empty-string inputs, so "" would leave the old
@@ -86,14 +83,32 @@ export async function PATCH(
       patch.color = coerceColor(body.color) || " ";
     }
 
-    if (Object.keys(patch).length === 0) {
+    // `items` lives in its own table, so a body carrying only that is
+    // still a valid edit — check for it before rejecting as empty.
+    const hasItems = "items" in body;
+    if (Object.keys(patch).length === 0 && !hasItems) {
       return NextResponse.json(
         { error: "No editable fields in body" },
         { status: 400 }
       );
     }
 
-    const updated = await xano.schoolCalendarEvents.update(id, patch);
+    const updated =
+      Object.keys(patch).length > 0
+        ? await xano.schoolCalendarEvents.update(id, patch)
+        : ((await xano.schoolCalendarEvents.getAll()).find(
+            (e) => e.id === id
+          ) ?? null);
+    if (!updated) {
+      return NextResponse.json({ error: "Event not found" }, { status: 404 });
+    }
+
+    // Needs list — reconciled against its own table. Rows keep their
+    // ids across a rename, which is what stops a family's claim from
+    // being orphaned when admin edits a need's wording.
+    const itemsError = hasItems
+      ? await syncEventItems(id, parseEventItemsInput(body.items))
+      : null;
 
     const day = (await xano.schoolCalendar.getAll().catch(() => [])).find(
       (d) => d.id === Number(updated.school_calendar_id)
@@ -102,9 +117,10 @@ export async function PATCH(
     return NextResponse.json({
       ...updated,
       warning:
-        sync.status === "failed"
+        itemsError ??
+        (sync.status === "failed"
           ? `Event updated, but the change couldn't be pushed to the school Google Calendar: ${sync.error}`
-          : undefined,
+          : undefined),
     });
   } catch (err) {
     return handleAdminError(err);

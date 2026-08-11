@@ -1,16 +1,23 @@
 import { auth, currentUser } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
 import { xano } from "@/lib/xano";
-import { isSignUpEvent, isUnlimitedSpots } from "@/lib/school-calendar";
+import {
+  eventItemAvailability,
+  isSignUpEvent,
+  isUnlimitedSpots,
+  type EventItemAvailability,
+} from "@/lib/school-calendar";
 
 /**
- * Upcoming sign-up events for the parent volunteer page.
+ * Sign-up events for the parent volunteer page.
  *
- *   GET /api/volunteer-events?yearId=Y → { events: [...] }
+ *   GET /api/volunteer-events?yearId=Y → { events: [...], past: [...] }
  *
  * An event appears when admin opened it for parent sign-up — either
- * with a capacity or with no limit at all (see `isSignUpEvent`) — and
- * its calendar day hasn't passed. Each row carries the live spot math
+ * with a capacity or with no limit at all (see `isSignUpEvent`).
+ * `events` is everything from today forward, soonest first; `past` is
+ * everything before today, most recent first, so the page can show a
+ * family what they've already signed up for. Each row carries the live spot math
  * (total / taken) plus the family's own RSVP so the page can render
  * Sign up vs Edit states without a second fetch.
  *
@@ -35,10 +42,12 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "yearId is required" }, { status: 400 });
   }
 
-  const [daysR, eventsR, rsvpsR] = await Promise.allSettled([
+  const [daysR, eventsR, rsvpsR, itemsR, claimsR] = await Promise.allSettled([
     xano.schoolCalendar.getByYear(yearId),
     xano.schoolCalendarEvents.getAll(),
     xano.eventRsvps.getAll(),
+    xano.eventItems.getAll(),
+    xano.eventItemClaims.getAll(),
   ]);
   if (daysR.status === "rejected" || eventsR.status === "rejected") {
     const reason =
@@ -59,6 +68,24 @@ export async function GET(req: NextRequest) {
   if (rsvpsR.status === "rejected") {
     console.error("[/api/volunteer-events] rsvp load failed:", rsvpsR.reason);
   }
+  // Items + claims degrade to [] the same way — the tables are newer
+  // than the events themselves, and an event with no items simply
+  // shows no "can you bring anything?" list.
+  const items = itemsR.status === "fulfilled" ? itemsR.value : [];
+  const claims = claimsR.status === "fulfilled" ? claimsR.value : [];
+  if (itemsR.status === "rejected") {
+    console.error("[/api/volunteer-events] item load failed:", itemsR.reason);
+  }
+  if (claimsR.status === "rejected") {
+    console.error("[/api/volunteer-events] claim load failed:", claimsR.reason);
+  }
+  const itemsByEvent = new Map<number, typeof items>();
+  for (const it of items) {
+    const eid = Number(it.school_calendar_events_id);
+    const list = itemsByEvent.get(eid) ?? [];
+    list.push(it);
+    itemsByEvent.set(eid, list);
+  }
 
   const dateByDay = new Map(daysR.value.map((d) => [d.id, d.date]));
   const todayIso = easternTodayIso();
@@ -72,54 +99,90 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const events = eventsR.value
+  const dated = eventsR.value
     .filter((e) => isSignUpEvent(e.parent_spots))
     .map((e) => ({ e, date: dateByDay.get(Number(e.school_calendar_id)) }))
     .filter(
       (x): x is { e: (typeof eventsR.value)[number]; date: string } =>
-        typeof x.date === "string" && x.date >= todayIso
-    )
+        typeof x.date === "string"
+    );
+
+  const shape = ({
+    e,
+    date,
+  }: {
+    e: (typeof eventsR.value)[number];
+    date: string;
+  }): ParentVolunteerEvent => {
+    const mine =
+      familyId > 0
+        ? (rsvps.find(
+            (r) =>
+              Number(r.school_calendar_events_id) === e.id &&
+              Number(r.registration_families_id) === familyId
+          ) ?? null)
+        : null;
+    return {
+      id: e.id,
+      date,
+      title: e.title,
+      description: e.description ?? "",
+      location: e.location ?? "",
+      start_time: e.start_time ?? 0,
+      end_time: e.end_time ?? 0,
+      color: e.color ?? "",
+      mandatory: e.mandatory === true,
+      parent_volunteer_hours: e.parent_volunteer_hours === true,
+      volunteer_hour_total: e.volunteer_hour_total ?? 0,
+      // Per-item claim math, joined across every family so the dialog
+      // can show "2 of 4 claimed" without a second fetch.
+      items: eventItemAvailability(
+        itemsByEvent.get(e.id) ?? [],
+        claims,
+        familyId
+      ),
+      spots_total: e.parent_spots ?? 0,
+      spots_taken: takenByEvent.get(e.id) ?? 0,
+      unlimited: isUnlimitedSpots(e.parent_spots),
+      my_rsvp: mine
+        ? {
+            spots: Number(mine.spots) || 0,
+            comment: (mine.comment ?? "").trim(),
+          }
+        : null,
+    };
+  };
+
+  const events = dated
+    .filter((x) => x.date >= todayIso)
     .sort(
       (a, b) =>
         a.date.localeCompare(b.date) ||
         (a.e.start_time ?? 0) - (b.e.start_time ?? 0)
     )
-    .map(({ e, date }) => {
-      const mine =
-        familyId > 0
-          ? (rsvps.find(
-              (r) =>
-                Number(r.school_calendar_events_id) === e.id &&
-                Number(r.registration_families_id) === familyId
-            ) ?? null)
-          : null;
-      return {
-        id: e.id,
-        date,
-        title: e.title,
-        description: e.description ?? "",
-        location: e.location ?? "",
-        start_time: e.start_time ?? 0,
-        end_time: e.end_time ?? 0,
-        color: e.color ?? "",
-        mandatory: e.mandatory === true,
-        parent_volunteer_hours: e.parent_volunteer_hours === true,
-        volunteer_hour_total: e.volunteer_hour_total ?? 0,
-        needs: (e.needs ?? "").trim(),
-        spots_total: e.parent_spots ?? 0,
-        spots_taken: takenByEvent.get(e.id) ?? 0,
-        unlimited: isUnlimitedSpots(e.parent_spots),
-        my_rsvp: mine
-          ? { spots: Number(mine.spots) || 0, comment: (mine.comment ?? "").trim() }
-          : null,
-      };
-    });
+    .map(shape);
 
-  return NextResponse.json({ events });
+  // Past sign-up events, most recent first — the family's record of
+  // what they signed up for. Same filter as upcoming so the two halves
+  // describe the same set of events, just on either side of today.
+  const past = dated
+    .filter((x) => x.date < todayIso)
+    .sort(
+      (a, b) =>
+        b.date.localeCompare(a.date) ||
+        (b.e.start_time ?? 0) - (a.e.start_time ?? 0)
+    )
+    .map(shape);
+
+  return NextResponse.json({ events, past });
 }
 
 export type VolunteerEventsResponse = {
   events: ParentVolunteerEvent[];
+  /** Sign-up events whose day has passed, most recent first. Optional
+   *  so a cached response from before this field existed still
+   *  type-checks on the client. */
+  past?: ParentVolunteerEvent[];
 };
 
 export interface ParentVolunteerEvent {
@@ -134,8 +197,10 @@ export interface ParentVolunteerEvent {
   mandatory: boolean;
   parent_volunteer_hours: boolean;
   volunteer_hour_total: number;
-  /** Raw one-per-line needs text — split client-side with parseNeeds. */
-  needs: string;
+  /** What the event needs families to bring, resolved against every
+   *  family's claims: how many are wanted, how many are spoken for,
+   *  how many are this family's. Empty when admin listed nothing. */
+  items: EventItemAvailability[];
   /** Capacity as stored. Meaningless when `unlimited` — read that
    *  first. */
   spots_total: number;

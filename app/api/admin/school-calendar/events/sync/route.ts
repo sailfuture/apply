@@ -49,11 +49,26 @@ export async function POST() {
       return NextResponse.json({ error: access.reason }, { status: 502 });
     }
 
-    const [days, events] = await Promise.all([
+    const [days, events, items] = await Promise.all([
       xano.schoolCalendar.getAll(),
       xano.schoolCalendarEvents.getAll(),
+      // Once for the run, not once per event — each push needs the
+      // event's needs list for its description.
+      xano.eventItems.getAll().catch(() => []),
     ]);
     const dateByDayId = new Map(days.map((d) => [d.id, d.date]));
+    const itemsByEvent = new Map<number, typeof items>();
+    for (const it of items) {
+      const eid = Number(it.school_calendar_events_id);
+      const list = itemsByEvent.get(eid) ?? [];
+      list.push(it);
+      itemsByEvent.set(eid, list);
+    }
+    for (const list of itemsByEvent.values()) {
+      list.sort(
+        (a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id - b.id
+      );
+    }
 
     let pushed = 0;
     let failed = 0;
@@ -79,7 +94,11 @@ export async function POST() {
           skipped++;
           continue;
         }
-        const result = await pushSchoolEventToGoogle(event, date);
+        const result = await pushSchoolEventToGoogle(
+          event,
+          date,
+          itemsByEvent.get(event.id) ?? []
+        );
         if (result.status === "synced") {
           pushed++;
           continue;

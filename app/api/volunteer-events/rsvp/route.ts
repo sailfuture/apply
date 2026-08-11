@@ -35,12 +35,34 @@ export async function POST(req: NextRequest) {
   const commentRaw = (body as { comment?: unknown }).comment;
   const comment =
     typeof commentRaw === "string" ? commentRaw.trim().slice(0, 500) : "";
+  // Item claims arrive as [{ itemId, quantity }] — ids, not labels, so
+  // renaming an item never strands what a family committed to.
+  const itemsRaw = (body as { items?: unknown }).items;
+  const requestedClaims: Array<{ itemId: number; quantity: number }> =
+    Array.isArray(itemsRaw)
+      ? itemsRaw
+          .map((row) => ({
+            itemId: Number((row as { itemId?: unknown })?.itemId),
+            quantity: Math.floor(
+              Number((row as { quantity?: unknown })?.quantity)
+            ),
+          }))
+          .filter(
+            (c) =>
+              Number.isFinite(c.itemId) &&
+              c.itemId > 0 &&
+              Number.isFinite(c.quantity) &&
+              c.quantity > 0
+          )
+      : [];
 
   // The event must exist, offer sign-ups, and not be in the past.
-  const [events, days, rsvps] = await Promise.all([
+  const [events, days, rsvps, allItems, allClaims] = await Promise.all([
     xano.schoolCalendarEvents.getAll(),
     xano.schoolCalendar.getAll(),
     xano.eventRsvps.getAll(),
+    xano.eventItems.getAll(),
+    xano.eventItemClaims.getAll(),
   ]);
   const event = events.find((e) => e.id === eventId);
   if (!event || !isSignUpEvent(event.parent_spots)) {
@@ -90,6 +112,64 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // Item claims are capacity-checked the same way spots are: against
+  // what OTHER families already hold, so editing your own claim down
+  // releases it rather than counting twice. A claim against an item
+  // that isn't this event's is rejected outright — silently dropping
+  // it would tell the parent they're bringing something nobody sees.
+  const eventItems = allItems.filter(
+    (it) => Number(it.school_calendar_events_id) === eventId
+  );
+  const itemById = new Map(eventItems.map((it) => [it.id, it]));
+  const othersClaimed = new Map<number, number>();
+  for (const c of allClaims) {
+    if (Number(c.registration_families_id) === familyId) continue;
+    if (!itemById.has(Number(c.registration_school_event_items_id))) continue;
+    const k = Number(c.registration_school_event_items_id);
+    othersClaimed.set(k, (othersClaimed.get(k) ?? 0) + (Number(c.quantity) || 0));
+  }
+  for (const claim of requestedClaims) {
+    const item = itemById.get(claim.itemId);
+    if (!item) {
+      return NextResponse.json(
+        { error: "That item isn't on this event's list any more." },
+        { status: 409 }
+      );
+    }
+    const wanted = Math.max(1, Number(item.quantity) || 1);
+    const left = wanted - (othersClaimed.get(claim.itemId) ?? 0);
+    if (claim.quantity > left) {
+      return NextResponse.json(
+        {
+          error:
+            left <= 0
+              ? `${item.label} is fully covered already.`
+              : `Only ${left} more ${item.label} needed.`,
+        },
+        { status: 409 }
+      );
+    }
+  }
+
+  // Replace this family's claims for the event wholesale — the dialog
+  // always submits the complete set, so reconciling row-by-row would
+  // just be a slower way to reach the same state.
+  const myExistingClaims = allClaims.filter(
+    (c) =>
+      Number(c.registration_families_id) === familyId &&
+      itemById.has(Number(c.registration_school_event_items_id))
+  );
+  for (const c of myExistingClaims) {
+    await xano.eventItemClaims.delete(c.id);
+  }
+  for (const claim of requestedClaims) {
+    await xano.eventItemClaims.create({
+      registration_school_event_items_id: claim.itemId,
+      registration_families_id: familyId,
+      quantity: claim.quantity,
+    });
+  }
+
   if (mine && comment) {
     await xano.eventRsvps.update(mine.id, { spots, comment });
   } else {
@@ -124,7 +204,11 @@ export async function DELETE(req: NextRequest) {
     return NextResponse.json({ error: "eventId is required" }, { status: 400 });
   }
 
-  const rsvps = await xano.eventRsvps.getAll();
+  const [rsvps, allItems, allClaims] = await Promise.all([
+    xano.eventRsvps.getAll(),
+    xano.eventItems.getAll(),
+    xano.eventItemClaims.getAll(),
+  ]);
   const mine = rsvps.find(
     (r) =>
       Number(r.school_calendar_events_id) === eventId &&
@@ -133,6 +217,21 @@ export async function DELETE(req: NextRequest) {
   if (mine) {
     await xano.eventRsvps.delete(mine.id);
   }
+
+  // Cancelling releases what the family said they'd bring. Leaving
+  // the claims behind would hold that capacity against an event
+  // nobody from this family is attending.
+  const eventItemIds = new Set(
+    allItems
+      .filter((it) => Number(it.school_calendar_events_id) === eventId)
+      .map((it) => it.id)
+  );
+  for (const c of allClaims) {
+    if (Number(c.registration_families_id) !== familyId) continue;
+    if (!eventItemIds.has(Number(c.registration_school_event_items_id))) continue;
+    await xano.eventItemClaims.delete(c.id);
+  }
+
   return NextResponse.json({ ok: true });
 }
 

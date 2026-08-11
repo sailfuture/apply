@@ -36,7 +36,12 @@ import {
 } from "@/components/ui/table";
 import { useApplications, useSchoolYears, apiFetcher } from "@/hooks/use-api";
 import { cn } from "@/lib/utils";
-import { eventColor, parseDate, parseNeeds } from "@/lib/school-calendar";
+import {
+  eventColor,
+  itemHeadroom,
+  parseDate,
+  type EventItemAvailability,
+} from "@/lib/school-calendar";
 import type {
   ParentVolunteerEvent,
   VolunteerEventsResponse,
@@ -374,10 +379,16 @@ function UpcomingEventsSection({ yearId }: { yearId: number | null }) {
       : null;
   const activeRsvp = rsvpTarget ?? deepLinkTarget;
 
-  if (!data || events.length === 0) return null;
+  const past = data?.past ?? [];
+
+  // Render if EITHER half has something — a family late in the year
+  // may have no upcoming events left but still wants their record.
+  if (!data || (events.length === 0 && past.length === 0)) return null;
 
   return (
-    <div>
+    <div className="space-y-6">
+      {events.length > 0 ? (
+        <div>
       <div className="flex items-baseline justify-between mb-3">
         <h2 className="text-sm font-semibold">Upcoming events</h2>
         <p className="text-xs text-muted-foreground">
@@ -388,7 +399,7 @@ function UpcomingEventsSection({ yearId }: { yearId: number | null }) {
         <div className="overflow-hidden rounded-lg border bg-white divide-y">
           {events.map((ev) => {
             const c = eventColor(ev.color);
-            const needs = parseNeeds(ev.needs);
+            const needs = ev.items ?? [];
             // Uncapped events are never "Full" — `left` only governs
             // capped ones.
             const left = ev.unlimited
@@ -462,9 +473,20 @@ function UpcomingEventsSection({ yearId }: { yearId: number | null }) {
                       <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                         Event needs
                       </p>
+                      {/* Live counts, not just a list — a parent
+                          scanning the card can see what's still
+                          uncovered before opening the dialog. */}
                       <ul className="mt-0.5 list-disc pl-4 text-xs text-muted-foreground marker:text-muted-foreground/60">
                         {needs.map((n) => (
-                          <li key={n}>{n}</li>
+                          <li key={n.id}>
+                            {n.label}
+                            <span className="text-muted-foreground/70">
+                              {" — "}
+                              {n.claimed >= n.quantity
+                                ? "covered"
+                                : `${n.claimed} of ${n.quantity}`}
+                            </span>
+                          </li>
                         ))}
                       </ul>
                     </div>
@@ -505,6 +527,98 @@ function UpcomingEventsSection({ yearId }: { yearId: number | null }) {
           })}
         </div>
       </div>
+        </div>
+      ) : null}
+
+      {/* Past events — the family's record of what they signed up
+          for. A table rather than the card list above: there's
+          nothing to act on here, so the rows only need to be
+          scannable, and a year's worth of cards would bury the
+          upcoming ones. */}
+      {past.length > 0 ? (
+        <div>
+          <div className="flex items-baseline justify-between mb-3">
+            <h2 className="text-sm font-semibold">Past events</h2>
+            <p className="text-xs text-muted-foreground">
+              Events that have already happened.
+            </p>
+          </div>
+          <div className="rounded-xl bg-background p-1.5 shadow-sm border">
+            <div className="overflow-x-auto rounded-lg border bg-white">
+              <table className="w-full text-sm">
+                <thead className="border-b bg-muted/30">
+                  <tr>
+                    <th className="px-4 py-2 text-left text-xs font-medium text-muted-foreground">
+                      Date
+                    </th>
+                    <th className="px-4 py-2 text-left text-xs font-medium text-muted-foreground">
+                      Event
+                    </th>
+                    <th className="px-4 py-2 text-left text-xs font-medium text-muted-foreground">
+                      You signed up
+                    </th>
+                    <th className="px-4 py-2 text-left text-xs font-medium text-muted-foreground">
+                      Hours
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {past.map((ev) => {
+                    const c = eventColor(ev.color);
+                    const dateObj = parseDate(ev.date);
+                    return (
+                      <tr key={ev.id} className="hover:bg-muted/20">
+                        <td className="whitespace-nowrap px-4 py-2 text-xs tabular-nums text-muted-foreground">
+                          {dateObj.toLocaleDateString("en-US", {
+                            month: "short",
+                            day: "numeric",
+                            year: "numeric",
+                          })}
+                        </td>
+                        <td className="px-4 py-2">
+                          <span className="flex items-center gap-1.5">
+                            <span
+                              className={cn(
+                                "size-2 shrink-0 rounded-full",
+                                c ? c.dot : "bg-slate-300"
+                              )}
+                              aria-hidden
+                            />
+                            <span className="font-medium">{ev.title}</span>
+                          </span>
+                          {ev.location ? (
+                            <span className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
+                              <MapPin className="size-3 shrink-0" />
+                              {ev.location}
+                            </span>
+                          ) : null}
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-2 text-xs">
+                          {ev.my_rsvp ? (
+                            <span className="inline-flex items-center gap-1.5 text-emerald-700">
+                              <CheckCircle2 className="size-3.5 shrink-0" />
+                              {ev.my_rsvp.spots}{" "}
+                              {ev.my_rsvp.spots === 1 ? "spot" : "spots"}
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-2 text-xs text-muted-foreground">
+                          {ev.parent_volunteer_hours &&
+                          ev.volunteer_hour_total > 0
+                            ? `${formatHours(ev.volunteer_hour_total)} hrs`
+                            : "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {activeRsvp ? (
         <RsvpDialog
@@ -548,9 +662,31 @@ function RsvpDialog({
   const [saving, setSaving] = useState(false);
   const [canceling, setCanceling] = useState(false);
 
+  const eventItems = event.items ?? [];
+
+  // What this family is bringing, keyed by item id. Seeded from the
+  // server's `mine` count so reopening shows what they committed to.
+  const [claims, setClaims] = useState<Record<number, number>>(() => {
+    const seed: Record<number, number> = {};
+    for (const it of event.items ?? []) {
+      if (it.mine > 0) seed[it.id] = it.mine;
+    }
+    return seed;
+  });
+
   const spotsNum = Number(spots);
   const valid =
     Number.isInteger(spotsNum) && spotsNum >= 1 && spotsNum <= maxSpots;
+
+  function setClaim(item: EventItemAvailability, next: number) {
+    const capped = Math.max(0, Math.min(next, itemHeadroom(item)));
+    setClaims((prev) => {
+      const copy = { ...prev };
+      if (capped <= 0) delete copy[item.id];
+      else copy[item.id] = capped;
+      return copy;
+    });
+  }
 
   async function save() {
     if (!valid || saving || canceling) return;
@@ -563,6 +699,9 @@ function RsvpDialog({
           eventId: event.id,
           spots: spotsNum,
           comment: comment.trim(),
+          items: eventItems
+            .map((it) => ({ itemId: it.id, quantity: claims[it.id] ?? 0 }))
+            .filter((c) => c.quantity > 0),
         }),
       });
       const body = await res.json().catch(() => null);
@@ -639,6 +778,60 @@ function RsvpDialog({
               {maxSpots} available to your family.
             </p>
           </div>
+
+          {/* What the event still needs. Each row shows how many are
+              wanted and how many are already spoken for across all
+              families, so a parent can see at a glance where they'd
+              actually help. Fully-covered items stay visible but
+              locked — hiding them reads as "nothing needed". */}
+          {eventItems.length > 0 ? (
+            <div className="space-y-1.5">
+              <Label>Can you bring anything? (optional)</Label>
+              <ul className="divide-y rounded-md border">
+                {eventItems.map((it) => {
+                  const claimedByMe = claims[it.id] ?? 0;
+                  const max = itemHeadroom(it);
+                  const othersHave = it.claimed - it.mine;
+                  const covered = max <= 0;
+                  return (
+                    <li
+                      key={it.id}
+                      className="flex items-center gap-3 px-3 py-2"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium">
+                          {it.label}
+                        </p>
+                        <p className="text-[11px] text-muted-foreground">
+                          {covered
+                            ? "Fully covered — thank you!"
+                            : `${othersHave + claimedByMe} of ${it.quantity} claimed`}
+                        </p>
+                      </div>
+                      <Input
+                        type="number"
+                        min={0}
+                        max={max}
+                        step={1}
+                        disabled={covered && claimedByMe === 0}
+                        aria-label={`How many ${it.label} you can bring`}
+                        value={String(claimedByMe)}
+                        onChange={(e) =>
+                          setClaim(it, Math.floor(Number(e.target.value) || 0))
+                        }
+                        className="h-8 w-16 shrink-0 text-center tabular-nums"
+                      />
+                    </li>
+                  );
+                })}
+              </ul>
+              <p className="text-[11px] text-muted-foreground">
+                Put in how many of each you can bring. Leave at 0 for
+                anything you can&rsquo;t.
+              </p>
+            </div>
+          ) : null}
+
           <div className="space-y-1.5">
             <Label htmlFor="rsvp-comment">Who&rsquo;s coming? (optional)</Label>
             <Textarea

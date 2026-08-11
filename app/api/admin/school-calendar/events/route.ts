@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { UNLIMITED_PARENT_SPOTS } from "@/lib/school-calendar";
+import {
+  parseEventItemsInput,
+  syncEventItems,
+} from "@/lib/school-event-items";
 import { pushSchoolEventToGoogle } from "@/lib/school-event-sync";
 import { xano } from "@/lib/xano";
 
@@ -60,10 +64,16 @@ export async function POST(req: NextRequest) {
       volunteer_hour_total: coerceHours(body.volunteer_hour_total),
       // Parent RSVP capacity — 0 = sign-ups not offered.
       parent_spots: coerceSpots(body.parent_spots),
-      // Event needs — one per line; rendered as a list to parents.
-      needs: typeof body.needs === "string" ? body.needs.trim() : "",
       color: coerceColor(body.color),
     });
+
+    // Needs land in their own table, keyed to the event we just
+    // created. Best-effort: the event row is already saved, so a
+    // failure here becomes a warning rather than a lost event.
+    const itemsError = await syncEventItems(
+      created.id,
+      parseEventItemsInput(body.items)
+    );
 
     // Mirror onto the school Google Calendar. The day's date (for
     // all-day placement) comes from the day table — resolved here
@@ -76,9 +86,10 @@ export async function POST(req: NextRequest) {
       {
         ...created,
         warning:
-          sync.status === "failed"
+          itemsError ??
+          (sync.status === "failed"
             ? `Event saved, but it couldn't be pushed to the school Google Calendar: ${sync.error}`
-            : undefined,
+            : undefined),
       },
       { status: 201 }
     );

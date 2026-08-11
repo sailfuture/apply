@@ -29,13 +29,23 @@ import {
   eventColor,
   isUnlimitedSpots,
   parseDate,
-  parseNeeds,
   UNLIMITED_PARENT_SPOTS,
 } from "@/lib/school-calendar";
+
 import type {
   XanoSchoolCalendarDay,
   XanoSchoolCalendarEvent,
 } from "@/lib/xano";
+
+/** One row of the event's needs list, as edited here. `id` is the
+ *  `registration_school_event_items` row for existing needs and
+ *  undefined for ones added in this session — the save route uses it
+ *  to tell an edit from an insert. */
+export interface EventItemDraft {
+  id?: number;
+  label: string;
+  quantity: number;
+}
 
 /**
  * Shared school-calendar event machinery — the create/edit dialog plus
@@ -579,24 +589,78 @@ export function EventUpsertDialog({
   const [spots, setSpots] = useState(
     ev?.parent_spots && ev.parent_spots > 0 ? String(ev.parent_spots) : ""
   );
-  // Needs are edited as discrete items (add box + removable rows) but
-  // stored exactly as before — one per line in the `needs` text column
-  // — so nothing downstream changes shape.
-  const [needsList, setNeedsList] = useState<string[]>(() =>
-    parseNeeds(ev?.needs)
+  // Needs live in `registration_school_event_items`, one row each with
+  // its own quantity. Edited here as a local list and reconciled
+  // server-side on save (see the `items` key in the payload below) —
+  // rows keep their id so a rename never orphans a family's claim.
+  //
+  // Fetched here rather than passed in: save submits the COMPLETE
+  // list, so a caller that forgot to seed this would silently delete
+  // every need on the event. Create mode has nothing to load.
+  const [needsList, setNeedsList] = useState<EventItemDraft[]>([]);
+  const [itemsReady, setItemsReady] = useState(!existing);
+  // Load failed → omit `items` from the save payload entirely. The
+  // route treats an absent key as "don't touch", so a failed read can
+  // never turn into a delete-everything write.
+  const [itemsLoadOk, setItemsLoadOk] = useState(true);
+  const [claimedByItem, setClaimedByItem] = useState<Record<number, number>>(
+    {}
   );
+  const existingEventId = existing?.event.id;
+  useEffect(() => {
+    if (!existingEventId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/admin/school-calendar/events/${existingEventId}/items`
+        );
+        if (!res.ok) throw new Error(`Failed (${res.status})`);
+        const data = await res.json();
+        if (cancelled) return;
+        const rows: Array<{
+          id: number;
+          label: string;
+          quantity: number;
+          claimed: number;
+        }> = data?.items ?? [];
+        setNeedsList(
+          rows.map((r) => ({ id: r.id, label: r.label, quantity: r.quantity }))
+        );
+        setClaimedByItem(
+          Object.fromEntries(rows.map((r) => [r.id, r.claimed]))
+        );
+      } catch (err) {
+        console.error("[EventUpsertDialog] item load failed:", err);
+        if (!cancelled) {
+          setItemsLoadOk(false);
+          toast.error(
+            "Couldn't load this event's needs list — saving will leave it untouched."
+          );
+        }
+      } finally {
+        if (!cancelled) setItemsReady(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [existingEventId]);
   const [needDraft, setNeedDraft] = useState("");
+  const [needQtyDraft, setNeedQtyDraft] = useState("1");
   const [saving, setSaving] = useState(false);
 
   function addNeed() {
-    const item = needDraft.trim();
-    if (!item) return;
+    const label = needDraft.trim();
+    if (!label) return;
+    const quantity = Math.max(1, Math.round(Number(needQtyDraft) || 1));
     setNeedsList((prev) =>
-      prev.some((n) => n.toLowerCase() === item.toLowerCase())
+      prev.some((n) => n.label.toLowerCase() === label.toLowerCase())
         ? prev
-        : [...prev, item]
+        : [...prev, { label, quantity }]
     );
     setNeedDraft("");
+    setNeedQtyDraft("1");
   }
 
   const dayByDate = useMemo(
@@ -627,17 +691,40 @@ export function EventUpsertDialog({
         parent_spots: noSpotLimit
           ? UNLIMITED_PARENT_SPOTS
           : Number(spots) || 0,
-        // Fold in an un-Added draft so typing a need and hitting Save
+        // The complete needs list. The route reconciles it against
+        // `registration_school_event_items`: rows with an id are
+        // updated, rows without are inserted, and ids missing from
+        // this list are deleted. Sending the whole set keeps the
+        // client from having to track deletions separately.
+        //
+        // Folds in an un-Added draft so typing a need and hitting Save
         // without pressing Add doesn't silently drop it.
-        needs: [
-          ...needsList,
-          ...(needDraft.trim() &&
-          !needsList.some(
-            (n) => n.toLowerCase() === needDraft.trim().toLowerCase()
-          )
-            ? [needDraft.trim()]
-            : []),
-        ].join("\n"),
+        //
+        // Omitted entirely when the list failed to load — an absent
+        // key means "leave the needs alone", where an empty array
+        // would mean "delete them all".
+        ...(itemsLoadOk
+          ? {
+              items: [
+                ...needsList,
+                ...(needDraft.trim() &&
+                !needsList.some(
+                  (n) =>
+                    n.label.toLowerCase() === needDraft.trim().toLowerCase()
+                )
+                  ? [
+                      {
+                        label: needDraft.trim(),
+                        quantity: Math.max(
+                          1,
+                          Math.round(Number(needQtyDraft) || 1)
+                        ),
+                      },
+                    ]
+                  : []),
+              ],
+            }
+          : {}),
       };
       const res = await fetch(
         existing
@@ -835,14 +922,47 @@ export function EventUpsertDialog({
               <ul className="space-y-1">
                 {needsList.map((n, i) => (
                   <li
-                    key={`${n}-${i}`}
+                    key={`${n.label}-${i}`}
                     className="flex items-center gap-2 rounded-md border bg-muted/30 px-2.5 py-1.5 text-sm"
                   >
-                    <span className="min-w-0 flex-1 truncate">{n}</span>
+                    <span className="min-w-0 flex-1 truncate">
+                      {n.label}
+                      {/* Families have already committed to this many.
+                          Shown so removing a need isn't done blind —
+                          deleting the row drops their claims with it. */}
+                      {n.id && (claimedByItem[n.id] ?? 0) > 0 ? (
+                        <span className="ml-1.5 text-[11px] text-muted-foreground">
+                          {claimedByItem[n.id]} claimed
+                        </span>
+                      ) : null}
+                    </span>
+                    {/* Quantity stays editable in place — the count is
+                        the thing most likely to change after the fact
+                        ("make it 6 chaperones"), and retyping the
+                        label to fix a number is busywork. */}
+                    <Input
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={String(n.quantity)}
+                      aria-label={`How many ${n.label}`}
+                      onChange={(e) => {
+                        const quantity = Math.max(
+                          1,
+                          Math.round(Number(e.target.value) || 1)
+                        );
+                        setNeedsList((prev) =>
+                          prev.map((item, idx) =>
+                            idx === i ? { ...item, quantity } : item
+                          )
+                        );
+                      }}
+                      className="h-7 w-16 shrink-0 bg-white px-2 text-center tabular-nums"
+                    />
                     <button
                       type="button"
                       className="shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:text-red-600"
-                      aria-label={`Remove "${n}"`}
+                      aria-label={`Remove "${n.label}"`}
                       onClick={() =>
                         setNeedsList((prev) =>
                           prev.filter((_, idx) => idx !== i)
@@ -859,7 +979,7 @@ export function EventUpsertDialog({
               <Input
                 value={needDraft}
                 onChange={(e) => setNeedDraft(e.target.value)}
-                placeholder="e.g. 4 chaperones, water jugs, grill…"
+                placeholder="e.g. chaperones, water jugs, grill…"
                 onKeyDown={(e) => {
                   // Enter adds the need instead of submitting/closing.
                   if (e.key === "Enter") {
@@ -867,6 +987,21 @@ export function EventUpsertDialog({
                     addNeed();
                   }
                 }}
+              />
+              <Input
+                type="number"
+                min="1"
+                step="1"
+                value={needQtyDraft}
+                aria-label="How many needed"
+                onChange={(e) => setNeedQtyDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    addNeed();
+                  }
+                }}
+                className="w-16 shrink-0 bg-white px-2 text-center tabular-nums"
               />
               <Button
                 type="button"
@@ -879,8 +1014,10 @@ export function EventUpsertDialog({
               </Button>
             </div>
             <p className="text-[11px] text-muted-foreground">
-              Add one item at a time — families see these as a list of
-              what the event needs.
+              One item at a time, with how many you need of it —
+              &ldquo;Chaperones&rdquo; × 4 rather than &ldquo;4
+              chaperones&rdquo;. Families see the list and claim
+              against those counts.
             </p>
           </div>
         </div>
@@ -897,7 +1034,11 @@ export function EventUpsertDialog({
           <Button
             size="sm"
             onClick={() => void save()}
-            disabled={saving || !title.trim() || (!existing && !day)}
+            // `!itemsReady` — saving mid-load would submit an empty
+            // needs list and delete every one of them.
+            disabled={
+              saving || !itemsReady || !title.trim() || (!existing && !day)
+            }
           >
             {saving ? (
               <>

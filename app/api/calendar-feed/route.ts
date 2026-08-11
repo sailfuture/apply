@@ -26,11 +26,24 @@ export async function GET(req: NextRequest) {
   const yearId = Number(req.nextUrl.searchParams.get("yearId"));
   const filterYear = Number.isFinite(yearId) && yearId > 0;
 
-  const [days, events] = await Promise.all([
+  const [days, events, items] = await Promise.all([
     xano.schoolCalendar.getAll().catch(() => []),
     xano.schoolCalendarEvents.getAll().catch(() => []),
+    // Once for the whole feed, then grouped — one fetch per event
+    // would be a full table read per VEVENT.
+    xano.eventItems.getAll().catch(() => []),
   ]);
   const dayById = new Map(days.map((d) => [d.id, d]));
+  const itemsByEvent = new Map<number, typeof items>();
+  for (const it of items) {
+    const eid = Number(it.school_calendar_events_id);
+    const list = itemsByEvent.get(eid) ?? [];
+    list.push(it);
+    itemsByEvent.set(eid, list);
+  }
+  for (const list of itemsByEvent.values()) {
+    list.sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id - b.id);
+  }
 
   const lines: string[] = [
     "BEGIN:VCALENDAR",
@@ -68,7 +81,10 @@ export async function GET(req: NextRequest) {
     // Shared with the Google push (lib/school-event-sync) so the same
     // event reads identically however it reached the parent —
     // including the RSVP link on sign-up events.
-    const description = calendarEventDescription(e);
+    const description = calendarEventDescription(
+      e,
+      itemsByEvent.get(e.id) ?? []
+    );
     if (description) {
       lines.push(fold(`DESCRIPTION:${esc(description)}`));
     }

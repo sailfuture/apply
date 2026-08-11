@@ -4,6 +4,7 @@ import {
   upsertSchoolEvent,
 } from "@/lib/google-calendar";
 import { calendarEventDescription } from "@/lib/school-calendar";
+import { loadEventItems } from "@/lib/school-event-items";
 import type { XanoSchoolCalendarEvent } from "@/lib/xano";
 
 /**
@@ -43,7 +44,11 @@ export interface SchoolEventSyncResult {
  *  event without a date can't be placed). */
 export async function pushSchoolEventToGoogle(
   event: XanoSchoolCalendarEvent,
-  dayDate: string | undefined
+  dayDate: string | undefined,
+  /** The event's needs rows. Pass them when you already have them —
+   *  the bulk sync reads the item table once for the whole run rather
+   *  than once per event. Omitted, they're fetched here. */
+  items?: Array<{ label: string; quantity: number }>
 ): Promise<SchoolEventSyncResult> {
   if (!isSchoolCalendarPushConfigured()) return { status: "off" };
   if (!dayDate) {
@@ -54,7 +59,12 @@ export async function pushSchoolEventToGoogle(
   try {
     await upsertSchoolEvent(event.id, {
       summary: event.title,
-      description: calendarEventDescription(event),
+      // Items come from their own table now, so the description
+      // builder can't read them off the event row.
+      description: calendarEventDescription(
+        event,
+        items ?? (await loadEventItems(event.id))
+      ),
       location: (event.location ?? "").trim(),
       date: dayDate,
       startMs: Number(event.start_time) || 0,
