@@ -1,8 +1,20 @@
 "use client";
 
+import { useState } from "react";
 import useSWR from "swr";
-import { CheckCircle2, Mail, RefreshCw, XCircle } from "lucide-react";
+import { toast } from "sonner";
+import { CheckCircle2, Loader2, Mail, RefreshCw, Send, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { cn } from "@/lib/utils";
 import type { XanoEmailNotification } from "@/lib/xano";
@@ -97,7 +109,7 @@ export function EmailNotificationsCard({ familyId, yearId }: Props) {
           </thead>
           <tbody className="divide-y">
             {rows.map((row) => (
-              <Row key={row.id} row={row} />
+              <Row key={row.id} row={row} onResent={() => void mutate()} />
             ))}
           </tbody>
         </table>
@@ -106,7 +118,14 @@ export function EmailNotificationsCard({ familyId, yearId }: Props) {
   );
 }
 
-function Row({ row }: { row: XanoEmailNotification }) {
+function Row({
+  row,
+  onResent,
+}: {
+  row: XanoEmailNotification;
+  onResent: () => void;
+}) {
+  const [resendOpen, setResendOpen] = useState(false);
   const date = new Date(row.created_at);
   const dateStr = date.toLocaleString("en-US", {
     month: "short",
@@ -185,9 +204,142 @@ function Row({ row }: { row: XanoEmailNotification }) {
               Delivery issue
             </span>
           ) : null}
+          {/* Resend is offered only where something went wrong — a
+              failure or a bounce note. On a clean send it would just
+              be a way to mail a family the same thing twice. */}
+          {row.status !== "dry_run" && row.error_message ? (
+            <button
+              type="button"
+              className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground underline underline-offset-2 hover:text-foreground"
+              onClick={() => setResendOpen(true)}
+            >
+              Resend
+            </button>
+          ) : null}
         </span>
       </td>
+      {resendOpen ? (
+        <ResendDialog
+          row={row}
+          onClose={(sent) => {
+            setResendOpen(false);
+            if (sent) onResent();
+          }}
+        />
+      ) : null}
     </tr>
+  );
+}
+
+/**
+ * Retry one email, with the address editable first — the case this
+ * exists for is a typo'd parent address that hard-bounced.
+ *
+ * Deliberately does NOT write the corrected address back to the parent
+ * record: that's a separate decision (the typo may be in the email the
+ * family actually gave us), and silently rewriting contact details
+ * from a send dialog would be a surprise.
+ */
+function ResendDialog({
+  row,
+  onClose,
+}: {
+  row: XanoEmailNotification;
+  onClose: (sent: boolean) => void;
+}) {
+  const original = (row.recipient_emails ?? "").split(",")[0]?.trim() ?? "";
+  const [to, setTo] = useState(original);
+  const [sending, setSending] = useState(false);
+  const changed = to.trim() !== original;
+
+  async function send() {
+    if (sending || !to.trim()) return;
+    setSending(true);
+    try {
+      const res = await fetch(
+        `/api/admin/email-notifications/${row.id}/resend`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ to: to.trim() }),
+        }
+      );
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error ?? `Failed (${res.status})`);
+      toast.success(`Resent to ${data?.to ?? to.trim()}.`);
+      onClose(true);
+    } catch (err) {
+      console.error("[ResendDialog]", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't resend.");
+      setSending(false);
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && !sending && onClose(false)}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Resend this email</DialogTitle>
+          <DialogDescription>
+            Sends the original message exactly as it was written —
+            not a freshly generated one.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="rounded-md border bg-muted/30 px-3 py-2">
+            <p className="text-sm font-medium">{row.subject}</p>
+            {row.error_message ? (
+              <p className="mt-1 text-xs text-amber-700">
+                {row.error_message}
+              </p>
+            ) : null}
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="resend-to">Send to</Label>
+            <Input
+              id="resend-to"
+              type="email"
+              value={to}
+              disabled={sending}
+              onChange={(e) => setTo(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  void send();
+                }
+              }}
+            />
+            <p className="text-[11px] text-muted-foreground">
+              {changed
+                ? "Correcting the address here only affects this send — it doesn't update the family's record."
+                : "Edit the address if the original had a typo."}
+            </p>
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            dean@ and admissions@ aren&rsquo;t copied on a resend —
+            they already received the original.
+          </p>
+        </div>
+        <DialogFooter>
+          <Button
+            variant="outline"
+            className="bg-white"
+            disabled={sending}
+            onClick={() => onClose(false)}
+          >
+            Cancel
+          </Button>
+          <Button disabled={sending || !to.trim()} onClick={() => void send()}>
+            {sending ? (
+              <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+            ) : (
+              <Send className="size-3.5 mr-1.5" />
+            )}
+            Resend
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
