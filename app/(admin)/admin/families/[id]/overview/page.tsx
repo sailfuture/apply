@@ -162,10 +162,23 @@ export default function FamilyOverviewPage() {
   const familyName =
     family.family_name?.trim() || `Family #${family.id}`;
 
+  // Alphabetical by the name as displayed ("First Last"), so the list
+  // reads A→Z top to bottom rather than in Xano's insertion order. A
+  // large residential family runs to 20+ students; unsorted, finding
+  // one means reading every row. Sorted once here, so the two tables
+  // below inherit the same order.
+  const sortedStudents = [...students].sort((a, b) =>
+    `${a.first_name ?? ""} ${a.last_name ?? ""}`
+      .trim()
+      .localeCompare(`${b.first_name ?? ""} ${b.last_name ?? ""}`.trim(), "en", {
+        sensitivity: "base",
+      })
+  );
+
   // Unenrolled students stay on the page but sit in their own table
   // below the roster — see the Students card comment.
-  const activeStudents = students.filter((s) => !s.isArchived);
-  const unenrolledStudents = students.filter((s) => s.isArchived);
+  const activeStudents = sortedStudents.filter((s) => !s.isArchived);
+  const unenrolledStudents = sortedStudents.filter((s) => s.isArchived);
 
   /** Look up a year_name from the response's `school_years` map.
    *  Falls back to "Year #N" if the map didn't include the id (Xano
