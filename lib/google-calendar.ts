@@ -454,18 +454,19 @@ function googleErrorMessage(body: string): string {
 }
 
 /**
- * Can the impersonated user actually reach the school calendar?
+ * Can the impersonated user actually WRITE to the school calendar?
  *
  * Run this before a bulk push: every per-event failure in a run has
  * the same cause when the cause is configuration, and 29 identical
- * 404s are far less useful than one sentence naming the account and
- * the calendar. Uses `events.list` rather than `calendars.get`
+ * failures are far less useful than one sentence naming the account
+ * and the calendar. Uses `events.list` rather than `calendars.get`
  * because the delegated scope is `calendar.events` only — a
  * `calendars.get` preflight would 403 on a perfectly healthy setup.
  *
- * Caveat: this proves the calendar is READABLE. A calendar shared as
- * "See all event details" passes here and still 403s on write, which
- * is why callers should surface the first write error too.
+ * `events.list` also reports `accessRole`, so a calendar that is
+ * readable but not writable is caught here rather than 29 events
+ * later. That's the case worth catching: a subscribed calendar and a
+ * view-only share both read fine and reject every write.
  */
 export async function checkSchoolCalendarAccess(): Promise<
   { ok: true } | { ok: false; reason: string }
@@ -490,7 +491,46 @@ export async function checkSchoolCalendarAccess(): Promise<
       }`,
     };
   }
-  if (res.ok) return { ok: true };
+  if (res.ok) {
+    // Readable — but readable isn't writable. `events.list` reports
+    // the caller's role on the calendar, so reject the read-only
+    // ones here instead of letting every event fail on write.
+    let role = "";
+    try {
+      role = String(JSON.parse(await res.text())?.accessRole ?? "");
+    } catch {
+      // No/!JSON body — fall through and let the writes speak.
+    }
+    if (role === "reader" || role === "freeBusyReader") {
+      // A calendar added by subscribing to an iCal URL lives on
+      // `@import.calendar.google.com` and is permanently read-only:
+      // Google owns it and repopulates it from the source feed, so
+      // no sharing change can make it writable. Worth calling out by
+      // name — it looks like an ordinary calendar in the UI, and
+      // pointing the push at one is an easy mistake when the app
+      // also publishes an ICS feed you'd subscribe to.
+      if (calendarId.endsWith("@import.calendar.google.com")) {
+        return {
+          ok: false,
+          reason:
+            `"${calendarId}" is a subscribed calendar — Google syncs it FROM an ` +
+            `iCal feed and the API can't write to it, no matter how it's shared. ` +
+            `Point GOOGLE_SCHOOL_CALENDAR_ID at a calendar the Workspace owns ` +
+            `(Google Calendar → Other calendars + → Create new calendar), share ` +
+            `it with ${who} as "Make changes to events", and copy its ID from ` +
+            `Settings → Integrate calendar → Calendar ID.`,
+        };
+      }
+      return {
+        ok: false,
+        reason:
+          `${who} has read-only access ("${role}") to calendar "${calendarId}". ` +
+          `Open that calendar's Settings → Share with specific people, add ` +
+          `${who}, and set the permission to "Make changes to events".`,
+      };
+    }
+    return { ok: true };
+  }
   const detail = googleErrorMessage(await res.text().catch(() => ""));
   if (res.status === 404) {
     return {
