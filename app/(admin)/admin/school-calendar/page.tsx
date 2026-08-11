@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { toast } from "sonner";
 import {
+  Bell,
   CalendarDays,
   ChevronLeft,
   ChevronRight,
@@ -23,6 +24,7 @@ import {
   eventColor,
   parseDate,
 } from "@/components/admin/event-upsert-dialog";
+import { EventReminderDialog } from "@/components/admin/event-reminder-dialog";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -295,10 +297,14 @@ export default function SchoolCalendarPage() {
       setSyncingGoogle(false);
     }
   }
-  // Per-event SMS reminders were removed from this page. The
-  // EventReminderDialog itself still lives in components/admin and is
-  // still wired up on the Volunteer Hours page, which is where
-  // reminders are sent from.
+  /** Event picked for an SMS reminder (from the day sheet or the
+   *  events sheet) — the event plus its day's date. Opens the shared
+   *  EventReminderDialog, which texts every textable enrolled family
+   *  through the group-blast route. */
+  const [remindTarget, setRemindTarget] = useState<{
+    event: XanoSchoolCalendarEvent;
+    date: string;
+  } | null>(null);
 
   /** Term chip click — filter (agenda) and jump the month view to the
    *  term's first month. */
@@ -551,6 +557,9 @@ export default function SchoolCalendarPage() {
           }
           onClose={() => setSelectedDayId(null)}
           onChanged={() => void mutate()}
+          onRemind={(event) =>
+            setRemindTarget({ event, date: selectedDay.date })
+          }
         />
       ) : null}
 
@@ -564,6 +573,17 @@ export default function SchoolCalendarPage() {
           termLabel={termLabel}
           onClose={() => setEventsOpen(false)}
           onChanged={() => void mutate()}
+          onRemind={(event, date) => setRemindTarget({ event, date })}
+        />
+      ) : null}
+
+      {/* Event SMS reminder (shared with the Volunteer Hours page) */}
+      {remindTarget ? (
+        <EventReminderDialog
+          key={remindTarget.event.id}
+          yearId={Number(yearId) || 0}
+          event={{ ...remindTarget.event, date: remindTarget.date }}
+          onDone={() => setRemindTarget(null)}
         />
       ) : null}
 
@@ -666,6 +686,7 @@ function EventsSheet({
   termLabel,
   onClose,
   onChanged,
+  onRemind,
 }: {
   days: XanoSchoolCalendarDay[];
   events: XanoSchoolCalendarEvent[];
@@ -673,6 +694,8 @@ function EventsSheet({
   termLabel: Map<number, string>;
   onClose: () => void;
   onChanged: () => void;
+  /** Opens the SMS reminder dialog for one event. */
+  onRemind: (event: XanoSchoolCalendarEvent, date: string) => void;
 }) {
   const [filter, setFilter] = useState<number | "all">("all");
 
@@ -958,6 +981,15 @@ function EventsSheet({
             </div>
             <div className="flex items-center gap-2">
               <Button
+                variant="outline"
+                size="sm"
+                className="bg-white"
+                onClick={() => onRemind(detail.e, detail.day.date)}
+              >
+                <Bell className="size-3.5 mr-1" />
+                Send SMS
+              </Button>
+              <Button
                 size="sm"
                 onClick={() =>
                   setEditTarget({ event: detail.e, date: detail.day.date })
@@ -1220,6 +1252,7 @@ function DaySheet({
   seasonName,
   onClose,
   onChanged,
+  onRemind,
 }: {
   day: XanoSchoolCalendarDay;
   /** The whole year's days — the event modal clamps its date picker
@@ -1230,6 +1263,8 @@ function DaySheet({
   seasonName: string;
   onClose: () => void;
   onChanged: () => void;
+  /** Opens the SMS reminder dialog for one of this day's events. */
+  onRemind: (event: XanoSchoolCalendarEvent) => void;
 }) {
   const [type, setType] = useState(day.type);
   // Trimmed — a cleared rotation stores the " " sentinel (Xano edits
@@ -1524,28 +1559,39 @@ function DaySheet({
                       </div>
 
                       {/* Actions — pinned to the card's bottom edge.
-                          `justify-end` (not `justify-between`): Remind
-                          used to hold the left edge, and without it a
-                          lone right-hand group would drift left. */}
-                      <div className="mt-3 flex items-center justify-end gap-2 border-t pt-3">
+                          Send SMS holds the left edge, away from Edit
+                          and Delete: it's the one button here that
+                          reaches families rather than editing a row. */}
+                      <div className="mt-3 flex items-center justify-between gap-2 border-t pt-3">
                         <Button
                           variant="outline"
                           size="sm"
-                          className="bg-white"
-                          onClick={() => setEditingId(e.id)}
+                          className="bg-white shrink-0"
+                          onClick={() => onRemind(e)}
                         >
-                          <Pencil className="size-3.5 mr-1" />
-                          Edit
+                          <Bell className="size-3.5 mr-1" />
+                          Send SMS
                         </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="bg-white text-red-600 hover:bg-red-50 hover:text-red-700"
-                          onClick={() => setDeleteTarget(e)}
-                        >
-                          <Trash2 className="size-3.5 mr-1" />
-                          Delete
-                        </Button>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="bg-white"
+                            onClick={() => setEditingId(e.id)}
+                          >
+                            <Pencil className="size-3.5 mr-1" />
+                            Edit
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="bg-white text-red-600 hover:bg-red-50 hover:text-red-700"
+                            onClick={() => setDeleteTarget(e)}
+                          >
+                            <Trash2 className="size-3.5 mr-1" />
+                            Delete
+                          </Button>
+                        </div>
                       </div>
                     </li>
                   );

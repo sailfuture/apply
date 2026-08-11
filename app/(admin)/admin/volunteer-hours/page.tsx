@@ -603,7 +603,7 @@ export default function AdminVolunteerHoursPage() {
                                 onClick={() => setRemindEvent(ev)}
                               >
                                 <Bell className="size-3.5 mr-1" />
-                                Remind
+                                Send SMS
                               </Button>
                               <Button
                                 variant="ghost"
