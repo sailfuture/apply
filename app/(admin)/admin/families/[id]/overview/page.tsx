@@ -162,6 +162,11 @@ export default function FamilyOverviewPage() {
   const familyName =
     family.family_name?.trim() || `Family #${family.id}`;
 
+  // Unenrolled students stay on the page but sit in their own table
+  // below the roster — see the Students card comment.
+  const activeStudents = students.filter((s) => !s.isArchived);
+  const unenrolledStudents = students.filter((s) => s.isArchived);
+
   /** Look up a year_name from the response's `school_years` map.
    *  Falls back to "Year #N" if the map didn't include the id (Xano
    *  schoolYears fetch fell over, or the row references a stale
@@ -341,7 +346,14 @@ export default function FamilyOverviewPage() {
           clickable and routes into the per-student enrolled detail
           page scoped to that student's most recent school year —
           replaces the standalone Applications table below that
-          previously surfaced cross-year app status. */}
+          previously surfaced cross-year app status.
+
+          Unenrolled students get their own table below rather than a
+          greyed row mixed into this one. They stay on the page — the
+          family's history matters, and a sibling who left is exactly
+          the kind of context admin needs when the next one applies —
+          but they aren't part of "who is here now", and reading them
+          off a shared list meant checking a pill on every row. */}
       <Card className="overflow-hidden gap-0 py-0 bg-white">
         <CardHeader className="py-3 !pb-3 border-b">
           <CardTitle className="text-base">Students</CardTitle>
@@ -351,93 +363,37 @@ export default function FamilyOverviewPage() {
             <p className="text-sm italic text-muted-foreground px-5 py-4">
               No students on file for this family.
             </p>
+          ) : activeStudents.length === 0 ? (
+            <p className="text-sm italic text-muted-foreground px-5 py-4">
+              Every student on this family is unenrolled — see below.
+            </p>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow className="hover:bg-transparent">
-                  <TableHead className="text-[10px] text-muted-foreground">
-                    Name
-                  </TableHead>
-                  <TableHead className="text-[10px] text-muted-foreground">
-                    Date of Birth
-                  </TableHead>
-                  <TableHead className="text-[10px] text-muted-foreground">
-                    Gender
-                  </TableHead>
-                  <TableHead className="text-[10px] text-muted-foreground">
-                    Ethnicity
-                  </TableHead>
-                  <TableHead className="text-[10px] text-muted-foreground">
-                    Status
-                  </TableHead>
-                  <TableHead className="text-[10px] text-muted-foreground text-right w-10" />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {students.map((s) => {
-                  const name =
-                    `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim() ||
-                    `Student #${s.id}`;
-                  const dob = s.date_of_birth
-                    ? new Date(`${s.date_of_birth}T00:00:00`).toLocaleDateString()
-                    : "—";
-                  const latestYear = latestYearByStudent.get(s.id);
-                  // `from=overview` points the student page's back
-                  // button here instead of the enrolled roster.
-                  const href = latestYear
-                    ? `/admin/enrolled/${s.id}?yearId=${latestYear}&from=overview`
-                    : null;
-                  return (
-                    <TableRow
-                      key={s.id}
-                      className={cn(
-                        s.isArchived && "bg-muted/30",
-                        href && "cursor-pointer hover:bg-muted/30"
-                      )}
-                    >
-                      <TableCell className="font-medium p-0">
-                        {href ? (
-                          <Link
-                            href={href}
-                            className="block px-4 py-3 hover:underline"
-                          >
-                            {name}
-                          </Link>
-                        ) : (
-                          <span className="block px-4 py-3">{name}</span>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {dob}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {s.gender || "—"}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {s.ethnicity || "—"}
-                      </TableCell>
-                      <TableCell>
-                        <StudentStatusPills student={s} />
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {href ? (
-                          <Link
-                            href={href}
-                            className="inline-flex text-muted-foreground hover:text-foreground"
-                            aria-label={`Open ${name} detail`}
-                          >
-                            <ExternalLink className="size-3.5" />
-                          </Link>
-                        ) : null}
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
+            <StudentsTable
+              rows={activeStudents}
+              latestYearByStudent={latestYearByStudent}
+            />
           )}
         </CardContent>
       </Card>
+
+      {unenrolledStudents.length > 0 ? (
+        <Card className="overflow-hidden gap-0 py-0 bg-white">
+          <CardHeader className="py-3 !pb-3 border-b">
+            <CardTitle className="text-base">
+              Unenrolled Students
+              <span className="ml-2 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground align-middle">
+                {unenrolledStudents.length}
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="px-3 pb-3 bg-white">
+            <StudentsTable
+              rows={unenrolledStudents}
+              latestYearByStudent={latestYearByStudent}
+            />
+          </CardContent>
+        </Card>
+      ) : null}
 
       {/* Emergency contacts — evergreen family data. Same five-
           column shape as the parents table since the data is
@@ -935,6 +891,103 @@ function DetailRow({
       </dt>
       <dd className="min-w-0">{children}</dd>
     </div>
+  );
+}
+
+/**
+ * The student roster table. Shared by the Students card and the
+ * Unenrolled Students card below it so the two read as one table
+ * split in half rather than two tables that drifted apart.
+ */
+function StudentsTable({
+  rows,
+  latestYearByStudent,
+}: {
+  rows: AdminFamilyOverviewResponse["students"];
+  /** student id → most recent school year with an application; rows
+   *  without one aren't clickable (there's no detail page to open). */
+  latestYearByStudent: Map<number, number>;
+}) {
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow className="hover:bg-transparent">
+          <TableHead className="text-[10px] text-muted-foreground">
+            Name
+          </TableHead>
+          <TableHead className="text-[10px] text-muted-foreground">
+            Date of Birth
+          </TableHead>
+          <TableHead className="text-[10px] text-muted-foreground">
+            Gender
+          </TableHead>
+          <TableHead className="text-[10px] text-muted-foreground">
+            Ethnicity
+          </TableHead>
+          <TableHead className="text-[10px] text-muted-foreground">
+            Status
+          </TableHead>
+          <TableHead className="text-[10px] text-muted-foreground text-right w-10" />
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {rows.map((s) => {
+          const name =
+            `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim() ||
+            `Student #${s.id}`;
+          const dob = s.date_of_birth
+            ? new Date(`${s.date_of_birth}T00:00:00`).toLocaleDateString()
+            : "—";
+          const latestYear = latestYearByStudent.get(s.id);
+          // `from=overview` points the student page's back button
+          // here instead of the enrolled roster.
+          const href = latestYear
+            ? `/admin/enrolled/${s.id}?yearId=${latestYear}&from=overview`
+            : null;
+          return (
+            <TableRow
+              key={s.id}
+              // No grey fill for archived rows any more — the
+              // Unenrolled table around them already says it, and
+              // dimming every row in that table just made it hard
+              // to read.
+              className={cn(href && "cursor-pointer hover:bg-muted/30")}
+            >
+              <TableCell className="font-medium p-0">
+                {href ? (
+                  <Link href={href} className="block px-4 py-3 hover:underline">
+                    {name}
+                  </Link>
+                ) : (
+                  <span className="block px-4 py-3">{name}</span>
+                )}
+              </TableCell>
+              <TableCell className="text-muted-foreground">{dob}</TableCell>
+              <TableCell className="text-muted-foreground">
+                {s.gender || "—"}
+              </TableCell>
+              <TableCell className="text-muted-foreground">
+                {s.ethnicity || "—"}
+              </TableCell>
+              <TableCell>
+                <StudentStatusPills student={s} />
+              </TableCell>
+              <TableCell className="text-right">
+                {href ? (
+                  <Link
+                    href={href}
+                    className="inline-flex text-muted-foreground hover:text-foreground"
+                    aria-label={`Open ${name} detail`}
+                  >
+                    <ExternalLink className="size-3.5" />
+                  </Link>
+                ) : null}
+              </TableCell>
+            </TableRow>
+          );
+        })}
+      </TableBody>
+    </Table>
   );
 }
 

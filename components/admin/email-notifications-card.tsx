@@ -119,41 +119,67 @@ function Row({ row }: { row: XanoEmailNotification }) {
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
+  const label = templateLabel(row.template);
+  // Subject repeats the label on several templates ("Records
+  // request" → "Records request — Ta'Quan Howard"); drop it when it
+  // adds nothing so the one line we have goes to the part that
+  // differs between rows.
+  const subject = (row.subject ?? "").trim();
+  const showSubject = subject && subject.toLowerCase() !== label.toLowerCase();
+  const recipients = recipientList.length > 0 ? recipientList.join(", ") : "—";
+  const ccLine = row.cc_emails?.trim() ?? "";
+  const recipientTitle = ccLine ? `${recipients}\nCC: ${ccLine}` : recipients;
 
+  // One line per row. Every cell that can overflow truncates rather
+  // than wraps, with the full value on hover — `max-w-0` is what
+  // makes `truncate` work inside a table cell, since an auto-width
+  // cell grows to fit its content instead of clipping it.
   return (
     <tr className="hover:bg-muted/20">
-      <td className="px-4 py-3 align-top whitespace-nowrap text-xs tabular-nums text-muted-foreground">
+      <td className="px-4 py-2 whitespace-nowrap text-xs tabular-nums text-muted-foreground">
         {dateStr}
       </td>
-      <td className="px-4 py-3 align-top">
-        <div className="font-medium text-sm">{templateLabel(row.template)}</div>
-        <div className="text-xs text-muted-foreground mt-0.5">
-          {row.subject}
+      <td className="px-4 py-2 max-w-0 w-1/2">
+        <div className="truncate" title={showSubject ? subject : label}>
+          <span className="font-medium text-sm">{label}</span>
+          {showSubject ? (
+            <span className="text-xs text-muted-foreground">
+              {" · "}
+              {subject}
+            </span>
+          ) : null}
         </div>
       </td>
-      <td className="px-4 py-3 align-top">
-        <div className="text-xs">
-          {recipientList.length > 0 ? recipientList.join(", ") : "—"}
+      <td className="px-4 py-2 max-w-0 w-1/2">
+        <div className="truncate text-xs" title={recipientTitle}>
+          {recipients}
+          {ccLine ? (
+            <span className="text-muted-foreground">
+              {" · CC: "}
+              {ccLine}
+            </span>
+          ) : null}
         </div>
-        {row.cc_emails ? (
-          <div className="text-[11px] text-muted-foreground mt-0.5">
-            CC: {row.cc_emails}
-          </div>
-        ) : null}
       </td>
-      <td className="px-4 py-3 align-top">
-        <StatusPill status={row.status} />
-        {row.status === "failed" && row.error_message ? (
-          <div className="text-[11px] text-red-700 mt-1">
-            {row.error_message}
-          </div>
-        ) : null}
+      <td className="px-4 py-2 whitespace-nowrap">
+        {/* A failed send's error moves onto the pill's tooltip — it's
+            the only field that can't fit, and losing the row height
+            everywhere to a case that's usually absent isn't worth
+            it. The pill still reads "Failed" at a glance. */}
+        <StatusPill
+          status={row.status}
+          title={
+            row.status === "failed" && row.error_message
+              ? row.error_message
+              : undefined
+          }
+        />
       </td>
     </tr>
   );
 }
 
-function StatusPill({ status }: { status: string }) {
+function StatusPill({ status, title }: { status: string; title?: string }) {
   const config = (() => {
     switch (status) {
       case "sent":
@@ -185,9 +211,11 @@ function StatusPill({ status }: { status: string }) {
   const Icon = config.Icon;
   return (
     <span
+      title={title}
       className={cn(
         "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ring-1",
-        config.tone
+        config.tone,
+        title && "cursor-help"
       )}
     >
       <Icon className="size-3" aria-hidden="true" />
