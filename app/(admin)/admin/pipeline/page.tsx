@@ -13,6 +13,7 @@ import {
 } from "@/components/admin/status-badge";
 import { PipelineExportDialog } from "@/components/admin/pipeline-export-dialog";
 import { adminFetcher } from "@/lib/admin-fetcher";
+import { cn } from "@/lib/utils";
 import type {
   PipelineFamilyRow,
   PipelineStage,
@@ -55,6 +56,48 @@ function badgeStatus(row: PipelineFamilyRow): ApplicationStatus {
   return row.isSubmitted ? "submitted" : "draft";
 }
 
+/**
+ * Application-column sub-state — finer than the shared status
+ * vocabulary, which collapses "hasn't touched it" and "three sections
+ * in" into one "Draft". On a board you work top-down that distinction
+ * is the whole point, so it lives here rather than in STATUS_META:
+ * "Draft" is a real status name elsewhere in admin (it matches Xano's
+ * own), and renaming it globally would move ground under the
+ * application tabs and filters.
+ */
+type AppProgress = "submitted" | "in_progress" | "not_started";
+
+const APP_PROGRESS_META: Record<
+  AppProgress,
+  { label: string; className: string }
+> = {
+  submitted: {
+    label: "Submitted",
+    className: "bg-blue-50 text-blue-700 border-blue-200",
+  },
+  in_progress: {
+    label: "In progress",
+    className: "bg-yellow-50 text-yellow-700 border-yellow-200",
+  },
+  not_started: {
+    label: "Not started",
+    className: "bg-muted text-muted-foreground border-border",
+  },
+};
+
+/** Board order: submitted first (they're waiting on us), then the
+ *  ones underway, then the ones that haven't begun. */
+const APP_PROGRESS_RANK: Record<AppProgress, number> = {
+  submitted: 0,
+  in_progress: 1,
+  not_started: 2,
+};
+
+function appProgress(row: PipelineFamilyRow): AppProgress {
+  if (row.isSubmitted) return "submitted";
+  return row.app_sections_complete > 0 ? "in_progress" : "not_started";
+}
+
 function fmtDate(ms: number | null): string {
   if (!ms) return "";
   const d = new Date(ms);
@@ -80,6 +123,22 @@ function cardMeta(row: PipelineFamilyRow): string {
   return `Application ${row.app_sections_complete}/${row.app_sections_total} sections`;
 }
 
+/** Same pill shape as StatusBadge — this column just has its own
+ *  three-state vocabulary. */
+function AppProgressBadge({ progress }: { progress: AppProgress }) {
+  const meta = APP_PROGRESS_META[progress];
+  return (
+    <span
+      className={cn(
+        "inline-flex shrink-0 items-center rounded-full border px-2.5 py-0.5 text-xs font-medium",
+        meta.className
+      )}
+    >
+      {meta.label}
+    </span>
+  );
+}
+
 function PipelineCard({
   row,
   onOpen,
@@ -95,7 +154,11 @@ function PipelineCard({
     >
       <div className="flex items-start justify-between gap-2">
         <p className="text-sm font-medium">{row.family_name}</p>
-        <StatusBadge status={badgeStatus(row)} />
+        {row.stage === "application" ? (
+          <AppProgressBadge progress={appProgress(row)} />
+        ) : (
+          <StatusBadge status={badgeStatus(row)} />
+        )}
       </div>
       {row.student_names ? (
         <p className="mt-0.5 text-xs text-muted-foreground line-clamp-2">
@@ -154,6 +217,14 @@ export default function PipelinePage() {
       enrollment: [],
     };
     for (const row of visible) buckets[row.stage].push(row);
+    // Applications sort by progress: submitted, then underway, then
+    // untouched. Rank only — Array.sort is stable, so the existing
+    // order inside each group is preserved rather than replaced with
+    // an ordering nobody asked for.
+    buckets.application.sort(
+      (a, b) =>
+        APP_PROGRESS_RANK[appProgress(a)] - APP_PROGRESS_RANK[appProgress(b)]
+    );
     return buckets;
   }, [visible]);
 
@@ -220,6 +291,13 @@ export default function PipelinePage() {
           <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
             {STAGES.map((stage) => {
               const items = byStage[stage.key];
+              // Students, not family cards — a residential family of 21
+              // counting as "1" made the board read as a fraction of
+              // the actual funnel.
+              const studentCount = items.reduce(
+                (n, r) => n + (Number(r.student_count) || 0),
+                0
+              );
               return (
                 <Card
                   key={stage.key}
@@ -235,8 +313,18 @@ export default function PipelinePage() {
                           {stage.description}
                         </p>
                       </div>
-                      <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium">
-                        {items.length}
+                      <span
+                        className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium"
+                        // The cards below are families, so spell out
+                        // what the number counts rather than leaving
+                        // the mismatch to be worked out.
+                        title={`${studentCount} student${
+                          studentCount === 1 ? "" : "s"
+                        } across ${items.length} famil${
+                          items.length === 1 ? "y" : "ies"
+                        }`}
+                      >
+                        {studentCount}
                       </span>
                     </div>
                   </CardHeader>
