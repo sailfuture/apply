@@ -200,6 +200,14 @@ export async function GET(req: NextRequest) {
         // First-open stamp from the Resend webhook (open tracking) —
         // renders as "Viewed …" in the bubble footer.
         openedAt: e.opened_at ?? undefined,
+        // Delivery note — a bounce that DIDN'T fail the send (one of
+        // several recipients, or a transient one). Surfaced so a
+        // partial failure isn't invisible just because the row is
+        // still "sent".
+        deliveryNote:
+          e.status !== "failed" && e.error_message
+            ? e.error_message
+            : undefined,
       });
     }
 
@@ -589,6 +597,11 @@ export interface ActivityEvent {
   direction?: "inbound" | "outbound";
   /** Texts: Twilio delivery status. Emails: sent | failed. */
   status?: string;
+  /** Emails only — a delivery problem that did NOT fail the send,
+   *  e.g. one of three recipients hard-bounced or a transient bounce
+   *  that may still deliver. Present only when `status` isn't
+   *  "failed", so the two never contradict each other. */
+  deliveryNote?: string;
   /** Texts only — this row was part of a group blast. */
   isGroup?: boolean;
   /** Emails only — Resend message id for the full-content preview. */

@@ -162,18 +162,30 @@ function Row({ row }: { row: XanoEmailNotification }) {
         </div>
       </td>
       <td className="px-4 py-2 whitespace-nowrap">
-        {/* A failed send's error moves onto the pill's tooltip — it's
-            the only field that can't fit, and losing the row height
-            everywhere to a case that's usually absent isn't worth
-            it. The pill still reads "Failed" at a glance. */}
-        <StatusPill
-          status={row.status}
-          title={
-            row.status === "failed" && row.error_message
-              ? row.error_message
-              : undefined
-          }
-        />
+        {/* The error moves onto the pill's tooltip — it's the only
+            field that can't fit, and losing the row height everywhere
+            to a case that's usually absent isn't worth it. The pill
+            still reads Failed / Sent at a glance.
+
+            An `error_message` on a row that ISN'T failed is a bounce
+            that didn't sink the send (one recipient of several, or a
+            transient one). That gets its own amber marker rather than
+            being hidden — the send succeeded, but somebody on it may
+            not have received it. */}
+        <span className="inline-flex items-center gap-1.5">
+          <StatusPill
+            status={row.status}
+            title={row.error_message || undefined}
+          />
+          {row.status !== "failed" && row.error_message ? (
+            <span
+              className="cursor-help text-[10px] font-medium uppercase tracking-wide text-amber-600"
+              title={row.error_message}
+            >
+              Delivery issue
+            </span>
+          ) : null}
+        </span>
       </td>
     </tr>
   );

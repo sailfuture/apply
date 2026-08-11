@@ -801,6 +801,15 @@ function BubbleRow({
               &nbsp;·&nbsp;Viewed {shortWhen(event.openedAt)}
             </span>
           ) : null}
+          {/* A bounce that didn't fail the send — one recipient of
+              several, or a transient one. Amber, not red: the message
+              did go out, but somebody on it may not have got it. The
+              specific address and reason are on hover. */}
+          {isEmail && event.deliveryNote ? (
+            <span className="text-amber-600" title={event.deliveryNote}>
+              &nbsp;·&nbsp;Delivery issue
+            </span>
+          ) : null}
           {isEmail && event.resendId ? (
             <>
               &nbsp;·&nbsp;
