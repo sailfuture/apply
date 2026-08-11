@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
+import type { XanoSchoolYear } from "@/lib/xano";
 
 /**
  * Admin Enrolled Students list — one row per student who has an
@@ -26,15 +27,45 @@ import { xano } from "@/lib/xano";
  *
  * Joins:
  *   - `xano.students.getAll()` → primary pivot, gated by isEnrolled
- *   - `xano.applications.getAll()` → year scope + `current_grade`
- *   - `xano.studentRegistration.getByYear(year)` → waiver state +
- *     "verified at" timestamp (side join, not the gate)
+ *   - `xano.applications.getAll()` → year scope + `current_grade` +
+ *     the first-enrolled-year fallback
+ *   - `xano.studentRegistration.getAll()` → waiver state + "verified
+ *     at" timestamp for the selected year (side join, not the gate),
+ *     AND every OTHER year's packet, which is what lets us derive
+ *     each student's first enrolled year. Deliberately the whole
+ *     table rather than `getByYear(yearId)`: the cohort year is a
+ *     cross-year question, and one full read is cheaper than a
+ *     per-year fan-out.
+ *   - `xano.schoolYears.getAll()` → year id → display name +
+ *     chronological ordering for the cohort year
  *   - `xano.families.getAll()` → family label
  *   - `xano.parents.getAll()` → primary parent name + email
  *
  * Each lookup is wrapped in `Promise.allSettled` so a single Xano
  * hiccup degrades gracefully rather than 500'ing the whole route.
  */
+
+/**
+ * Chronological sort key for a school year. Prefers the row's
+ * `start_date`; falls back to a leading 4-digit year parsed out of
+ * `year_name` ("2023-2024" → Jul 2023), which covers rows where the
+ * date columns were never filled in. Anything unparseable sorts last
+ * rather than colliding with real years near epoch zero — the same
+ * "unknown drops to the end" treatment the grade sort uses on the
+ * page.
+ */
+function yearSortKey(year: XanoSchoolYear | null | undefined): number {
+  if (!year) return Number.MAX_SAFE_INTEGER;
+  const fromStartDate = year.start_date ? Date.parse(year.start_date) : NaN;
+  if (Number.isFinite(fromStartDate)) return fromStartDate;
+  const leading = parseInt(String(year.year_name ?? "").trim().slice(0, 4), 10);
+  // Range-guard the parse so a short label like "23-24" doesn't
+  // resolve to the year 23 AD and sort ahead of everything real.
+  if (Number.isFinite(leading) && leading >= 1900 && leading <= 3000) {
+    return Date.UTC(leading, 6, 1);
+  }
+  return Number.MAX_SAFE_INTEGER;
+}
 export async function GET(req: NextRequest) {
   try {
     await requireAdmin();
@@ -59,18 +90,26 @@ export async function GET(req: NextRequest) {
       studentsResult,
       familiesResult,
       parentsResult,
+      yearsResult,
     ] = await Promise.allSettled([
-      xano.studentRegistration.getByYear(yearId),
+      xano.studentRegistration.getAll(),
       xano.applications.getAll(),
       xano.students.getAll(),
       xano.families.getAll(),
       xano.parents.getAll(),
+      xano.schoolYears.getAll(),
     ]);
 
     if (packetsResult.status === "rejected") {
       console.error(
         "[/api/admin/enrolled] failed to load packets:",
         packetsResult.reason
+      );
+    }
+    if (yearsResult.status === "rejected") {
+      console.error(
+        "[/api/admin/enrolled] failed to load school years:",
+        yearsResult.reason
       );
     }
     if (appsResult.status === "rejected") {
@@ -98,8 +137,16 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const packets =
+    // Every packet across every year. The selected year's slice is
+    // pulled out below for the waiver / verified-at side join; the
+    // full set feeds the first-enrolled-year derivation.
+    const allPackets =
       packetsResult.status === "fulfilled" ? packetsResult.value : [];
+    const packets = allPackets.filter(
+      (p) => Number(p.registration_school_years_id) === yearId
+    );
+    const years =
+      yearsResult.status === "fulfilled" ? yearsResult.value : [];
     const apps =
       appsResult.status === "fulfilled" ? appsResult.value : [];
     const students =
@@ -117,6 +164,60 @@ export async function GET(req: NextRequest) {
       if (Number(a.registration_school_years_id) !== yearId) continue;
       if (a.isActive === false) continue;
       appByStudent.set(Number(a.registration_students_id), a);
+    }
+
+    // ── First-enrolled ("cohort") year, per student ──────────────
+    //
+    // The roster is scoped to ONE school year, so "which year did
+    // this student enrol?" can't be read off the row — it's a
+    // cross-year question. Two tiers, best signal first:
+    //
+    //   1. The earliest year in which the student has a packet with
+    //      `registrationConfirmed === true`. That's the real
+    //      "admin signed off on this student's registration" event,
+    //      so it's the honest answer to "when did they start here."
+    //   2. Failing that (packet drift, legacy rows, a student
+    //      enrolled via the family-level cascade before their own
+    //      packet was confirmed), the earliest year they hold an
+    //      active application for.
+    //
+    // Tier 2 always resolves for anyone in this list — an active
+    // application for the selected year is the list's own gate — so
+    // every row gets a year. `basis` rides along so the column can
+    // hover-explain which tier answered, rather than presenting a
+    // softer number with the same confidence as a hard one.
+    const yearById = new Map<number, XanoSchoolYear>(
+      years.map((y) => [y.id, y])
+    );
+    const yearKeyById = new Map<number, number>(
+      years.map((y) => [y.id, yearSortKey(y)])
+    );
+    /** Keep whichever of the two year ids sits earlier on the
+     *  calendar. Unknown years (no row in `registration_school_years`)
+     *  score MAX_SAFE_INTEGER and therefore lose to any known year. */
+    const earlier = (a: number | null, b: number) => {
+      if (a === null) return b;
+      const aKey = yearKeyById.get(a) ?? Number.MAX_SAFE_INTEGER;
+      const bKey = yearKeyById.get(b) ?? Number.MAX_SAFE_INTEGER;
+      return bKey < aKey ? b : a;
+    };
+    const firstConfirmedYearByStudent = new Map<number, number>();
+    for (const p of allPackets) {
+      if (p.registrationConfirmed !== true) continue;
+      const sid = Number(p.registration_students_id);
+      const yid = Number(p.registration_school_years_id);
+      if (!Number.isFinite(sid) || !Number.isFinite(yid)) continue;
+      const next = earlier(firstConfirmedYearByStudent.get(sid) ?? null, yid);
+      firstConfirmedYearByStudent.set(sid, next);
+    }
+    const firstAppliedYearByStudent = new Map<number, number>();
+    for (const a of apps) {
+      if (a.isActive === false) continue;
+      const sid = Number(a.registration_students_id);
+      const yid = Number(a.registration_school_years_id);
+      if (!Number.isFinite(sid) || !Number.isFinite(yid)) continue;
+      const next = earlier(firstAppliedYearByStudent.get(sid) ?? null, yid);
+      firstAppliedYearByStudent.set(sid, next);
     }
 
     // Primary parent per family — lowest id wins, mirroring how the
@@ -179,6 +280,16 @@ export async function GET(req: NextRequest) {
         0;
       const isEnrolled =
         student.isEnrolled === true && student.isArchived !== true;
+      // Cohort year — see the two-tier derivation above. Falls all
+      // the way back to the selected year so the column never renders
+      // blank on a row that is, by definition, here for this year.
+      const confirmedCohortYearId =
+        firstConfirmedYearByStudent.get(studentId) ?? null;
+      const cohortYearId =
+        confirmedCohortYearId ??
+        firstAppliedYearByStudent.get(studentId) ??
+        yearId;
+      const cohortYear = yearById.get(cohortYearId) ?? null;
       return [
         {
           id: studentId,
@@ -206,6 +317,11 @@ export async function GET(req: NextRequest) {
           primary_email: primary?.email ?? "",
           primary_phone: (primary?.phone ?? "").toString(),
           confirmed_at: enrolledAt,
+          enrolled_year_id: cohortYearId,
+          enrolled_year_name: cohortYear?.year_name?.trim() || "—",
+          enrolled_year_sort: yearKeyById.get(cohortYearId) ?? Number.MAX_SAFE_INTEGER,
+          enrolled_year_basis:
+            confirmedCohortYearId !== null ? "confirmed" : "application",
           liability_waiver_status: packet?.liability_waiver_status ?? "",
           liability_waiver_pdf_url: packet?.liability_waiver_pdf_url ?? "",
           is_enrolled: isEnrolled,
@@ -280,8 +396,29 @@ export interface EnrolledStudentRow {
   primary_email: string;
   /** Best-effort "enrolled at" timestamp — packet verify time,
    *  packet created_at, or student created_at, in that order of
-   *  preference. */
+   *  preference. Scoped to the SELECTED year; see
+   *  `enrolled_year_*` for the student's cohort year. */
   confirmed_at: number;
+  /** School-year id the student FIRST enrolled under — their cohort
+   *  year, which is usually earlier than the year this list is
+   *  scoped to. Derived cross-year; see the derivation block in the
+   *  route for the two tiers. */
+  enrolled_year_id: number;
+  /** Display label for `enrolled_year_id` ("2023-2024"), or "—" when
+   *  the year row is missing from `registration_school_years`. */
+  enrolled_year_name: string;
+  /** Chronological sort key for `enrolled_year_id` (epoch ms of the
+   *  year's start). Unknown years score `MAX_SAFE_INTEGER` so they
+   *  land at the end of an ascending sort instead of the front.
+   *  The column sorts on THIS, not on `enrolled_year_name` — a
+   *  string sort would put "—" ahead of every real year. */
+  enrolled_year_sort: number;
+  /** Which tier of the derivation answered: `"confirmed"` (a
+   *  registration packet was admin-confirmed that year — hard
+   *  signal) or `"application"` (no confirmed packet anywhere, so
+   *  we fell back to their earliest active application year — soft
+   *  signal). Drives the column's hover text. */
+  enrolled_year_basis: "confirmed" | "application";
   liability_waiver_status: string;
   liability_waiver_pdf_url: string;
   /** Primary parent's phone (bare digits as stored) — surfaced in the

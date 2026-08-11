@@ -5,7 +5,10 @@ import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import {
   Activity,
+  ChevronDown,
   ChevronRight,
+  ChevronsUpDown,
+  ChevronUp,
   GraduationCap,
   Search,
 } from "lucide-react";
@@ -187,7 +190,11 @@ export default function EnrolledStudentsPage() {
       header: "Student",
       sortable: true,
       searchable: true,
-      width: "w-[26%]",
+      width: "w-[22%]",
+      // Sort on last-then-first so the ordering reads like a class
+      // list, matching how the grade groups already order themselves.
+      accessor: (row) =>
+        `${row.student_last_name} ${row.student_first_name}`.trim(),
       // Name click = full student page; the ROW click opens the
       // quick-detail sheet, so this stops propagation.
       render: (row) => (
@@ -211,6 +218,9 @@ export default function EnrolledStudentsPage() {
       sortable: true,
       searchable: true,
       width: "w-[8%]",
+      // Numeric key so a flat sort puts 8th before 10th — the same
+      // ordering `groupByGrade` applies to the group headers.
+      accessor: (row) => gradeSortKey(row.grade_level?.trim() || "—")[0],
       render: (row) => (
         <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
           {row.grade_level?.trim() || "—"}
@@ -222,7 +232,7 @@ export default function EnrolledStudentsPage() {
       header: "Family",
       sortable: true,
       searchable: true,
-      width: "w-[20%]",
+      width: "w-[18%]",
       // Family click = family overview page; stops propagation for
       // the same reason as the student-name link above. Legacy rows
       // without a family id fall back to plain text.
@@ -249,7 +259,7 @@ export default function EnrolledStudentsPage() {
       header: "Primary Contact",
       sortable: true,
       searchable: true,
-      width: "w-[22%]",
+      width: "w-[18%]",
       render: (row) => (
         <span className="block truncate">
           {row.primary_email || row.primary_name || "—"}
@@ -274,6 +284,38 @@ export default function EnrolledStudentsPage() {
           }
         >
           {formatRelativeShort(row.confirmed_at)}
+        </span>
+      ),
+    },
+    {
+      key: "enrolled_year_name",
+      header: "First Enrolled",
+      sortable: true,
+      searchable: true,
+      width: "w-[10%]",
+      // The student's cohort year — the year they FIRST enrolled,
+      // which is usually earlier than the year this roster is scoped
+      // to. Sorts on the numeric `enrolled_year_sort` (epoch ms of
+      // the year's start) rather than the label, so unknown years
+      // sink instead of leading with "—".
+      accessor: (row) => row.enrolled_year_sort,
+      render: (row) => (
+        <span
+          className="text-sm tabular-nums text-muted-foreground"
+          title={
+            row.enrolled_year_basis === "confirmed"
+              ? "First year with an admin-confirmed registration packet."
+              : "No confirmed registration packet on file — showing their earliest application year instead."
+          }
+        >
+          {row.enrolled_year_name || "—"}
+          {/* Soft-signal marker. A derived cohort year that came from
+              an application rather than a confirmed packet is a
+              guess, and admin sorting a roster by it deserves to see
+              which rows are guesses without hovering every cell. */}
+          {row.enrolled_year_basis === "application" ? (
+            <span className="ml-0.5 text-muted-foreground/60">*</span>
+          ) : null}
         </span>
       ),
     },
@@ -520,16 +562,31 @@ function EnrolledRoster({
   onRowClick: (row: EnrolledStudentRow) => void;
 }) {
   const colCount = columns.length;
+  // Active column sort, or `null` for the default grade grouping.
+  // Per-roster state: sorting the Enrolled card shouldn't reorder
+  // the Unenrolled one underneath it.
+  const [sort, setSort] = useState<{ key: string; dir: "asc" | "desc" } | null>(
+    null
+  );
+  /** Header click cycles asc → desc → off, so the third click puts
+   *  the grade grouping back without hunting for a reset control. */
+  function toggleSort(key: string) {
+    setSort((cur) => {
+      if (!cur || cur.key !== key) return { key, dir: "asc" };
+      if (cur.dir === "asc") return { key, dir: "desc" };
+      return null;
+    });
+  }
   // Filter each grade group's rows by the search query, then
   // drop any groups that have zero matches so empty grade
   // sections don't render. Matches against student name +
-  // family name + primary contact + grade — the same fields
-  // admin's eye scans when looking for a specific row.
+  // family name + primary contact + grade + cohort year — the
+  // same fields admin's eye scans when looking for a specific row.
   const visibleGrouped = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return grouped;
     const filterRow = (r: EnrolledStudentRow) =>
-      `${r.student_full_name} ${r.family_name} ${r.primary_email ?? ""} ${r.primary_name ?? ""} ${r.grade_level}`
+      `${r.student_full_name} ${r.family_name} ${r.primary_email ?? ""} ${r.primary_name ?? ""} ${r.grade_level} ${r.enrolled_year_name ?? ""}`
         .toLowerCase()
         .includes(q);
     return grouped
@@ -539,6 +596,80 @@ function EnrolledRoster({
   const visibleCount = useMemo(
     () => visibleGrouped.reduce((acc, g) => acc + g.rows.length, 0),
     [visibleGrouped]
+  );
+  // A column sort is necessarily global, so it dissolves the grade
+  // grouping — you can't order the whole roster by cohort year while
+  // still penning each student inside their grade bucket. When a
+  // sort is active the table renders one flat list instead, and the
+  // Grade column carries the grade that the group headers used to.
+  // `null` here means "no sort active" → keep the grouped render.
+  const sortedFlat = useMemo(() => {
+    if (!sort) return null;
+    const col = columns.find((c) => c.key === sort.key);
+    if (!col) return null;
+    const valueOf = (row: EnrolledStudentRow) =>
+      col.accessor
+        ? col.accessor(row)
+        : (row[col.key] as string | number | null | undefined);
+    const dir = sort.dir === "asc" ? 1 : -1;
+    return visibleGrouped
+      .flatMap((g) => g.rows)
+      .slice()
+      .sort((a, b) => {
+        const av = valueOf(a);
+        const bv = valueOf(b);
+        // Blanks sink to the bottom in BOTH directions — an empty
+        // cell is never the "most" of anything, and flipping them to
+        // the top on a desc sort just buries the real data.
+        const aEmpty = av === null || av === undefined || av === "";
+        const bEmpty = bv === null || bv === undefined || bv === "";
+        if (aEmpty !== bEmpty) return aEmpty ? 1 : -1;
+        if (!aEmpty && !bEmpty) {
+          if (typeof av === "number" && typeof bv === "number") {
+            if (av !== bv) return (av - bv) * dir;
+          } else {
+            const cmp = String(av).localeCompare(String(bv), undefined, {
+              numeric: true,
+            });
+            if (cmp !== 0) return cmp * dir;
+          }
+        }
+        // Ties (a whole cohort year, a whole grade) fall back to the
+        // class-list order rather than whatever the fetch happened to
+        // return, so repeat renders stay stable.
+        return (
+          (a.student_last_name ?? "").localeCompare(b.student_last_name ?? "") ||
+          (a.student_first_name ?? "").localeCompare(b.student_first_name ?? "")
+        );
+      });
+  }, [sort, columns, visibleGrouped]);
+  const sortedColumnHeader = sort
+    ? columns.find((c) => c.key === sort.key)?.header ?? null
+    : null;
+  /** One student row. Shared by the grouped and flat-sorted bodies
+   *  so the two renders can't drift in cell padding or click
+   *  behaviour. */
+  const renderRow = (row: EnrolledStudentRow) => (
+    <TableRow
+      key={row.id}
+      onClick={() => onRowClick(row)}
+      className="cursor-pointer"
+    >
+      {columns.map((col) => (
+        <TableCell
+          key={col.key}
+          className={cn(
+            "text-sm",
+            col.align === "right" && "text-right",
+            col.align === "center" && "text-center"
+          )}
+        >
+          {col.render
+            ? col.render(row)
+            : (row[col.key] as React.ReactNode) ?? "—"}
+        </TableCell>
+      ))}
+    </TableRow>
   );
   return (
     <Card className="overflow-hidden bg-white py-0 gap-0">
@@ -552,6 +683,23 @@ function EnrolledRoster({
           </span>
         </div>
         <p className="text-xs text-muted-foreground">{description}</p>
+        {/* Sort indicator — the grade group headers vanish while a
+            sort is active, so say why and offer the way back
+            explicitly rather than relying on admin finding the
+            third header click. */}
+        {sort && sortedColumnHeader ? (
+          <button
+            type="button"
+            onClick={() => setSort(null)}
+            // `w-fit` because CardHeader is a grid with stretched
+            // items — without it the click target spans the card.
+            className="w-fit text-left text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+          >
+            Sorted by {sortedColumnHeader} (
+            {sort.dir === "asc" ? "ascending" : "descending"}) · reset to
+            grade groups
+          </button>
+        ) : null}
       </CardHeader>
       <CardContent className="p-6 bg-white space-y-3">
         <Table>
@@ -567,7 +715,36 @@ function EnrolledRoster({
                     col.align === "center" && "text-center"
                   )}
                 >
-                  {col.header}
+                  {col.sortable ? (
+                    // `flex w-full min-w-0` bounds the button to the
+                    // cell so long headers truncate instead of
+                    // spilling into the next column — same treatment
+                    // DataTable gives its sortable headers.
+                    <button
+                      type="button"
+                      onClick={() => toggleSort(col.key)}
+                      title={`Sort by ${col.header}`}
+                      className={cn(
+                        "flex w-full min-w-0 items-center gap-1 uppercase tracking-wider transition-colors hover:text-foreground",
+                        col.align === "right" && "justify-end",
+                        col.align === "center" && "justify-center",
+                        sort?.key === col.key && "text-foreground"
+                      )}
+                    >
+                      <span className="truncate">{col.header}</span>
+                      {sort?.key === col.key ? (
+                        sort.dir === "asc" ? (
+                          <ChevronUp className="size-3 shrink-0" />
+                        ) : (
+                          <ChevronDown className="size-3 shrink-0" />
+                        )
+                      ) : (
+                        <ChevronsUpDown className="size-3 shrink-0 opacity-40" />
+                      )}
+                    </button>
+                  ) : (
+                    col.header
+                  )}
                 </TableHead>
               ))}
             </TableRow>
@@ -584,6 +761,11 @@ function EnrolledRoster({
                     : emptyLabel}
                 </TableCell>
               </TableRow>
+            ) : sortedFlat ? (
+              // Sorted: one flat list, no grade banners. The Grade
+              // column still shows each student's grade, so nothing
+              // is lost by dropping the group headers here.
+              sortedFlat.map(renderRow)
             ) : (
               visibleGrouped.map((group) => (
                 <Fragment key={group.grade}>
@@ -603,28 +785,7 @@ function EnrolledRoster({
                       </span>
                     </TableCell>
                   </TableRow>
-                  {group.rows.map((row) => (
-                    <TableRow
-                      key={row.id}
-                      onClick={() => onRowClick(row)}
-                      className="cursor-pointer"
-                    >
-                      {columns.map((col) => (
-                        <TableCell
-                          key={col.key}
-                          className={cn(
-                            "text-sm",
-                            col.align === "right" && "text-right",
-                            col.align === "center" && "text-center"
-                          )}
-                        >
-                          {col.render
-                            ? col.render(row)
-                            : (row[col.key] as React.ReactNode) ?? "—"}
-                        </TableCell>
-                      ))}
-                    </TableRow>
-                  ))}
+                  {group.rows.map(renderRow)}
                 </Fragment>
               ))
             )}
