@@ -262,6 +262,24 @@ export function EnrolledFamilyDashboard({
     }
     return ids;
   }, [packetsData]);
+  /**
+   * Students who have a packet for this year at all, confirmed or not
+   * — i.e. registration has been started.
+   *
+   * Read from the packet rows rather than the application's
+   * `isAccepted`, which never persists: `registration_application` has
+   * no isAccepted / isSubmitted columns in Xano, so those writes are
+   * silently dropped and every row read back as undefined. That made
+   * these rows permanently say "Registration incomplete / Finish" even
+   * after the family had created the packet.
+   */
+  const startedStudentIds = useMemo(() => {
+    const ids = new Set<number>();
+    for (const p of packetsData ?? []) {
+      ids.add(Number(p.registration_students_id));
+    }
+    return ids;
+  }, [packetsData]);
   // A residential addition isn't fully enrolled until its packet is
   // confirmed; until then it belongs in "Pending Registrations".
   const isPendingResidentialAdd = useCallback(
@@ -810,11 +828,14 @@ export function EnrolledFamilyDashboard({
               <Table className="text-sm">
                 <TableBody>
                   {pendingResidentialAdds.map(({ student, app }) => {
-                    // Three states: incomplete details → "Finish";
-                    // submitted-but-not-accepted → "In review"; accepted
-                    // but packet not yet confirmed → "Complete packet".
-                    const accepted = app.isAccepted === true;
-                    const inReview = !accepted && app.isSubmitted === true;
+                    // Two states, both derived from whether the packet
+                    // exists (the application's own flags don't persist
+                    // — see `startedStudentIds`): no packet yet →
+                    // "Finish" the details; packet created but not yet
+                    // admin-confirmed → "Continue registration".
+                    const started = startedStudentIds.has(
+                      app.registration_students_id
+                    );
                     const name = student
                       ? `${student.first_name ?? ""} ${student.last_name ?? ""}`.trim()
                       : "";
@@ -841,27 +862,18 @@ export function EnrolledFamilyDashboard({
                                 {name || "Registration in progress"}
                               </p>
                               <p className="text-xs text-muted-foreground mt-0.5">
-                                {accepted
-                                  ? "Accepted — complete the registration packet"
-                                  : inReview
-                                    ? "Submitted — awaiting admissions review"
-                                    : "Registration incomplete"}
+                                {started
+                                  ? "Registration packet in progress"
+                                  : "Student details incomplete"}
                               </p>
                             </div>
                           </div>
                         </TableCell>
                         <TableCell className="px-4 py-3 text-right whitespace-nowrap">
-                          {inReview ? (
-                            <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-amber-200">
-                              <Clock className="size-3.5" />
-                              In review
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1.5 text-xs font-medium text-primary">
-                              {accepted ? "Complete packet" : "Finish"}
-                              <ChevronRight className="size-4" />
-                            </span>
-                          )}
+                          <span className="inline-flex items-center gap-1.5 text-xs font-medium text-primary">
+                            {started ? "Continue registration" : "Finish"}
+                            <ChevronRight className="size-4" />
+                          </span>
                         </TableCell>
                       </TableRow>
                     );

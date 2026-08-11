@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { NweaBookingDialog } from "@/components/nwea-booking-dialog";
-import { ArrowLeft, Calendar, Clock, ExternalLink } from "lucide-react";
+import { ArrowLeft, ArrowRight, Calendar, ExternalLink } from "lucide-react";
 import { ResidentialPacketForm } from "./residential-packet-form";
 
 const STEP_UP_URL = "https://www.stepupforstudents.org/scholarships/logins/";
@@ -83,6 +83,20 @@ export default function AddStudentRegistrationPage() {
   const [saving, setSaving] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [scheduleDialogOpen, setScheduleDialogOpen] = useState(false);
+  /**
+   * Whether this student already has a registration packet.
+   *
+   * This is the durable "has registration started?" signal, NOT the
+   * application's `isAccepted`: `registration_application` has no
+   * isAccepted / isSubmitted / isOffered / isDenied columns in Xano,
+   * so writing them returns 200 and persists nothing. Reading them
+   * back always gave undefined, which is why this page kept offering
+   * "Create Registration Packet" after the packet had been made.
+   * The packet row is real, so we ask about that instead.
+   */
+  const [hasPacket, setHasPacket] = useState(false);
+  /** Packet form is showing (created just now, or Continue clicked). */
+  const [showPacket, setShowPacket] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -132,6 +146,30 @@ export default function AddStudentRegistrationPage() {
           ) ?? null
         );
         setBusStops(stops);
+
+        // Does a packet already exist for this student + year? Answers
+        // "created" vs "not yet" durably, where the application's own
+        // decision flags can't (see `hasPacket`). Best-effort: a failed
+        // lookup leaves the page offering Create, which is recoverable
+        // — the create path resolves an existing packet rather than
+        // duplicating it.
+        try {
+          const pktRes = await fetch(
+            `/api/student-registration?studentId=${Number(
+              appData.registration_students_id
+            )}`
+          );
+          if (pktRes.ok) {
+            const pkt = await pktRes.json().catch(() => null);
+            const match =
+              pkt &&
+              Number(pkt.registration_school_years_id) ===
+                Number(appData.registration_school_years_id);
+            if (!cancelled && match) setHasPacket(true);
+          }
+        } catch (err) {
+          console.error("Packet lookup failed:", err);
+        }
       } catch (err) {
         console.error("Failed to load registration:", err);
         if (!cancelled) setNotFound(true);
@@ -212,12 +250,10 @@ export default function AddStudentRegistrationPage() {
         headers: { "Content-Type": "application/json" },
       });
       if (!res.ok) throw new Error("submit failed");
-      // Residential submissions are auto-accepted with their packet
-      // created server-side — stay on this page, which now renders the
-      // registration packet form, instead of bouncing to the dashboard.
-      setApp((prev) =>
-        prev ? { ...prev, isSubmitted: true, isAccepted: true } : prev
-      );
+      // Residential submissions create the packet server-side — stay
+      // on this page and show it, instead of bouncing to the dashboard.
+      setHasPacket(true);
+      setShowPacket(true);
       toast.success("Registration packet created — complete it below.");
     } catch {
       toast.error("Couldn't submit. Please try again.");
@@ -258,31 +294,26 @@ export default function AddStudentRegistrationPage() {
     );
   }
 
-  // Accepted — the parent completes this student's registration packet.
-  if (app.isAccepted) {
+  // Packet open — the parent completes this student's registration.
+  // Driven by `showPacket` (set on create, or by Continue below) rather
+  // than an application flag, so it survives a reload.
+  if (showPacket) {
     return (
       <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
-        <BackToDashboard />
+        <Button
+          variant="outline"
+          size="sm"
+          className="bg-white w-fit"
+          onClick={() => setShowPacket(false)}
+        >
+          <ArrowLeft className="size-3.5 mr-1.5" />
+          Back to student details
+        </Button>
         <ResidentialPacketForm
           studentId={app.registration_students_id}
           yearId={app.registration_school_years_id}
           registrationTypeId={1}
           studentName={studentName}
-        />
-      </div>
-    );
-  }
-
-  // Submitted, awaiting admin review.
-  if (app.isSubmitted) {
-    return (
-      <div className="flex flex-1 flex-col gap-4 p-6 mx-auto w-full max-w-4xl">
-        <BackToDashboard />
-        <StatusBanner
-          tone="pending"
-          icon={<Clock className="size-5" />}
-          title={`${studentName}'s registration is in review.`}
-          body="Our admissions team is reviewing the new student's information. You'll see them on your dashboard once they're confirmed."
         />
       </div>
     );
@@ -529,9 +560,20 @@ export default function AddStudentRegistrationPage() {
         <Button variant="outline" onClick={handleSave} disabled={saving || submitting}>
           {saving ? "Saving…" : "Save for Later"}
         </Button>
-        <Button onClick={handleSubmit} disabled={submitting || saving}>
-          {submitting ? "Creating…" : "Create Registration Packet"}
-        </Button>
+        {/* Once the packet exists this becomes the way back into it —
+            creating a second one isn't a thing that can happen, and
+            offering "Create" again read as though the first attempt
+            hadn't worked. */}
+        {hasPacket ? (
+          <Button onClick={() => setShowPacket(true)} disabled={saving}>
+            Continue Registration
+            <ArrowRight className="size-4 ml-1.5" />
+          </Button>
+        ) : (
+          <Button onClick={handleSubmit} disabled={submitting || saving}>
+            {submitting ? "Creating…" : "Create Registration Packet"}
+          </Button>
+        )}
       </div>
 
       {/* NWEA scheduling — embeds the Google Calendar booking flow. */}
@@ -555,31 +597,5 @@ function BackToDashboard() {
       <ArrowLeft className="size-3.5 mr-1.5" />
       Back to dashboard
     </Button>
-  );
-}
-
-function StatusBanner({
-  tone,
-  icon,
-  title,
-  body,
-}: {
-  tone: "success" | "pending";
-  icon: React.ReactNode;
-  title: string;
-  body: string;
-}) {
-  const cls =
-    tone === "success"
-      ? "border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-100"
-      : "border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100";
-  return (
-    <div className={`rounded-xl border p-5 flex items-start gap-3 ${cls}`}>
-      <div className="shrink-0 mt-0.5">{icon}</div>
-      <div>
-        <p className="text-sm font-semibold">{title}</p>
-        <p className="text-xs mt-1 opacity-80 max-w-xl">{body}</p>
-      </div>
-    </div>
   );
 }
