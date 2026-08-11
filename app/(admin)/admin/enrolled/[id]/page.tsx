@@ -256,14 +256,16 @@ export default function EnrolledStudentDetailPage() {
         ) : null}
       </div>
       {/* Navigation band — its own section under the title, ruled off
-          from the content below. Two segmented groups, left-justified:
-          the family group (Family overview + one segment per sibling,
-          current student filled) for moving BETWEEN students, and the
-          stage group for moving between this family's admissions
-          surfaces. Kept apart from the action row so "where can I go"
-          never reads as "what can I do". */}
+          from the content below. Two segmented groups pushed to
+          opposite edges: WHO you're looking at on the left (Family
+          overview + one segment per sibling, current student filled),
+          WHICH surface of them on the right (the admissions stages).
+          Splitting them apart rather than butting them together stops
+          the two groups reading as one long strip of equal choices.
+          Kept apart from the action row so "where can I go" never
+          reads as "what can I do". */}
       {family ? (
-        <div className="flex flex-wrap items-center gap-2 border-b pb-4">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b pb-4">
           <FamilyStudentsNav
             familyId={Number(family.id)}
             yearId={yearId}
@@ -277,15 +279,16 @@ export default function EnrolledStudentDetailPage() {
         </div>
       ) : null}
       {/* Action row sits right above the Student Information card,
-          Unenroll pinned last — the one destructive, hard-to-reverse
-          action here, kept away from the things admin clicks
-          routinely. There's no back link: the stage nav in the header
-          covers cross-surface movement, and a second "back to where
-          you came from" beside it was the same journey twice. The
-          loading / not-found states above keep theirs, since the
-          stage nav can't render without a family. */}
-      <div className="flex items-center justify-end gap-2 flex-wrap">
-        <div className="flex items-center gap-2 shrink-0 flex-wrap">
+          split by consequence: the routine, reversible things admin
+          reaches for daily on the left, and the two that end this
+          student's place on the roster pinned to the right, away from
+          the cursor's usual path. There's no back link: the stage nav
+          in the header covers cross-surface movement, and a second
+          "back to where you came from" beside it was the same journey
+          twice. The loading / not-found states above keep theirs,
+          since the stage nav can't render without a family. */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {/* Unified account activity stream — notes + texts + emails
               + system milestones in one timeline. Notes composed here
               tag this student. */}
@@ -307,20 +310,6 @@ export default function EnrolledStudentDetailPage() {
             familyId={family ? Number(family.id) : undefined}
             yearId={yearId ? Number(yearId) : undefined}
           />
-          {packet ? (
-            <RemoveStudentButton
-              packetId={packet.id}
-              studentName={fullName}
-              onRemoved={() => {
-                // Soft-delete: registrationConfirmed=false moves
-                // the row out of the enrolled list. Push admin
-                // back to the list since this student no longer
-                // belongs on this page.
-                void mutate();
-                window.location.href = backHref;
-              }}
-            />
-          ) : null}
           {/* Push this student into Toddle (LMS) — updates the
               matching Toddle record or creates one. Grade comes from
               the packet's admin placement (falling back to the
@@ -336,6 +325,34 @@ export default function EnrolledStudentDetailPage() {
           {/* Family overview moved into the header's family nav group
               — keeping a second copy here would be the same journey
               twice. */}
+        </div>
+        {/* Roster-ending actions, right-aligned. */}
+        <div className="flex flex-wrap items-center gap-2">
+          {packet ? (
+            <RemoveStudentButton
+              packetId={packet.id}
+              studentName={fullName}
+              // Delete only clears the packet's admin confirmation.
+              // Doing that to a student who is still enrolled takes
+              // them off the roster without unenrolling them — no
+              // reason captured, no date, and they read as "never
+              // confirmed" rather than "left". Unenroll is the step
+              // that records why, so Delete waits behind it.
+              disabledReason={
+                student.isArchived === true
+                  ? undefined
+                  : "Unenroll this student first — Delete is only available once they've been unenrolled."
+              }
+              onRemoved={() => {
+                // Soft-delete: registrationConfirmed=false moves
+                // the row out of the enrolled list. Push admin
+                // back to the list since this student no longer
+                // belongs on this page.
+                void mutate();
+                window.location.href = backHref;
+              }}
+            />
+          ) : null}
           {/* Unenroll — far right, deliberately last. */}
           <UnenrollStudentButton
             studentId={student.id}
@@ -4557,14 +4574,19 @@ function AdminDocumentUpload({
 function RemoveStudentButton({
   packetId,
   studentName,
+  disabledReason,
   onRemoved,
 }: {
   packetId: number;
   studentName: string;
+  /** Non-empty = render disabled and say why on hover. The caller
+   *  owns the rule; this component just refuses to fire. */
+  disabledReason?: string;
   onRemoved: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const blocked = Boolean(disabledReason);
 
   async function runRemove() {
     setSaving(true);
@@ -4590,17 +4612,31 @@ function RemoveStudentButton({
 
   return (
     <>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        disabled={saving}
-        onClick={() => setOpen(true)}
-        className="bg-white text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700"
+      {/* Wrapping span carries the tooltip: a disabled button doesn't
+          reliably fire the hover that surfaces `title`, so the reason
+          would be invisible exactly when it's needed. */}
+      <span
+        title={disabledReason}
+        className={blocked ? "inline-flex cursor-not-allowed" : undefined}
       >
-        <Trash2 className="size-3.5 mr-1.5" />
-        Delete
-      </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={saving || blocked}
+          onClick={() => setOpen(true)}
+          className={cn(
+            "bg-white text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700",
+            // Drop the red at rest when it can't be clicked — a
+            // disabled destructive button still reading as "danger"
+            // draws the eye to the one thing that isn't available.
+            blocked && "text-muted-foreground border-input hover:bg-white hover:text-muted-foreground"
+          )}
+        >
+          <Trash2 className="size-3.5 mr-1.5" />
+          Delete
+        </Button>
+      </span>
       <AlertDialog
         open={open}
         onOpenChange={(next) => {
