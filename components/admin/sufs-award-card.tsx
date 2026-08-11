@@ -2,13 +2,15 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
-import { Loader2 } from "lucide-react";
+import { CheckCircle2, Loader2, Pencil } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -104,6 +106,17 @@ export function SufsAwardCard({
   );
 }
 
+/**
+ * One student's row: read-only until Edit, then tier / status / award
+ * ID become editable together behind Cancel + Save.
+ *
+ * It used to be three always-live controls that each wrote on change
+ * or blur. Award bookkeeping is reference data staff read far more
+ * often than they change, and live inputs meant a mis-click on a
+ * select or a stray keystroke in the ID field was already saved before
+ * anyone noticed. Same shape as the NWEA testing card these pages
+ * render alongside, so the two read as siblings.
+ */
 function SufsAwardRowEditor({
   row,
   onSaved,
@@ -111,19 +124,46 @@ function SufsAwardRowEditor({
   row: SufsAwardRow;
   onSaved: () => void;
 }) {
-  const [draft, setDraft] = useState(
-    row.awardId ? String(row.awardId) : ""
-  );
-  // Local mirrors so the selects reflect the change instantly; the
-  // host page revalidates behind them via onSaved().
-  const [tier, setTier] = useState(row.sufsType || NO_TIER);
-  const [status, setStatus] = useState(row.sufsStatus || NO_STATUS);
+  const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [draft, setDraft] = useState(() => rowToDraft(row));
 
-  async function patchApplication(
-    body: Record<string, unknown>,
-    successMessage: string
-  ) {
+  function rowToDraft(r: SufsAwardRow) {
+    return {
+      tier: r.sufsType || NO_TIER,
+      status: r.sufsStatus || NO_STATUS,
+      awardId: r.awardId ? String(r.awardId) : "",
+    };
+  }
+
+  function enterEdit() {
+    // Re-seed from the row, not from whatever the last cancelled edit
+    // left behind.
+    setDraft(rowToDraft(row));
+    setEditing(true);
+  }
+
+  async function runSave() {
+    // Diff-only, one PATCH. `""` is the stored convention for "not on
+    // a SUFS scholarship" / "no status" — same value the family
+    // Decision card writes.
+    const patch: Record<string, string | number> = {};
+    const tierStored = draft.tier === NO_TIER ? "" : draft.tier;
+    if (tierStored !== (row.sufsType ?? "")) patch.sufs_type = tierStored;
+    const statusStored = draft.status === NO_STATUS ? "" : draft.status;
+    if (statusStored !== (row.sufsStatus ?? "")) {
+      patch.sufs_status = statusStored;
+    }
+    const parsed = Number(draft.awardId);
+    const nextAwardId = Number.isFinite(parsed) ? parsed : 0;
+    if (nextAwardId !== (row.awardId ?? 0)) {
+      patch.sufs_award_id = nextAwardId;
+    }
+
+    if (Object.keys(patch).length === 0) {
+      setEditing(false);
+      return;
+    }
     setSaving(true);
     try {
       const res = await fetch(
@@ -131,133 +171,169 @@ function SufsAwardRowEditor({
         {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
+          body: JSON.stringify(patch),
         }
       );
       if (!res.ok) {
         const err = await res.json().catch(() => null);
         throw new Error(err?.error ?? `Save failed (${res.status})`);
       }
-      toast.success(successMessage);
+      toast.success(`SUFS details saved for ${row.studentName}.`);
+      setEditing(false);
       onSaved();
-      return true;
     } catch (err) {
-      console.error("[SufsAwardRowEditor.patchApplication]", err);
-      toast.error(
-        err instanceof Error ? err.message : "Couldn't save."
-      );
-      return false;
+      console.error("[SufsAwardRowEditor.runSave]", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't save.");
     } finally {
       setSaving(false);
     }
   }
 
-  async function saveAwardId() {
-    const next = Number(draft);
-    const safe = Number.isFinite(next) ? next : 0;
-    if (safe === (row.awardId ?? 0)) return;
-    await patchApplication(
-      { sufs_award_id: safe },
-      safe
-        ? `Award ID saved for ${row.studentName}.`
-        : `Award ID cleared for ${row.studentName}.`
-    );
-  }
-
-  async function saveTier(next: string) {
-    const prev = tier;
-    setTier(next);
-    // "" per the existing column convention for "not on a SUFS
-    // scholarship" — same value the family Decision card stores.
-    const stored = next === NO_TIER ? "" : next;
-    if (stored === row.sufsType) return;
-    const ok = await patchApplication(
-      { sufs_type: stored },
-      stored
-        ? `SUFS tier saved for ${row.studentName}.`
-        : `SUFS tier cleared for ${row.studentName}.`
-    );
-    if (!ok) setTier(prev);
-  }
-
-  async function saveStatus(next: string) {
-    const prev = status;
-    setStatus(next);
-    const stored = next === NO_STATUS ? "" : next;
-    if (stored === row.sufsStatus) return;
-    const ok = await patchApplication(
-      { sufs_status: stored },
-      stored
-        ? `SUFS status saved for ${row.studentName}.`
-        : `SUFS status cleared for ${row.studentName}.`
-    );
-    if (!ok) setStatus(prev);
-  }
-
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-      <div className="min-w-0">
-        <p className="truncate text-sm font-medium">{row.studentName}</p>
+    <div className="space-y-4 px-4 py-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm font-medium">{row.studentName}</p>
+        {editing ? (
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setEditing(false)}
+              disabled={saving}
+              className="bg-white"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => void runSave()}
+              disabled={saving}
+              className="bg-blue-600 hover:bg-blue-700 text-white"
+            >
+              {saving ? (
+                <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+              ) : (
+                <CheckCircle2 className="size-3.5 mr-1.5" />
+              )}
+              Save
+            </Button>
+          </div>
+        ) : (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={enterEdit}
+            className="bg-white"
+          >
+            <Pencil className="size-3.5 mr-1.5" />
+            Edit
+          </Button>
+        )}
       </div>
-      <div className="flex flex-wrap items-center gap-2">
-        {saving ? (
-          <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
-        ) : null}
-        <Select
-          value={tier}
-          onValueChange={(v) => void saveTier(v)}
-          disabled={saving}
-        >
-          <SelectTrigger className="w-56 bg-white">
-            <SelectValue placeholder="SUFS tier" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={NO_TIER}>Not on a SUFS scholarship</SelectItem>
-            {Object.entries(SUFS_TYPE_LABELS).map(([key, label]) => (
-              <SelectItem key={key} value={key}>
-                {label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Select
-          value={status}
-          onValueChange={(v) => void saveStatus(v)}
-          disabled={saving}
-        >
-          <SelectTrigger className="w-36 bg-white">
-            <SelectValue placeholder="Status" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={NO_STATUS}>No status</SelectItem>
-            {SUFS_STATUS_OPTIONS.map((s) => (
-              <SelectItem key={s} value={s}>
-                {s}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Input
-          value={draft}
-          type="text"
-          inputMode="numeric"
-          // SUFS portal hands out a fixed 9-digit numeric ID — same
-          // constraints as the Decision-card input: filter non-digits
-          // on the fly (hyphenated pastes get cleaned) and cap at 9.
-          pattern="\d{0,9}"
-          maxLength={9}
-          disabled={saving}
-          placeholder="From SUFS portal (9 digits)"
-          onChange={(e) =>
-            setDraft(e.target.value.replace(/\D/g, "").slice(0, 9))
-          }
-          onBlur={() => void saveAwardId()}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") e.currentTarget.blur();
-          }}
-          className="w-56 border-input tabular-nums"
-        />
+      <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
+        {editing ? (
+          <>
+            <Field>
+              <FieldLabel className="text-xs">SUFS tier</FieldLabel>
+              <Select
+                value={draft.tier}
+                onValueChange={(v) => setDraft((d) => ({ ...d, tier: v }))}
+                disabled={saving}
+              >
+                <SelectTrigger className="w-full bg-white">
+                  <SelectValue placeholder="SUFS tier" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NO_TIER}>
+                    Not on a SUFS scholarship
+                  </SelectItem>
+                  {Object.entries(SUFS_TYPE_LABELS).map(([key, label]) => (
+                    <SelectItem key={key} value={key}>
+                      {label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field>
+              <FieldLabel className="text-xs">SUFS status</FieldLabel>
+              <Select
+                value={draft.status}
+                onValueChange={(v) => setDraft((d) => ({ ...d, status: v }))}
+                disabled={saving}
+              >
+                <SelectTrigger className="w-full bg-white">
+                  <SelectValue placeholder="Status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NO_STATUS}>No status</SelectItem>
+                  {SUFS_STATUS_OPTIONS.map((s) => (
+                    <SelectItem key={s} value={s}>
+                      {s}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field>
+              <FieldLabel className="text-xs">Award ID</FieldLabel>
+              <Input
+                value={draft.awardId}
+                type="text"
+                inputMode="numeric"
+                // SUFS hands out a fixed 9-digit numeric ID — filter
+                // non-digits on the fly so a hyphenated paste like
+                // "123-456-789" lands clean, and cap at 9.
+                pattern="\d{0,9}"
+                maxLength={9}
+                disabled={saving}
+                placeholder="From SUFS portal (9 digits)"
+                onChange={(e) =>
+                  setDraft((d) => ({
+                    ...d,
+                    awardId: e.target.value.replace(/\D/g, "").slice(0, 9),
+                  }))
+                }
+                className="tabular-nums"
+              />
+            </Field>
+          </>
+        ) : (
+          <>
+            <ReadValue
+              label="SUFS tier"
+              value={
+                row.sufsType
+                  ? (SUFS_TYPE_LABELS[row.sufsType] ?? row.sufsType)
+                  : "Not on a SUFS scholarship"
+              }
+            />
+            <ReadValue label="SUFS status" value={row.sufsStatus} />
+            <ReadValue
+              label="Award ID"
+              value={row.awardId ? String(row.awardId) : ""}
+            />
+          </>
+        )}
       </div>
     </div>
+  );
+}
+
+/** Read-only labeled value — `readOnly` rather than `disabled` so an
+ *  admin can still select and copy an award ID out of it. */
+function ReadValue({ label, value }: { label: string; value: string }) {
+  return (
+    <Field>
+      <FieldLabel className="text-xs">{label}</FieldLabel>
+      <Input
+        value={value || "—"}
+        readOnly
+        className="border-input bg-white text-foreground tabular-nums"
+      />
+    </Field>
   );
 }
