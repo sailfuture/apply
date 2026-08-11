@@ -600,23 +600,24 @@ function TermChipRow({
   /** The events sheet hides the date ranges (names only). */
   showRanges?: boolean;
 }) {
-  const chip = (on: boolean) =>
-    cn(
-      "rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors",
-      on
-        ? "border-foreground bg-foreground text-background"
-        : "border-border bg-white text-muted-foreground hover:border-foreground/40 hover:text-foreground"
-    );
+  // Same Button primitive as the toolbar above rather than bespoke
+  // pills: outline + white for the unselected ones (identical to
+  // Today / Events / Terms & seasons) and the filled default for the
+  // selected one (New event). The row used to be the only place on the
+  // page with its own button shape, which made a filter read like a
+  // different kind of control than everything around it.
   return (
-    <div className={cn("flex flex-wrap items-center gap-1.5", className)}>
-      <button
+    <div className={cn("flex flex-wrap items-center gap-2", className)}>
+      <Button
         type="button"
+        size="sm"
+        variant={value === "all" ? "default" : "outline"}
         aria-pressed={value === "all"}
         onClick={onAll}
-        className={chip(value === "all")}
+        className={cn(value !== "all" && "bg-white")}
       >
         All terms
-      </button>
+      </Button>
       {terms.map((t) => {
         const on = value === t.id;
         const range =
@@ -624,26 +625,28 @@ function TermChipRow({
             ? `${fmtShortDate(t.start_date)} – ${fmtShortDate(t.end_date)}`
             : "";
         return (
-          <button
+          <Button
             key={t.id}
             type="button"
+            size="sm"
+            variant={on ? "default" : "outline"}
             aria-pressed={on}
             title={range}
             onClick={() => onTerm(t)}
-            className={chip(on)}
+            className={cn(!on && "bg-white")}
           >
             {t.term_name}
             {range ? (
               <span
                 className={cn(
                   "ml-1.5 font-normal",
-                  on ? "text-background/70" : "text-muted-foreground/70"
+                  on ? "text-primary-foreground/70" : "text-muted-foreground"
                 )}
               >
                 {range}
               </span>
             ) : null}
-          </button>
+          </Button>
         );
       })}
     </div>
