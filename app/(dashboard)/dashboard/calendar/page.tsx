@@ -31,7 +31,11 @@ import {
 } from "@/components/ui/sheet";
 import { DashboardPageHeader } from "@/components/dashboard-page-header";
 import { cn } from "@/lib/utils";
-import { eventColor, parseDate, parseNeeds } from "@/lib/school-calendar";
+import {
+  eventColor,
+  parseDate,
+  type EventItemAvailability,
+} from "@/lib/school-calendar";
 import type { ParentSchoolCalendarResponse } from "@/app/api/school-calendar/route";
 import type {
   XanoSchoolCalendarDay,
@@ -565,6 +569,7 @@ export default function ParentCalendarPage() {
           key={selectedDay.id}
           day={selectedDay}
           events={eventsByDay.get(selectedDay.id) ?? []}
+          itemsByEvent={data?.itemsByEvent ?? {}}
           termLabel={termLabel.get(selectedDay.terms_id) ?? ""}
           onClose={() => setSelectedDayId(null)}
         />
@@ -811,11 +816,15 @@ function DayCell({
 function DayDetailsSheet({
   day,
   events,
+  itemsByEvent,
   termLabel,
   onClose,
 }: {
   day: XanoSchoolCalendarDay;
   events: XanoSchoolCalendarEvent[];
+  /** Event id → its needs with live claim counts, from
+   *  /api/school-calendar. Absent for events that need nothing. */
+  itemsByEvent: Record<number, EventItemAvailability[]>;
   termLabel: string;
   onClose: () => void;
 }) {
@@ -858,7 +867,7 @@ function DayDetailsSheet({
           ) : (
             events.map((e) => {
               const c = eventColor(e.color);
-              const needs = parseNeeds(e.needs);
+              const needs = itemsByEvent[e.id] ?? [];
               return (
                 <section key={e.id} className="px-4 py-4">
                   <div className="flex items-center gap-2">
@@ -905,9 +914,31 @@ function DayDetailsSheet({
                     {needs.length > 0 ? (
                       <DetailLine label="Needs">
                         <ul className="list-disc space-y-0.5 pl-4 marker:text-muted-foreground/60">
-                          {needs.map((n) => (
-                            <li key={n}>{n}</li>
-                          ))}
+                          {needs.map((n) => {
+                            const covered = n.claimed >= n.quantity;
+                            return (
+                              <li key={n.id}>
+                                {n.label}
+                                <span
+                                  className={cn(
+                                    "ml-1.5 text-[11px]",
+                                    covered
+                                      ? "text-emerald-700"
+                                      : "text-muted-foreground"
+                                  )}
+                                >
+                                  {covered
+                                    ? "covered"
+                                    : `${n.claimed} of ${n.quantity}`}
+                                </span>
+                                {n.mine > 0 ? (
+                                  <span className="ml-1.5 text-[11px] font-medium text-emerald-700">
+                                    · you: {n.mine}
+                                  </span>
+                                ) : null}
+                              </li>
+                            );
+                          })}
                         </ul>
                       </DetailLine>
                     ) : null}

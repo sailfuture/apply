@@ -1,6 +1,10 @@
-import { auth } from "@clerk/nextjs/server";
+import { auth, currentUser } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
 import { xano } from "@/lib/xano";
+import {
+  eventItemAvailability,
+  type EventItemAvailability,
+} from "@/lib/school-calendar";
 import type {
   XanoAcademicTerm,
   XanoSchoolCalendarDay,
@@ -30,20 +34,34 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // Only used to mark which claims are this family's — everything
+  // else on this route is the same for every viewer.
+  const user = await currentUser();
+  const familyId =
+    (user?.publicMetadata.registration_families_id as number | undefined) ?? 0;
+
   const yearId = Number(req.nextUrl.searchParams.get("yearId"));
   if (!Number.isFinite(yearId) || yearId <= 0) {
     return NextResponse.json({ error: "yearId is required" }, { status: 400 });
   }
 
-  const [daysResult, eventsResult, termsResult] = await Promise.allSettled([
-    xano.schoolCalendar.getByYear(yearId),
-    xano.schoolCalendarEvents.getAll(),
-    xano.academicTerms.getByYear(yearId),
-  ]);
+  // Items + claims join in here rather than being fetched per event:
+  // two more reads for the whole page, in parallel with the three
+  // already in flight, not two per event.
+  const [daysResult, eventsResult, termsResult, itemsResult, claimsResult] =
+    await Promise.allSettled([
+      xano.schoolCalendar.getByYear(yearId),
+      xano.schoolCalendarEvents.getAll(),
+      xano.academicTerms.getByYear(yearId),
+      xano.eventItems.getAll(),
+      xano.eventItemClaims.getAll(),
+    ]);
   for (const [label, r] of [
     ["days", daysResult],
     ["events", eventsResult],
     ["terms", termsResult],
+    ["items", itemsResult],
+    ["claims", claimsResult],
   ] as const) {
     if (r.status === "rejected") {
       console.error(`[/api/school-calendar] failed to load ${label}:`, r.reason);
@@ -53,6 +71,9 @@ export async function GET(req: NextRequest) {
   const allEvents =
     eventsResult.status === "fulfilled" ? eventsResult.value : [];
   const terms = termsResult.status === "fulfilled" ? termsResult.value : [];
+  const allItems = itemsResult.status === "fulfilled" ? itemsResult.value : [];
+  const allClaims =
+    claimsResult.status === "fulfilled" ? claimsResult.value : [];
 
   days.sort((a, b) => a.date.localeCompare(b.date));
   const dayIds = new Set(days.map((d) => d.id));
@@ -71,11 +92,23 @@ export async function GET(req: NextRequest) {
     ? `${req.nextUrl.origin}/api/calendar-feed?token=${encodeURIComponent(feedToken)}`
     : null;
 
+  // event id → its needs with live claim counts. `mine` is filled for
+  // the viewing family so the sheet can mark what they're bringing.
+  const itemsByEvent: Record<number, EventItemAvailability[]> = {};
+  for (const e of events) {
+    const mine = allItems.filter(
+      (i) => Number(i.school_calendar_events_id) === e.id
+    );
+    if (mine.length === 0) continue;
+    itemsByEvent[e.id] = eventItemAvailability(mine, allClaims, familyId);
+  }
+
   return NextResponse.json({
     days,
     events,
     terms,
     feedUrl,
+    itemsByEvent,
   } satisfies ParentSchoolCalendarResponse);
 }
 
@@ -83,6 +116,10 @@ export interface ParentSchoolCalendarResponse {
   days: XanoSchoolCalendarDay[];
   events: XanoSchoolCalendarEvent[];
   terms: XanoAcademicTerm[];
+  /** Event id → what that event needs, with live claim counts. Only
+   *  events that need something appear; optional so a cached response
+   *  from before this field existed still type-checks. */
+  itemsByEvent?: Record<number, EventItemAvailability[]>;
   /** Tokenized ICS subscription URL, or null when the feed isn't
    *  configured (CALENDAR_FEED_TOKEN unset). */
   feedUrl: string | null;
