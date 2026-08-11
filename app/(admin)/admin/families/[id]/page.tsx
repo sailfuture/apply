@@ -368,6 +368,14 @@ export default function FamilyDetailPage() {
           "Revoke acceptance below before undoing.",
       }
     : {};
+  // Copy for the Financial Aid path picker's in-session unlock (its
+  // Edit button). The stakes read differently by lifecycle stage —
+  // on an accepted family the note has to say out loud that
+  // acceptance survives the switch, or admin reasonably assumes
+  // this is the same thing as revoking.
+  const pathUnlockNote = pageAccepted
+    ? "Editing a verified path on an accepted family. This undoes neither the Financial Aid verification nor the acceptance — after switching, re-check the award letter, the cost determination, and the per-student award amounts below."
+    : "Editing a verified path. The Financial Aid verification stamp stays as-is — after switching, re-check the documents and the cost determination below.";
 
   async function toggleSectionConfirmed(
     section:
@@ -943,11 +951,15 @@ export default function FamilyDetailPage() {
                   // Lock the path selector once admin has verified
                   // the Financial Aid section — switching paths
                   // mid-verify would invalidate the determination
-                  // the verify is anchored on. Admin Undoes the
-                  // verification on the section footer to unlock.
+                  // the verify is anchored on. Undoing the
+                  // verification on the section footer clears the
+                  // lock outright; the picker's own Edit button
+                  // lifts it for one visit without unwinding the
+                  // verify (or the acceptance above it).
                   pathLocked={
                     progress?.financial_aid_admin_confirm === true
                   }
+                  pathUnlockNote={pathUnlockNote}
                 />
               ) : (
                 // No scholarship row yet — admin can still choose
@@ -974,9 +986,11 @@ export default function FamilyDetailPage() {
                     }
                     disabledReason={
                       progress?.financial_aid_admin_confirm === true
-                        ? "Undo the Financial Aid verification below to switch paths."
+                        ? "Financial Aid is verified — use Edit to pick a path without undoing the verification."
                         : undefined
                     }
+                    unlockable
+                    unlockNote={pathUnlockNote}
                   />
                 </div>
               )}
@@ -3265,6 +3279,7 @@ function ScholarshipBlock({
   familyId,
   onScholarshipChanged,
   pathLocked,
+  pathUnlockNote,
 }: {
   scholarship: XanoScholarship;
   /** Family id is forwarded to `DocumentsToReviewBlock` so future
@@ -3277,9 +3292,15 @@ function ScholarshipBlock({
    *  `*_confirm` columns) updates without manual reload. */
   onScholarshipChanged?: () => void;
   /** When true, the path selector is locked — admin has verified
-   *  the Financial Aid section, so switching paths is gated behind
-   *  Undoing the verification first. */
+   *  the Financial Aid section, so the picker reads as settled.
+   *  The lock is liftable in-session via the picker's Edit button
+   *  (see `pathUnlockNote`). */
   pathLocked?: boolean;
+  /** Caption the path selector shows while its lock is lifted.
+   *  Owned by the page because the wording depends on whether the
+   *  family is already accepted — something this block doesn't
+   *  know. */
+  pathUnlockNote?: string;
 }) {
   // Single composite fetch — Xano's `/registration_opportunity_scholarship/{id}`
   // endpoint returns the scholarship row + every child table
@@ -3447,9 +3468,17 @@ function ScholarshipBlock({
         disabled={pathLocked}
         disabledReason={
           pathLocked
-            ? "Undo the Financial Aid verification below to switch paths."
+            ? "Financial Aid is verified — use Edit to switch paths without undoing the verification."
             : undefined
         }
+        // Always unlockable. The verified state is the *default*
+        // posture, not a hard wall: admin regularly needs to move a
+        // family onto the SNAP path after the fact to push them
+        // through, and the alternative (revoke acceptance → undo
+        // verify → switch → re-verify → re-accept) throws away the
+        // whole audit chain to fix one flag.
+        unlockable
+        unlockNote={pathUnlockNote}
       />
       {scholarship.isNotParticipating ? (
         <div className="flex items-start gap-2 rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
@@ -7652,8 +7681,20 @@ function UndoRegistrationConfirmationButton({
  * Locked when `disabled` is set — typically when admin has
  * verified the Financial Aid section: the verified state is the
  * source of truth, and changing the path mid-verify would
- * invalidate the determination underneath. Admin Undoes the
- * verification first to unlock the picker.
+ * invalidate the determination underneath.
+ *
+ * `unlockable` puts an **Edit** affordance on that lock. Undoing the
+ * verification used to be the only way back into the picker, and
+ * once a family is *accepted* the Undo itself freezes ("Revoke
+ * acceptance below before undoing") — so correcting a path on an
+ * accepted family meant unwinding revoke → un-verify → switch →
+ * re-verify → re-accept. Admin needs to move a family onto the SNAP
+ * path mid-cycle to push them through without tearing down the
+ * whole decision chain, so Edit re-enables the picker in-session
+ * while leaving both the verification stamp and the acceptance
+ * intact. The unlock is deliberately per-visit (local state, no
+ * persisted flag) so the picker re-locks on reload and the default
+ * posture stays "verified means settled."
  */
 function ScholarshipPathSelector({
   scholarship,
@@ -7662,6 +7703,8 @@ function ScholarshipPathSelector({
   onChanged,
   disabled,
   disabledReason,
+  unlockable,
+  unlockNote,
 }: {
   scholarship: XanoScholarship | null;
   /** Required when `scholarship` is null — scopes the POST that
@@ -7672,16 +7715,35 @@ function ScholarshipPathSelector({
   onChanged?: () => void;
   /** When true, every option button is non-interactive and reads
    *  as muted. Used to lock the picker after the Financial Aid
-   *  section is verified — admin has to Undo the verify to switch
-   *  paths. */
+   *  section is verified — admin has to Undo the verify (or click
+   *  Edit, when `unlockable`) to switch paths. */
   disabled?: boolean;
   /** Optional caption to render below the picker when `disabled`
    *  — explains *why* it's locked so admin doesn't wonder. */
   disabledReason?: string;
+  /** When true, a locked picker renders an Edit button that lifts
+   *  the lock for this page visit. Without it, `disabled` is
+   *  absolute. */
+  unlockable?: boolean;
+  /** Caption rendered while the lock is lifted — spells out what
+   *  the override does and doesn't touch (verification stamp,
+   *  acceptance) so admin knows the blast radius. */
+  unlockNote?: string;
 }) {
   const [savingPath, setSavingPath] = useState<
     "isOpportunityScholarship" | "isSNAPBenefits" | "isNotParticipating" | null
   >(null);
+  // In-session override of `disabled`. Never persisted — see the
+  // component doc above.
+  const [unlocked, setUnlocked] = useState(false);
+  // Effective lock: the caller's policy minus the admin's override.
+  const locked = !!disabled && !(unlockable && unlocked);
+  // Drop a stale override when the caller's policy flips off on its
+  // own (admin undid the verification elsewhere on the page), so the
+  // next verify starts from the locked posture again.
+  useEffect(() => {
+    if (!disabled) setUnlocked(false);
+  }, [disabled]);
   // Pending switch sits in state so the modal can read which target
   // path admin clicked, render its specific copy, and route the
   // confirm action back through `setPath`. Cleared on cancel or
@@ -7729,6 +7791,11 @@ function ScholarshipPathSelector({
         throw new Error(errBody?.error ?? `Save failed (${res.status})`);
       }
       toast.success(`Path set to ${label}.`);
+      // Re-lock after a successful switch — the click *is* the save
+      // here, so leaving the picker hot would invite a second
+      // accidental flip. A failed PATCH deliberately stays unlocked
+      // so admin can retry without clicking Edit again.
+      setUnlocked(false);
       onChanged?.();
     } catch (err) {
       console.error("[ScholarshipPathSelector.setPath]", err);
@@ -7764,22 +7831,48 @@ function ScholarshipPathSelector({
 
   return (
     <div className="space-y-2">
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-        Scholarship Path
-      </p>
+      {/* Label + the Edit affordance that lifts the verified lock.
+          The button only exists when the picker is actually locked
+          AND the caller opted into unlocking — an unlocked picker
+          has nothing to edit into. */}
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          Scholarship Path
+        </p>
+        {disabled && unlockable ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-7 bg-white text-xs"
+            disabled={savingPath !== null}
+            onClick={() => setUnlocked((u) => !u)}
+          >
+            {unlocked ? (
+              "Cancel"
+            ) : (
+              <>
+                <Pencil className="size-3.5 mr-1" />
+                Edit
+              </>
+            )}
+          </Button>
+        ) : null}
+      </div>
       {/* Three-pill picker — single-line label per option (no
           sub-description), outline-only active state (heavier
           border, no tinted background). Selected option swaps
           its empty circle for a filled circle so the choice is
           clear at a glance without painting the button green.
-          When `disabled` is set every button reads as non-
-          interactive (muted, no hover) and clicks are swallowed. */}
+          While `locked` (i.e. `disabled` and the admin hasn't
+          clicked Edit) every button reads as non-interactive
+          (muted, no hover) and clicks are swallowed. */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
         {options.map((opt) => {
           const isActive = active === opt.key;
           const isSaving = savingPath === opt.flag;
           const buttonDisabled =
-            disabled || isSaving || savingPath !== null;
+            locked || isSaving || savingPath !== null;
           return (
             <button
               key={opt.key}
@@ -7799,7 +7892,7 @@ function ScholarshipPathSelector({
               }}
               className={cn(
                 "flex items-center gap-2 rounded-md border bg-white px-3 py-2 text-left text-sm transition-colors disabled:cursor-not-allowed",
-                disabled
+                locked
                   ? "opacity-60 hover:bg-white"
                   : "disabled:opacity-50",
                 // Active-state border + filled circle use `green-500`
@@ -7830,8 +7923,18 @@ function ScholarshipPathSelector({
           );
         })}
       </div>
-      {disabled && disabledReason ? (
+      {locked && disabledReason ? (
         <p className="text-xs text-muted-foreground">{disabledReason}</p>
+      ) : null}
+      {/* Override banner — only while the lock is actually lifted.
+          Amber (not red) because this is a sanctioned correction
+          path, not a destructive one; the copy's job is to tell
+          admin what survives the switch. */}
+      {!locked && disabled && unlockNote ? (
+        <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          <AlertCircle className="size-3.5 shrink-0 mt-0.5" />
+          <span>{unlockNote}</span>
+        </div>
       ) : null}
 
       {/* Confirmation modal for path switches on an existing row.

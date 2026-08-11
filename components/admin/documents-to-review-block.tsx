@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import useSWR from "swr";
 import { toast } from "sonner";
 import {
@@ -10,9 +10,21 @@ import {
   FileText,
   Loader2,
   Plus,
+  RefreshCw,
   RotateCcw,
+  Trash2,
   X,
 } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -359,6 +371,24 @@ interface DocRowData {
     /** Max number of files allowed in the picker. Defaults to 5. */
     maxFiles?: number;
   };
+  /** Optional per-file edit affordances. When set, every file in the
+   *  row renders a Replace + Remove pair alongside its link. Replace
+   *  swaps the metadata at that index (upload a new file over the
+   *  old entry); Remove drops the index from the array. The row's
+   *  `upload` config only ever *appends*, so these two are what let
+   *  admin correct a wrong or superseded document in place —
+   *  including after the family has been accepted.
+   *
+   *  Contract: implementations toast their own errors AND re-throw,
+   *  so the per-file UI can keep its confirm dialog open on failure
+   *  instead of closing as if the write landed. */
+  fileActions?: {
+    onReplace: (index: number, file: File) => Promise<void>;
+    onRemove: (index: number) => Promise<void>;
+    /** Accept list for the Replace picker. Falls back to the row's
+     *  `upload.accept` when omitted. */
+    accept?: string;
+  };
   /** When set, the row renders the Mark Confirmed + Undo button
    *  pair. Mark Confirmed flips the slot's `*_confirm` to true,
    *  Undo flips it back to false. Splitting the actions (rather
@@ -446,55 +476,139 @@ function buildRows({
         setSavingSlot(null);
       }
     };
-    // Admin upload-on-behalf-of-family. Posts each file to
-    // /api/upload (Xano vault), accumulates the returned metadata
-    // onto the existing `snap_benefits` array, then PATCHes the
-    // scholarship row. `onScholarshipChanged` revalidates upstream
-    // SWR so the table reflects the new file without a refresh.
+    // Single writer for the `snap_benefits` array — add, replace,
+    // and remove all funnel through here so error handling and
+    // cache revalidation stay identical across the three.
+    //
+    // The empty-array read-back is deliberate. Xano's auto-generated
+    // edit endpoints drop empty inputs rather than clearing the
+    // column, so "remove the last letter" is the one write that can
+    // silently no-op. Showing a stale award letter on a row admin
+    // believes they emptied is worse than an honest error, so we
+    // check the PATCH response and say so.
+    const patchSnapFiles = async (
+      next: XanoFileMetadata[],
+      successMessage: string
+    ) => {
+      const patchRes = await fetch(
+        `/api/admin/scholarships/${scholarship.id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ snap_benefits: next }),
+        }
+      );
+      if (!patchRes.ok) {
+        const body = await patchRes.json().catch(() => null);
+        throw new Error(body?.error ?? `Save failed (${patchRes.status})`);
+      }
+      const updated = (await patchRes
+        .json()
+        .catch(() => null)) as { snap_benefits?: unknown } | null;
+      if (
+        next.length === 0 &&
+        toFileArray(updated?.snap_benefits).length > 0
+      ) {
+        toast.warning(
+          "The award letter is still on the record — Xano didn't clear the column. Remove it from the Xano row directly."
+        );
+      } else {
+        toast.success(successMessage);
+      }
+      onScholarshipChanged?.();
+    };
+
+    // Upload a single file to the Xano vault and hand back its
+    // metadata. Shared by the append (`uploadSnap`) and swap
+    // (`replaceSnapFile`) paths.
+    const uploadToVault = async (f: File): Promise<XanoFileMetadata> => {
+      const formData = new FormData();
+      formData.append("file", f);
+      const uploadRes = await fetch("/api/upload", {
+        method: "POST",
+        body: formData,
+      });
+      if (!uploadRes.ok) {
+        const body = await uploadRes.json().catch(() => null);
+        throw new Error(body?.error ?? `Upload failed (${uploadRes.status})`);
+      }
+      return (await uploadRes.json()) as XanoFileMetadata;
+    };
+
+    // Admin upload-on-behalf-of-family. Appends to the existing
+    // array, then PATCHes the scholarship row.
+    // `onScholarshipChanged` revalidates upstream SWR so the table
+    // reflects the new file without a refresh.
     const uploadSnap = async (newFiles: File[]) => {
       if (newFiles.length === 0) return;
       setSavingSlot(slotKey);
       try {
         let acc = toFileArray(scholarship.snap_benefits);
         for (const f of newFiles) {
-          const formData = new FormData();
-          formData.append("file", f);
-          const uploadRes = await fetch("/api/upload", {
-            method: "POST",
-            body: formData,
-          });
-          if (!uploadRes.ok) {
-            const body = await uploadRes.json().catch(() => null);
-            throw new Error(
-              body?.error ?? `Upload failed (${uploadRes.status})`
-            );
-          }
-          const metadata = (await uploadRes.json()) as Record<string, unknown>;
-          acc = [...acc, metadata];
+          acc = [...acc, await uploadToVault(f)];
         }
-        const patchRes = await fetch(
-          `/api/admin/scholarships/${scholarship.id}`,
-          {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ snap_benefits: acc }),
-          }
-        );
-        if (!patchRes.ok) {
-          const body = await patchRes.json().catch(() => null);
-          throw new Error(body?.error ?? `Save failed (${patchRes.status})`);
-        }
-        toast.success(
+        await patchSnapFiles(
+          acc,
           newFiles.length === 1
             ? "SNAP award letter uploaded."
             : `${newFiles.length} files uploaded.`
         );
-        onScholarshipChanged?.();
       } catch (err) {
         console.error("Failed to upload SNAP letter:", err);
         toast.error(
           err instanceof Error ? err.message : "Couldn't upload file."
         );
+      } finally {
+        setSavingSlot(null);
+      }
+    };
+
+    // Swap one entry in place — upload the new file first so a
+    // failed upload leaves the existing letter untouched, then
+    // PATCH the array with the metadata substituted at `index`.
+    const replaceSnapFile = async (index: number, file: File) => {
+      setSavingSlot(slotKey);
+      try {
+        const metadata = await uploadToVault(file);
+        const current = toFileArray(scholarship.snap_benefits);
+        await patchSnapFiles(
+          current.map((f, i) => (i === index ? metadata : f)),
+          "SNAP award letter replaced."
+        );
+      } catch (err) {
+        console.error("Failed to replace SNAP letter:", err);
+        toast.error(
+          err instanceof Error ? err.message : "Couldn't replace file."
+        );
+        // Re-throw so the caller's confirm UI knows the write
+        // didn't land — see the `fileActions` contract.
+        throw err;
+      } finally {
+        setSavingSlot(null);
+      }
+    };
+
+    // Drop one entry from the array. The `is_snap_confirmed` flag is
+    // deliberately NOT auto-cleared here — same call the student
+    // registration-packet remove button makes. Removal and
+    // confirmation are two user-driven flips on the same row, and
+    // bundling the second one would hide a write from the admin who
+    // only asked for the first. The confirm dialog warns when the
+    // row is currently confirmed so admin knows to Undo it.
+    const removeSnapFile = async (index: number) => {
+      setSavingSlot(slotKey);
+      try {
+        const current = toFileArray(scholarship.snap_benefits);
+        await patchSnapFiles(
+          current.filter((_, i) => i !== index),
+          "SNAP award letter removed."
+        );
+      } catch (err) {
+        console.error("Failed to remove SNAP letter:", err);
+        toast.error(
+          err instanceof Error ? err.message : "Couldn't remove file."
+        );
+        throw err;
       } finally {
         setSavingSlot(null);
       }
@@ -508,6 +622,10 @@ function buildRows({
         onUpload: uploadSnap,
         accept: ".pdf,.jpg,.jpeg,.png,.heic,.heif",
         maxFiles: 5,
+      },
+      fileActions: {
+        onReplace: replaceSnapFile,
+        onRemove: removeSnapFile,
       },
       confirmation: {
         confirmed,
@@ -1068,6 +1186,26 @@ function DocRow({
                       key={`${row.key}-${f.name ?? f.path ?? i}-${i}`}
                       file={f}
                       fallbackIndex={i}
+                      actions={
+                        row.fileActions ? (
+                          <DocFileActions
+                            index={i}
+                            fileName={
+                              typeof f.name === "string" ? f.name : null
+                            }
+                            // Surfaced in the confirm copy: swapping
+                            // or dropping a file the row already
+                            // vouches for leaves the confirmation
+                            // pointing at a document nobody reviewed.
+                            confirmed={row.confirmation?.confirmed === true}
+                            accept={
+                              row.fileActions.accept ?? row.upload?.accept
+                            }
+                            onReplace={row.fileActions.onReplace}
+                            onRemove={row.fileActions.onRemove}
+                          />
+                        ) : null
+                      }
                     />
                   ))}
                 </ul>
@@ -1257,9 +1395,14 @@ function DocRow({
 function FileLink({
   file,
   fallbackIndex,
+  actions,
 }: {
   file: XanoFileMetadata;
   fallbackIndex: number;
+  /** Trailing slot for per-file controls (Replace / Remove). Kept
+   *  as a node so this component stays a dumb renderer — the row
+   *  owns which affordances a given document slot gets. */
+  actions?: React.ReactNode;
 }) {
   const name = file.name ?? file.path ?? `File ${fallbackIndex + 1}`;
   const sizeKb =
@@ -1305,6 +1448,158 @@ function FileLink({
           · {sizeKb}
         </span>
       ) : null}
+      {actions}
     </li>
+  );
+}
+
+/**
+ * Replace + Remove controls for one already-uploaded file.
+ *
+ * Replace routes through a hidden `<input type="file">` (the row's
+ * dropzone widget only appends, and re-using it here would add a
+ * second file rather than swap this one). Remove routes through a
+ * confirm dialog — dropping a document the family submitted is not
+ * something to do on a stray click.
+ *
+ * Both stay live regardless of section verification or family
+ * acceptance: correcting a superseded or mis-uploaded letter is
+ * exactly the thing admin needs *after* a family has been pushed
+ * through, and the verify stamp is an audit record rather than an
+ * edit lock. When the row is currently confirmed, both dialogs say
+ * that the confirmation will keep pointing at whatever is on the
+ * row afterwards — admin Undoes and re-confirms to re-establish it.
+ */
+function DocFileActions({
+  index,
+  fileName,
+  confirmed,
+  accept,
+  onReplace,
+  onRemove,
+}: {
+  index: number;
+  fileName: string | null;
+  confirmed: boolean;
+  accept?: string;
+  onReplace: (index: number, file: File) => Promise<void>;
+  onRemove: (index: number) => Promise<void>;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState<"replace" | "remove" | null>(null);
+  const [removeOpen, setRemoveOpen] = useState(false);
+  const label = fileName ?? `File ${index + 1}`;
+
+  async function handlePick(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    // Reset first so re-picking the same file still fires `change`.
+    e.target.value = "";
+    if (!file) return;
+    setBusy("replace");
+    try {
+      await onReplace(index, file);
+    } catch {
+      // Already toasted by the row's implementation.
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function runRemove() {
+    setBusy("remove");
+    try {
+      await onRemove(index);
+      setRemoveOpen(false);
+    } catch {
+      // Leave the dialog open so admin can retry — the row's
+      // implementation surfaced the error.
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <span className="flex items-center gap-0.5 shrink-0">
+      <input
+        ref={inputRef}
+        type="file"
+        accept={accept ?? ".pdf,.jpg,.jpeg,.png,.heic,.heif"}
+        className="hidden"
+        onChange={handlePick}
+      />
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        className="size-6 text-muted-foreground hover:text-foreground"
+        disabled={busy !== null}
+        onClick={() => inputRef.current?.click()}
+        title={`Replace ${label}`}
+        aria-label={`Replace ${label}`}
+      >
+        {busy === "replace" ? (
+          <Loader2 className="size-3.5 animate-spin" />
+        ) : (
+          <RefreshCw className="size-3.5" />
+        )}
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        className="size-6 text-muted-foreground hover:text-red-600 hover:bg-red-50"
+        disabled={busy !== null}
+        onClick={() => setRemoveOpen(true)}
+        title={`Remove ${label}`}
+        aria-label={`Remove ${label}`}
+      >
+        {busy === "remove" ? (
+          <Loader2 className="size-3.5 animate-spin" />
+        ) : (
+          <X className="size-3.5" />
+        )}
+      </Button>
+      <AlertDialog
+        open={removeOpen}
+        onOpenChange={(next) => {
+          if (!next && busy === null) setRemoveOpen(next);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove uploaded file?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {fileName
+                ? `This drops "${fileName}" from this family's scholarship record. `
+                : "This drops the file from this family's scholarship record. "}
+              You can re-upload from the same row if it was a mistake.
+              {confirmed
+                ? " This row is currently marked confirmed — the confirmation stays as-is, so Undo and re-confirm once the correct document is on file."
+                : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busy !== null}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={busy !== null}
+              className="bg-red-600 hover:bg-red-700 text-white"
+              onClick={(e) => {
+                e.preventDefault();
+                void runRemove();
+              }}
+            >
+              {busy === "remove" ? (
+                <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+              ) : (
+                <Trash2 className="size-3.5 mr-1.5" />
+              )}
+              Yes, remove
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </span>
   );
 }
