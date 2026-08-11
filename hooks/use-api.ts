@@ -70,9 +70,18 @@ export function useSchoolYears() {
   });
 }
 
+/**
+ * Revalidates on focus, deliberately matching `useApplications`.
+ * These two are consumed together — the dashboard joins applications
+ * back to their student rows — and when only one of them refreshes,
+ * the join silently drops rows for students the stale list has never
+ * heard of. That's how a freshly-created mid-year registration went
+ * missing from the parent's dashboard after they navigated away and
+ * back.
+ */
 export function useStudents() {
   return useSWR("/api/students", fetcher, {
-    revalidateOnFocus: false,
+    revalidateOnFocus: true,
     dedupingInterval: 10000,
   });
 }

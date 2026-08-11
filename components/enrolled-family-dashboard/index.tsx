@@ -297,19 +297,24 @@ export function EnrolledFamilyDashboard({
   // Surfaced in their own "Pending Registrations" section so they don't
   // masquerade as confirmed students in the roster above.
   const pendingResidentialAdds = useMemo(() => {
-    if (!studentsData || !applicationsData) return [];
+    if (!applicationsData) return [];
     const apps = (applicationsData as Application[]).filter(
       (a) => a.registration_school_years_id === yearId && isPendingResidentialAdd(a)
     );
-    return apps
-      .map((app) => {
-        const student = (studentsData as Student[]).find(
+    // Unlike the confirmed roster above, a student row we can't find
+    // does NOT drop the entry. This row is the parent's only way back
+    // into a half-finished registration — hiding it leaves them
+    // looking at "Create New Registration", which starts a SECOND
+    // student for the same placement. The row only needs `app.id` to
+    // navigate; the name is decoration, so render it without one
+    // rather than not at all.
+    return apps.map((app) => ({
+      app,
+      student:
+        ((studentsData as Student[] | undefined) ?? []).find(
           (s) => s.id === app.registration_students_id
-        );
-        if (!student) return null;
-        return { student, app };
-      })
-      .filter((x): x is { student: Student; app: Application } => x !== null);
+        ) ?? null,
+    }));
   }, [studentsData, applicationsData, yearId, isPendingResidentialAdd]);
 
   // Year picker — shows enrolled + re-applying years for the family.
@@ -810,9 +815,15 @@ export function EnrolledFamilyDashboard({
                     // but packet not yet confirmed → "Complete packet".
                     const accepted = app.isAccepted === true;
                     const inReview = !accepted && app.isSubmitted === true;
+                    const name = student
+                      ? `${student.first_name ?? ""} ${student.last_name ?? ""}`.trim()
+                      : "";
+                    const initials = student
+                      ? `${(student.first_name ?? "").charAt(0)}${(student.last_name ?? "").charAt(0)}`
+                      : "";
                     return (
                       <TableRow
-                        key={student.id}
+                        key={app.id}
                         className="cursor-pointer transition-colors hover:bg-muted/30"
                         onClick={() =>
                           router.push(`/dashboard/add-student/${app.id}`)
@@ -822,13 +833,12 @@ export function EnrolledFamilyDashboard({
                           <div className="flex items-center gap-3">
                             <Avatar className="size-10 shrink-0">
                               <AvatarFallback className="bg-muted text-muted-foreground text-sm font-medium">
-                                {student.first_name.charAt(0)}
-                                {student.last_name.charAt(0)}
+                                {initials || "—"}
                               </AvatarFallback>
                             </Avatar>
                             <div className="min-w-0">
                               <p className="font-medium truncate">
-                                {student.first_name} {student.last_name}
+                                {name || "Registration in progress"}
                               </p>
                               <p className="text-xs text-muted-foreground mt-0.5">
                                 {accepted

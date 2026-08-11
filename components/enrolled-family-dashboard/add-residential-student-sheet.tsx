@@ -20,6 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { mutateApplications, mutateStudents } from "@/hooks/use-api";
 
 interface Props {
   open: boolean;
@@ -86,6 +87,15 @@ export function AddResidentialStudentSheet({
         throw new Error(data?.error ?? `Failed to create student (${res.status})`);
       }
       const applicationId = data?.application?.id;
+      // Refresh both caches BEFORE routing away. This POST creates a
+      // student row and an application row, and the dashboard's
+      // "Pending Registrations" list needs both — it joins the new
+      // application back to its student. Without this the parent
+      // comes back from the packet page to a students list that
+      // predates their new student, the join finds nothing, the
+      // pending row disappears, and the only affordance left is
+      // "Create New Registration" — which makes a SECOND student.
+      await Promise.all([mutateStudents(), mutateApplications()]);
       onOpenChange(false);
       reset();
       if (applicationId) {
