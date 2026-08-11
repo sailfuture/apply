@@ -745,7 +745,7 @@ export interface XanoVolunteerHours {
 }
 
 /**
- * One school-store product (`store_items`) —
+ * One school-store product (`registration_store_items`) —
  * admin-managed catalog of things parents can buy in the portal
  * (uniform shirts, sweatshirts, …). Each item wraps a Stripe Payment
  * Link created in the Stripe Dashboard; the portal appends family
@@ -766,7 +766,7 @@ export interface XanoStoreItem {
 }
 
 /**
- * One school-store purchase (`store_orders`) — mirrored
+ * One school-store purchase (`registration_store_orders`) — mirrored
  * from Stripe by the webhook when a `checkout.session.completed`
  * event arrives for a Payment Link checkout. The parent portal
  * appends `client_reference_id=family-<id>-year-<yid>` to the store
@@ -785,7 +785,7 @@ export interface XanoStoreOrder {
   registration_families_id: number;
   /** FK to `registration_school_years` — 0 = unknown. */
   registration_school_years_id: number;
-  /** FK to `store_items` — resolved by matching the
+  /** FK to `registration_store_items` — resolved by matching the
    *  session's Payment Link URL against the catalog. 0 = unresolved
    *  (multi-product link, or the item was deleted). Drives the
    *  per-product sold / awaiting-pickup rollups. */
@@ -2580,6 +2580,43 @@ export interface XanoEventRsvp {
   registration_families_id: number;
   spots: number;
   comment: string;
+}
+
+/**
+ * One thing an event needs families to bring
+ * (`registration_school_event_items`) — "Chaperones", quantity 4.
+ *
+ * A row per need rather than lines in the event's `needs` text column,
+ * so a claim can reference an id: renaming a need is then an edit, not
+ * a silent orphaning of every family that already claimed it. The
+ * legacy `school_calendar_events.needs` column is no longer written.
+ */
+export interface XanoSchoolEventItem {
+  id: number;
+  created_at: number;
+  school_calendar_events_id: number;
+  label: string;
+  /** How many are wanted. Always >= 1. */
+  quantity: number;
+  /** Display order within the event; ties broken by id. */
+  sort_order: number;
+}
+
+/**
+ * One family's commitment against one event item
+ * (`registration_school_event_item_claims`) — "the Doyleys are
+ * bringing 2 of the 4 chaperones".
+ *
+ * One row per (item, family): re-submitting an RSVP replaces the
+ * family's claims for that event. Capacity is enforced at write time
+ * against the item's `quantity` across all families.
+ */
+export interface XanoSchoolEventItemClaim {
+  id: number;
+  created_at: number;
+  registration_school_event_items_id: number;
+  registration_families_id: number;
+  quantity: number;
 }
 
 /**
@@ -4619,10 +4656,10 @@ export const xano = {
   },
 
   /** School-store catalog — see `XanoStoreItem`. Plain CRUD on
-   *  `store_items`. */
+   *  `registration_store_items`. */
   storeItems: {
     async getAll(): Promise<XanoStoreItem[]> {
-      const res = await fetch(`${getBaseUrl()}/store_items`, {
+      const res = await fetch(`${getBaseUrl()}/registration_store_items`, {
         cache: "no-store",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -4633,7 +4670,7 @@ export const xano = {
     async create(
       data: Omit<XanoStoreItem, "id" | "created_at">
     ): Promise<XanoStoreItem> {
-      const res = await fetch(`${getBaseUrl()}/store_items`, {
+      const res = await fetch(`${getBaseUrl()}/registration_store_items`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -4646,7 +4683,7 @@ export const xano = {
       id: number,
       patch: Partial<XanoStoreItem>
     ): Promise<XanoStoreItem> {
-      const res = await fetch(`${getBaseUrl()}/store_items/${id}`, {
+      const res = await fetch(`${getBaseUrl()}/registration_store_items/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
@@ -4656,7 +4693,7 @@ export const xano = {
     },
 
     async delete(id: number): Promise<void> {
-      const res = await fetch(`${getBaseUrl()}/store_items/${id}`, {
+      const res = await fetch(`${getBaseUrl()}/registration_store_items/${id}`, {
         method: "DELETE",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -4664,11 +4701,11 @@ export const xano = {
   },
 
   /** School-store purchases — see `XanoStoreOrder`. Plain CRUD on
-   *  `store_orders`; callers filter by family / session in
+   *  `registration_store_orders`; callers filter by family / session in
    *  (order volume is small). */
   storeOrders: {
     async getAll(): Promise<XanoStoreOrder[]> {
-      const res = await fetch(`${getBaseUrl()}/store_orders`, {
+      const res = await fetch(`${getBaseUrl()}/registration_store_orders`, {
         cache: "no-store",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -4694,7 +4731,7 @@ export const xano = {
     async create(
       data: Omit<XanoStoreOrder, "id" | "created_at">
     ): Promise<XanoStoreOrder> {
-      const res = await fetch(`${getBaseUrl()}/store_orders`, {
+      const res = await fetch(`${getBaseUrl()}/registration_store_orders`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -4707,7 +4744,7 @@ export const xano = {
       id: number,
       patch: Partial<XanoStoreOrder>
     ): Promise<XanoStoreOrder> {
-      const res = await fetch(`${getBaseUrl()}/store_orders/${id}`, {
+      const res = await fetch(`${getBaseUrl()}/registration_store_orders/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
@@ -6517,6 +6554,112 @@ export const xano = {
     async delete(id: number): Promise<void> {
       const res = await fetch(
         `${getBaseUrl()}/school_event_rsvps/${id}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+    },
+  },
+
+  /** Things an event needs families to bring — see
+   *  `XanoSchoolEventItem`. */
+  eventItems: {
+    async getAll(): Promise<XanoSchoolEventItem[]> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_school_event_items`,
+        { cache: "no-store" }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      const rows = await res.json();
+      return Array.isArray(rows) ? rows : [];
+    },
+
+    async create(
+      data: Omit<XanoSchoolEventItem, "id" | "created_at">
+    ): Promise<XanoSchoolEventItem> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_school_event_items`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async update(
+      id: number,
+      patch: Partial<XanoSchoolEventItem>
+    ): Promise<XanoSchoolEventItem> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_school_event_items/${id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch),
+        }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async delete(id: number): Promise<void> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_school_event_items/${id}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+    },
+  },
+
+  /** One family's commitment against an event item — see
+   *  `XanoSchoolEventItemClaim`. */
+  eventItemClaims: {
+    async getAll(): Promise<XanoSchoolEventItemClaim[]> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_school_event_item_claims`,
+        { cache: "no-store" }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      const rows = await res.json();
+      return Array.isArray(rows) ? rows : [];
+    },
+
+    async create(
+      data: Omit<XanoSchoolEventItemClaim, "id" | "created_at">
+    ): Promise<XanoSchoolEventItemClaim> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_school_event_item_claims`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async update(
+      id: number,
+      patch: Partial<XanoSchoolEventItemClaim>
+    ): Promise<XanoSchoolEventItemClaim> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_school_event_item_claims/${id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch),
+        }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async delete(id: number): Promise<void> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_school_event_item_claims/${id}`,
         { method: "DELETE" }
       );
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
