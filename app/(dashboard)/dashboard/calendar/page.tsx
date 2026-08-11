@@ -6,15 +6,12 @@ import useSWR from "swr";
 import {
   CalendarDays,
   CalendarPlus,
-  Check,
   ChevronLeft,
   ChevronRight,
-  Copy,
   ExternalLink,
   List,
   MapPin,
 } from "lucide-react";
-import { toast } from "sonner";
 import { apiFetcher, useApplications, useSchoolYears } from "@/hooks/use-api";
 import { Button } from "@/components/ui/button";
 import {
@@ -24,7 +21,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Sheet,
@@ -440,8 +436,13 @@ export default function ParentCalendarPage() {
                   </div>
                 ))}
               </div>
-              {/* Month grid */}
-              <div className="grid grid-cols-7">
+              {/* Month grid. `auto-rows-fr` makes every week the same
+                  height: without it each row sizes to its own tallest
+                  cell, so a week with two events stands visibly taller
+                  than an empty one and the grid looks like it's
+                  shrinking toward the bottom of the month. The
+                  per-cell `min-h-*` still sets the floor. */}
+              <div className="grid auto-rows-fr grid-cols-7">
                 {cells.map((cell, i) => {
                   const edge = cn(
                     i % 7 !== 6 && "border-r",
@@ -583,21 +584,10 @@ export default function ParentCalendarPage() {
  */
 function SubscribeButton() {
   const [open, setOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
   const webcalUrl = CALENDAR_ICS_URL.replace(/^https?:\/\//, "webcal://");
   const googleUrl = `https://calendar.google.com/calendar/render?cid=${encodeURIComponent(
     SCHOOL_CALENDAR_ID
   )}`;
-
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(CALENDAR_ICS_URL);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      toast.error("Couldn't copy — select the link and copy it manually.");
-    }
-  }
 
   return (
     <>
@@ -632,39 +622,6 @@ function SubscribeButton() {
                 Add to Apple Calendar / Outlook
               </a>
             </Button>
-            <div className="space-y-1.5 pt-2">
-              <p className="text-xs text-muted-foreground">
-                Or copy the link and paste it into any calendar app that
-                supports subscriptions (&ldquo;Add calendar from
-                URL&rdquo;):
-              </p>
-              <div className="flex items-center gap-2">
-                <Input
-                  readOnly
-                  value={CALENDAR_ICS_URL}
-                  className="h-8 text-xs"
-                  onFocus={(e) => e.currentTarget.select()}
-                />
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="shrink-0 bg-white"
-                  onClick={() => void copy()}
-                >
-                  {copied ? (
-                    <Check className="size-3.5 text-emerald-600" />
-                  ) : (
-                    <Copy className="size-3.5" />
-                  )}
-                </Button>
-              </div>
-            </div>
-            <p className="pt-1 text-[11px] text-muted-foreground">
-              Google Calendar can take up to a day to show a new
-              subscription&rsquo;s events and refreshes it on its own
-              schedule. Apple Calendar and Outlook let you choose how
-              often to refresh.
-            </p>
           </div>
         </DialogContent>
       </Dialog>
