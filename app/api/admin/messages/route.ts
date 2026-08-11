@@ -125,7 +125,6 @@ export async function GET(req: NextRequest) {
         students,
         fap,
         srp,
-        apps,
       ] =
         await Promise.all([
           xano.smsMessages.getAll(),
@@ -144,12 +143,9 @@ export async function GET(req: NextRequest) {
                 .getByYear(yearId)
                 .catch(() => [])
             : Promise.resolve([]),
-          withStages
-            ? xano.applications.getAll().catch(() => [])
-            : Promise.resolve([]),
         ]);
       const stageSets = withStages
-        ? computeFamilyStageSets({ yearId, fap, srp, apps })
+        ? computeFamilyStageSets({ fap, srp })
         : null;
       const familyStage = (id: number): ConversationStage => {
         if (!stageSets) return "none";

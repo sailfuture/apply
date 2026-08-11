@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
 import useSWR from "swr";
@@ -19,8 +19,6 @@ import { Input } from "@/components/ui/input";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Skeleton } from "@/components/ui/skeleton";
 import { adminFetcher } from "@/lib/admin-fetcher";
-import { deriveApplicationStatus } from "@/lib/application-status";
-import { StatusBadge } from "@/components/admin/status-badge";
 import { StateSelect } from "@/components/state-select";
 import type {
   XanoAdminFamilyDetail,
@@ -486,10 +484,10 @@ function StudentAppCard({
     });
   }, [app]);
 
-  const status = useMemo(
-    () => (app ? deriveApplicationStatus(app) : null),
-    [app]
-  );
+  // No per-application status badge: the decision flags it derived
+  // from never existed on `registration_application` (every row read
+  // as "draft"). Family lifecycle lives on the progress row and is
+  // surfaced on the family detail page instead.
 
   async function save() {
     if (!app) return;
@@ -529,11 +527,9 @@ function StudentAppCard({
                 ? `DOB ${new Date(`${student.date_of_birth}T00:00:00`).toLocaleDateString()}`
                 : ""}
               {student.gender ? ` · ${student.gender}` : ""}
-              {status ? null : null}
             </p>
           </div>
           <div className="flex items-center gap-2">
-            {status ? <StatusBadge status={status} /> : null}
             {!app ? (
               <span className="text-xs text-muted-foreground">No app</span>
             ) : editing ? (

@@ -116,10 +116,8 @@ export async function GET(req: NextRequest) {
     );
 
     const stageSets = computeFamilyStageSets({
-      yearId,
       fap: val(fapR),
       srp: val(srpR),
-      apps: val(appsR),
     });
 
     // Per-family student first names for the year — same application

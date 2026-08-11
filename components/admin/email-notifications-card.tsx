@@ -250,8 +250,6 @@ function templateLabel(tag: string): string {
       return "Registration received";
     case "enrolled":
       return "Officially enrolled";
-    case "not-accepted":
-      return "Not accepted";
     case "draft-reminder":
       return "Draft reminder";
     case "enrollment-reminder":

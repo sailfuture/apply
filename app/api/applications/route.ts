@@ -104,9 +104,6 @@ export async function POST(req: NextRequest) {
     nwea_testing_scheduled: false,
     last_grade_completed: "",
     current_grade: "",
-    isSubmitted: false,
-    isOffered: false,
-    isAccepted: false,
     // Newly-created application rows always start active. Admin views
     // filter on `isActive=true` so removing a student from the year
     // (which flips this to false) hides them from the admin pipeline

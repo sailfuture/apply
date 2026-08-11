@@ -1,5 +1,4 @@
 import type {
-  XanoApplication,
   XanoFamilyApplicationProgress,
   XanoStudentRegistrationProgress,
 } from "@/lib/xano";
@@ -18,8 +17,7 @@ import type {
  *   - registration — accepted for the year (merged per-family flags,
  *                    so duplicate progress rows can't split a family
  *                    across buckets)
- *   - application  — submitted but not accepted, EXCLUDING families
- *                    whose every active application was denied
+ *   - application  — submitted but not accepted
  *
  * Buckets are mutually exclusive: enrolled > registration > application.
  */
@@ -30,12 +28,12 @@ export interface FamilyStageSets {
 }
 
 export function computeFamilyStageSets(input: {
-  yearId: number;
+  /** Year-scoped rows — callers fetch via `getByYear`, so no year
+   *  filtering happens here. */
   fap: XanoFamilyApplicationProgress[];
   srp: XanoStudentRegistrationProgress[];
-  apps: XanoApplication[];
 }): FamilyStageSets {
-  const { yearId, fap, srp, apps } = input;
+  const { fap, srp } = input;
 
   const enrolled = new Set<number>();
   for (const r of srp) {
@@ -60,33 +58,15 @@ export function computeFamilyStageSets(input: {
     applyFlags.set(fid, f);
   }
 
-  // Families whose every active application for the year was denied —
-  // they keep `isSubmitted` progress rows but must not count as
-  // "applying".
-  const deniedFamilies = new Set<number>();
-  {
-    const byFamily = new Map<number, { total: number; denied: number }>();
-    for (const a of apps) {
-      if (Number(a.registration_school_years_id) !== yearId) continue;
-      if (a.isActive === false) continue;
-      const fid = Number(a.registration_families_id);
-      if (!fid) continue;
-      const b = byFamily.get(fid) ?? { total: 0, denied: 0 };
-      b.total += 1;
-      if (a.isDenied === true) b.denied += 1;
-      byFamily.set(fid, b);
-    }
-    for (const [fid, b] of byFamily) {
-      if (b.total > 0 && b.denied === b.total) deniedFamilies.add(fid);
-    }
-  }
-
+  // No denied-family exclusion: per-application `isDenied` never
+  // existed as a column, so the old check could never fire — and with
+  // no deny path in the app, no family can be in a denied state.
   const registration = new Set<number>();
   const application = new Set<number>();
   for (const [fid, f] of applyFlags) {
     if (enrolled.has(fid)) continue;
     if (f.accepted) registration.add(fid);
-    else if (f.submitted && !deniedFamilies.has(fid)) application.add(fid);
+    else if (f.submitted) application.add(fid);
   }
 
   return { enrolled, registration, application };

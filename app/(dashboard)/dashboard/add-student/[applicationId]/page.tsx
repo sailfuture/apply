@@ -53,8 +53,6 @@ interface AppRow {
   sufs_award_id?: number;
   nwea_testing_scheduled?: boolean;
   nwea_testing_complete?: boolean;
-  isSubmitted: boolean;
-  isAccepted: boolean;
   is_residential_addition?: boolean;
 }
 

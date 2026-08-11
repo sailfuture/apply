@@ -528,7 +528,6 @@ function sectionAdmin(p: object, key: string): string {
 const EMAIL_TEMPLATE_SCOPE: Record<string, ActivityScope> = {
   "application-received": "application",
   accepted: "application",
-  "not-accepted": "application",
   "draft-reminder": "application",
   "registration-received": "registration",
   "enrollment-reminder": "registration",

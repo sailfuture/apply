@@ -408,14 +408,13 @@ export interface XanoApplication {
   initial_screening_nwea_reading_date?: string | null;
   last_grade_completed: string;
   current_grade: string;
-  isSubmitted: boolean;
-  isOffered: boolean;
-  isAccepted: boolean;
-  /** Set true when admin denies an application that was submitted. Mutually
-   *  exclusive with `isOffered` / `isAccepted` in practice — admin tools
-   *  flip exactly one of the decision booleans on a submitted application.
-   *  Optional because legacy rows predate the column. */
-  isDenied?: boolean;
+  // NOTE: there are deliberately NO decision flags here. isSubmitted /
+  // isOffered / isAccepted / isDenied never existed as columns on
+  // `registration_application` in Xano — writes were silently dropped
+  // and reads always returned undefined (audited 2026-08-10). The
+  // admissions lifecycle lives on the per-year
+  // `registration_family_application_progress` row; families move
+  // through the pipeline as a unit.
   /** Soft-delete / inclusion flag. New applications are created with
    *  `isActive = true`. When a parent removes a student from a year, we
    *  flip this to `false` instead of deleting the row, so historical

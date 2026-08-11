@@ -132,11 +132,11 @@ export async function GET(req: NextRequest) {
 
     const totalInquiries = inquiries.length;
     const totalApplications = applications.length;
-    const submitted = applications.filter((a) => a.isSubmitted).length;
-    const offered = applications.filter((a) => a.isOffered).length;
-    const accepted = applications.filter((a) => a.isAccepted).length;
-    const denied = applications.filter((a) => a.isDenied === true).length;
-    const draft = totalApplications - submitted;
+    // No per-application decision counts: those flags never existed as
+    // columns, so submitted/offered/accepted/denied all read as 0 and
+    // the dashboard's Accepted tile rendered 0 forever. The family
+    // buckets below (from `family_application_progress`) are the real
+    // funnel numbers.
     const totalRegistrations = registrations.length;
     const completedRegistrations = registrations.filter(
       (r) => r.is_submitted
@@ -234,11 +234,6 @@ export async function GET(req: NextRequest) {
       },
       applications: {
         total: totalApplications,
-        draft,
-        submitted,
-        offered,
-        accepted,
-        denied,
       },
       registrations: {
         total: totalRegistrations,

@@ -146,48 +146,6 @@ export async function resolveFamilyContext(
   }
 }
 
-/** Resolve context for a single application — primary parent stays
- *  the family's primary, but `studentDisplayNames` is just that
- *  application's student. Used by the per-application denial trigger
- *  so multi-student families get one email per student status flip. */
-async function resolveApplicationContext(
-  applicationId: number
-): Promise<FamilyContext | null> {
-  try {
-    const app = await xano.applications.getById(applicationId);
-    const familyId = Number(app.registration_families_id);
-    const yearId = Number(app.registration_school_years_id);
-    const ctx = await resolveFamilyContext(familyId, yearId);
-    if (!ctx) return null;
-
-    // Override the student display to the specific application's
-    // student. If the student isn't in the year-filtered list
-    // (shouldn't happen, but defensive), look them up directly.
-    const studentId = Number(app.registration_students_id);
-    let studentFirstName = ctx.individualStudents.find(
-      (s) => s.id === studentId
-    )?.firstName;
-    if (!studentFirstName) {
-      try {
-        const student = await xano.students.getById(studentId);
-        studentFirstName = student.first_name?.trim() || "your student";
-      } catch {
-        studentFirstName = "your student";
-      }
-    }
-    return {
-      ...ctx,
-      studentDisplayNames: studentFirstName,
-    };
-  } catch (err) {
-    console.error(
-      `[email/resolveApplicationContext] failed for application=${applicationId}:`,
-      err
-    );
-    return null;
-  }
-}
-
 /* ────────────────────────── Event triggers ────────────────────────── */
 
 /** Email 1: parent submitted their application. Fires from PATCH
@@ -329,29 +287,11 @@ export async function sendEnrolledEmail(
   });
 }
 
-/** Email 8: admin denied a single application. Per-application
- *  rather than family-level — a family with multiple kids could have
- *  one accepted and one denied, and we want each parent message to
- *  reference the specific student. Fires from PATCH
- *  /api/admin/applications/[id] when `isDenied` transitions
- *  false→true. */
-export async function sendNotAcceptedEmail(
-  applicationId: number
-): Promise<SendResult> {
-  const ctx = await resolveApplicationContext(applicationId);
-  if (!ctx) return { ok: false, error: "context-failed" };
-  return sendEmail({
-    to: ctx.parentEmails,
-    content: t.notAccepted({
-      parent_first_name: ctx.primaryParentFirstName,
-      student_first_name: ctx.studentDisplayNames,
-      login_url: ctx.loginUrl,
-    }),
-    tag: "not-accepted",
-    familyId: ctx.familyId,
-    yearId: ctx.yearId,
-  });
-}
+// Email 8 (not-accepted) was removed 2026-08-11: its trigger fired on
+// a per-application isDenied transition, but that column never existed
+// in Xano and no Deny UI remains — declining a family is Archive /
+// Return Application, neither of which emails. Removed at the user's
+// direction rather than rewired.
 
 /* ────────────────────────── Scheduled triggers ────────────────────────── */
 

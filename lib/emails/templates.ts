@@ -369,44 +369,6 @@ export function enrollmentAgreementReminder(ctx: BaseContext): EmailContent {
   return { subject, html, text };
 }
 
-/* ─────────────────────────────── Email 8 ─────────────────────────────── */
-/* Not accepted. */
-
-export function notAccepted(ctx: BaseContext): EmailContent {
-  const subject = `Update on ${ctx.student_first_name}'s SailFuture Academy application`;
-  const preheader = `An update on ${ctx.student_first_name}'s application for 2026/2027.`;
-  const html = layout({
-    preheader,
-    body:
-      p(`Hi ${ctx.parent_first_name},`) +
-      p(
-        `Thank you for applying to SailFuture Academy and trusting us with ${ctx.student_first_name}'s application. After careful review, we're unable to offer ${ctx.student_first_name} a spot for the 2026/2027 school year.`
-      ) +
-      p(
-        `This decision isn't a reflection of ${ctx.student_first_name}'s potential or worth. We had far more applicants than spots available, and these decisions are some of the hardest our team makes.`
-      ) +
-      p(
-        `If you'd like to talk through the decision, learn what could make a future application stronger, or get connected with other educational resources in the area, we're glad to help. Email ${SUPPORT_EMAIL} or call ${SUPPORT_PHONE}.`
-      ) +
-      p(`We wish ${ctx.student_first_name} the very best,`) +
-      p(TEAM_SIGNATURE),
-    // Intentionally no CTA button — this is a closing communication.
-  });
-  const text = [
-    `Hi ${ctx.parent_first_name},`,
-    "",
-    `Thank you for applying to SailFuture Academy and trusting us with ${ctx.student_first_name}'s application. After careful review, we're unable to offer ${ctx.student_first_name} a spot for the 2026/2027 school year.`,
-    "",
-    `This decision isn't a reflection of ${ctx.student_first_name}'s potential or worth. We had far more applicants than spots available, and these decisions are some of the hardest our team makes.`,
-    "",
-    `If you'd like to talk through the decision, learn what could make a future application stronger, or get connected with other educational resources in the area, we're glad to help. Email ${SUPPORT_EMAIL} or call ${SUPPORT_PHONE}.`,
-    "",
-    `We wish ${ctx.student_first_name} the very best,`,
-    TEAM_SIGNATURE,
-  ].join("\n");
-  return { subject, html, text };
-}
-
 /* ─────────────────────────────── Email 11 ─────────────────────────────── */
 /* Back-to-school welcome (sent 1-2 weeks before August 24th). */
 

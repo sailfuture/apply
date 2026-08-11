@@ -88,11 +88,6 @@ interface StatsResponse {
   families?: { accepted: number; submitted: number; inProgress: number };
   applications: {
     total: number;
-    draft: number;
-    submitted: number;
-    offered: number;
-    accepted: number;
-    denied: number;
   };
   registrations: { total: number; completed: number; inProgress: number };
   students: { total: number };
@@ -211,11 +206,6 @@ export default function AdminDashboardPage() {
     families: { accepted: 0, submitted: 0, inProgress: 0 },
     applications: {
       total: 0,
-      draft: 0,
-      submitted: 0,
-      offered: 0,
-      accepted: 0,
-      denied: 0,
     },
     registrations: { total: 0, completed: 0, inProgress: 0 },
     students: { total: 0 },
@@ -316,12 +306,15 @@ export default function AdminDashboardPage() {
           description={`in progress · ${familyStats.submitted} submitted`}
           href={yearId ? `/admin/applications?yearId=${yearId}` : "/admin/applications"}
         />
-        {/* Accepted applications for the selected year. */}
+        {/* Accepted FAMILIES for the selected year, from the progress
+            rows — the same bucket the Applications page counts. The
+            old version counted per-application decision flags that
+            never existed in Xano, so this tile showed 0 forever. */}
         <StatsCard
           title="Accepted"
-          value={safeStats.applications.accepted}
+          value={familyStats.accepted}
           icon={<CheckCircle className="size-5" />}
-          description={`${safeStats.applications.offered} offered`}
+          description="families accepted"
           href={yearId ? `/admin/applications?yearId=${yearId}` : "/admin/applications"}
         />
         {/* Enrollment is per-year — joined to the applications list so

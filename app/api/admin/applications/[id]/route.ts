@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse, after } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
-import { sendNotAcceptedEmail } from "@/lib/emails/triggers";
 import {
   findPacketForApplication,
   removeStripeItemForApplication,
@@ -11,19 +10,19 @@ import { reconcileFamilySubscriptionItems } from "@/lib/billing";
 import { sendBillingAlert } from "@/lib/billing-alerts";
 
 /**
- * Admin GET / PATCH for a single `registration_application` row.
+ * Admin GET / PATCH for a single `registration_application` row — a
+ * flat partial object of allowlisted fields, used by the per-
+ * application detail surfaces when editing application values (grade,
+ * school, scholarship, billing, etc.).
  *
- * The PATCH endpoint accepts either:
- *   - A `{ status: "submitted" | "offered" | "denied" | "accepted" | "draft" }`
- *     shorthand that flips the corresponding decision booleans (and
- *     unsets the others) — used by the inline status dropdown on the
- *     applications list.
- *   - A flat partial object with explicit fields to PATCH directly —
- *     used by the per-application detail page when editing arbitrary
- *     application values (grade, school, scholarship, etc.).
- *
- * Both shapes can be combined in one PATCH; status is applied first,
- * then the rest of the fields override.
+ * There is deliberately NO decision-flag handling here. The old
+ * `{ status: "accepted" | ... }` shorthand wrote isSubmitted /
+ * isOffered / isAccepted / isDenied — columns that don't exist on
+ * `registration_application` in Xano, so every write was silently
+ * dropped (audited 2026-08-10). The admissions lifecycle lives on
+ * `registration_family_application_progress` via
+ * /api/admin/family-progress; families move through the pipeline as a
+ * unit, not per-application.
  */
 export async function GET(
   _req: NextRequest,
@@ -58,49 +57,6 @@ export async function PATCH(
     const body = await req.json();
     const patch: Record<string, unknown> = {};
 
-    // Status shorthand → decision-boolean transitions. Each branch sets
-    // exactly one of the four flags and clears the others so the row
-    // never lands in an inconsistent state (e.g. both Offered and Denied).
-    if (typeof body?.status === "string") {
-      switch (body.status) {
-        case "draft":
-          patch.isSubmitted = false;
-          patch.isOffered = false;
-          patch.isAccepted = false;
-          patch.isDenied = false;
-          break;
-        case "submitted":
-          patch.isSubmitted = true;
-          patch.isOffered = false;
-          patch.isAccepted = false;
-          patch.isDenied = false;
-          break;
-        case "offered":
-          patch.isSubmitted = true;
-          patch.isOffered = true;
-          patch.isAccepted = false;
-          patch.isDenied = false;
-          break;
-        case "denied":
-          patch.isSubmitted = true;
-          patch.isOffered = false;
-          patch.isAccepted = false;
-          patch.isDenied = true;
-          break;
-        case "accepted":
-          patch.isSubmitted = true;
-          patch.isOffered = true;
-          patch.isAccepted = true;
-          patch.isDenied = false;
-          break;
-        default:
-          return NextResponse.json(
-            { error: `Unknown status "${body.status}"` },
-            { status: 400 }
-          );
-      }
-    }
-
     // Allowlist of editable fields. Anything not in this list is ignored
     // — keeps an admin from accidentally overwriting Xano-managed columns
     // (id, created_at, foreign keys) by tossing extra props in the body.
@@ -128,10 +84,9 @@ export async function PATCH(
       // those instead.
       "last_grade_completed",
       "current_grade",
-      "isSubmitted",
-      "isOffered",
-      "isAccepted",
-      "isDenied",
+      // Decision flags (isSubmitted / isOffered / isAccepted /
+      // isDenied) are intentionally absent — those columns don't
+      // exist on this table; the lifecycle is family-level.
       "isActive",
       "opportunity_scholarship_award_amount",
       // Per-student billing columns mirroring the packet's six
@@ -193,19 +148,13 @@ export async function PATCH(
       }
     }
 
-    // Snapshot pre-patch state for the denial-email transition guard
-    // below, the acceptance cascade, AND the isActive billing
-    // cascades. Best-effort: if the read fails the guards are skipped
-    // — better to silently miss one notification than fail the
-    // admin's PATCH.
-    let priorIsDenied: boolean | undefined;
-    let priorIsAccepted: boolean | undefined;
+    // Snapshot pre-patch state for the isActive billing cascades.
+    // Best-effort: if the read fails the guards are skipped — better
+    // to silently miss one cascade than fail the admin's PATCH.
     let priorIsActive: boolean | undefined;
-    if ("isDenied" in patch || "isAccepted" in patch || "isActive" in patch) {
+    if ("isActive" in patch) {
       try {
         const prior = await xano.applications.getById(id);
-        priorIsDenied = prior.isDenied;
-        priorIsAccepted = prior.isAccepted;
         priorIsActive = prior.isActive !== false;
       } catch (err) {
         console.warn(
@@ -216,50 +165,6 @@ export async function PATCH(
     }
 
     const updated = await xano.applications.update(id, patch);
-
-    // On acceptance (isAccepted false → true): ensure a
-    // `registration_student_registration` packet exists for this
-    // (student, year) so the parent's post-acceptance registration
-    // paperwork has a home to write to. Billing math lives on the
-    // application row (single source of truth), so the packet
-    // doesn't need any column copies — just needs to exist.
-    // Best-effort — log and continue if anything fails (admin's
-    // accept already succeeded).
-    if (patch.isAccepted === true && priorIsAccepted !== true) {
-      try {
-        const studentId = Number(updated.registration_students_id);
-        const yearId = Number(updated.registration_school_years_id);
-        if (
-          Number.isFinite(studentId) &&
-          studentId > 0 &&
-          Number.isFinite(yearId) &&
-          yearId > 0
-        ) {
-          await xano.studentRegistration.resolve(studentId, yearId);
-        }
-      } catch (err) {
-        console.error(
-          `[/api/admin/applications/${id}] failed to ensure packet on acceptance:`,
-          err
-        );
-      }
-    }
-
-    // Email 8: admin denied this application. Per-application
-    // rather than family-level — the family might have other
-    // students still in flight, and the message should reference
-    // the specific denied student by name. Transition guard prevents
-    // re-saves (admin clicks Deny twice, or PATCHes another field
-    // while already denied) from re-firing the email. Best-effort
-    // send.
-    if (patch.isDenied === true && priorIsDenied !== true) {
-      sendNotAcceptedEmail(id).catch((err) => {
-        console.error(
-          `[/api/admin/applications/${id}] sendNotAcceptedEmail failed:`,
-          err
-        );
-      });
-    }
 
     // Billing cascades — keep Stripe in lockstep with the row the
     // admin just edited. Each is alert-on-failure rather than

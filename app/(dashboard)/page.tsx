@@ -152,12 +152,9 @@ export default async function Page() {
   ]);
 
   // Step 5 — derive lifecycle state and pick the final URL. `isAccepted`
-  // now lives on the per-year application-progress row; we fall back to
-  // any per-app flag in case the family-level flag hasn't been flipped
-  // yet but admin already moved a student forward.
-  const isAccepted =
-    appProgress?.isAccepted === true ||
-    yearApps.some((a) => a.isAccepted === true);
+  // lives on the per-year application-progress row — the only place it
+  // exists; `registration_application` has no decision columns.
+  const isAccepted = appProgress?.isAccepted === true;
 
   // `isRegistrationConfirmed` is the family-level latch admin flips
   // via the Family Registration Confirmation card. It's the

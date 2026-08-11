@@ -74,7 +74,7 @@ export async function GET(req: NextRequest) {
 
     // ── Family stage sets — shared bucketing (also powers the inbox
     //    stage filter) so the two surfaces can't disagree. ──
-    const stageSets = computeFamilyStageSets({ yearId, fap, srp, apps });
+    const stageSets = computeFamilyStageSets({ fap, srp });
     const familyStage = (fid: number): GroupStage | null => {
       if (stageSets.enrolled.has(fid)) return "enrolled";
       if (stageSets.registration.has(fid)) return "registration";

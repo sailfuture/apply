@@ -107,9 +107,6 @@ export async function POST(req: NextRequest) {
           nwea_testing_scheduled: false,
           last_grade_completed: "",
           current_grade: "",
-          isSubmitted: false,
-          isOffered: false,
-          isAccepted: false,
           // Per-student tuition columns moved onto the per-year
           // packet; the app-row column is kept as `null` to satisfy
           // the type contract without implying a $0 determination.
@@ -134,12 +131,10 @@ export async function POST(req: NextRequest) {
         prev?.current_grade ?? prev?.last_grade_completed ?? "",
       current_grade: bumpGrade(prev?.current_grade ?? ""),
       // Status fields reset — re-applying families need to be re-offered
-      // and re-accepted by admin for the new year.
+      // and re-accepted by admin for the new year (family-level, on the
+      // fresh progress row).
       sufs_status: "",
       sufs_award_id: 0,
-      isSubmitted: false,
-      isOffered: false,
-      isAccepted: false,
       // New year's application starts active regardless of last
       // year's flag. Admin views filter on `isActive=true`.
       isActive: true,

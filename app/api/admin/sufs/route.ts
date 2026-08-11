@@ -146,10 +146,8 @@ export async function GET(req: NextRequest) {
     // group composer use (enrolled > registration > application). Also
     // drives the eligibility filter below, so it's computed first.
     const stageSets = computeFamilyStageSets({
-      yearId,
       fap: familyProgressRows,
       srp: progressRows,
-      apps,
     });
     // Families that have STARTED an application for the year — any
     // non-archived apply-progress row, submitted or not. This is what
@@ -191,15 +189,11 @@ export async function GET(req: NextRequest) {
       const student = studentById.get(Number(a.registration_students_id));
       if (student?.isArchived === true) return false;
       const familyId = Number(a.registration_families_id);
-      const familyAccepted = acceptedFamilyIds.has(familyId);
-      const legacyStudentAccepted =
-        (a as { isAccepted?: boolean }).isAccepted === true;
-      if (familyAccepted || legacyStudentAccepted) return true;
+      // Family-level acceptance only — per-application decision flags
+      // never existed as columns, so the old per-student fallback and
+      // denied-student exclusion here could never fire.
+      if (acceptedFamilyIds.has(familyId)) return true;
       if (stageSets.enrolled.has(familyId)) return true;
-      // An individually-denied student never surfaces, even inside an
-      // otherwise-live family. (`stageSets.application` already drops
-      // families whose every active app was denied.)
-      if ((a as { isDenied?: boolean }).isDenied === true) return false;
       // Submitted-and-applying, or still filling the application out.
       // `startedFamilyIds` is archive-filtered, so a family whose only
       // apply-progress rows are archived drops out here.

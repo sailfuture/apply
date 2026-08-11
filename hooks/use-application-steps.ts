@@ -323,20 +323,12 @@ export function useApplicationSteps(yearId: number) {
 
   const registrationCompletedCount = registrationSteps.filter((s) => s.status === "complete").length;
 
-  // Application stage flags. `isSubmitted` and `isAccepted` now live on
-  // the per-year `family_application_progress` row (they used to be
-  // family-level booleans, but acceptance is per-year-per-family). We
-  // keep the per-app fallbacks so the stage advances if admin moved an
-  // individual student forward before flipping the family-level flag.
-  const familySubmitted = progressData?.isSubmitted === true;
-  const familyAccepted = progressData?.isAccepted === true;
-  const isSubmitted =
-    familySubmitted ||
-    yearApps.some((a) => (a as { isSubmitted?: boolean }).isSubmitted);
-  const isOffered = yearApps.some((a) => (a as { isOffered?: boolean }).isOffered);
-  const isAccepted =
-    familyAccepted ||
-    yearApps.some((a) => (a as { isAccepted?: boolean }).isAccepted);
+  // Application stage flags — from the per-year
+  // `family_application_progress` row, their only home. The per-app
+  // fallbacks that used to sit here read columns that never existed on
+  // `registration_application` (always undefined), so they never fired.
+  const isSubmitted = progressData?.isSubmitted === true;
+  const isAccepted = progressData?.isAccepted === true;
 
   // Derive stage: "apply" | "review" | "accepted"
   const stage: "apply" | "review" | "accepted" =
@@ -359,7 +351,6 @@ export function useApplicationSteps(yearId: number) {
     yearApps,
     stage,
     isSubmitted,
-    isOffered,
     isAccepted,
     /** `undefined` while loading, `null` once settled with no family —
      *  pages should bounce a settled-null user to /welcome. */

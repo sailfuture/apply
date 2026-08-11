@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
-import { deriveApplicationStatus } from "@/lib/application-status";
 
 /**
  * Admin families list — single round trip via the Xano
@@ -51,15 +50,6 @@ export async function GET(req: NextRequest) {
           .filter((id) => Number.isFinite(id) && id > 0)
       );
 
-      // Worst-case status across the family's apps for the selected year.
-      // Used so admins scanning the families table can see "this family
-      // has at least one submitted-but-undecided app to review."
-      const statuses = yearApps.map((a) => deriveApplicationStatus(a));
-      const priority = ["submitted", "offered", "accepted", "enrolled", "draft", "denied"];
-      const topStatus =
-        priority.find((s) => statuses.includes(s as ReturnType<typeof deriveApplicationStatus>)) ??
-        null;
-
       return {
         id: family.id,
         family_name: family.family_name || `Family #${family.id}`,
@@ -67,11 +57,10 @@ export async function GET(req: NextRequest) {
         parent_count: family.registration_parents_id.length,
         student_count: studentIds.size,
         application_count: yearApps.length,
-        // `isSubmitted` / `isAccepted` no longer live on the family
-        // row — they're per-year on `family_application_progress`.
-        // `top_status` derived from per-app decision booleans below
-        // already reflects the right thing for this row's year.
-        top_status: topStatus,
+        // No status field: per-app decision flags never existed in
+        // Xano, so the old `top_status` always computed "draft" — and
+        // nothing consumed it. Family lifecycle comes from the
+        // `family_application_progress` row where it's needed.
         primary_email: family.registration_parents_id[0]?.email ?? "",
         primary_name: family.registration_parents_id[0]
           ? `${family.registration_parents_id[0].first_name} ${family.registration_parents_id[0].last_name}`.trim()
