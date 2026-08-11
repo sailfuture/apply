@@ -5,7 +5,6 @@ import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { toast } from "sonner";
 import {
-  Bell,
   CalendarDays,
   ChevronLeft,
   ChevronRight,
@@ -24,7 +23,6 @@ import {
   eventColor,
   parseDate,
 } from "@/components/admin/event-upsert-dialog";
-import { EventReminderDialog } from "@/components/admin/event-reminder-dialog";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -297,12 +295,10 @@ export default function SchoolCalendarPage() {
       setSyncingGoogle(false);
     }
   }
-  /** Event picked for an SMS reminder (from the day sheet or the
-   *  events sheet) — the event plus its day's date. */
-  const [remindTarget, setRemindTarget] = useState<{
-    event: XanoSchoolCalendarEvent;
-    date: string;
-  } | null>(null);
+  // Per-event SMS reminders were removed from this page. The
+  // EventReminderDialog itself still lives in components/admin and is
+  // still wired up on the Volunteer Hours page, which is where
+  // reminders are sent from.
 
   /** Term chip click — filter (agenda) and jump the month view to the
    *  term's first month. */
@@ -555,9 +551,6 @@ export default function SchoolCalendarPage() {
           }
           onClose={() => setSelectedDayId(null)}
           onChanged={() => void mutate()}
-          onRemind={(event) =>
-            setRemindTarget({ event, date: selectedDay.date })
-          }
         />
       ) : null}
 
@@ -571,17 +564,6 @@ export default function SchoolCalendarPage() {
           termLabel={termLabel}
           onClose={() => setEventsOpen(false)}
           onChanged={() => void mutate()}
-          onRemind={(event, date) => setRemindTarget({ event, date })}
-        />
-      ) : null}
-
-      {/* Event SMS reminder (shared with the Volunteer Hours page) */}
-      {remindTarget ? (
-        <EventReminderDialog
-          key={remindTarget.event.id}
-          yearId={Number(yearId) || 0}
-          event={{ ...remindTarget.event, date: remindTarget.date }}
-          onDone={() => setRemindTarget(null)}
         />
       ) : null}
 
@@ -681,7 +663,6 @@ function EventsSheet({
   termLabel,
   onClose,
   onChanged,
-  onRemind,
 }: {
   days: XanoSchoolCalendarDay[];
   events: XanoSchoolCalendarEvent[];
@@ -689,7 +670,6 @@ function EventsSheet({
   termLabel: Map<number, string>;
   onClose: () => void;
   onChanged: () => void;
-  onRemind: (event: XanoSchoolCalendarEvent, date: string) => void;
 }) {
   const [filter, setFilter] = useState<number | "all">("all");
 
@@ -799,18 +779,9 @@ function EventsSheet({
                               c ? c.dot : "bg-slate-300"
                             )}
                           />
-                          {/* Fixed-width, nowrap time so ranges never
-                              break onto a second line. */}
-                          <span className="w-40 shrink-0 whitespace-nowrap text-xs tabular-nums text-muted-foreground">
-                            {e.start_time
-                              ? `${fmtTime(e.start_time)}${
-                                  e.end_time
-                                    ? ` – ${fmtTime(e.end_time)}`
-                                    : ""
-                                }`
-                              : "All day"}
-                          </span>
-                          {/* Title · location on ONE truncating line. */}
+                          {/* Name leads — it's what you're scanning
+                              for. Title · badges · location on ONE
+                              truncating line. */}
                           <span className="min-w-0 flex-1 truncate text-sm">
                             <span className="font-medium">{e.title}</span>
                             {e.mandatory ? (
@@ -831,11 +802,21 @@ function EventsSheet({
                               </span>
                             ) : null}
                           </span>
-                          {c ? (
-                            <span className="hidden shrink-0 text-[11px] text-muted-foreground sm:block">
-                              {c.label}
-                            </span>
-                          ) : null}
+                          {/* Time trails the name, right-aligned in a
+                              fixed-width nowrap column so ranges never
+                              wrap and the times still line up down the
+                              list. The category label that used to sit
+                              here is gone — the colored dot already
+                              carries it without spending a column. */}
+                          <span className="w-40 shrink-0 whitespace-nowrap text-right text-xs tabular-nums text-muted-foreground">
+                            {e.start_time
+                              ? `${fmtTime(e.start_time)}${
+                                  e.end_time
+                                    ? ` – ${fmtTime(e.end_time)}`
+                                    : ""
+                                }`
+                              : "All day"}
+                          </span>
                         </button>
                       </li>
                     );
@@ -973,15 +954,6 @@ function EventsSheet({
               </Button>
             </div>
             <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                className="bg-white"
-                onClick={() => onRemind(detail.e, detail.day.date)}
-              >
-                <Bell className="size-3.5 mr-1" />
-                Remind
-              </Button>
               <Button
                 size="sm"
                 onClick={() =>
@@ -1245,7 +1217,6 @@ function DaySheet({
   seasonName,
   onClose,
   onChanged,
-  onRemind,
 }: {
   day: XanoSchoolCalendarDay;
   /** The whole year's days — the event modal clamps its date picker
@@ -1256,8 +1227,6 @@ function DaySheet({
   seasonName: string;
   onClose: () => void;
   onChanged: () => void;
-  /** Opens the SMS reminder dialog for one of this day's events. */
-  onRemind: (event: XanoSchoolCalendarEvent) => void;
 }) {
   const [type, setType] = useState(day.type);
   // Trimmed — a cleared rotation stores the " " sentinel (Xano edits
@@ -1551,37 +1520,29 @@ function DaySheet({
                         ) : null}
                       </div>
 
-                      {/* Actions — pinned to the card's bottom edge */}
-                      <div className="mt-3 flex items-center justify-between gap-2 border-t pt-3">
+                      {/* Actions — pinned to the card's bottom edge.
+                          `justify-end` (not `justify-between`): Remind
+                          used to hold the left edge, and without it a
+                          lone right-hand group would drift left. */}
+                      <div className="mt-3 flex items-center justify-end gap-2 border-t pt-3">
                         <Button
                           variant="outline"
                           size="sm"
                           className="bg-white"
-                          onClick={() => onRemind(e)}
+                          onClick={() => setEditingId(e.id)}
                         >
-                          <Bell className="size-3.5 mr-1" />
-                          Remind
+                          <Pencil className="size-3.5 mr-1" />
+                          Edit
                         </Button>
-                        <div className="flex items-center gap-2">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="bg-white"
-                            onClick={() => setEditingId(e.id)}
-                          >
-                            <Pencil className="size-3.5 mr-1" />
-                            Edit
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="bg-white text-red-600 hover:bg-red-50 hover:text-red-700"
-                            onClick={() => setDeleteTarget(e)}
-                          >
-                            <Trash2 className="size-3.5 mr-1" />
-                            Delete
-                          </Button>
-                        </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="bg-white text-red-600 hover:bg-red-50 hover:text-red-700"
+                          onClick={() => setDeleteTarget(e)}
+                        >
+                          <Trash2 className="size-3.5 mr-1" />
+                          Delete
+                        </Button>
                       </div>
                     </li>
                   );
