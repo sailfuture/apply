@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { calendarEventDescription } from "@/lib/school-calendar";
 import { xano } from "@/lib/xano";
 
 /**
@@ -64,15 +65,12 @@ export async function GET(req: NextRequest) {
     if (e.location?.trim()) {
       lines.push(fold(`LOCATION:${esc(e.location.trim())}`));
     }
-    const descParts = [
-      e.description?.trim() ?? "",
-      e.mandatory ? "Mandatory attendance." : "",
-      e.parent_volunteer_hours
-        ? `Counts toward parent volunteer hours (${e.volunteer_hour_total || 0} hrs).`
-        : "",
-    ].filter(Boolean);
-    if (descParts.length > 0) {
-      lines.push(fold(`DESCRIPTION:${esc(descParts.join("\n"))}`));
+    // Shared with the Google push (lib/school-event-sync) so the same
+    // event reads identically however it reached the parent —
+    // including the RSVP link on sign-up events.
+    const description = calendarEventDescription(e);
+    if (description) {
+      lines.push(fold(`DESCRIPTION:${esc(description)}`));
     }
     lines.push("END:VEVENT");
   }

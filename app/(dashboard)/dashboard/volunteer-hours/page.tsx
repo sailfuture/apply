@@ -354,8 +354,26 @@ function UpcomingEventsSection({ yearId }: { yearId: number | null }) {
   const [rsvpTarget, setRsvpTarget] = useState<ParentVolunteerEvent | null>(
     null
   );
+  // `?eventId=` — the RSVP deep link carried in every calendar event's
+  // description (see `parentRsvpUrl`). A parent arriving from their
+  // calendar app gets that event's sign-up dialog straight away
+  // instead of having to find the row again.
+  const searchParams = useSearchParams();
+  const deepLinkId = Number(searchParams.get("eventId")) || 0;
+  const [deepLinkDismissed, setDeepLinkDismissed] = useState(false);
 
   const events = data?.events ?? [];
+
+  // Derived rather than pushed into state from an effect: the events
+  // arrive async, so an effect would mean a setState-on-load, and
+  // reopening the dialog every time the list revalidates. `dismissed`
+  // latches once the parent closes it.
+  const deepLinkTarget =
+    deepLinkId && !deepLinkDismissed
+      ? (events.find((e) => e.id === deepLinkId) ?? null)
+      : null;
+  const activeRsvp = rsvpTarget ?? deepLinkTarget;
+
   if (!data || events.length === 0) return null;
 
   return (
@@ -488,12 +506,16 @@ function UpcomingEventsSection({ yearId }: { yearId: number | null }) {
         </div>
       </div>
 
-      {rsvpTarget ? (
+      {activeRsvp ? (
         <RsvpDialog
-          key={rsvpTarget.id}
-          event={rsvpTarget}
+          key={activeRsvp.id}
+          event={activeRsvp}
           onDone={(changed) => {
             setRsvpTarget(null);
+            // Latch the deep link closed too, or closing the dialog
+            // would immediately re-derive it from the still-present
+            // `?eventId=` and pop straight back open.
+            setDeepLinkDismissed(true);
             if (changed) void mutate();
           }}
         />

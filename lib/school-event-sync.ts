@@ -3,6 +3,7 @@ import {
   isSchoolCalendarPushConfigured,
   upsertSchoolEvent,
 } from "@/lib/google-calendar";
+import { calendarEventDescription } from "@/lib/school-calendar";
 import type { XanoSchoolCalendarEvent } from "@/lib/xano";
 
 /**
@@ -20,19 +21,10 @@ import type { XanoSchoolCalendarEvent } from "@/lib/xano";
  * covers those deployments.
  */
 
-/** Google-facing description — the event description plus the same
- *  mandatory/volunteer footnotes the ICS feed appends. */
-function googleDescription(e: XanoSchoolCalendarEvent): string {
-  return [
-    e.description?.trim() ?? "",
-    e.mandatory ? "Mandatory attendance." : "",
-    e.parent_volunteer_hours
-      ? `Counts toward parent volunteer hours (${e.volunteer_hour_total || 0} hrs).`
-      : "",
-  ]
-    .filter(Boolean)
-    .join("\n");
-}
+// Description is built by `calendarEventDescription` in
+// lib/school-calendar, shared with the ICS feed so an event reads the
+// same whether it reached the parent by push or by subscription —
+// including the RSVP deep link on sign-up events.
 
 /**
  * Outcome of one push. `error` carries Google's own explanation on
@@ -62,7 +54,7 @@ export async function pushSchoolEventToGoogle(
   try {
     await upsertSchoolEvent(event.id, {
       summary: event.title,
-      description: googleDescription(event),
+      description: calendarEventDescription(event),
       location: (event.location ?? "").trim(),
       date: dayDate,
       startMs: Number(event.start_time) || 0,

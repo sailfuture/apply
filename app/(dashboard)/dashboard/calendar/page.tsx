@@ -44,9 +44,18 @@ import type {
 
 /** The school calendar as published in Google Calendar. Both the
  *  "view it" link and the subscribe/download links are built from this
- *  one id so they can never drift apart. */
+ *  one id so they can never drift apart.
+ *
+ *  This is the calendar the app PUSHES to (`GOOGLE_SCHOOL_CALENDAR_ID`
+ *  server-side) — keep the two in step. It replaced an
+ *  `@import.calendar.google.com` id, which was Google's own read-only
+ *  subscription to our ICS feed: a second copy of the same events that
+ *  the API could never write to.
+ *
+ *  Requires "Make available to public" on the calendar, or the embed
+ *  and /public/basic.ics links below 404 for signed-out parents. */
 const SCHOOL_CALENDAR_ID =
-  "uvr342hf7argd0mmiobenn89rch3o7a5@import.calendar.google.com";
+  "c_e9f69a1c071a973f0086ec5606b4262fe2ade4a9a13db6c47f0e438d002ed4e7@group.calendar.google.com";
 const SCHOOL_CALENDAR_TZ = "America/New_York";
 
 /** Public, signed-out-safe view of the calendar.
