@@ -104,14 +104,45 @@ export function EventReminderDialog({
       ),
     [data]
   );
-  const defaultSelected = useMemo(
-    () => new Set(enrolled.filter((c) => c.sendable).map((c) => c.id)),
+  // Crew chips — scope the reminder to the crew(s) an event applies
+  // to ("Picture Day (Crew E)" → just Crew E's families), instead of
+  // texting every enrolled family about every crew's event. Still one
+  // text per FAMILY: the audience is family-level, and a family
+  // qualifies when ANY of its students is in a selected crew.
+  const [crewFilter, setCrewFilter] = useState<string[]>([]);
+  const crewOptions = useMemo(
+    () =>
+      [...new Set(enrolled.flatMap((c) => c.crews ?? []))].sort((a, b) =>
+        a.localeCompare(b)
+      ),
     [enrolled]
   );
-  // null = "everything sendable" until the admin touches the list —
-  // avoids a state write when the audience finishes loading.
+  const eligible = useMemo(
+    () =>
+      crewFilter.length === 0
+        ? enrolled
+        : enrolled.filter((c) =>
+            (c.crews ?? []).some((cr) => crewFilter.includes(cr))
+          ),
+    [enrolled, crewFilter]
+  );
+  const defaultSelected = useMemo(
+    () => new Set(eligible.filter((c) => c.sendable).map((c) => c.id)),
+    [eligible]
+  );
+  // null = "everything sendable in the current filter" until the
+  // admin touches the list — avoids a state write when the audience
+  // finishes loading.
   const [picked, setPicked] = useState<Set<number> | null>(null);
   const selected = picked ?? defaultSelected;
+  function toggleCrew(crew: string) {
+    setCrewFilter((prev) =>
+      prev.includes(crew) ? prev.filter((x) => x !== crew) : [...prev, crew]
+    );
+    // Selection tracks the filter until hand-edited — re-deriving
+    // from the narrowed list is the least surprising behavior.
+    setPicked(null);
+  }
 
   const [message, setMessage] = useState(() => defaultReminder(event));
   const [query, setQuery] = useState("");
@@ -128,9 +159,9 @@ export function EventReminderDialog({
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
     return q
-      ? enrolled.filter((c) => c.name.toLowerCase().includes(q))
-      : enrolled;
-  }, [enrolled, query]);
+      ? eligible.filter((c) => c.name.toLowerCase().includes(q))
+      : eligible;
+  }, [eligible, query]);
 
   function toggle(id: number) {
     const next = new Set(selected);
@@ -208,10 +239,46 @@ export function EventReminderDialog({
               </p>
             </div>
 
+            {/* Crew chips — narrow to the crew(s) this event is for.
+                One text per family regardless; the selection below
+                re-derives from the narrowed list. Hidden when no
+                family carries a crew assignment for the year. */}
+            {crewOptions.length > 0 ? (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                  Crew
+                </span>
+                {crewOptions.map((crew) => {
+                  const on = crewFilter.includes(crew);
+                  return (
+                    <button
+                      key={crew}
+                      type="button"
+                      aria-pressed={on}
+                      onClick={() => toggleCrew(crew)}
+                      className={cn(
+                        "rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors",
+                        on
+                          ? "border-foreground bg-foreground text-background"
+                          : "border-border bg-white text-muted-foreground hover:border-foreground/40 hover:text-foreground"
+                      )}
+                    >
+                      {crew.replace(/^crew\s+/i, "")}
+                    </button>
+                  );
+                })}
+                <span className="text-[11px] text-muted-foreground">
+                  {crewFilter.length === 0
+                    ? "All enrolled families"
+                    : "Only families with a student in the selected crew(s)"}
+                </span>
+              </div>
+            ) : null}
+
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Recipients ({selected.size} of {enrolled.length})
+                  Recipients ({selected.size} of {eligible.length})
                 </h3>
                 <div className="flex items-center gap-3 text-xs">
                   <button
@@ -243,7 +310,7 @@ export function EventReminderDialog({
                 </div>
               ) : shown.length === 0 ? (
                 <p className="py-2 text-sm text-muted-foreground">
-                  {query
+                  {query || crewFilter.length > 0
                     ? "No matching families."
                     : "No enrolled families to text."}
                 </p>
