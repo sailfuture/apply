@@ -6778,17 +6778,27 @@ function DecisionStudentRow({
             <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Step Up For Students
             </h4>
+            {sufsConfirmed ? (
+              <p className="text-[11px] text-muted-foreground">
+                Scholarship confirmed — tier, status, and award ID stay
+                editable; award amounts are locked.
+              </p>
+            ) : null}
             <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
               <Field>
                 <FieldLabel className="text-xs">SUFS award tier</FieldLabel>
                 <Select
                   value={sufsType || "__none"}
-                  // Locked once the scholarship is confirmed — admin
-                  // has to click Undo on the per-student footer to
-                  // re-edit. Prevents accidental changes while the
-                  // family-level approve gate is reading these
-                  // values.
-                  disabled={sufsConfirmed}
+                  // Deliberately NOT locked on `sufsConfirmed` — SUFS
+                  // assigns/changes award tiers on their own schedule,
+                  // so admin must be able to correct the tier (and
+                  // award ID / status below) even after confirmation
+                  // and acceptance. Only the DOLLAR inputs stay
+                  // locked once confirmed: post-confirmation tier
+                  // changes update the label without touching the
+                  // stored `sufs_amount` (see the gate in
+                  // onValueChange), so the amount the family signed
+                  // against never moves underneath them.
                   onValueChange={(v) => {
                     const nextType = v === "__none" ? "" : v;
                     // SUFS tier select writes two values to two
@@ -6819,6 +6829,12 @@ function DecisionStudentRow({
                       }));
                       return;
                     }
+                    // Once the scholarship is confirmed, the tier
+                    // label may change but the billed amount is
+                    // locked — skip the derived-amount write so a
+                    // post-confirmation correction can't re-price
+                    // billing.
+                    if (sufsConfirmed) return;
                     const nextAmount = sufsAmountFor(nextType, schoolYear);
                     void patchPerStudentBilling({
                       sufsAwardAmount: nextAmount,
@@ -6914,7 +6930,8 @@ function DecisionStudentRow({
                 <FieldLabel className="text-xs">SUFS status</FieldLabel>
                 <Select
                   value={sufsStatus || "__none"}
-                  disabled={sufsConfirmed}
+                  // Editable after confirmation — see the tier
+                  // select's note above.
                   onValueChange={(v) =>
                     patchField("sufs_status", {
                       sufs_status: v === "__none" ? "" : v,
@@ -6943,7 +6960,9 @@ function DecisionStudentRow({
                   value={draft.sufs_award_id}
                   type="text"
                   inputMode="numeric"
-                  disabled={sufsConfirmed}
+                  // Editable after confirmation — award IDs arrive
+                  // from the SUFS portal on their own schedule (see
+                  // the tier select's note above).
                   // SUFS portal hands out a fixed 9-digit numeric
                   // ID. Constrain the input shape so admin can't
                   // typo extra digits or paste a longer string in

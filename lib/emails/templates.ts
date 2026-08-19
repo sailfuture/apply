@@ -266,7 +266,7 @@ export function enrolled(ctx: BaseContext): EmailContent {
         `It's official. ${ctx.student_first_name} is enrolled at SailFuture Academy for the 2026/2027 school year. We can't wait to get started.`
       ) +
       p(
-        `A couple of things to know as you plan ahead. Monthly tuition invoices will begin on the 1st of each month and can be viewed and paid through your family portal. The first day of school is Monday, August 24th, 2026. We'll send a back to school packet later this summer with the full calendar, supply list, and first day logistics.`
+        `A couple of things to know as you plan ahead. Monthly tuition invoices will begin on the 1st of each month and can be viewed and paid through your family portal. The first day of school is Monday, August 24th, 2026. We'll send a back to school packet later this summer with the full calendar and first day logistics.`
       ) +
       p(
         `For anything else between now and August, email ${SUPPORT_EMAIL} or call ${SUPPORT_PHONE}.`
@@ -281,7 +281,7 @@ export function enrolled(ctx: BaseContext): EmailContent {
     "",
     `It's official. ${ctx.student_first_name} is enrolled at SailFuture Academy for the 2026/2027 school year. We can't wait to get started.`,
     "",
-    `A couple of things to know as you plan ahead. Monthly tuition invoices will begin on the 1st of each month and can be viewed and paid through your family portal. The first day of school is Monday, August 24th, 2026. We'll send a back to school packet later this summer with the full calendar, supply list, and first day logistics.`,
+    `A couple of things to know as you plan ahead. Monthly tuition invoices will begin on the 1st of each month and can be viewed and paid through your family portal. The first day of school is Monday, August 24th, 2026. We'll send a back to school packet later this summer with the full calendar and first day logistics.`,
     "",
     `View your account: ${ctx.login_url}`,
     "",
@@ -383,7 +383,10 @@ export function backToSchool(ctx: BaseContext): EmailContent {
         `School starts Monday, August 24th, 2026, and we're getting ready to welcome ${ctx.student_first_name} to campus. Here's what you need to know to start the year strong.`
       ) +
       p(
-        `Full first day logistics, the academic calendar, the supply list, drop-off and pick-up details, and uniform expectations are all in your family portal. Please take a few minutes to review everything before the first day so ${ctx.student_first_name} arrives ready.`
+        `Full first day logistics, the academic calendar, drop-off and pick-up details, and uniform expectations are all in your family portal. Please take a few minutes to review everything before the first day so ${ctx.student_first_name} arrives ready.`
+      ) +
+      p(
+        `There's no supply list to shop for. We provide all school supplies, so ${ctx.student_first_name} just needs to show up.`
       ) +
       p(
         `Questions before August 24th? Email ${SUPPORT_EMAIL} or call ${SUPPORT_PHONE}.`
@@ -398,7 +401,9 @@ export function backToSchool(ctx: BaseContext): EmailContent {
     "",
     `School starts Monday, August 24th, 2026, and we're getting ready to welcome ${ctx.student_first_name} to campus. Here's what you need to know to start the year strong.`,
     "",
-    `Full first day logistics, the academic calendar, the supply list, drop-off and pick-up details, and uniform expectations are all in your family portal. Please take a few minutes to review everything before the first day so ${ctx.student_first_name} arrives ready.`,
+    `Full first day logistics, the academic calendar, drop-off and pick-up details, and uniform expectations are all in your family portal. Please take a few minutes to review everything before the first day so ${ctx.student_first_name} arrives ready.`,
+    "",
+    `There's no supply list to shop for. We provide all school supplies, so ${ctx.student_first_name} just needs to show up.`,
     "",
     `View first day info: ${ctx.login_url}`,
     "",
