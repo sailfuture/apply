@@ -56,6 +56,10 @@ const NAV_ITEMS: NavItem[] = [
     title: "Recruitment",
     children: [
       { title: "All Leads", href: "/admin/all-leads" },
+      // Texting for everyone NOT yet enrolled — leads plus families
+      // still applying/registering. Lives under /admin/messages so
+      // the unread-badge suppression + PWA start URL keep working.
+      { title: "Messages", href: "/admin/messages/recruitment" },
       { title: "Campus Tours", href: "/admin/campus-tours" },
       { title: "Inquiries", href: "/admin/inquiries" },
       { title: "Summer Camp", href: "/admin/summer-camp" },
@@ -63,49 +67,64 @@ const NAV_ITEMS: NavItem[] = [
       { title: "Visit Form", href: "/admin/tasco-summer-visits" },
     ],
   },
-  // Admissions — the apply-through-enrolled pipeline. Applications
+  // Admissions — the apply-through-acceptance pipeline. Applications
   // folds in re-applications (with a `flow_type` pill on each row),
-  // so there's no standalone Re-Applications item.
+  // so there's no standalone Re-Applications item. Enrolled students
+  // live under Enrollment.
   {
     title: "Admissions",
     children: [
       { title: "Pipeline", href: "/admin/pipeline" },
       { title: "Applications", href: "/admin/applications" },
       { title: "Registrations", href: "/admin/registrations" },
-      { title: "Enrolled", href: "/admin/enrolled" },
     ],
   },
-  // Finance — Stripe billing (per-family subscriptions, past-due
-  // filters, drill-through to the Billing card) and the Step Up For
-  // Students confirmation pipeline.
+  // Enrollment — everything about students once they're in: the
+  // roster, the retention tracker (enrolled vs unenrolled + reasons),
+  // and the money surfaces (Stripe billing + the Step Up For Students
+  // confirmation pipeline).
   {
-    title: "Finance",
+    title: "Enrollment",
     children: [
+      { title: "Enrolled", href: "/admin/enrolled" },
+      { title: "Retention", href: "/admin/retention" },
       { title: "Billing", href: "/admin/billing" },
       { title: "SUFS", href: "/admin/sufs" },
     ],
   },
-  // Parent Engagement — the two-way SMS inbox + group messaging, the
-  // school calendar (events + reminders), and the family
-  // volunteer-hours program. Unread texts badge on the group label as
-  // well as on Messages itself: the group is collapsed by default, so
-  // a badge only inside the dropdown would never be seen.
+  // Operations — school logistics: bus-stop rosters, the school
+  // calendar, device inventory, year configuration (tuition, fees,
+  // SUFS amounts, billing start date), and the school store.
   {
-    title: "Parent Engagement",
-    badge: "messages",
+    title: "Operations",
     children: [
-      { title: "Messages", href: "/admin/messages", badge: "messages" },
+      { title: "Bus Stops", href: "/admin/bus-stops" },
       { title: "Calendar", href: "/admin/school-calendar" },
-      { title: "Volunteer Hours", href: "/admin/volunteer-hours" },
-      { title: "Store", href: "/admin/store" },
       { title: "Laptops", href: "/admin/laptops" },
+      { title: "School Years", href: "/admin/school-years" },
+      { title: "Store", href: "/admin/store" },
     ],
   },
-  // Settings — year-scoped configuration (tuition, fees, SUFS award
-  // amounts, billing start date).
+  // Parents — the enrolled-family surfaces staff touch daily: the
+  // volunteer-hours program and the two-way SMS inbox. Unread texts
+  // badge on the group label as well as on Messages itself: the group
+  // is collapsed by default, so a badge only inside the dropdown
+  // would never be seen.
   {
-    title: "Settings",
-    children: [{ title: "School Years", href: "/admin/school-years" }],
+    title: "Parents",
+    badge: "messages",
+    children: [
+      { title: "Volunteer Hours", href: "/admin/volunteer-hours" },
+      // matchExact: without it this leaf also lights up on
+      // /admin/messages/recruitment (the Recruitment → Messages page),
+      // since active state is a startsWith match.
+      {
+        title: "Messages",
+        href: "/admin/messages",
+        badge: "messages",
+        matchExact: true,
+      },
+    ],
   },
 ];
 
