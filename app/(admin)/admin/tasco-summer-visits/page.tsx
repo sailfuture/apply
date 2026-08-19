@@ -390,7 +390,7 @@ export default function TascoSummerVisitsPage() {
                 placeholder="Search by student, school, center, or contact…"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="h-9 w-full sm:w-72"
+                className="h-9 w-full sm:min-w-0 sm:flex-1"
               />
               <Button
                 variant="outline"

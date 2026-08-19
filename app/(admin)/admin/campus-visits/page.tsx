@@ -371,7 +371,7 @@ export default function CampusVisitsPage() {
                 placeholder="Search by parent, email, student, or school…"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="h-9 w-full sm:w-72"
+                className="h-9 w-full sm:min-w-0 sm:flex-1"
               />
               <Button
                 variant="outline"

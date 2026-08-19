@@ -164,7 +164,8 @@ export default function AdminStorePage() {
       {/* ── Orders ── */}
       <Card className="overflow-hidden gap-0 py-0 bg-white">
         <CardHeader className="py-3 !pb-3 border-b">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+          {/* Title stacked over a full-width search row. */}
+          <div className="space-y-3">
             <div>
               <CardTitle className="text-base">
                 Orders{orders ? ` (${orders.length})` : ""}
@@ -188,7 +189,7 @@ export default function AdminStorePage() {
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search family, student, item, email…"
-                className="h-8 w-64 bg-white pl-8 text-sm"
+                className="h-8 w-full bg-white pl-8 text-sm"
               />
             </div>
           </div>
