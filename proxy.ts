@@ -15,6 +15,11 @@ const isPublicRoute = createRouteMatcher([
   // can't present a Clerk session; the route guards itself with the
   // CALENDAR_FEED_TOKEN query secret (404 without it).
   "/api/calendar-feed(.*)",
+  // Short pay links from billing SMS — a parent tapping the text is
+  // rarely signed in, and the destination (Stripe's hosted invoice
+  // page) is unauthenticated by design. Keyed by unguessable Stripe
+  // invoice ids; unknown ids bounce to the sign-in-gated tuition page.
+  "/pay(.*)",
 ]);
 
 /**

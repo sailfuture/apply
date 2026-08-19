@@ -195,9 +195,10 @@ export async function GET(req: NextRequest) {
       // Both dedupe per-invoice via the SMS log (see lib/sms/triggers),
       // so a daily run only texts each invoice once per state. No-ops
       // safely when Twilio isn't configured.
-      const billingFallbackUrl =
+      const appBaseUrl = (
         process.env.NEXT_PUBLIC_APP_URL ??
-        "https://apply.sailfutureacademy.org";
+        "https://apply.sailfutureacademy.org"
+      ).replace(/\/+$/, "");
       const txns = await xano.paymentTransactions.getAllByYear(year.id);
       for (const tx of txns) {
         const outstanding =
@@ -213,7 +214,14 @@ export async function GET(req: NextRequest) {
           invoiceId: tx.stripe_invoice_id,
           amountCents: outstanding,
           dueDate: tx.due_date,
-          payUrl: tx.hosted_invoice_url ?? billingFallbackUrl,
+          // Branded short link (`/pay/<invoice>` → 302 to the hosted
+          // invoice page) instead of the ~140-char invoice.stripe.com
+          // URL — half the length in the text, and it reads as us.
+          // Only when a hosted URL exists to land on; otherwise fall
+          // back to the app itself.
+          payUrl: tx.hosted_invoice_url
+            ? `${appBaseUrl}/pay/${tx.stripe_invoice_id}`
+            : appBaseUrl,
         };
 
         if (tx.due_date != null && tx.due_date < Date.now()) {
