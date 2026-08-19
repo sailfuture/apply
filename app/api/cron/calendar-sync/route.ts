@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireCronAuth } from "@/lib/cron-auth";
 import {
   isGoogleCalendarConfigured,
   listCalendarEvents,
@@ -45,13 +46,10 @@ const WINDOW_PAST_MS = 7 * 24 * 60 * 60 * 1000;
 const WINDOW_FUTURE_MS = 120 * 24 * 60 * 60 * 1000;
 
 export async function GET(req: NextRequest) {
-  const authHeader = req.headers.get("authorization") ?? "";
-  const expected = process.env.CRON_SECRET
-    ? `Bearer ${process.env.CRON_SECRET}`
-    : null;
-  if (expected && authHeader !== expected) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  // Fails closed in production when CRON_SECRET is unset (shared
+  // helper) — this route writes calendar rows.
+  const denied = requireCronAuth(req);
+  if (denied) return denied;
 
   if (!isGoogleCalendarConfigured()) {
     return NextResponse.json({ skipped: "google-calendar-not-configured" });

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireCronAuth } from "@/lib/cron-auth";
 import { xano } from "@/lib/xano";
 import {
   sendDraftReminderEmail,
@@ -82,13 +83,10 @@ const BACK_TO_SCHOOL_END_DAY = 17;
 const BILLING_UPCOMING_LEAD_DAYS = 3;
 
 export async function GET(req: NextRequest) {
-  const authHeader = req.headers.get("authorization") ?? "";
-  const expected = process.env.CRON_SECRET
-    ? `Bearer ${process.env.CRON_SECRET}`
-    : null;
-  if (expected && authHeader !== expected) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  // Fails closed in production when CRON_SECRET is unset — this route
+  // sends real emails/texts, so it must never be world-callable.
+  const denied = requireCronAuth(req);
+  if (denied) return denied;
 
   const result = {
     ok: true as boolean,

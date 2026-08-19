@@ -28,15 +28,27 @@ import {
 export async function POST(req: NextRequest) {
   const authToken = getTwilioAuthToken();
 
-  const form = await req.formData();
+  // Twilio always sends form-encoded bodies; anything else is not
+  // Twilio. Parse defensively so a malformed probe gets a 400 instead
+  // of an unhandled 500 (which Twilio-side would read as retryable).
+  let form: FormData;
+  try {
+    form = await req.formData();
+  } catch {
+    return new NextResponse("Expected form-encoded body", { status: 400 });
+  }
   const params: Record<string, string> = {};
   for (const [k, v] of form.entries()) {
     params[k] = typeof v === "string" ? v : "";
   }
 
-  // Reject anything not actually signed by Twilio. When the token isn't
-  // configured yet (local/preview) we skip verification so the endpoint
-  // can be exercised, but in production the token is always present.
+  // Reject anything not actually signed by Twilio. Fails CLOSED
+  // outside local dev: with the token unset this endpoint would accept
+  // forged inbound texts, forged STOP opt-outs, and forged delivery
+  // statuses from anyone — so a missing/rotated-away token must be a
+  // loud 503 (Twilio's error webhook alerting picks it up), never a
+  // silent unverified webhook. Local dev stays open so the endpoint
+  // can be exercised without real Twilio credentials.
   if (authToken) {
     const signature = req.headers.get("x-twilio-signature") ?? "";
     const url = webhookUrl(req);
@@ -44,6 +56,13 @@ export async function POST(req: NextRequest) {
     if (!valid) {
       return new NextResponse("Invalid Twilio signature", { status: 403 });
     }
+  } else if (process.env.NODE_ENV === "production") {
+    console.error(
+      "[twilio webhook] TWILIO_AUTH_TOKEN is not set — rejecting unverifiable webhook."
+    );
+    return new NextResponse("Webhook auth is not configured", {
+      status: 503,
+    });
   }
 
   const messageSid = params.MessageSid || params.SmsSid || "";
@@ -139,7 +158,11 @@ export async function POST(req: NextRequest) {
           direction: "inbound",
           to_number: params.To ?? "",
           from_number: from,
-          body,
+          // Trimmed — Xano trims text columns on save, and the create
+          // echo-guard compares what comes back. Raw carrier text
+          // routinely ends in a newline; storing it verbatim made the
+          // guard false-positive and drop the row (Aug 2026 incident).
+          body: body.trim() || "(no text)",
           status: "received",
           twilio_message_sid: messageSid || null,
           template: null,
