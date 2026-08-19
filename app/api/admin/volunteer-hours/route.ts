@@ -15,8 +15,10 @@ export interface VolunteerFamily {
   id: number;
   name: string;
   enrolled: boolean;
-  /** The family's students for the year, first names dot-joined
-   *  ("Jorden · Mia") — shown in the family pickers. */
+  /** The family's students for the year, FULL names dot-joined
+   *  ("Jorden Smith · Mia Smith") — shown in the family pickers and
+   *  matched by their search boxes, so searching a student's first
+   *  OR last name finds the family. */
   students: string;
 }
 
@@ -120,11 +122,15 @@ export async function GET(req: NextRequest) {
       srp: val(srpR),
     });
 
-    // Per-family student first names for the year — same application
+    // Per-family student FULL names for the year — same application
     // join the group-audience route uses (year-scoped, inactive apps
-    // skipped, deduped per student).
-    const studentFirst = new Map(
-      val(studentsR).map((s) => [s.id, (s.first_name ?? "").trim()])
+    // skipped, deduped per student). Full names (not just first) so
+    // the pickers' search matches a student's last name too.
+    const studentName = new Map(
+      val(studentsR).map((s) => [
+        s.id,
+        `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim(),
+      ])
     );
     const familyStudents = new Map<number, string[]>();
     for (const a of val(appsR)) {
@@ -133,7 +139,7 @@ export async function GET(req: NextRequest) {
       const fid = Number(a.registration_families_id);
       const sid = Number(a.registration_students_id);
       if (!fid || !sid) continue;
-      const name = studentFirst.get(sid) || "";
+      const name = studentName.get(sid) || "";
       if (!name) continue;
       const list = familyStudents.get(fid) ?? [];
       if (!list.includes(name)) list.push(name);
@@ -254,6 +260,11 @@ export async function POST(req: NextRequest) {
     const eventId =
       Number.isFinite(eventIdRaw) && eventIdRaw > 0 ? eventIdRaw : 0;
     const approved = body.approved !== false; // admin adds default approved
+    // Optional free-text note ("rising junior meeting w/ Mr. Angelo").
+    // Requires the `note` column on the Xano table — absent, Xano
+    // drops the input and entries save without it.
+    const note =
+      typeof body.note === "string" ? body.note.trim().slice(0, 500) : "";
 
     const now = Date.now();
     const created: XanoVolunteerHours[] = [];
@@ -270,6 +281,7 @@ export async function POST(req: NextRequest) {
             is_approved_admin: approved ? admin.name : "",
             edited_at: 0,
             school_calendar_events_id: eventId,
+            note,
           })
         )
       );

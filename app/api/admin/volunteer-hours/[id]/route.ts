@@ -70,6 +70,12 @@ export async function PATCH(
       patch.approved_time = approved ? Date.now() : 0;
       patch.is_approved_admin = approved ? admin.name : " ";
     }
+    if ("note" in body) {
+      const note =
+        typeof body.note === "string" ? body.note.trim().slice(0, 500) : "";
+      // " " sentinel clears — Xano edits drop empty-string inputs.
+      patch.note = note || " ";
+    }
 
     if (Object.keys(patch).length === 0) {
       return NextResponse.json(

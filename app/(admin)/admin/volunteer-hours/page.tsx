@@ -306,7 +306,12 @@ export default function AdminVolunteerHoursPage() {
 
   const sourceLabel = (e: XanoVolunteerHours): string => {
     const ev = eventById.get(Number(e.school_calendar_events_id));
-    return ev ? ev.title : "Manual";
+    // Manual entries surface their note as the source ("rising junior
+    // meeting w/ Mr. Angelo") — "Manual" only when no note was left.
+    // (" " is the cleared-note sentinel; trim() folds it to empty.)
+    const note = (e.note ?? "").trim();
+    if (ev) return note ? `${ev.title} — ${note}` : ev.title;
+    return note || "Manual";
   };
 
   return (
@@ -1076,6 +1081,7 @@ function EntryDialog({
   const [eventId, setEventId] = useState(
     String(existing?.school_calendar_events_id || 0)
   );
+  const [note, setNote] = useState((existing?.note ?? "").trim());
   const [approved, setApproved] = useState(
     existing ? existing.is_approved === true : true
   );
@@ -1112,6 +1118,7 @@ function EntryDialog({
               entry_date: date,
               school_calendar_events_id: Number(eventId) || 0,
               is_approved: approved,
+              note: note.trim(),
             }),
           })
         : await fetch("/api/admin/volunteer-hours", {
@@ -1124,6 +1131,7 @@ function EntryDialog({
               entryDate: date,
               eventId: Number(eventId) || 0,
               approved,
+              note: note.trim(),
             }),
           });
       if (!res.ok) {
@@ -1192,6 +1200,15 @@ function EntryDialog({
                 placeholder="2"
               />
             </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs">Note (optional)</Label>
+            <Input
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              maxLength={500}
+              placeholder="e.g. rising junior meeting w/ Mr. Angelo"
+            />
           </div>
           <div className="flex items-center justify-between gap-2">
             <Label htmlFor="entry-approved" className="text-xs font-normal">
@@ -1275,7 +1292,14 @@ function AttendeesDialog({
     const q = query.trim().toLowerCase();
     return families
       .filter((f) => f.enrolled && !creditedIds.has(f.id))
-      .filter((f) => !q || f.name.toLowerCase().includes(q));
+      .filter(
+        (f) =>
+          !q ||
+          f.name.toLowerCase().includes(q) ||
+          // Students match too — "searching for a student" should
+          // find their family, not just the family name.
+          f.students.toLowerCase().includes(q)
+      );
   }, [families, creditedIds, query]);
 
   function toggle(id: number) {
@@ -1522,6 +1546,7 @@ function BulkHoursDialog({
   const [date, setDate] = useState("");
   const [hours, setHours] = useState("");
   const [eventId, setEventId] = useState("0");
+  const [note, setNote] = useState("");
   const [approved, setApproved] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -1529,7 +1554,12 @@ function BulkHoursDialog({
     const q = query.trim().toLowerCase();
     return families
       .filter((f) => f.enrolled)
-      .filter((f) => !q || f.name.toLowerCase().includes(q));
+      .filter(
+        (f) =>
+          !q ||
+          f.name.toLowerCase().includes(q) ||
+          f.students.toLowerCase().includes(q)
+      );
   }, [families, query]);
 
   function toggle(id: number) {
@@ -1573,6 +1603,7 @@ function BulkHoursDialog({
           entryDate: date,
           eventId: Number(eventId) || 0,
           approved,
+          note: note.trim(),
         }),
       });
       if (!res.ok) {
@@ -1641,6 +1672,15 @@ function BulkHoursDialog({
                 placeholder="2"
               />
             </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs">Note (optional)</Label>
+            <Input
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              maxLength={500}
+              placeholder="e.g. rising junior meeting w/ Mr. Angelo"
+            />
           </div>
           <div className="flex items-center justify-between gap-2">
             <Label htmlFor="bulk-approved" className="text-xs font-normal">
