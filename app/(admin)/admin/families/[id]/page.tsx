@@ -7401,7 +7401,7 @@ function ExportPdfButton({
       onClick={handleExport}
       disabled={exporting}
       className="bg-white"
-      title="Download a multi-page PDF summary of this family's acceptance"
+      title="Download a printable PDF of this family's full scholarship application — financial aid details, document links, and award determination"
     >
       {exporting ? (
         <Loader2 className="size-3.5 mr-1.5 animate-spin" />
