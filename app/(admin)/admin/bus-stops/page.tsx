@@ -1,11 +1,20 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { toast } from "sonner";
-import { Bus, Clipboard, Download, MapPin } from "lucide-react";
+import {
+  Bus,
+  ChevronRight,
+  Clipboard,
+  Download,
+  MapPin,
+  MessageSquareText,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { FamilyProfileSheet } from "@/components/admin/family-profile-sheet";
+import { QuickTextDialog } from "@/components/admin/quick-text-dialog";
 import {
   Card,
   CardContent,
@@ -22,6 +31,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { adminFetcher } from "@/lib/admin-fetcher";
+import { cn } from "@/lib/utils";
 import { formatUSPhone } from "@/lib/phone";
 import type {
   BusStopGroup,
@@ -32,8 +42,10 @@ import type {
  * Operations → Bus Stops — one card per stop with its riders for the
  * year. Built for the morning-route workflow: each card copies as
  * TAB-separated rows (paste straight into Google Sheets and it lands
- * as real cells), and the whole page exports as CSV / copies in one
- * click with a Stop column added.
+ * as real cells), the whole page exports as CSV / copies in one
+ * click with a Stop column added, and each card (plus the toolbar)
+ * can text its families through the group blast route. Row click
+ * opens the family's contact sheet.
  */
 export default function BusStopsPage() {
   const searchParams = useSearchParams();
@@ -48,6 +60,31 @@ export default function BusStopsPage() {
     () => stops.filter((s) => s.riders.length > 0),
     [stops]
   );
+  // Distinct {id, name} pairs — the quick-text dialog needs the name
+  // as a fallback for families the messaging directory doesn't list.
+  const allFamilies = useMemo(() => {
+    const byId = new Map<number, string>();
+    for (const s of ridingStops) {
+      for (const r of s.riders) {
+        if (r.family_id > 0 && !byId.has(r.family_id)) {
+          byId.set(r.family_id, r.family_name);
+        }
+      }
+    }
+    return [...byId.entries()].map(([id, name]) => ({ id, name }));
+  }, [ridingStops]);
+
+  // Row click → the family's contact sheet (same one the inbox uses:
+  // every parent with tap-to-call/email, plus students).
+  const [profileFamilyId, setProfileFamilyId] = useState<number | null>(
+    null
+  );
+  // "Message" targets — one stop's families, or every riding family.
+  const [quickText, setQuickText] = useState<{
+    title: string;
+    description: string;
+    families: Array<{ id: number; name: string }>;
+  } | null>(null);
 
   if (!yearId) {
     return (
@@ -75,6 +112,22 @@ export default function BusStopsPage() {
             {data?.totalRiders ?? 0} rider
             {(data?.totalRiders ?? 0) === 1 ? "" : "s"}
           </span>
+          <Button
+            type="button"
+            size="sm"
+            disabled={allFamilies.length === 0}
+            onClick={() =>
+              setQuickText({
+                title: "Text all bus families",
+                description:
+                  "Every family with a bus rider this year, across all stops.",
+                families: allFamilies,
+              })
+            }
+          >
+            <MessageSquareText className="size-3.5 mr-1.5" aria-hidden="true" />
+            Message all
+          </Button>
           <Button
             type="button"
             variant="outline"
@@ -125,15 +178,69 @@ export default function BusStopsPage() {
       ) : (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           {stops.map((stop) => (
-            <StopCard key={stop.id ?? `orphan-${stop.name}`} stop={stop} />
+            <StopCard
+              key={stop.id ?? `orphan-${stop.name}`}
+              stop={stop}
+              onMessage={() => {
+                const byId = new Map<number, string>();
+                for (const r of stop.riders) {
+                  if (r.family_id > 0 && !byId.has(r.family_id)) {
+                    byId.set(r.family_id, r.family_name);
+                  }
+                }
+                setQuickText({
+                  title: `Text families — ${stop.name}`,
+                  description: `Families with a rider at ${stop.name}.`,
+                  families: [...byId.entries()].map(([id, name]) => ({
+                    id,
+                    name,
+                  })),
+                });
+              }}
+              onOpenFamily={setProfileFamilyId}
+            />
           ))}
         </div>
       )}
+
+      {profileFamilyId != null ? (
+        <FamilyProfileSheet
+          familyId={profileFamilyId}
+          open
+          onOpenChange={(o) => {
+            if (!o) setProfileFamilyId(null);
+          }}
+        />
+      ) : null}
+
+      {/* Keyed by title so switching stops starts a fresh draft +
+          selection (and a fresh blast id). */}
+      {quickText && yearId ? (
+        <QuickTextDialog
+          key={quickText.title}
+          yearId={Number(yearId)}
+          title={quickText.title}
+          description={quickText.description}
+          families={quickText.families}
+          onClose={() => setQuickText(null)}
+        />
+      ) : null}
     </div>
   );
 }
 
-function StopCard({ stop }: { stop: BusStopGroup }) {
+function StopCard({
+  stop,
+  onMessage,
+  onOpenFamily,
+}: {
+  stop: BusStopGroup;
+  /** "Message" click — opens the quick-text dialog for this stop's
+   *  families. */
+  onMessage: () => void;
+  /** Row click — opens the family's contact sheet. */
+  onOpenFamily: (familyId: number) => void;
+}) {
   const times = [
     stop.pick_up_time ? `Pickup ${formatTime(stop.pick_up_time)}` : null,
     stop.drop_off_time
@@ -142,18 +249,13 @@ function StopCard({ stop }: { stop: BusStopGroup }) {
   ]
     .filter(Boolean)
     .join(" · ");
+  const familyCount = new Set(stop.riders.map((r) => r.family_id)).size;
   return (
     <Card className="overflow-hidden gap-0 py-0 bg-white">
       <CardHeader className="py-3 !pb-3 border-b">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <CardTitle className="flex items-center gap-1.5 text-base">
-              <Bus
-                className="size-4 shrink-0 text-muted-foreground"
-                aria-hidden="true"
-              />
-              <span className="truncate">{stop.name}</span>
-            </CardTitle>
+            <CardTitle className="truncate text-base">{stop.name}</CardTitle>
             {times ? (
               <p className="mt-0.5 text-xs text-muted-foreground">
                 {times}
@@ -170,6 +272,17 @@ function StopCard({ stop }: { stop: BusStopGroup }) {
             <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium tabular-nums">
               {stop.riders.length}
             </span>
+            <Button
+              type="button"
+              size="sm"
+              className="h-7 px-2 text-xs"
+              disabled={familyCount === 0}
+              onClick={onMessage}
+              title={`Text the ${familyCount} famil${familyCount === 1 ? "y" : "ies"} at this stop`}
+            >
+              <MessageSquareText className="size-3 mr-1" aria-hidden="true" />
+              Message
+            </Button>
             <Button
               type="button"
               variant="outline"
@@ -194,41 +307,67 @@ function StopCard({ stop }: { stop: BusStopGroup }) {
           <Table className="table-fixed">
             <TableHeader>
               <TableRow className="hover:bg-transparent">
-                <TableHead className="text-[10px] text-muted-foreground w-[30%]">
+                <TableHead className="text-[10px] text-muted-foreground w-[40%]">
                   Student
                 </TableHead>
-                <TableHead className="text-[10px] text-muted-foreground w-[12%]">
+                <TableHead className="text-[10px] text-muted-foreground w-[16%]">
                   Grade
                 </TableHead>
-                <TableHead className="text-[10px] text-muted-foreground w-[28%]">
+                <TableHead className="text-[10px] text-muted-foreground w-[38%]">
                   Family
                 </TableHead>
-                <TableHead className="text-[10px] text-muted-foreground w-[30%]">
-                  Parent
-                </TableHead>
+                <TableHead className="w-[6%]" />
               </TableRow>
             </TableHeader>
             <TableBody>
-              {stop.riders.map((r) => (
-                <TableRow key={r.student_id} className="hover:bg-muted/40">
-                  <TableCell className="text-sm font-medium">
-                    <span className="block truncate">{r.student_name}</span>
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {r.grade || "—"}
-                  </TableCell>
-                  <TableCell className="text-sm">
-                    <span className="block truncate">{r.family_name}</span>
-                  </TableCell>
-                  <TableCell className="text-xs text-muted-foreground">
-                    <span className="block truncate">
-                      {[r.parent_name, formatUSPhone(r.parent_phone)]
-                        .filter(Boolean)
-                        .join(" · ") || "—"}
-                    </span>
-                  </TableCell>
-                </TableRow>
-              ))}
+              {/* Row click = the family's contact sheet (parents with
+                  tap-to-call/email, students) — the Parent column
+                  moved there so the roster stays scannable. The
+                  chevron is a real button so keyboard users can reach
+                  the sheet too (the row onClick is mouse convenience);
+                  orphaned rows (no family FK) get neither affordance. */}
+              {stop.riders.map((r) => {
+                const clickable = r.family_id > 0;
+                return (
+                  <TableRow
+                    key={r.student_id}
+                    onClick={() =>
+                      clickable && onOpenFamily(r.family_id)
+                    }
+                    className={cn(clickable && "cursor-pointer")}
+                  >
+                    <TableCell className="text-sm font-medium">
+                      <span className="block truncate">
+                        {r.student_name}
+                      </span>
+                    </TableCell>
+                    <TableCell className="text-sm text-muted-foreground">
+                      {r.grade || "—"}
+                    </TableCell>
+                    <TableCell className="text-sm">
+                      <span className="block truncate">{r.family_name}</span>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {clickable ? (
+                        <button
+                          type="button"
+                          aria-label={`Open ${r.family_name} contact info`}
+                          className="rounded p-1 align-middle text-muted-foreground hover:bg-muted hover:text-foreground"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onOpenFamily(r.family_id);
+                          }}
+                        >
+                          <ChevronRight
+                            className="size-4"
+                            aria-hidden="true"
+                          />
+                        </button>
+                      ) : null}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         )}
