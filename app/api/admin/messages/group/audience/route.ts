@@ -111,6 +111,7 @@ export async function GET(req: NextRequest) {
         grade: number | null;
         gradeRaw: string;
         crew: string;
+        busStop: string;
       }>
     >();
     for (const a of apps) {
@@ -130,6 +131,12 @@ export async function GET(req: NextRequest) {
           grade: parseGrade(gradeRaw),
           gradeRaw,
           crew: packetCrewByStudent.get(sid) ?? "",
+          // Bus election lives on the application row; the stop is
+          // stored by NAME. Only bus riders carry one.
+          busStop:
+            a.is_bus_transportation === true
+              ? (a.bus_stop ?? "").trim()
+              : "",
         });
       }
       familyStudents.set(fid, list);
@@ -193,6 +200,9 @@ export async function GET(req: NextRequest) {
           ),
         ],
         crews: [...new Set(kids.map((k) => k.crew).filter(Boolean))],
+        busStops: [
+          ...new Set(kids.map((k) => k.busStop).filter(Boolean)),
+        ],
         phone: formatUSPhone(parent?.phone ?? "") || "",
         hasPhone: Boolean(e164),
         optedOut,
@@ -434,6 +444,12 @@ export interface GroupContact {
    *  across the family's packet rows for the year. Drives the
    *  composer's crew filter; absent/empty on lead rows. */
   crews?: string[];
+  /** Families only — distinct bus-stop names across the family's
+   *  bus-riding students for the year (application rows with
+   *  `is_bus_transportation`). Drives the enrolled composer's
+   *  bus-stop filter; absent/empty on lead rows and non-bus
+   *  families. */
+  busStops?: string[];
   /** Display-formatted phone ("(727) 555-0143"); empty when none on
    *  file. Shown on every recipient row. */
   phone: string;

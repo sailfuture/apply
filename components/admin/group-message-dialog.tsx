@@ -158,6 +158,12 @@ function matchesStageAlias(stage: GroupStage, q: string): boolean {
 export const FIRST_NAME_TOKEN = "{{first_name}}";
 const FIRST_NAME_RE = /\{\{\s*first_name\s*\}\}/i;
 
+/** Which slice of the directory a composer instance works over —
+ *  the enrolled messages page and the recruitment messages page each
+ *  mount a scoped composer so staff can't accidentally blast across
+ *  the boundary. "all" preserves the original everything view. */
+export type GroupScope = "all" | "enrolled" | "recruitment";
+
 /**
  * Group SMS composer — audience built by hand instead of coarse stage
  * filters. The full contact directory for the year loads once
@@ -168,8 +174,20 @@ const FIRST_NAME_RE = /\{\{\s*first_name\s*\}\}/i;
  * outstanding balance, and check off recipients — or select-all the
  * current view. Send posts the explicit contact list; opted-out and
  * no-number contacts can't be selected at all.
+ *
+ * Scoped variants: `scope="enrolled"` narrows to enrolled families
+ * and swaps the lead-oriented filters (stage, rating) for the
+ * enrolled ones (crew, bus stop, grade, balance); `scope="recruitment"`
+ * is the complement — every not-yet-enrolled contact, with stage and
+ * rating filters and no crew/bus rows.
  */
-export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
+export function GroupMessageDialog({
+  onSent,
+  scope = "all",
+}: {
+  onSent?: () => void;
+  scope?: GroupScope;
+}) {
   const [open, setOpen] = useState(false);
   const { data: yearsData } = useSWR(
     open ? "/api/admin/school-years" : null,
@@ -189,6 +207,9 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
   // appear without a code change; the row hides when no family has a
   // crew assignment for the year.
   const [crewFilter, setCrewFilter] = useState<string[]>([]);
+  // Bus-stop chips — narrow to families with a bus rider at the
+  // selected stop(s). Same derive-from-audience pattern as crews.
+  const [busStopFilter, setBusStopFilter] = useState<string[]>([]);
   const [onlyOutstanding, setOnlyOutstanding] = useState(false);
   // Minimum star rating (0 = any). Ratings live on LEAD rows (inquiry
   // / camp / visit / TASCO), so any minimum > 0 narrows to rated leads.
@@ -262,28 +283,49 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
         : null,
       adminFetcher
     );
-  const contacts = useMemo<GroupContact[]>(
-    () => audienceData?.contacts ?? [],
-    [audienceData]
-  );
+  const contacts = useMemo<GroupContact[]>(() => {
+    const all = audienceData?.contacts ?? [];
+    // Scope boundary: enrolled = enrolled families only; recruitment =
+    // everyone who ISN'T an enrolled family (leads + families still
+    // applying/registering). "all" keeps the original combined view.
+    if (scope === "enrolled") {
+      return all.filter(
+        (c) => c.type === "family" && c.stage === "enrolled"
+      );
+    }
+    if (scope === "recruitment") {
+      return all.filter(
+        (c) => !(c.type === "family" && c.stage === "enrolled")
+      );
+    }
+    return all;
+  }, [audienceData, scope]);
   const contactByKey = useMemo(
     () => new Map(contacts.map((c) => [c.key, c])),
     [contacts]
   );
 
   // Year switch invalidates the audience — drop any selection made
-  // against the previous year's list (and any crew narrowing, since
-  // crews are per-year packet assignments).
+  // against the previous year's list (and any crew/bus narrowing,
+  // since both are per-year assignments).
   function changeYear(v: string) {
     setYearId(v);
     setSelected(new Set());
     setCrewFilter([]);
+    setBusStopFilter([]);
   }
 
   const crewOptions = useMemo(
     () =>
       [...new Set(contacts.flatMap((c) => c.crews ?? []))].sort((a, b) =>
         a.localeCompare(b)
+      ),
+    [contacts]
+  );
+  const busStopOptions = useMemo(
+    () =>
+      [...new Set(contacts.flatMap((c) => c.busStops ?? []))].sort(
+        (a, b) => a.localeCompare(b)
       ),
     [contacts]
   );
@@ -306,6 +348,12 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
       ) {
         return false;
       }
+      if (
+        busStopFilter.length > 0 &&
+        !(c.busStops ?? []).some((b) => busStopFilter.includes(b))
+      ) {
+        return false;
+      }
       if (onlyOutstanding && !c.outstanding) return false;
       if (minRating > 0 && (c.rating ?? 0) < minRating) return false;
       if (!q) return true;
@@ -324,6 +372,7 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
     stageFilter,
     gradeFilter,
     crewFilter,
+    busStopFilter,
     onlyOutstanding,
     minRating,
   ]);
@@ -468,7 +517,13 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
             list shows a real page of names. */}
         <DialogContent className="flex h-[92vh] max-h-[1040px] flex-col gap-4 sm:max-w-6xl">
           <DialogHeader className="shrink-0">
-            <DialogTitle>New group message</DialogTitle>
+            <DialogTitle>
+              {scope === "enrolled"
+                ? "New group message — enrolled families"
+                : scope === "recruitment"
+                  ? "New group message — recruitment"
+                  : "New group message"}
+            </DialogTitle>
             <DialogDescription>
               Search and check off recipients — each contact appears once,
               at the furthest stage they&rsquo;ve reached. Opted-out
@@ -506,12 +561,18 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
             {/* Stage narrowing chips — camp / inquiries / applying /
                 registration / enrolled. Pair with "Select all shown"
                 for one-click "text everyone at this stage" blasts.
-                Empty = every stage. */}
+                Empty = every stage. Hidden on the enrolled-scoped
+                composer (everyone there IS enrolled); the recruitment
+                scope drops the Enrolled chip (its audience can't
+                contain any). */}
+            {scope !== "enrolled" ? (
             <div className="flex flex-wrap items-center gap-1.5">
               <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
                 Stage
               </span>
-              {STAGE_FILTERS.map((s) => {
+              {STAGE_FILTERS.filter(
+                (s) => scope !== "recruitment" || s.value !== "enrolled"
+              ).map((s) => {
                 const on = stageFilter.includes(s.value);
                 return (
                   <button
@@ -537,6 +598,7 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
                 );
               })}
             </div>
+            ) : null}
 
             {/* Grade + balance narrowing chips */}
             <div className="flex flex-wrap items-center gap-1.5">
@@ -569,8 +631,10 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
                 );
               })}
               {/* Crew chips — packet crew assignments for the year.
-                  Hidden entirely until at least one family has one. */}
-              {crewOptions.length > 0 ? (
+                  Hidden entirely until at least one family has one,
+                  and on the recruitment scope (crews belong to
+                  enrolled life, not the funnel). */}
+              {scope !== "recruitment" && crewOptions.length > 0 ? (
                 <>
                   <span className="mx-1 h-4 w-px bg-border" aria-hidden />
                   <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
@@ -605,23 +669,67 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
                   })}
                 </>
               ) : null}
-              <span className="mx-1 h-4 w-px bg-border" aria-hidden />
-              <button
-                type="button"
-                aria-pressed={onlyOutstanding}
-                onClick={() => setOnlyOutstanding((v) => !v)}
-                className={cn(
-                  "rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors",
-                  onlyOutstanding
-                    ? "border-foreground bg-foreground text-background"
-                    : "border-border bg-white text-muted-foreground hover:border-foreground/40 hover:text-foreground"
-                )}
-              >
-                Outstanding balance
-              </button>
+              {/* Bus-stop chips — families with a bus rider at the
+                  selected stop(s). Same derive-from-audience pattern
+                  as crews; hidden until a family has a bus election,
+                  and on the recruitment scope. */}
+              {scope !== "recruitment" && busStopOptions.length > 0 ? (
+                <>
+                  <span className="mx-1 h-4 w-px bg-border" aria-hidden />
+                  <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                    Bus stop
+                  </span>
+                  {busStopOptions.map((stop) => {
+                    const on = busStopFilter.includes(stop);
+                    return (
+                      <button
+                        key={stop}
+                        type="button"
+                        aria-pressed={on}
+                        onClick={() =>
+                          setBusStopFilter((prev) =>
+                            prev.includes(stop)
+                              ? prev.filter((x) => x !== stop)
+                              : [...prev, stop]
+                          )
+                        }
+                        className={cn(
+                          "rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors",
+                          on
+                            ? "border-foreground bg-foreground text-background"
+                            : "border-border bg-white text-muted-foreground hover:border-foreground/40 hover:text-foreground"
+                        )}
+                      >
+                        {stop}
+                      </button>
+                    );
+                  })}
+                </>
+              ) : null}
+              {scope !== "recruitment" ? (
+                <>
+                  <span className="mx-1 h-4 w-px bg-border" aria-hidden />
+                  <button
+                    type="button"
+                    aria-pressed={onlyOutstanding}
+                    onClick={() => setOnlyOutstanding((v) => !v)}
+                    className={cn(
+                      "rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors",
+                      onlyOutstanding
+                        ? "border-foreground bg-foreground text-background"
+                        : "border-border bg-white text-muted-foreground hover:border-foreground/40 hover:text-foreground"
+                    )}
+                  >
+                    Outstanding balance
+                  </button>
+                </>
+              ) : null}
               {/* Minimum star rating — narrows to leads rated at least
                   N stars (ratings live on inquiry/camp/visit/TASCO
-                  rows). Clicking the active chip clears it. */}
+                  rows). Clicking the active chip clears it. Hidden on
+                  the enrolled scope — families carry no rating. */}
+              {scope !== "enrolled" ? (
+                <>
               <span className="mx-1 h-4 w-px bg-border" aria-hidden />
               <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
                 Rating
@@ -653,6 +761,8 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
                   </button>
                 );
               })}
+                </>
+              ) : null}
             </div>
 
             {/* Recipient list — flexes to fill the fixed dialog frame,
