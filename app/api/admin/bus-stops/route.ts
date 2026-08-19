@@ -121,13 +121,18 @@ export async function GET(req: NextRequest) {
       list.sort((a, b) => a.student_name.localeCompare(b.student_name));
     }
 
-    // Catalog stops first (in name order), then any orphaned stop
-    // names riders still carry.
+    // Catalog stops first, in ROUTE order — pickup time ascending
+    // (user request: that's how staff run the morning loop). Unset
+    // times sink to the bottom; names break ties. Orphaned stop
+    // names riders still carry follow after, alphabetically.
     const catalogNames = new Set<string>();
     const out: BusStopGroup[] = [];
-    for (const s of [...stops].sort((a, b) =>
-      (a.name ?? "").localeCompare(b.name ?? "")
-    )) {
+    for (const s of [...stops].sort((a, b) => {
+      const at = a.pick_up_time || Number.MAX_SAFE_INTEGER;
+      const bt = b.pick_up_time || Number.MAX_SAFE_INTEGER;
+      if (at !== bt) return at - bt;
+      return (a.name ?? "").localeCompare(b.name ?? "");
+    })) {
       const name = (s.name ?? "").trim() || `Stop #${s.id}`;
       // One card per trimmed NAME — duplicate catalog rows would
       // otherwise each render the same rider list and double every
