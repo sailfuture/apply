@@ -10,7 +10,6 @@ import {
   Banknote,
   CheckCircle2,
   Circle,
-  Copy,
   ExternalLink,
   FileText,
   Loader2,
@@ -32,6 +31,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -367,6 +373,12 @@ function ScheduleCard({
   );
 }
 
+/** Row-action pill — inline badge-style button/link (rounded, bordered,
+ *  hover wash + pointer) matching the table's pill vocabulary, instead
+ *  of underlined text links. */
+const ACTION_BADGE =
+  "inline-flex cursor-pointer items-center gap-1 rounded-full border bg-white px-2 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground";
+
 function ScheduleRow({
   slot,
   onMarkPaid,
@@ -407,22 +419,21 @@ function ScheduleRow({
         {amountPaid != null && amountPaid > 0 ? formatUsd(amountPaid) : "—"}
       </TableCell>
       <TableCell>
-        <StatusPill status={slot.status} />
-        {inv?.paymentMethod && slot.status === "paid" ? (
-          // How an out-of-band payment arrived ("Check — #1042"),
-          // stamped by the mark-paid flow. Gated on paid: the label
-          // can't be cleared by syncs (they omit the key), so if the
-          // payment record is later voided in the Stripe Dashboard
-          // and the invoice reopens, an unguarded label would show
-          // "via Check" under an Open pill forever.
-          <span className="mt-0.5 block text-[10px] text-muted-foreground">
-            via {inv.paymentMethod}
-          </span>
-        ) : null}
+        {/* The out-of-band method rides INSIDE the pill ("Complete ·
+            via Check") rather than on a second line; the full value
+            with the check # sits in the tooltip. Gated on paid: the
+            label can't be cleared by syncs (they omit the key), so if
+            the payment record is voided in the Stripe Dashboard and
+            the invoice reopens, an unguarded label would mislabel an
+            Open pill. */}
+        <StatusPill
+          status={slot.status}
+          paymentMethod={slot.status === "paid" ? inv?.paymentMethod : null}
+        />
       </TableCell>
       <TableCell className="text-right">
         {inv ? (
-          <span className="inline-flex items-center gap-2.5">
+          <span className="inline-flex items-center gap-1.5">
             {canMarkPaid ? (
               // Record a payment that happened OUTSIDE Stripe (check
               // or cash) — opens the confirm dialog; the API marks
@@ -430,7 +441,7 @@ function ScheduleRow({
               <button
                 type="button"
                 onClick={() => onMarkPaid(slot)}
-                className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                className={ACTION_BADGE}
                 title="Record a check or cash payment — marks the Stripe invoice paid without charging anyone"
               >
                 <Banknote className="size-3" aria-hidden="true" />
@@ -438,37 +449,25 @@ function ScheduleRow({
               </button>
             ) : null}
             {inv.hostedInvoiceUrl ? (
-              // Copy + View pair. The hosted invoice URL is Stripe's
-              // unauthenticated pay-this-exact-invoice page — anyone
-              // holding the link can view and pay it, so Copy is the
-              // assisted-payment workflow: text/email it to the
-              // family, or open it yourself and enter their card.
-              <>
-                <button
-                  type="button"
-                  onClick={() => copyInvoiceLink(inv.hostedInvoiceUrl!)}
-                  className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
-                  title="Copy the payment link — anyone with it can view and pay this invoice, no login needed"
-                >
-                  <Copy className="size-3" aria-hidden="true" />
-                  Copy link
-                </button>
-                <a
-                  href={inv.hostedInvoiceUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
-                >
-                  <ExternalLink className="size-3" aria-hidden="true" />
-                  View
-                </a>
-              </>
+              // Stripe's unauthenticated pay-this-exact-invoice page —
+              // anyone holding the link can view and pay it, so admin
+              // can open it and enter a card on the family's behalf.
+              <a
+                href={inv.hostedInvoiceUrl}
+                target="_blank"
+                rel="noreferrer"
+                className={ACTION_BADGE}
+                title="Open the payment page — anyone with the link can view and pay, no login needed"
+              >
+                <ExternalLink className="size-3" aria-hidden="true" />
+                View
+              </a>
             ) : inv.invoicePdfUrl ? (
               <a
                 href={inv.invoicePdfUrl}
                 target="_blank"
                 rel="noreferrer"
-                className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                className={ACTION_BADGE}
               >
                 <FileText className="size-3" aria-hidden="true" />
                 PDF
@@ -483,7 +482,16 @@ function ScheduleRow({
   );
 }
 
-function StatusPill({ status }: { status: ScheduleSlot["status"] }) {
+function StatusPill({
+  status,
+  paymentMethod,
+}: {
+  status: ScheduleSlot["status"];
+  /** Out-of-band collection method ("Check — #1042") — the method
+   *  word renders inside the pill ("· via Check"); the full value,
+   *  reference number included, lives in the tooltip. */
+  paymentMethod?: string | null;
+}) {
   const config = (() => {
     switch (status) {
       case "paid":
@@ -528,8 +536,10 @@ function StatusPill({ status }: { status: ScheduleSlot["status"] }) {
     }
   })();
   const { label, tone, Icon } = config;
+  const methodWord = paymentMethod ? paymentMethod.split(" — ")[0] : null;
   return (
     <span
+      title={paymentMethod ?? undefined}
       className={cn(
         "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ring-1",
         tone
@@ -537,6 +547,9 @@ function StatusPill({ status }: { status: ScheduleSlot["status"] }) {
     >
       <Icon className="size-2.5" aria-hidden="true" />
       {label}
+      {methodWord ? (
+        <span className="font-normal opacity-80">· via {methodWord}</span>
+      ) : null}
     </span>
   );
 }
@@ -630,34 +643,28 @@ function MarkPaidDialog({
         </DialogHeader>
         <div className="space-y-3">
           <div>
-            <p
-              id="mark-paid-method-label"
-              className="text-xs font-medium text-muted-foreground mb-1.5"
+            <label
+              htmlFor="mark-paid-method"
+              className="block text-xs font-medium text-muted-foreground mb-1.5"
             >
               Payment type
-            </p>
-            {/* aria-pressed carries the selection for assistive tech —
-                the default/outline variants only differ visually. */}
-            <div
-              role="group"
-              aria-labelledby="mark-paid-method-label"
-              className="flex gap-2"
+            </label>
+            <Select
+              value={method}
+              onValueChange={(v) => setMethod(v as PaymentMethodKey)}
+              disabled={saving}
             >
-              {PAYMENT_METHODS.map((m) => (
-                <Button
-                  key={m.key}
-                  type="button"
-                  size="sm"
-                  variant={method === m.key ? "default" : "outline"}
-                  className={method === m.key ? "" : "bg-white"}
-                  aria-pressed={method === m.key}
-                  disabled={saving}
-                  onClick={() => setMethod(m.key)}
-                >
-                  {m.label}
-                </Button>
-              ))}
-            </div>
+              <SelectTrigger id="mark-paid-method" className="w-full bg-white">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {PAYMENT_METHODS.map((m) => (
+                  <SelectItem key={m.key} value={m.key}>
+                    {m.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <div>
             <label
@@ -698,23 +705,6 @@ function MarkPaidDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  );
-}
-
-function copyInvoiceLink(url: string): void {
-  // navigator.clipboard is secure-context-only — undefined over plain
-  // http (e.g. a LAN-IP dev preview), where the member access would
-  // throw synchronously and skip the rejection handler entirely.
-  if (!navigator.clipboard?.writeText) {
-    toast.error("Couldn't copy — open View and copy the URL instead.");
-    return;
-  }
-  void navigator.clipboard.writeText(url).then(
-    () =>
-      toast.success(
-        "Invoice link copied. Anyone with the link can view and pay — no login needed."
-      ),
-    () => toast.error("Couldn't copy — open View and copy the URL instead.")
   );
 }
 
