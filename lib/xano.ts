@@ -1180,9 +1180,16 @@ export interface XanoBusStop {
   id: number;
   created_at: number;
   name: string;
+  /** Clock time encoded as H*100 + MM on a 24-hour clock — 810 is
+   *  8:10 AM, 1445 is 2:45 PM. NOT a timestamp (a formatter that
+   *  treats these as unix-ms renders every stop as the epoch's local
+   *  time). 0 = unset. */
   pick_up_time: number;
   drop_off_time: number;
   address: string;
+  /** Year link on the catalog row. Optional: legacy rows/endpoints
+   *  may omit it, and the input may not exist on every endpoint. */
+  registration_school_years_id?: number | null;
 }
 
 /**
@@ -4095,6 +4102,31 @@ export const xano = {
     async getAll(): Promise<XanoBusStop[]> {
       const res = await fetch(`${getBaseUrl()}/registration_bus`, {
         cache: "no-store",
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async create(
+      data: Omit<XanoBusStop, "id" | "created_at">
+    ): Promise<XanoBusStop> {
+      const res = await fetch(`${getBaseUrl()}/registration_bus`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async update(
+      id: number,
+      data: Partial<Omit<XanoBusStop, "id" | "created_at">>
+    ): Promise<XanoBusStop> {
+      const res = await fetch(`${getBaseUrl()}/registration_bus/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
       return res.json();

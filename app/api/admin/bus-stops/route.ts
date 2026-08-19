@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
+import { parseStopBody } from "@/lib/bus-stops";
 
 /**
  * Bus-stop rosters for the Operations → Bus Stops page.
@@ -26,13 +27,34 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const [stops, apps, students, families, parents] = await Promise.all([
-      xano.busStops.getAll().catch(() => []),
-      xano.applications.getAll().catch(() => []),
-      xano.students.getAll().catch(() => []),
-      xano.families.getAll().catch(() => []),
-      xano.parents.getAll().catch(() => []),
-    ]);
+    const [stops, apps, students, families, parents, fap, srp] =
+      await Promise.all([
+        xano.busStops.getAll().catch(() => []),
+        xano.applications.getAll().catch(() => []),
+        xano.students.getAll().catch(() => []),
+        xano.families.getAll().catch(() => []),
+        xano.parents.getAll().catch(() => []),
+        xano.familyApplicationProgress.getByYear(yearId).catch(() => []),
+        xano.studentRegistrationProgress.getByYear(yearId).catch(() => []),
+      ]);
+
+    // Year-archived families are OFF the roster (user rule: archived
+    // shouldn't appear anywhere) — same definition the pipeline uses:
+    // apply-flow `is_archived` OR registration-flow `isArchived`. A
+    // set-aside family can still hold an active application row with
+    // a bus election (the Sanford case), which is exactly the leak
+    // this closes; archived STUDENTS are excluded further down.
+    const archivedFamilies = new Set<number>();
+    for (const p of fap) {
+      if (p.is_archived === true) {
+        archivedFamilies.add(Number(p.registration_families_id));
+      }
+    }
+    for (const p of srp) {
+      if (p.isArchived === true) {
+        archivedFamilies.add(Number(p.registration_families_id));
+      }
+    }
 
     const studentById = new Map(students.map((s) => [s.id, s]));
     const familyById = new Map(families.map((f) => [f.id, f]));
@@ -72,6 +94,9 @@ export async function GET(req: NextRequest) {
       if (a.is_bus_transportation !== true) continue;
       const student = studentById.get(sid);
       if (!student || student.isArchived === true) continue;
+      if (archivedFamilies.has(Number(a.registration_families_id))) {
+        continue;
+      }
       const fid = Number(a.registration_families_id) || 0;
       const parent = primaryParent(fid);
       const stopName = (a.bus_stop ?? "").trim() || "No stop selected";
@@ -144,6 +169,60 @@ export async function GET(req: NextRequest) {
   }
 }
 
+/**
+ * Create a catalog stop.
+ *
+ *   POST /api/admin/bus-stops
+ *   body: { name, address?, pick_up_time?, drop_off_time?, yearId? }
+ *
+ * Times arrive as H*100+MM clock numbers (matching the column's
+ * encoding); `yearId` rides along as the catalog row's year link
+ * when given. Editing goes through PATCH /api/admin/bus-stops/[id].
+ */
+export async function POST(req: NextRequest) {
+  try {
+    await requireAdmin();
+    const body = await req.json().catch(() => null);
+    const parsed = parseStopBody(body);
+    if ("error" in parsed) {
+      return NextResponse.json({ error: parsed.error }, { status: 400 });
+    }
+    if (!parsed.name) {
+      return NextResponse.json(
+        { error: "name is required" },
+        { status: 400 }
+      );
+    }
+    // Duplicate-name guard: the roster keys stops by trimmed name and
+    // parent pickers list every row verbatim, so a same-named second
+    // row would be invisible/uneditable here and show twice to
+    // parents.
+    const existing = await xano.busStops.getAll().catch(() => []);
+    const nameKey = parsed.name.toLowerCase();
+    if (
+      existing.some((s) => (s.name ?? "").trim().toLowerCase() === nameKey)
+    ) {
+      return NextResponse.json(
+        { error: `A stop named "${parsed.name}" already exists — edit it instead.` },
+        { status: 400 }
+      );
+    }
+    const yearId = Number((body as { yearId?: unknown })?.yearId);
+    const stop = await xano.busStops.create({
+      name: parsed.name,
+      address: parsed.address ?? "",
+      pick_up_time: parsed.pick_up_time ?? 0,
+      drop_off_time: parsed.drop_off_time ?? 0,
+      ...(Number.isFinite(yearId) && yearId > 0
+        ? { registration_school_years_id: yearId }
+        : {}),
+    });
+    return NextResponse.json({ ok: true, stop });
+  } catch (err) {
+    return handleAdminError(err);
+  }
+}
+
 export interface BusStopRider {
   student_id: number;
   student_name: string;
@@ -159,7 +238,8 @@ export interface BusStopGroup {
    *  stop name no longer matches the catalog, or no stop picked). */
   id: number | null;
   name: string;
-  /** Unix ms, null when unset (the calendar 0-sentinel convention). */
+  /** Clock time as H*100+MM on a 24-hour clock (810 = 8:10 AM,
+   *  1445 = 2:45 PM); null when unset. NOT a timestamp. */
   pick_up_time: number | null;
   drop_off_time: number | null;
   address: string;

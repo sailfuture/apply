@@ -9,10 +9,22 @@ import {
   ChevronRight,
   Clipboard,
   Download,
+  Loader2,
   MapPin,
   MessageSquareText,
+  Pencil,
+  Plus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { FamilyProfileSheet } from "@/components/admin/family-profile-sheet";
 import { QuickTextDialog } from "@/components/admin/quick-text-dialog";
 import {
@@ -51,7 +63,7 @@ export default function BusStopsPage() {
   const searchParams = useSearchParams();
   const yearId = searchParams.get("yearId");
 
-  const { data, isLoading, error } = useSWR<BusStopsResponse>(
+  const { data, isLoading, error, mutate } = useSWR<BusStopsResponse>(
     yearId ? `/api/admin/bus-stops?yearId=${yearId}` : null,
     adminFetcher
   );
@@ -85,6 +97,10 @@ export default function BusStopsPage() {
     description: string;
     families: Array<{ id: number; name: string }>;
   } | null>(null);
+  // Add/edit stop dialog — `{ stop: null }` = creating a new stop.
+  const [stopDialog, setStopDialog] = useState<{
+    stop: BusStopGroup | null;
+  } | null>(null);
 
   if (!yearId) {
     return (
@@ -114,7 +130,19 @@ export default function BusStopsPage() {
           </span>
           <Button
             type="button"
+            variant="outline"
             size="sm"
+            className="bg-white"
+            onClick={() => setStopDialog({ stop: null })}
+          >
+            <Plus className="size-3.5 mr-1.5" aria-hidden="true" />
+            Add stop
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="bg-white"
             disabled={allFamilies.length === 0}
             onClick={() =>
               setQuickText({
@@ -198,10 +226,24 @@ export default function BusStopsPage() {
                 });
               }}
               onOpenFamily={setProfileFamilyId}
+              onEdit={() => setStopDialog({ stop })}
             />
           ))}
         </div>
       )}
+
+      {stopDialog ? (
+        <StopUpsertDialog
+          key={stopDialog.stop?.id ?? "new"}
+          yearId={yearId ? Number(yearId) : undefined}
+          stop={stopDialog.stop}
+          onClose={() => setStopDialog(null)}
+          onSaved={() => {
+            setStopDialog(null);
+            void mutate();
+          }}
+        />
+      ) : null}
 
       {profileFamilyId != null ? (
         <FamilyProfileSheet
@@ -233,6 +275,7 @@ function StopCard({
   stop,
   onMessage,
   onOpenFamily,
+  onEdit,
 }: {
   stop: BusStopGroup;
   /** "Message" click — opens the quick-text dialog for this stop's
@@ -240,6 +283,8 @@ function StopCard({
   onMessage: () => void;
   /** Row click — opens the family's contact sheet. */
   onOpenFamily: (familyId: number) => void;
+  /** Pencil click — opens the edit dialog. Catalog stops only. */
+  onEdit: () => void;
 }) {
   const times = [
     stop.pick_up_time ? `Pickup ${formatTime(stop.pick_up_time)}` : null,
@@ -272,10 +317,26 @@ function StopCard({
             <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium tabular-nums">
               {stop.riders.length}
             </span>
+            {/* Synthetic groups (orphaned stop names) have no catalog
+                row to edit. */}
+            {stop.id != null ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 bg-white px-2 text-xs"
+                onClick={onEdit}
+                title="Edit this stop's name, times, and address"
+              >
+                <Pencil className="size-3 mr-1" aria-hidden="true" />
+                Edit
+              </Button>
+            ) : null}
             <Button
               type="button"
+              variant="outline"
               size="sm"
-              className="h-7 px-2 text-xs"
+              className="h-7 bg-white px-2 text-xs"
               disabled={familyCount === 0}
               onClick={onMessage}
               title={`Text the ${familyCount} famil${familyCount === 1 ? "y" : "ies"} at this stop`}
@@ -462,10 +523,220 @@ function csvCell(v: string): string {
   return /[",\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
 }
 
-/** "8:45 AM" from the catalog's unix-ms time (0/null = unset). */
-function formatTime(ms: number): string {
-  return new Date(ms).toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-  });
+/** "8:10 AM" from the catalog's H*100+MM clock number (810 → 8:10 AM,
+ *  1445 → 2:45 PM). These are NOT timestamps — decoding them as
+ *  unix-ms rendered every stop as "7:00 PM" (the epoch in Eastern
+ *  time). Malformed values fall back to the raw number. */
+function formatTime(hmm: number): string {
+  const hours = Math.floor(hmm / 100);
+  const minutes = hmm % 100;
+  if (!Number.isInteger(hmm) || hmm < 0 || hours > 23 || minutes > 59) {
+    return String(hmm);
+  }
+  const h12 = hours % 12 === 0 ? 12 : hours % 12;
+  return `${h12}:${String(minutes).padStart(2, "0")} ${hours < 12 ? "AM" : "PM"}`;
+}
+
+/** HMM clock number → `<input type="time">` value ("08:10"). */
+function hmmToInput(v: number | null): string {
+  if (!v) return "";
+  const h = Math.floor(v / 100);
+  const m = v % 100;
+  if (h > 23 || m > 59) return "";
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+/** `<input type="time">` value → HMM clock number ("" → 0 = unset). */
+function inputToHmm(v: string): number {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(v.trim());
+  return m ? Number(m[1]) * 100 + Number(m[2]) : 0;
+}
+
+/** Create/edit one catalog stop — name, address, pickup and drop-off
+ *  times (stored as H*100+MM clock numbers). Keyed by stop id at the
+ *  call site so switching targets resets the form. */
+function StopUpsertDialog({
+  yearId,
+  stop,
+  onClose,
+  onSaved,
+}: {
+  yearId?: number;
+  /** null = create a new stop. */
+  stop: BusStopGroup | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [name, setName] = useState(stop?.name ?? "");
+  const [address, setAddress] = useState(stop?.address ?? "");
+  const [pickup, setPickup] = useState(hmmToInput(stop?.pick_up_time ?? null));
+  const [dropoff, setDropoff] = useState(
+    hmmToInput(stop?.drop_off_time ?? null)
+  );
+  const [saving, setSaving] = useState(false);
+  const renamed = stop != null && name.trim() !== stop.name;
+
+  async function save() {
+    if (!name.trim() || saving) return;
+    // The column stores 0 as "unset", so literal midnight can't be
+    // represented — saving 00:00 would silently show as no time.
+    if (pickup === "00:00" || dropoff === "00:00") {
+      toast.error(
+        "12:00 AM reads as “no time set” — use 12:01 AM (or clear the field) instead."
+      );
+      return;
+    }
+    setSaving(true);
+    try {
+      const payload = {
+        name: name.trim(),
+        address: address.trim(),
+        pick_up_time: inputToHmm(pickup),
+        drop_off_time: inputToHmm(dropoff),
+        ...(stop == null && yearId ? { yearId } : {}),
+      };
+      const res = await fetch(
+        stop == null
+          ? "/api/admin/bus-stops"
+          : `/api/admin/bus-stops/${stop.id}`,
+        {
+          method: stop == null ? "POST" : "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        }
+      );
+      const result = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(result?.error ?? `Save failed (${res.status})`);
+      }
+      toast.success(stop == null ? "Stop added." : "Stop updated.");
+      onSaved();
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't save the stop."
+      );
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => !saving && !o && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>
+            {stop == null ? "Add bus stop" : `Edit ${stop.name}`}
+          </DialogTitle>
+          <DialogDescription>
+            {stop == null
+              ? "Adds a stop to the catalog — it appears here and in the parents' bus-stop picker."
+              : "Times and address update everywhere immediately."}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div>
+            <label
+              htmlFor="stop-name"
+              className="mb-1.5 block text-xs font-medium text-muted-foreground"
+            >
+              Stop name
+            </label>
+            <Input
+              id="stop-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Gladden Park"
+              disabled={saving}
+            />
+            {renamed ? (
+              // Applications snapshot the stop by NAME — a rename
+              // strands existing riders in an unmatched group until
+              // their bus elections are updated.
+              <p className="mt-1.5 text-xs text-amber-700">
+                Heads up: riders are linked to the stop&rsquo;s name.
+                Renaming moves this stop&rsquo;s current riders into an
+                unmatched group until their bus elections are updated.
+              </p>
+            ) : null}
+          </div>
+          <div>
+            <label
+              htmlFor="stop-address"
+              className="mb-1.5 block text-xs font-medium text-muted-foreground"
+            >
+              Address
+            </label>
+            <Input
+              id="stop-address"
+              value={address}
+              onChange={(e) => setAddress(e.target.value)}
+              placeholder="3901 30th Ave N, St. Petersburg, FL 33713"
+              disabled={saving}
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label
+                htmlFor="stop-pickup"
+                className="mb-1.5 block text-xs font-medium text-muted-foreground"
+              >
+                Pickup time
+              </label>
+              <Input
+                id="stop-pickup"
+                type="time"
+                value={pickup}
+                onChange={(e) => setPickup(e.target.value)}
+                disabled={saving}
+              />
+            </div>
+            <div>
+              <label
+                htmlFor="stop-dropoff"
+                className="mb-1.5 block text-xs font-medium text-muted-foreground"
+              >
+                Drop-off time
+              </label>
+              <Input
+                id="stop-dropoff"
+                type="time"
+                value={dropoff}
+                onChange={(e) => setDropoff(e.target.value)}
+                disabled={saving}
+              />
+            </div>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            className="bg-white"
+            disabled={saving}
+            onClick={onClose}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            disabled={saving || !name.trim()}
+            onClick={save}
+          >
+            {saving ? (
+              <>
+                <Loader2
+                  className="size-3.5 mr-1.5 animate-spin"
+                  aria-hidden="true"
+                />
+                Saving…
+              </>
+            ) : stop == null ? (
+              "Add stop"
+            ) : (
+              "Save changes"
+            )}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
 }
