@@ -54,12 +54,24 @@ const NAV_ITEMS: NavItem[] = [
   // their full detail views.
   {
     title: "Recruitment",
+    // Group-level badge for the same reason Parents has one: the
+    // dropdown is collapsed by default, so a badge only on the
+    // Messages leaf inside it would never be seen.
+    badge: "messages",
     children: [
       { title: "All Leads", href: "/admin/all-leads" },
       // Texting for everyone NOT yet enrolled — leads plus families
       // still applying/registering. Lives under /admin/messages so
       // the unread-badge suppression + PWA start URL keep working.
-      { title: "Messages", href: "/admin/messages/recruitment" },
+      // Badge: the unread count is GLOBAL (both inboxes), so it shows
+      // on both Messages leaves — a lead's text otherwise lights only
+      // the enrolled page, where its thread doesn't exist. Per-mode
+      // counts would need the unread API to classify stages.
+      {
+        title: "Messages",
+        href: "/admin/messages/recruitment",
+        badge: "messages",
+      },
       { title: "Campus Tours", href: "/admin/campus-tours" },
       { title: "Inquiries", href: "/admin/inquiries" },
       { title: "Summer Camp", href: "/admin/summer-camp" },

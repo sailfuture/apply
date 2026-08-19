@@ -184,9 +184,15 @@ export type GroupScope = "all" | "enrolled" | "recruitment";
 export function GroupMessageDialog({
   onSent,
   scope = "all",
+  defaultYearId,
 }: {
   onSent?: () => void;
   scope?: GroupScope;
+  /** Year to preselect — the messages pages pass their URL year so
+   *  the composer's audience matches the page's slice (the dialog's
+   *  own fallback, the active year, can differ from the nav's
+   *  default, the upcoming year). Still changeable in the dialog. */
+  defaultYearId?: number;
 }) {
   const [open, setOpen] = useState(false);
   const { data: yearsData } = useSWR(
@@ -268,13 +274,20 @@ export function GroupMessageDialog({
     if (open) setBlastId(crypto.randomUUID());
   }, [open]);
 
-  // Default to the active year once the list loads.
+  // Default year once the list loads: the caller's year when given
+  // (keeps the composer aligned with the page it sits on), otherwise
+  // the active year.
   useEffect(() => {
     if (!yearId && years.length) {
-      const active = years.find((y) => y.isActive) ?? years[0];
-      if (active) setYearId(String(active.id));
+      const preferred =
+        defaultYearId != null
+          ? years.find((y) => y.id === defaultYearId)
+          : undefined;
+      const fallback = years.find((y) => y.isActive) ?? years[0];
+      const pick = preferred ?? fallback;
+      if (pick) setYearId(String(pick.id));
     }
-  }, [years, yearId]);
+  }, [years, yearId, defaultYearId]);
 
   const { data: audienceData, isLoading: loadingAudience } =
     useSWR<GroupAudienceResponse>(

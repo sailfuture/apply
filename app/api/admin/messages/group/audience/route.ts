@@ -121,8 +121,23 @@ export async function GET(req: NextRequest) {
       const sid = Number(a.registration_students_id);
       if (!fid || !sid) continue;
       const list = familyStudents.get(fid) ?? [];
-      // Dedupe per student (re-created application rows).
-      if (!list.some((s) => s.name === (studentNameById.get(sid) ?? ""))) {
+      // Bus election lives on the application row; the stop is
+      // stored by NAME. Only bus riders carry one.
+      const busStop =
+        a.is_bus_transportation === true ? (a.bus_stop ?? "").trim() : "";
+      // Dedupe per student (re-created application rows) — but merge
+      // the bus stop across duplicates: grade/crew survive the
+      // first-row-wins pick via the packet overrides, while bus_stop
+      // only exists on the app row, so an older row's empty election
+      // must not shadow a newer row's real stop.
+      const existingEntry = list.find(
+        (s) => s.name === (studentNameById.get(sid) ?? "")
+      );
+      if (existingEntry) {
+        if (!existingEntry.busStop && busStop) {
+          existingEntry.busStop = busStop;
+        }
+      } else {
         const gradeRaw =
           packetGradeByStudent.get(sid) ??
           (a.current_grade ?? "").trim();
@@ -131,12 +146,7 @@ export async function GET(req: NextRequest) {
           grade: parseGrade(gradeRaw),
           gradeRaw,
           crew: packetCrewByStudent.get(sid) ?? "",
-          // Bus election lives on the application row; the stop is
-          // stored by NAME. Only bus riders carry one.
-          busStop:
-            a.is_bus_transportation === true
-              ? (a.bus_stop ?? "").trim()
-              : "",
+          busStop,
         });
       }
       familyStudents.set(fid, list);

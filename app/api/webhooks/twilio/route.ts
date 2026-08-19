@@ -210,7 +210,12 @@ export async function POST(req: NextRequest) {
         from_number: from,
         message_body: body,
         message_sid: messageSid || null,
-        inbox_url: `${appBase}/admin/messages`,
+        // Deep-link the thread when the sender matched a contact —
+        // the inbox's cross-page redirect places it on the enrolled
+        // or recruitment page. Unmatched numbers get the bare inbox.
+        inbox_url: contact
+          ? `${appBase}/admin/messages?open=${encodeURIComponent(`${contact.type}:${contact.id}`)}`
+          : `${appBase}/admin/messages`,
         opted_out: isStop,
       }),
       tag: "sms-reply-received",

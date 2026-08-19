@@ -3,8 +3,8 @@
 import { MessagesInbox } from "@/components/admin/messages-inbox";
 
 /**
- * Messages — the ENROLLED families inbox (Parent Engagement →
- * Messages). Filters by crew, bus stop, and grade; the group composer
+ * Messages — the ENROLLED families inbox (Parents → Messages).
+ * Filters by crew, bus stop, and grade; the group composer
  * is scoped to enrolled families. Everyone still in the funnel —
  * leads and applying/registering families — lives on
  * /admin/messages/recruitment (Recruitment → Messages); deep links

@@ -166,7 +166,12 @@ export function SmsNotificationWatcher() {
         });
         n.onclick = () => {
           window.focus();
-          router.push("/admin/messages");
+          // Deep-link the exact thread — the inbox's cross-page
+          // redirect then places it on the enrolled or recruitment
+          // page, whichever the contact belongs to. A bare
+          // /admin/messages push would strand lead texts on the
+          // enrolled-only page.
+          router.push(`/admin/messages?open=${encodeURIComponent(c.key)}`);
           n.close();
         };
       } catch (err) {

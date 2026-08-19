@@ -110,15 +110,22 @@ const CHIP_CLASS = (on: boolean) =>
 
 export function MessagesInbox({ mode }: { mode: InboxMode }) {
   const router = useRouter();
-  // yearId scopes the family STAGE annotations (and, on the enrolled
-  // page, the crew/bus/grade directory) — threads themselves are
-  // never year-filtered.
+  // yearId is LOAD-BEARING here, not just an annotation: the
+  // enrolled/recruitment split and the cross-page ?open= redirect
+  // both classify on `stage`, and the API only computes family
+  // stages when ?yearId= is passed — without it every family reads
+  // stage "none" and an enrolled family's deep link would misroute
+  // to the recruitment page (and latch there, since the one-shot
+  // effect can't rerun). So unlike the pre-split page, the feed
+  // fetch WAITS for the YearSelector to inject the year; entry
+  // points without one (dashboard rows, PWA icon, notifications)
+  // show the loading state for the beat that takes.
   const searchParams = useSearchParams();
   const yearId = searchParams.get("yearId");
   const { data, error, isLoading, mutate } = useSWR<{
     conversations: SmsConversation[];
   }>(
-    yearId ? `/api/admin/messages?yearId=${yearId}` : "/api/admin/messages",
+    yearId ? `/api/admin/messages?yearId=${yearId}` : null,
     adminFetcher,
     { refreshInterval: 20_000 }
   );
@@ -189,9 +196,32 @@ export function MessagesInbox({ mode }: { mode: InboxMode }) {
   const [stageFilter, setStageFilter] = useState<ConversationStage | "all">(
     "all"
   );
-  const [crewFilter, setCrewFilter] = useState<string[]>([]);
-  const [busStopFilter, setBusStopFilter] = useState<string[]>([]);
-  const [gradeFilter, setGradeFilter] = useState<number[]>([]);
+  // Audience-derived filters are PER-YEAR (crews and stops are year
+  // assignments) — carrying them across a year switch would leave an
+  // invisible filter whose chip may no longer exist. Stamping the
+  // year into the state and ignoring mismatched stamps self-resets
+  // on switch without an effect.
+  const [filterState, setFilterState] = useState<{
+    year: string | null;
+    crews: string[];
+    stops: string[];
+    grades: number[];
+  }>({ year: null, crews: [], stops: [], grades: [] });
+  const {
+    crews: crewFilter,
+    stops: busStopFilter,
+    grades: gradeFilter,
+  } = useMemo(
+    () =>
+      filterState.year === yearId
+        ? filterState
+        : {
+            crews: [] as string[],
+            stops: [] as string[],
+            grades: [] as number[],
+          },
+    [filterState, yearId]
+  );
   // Free-text search across who the conversation is WITH — family,
   // parent, and student names (via the API's searchText), the phone
   // in any format, and the latest message body.
@@ -448,21 +478,37 @@ export function MessagesInbox({ mode }: { mode: InboxMode }) {
     setStageFilter(v);
     setVisibleCount(PAGE);
   }
-  function toggleIn(
-    setter: React.Dispatch<React.SetStateAction<string[]>>,
-    value: string
-  ) {
-    setter((prev) =>
-      prev.includes(value)
-        ? prev.filter((x) => x !== value)
-        : [...prev, value]
-    );
+  function toggleFilter(kind: "crews" | "stops", value: string) {
+    setFilterState((prev) => {
+      const base =
+        prev.year === yearId
+          ? prev
+          : { year: yearId, crews: [], stops: [], grades: [] };
+      const list = base[kind];
+      return {
+        ...base,
+        year: yearId,
+        [kind]: list.includes(value)
+          ? list.filter((x) => x !== value)
+          : [...list, value],
+      };
+    });
     setVisibleCount(PAGE);
   }
   function toggleGrade(g: number) {
-    setGradeFilter((prev) =>
-      prev.includes(g) ? prev.filter((x) => x !== g) : [...prev, g]
-    );
+    setFilterState((prev) => {
+      const base =
+        prev.year === yearId
+          ? prev
+          : { year: yearId, crews: [], stops: [], grades: [] };
+      return {
+        ...base,
+        year: yearId,
+        grades: base.grades.includes(g)
+          ? base.grades.filter((x) => x !== g)
+          : [...base.grades, g],
+      };
+    });
     setVisibleCount(PAGE);
   }
   function changeSearch(v: string) {
@@ -484,7 +530,7 @@ export function MessagesInbox({ mode }: { mode: InboxMode }) {
         <p className="hidden text-sm text-muted-foreground sm:block">
           {mode === "enrolled"
             ? "Two-way text threads with enrolled families. Filter by crew, bus stop, or grade — or send a group message."
-            : "Two-way text threads with leads and families still in the admissions funnel. Enrolled families live on the Messages page under Parent Engagement."}
+            : "Two-way text threads with leads and families still in the admissions funnel. Enrolled families live on the Messages page under Parents."}
         </p>
       </div>
 
@@ -546,7 +592,7 @@ export function MessagesInbox({ mode }: { mode: InboxMode }) {
                       key={crew}
                       type="button"
                       aria-pressed={crewFilter.includes(crew)}
-                      onClick={() => toggleIn(setCrewFilter, crew)}
+                      onClick={() => toggleFilter("crews", crew)}
                       className={CHIP_CLASS(crewFilter.includes(crew))}
                     >
                       {crew.replace(/^crew\s+/i, "")}
@@ -568,7 +614,7 @@ export function MessagesInbox({ mode }: { mode: InboxMode }) {
                       key={stop}
                       type="button"
                       aria-pressed={busStopFilter.includes(stop)}
-                      onClick={() => toggleIn(setBusStopFilter, stop)}
+                      onClick={() => toggleFilter("stops", stop)}
                       className={CHIP_CLASS(busStopFilter.includes(stop))}
                     >
                       {stop}
@@ -611,7 +657,16 @@ export function MessagesInbox({ mode }: { mode: InboxMode }) {
               setProfileOpen(false);
             }}
           />
-          <GroupMessageDialog scope={mode} onSent={() => mutate()} />
+          {/* defaultYearId keeps the composer's audience year in
+              lockstep with the page's slicing year — its own default
+              (the active year) can differ from the nav's (the
+              upcoming year), which made "enrolled" mean two different
+              cohorts on one screen. */}
+          <GroupMessageDialog
+            scope={mode}
+            defaultYearId={yearId ? Number(yearId) : undefined}
+            onSent={() => mutate()}
+          />
         </div>
       </div>
 
@@ -641,9 +696,11 @@ export function MessagesInbox({ mode }: { mode: InboxMode }) {
                 Try again
               </button>
             </div>
-          ) : isLoading && !data ? (
+          ) : (!yearId || isLoading) && !data ? (
             // Centered in the pane (not hugging the top) with a label
-            // so the wait reads as "working", not "empty".
+            // so the wait reads as "working", not "empty". Also the
+            // state while the YearSelector injects the default year —
+            // the feed deliberately doesn't fetch without one.
             <div className="flex h-full flex-col items-center justify-center gap-2 p-6">
               <Loader2 className="size-5 animate-spin text-muted-foreground" />
               <p className="text-xs text-muted-foreground">
@@ -813,7 +870,7 @@ export function MessagesInbox({ mode }: { mode: InboxMode }) {
                 onSent={() => mutate()}
               />
             </>
-          ) : isLoading && !data ? (
+          ) : (!yearId || isLoading) && !data ? (
             // Conversation list is still loading — an empty pane here
             // (the list's own spinner carries the state). Prompting
             // "select a conversation" before there's anything to
