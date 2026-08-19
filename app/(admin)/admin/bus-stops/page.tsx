@@ -205,10 +205,11 @@ export default function BusStopsPage() {
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          {stops.map((stop) => (
+          {stops.map((stop, i) => (
             <StopCard
               key={stop.id ?? `orphan-${stop.name}`}
               stop={stop}
+              index={i + 1}
               onMessage={() => {
                 const byId = new Map<number, string>();
                 for (const r of stop.riders) {
@@ -273,11 +274,15 @@ export default function BusStopsPage() {
 
 function StopCard({
   stop,
+  index,
   onMessage,
   onOpenFamily,
   onEdit,
 }: {
   stop: BusStopGroup;
+  /** 1-based position in the page's pickup-time order — the route's
+   *  stop number. */
+  index: number;
   /** "Message" click — opens the quick-text dialog for this stop's
    *  families. */
   onMessage: () => void;
@@ -299,19 +304,27 @@ function StopCard({
     <Card className="overflow-hidden gap-0 py-0 bg-white">
       <CardHeader className="py-3 !pb-3 border-b">
         <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <CardTitle className="truncate text-base">{stop.name}</CardTitle>
-            {times ? (
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                {times}
-              </p>
-            ) : null}
-            {stop.address ? (
-              <p className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
-                <MapPin className="size-3 shrink-0" aria-hidden="true" />
-                <span className="truncate">{stop.address}</span>
-              </p>
-            ) : null}
+          <div className="flex min-w-0 items-start gap-2">
+            <span
+              aria-label={`Stop ${index}`}
+              className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-primary text-[11px] font-semibold tabular-nums text-primary-foreground"
+            >
+              {index}
+            </span>
+            <div className="min-w-0">
+              <CardTitle className="truncate text-base">{stop.name}</CardTitle>
+              {times ? (
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  {times}
+                </p>
+              ) : null}
+              {stop.address ? (
+                <p className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
+                  <MapPin className="size-3 shrink-0" aria-hidden="true" />
+                  <span className="truncate">{stop.address}</span>
+                </p>
+              ) : null}
+            </div>
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium tabular-nums">
