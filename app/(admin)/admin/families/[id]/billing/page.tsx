@@ -1,15 +1,19 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
 import useSWR from "swr";
+import { toast } from "sonner";
 import {
   ArrowLeft,
+  Banknote,
   CheckCircle2,
   Circle,
+  Copy,
   ExternalLink,
   FileText,
+  Loader2,
   XCircle,
 } from "lucide-react";
 import {
@@ -19,6 +23,15 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -66,9 +79,15 @@ export default function FamilyBillingPage() {
     Number.isFinite(familyId) && yearId
       ? `/api/admin/families/${familyId}/billing/schedule?yearId=${yearId}`
       : null;
-  const { data, isLoading, error } = useSWR<ScheduleResponse>(
+  const { data, isLoading, error, mutate } = useSWR<ScheduleResponse>(
     swrKey,
     adminFetcher
+  );
+
+  // "Record an outside payment" (check/cash) — the slot whose invoice
+  // is being marked paid out-of-band, null when the dialog is closed.
+  const [markPaidSlot, setMarkPaidSlot] = useState<ScheduleSlot | null>(
+    null
   );
 
   // Same payload the registration detail page renders from — reused
@@ -188,7 +207,22 @@ export default function FamilyBillingPage() {
         </Card>
       ) : null}
 
-      <ScheduleCard slots={data.slots} familyId={familyId} />
+      <ScheduleCard slots={data.slots} onMarkPaid={setMarkPaidSlot} />
+
+      {/* Keyed by invoice so reopening for a different month starts
+          with fresh form state instead of the previous entry's. */}
+      {markPaidSlot ? (
+        <MarkPaidDialog
+          key={markPaidSlot.invoice?.stripeInvoiceId ?? markPaidSlot.slotIndex}
+          familyId={familyId}
+          slot={markPaidSlot}
+          onClose={() => setMarkPaidSlot(null)}
+          onRecorded={() => {
+            setMarkPaidSlot(null);
+            void mutate();
+          }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -279,12 +313,13 @@ function SummaryStat({
 
 function ScheduleCard({
   slots,
-  familyId,
+  onMarkPaid,
 }: {
   slots: ScheduleSlot[];
-  familyId: number;
+  /** "Mark paid" click on an open/failed row — opens the
+   *  outside-payment dialog for that slot's invoice. */
+  onMarkPaid: (slot: ScheduleSlot) => void;
 }) {
-  void familyId; // kept for parity with future per-row actions
   return (
     <Card className="overflow-hidden gap-0 py-0 bg-white">
       <CardHeader className="py-3 !pb-3 border-b">
@@ -319,7 +354,11 @@ function ScheduleCard({
           </TableHeader>
           <TableBody>
             {slots.map((slot) => (
-              <ScheduleRow key={slot.slotIndex} slot={slot} />
+              <ScheduleRow
+                key={slot.slotIndex}
+                slot={slot}
+                onMarkPaid={onMarkPaid}
+              />
             ))}
           </TableBody>
         </Table>
@@ -328,8 +367,19 @@ function ScheduleCard({
   );
 }
 
-function ScheduleRow({ slot }: { slot: ScheduleSlot }) {
+function ScheduleRow({
+  slot,
+  onMarkPaid,
+}: {
+  slot: ScheduleSlot;
+  onMarkPaid: (slot: ScheduleSlot) => void;
+}) {
   const inv = slot.invoice;
+  // Server-computed from the RAW mirror status (open/uncollectible —
+  // the same check the mark-paid route enforces). The folded UI
+  // status can't stand in for it: "open" includes pre-finalization
+  // drafts, which neither Stripe nor the route can mark paid.
+  const canMarkPaid = inv?.canMarkPaid === true;
   // "Invoice sent" = the day Stripe finalized + emailed the invoice
   // (`finalized_at` from the mirror, set on invoice.finalized
   // webhook). "Due by" = Stripe's `due_date`, calculated server-side
@@ -358,28 +408,73 @@ function ScheduleRow({ slot }: { slot: ScheduleSlot }) {
       </TableCell>
       <TableCell>
         <StatusPill status={slot.status} />
+        {inv?.paymentMethod && slot.status === "paid" ? (
+          // How an out-of-band payment arrived ("Check — #1042"),
+          // stamped by the mark-paid flow. Gated on paid: the label
+          // can't be cleared by syncs (they omit the key), so if the
+          // payment record is later voided in the Stripe Dashboard
+          // and the invoice reopens, an unguarded label would show
+          // "via Check" under an Open pill forever.
+          <span className="mt-0.5 block text-[10px] text-muted-foreground">
+            via {inv.paymentMethod}
+          </span>
+        ) : null}
       </TableCell>
       <TableCell className="text-right">
-        {inv?.hostedInvoiceUrl ? (
-          <a
-            href={inv.hostedInvoiceUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
-          >
-            <ExternalLink className="size-3" aria-hidden="true" />
-            View
-          </a>
-        ) : inv?.invoicePdfUrl ? (
-          <a
-            href={inv.invoicePdfUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
-          >
-            <FileText className="size-3" aria-hidden="true" />
-            PDF
-          </a>
+        {inv ? (
+          <span className="inline-flex items-center gap-2.5">
+            {canMarkPaid ? (
+              // Record a payment that happened OUTSIDE Stripe (check
+              // or cash) — opens the confirm dialog; the API marks
+              // the Stripe invoice paid out-of-band.
+              <button
+                type="button"
+                onClick={() => onMarkPaid(slot)}
+                className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                title="Record a check or cash payment — marks the Stripe invoice paid without charging anyone"
+              >
+                <Banknote className="size-3" aria-hidden="true" />
+                Mark paid
+              </button>
+            ) : null}
+            {inv.hostedInvoiceUrl ? (
+              // Copy + View pair. The hosted invoice URL is Stripe's
+              // unauthenticated pay-this-exact-invoice page — anyone
+              // holding the link can view and pay it, so Copy is the
+              // assisted-payment workflow: text/email it to the
+              // family, or open it yourself and enter their card.
+              <>
+                <button
+                  type="button"
+                  onClick={() => copyInvoiceLink(inv.hostedInvoiceUrl!)}
+                  className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                  title="Copy the payment link — anyone with it can view and pay this invoice, no login needed"
+                >
+                  <Copy className="size-3" aria-hidden="true" />
+                  Copy link
+                </button>
+                <a
+                  href={inv.hostedInvoiceUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                >
+                  <ExternalLink className="size-3" aria-hidden="true" />
+                  View
+                </a>
+              </>
+            ) : inv.invoicePdfUrl ? (
+              <a
+                href={inv.invoicePdfUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+              >
+                <FileText className="size-3" aria-hidden="true" />
+                PDF
+              </a>
+            ) : null}
+          </span>
         ) : (
           <span className="text-muted-foreground">—</span>
         )}
@@ -454,6 +549,172 @@ function BackLink({ href }: { href: string }) {
         Back to billing
       </Link>
     </Button>
+  );
+}
+
+const PAYMENT_METHODS = [
+  { key: "check", label: "Check" },
+  { key: "cash", label: "Cash" },
+  { key: "other", label: "Other" },
+] as const;
+type PaymentMethodKey = (typeof PAYMENT_METHODS)[number]["key"];
+
+/**
+ * Confirm dialog for recording a payment made OUTSIDE Stripe (check /
+ * cash). Posts to the mark-paid route, which marks the Stripe invoice
+ * paid out-of-band — nobody's card is charged, Stripe's reminders
+ * stop, and the webhook + immediate mirror write flip the month to
+ * Complete. Caller keys this component by invoice so form state
+ * resets between months.
+ */
+function MarkPaidDialog({
+  familyId,
+  slot,
+  onClose,
+  onRecorded,
+}: {
+  familyId: number;
+  slot: ScheduleSlot;
+  onClose: () => void;
+  onRecorded: () => void;
+}) {
+  const inv = slot.invoice;
+  const [method, setMethod] = useState<PaymentMethodKey>("check");
+  const [note, setNote] = useState("");
+  const [saving, setSaving] = useState(false);
+  const amountLabel = inv ? formatUsd(inv.amountDueCents / 100) : "";
+
+  async function submit() {
+    if (!inv || saving) return;
+    setSaving(true);
+    try {
+      const res = await fetch(
+        `/api/admin/families/${familyId}/billing/mark-paid`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            invoiceId: inv.stripeInvoiceId,
+            method,
+            note: note.trim() || undefined,
+          }),
+        }
+      );
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(body?.error ?? `Failed to record (${res.status})`);
+      }
+      toast.success(
+        `${slot.monthLabel} marked paid — ${body?.payment_method ?? "recorded"}.`
+      );
+      onRecorded();
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't record the payment"
+      );
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => !saving && !o && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Record an outside payment</DialogTitle>
+          <DialogDescription>
+            Marks the {slot.monthLabel} invoice ({amountLabel}) as paid
+            out-of-band in Stripe — no card is charged and payment
+            reminders stop. Use this when the family paid by check or
+            cash. Reversing it later is a Stripe Dashboard operation.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div>
+            <p
+              id="mark-paid-method-label"
+              className="text-xs font-medium text-muted-foreground mb-1.5"
+            >
+              Payment type
+            </p>
+            {/* aria-pressed carries the selection for assistive tech —
+                the default/outline variants only differ visually. */}
+            <div
+              role="group"
+              aria-labelledby="mark-paid-method-label"
+              className="flex gap-2"
+            >
+              {PAYMENT_METHODS.map((m) => (
+                <Button
+                  key={m.key}
+                  type="button"
+                  size="sm"
+                  variant={method === m.key ? "default" : "outline"}
+                  className={method === m.key ? "" : "bg-white"}
+                  aria-pressed={method === m.key}
+                  disabled={saving}
+                  onClick={() => setMethod(m.key)}
+                >
+                  {m.label}
+                </Button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label
+              htmlFor="mark-paid-note"
+              className="block text-xs font-medium text-muted-foreground mb-1.5"
+            >
+              Reference (optional)
+            </label>
+            <Input
+              id="mark-paid-note"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="Check #1042"
+              disabled={saving}
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            className="bg-white"
+            disabled={saving}
+            onClick={onClose}
+          >
+            Cancel
+          </Button>
+          <Button type="button" disabled={saving || !inv} onClick={submit}>
+            {saving ? (
+              <>
+                <Loader2 className="size-3.5 mr-1.5 animate-spin" aria-hidden="true" />
+                Recording…
+              </>
+            ) : (
+              `Mark ${amountLabel} paid`
+            )}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function copyInvoiceLink(url: string): void {
+  // navigator.clipboard is secure-context-only — undefined over plain
+  // http (e.g. a LAN-IP dev preview), where the member access would
+  // throw synchronously and skip the rejection handler entirely.
+  if (!navigator.clipboard?.writeText) {
+    toast.error("Couldn't copy — open View and copy the URL instead.");
+    return;
+  }
+  void navigator.clipboard.writeText(url).then(
+    () =>
+      toast.success(
+        "Invoice link copied. Anyone with the link can view and pay — no login needed."
+      ),
+    () => toast.error("Couldn't copy — open View and copy the URL instead.")
   );
 }
 

@@ -169,6 +169,25 @@ async function upsertInvoiceRow({
     ? transitions.finalized_at * 1000
     : null;
 
+  // Strict lookup — a transient Xano failure must throw (collected in
+  // the per-subscription error list) rather than coerce to null,
+  // which would create a duplicate mirror row for this invoice.
+  // Fetched BEFORE the payload so the paid-amount floor guard below
+  // can read the existing row.
+  const existing = await xano.paymentTransactions.findByStripeIdStrict(
+    invoice.id
+  );
+
+  // Floor guard for out-of-band (check/cash) payments, matching the
+  // webhook: the mark-paid route records the full amount as
+  // collected, and Stripe's own `amount_paid` may not include money
+  // it never touched — a re-sync writing the lower figure would
+  // un-count a settled check payment. On a PAID row keep the higher
+  // of the two; unpaid rows take Stripe's number verbatim.
+  const reportedPaidCents = invoice.amount_paid ?? 0;
+
+  // Omits `payment_method` — owned by the admin mark-paid route; a
+  // re-sync must not clear it (PATCH leaves absent keys untouched).
   const payload: Omit<XanoPaymentTransaction, "id" | "created_at"> = {
     registration_families_id: familyId,
     registration_school_years_id: yearId,
@@ -178,7 +197,10 @@ async function upsertInvoiceRow({
     period_start: periodStart,
     period_end: periodEnd,
     amount_due_cents: invoice.amount_due ?? 0,
-    amount_paid_cents: invoice.amount_paid ?? 0,
+    amount_paid_cents:
+      status === "paid"
+        ? Math.max(reportedPaidCents, existing?.amount_paid_cents ?? 0)
+        : reportedPaidCents,
     status,
     hosted_invoice_url: invoice.hosted_invoice_url ?? null,
     invoice_pdf_url: invoice.invoice_pdf ?? null,
@@ -188,12 +210,6 @@ async function upsertInvoiceRow({
     last_synced_at: now,
   };
 
-  // Strict lookup — a transient Xano failure must throw (collected in
-  // the per-subscription error list) rather than coerce to null,
-  // which would create a duplicate mirror row for this invoice.
-  const existing = await xano.paymentTransactions.findByStripeIdStrict(
-    invoice.id
-  );
   if (existing) {
     await xano.paymentTransactions.update(existing.id, payload);
   } else {

@@ -165,6 +165,14 @@ export async function GET(
           dueDate: tx.due_date,
           paidAt: tx.paid_at,
           finalizedAt: tx.finalized_at,
+          paymentMethod: tx.payment_method?.trim() || null,
+          // Raw-mirror-status gate for the "Mark paid" action,
+          // matching the mark-paid route's own check exactly. The UI
+          // status can't express this: stripeStatusToUi folds "draft"
+          // into "open", and neither Stripe nor the route can pay a
+          // draft — gating client-side on UI "open" put a guaranteed-
+          // 400 button on pre-finalization draft rows.
+          canMarkPaid: tx.status === "open" || tx.status === "uncollectible",
         },
       };
     });
@@ -235,6 +243,14 @@ export interface ScheduleSlot {
     dueDate: number | null;
     paidAt: number | null;
     finalizedAt: number | null;
+    /** "Check — #1234" / "Cash" for out-of-band payments recorded by
+     *  admin; null for Stripe-collected (or method-less) payments. */
+    paymentMethod: string | null;
+    /** Whether the mark-paid action can succeed on this invoice —
+     *  computed from the RAW mirror status (open/uncollectible), which
+     *  the folded UI status can't express (drafts render as "open"
+     *  but can't be paid). */
+    canMarkPaid: boolean;
   } | null;
 }
 
