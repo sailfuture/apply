@@ -94,30 +94,31 @@ export default function AdminLaptopsPage() {
 
   return (
     <div className="p-6 space-y-6 max-w-6xl mx-auto">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight">Laptops</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Device inventory and student checkouts. Assignments link to
-            enrolled students, which is what shows the device on the
-            family&rsquo;s Store page.
-          </p>
+      <div>
+        <h1 className="text-xl font-semibold tracking-tight">Laptops</h1>
+        <p className="text-sm text-muted-foreground mt-1">
+          Device inventory and student checkouts. Assignments link to
+          enrolled students, which is what shows the device on the
+          family&rsquo;s Store page.
+        </p>
+      </div>
+
+      {/* Search + action on their own full-width row under the header,
+          spanning the same width as the table below. */}
+      <div className="flex items-center gap-2">
+        <div className="relative min-w-0 flex-1">
+          <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search asset, serial, student…"
+            className="w-full bg-white pl-8"
+          />
         </div>
-        <div className="flex items-center gap-2">
-          <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search asset, serial, student…"
-              className="w-64 bg-white pl-8"
-            />
-          </div>
-          <Button onClick={() => setShowNew(true)}>
-            <Plus className="size-3.5" />
-            Add Laptop
-          </Button>
-        </div>
+        <Button className="shrink-0" onClick={() => setShowNew(true)}>
+          <Plus className="size-3.5" />
+          Add Laptop
+        </Button>
       </div>
 
       {!data ? (
@@ -269,25 +270,29 @@ function LaptopGroupCard({
             {emptyText}
           </p>
         ) : (
-          <Table className="text-sm">
+          /* table-fixed + the shared width scale below keep the
+             Device / Serial / third / fourth / fifth columns in the
+             same horizontal position across all three group cards,
+             so the stacked tables read as one aligned grid. */
+          <Table className="table-fixed text-sm">
             <TableHeader>
               <TableRow className="hover:bg-transparent">
-                <TableHead className="pl-4">Device</TableHead>
-                <TableHead>Serial #</TableHead>
+                <TableHead className="w-[30%] pl-4">Device</TableHead>
+                <TableHead className="w-[24%]">Serial #</TableHead>
                 {columns === "assigned" ? (
                   <>
-                    <TableHead>Student</TableHead>
-                    <TableHead>Assigned</TableHead>
-                    <TableHead className="pr-4">Condition</TableHead>
+                    <TableHead className="w-[24%]">Student</TableHead>
+                    <TableHead className="w-[12%]">Assigned</TableHead>
+                    <TableHead className="w-[10%] pr-4">Condition</TableHead>
                   </>
                 ) : columns === "available" ? (
                   <>
-                    <TableHead>Year</TableHead>
-                    <TableHead>RFID tags</TableHead>
-                    <TableHead className="pr-4 text-right"></TableHead>
+                    <TableHead className="w-[24%]">Year</TableHead>
+                    <TableHead className="w-[12%]">RFID tags</TableHead>
+                    <TableHead className="w-[10%] pr-4 text-right"></TableHead>
                   </>
                 ) : (
-                  <TableHead className="pr-4">Reason</TableHead>
+                  <TableHead className="w-[46%] pr-4">Reason</TableHead>
                 )}
               </TableRow>
             </TableHeader>

@@ -209,7 +209,7 @@ export function LaptopDetailSheet({
       <Sheet open={!!laptop} onOpenChange={onOpenChange}>
         <SheetContent
           side="right"
-          className="flex w-full flex-col gap-0 overflow-y-auto p-0 sm:max-w-xl"
+          className="flex w-full flex-col gap-0 overflow-y-auto p-0 sm:max-w-2xl lg:max-w-3xl"
         >
           {laptop ? (
             <>
@@ -227,7 +227,7 @@ export function LaptopDetailSheet({
               </SheetHeader>
 
               <div className="flex-1 space-y-6 px-5 py-5">
-                <div className="space-y-4">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <Field label="Serial Number">
                     <span className="font-mono text-sm">
                       {laptop.serial_number || "—"}
@@ -453,7 +453,7 @@ export function LaptopDetailSheet({
                       No past assignments.
                     </p>
                   ) : (
-                    <div className="overflow-hidden rounded-md border">
+                    <div className="overflow-x-auto rounded-md border">
                       <Table className="text-sm">
                         <TableHeader>
                           <TableRow className="hover:bg-transparent">
@@ -504,7 +504,10 @@ export function LaptopDetailSheet({
                                   ) : null}
                                 </span>
                               </TableCell>
-                              <TableCell className="pr-3 max-w-40 truncate text-muted-foreground">
+                              <TableCell
+                                className="pr-3 max-w-56 truncate text-muted-foreground"
+                                title={h.notes || undefined}
+                              >
                                 {h.notes || "—"}
                               </TableCell>
                             </TableRow>
