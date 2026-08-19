@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import useSWR from "swr";
-import { ExternalLink, Loader2 } from "lucide-react";
+import { ExternalLink, Loader2, Mail, Phone } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ContactRow } from "@/components/admin/lead-triage";
 import {
   Sheet,
   SheetContent,
@@ -63,6 +64,10 @@ export function FamilyProfileSheet({
             </div>
           ) : (
             <>
+              {/* Flat label-over-value layout matching the lead
+                  triage sheet (user request: no bordered contact
+                  cards) — same ContactRow with copy + call/email
+                  actions, parents separated by hairlines. */}
               <div className="space-y-2">
                 <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                   Parents
@@ -72,41 +77,43 @@ export function FamilyProfileSheet({
                     No parents on file.
                   </p>
                 ) : (
-                  data.parents.map((p) => (
-                    <div key={p.id} className="rounded-md border bg-white p-3">
-                      <p className="text-sm font-medium">
-                        {p.name || `Parent #${p.id}`}
-                        {p.relationship ? (
-                          <span className="ml-1.5 font-normal text-muted-foreground">
-                            · {p.relationship}
-                          </span>
-                        ) : null}
-                      </p>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        {p.phone ? (
-                          <a
-                            href={`tel:${p.phone}`}
-                            className="tabular-nums hover:underline"
-                          >
-                            {formatUSPhone(p.phone) || p.phone}
-                          </a>
-                        ) : (
-                          "No phone"
-                        )}
-                        {" · "}
-                        {p.email ? (
-                          <a
-                            href={`mailto:${p.email}`}
-                            className="hover:underline"
-                          >
-                            {p.email}
-                          </a>
-                        ) : (
-                          "No email"
-                        )}
-                      </p>
-                    </div>
-                  ))
+                  <div className="space-y-4">
+                    {data.parents.map((p) => (
+                      <div
+                        key={p.id}
+                        className="space-y-2 border-b pb-4 last:border-b-0 last:pb-0"
+                      >
+                        <p className="text-sm font-medium">
+                          {p.name || `Parent #${p.id}`}
+                          {p.relationship ? (
+                            <span className="ml-1.5 font-normal text-muted-foreground">
+                              · {p.relationship}
+                            </span>
+                          ) : null}
+                        </p>
+                        <div className="grid grid-cols-2 gap-x-4 gap-y-2.5">
+                          <ContactRow
+                            label="Phone"
+                            value={
+                              formatUSPhone(p.phone ?? "") || (p.phone ?? "")
+                            }
+                            copyValue={p.phone ?? ""}
+                            href={p.phone ? `tel:${p.phone}` : null}
+                            actionLabel="Call"
+                            actionIcon={<Phone className="size-3.5" />}
+                          />
+                          <ContactRow
+                            label="Email"
+                            value={p.email ?? ""}
+                            copyValue={p.email ?? ""}
+                            href={p.email ? `mailto:${p.email}` : null}
+                            actionLabel="Email"
+                            actionIcon={<Mail className="size-3.5" />}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
 
@@ -119,12 +126,9 @@ export function FamilyProfileSheet({
                     No students on file.
                   </p>
                 ) : (
-                  <div className="rounded-md border bg-white">
+                  <div className="space-y-1.5">
                     {data.students.map((s) => (
-                      <p
-                        key={s.id}
-                        className="border-b px-3 py-2 text-sm last:border-b-0"
-                      >
+                      <p key={s.id} className="text-sm">
                         {s.name || `Student #${s.id}`}
                       </p>
                     ))}

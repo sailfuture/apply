@@ -839,7 +839,7 @@ export interface LeadEditableDetails {
  * rather than truncating, so a long address stays readable), with a
  * one-tap action (call / compose) and a copy button.
  */
-function ContactRow({
+export function ContactRow({
   label,
   value,
   copyValue,
