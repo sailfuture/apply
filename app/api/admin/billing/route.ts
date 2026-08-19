@@ -16,6 +16,10 @@ import { getStripeClient } from "@/lib/stripe";
  * mirror, then in-memory reduce by family. No Stripe API calls per
  * row (which would N+1 on every page load).
  *
+ * Residential/foster families (`is_residential` on the family row)
+ * are excluded from BOTH the paying list and the not-started queue —
+ * the program covers their students, so they're never tuition-billed.
+ *
  * Joins:
  *   - `xano.familyPayments.getAllByYear(yearId)` → primary pivot
  *   - `xano.families.getAll()` → display label for the family
@@ -235,10 +239,21 @@ export async function GET(req: NextRequest) {
       primaryByFamily.set(f.id, matched[0] ?? null);
     }
 
+    // Residential/foster families are never tuition-billed — the
+    // program covers their students — so they stay off every part of
+    // this page (paying list AND the not-started queue). A stray
+    // subscription on one is handled from the family detail page, not
+    // here. Missing flag (legacy rows) counts as not residential.
+    const isResidentialFamily = (familyId: number): boolean =>
+      familyById.get(familyId)?.is_residential === true;
+
     const rows: BillingRow[] = payments
       // Sentinel-aware: a `canceled:<id>` marker is NOT a live
       // subscription — those families belong off the paying list.
       .filter((p) => !!activeStripeSubscriptionId(p.stripe_subscription_id))
+      .filter(
+        (p) => !isResidentialFamily(Number(p.registration_families_id))
+      )
       .map((p) => {
         const familyId = Number(p.registration_families_id);
         const family = familyById.get(familyId) ?? null;
@@ -307,7 +322,8 @@ export async function GET(req: NextRequest) {
         (p) =>
           p.isRegistrationConfirmed === true &&
           p.isArchived !== true &&
-          !liveSubFamilies.has(Number(p.registration_families_id))
+          !liveSubFamilies.has(Number(p.registration_families_id)) &&
+          !isResidentialFamily(Number(p.registration_families_id))
       )
       .map((p) => {
         const fid = Number(p.registration_families_id);

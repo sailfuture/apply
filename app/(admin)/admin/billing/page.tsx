@@ -1,15 +1,15 @@
 "use client";
 
-import { Fragment, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { toast } from "sonner";
 import {
-  ChevronDown,
   ChevronRight,
   CreditCard,
   Download,
   ExternalLink,
+  History,
   Loader2,
   OctagonAlert,
   Search,
@@ -96,8 +96,9 @@ export default function AdminBillingPage() {
   // year (not the search-filtered subset) — `exceljs` is lazy-loaded
   // inside the helper so it only ships on demand.
   const [exporting, setExporting] = useState(false);
-  // Row-click billing activity sheet — the stream filtered to Stripe
-  // subscription/invoice/payment events only.
+  // History-icon billing activity sheet — the stream filtered to
+  // Stripe subscription/invoice/payment events only. (Row click
+  // navigates to the family billing page — user request.)
   const [billingActivityFamily, setBillingActivityFamily] = useState<
     number | null
   >(null);
@@ -226,14 +227,24 @@ export default function AdminBillingPage() {
             </AlertDialogTitle>
             <AlertDialogDescription asChild>
               <div className="space-y-2 text-sm">
+                {/* "Every live subscription", not "{rows.length}
+                    families": the server sweep cancels ALL live
+                    subscriptions in the year's payment pivot,
+                    including any hidden from this list (e.g. a stray
+                    subscription on a residential family, which this
+                    page filters out). Promising the visible count
+                    would understate the action; the post-action toast
+                    reports the server's real numbers. */}
                 <p>
                   This sets{" "}
                   <span className="font-semibold text-foreground">
-                    {rows.length} famil{rows.length === 1 ? "y" : "ies"}
+                    every live subscription for this school year
                   </span>{" "}
-                  with a live subscription to{" "}
+                  ({rows.length} famil
+                  {rows.length === 1 ? "y" : "ies"} on this list, plus
+                  any subscription hidden from it) to{" "}
                   <span className="font-semibold text-foreground">
-                    cancel at the end of their current billing period
+                    cancel at the end of its current billing period
                   </span>
                   . Each family&rsquo;s current invoice plays out
                   normally; no further monthly invoices will be
@@ -272,15 +283,15 @@ export default function AdminBillingPage() {
                   Closing out…
                 </>
               ) : (
-                `Cancel ${rows.length} subscription${rows.length === 1 ? "" : "s"}`
+                "Cancel all live subscriptions"
               )}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Row-click billing activity — the family stream filtered to
-          Stripe subscription/invoice/payment events. */}
+      {/* History-icon billing activity — the family stream filtered
+          to Stripe subscription/invoice/payment events. */}
       {billingActivityFamily && yearId ? (
         <ActivityLogSheet
           familyId={billingActivityFamily}
@@ -541,9 +552,9 @@ function BillingTable({
   onOpenFamily,
 }: {
   rows: BillingRow[];
-  /** Row click — opens the billing-scoped activity sheet. */
+  /** History-icon click — opens the billing-scoped activity sheet. */
   onRowClick: (row: BillingRow) => void;
-  /** Family-name click — navigates to the family's billing page. */
+  /** Row click — navigates to the family's billing schedule page. */
   onOpenFamily: (row: BillingRow) => void;
 }) {
   const [search, setSearch] = useState("");
@@ -557,9 +568,11 @@ function BillingTable({
     );
   }, [rows, search]);
 
-  // Balance grouping — who owes money vs who's square. Outstanding
-  // sorts by size (biggest debt first) because that's the collection
-  // work order; the settled groups stay alphabetical for lookup.
+  // Balance grouping — who owes money vs who's square, one CARD per
+  // bucket (user request: outstanding vs paid-in-full as separate
+  // tables). Outstanding sorts by size (biggest debt first) because
+  // that's the collection work order; the settled groups stay
+  // alphabetical for lookup.
   //
   // A third bucket is needed for correctness: a scheduled subscription
   // has $0 outstanding AND $0 paid, so lumping it into "paid" would
@@ -582,62 +595,121 @@ function BillingTable({
         label: "Outstanding",
         hint: "An invoice balance is still owed for the year.",
         rows: owing,
-        className: "border-red-200 bg-red-50 text-red-700",
+        cardClassName: "border-red-200",
+        headerClassName: "border-red-200 bg-red-50/50",
+        titleClassName: "text-red-800",
+        mutedClassName: "text-red-800/70",
         total: `${formatCents(sum(owing, "outstanding_cents"))} outstanding`,
       },
       {
         key: "paid",
-        label: "Paid in full",
+        label: "Paid in Full",
         hint: "Every invoice issued so far has been paid — nothing owed today.",
         rows: settled,
-        className: "border-emerald-200 bg-emerald-50 text-emerald-700",
+        cardClassName: "border-emerald-200",
+        headerClassName: "border-emerald-200 bg-emerald-50/50",
+        titleClassName: "text-emerald-800",
+        mutedClassName: "text-emerald-800/70",
         total: `${formatCents(sum(settled, "paid_cents"))} collected`,
       },
       {
         key: "unbilled",
-        label: "Not yet billed",
+        label: "Not Yet Billed",
         hint: "Live subscription, but no invoice has been paid or issued yet.",
         rows: unbilled,
-        className: "border-blue-200 bg-blue-50 text-blue-700",
+        cardClassName: "border-blue-200",
+        headerClassName: "border-blue-200 bg-blue-50/50",
+        titleClassName: "text-blue-800",
+        mutedClassName: "text-blue-800/70",
         total: null,
       },
     ].filter((g) => g.rows.length > 0);
   }, [visible]);
 
-  // Collapsed group keys — all groups start open.
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  function toggleGroup(key: string) {
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  }
-
   return (
-    <Card className="overflow-hidden bg-white py-0 gap-0">
-      <CardHeader className="py-4 border-b bg-white">
+    <>
+      {/* One search across every bucket — a family moves between
+          cards as invoices get paid, so the search can't live inside
+          any single card. */}
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground/60" />
+        <Input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search families…"
+          className="pl-9 bg-white"
+        />
+      </div>
+      {visible.length === 0 ? (
+        <Card className="bg-white">
+          <CardContent className="py-8 text-center text-sm italic text-muted-foreground">
+            No families match &ldquo;{search}&rdquo;.
+          </CardContent>
+        </Card>
+      ) : (
+        groups.map((group) => (
+          <BillingGroupCard
+            key={group.key}
+            group={group}
+            onRowClick={onRowClick}
+            onOpenFamily={onOpenFamily}
+          />
+        ))
+      )}
+    </>
+  );
+}
+
+/** One balance bucket rendered as its own table card — header carries
+ *  the bucket name, row count, qualifying rule, and money total; the
+ *  table inside matches the old single-list columns exactly. */
+function BillingGroupCard({
+  group,
+  onRowClick,
+  onOpenFamily,
+}: {
+  group: BillingGroup;
+  /** History-icon click — opens the billing-scoped activity sheet. */
+  onRowClick: (row: BillingRow) => void;
+  /** Row click — navigates to the family's billing schedule page. */
+  onOpenFamily: (row: BillingRow) => void;
+}) {
+  return (
+    <Card
+      className={cn(
+        "overflow-hidden bg-white py-0 gap-0",
+        group.cardClassName
+      )}
+    >
+      <CardHeader className={cn("py-4 border-b", group.headerClassName)}>
         <div className="flex items-baseline gap-3">
-          <CardTitle className="text-sm font-semibold text-muted-foreground">
-            Subscriptions on File
+          <CardTitle
+            className={cn("text-sm font-semibold", group.titleClassName)}
+          >
+            {group.label}
           </CardTitle>
-          <span className="text-xs tabular-nums text-muted-foreground">
-            ({rows.length})
+          <span className={cn("text-xs tabular-nums", group.mutedClassName)}>
+            ({group.rows.length})
           </span>
+          <p className={cn("text-xs", group.mutedClassName)}>{group.hint}</p>
+          {group.total ? (
+            <span
+              className={cn(
+                "ml-auto text-xs font-medium tabular-nums",
+                group.mutedClassName
+              )}
+            >
+              {group.total}
+            </span>
+          ) : null}
         </div>
       </CardHeader>
-      <CardContent className="p-4 bg-white space-y-3">
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground/60" />
-          <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search families…"
-            className="pl-9 bg-white"
-          />
-        </div>
-        <Table>
+      <CardContent className="p-4 bg-white">
+        {/* table-fixed so the width hints hold and the truncate spans
+            in the Family / Primary Contact cells can actually bite —
+            auto layout would let one long email stretch its column
+            and horizontally scroll the card. */}
+        <Table className="table-fixed">
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead className="text-[10px] text-muted-foreground w-[16%]">
@@ -661,123 +733,76 @@ function BillingTable({
               <TableHead className="text-[10px] text-muted-foreground w-[12%] text-right">
                 Outstanding
               </TableHead>
-              <TableHead className="text-[10px] text-muted-foreground w-[12%] text-right">
+              <TableHead className="text-[10px] text-muted-foreground w-[10%] text-right">
                 Next Invoice
               </TableHead>
-              <TableHead className="text-[10px] text-muted-foreground w-[4%] text-right" />
+              <TableHead className="text-[10px] text-muted-foreground w-[6%] text-right" />
             </TableRow>
           </TableHeader>
           <TableBody>
-            {visible.length === 0 ? (
-              <TableRow className="hover:bg-transparent">
+            {group.rows.map((row) => (
+              // Row click = the family's billing schedule page (user
+              // request — it used to open the activity sheet, which
+              // now lives on the history icon at the row's end).
+              <TableRow
+                key={row.id}
+                onClick={() => onOpenFamily(row)}
+                className="cursor-pointer"
+              >
+                <TableCell className="text-sm font-medium">
+                  <span className="block max-w-full truncate">
+                    {row.family_name}
+                  </span>
+                </TableCell>
+                <TableCell className="text-sm">
+                  <span className="block truncate">
+                    {row.primary_email || row.primary_name || "—"}
+                  </span>
+                </TableCell>
+                <TableCell>
+                  <StatusPill status={row.status} />
+                </TableCell>
+                <TableCell className="text-sm text-right tabular-nums">
+                  {formatMonthly(row.monthly_tuition)}
+                </TableCell>
+                <TableCell className="text-sm text-right tabular-nums">
+                  {formatMonthly(row.year_total)}
+                </TableCell>
+                <TableCell className="text-sm text-right tabular-nums text-emerald-700">
+                  {formatCents(row.paid_cents)}
+                </TableCell>
                 <TableCell
-                  colSpan={9}
-                  className="py-8 text-center text-sm italic text-muted-foreground"
+                  className={cn(
+                    "text-sm text-right tabular-nums",
+                    row.outstanding_cents > 0
+                      ? "text-red-700 font-medium"
+                      : "text-muted-foreground"
+                  )}
                 >
-                  No families match &ldquo;{search}&rdquo;.
+                  {formatCents(row.outstanding_cents)}
+                </TableCell>
+                <TableCell
+                  className="text-sm text-right tabular-nums text-muted-foreground"
+                  title="Projected from the year's billing anchor — Stripe owns the exact cycle date."
+                >
+                  {formatUpcoming(row.next_invoice_at)}
+                </TableCell>
+                <TableCell className="text-right whitespace-nowrap">
+                  <button
+                    type="button"
+                    title="Billing activity"
+                    className="rounded p-1 align-middle text-muted-foreground hover:bg-muted hover:text-foreground"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onRowClick(row);
+                    }}
+                  >
+                    <History className="size-3.5" aria-hidden="true" />
+                  </button>
+                  <ChevronRight className="size-4 text-muted-foreground inline align-middle" />
                 </TableCell>
               </TableRow>
-            ) : (
-              groups.map((group) => {
-                const isCollapsed = collapsed.has(group.key);
-                return (
-                  <Fragment key={group.key}>
-                    <TableRow className="hover:bg-transparent border-t bg-muted/40">
-                      <TableCell colSpan={9} className="p-0">
-                        <button
-                          type="button"
-                          onClick={() => toggleGroup(group.key)}
-                          title={group.hint}
-                          className="flex w-full items-center gap-2 px-2 py-2 text-left"
-                        >
-                          {isCollapsed ? (
-                            <ChevronRight className="size-3.5 text-muted-foreground" />
-                          ) : (
-                            <ChevronDown className="size-3.5 text-muted-foreground" />
-                          )}
-                          <span
-                            className={cn(
-                              "inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium",
-                              group.className
-                            )}
-                          >
-                            {group.label}
-                          </span>
-                          <span className="text-xs tabular-nums text-muted-foreground">
-                            {group.rows.length}
-                          </span>
-                          {group.total ? (
-                            <span className="ml-auto text-xs tabular-nums text-muted-foreground">
-                              {group.total}
-                            </span>
-                          ) : null}
-                        </button>
-                      </TableCell>
-                    </TableRow>
-                    {isCollapsed
-                      ? null
-                      : group.rows.map((row) => (
-                          <TableRow
-                            key={row.id}
-                            onClick={() => onRowClick(row)}
-                            className="cursor-pointer"
-                          >
-                            <TableCell className="text-sm font-medium">
-                              {/* Name click = full billing page; the ROW click
-                                  opens the billing activity sheet. */}
-                              <button
-                                type="button"
-                                className="block max-w-full truncate text-left font-medium hover:underline"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onOpenFamily(row);
-                                }}
-                              >
-                                {row.family_name}
-                              </button>
-                            </TableCell>
-                            <TableCell className="text-sm">
-                              <span className="block truncate">
-                                {row.primary_email || row.primary_name || "—"}
-                              </span>
-                            </TableCell>
-                            <TableCell>
-                              <StatusPill status={row.status} />
-                            </TableCell>
-                            <TableCell className="text-sm text-right tabular-nums">
-                              {formatMonthly(row.monthly_tuition)}
-                            </TableCell>
-                            <TableCell className="text-sm text-right tabular-nums">
-                              {formatMonthly(row.year_total)}
-                            </TableCell>
-                            <TableCell className="text-sm text-right tabular-nums text-emerald-700">
-                              {formatCents(row.paid_cents)}
-                            </TableCell>
-                            <TableCell
-                              className={cn(
-                                "text-sm text-right tabular-nums",
-                                row.outstanding_cents > 0
-                                  ? "text-red-700 font-medium"
-                                  : "text-muted-foreground"
-                              )}
-                            >
-                              {formatCents(row.outstanding_cents)}
-                            </TableCell>
-                            <TableCell
-                              className="text-sm text-right tabular-nums text-muted-foreground"
-                              title="Projected from the year's billing anchor — Stripe owns the exact cycle date."
-                            >
-                              {formatUpcoming(row.next_invoice_at)}
-                            </TableCell>
-                            <TableCell className="text-right">
-                              <ChevronRight className="size-4 text-muted-foreground inline" />
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                  </Fragment>
-                );
-              })
-            )}
+            ))}
           </TableBody>
         </Table>
       </CardContent>
@@ -789,11 +814,17 @@ function BillingTable({
 interface BillingGroup {
   key: string;
   label: string;
-  /** Tooltip on the group header — what puts a family in this bucket. */
+  /** Header microcopy — what puts a family in this bucket. */
   hint: string;
   rows: BillingRow[];
-  /** Pill colors, matching the status pills above. */
-  className: string;
+  /** Card border accent. */
+  cardClassName: string;
+  /** Card header band (border + wash). */
+  headerClassName: string;
+  /** Title text color. */
+  titleClassName: string;
+  /** De-emphasized header text (count, hint, total). */
+  mutedClassName: string;
   /** Right-aligned money summary for the group, null when meaningless. */
   total: string | null;
 }
