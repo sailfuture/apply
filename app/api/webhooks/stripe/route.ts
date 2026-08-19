@@ -372,11 +372,13 @@ async function upsertInvoiceFromEvent(
             : (invoice.amount_due ?? 0);
       }
     } catch (err) {
-      // Lookup failure — keep Stripe's payload figure; the floor
-      // guard below still protects an already-recorded amount.
-      console.error(
-        `[/api/webhooks/stripe] failed to check payments on ${invoice.id}:`,
-        err
+      // THROW → 500 → Stripe redelivers. Swallowing this would
+      // silently reintroduce the $0-clobber race: with the retrieve
+      // dead we'd fall back to the floor guard's possibly-stale
+      // mirror read, and `invoice.paid` is the terminal event — a
+      // 200 here means nothing ever corrects the row.
+      throw new Error(
+        `payments check for ${invoice.id} failed (${err instanceof Error ? err.message : String(err)}) — retrying so a check payment can't mirror as $0`
       );
     }
   }
