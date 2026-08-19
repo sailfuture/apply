@@ -23,6 +23,12 @@ import type { FamilyProfileResponse } from "@/app/api/admin/families/[id]/profil
  * full family record for everything else (billing, docs, notes).
  * Lazy: nothing fetches until the sheet opens.
  */
+/** "9" and "9th" both live in the grade column — normalize bare
+ *  numbers to the ordinal form for display. */
+function formatGrade(grade: string): string {
+  return /^\d+$/.test(grade) ? `${grade}th` : grade;
+}
+
 export function FamilyProfileSheet({
   familyId,
   open,
@@ -91,7 +97,10 @@ export function FamilyProfileSheet({
                             </span>
                           ) : null}
                         </p>
-                        <div className="grid grid-cols-2 gap-x-4 gap-y-2.5">
+                        {/* Stacked full-width rows — the sheet is
+                            narrow, and a 2-col grid wrapped phone
+                            numbers mid-digit. */}
+                        <div className="space-y-2.5">
                           <ContactRow
                             label="Phone"
                             value={
@@ -126,11 +135,28 @@ export function FamilyProfileSheet({
                     No students on file.
                   </p>
                 ) : (
-                  <div className="space-y-1.5">
+                  <div className="space-y-3">
                     {data.students.map((s) => (
-                      <p key={s.id} className="text-sm">
-                        {s.name || `Student #${s.id}`}
-                      </p>
+                      <div key={s.id} className="space-y-1.5">
+                        <p className="text-sm font-medium">
+                          {s.name || `Student #${s.id}`}
+                          {s.grade ? (
+                            <span className="ml-1.5 font-normal text-muted-foreground">
+                              · {formatGrade(s.grade)}
+                            </span>
+                          ) : null}
+                        </p>
+                        {s.phone ? (
+                          <ContactRow
+                            label="Phone"
+                            value={formatUSPhone(s.phone) || s.phone}
+                            copyValue={s.phone}
+                            href={`tel:${s.phone}`}
+                            actionLabel="Call"
+                            actionIcon={<Phone className="size-3.5" />}
+                          />
+                        ) : null}
+                      </div>
                     ))}
                   </div>
                 )}

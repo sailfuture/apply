@@ -19,7 +19,16 @@ export interface FamilyProfileResponse {
     phone: string;
     email: string;
   }>;
-  students: Array<{ id: number; name: string }>;
+  students: Array<{
+    id: number;
+    name: string;
+    /** Current grade from the student's newest active application
+     *  row ("9th"); empty when none on file. */
+    grade: string;
+    /** The student's own phone (packet contact field); empty when
+     *  unset. */
+    phone: string;
+  }>;
 }
 
 export async function GET(
@@ -34,12 +43,27 @@ export async function GET(
       return NextResponse.json({ error: "Invalid id" }, { status: 400 });
     }
 
-    const [family, students] = await Promise.all([
+    const [family, students, apps] = await Promise.all([
       xano.families.getById(id),
       xano.students.getByFamilyId(id).catch(() => []),
+      xano.applications.getByFamilyId(id).catch(() => []),
     ]);
     if (!family) {
       return NextResponse.json({ error: "Family not found" }, { status: 404 });
+    }
+
+    // Grade per student — newest ACTIVE application row wins (the
+    // re-created-row convention used across the admin surfaces).
+    const gradeRowByStudent = new Map<number, { appId: number; grade: string }>();
+    for (const a of apps) {
+      if (a.isActive === false) continue;
+      const sid = Number(a.registration_students_id);
+      const grade = (a.current_grade ?? "").trim();
+      if (!sid || !grade) continue;
+      const prev = gradeRowByStudent.get(sid);
+      if (!prev || Number(a.id) > prev.appId) {
+        gradeRowByStudent.set(sid, { appId: Number(a.id), grade });
+      }
     }
 
     const parents = (
@@ -66,6 +90,8 @@ export async function GET(
         .map((s) => ({
           id: s.id,
           name: `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim(),
+          grade: gradeRowByStudent.get(s.id)?.grade ?? "",
+          phone: (s.student_phone ?? "").trim(),
         })),
     };
     return NextResponse.json(payload);
