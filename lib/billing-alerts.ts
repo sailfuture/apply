@@ -12,15 +12,21 @@ import { getResend, getFromAddress } from "@/lib/emails/resend";
  * staff billing inbox. Best-effort: never throws, because every call
  * site is itself inside a billing operation that must not fail on a
  * notification problem.
+ *
+ * Returns whether the send succeeded, for the rare call site where
+ * the alert is the ONLY durable outcome of handling an event (the
+ * webhook's stray-subscription branch) and a failed send must feed
+ * back into the caller's retry loop. Everywhere else the return is
+ * ignored and the alert stays fire-and-forget.
  */
 export async function sendBillingAlert(
   subject: string,
   lines: string[]
-): Promise<void> {
+): Promise<boolean> {
   try {
     const to =
       process.env.BILLING_ALERTS_EMAIL ?? "admissions@sailfuture.org";
-    await getResend().emails.send({
+    const { error } = await getResend().emails.send({
       from: getFromAddress(),
       to,
       subject: `[Billing alert] ${subject}`,
@@ -30,10 +36,22 @@ export async function sendBillingAlert(
         "— Automated alert from the SailFuture Apply billing pipeline.",
       ].join("\n"),
     });
+    // Resend reports API-level failures on the `error` field rather
+    // than throwing — a send that "succeeded" with an error attached
+    // never reached the inbox.
+    if (error) {
+      console.error(
+        `[billing-alerts] failed to send alert "${subject}":`,
+        error
+      );
+      return false;
+    }
+    return true;
   } catch (err) {
     console.error(
       `[billing-alerts] failed to send alert "${subject}":`,
       err
     );
+    return false;
   }
 }

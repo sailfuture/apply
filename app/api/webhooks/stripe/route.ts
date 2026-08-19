@@ -339,6 +339,24 @@ async function upsertInvoiceFromEvent(
   const existingRank = existing ? (STATUS_RANK[existing.status] ?? 1) : -1;
   const regressed = existing !== null && incomingRank < existingRank;
 
+  // Floor guard for out-of-band (check/cash) payments: the admin
+  // mark-paid route records the full amount as collected the moment
+  // it marks the invoice paid, but the `invoice.paid` event that
+  // follows may report a smaller `amount_paid` for money Stripe never
+  // touched — and the event payload has no way to say so (Basil
+  // removed `paid_out_of_band` from the Invoice resource, and
+  // `payments` isn't included in webhook payloads). On a PAID row,
+  // never let a lower Stripe-reported figure clobber the higher
+  // recorded one; unpaid rows keep Stripe's number verbatim.
+  const reportedPaidCents = invoice.amount_paid ?? 0;
+  const collectedCents =
+    status === "paid"
+      ? Math.max(reportedPaidCents, existing?.amount_paid_cents ?? 0)
+      : reportedPaidCents;
+
+  // NOTE: this payload deliberately omits `payment_method` — the
+  // admin mark-paid route owns that field, and a webhook re-sync
+  // must not clear it (PATCH leaves absent keys untouched).
   const payload: Omit<XanoPaymentTransaction, "id" | "created_at"> = {
     registration_families_id: familyId,
     registration_school_years_id: yearId,
@@ -350,7 +368,7 @@ async function upsertInvoiceFromEvent(
     amount_due_cents: invoice.amount_due ?? 0,
     amount_paid_cents: regressed
       ? (existing?.amount_paid_cents ?? 0)
-      : (invoice.amount_paid ?? 0),
+      : collectedCents,
     status: regressed ? existing!.status : status,
     hosted_invoice_url: invoice.hosted_invoice_url ?? null,
     invoice_pdf_url: invoice.invoice_pdf ?? null,
@@ -488,7 +506,14 @@ async function findFamilyPaymentBySubscriptionId(
  * family 0 so staff see every purchase. Sessions with no
  * `payment_link` aren't ours to mirror — the tuition pipeline runs on
  * subscriptions/invoices, so payment links are the only checkout
- * sessions this account produces.
+ * sessions this account produces. Subscription-MODE payment links are
+ * excluded too: store catalog items are all one-time (`mode:
+ * "payment"`), so a recurring link is a Dashboard-made tuition-style
+ * link whose checkout mints a fresh subscription under the payer —
+ * unconnected to any family's real subscription. Recording that as a
+ * store order would paper over money that won't reconcile anywhere,
+ * so we alert staff instead (the stray subscription needs a manual
+ * cancel/refund).
  *
  * Same retry contract as the invoice mirror: transient Xano failures
  * (including the table not existing yet) THROW so Stripe retries;
@@ -505,6 +530,69 @@ async function recordStoreOrderFromSession(
     );
     return;
   }
+  const purchaserEmail = (
+    session.customer_details?.email ??
+    session.customer_email ??
+    ""
+  ).trim();
+
+  // Subscription-mode sessions are never store purchases (catalog
+  // links are all one-time `mode: "payment"`; a recurring link pasted
+  // into the catalog would land here too — don't do that). This fires
+  // when someone completes a Dashboard-made recurring Payment Link —
+  // e.g. a legacy per-family tuition link. That checkout created a
+  // brand-new Stripe subscription under the PAYER's identity,
+  // unconnected to the family's real subscription or invoices, and it
+  // keeps billing on the link's schedule until canceled. Don't record
+  // a phantom store order — alert staff so they cancel/refund it.
+  //
+  // This guard sits ABOVE the payment_status check deliberately: a
+  // trial-configured recurring link completes with payment_status
+  // "no_payment_required" and no follow-up event ever fires, so the
+  // "waiting for payment" early-return below would silently swallow
+  // exactly the sessions this guard exists to surface.
+  if (session.mode === "subscription") {
+    let lineItemSummary = "";
+    try {
+      const lineItems = await getStripeClient().checkout.sessions.listLineItems(
+        session.id,
+        { limit: 5 }
+      );
+      lineItemSummary = lineItems.data
+        .map((li) => li.description)
+        .filter(Boolean)
+        .join(", ");
+    } catch {
+      // Summary is nice-to-have for the alert — skip on failure.
+    }
+    console.warn(
+      `[/api/webhooks/stripe] ${eventType}: session ${session.id} (payment link ${paymentLinkId}) is subscription-mode — not a store purchase; alerting staff instead of recording an order.`
+    );
+    const sent = await sendBillingAlert(
+      "Recurring Payment Link was paid — will not reconcile",
+      [
+        `Someone completed checkout on a subscription-mode Stripe Payment Link (${paymentLinkId}), checkout session ${session.id}.`,
+        lineItemSummary ? `Line items: ${lineItemSummary}.` : "",
+        `Amount: $${((session.amount_total ?? 0) / 100).toFixed(2)}. Purchaser email: ${purchaserEmail || "unknown"}.`,
+        `This created a NEW Stripe subscription under the purchaser's identity. It is NOT connected to any family's tuition subscription and keeps billing on the link's schedule until canceled.`,
+        `Action: open the checkout session in the Stripe Dashboard, cancel the subscription it created, and refund if needed. To pay a family's actual tuition invoice, use the invoice's hosted payment link on their admin billing schedule page — it works for anyone, no login required.`,
+      ].filter(Boolean)
+    );
+    // The alert is this branch's ONLY durable outcome — no row is
+    // written anywhere, and every follow-up event from the stray
+    // subscription is silently skipped by the other handlers. A
+    // swallowed send failure + 200 would lose the event forever
+    // (the exact contract violation the file header forbids), so
+    // throw → Stripe retries → the alert re-sends until it lands.
+    // A duplicate staff email on a rare double-delivery is fine.
+    if (!sent) {
+      throw new Error(
+        `billing alert for subscription-mode session ${session.id} failed to send — retrying`
+      );
+    }
+    return;
+  }
+
   if (session.payment_status !== "paid") {
     // A completed session with an async payment method still pending —
     // the async_payment_succeeded event will land here again once the
@@ -529,11 +617,6 @@ async function recordStoreOrderFromSession(
   // link carries none — fall back to matching the purchaser's email
   // against the parent roster. Best-effort: an unmatched email still
   // records as unattributed (family 0).
-  const purchaserEmail = (
-    session.customer_details?.email ??
-    session.customer_email ??
-    ""
-  ).trim();
   let familyId = refFamilyId;
   if (!familyId && purchaserEmail) {
     const familyByEmail = await buildFamilyByParentEmail();
