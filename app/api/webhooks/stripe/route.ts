@@ -339,16 +339,49 @@ async function upsertInvoiceFromEvent(
   const existingRank = existing ? (STATUS_RANK[existing.status] ?? 1) : -1;
   const regressed = existing !== null && incomingRank < existingRank;
 
-  // Floor guard for out-of-band (check/cash) payments: the admin
-  // mark-paid route records the full amount as collected the moment
-  // it marks the invoice paid, but the `invoice.paid` event that
-  // follows may report a smaller `amount_paid` for money Stripe never
-  // touched — and the event payload has no way to say so (Basil
+  // Out-of-band (check/cash) payments report `amount_paid` 0 — money
+  // Stripe never touched — and the event payload can't say so (Basil
   // removed `paid_out_of_band` from the Invoice resource, and
-  // `payments` isn't included in webhook payloads). On a PAID row,
-  // never let a lower Stripe-reported figure clobber the higher
-  // recorded one; unpaid rows keep Stripe's number verbatim.
-  const reportedPaidCents = invoice.amount_paid ?? 0;
+  // `payments` isn't included in webhook payloads). A paid invoice
+  // with a suspicious $0 gets ONE retrieve with payments expanded: a
+  // succeeded `payment_record` payment means out-of-band, so the
+  // amount due counts as collected. This must be deterministic, not
+  // inferred from the mirror row: the previous approach (floor-guard
+  // against the existing row's amount) raced the mark-paid route's
+  // own mirror write — a webhook that READ the row before that write
+  // landed clobbered the recorded amount back to $0 (family showed
+  // "paid via Check, $0 collected", bucketed as Not Yet Billed).
+  let reportedPaidCents = invoice.amount_paid ?? 0;
+  if (
+    status === "paid" &&
+    reportedPaidCents === 0 &&
+    (invoice.amount_due ?? 0) > 0 &&
+    invoice.id
+  ) {
+    try {
+      const full = await getStripeClient().invoices.retrieve(invoice.id, {
+        expand: ["payments"],
+      });
+      const outOfBand = (full.payments?.data ?? []).some(
+        (p) => p.status === "paid" && p.payment?.type === "payment_record"
+      );
+      if (outOfBand) {
+        reportedPaidCents =
+          (full.amount_paid ?? 0) > 0
+            ? (full.amount_paid ?? 0)
+            : (invoice.amount_due ?? 0);
+      }
+    } catch (err) {
+      // Lookup failure — keep Stripe's payload figure; the floor
+      // guard below still protects an already-recorded amount.
+      console.error(
+        `[/api/webhooks/stripe] failed to check payments on ${invoice.id}:`,
+        err
+      );
+    }
+  }
+  // Floor guard stays as a second net: on a PAID row, never let a
+  // lower figure clobber a higher recorded one.
   const collectedCents =
     status === "paid"
       ? Math.max(reportedPaidCents, existing?.amount_paid_cents ?? 0)

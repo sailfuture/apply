@@ -118,6 +118,9 @@ async function listAllInvoicesForSubscription(
     const page = await stripe.invoices.list({
       subscription: subscriptionId,
       limit: 100,
+      // `payments` is expandable-only — needed to recognize
+      // out-of-band (check/cash) payment records below.
+      expand: ["data.payments"],
       ...(startingAfter ? { starting_after: startingAfter } : {}),
     });
     out.push(...page.data);
@@ -178,13 +181,23 @@ async function upsertInvoiceRow({
     invoice.id
   );
 
-  // Floor guard for out-of-band (check/cash) payments, matching the
-  // webhook: the mark-paid route records the full amount as
-  // collected, and Stripe's own `amount_paid` may not include money
-  // it never touched — a re-sync writing the lower figure would
-  // un-count a settled check payment. On a PAID row keep the higher
-  // of the two; unpaid rows take Stripe's number verbatim.
-  const reportedPaidCents = invoice.amount_paid ?? 0;
+  // Out-of-band (check/cash) payments report `amount_paid` 0 — money
+  // Stripe never touched. The payments list (expanded on the fetch)
+  // says so deterministically: a succeeded `payment_record` payment
+  // means out-of-band, so the amount due counts as collected. The
+  // floor guard below stays as a second net so a re-sync can never
+  // un-count a recorded check payment either way.
+  let reportedPaidCents = invoice.amount_paid ?? 0;
+  if (
+    status === "paid" &&
+    reportedPaidCents === 0 &&
+    (invoice.amount_due ?? 0) > 0 &&
+    (invoice.payments?.data ?? []).some(
+      (p) => p.status === "paid" && p.payment?.type === "payment_record"
+    )
+  ) {
+    reportedPaidCents = invoice.amount_due ?? 0;
+  }
 
   // Omits `payment_method` — owned by the admin mark-paid route; a
   // re-sync must not clear it (PATCH leaves absent keys untouched).
