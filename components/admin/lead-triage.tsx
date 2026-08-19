@@ -1310,6 +1310,7 @@ export function LeadTriageSheet({
   extraContent,
   headerBadges,
   onChanged,
+  loading,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -1350,7 +1351,40 @@ export function LeadTriageSheet({
    *  say — which would lose their urgency buried in a field list. */
   headerBadges?: React.ReactNode;
   onChanged?: () => void;
+  /** Skeleton mode — the sheet shell opens immediately (title +
+   *  spinner, no controls) while the host is still fetching the
+   *  lead's row. Flipping to false swaps the real content in place,
+   *  so the slide-in animation never replays. */
+  loading?: boolean;
 }) {
+  // Loading shell — same <Sheet>/<SheetContent> in the same tree
+  // position as the full return below, so React reconciles the flip
+  // to loaded in place instead of remounting (a remount would replay
+  // the slide-in with the content popping in mid-animation).
+  if (loading) {
+    return (
+      <Sheet open={open} onOpenChange={onOpenChange}>
+        <SheetContent
+          side="right"
+          className="flex w-full flex-col gap-0 p-0 sm:max-w-lg"
+        >
+          <SheetHeader className="shrink-0 border-b px-4 py-3">
+            <SheetTitle className="flex flex-wrap items-center gap-2 text-base">
+              {title}
+            </SheetTitle>
+            {subtitle ? (
+              <SheetDescription className="text-xs">
+                {subtitle}
+              </SheetDescription>
+            ) : null}
+          </SheetHeader>
+          <div className="flex flex-1 items-center justify-center">
+            <Loader2 className="size-4 animate-spin text-muted-foreground" />
+          </div>
+        </SheetContent>
+      </Sheet>
+    );
+  }
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent

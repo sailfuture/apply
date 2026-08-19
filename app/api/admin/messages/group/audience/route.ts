@@ -92,15 +92,26 @@ export async function GET(req: NextRequest) {
     // Admin-set packet placement (grade_level) wins over the
     // application's incoming grade — it's the grade the Enrolled
     // roster shows, so the composer's grade chips match that page.
+    // Crew assignment rides along from the same packet rows so the
+    // composer can narrow a blast to one crew ("just Crew E").
     const packetGradeByStudent = new Map<number, string>();
+    const packetCrewByStudent = new Map<number, string>();
     for (const p of packets) {
       const sid = Number(p.registration_students_id);
+      if (!sid) continue;
       const g = (p.grade_level ?? "").trim();
-      if (sid && g) packetGradeByStudent.set(sid, g);
+      if (g) packetGradeByStudent.set(sid, g);
+      const crew = (p.crew_assignment ?? "").trim();
+      if (crew) packetCrewByStudent.set(sid, crew);
     }
     const familyStudents = new Map<
       number,
-      Array<{ name: string; grade: number | null; gradeRaw: string }>
+      Array<{
+        name: string;
+        grade: number | null;
+        gradeRaw: string;
+        crew: string;
+      }>
     >();
     for (const a of apps) {
       if (Number(a.registration_school_years_id) !== yearId) continue;
@@ -118,6 +129,7 @@ export async function GET(req: NextRequest) {
           name: studentNameById.get(sid) ?? "",
           grade: parseGrade(gradeRaw),
           gradeRaw,
+          crew: packetCrewByStudent.get(sid) ?? "",
         });
       }
       familyStudents.set(fid, list);
@@ -158,13 +170,19 @@ export async function GET(req: NextRequest) {
           : "",
         stage,
         students: kids
-          .map((k) =>
-            k.name
-              ? k.gradeRaw
-                ? `${k.name} (${gradeLabel(k.grade, k.gradeRaw)})`
-                : k.name
-              : ""
-          )
+          .map((k) => {
+            if (!k.name) return "";
+            // "(8th · Crew E)" — crew shows beside the grade so the
+            // recipient row answers "whose kid is in which crew" at a
+            // glance, and plain search ("crew e") matches it too.
+            const detail = [
+              k.gradeRaw ? gradeLabel(k.grade, k.gradeRaw) : "",
+              k.crew,
+            ]
+              .filter(Boolean)
+              .join(" · ");
+            return detail ? `${k.name} (${detail})` : k.name;
+          })
           .filter(Boolean)
           .join(", "),
         grades: [
@@ -174,6 +192,7 @@ export async function GET(req: NextRequest) {
               .filter((g): g is number => g !== null)
           ),
         ],
+        crews: [...new Set(kids.map((k) => k.crew).filter(Boolean))],
         phone: formatUSPhone(parent?.phone ?? "") || "",
         hasPhone: Boolean(e164),
         optedOut,
@@ -411,6 +430,10 @@ export interface GroupContact {
   students: string;
   /** Distinct parsed grades 8–12 — drives the dialog's grade filter. */
   grades: number[];
+  /** Families only — distinct crew assignments ("Crew A"–"Crew E")
+   *  across the family's packet rows for the year. Drives the
+   *  composer's crew filter; absent/empty on lead rows. */
+  crews?: string[];
   /** Display-formatted phone ("(727) 555-0143"); empty when none on
    *  file. Shown on every recipient row. */
   phone: string;

@@ -134,7 +134,11 @@ export async function syncMessagesFromTwilio({
         direction: inbound ? "inbound" : "outbound",
         to_number: msg.to ?? "",
         from_number: msg.from ?? "",
-        body: msg.body || "(no text)",
+        // Trimmed for the same reason as the webhook's inbound log:
+        // Xano trims text on save, and untrimmed carrier text made the
+        // create echo-guard false-positive — which here aborted the
+        // WHOLE sweep and re-wedged on every run (Aug 2026 incident).
+        body: (msg.body ?? "").trim() || "(no text)",
         status: msg.status || (inbound ? "received" : "sent"),
         twilio_message_sid: msg.sid,
         // "external" renders these with the automated (tinted) bubble

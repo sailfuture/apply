@@ -184,6 +184,11 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
   const [search, setSearch] = useState("");
   const [stageFilter, setStageFilter] = useState<GroupStage[]>([]);
   const [gradeFilter, setGradeFilter] = useState<number[]>([]);
+  // Crew chips — narrow a blast to one crew's families ("just Crew E").
+  // Options derive from the loaded audience so renamed/added crews
+  // appear without a code change; the row hides when no family has a
+  // crew assignment for the year.
+  const [crewFilter, setCrewFilter] = useState<string[]>([]);
   const [onlyOutstanding, setOnlyOutstanding] = useState(false);
   // Minimum star rating (0 = any). Ratings live on LEAD rows (inquiry
   // / camp / visit / TASCO), so any minimum > 0 narrows to rated leads.
@@ -267,11 +272,21 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
   );
 
   // Year switch invalidates the audience — drop any selection made
-  // against the previous year's list.
+  // against the previous year's list (and any crew narrowing, since
+  // crews are per-year packet assignments).
   function changeYear(v: string) {
     setYearId(v);
     setSelected(new Set());
+    setCrewFilter([]);
   }
+
+  const crewOptions = useMemo(
+    () =>
+      [...new Set(contacts.flatMap((c) => c.crews ?? []))].sort((a, b) =>
+        a.localeCompare(b)
+      ),
+    [contacts]
+  );
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -282,6 +297,12 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
       if (
         gradeFilter.length > 0 &&
         !c.grades.some((g) => gradeFilter.includes(g))
+      ) {
+        return false;
+      }
+      if (
+        crewFilter.length > 0 &&
+        !(c.crews ?? []).some((cr) => crewFilter.includes(cr))
       ) {
         return false;
       }
@@ -297,7 +318,15 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
         matchesStageAlias(c.stage, q)
       );
     });
-  }, [contacts, search, stageFilter, gradeFilter, onlyOutstanding, minRating]);
+  }, [
+    contacts,
+    search,
+    stageFilter,
+    gradeFilter,
+    crewFilter,
+    onlyOutstanding,
+    minRating,
+  ]);
 
   const selectedContacts = useMemo(
     () =>
@@ -539,6 +568,43 @@ export function GroupMessageDialog({ onSent }: { onSent?: () => void }) {
                   </button>
                 );
               })}
+              {/* Crew chips — packet crew assignments for the year.
+                  Hidden entirely until at least one family has one. */}
+              {crewOptions.length > 0 ? (
+                <>
+                  <span className="mx-1 h-4 w-px bg-border" aria-hidden />
+                  <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                    Crew
+                  </span>
+                  {crewOptions.map((crew) => {
+                    const on = crewFilter.includes(crew);
+                    return (
+                      <button
+                        key={crew}
+                        type="button"
+                        aria-pressed={on}
+                        onClick={() =>
+                          setCrewFilter((prev) =>
+                            prev.includes(crew)
+                              ? prev.filter((x) => x !== crew)
+                              : [...prev, crew]
+                          )
+                        }
+                        className={cn(
+                          "rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors",
+                          on
+                            ? "border-foreground bg-foreground text-background"
+                            : "border-border bg-white text-muted-foreground hover:border-foreground/40 hover:text-foreground"
+                        )}
+                      >
+                        {/* "Crew E" chips read as just "E" next to the
+                            CREW row label. */}
+                        {crew.replace(/^crew\s+/i, "")}
+                      </button>
+                    );
+                  })}
+                </>
+              ) : null}
               <span className="mx-1 h-4 w-px bg-border" aria-hidden />
               <button
                 type="button"

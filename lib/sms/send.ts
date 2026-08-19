@@ -81,12 +81,20 @@ function buildStatusCallbackUrl(): string | undefined {
 
 export async function sendSms(input: SendSmsInput): Promise<SendSmsResult> {
   const {
-    body,
     template = "manual",
     studentId = null,
     yearId = null,
     author = null,
   } = input;
+  // Trim at the choke point, not (only) per caller: Xano trims text
+  // columns on save, and the sms_messages create echo-guard compares
+  // what comes back — an untrimmed trailing newline would trip it and
+  // drop the log row. Trimming here means no current or future caller
+  // can reintroduce that.
+  const body = (input.body ?? "").trim();
+  if (!body) {
+    return { ok: false, error: "Empty message body" };
+  }
 
   const contact =
     input.contact ??
@@ -100,11 +108,16 @@ export async function sendSms(input: SendSmsInput): Promise<SendSmsResult> {
   // Resolve the recipient + consent gate, per contact type.
   let to: string | null = null;
   if (contact.type === "family") {
-    // Family path: account-holder parent unless the caller passed one
-    // or an explicit `to`. Needed both for the phone number and the
-    // opt-out check.
+    // Family path: the parent row supplies both the phone number and
+    // the consent evidence. ALWAYS resolve it when the caller didn't
+    // pass one — including when an explicit `to` override is given.
+    // The old shape (`!parent && !input.to`) skipped the lookup for
+    // `to`-only calls, which made the gate below evaluate
+    // `undefined?.sms_opted_out_at` and fail OPEN: any such caller
+    // would text an opted-out family. This function is the final
+    // authority on consent; the extra read is the cost of that.
     let parent = input.parent ?? null;
-    if (!parent && !input.to) {
+    if (!parent) {
       parent = await resolvePrimaryParent(contact.id);
     }
     // Consent gate — never text a family that texted STOP.

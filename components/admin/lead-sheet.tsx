@@ -66,7 +66,7 @@ export function LeadSheet({
    *  hook in here; without it the sheet simply stays closed. */
   onMissing?: () => void;
 }) {
-  const { data, mutate } = useSWR<AllLeadRow[]>(
+  const { data, isLoading, mutate } = useSWR<AllLeadRow[]>(
     lead ? "/api/admin/all-leads" : null,
     adminFetcher,
     {
@@ -87,7 +87,30 @@ export function LeadSheet({
     lead && Array.isArray(data)
       ? (data.find((r) => r.source === lead.source && r.id === lead.id) ?? null)
       : null;
-  if (!row) return null;
+
+  if (!row) {
+    // Cold feed: the all-leads aggregation can take a couple of
+    // seconds, and returning null here left the FIRST click on a
+    // page with zero feedback — the sheet seemed to ignore the
+    // click. Open the shell immediately with a spinner instead; the
+    // real content swaps in place when the feed lands (same
+    // component, same position, so the slide-in doesn't replay).
+    // Once the fetch settles without a match (deleted lead, stale
+    // FK) `isLoading` is false: render nothing, exactly as before —
+    // `onMissing` has already told hosts that can react.
+    if (!lead || !isLoading) return null;
+    return (
+      <LeadTriageSheet
+        open
+        loading
+        onOpenChange={onOpenChange}
+        scope={{ source: lead.source, id: lead.id }}
+        title={LEAD_SOURCE_LABEL[lead.source]}
+        rating={0}
+        isFollowedUp={false}
+      />
+    );
+  }
 
   const label = LEAD_SOURCE_LABEL[row.source];
   return (
