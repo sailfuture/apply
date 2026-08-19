@@ -258,8 +258,14 @@ export async function createInvoiceSubscription(
 export interface BillingSnapshot {
   subscription: Stripe.Subscription;
   invoices: Stripe.Invoice[];
-  /** Most recent invoice that ended `paid`, used for the "Refund last
-   *  invoice" admin action. Null when no successful invoice exists yet. */
+  /** Most recent invoice with money actually collected THROUGH STRIPE
+   *  — the only thing the admin "Refund last payment" action can act
+   *  on, and the gate that shows/hides the button. Deliberately
+   *  stricter than `status === "paid"`: $0 invoices (Stripe auto-pays
+   *  them instantly, e.g. the creation invoice of a deferred-start
+   *  subscription) and out-of-band payments (admin-recorded check/
+   *  cash) are both `paid` with nothing refundable, and matching them
+   *  offered a Refund button to families who never paid a cent. */
   lastPaidInvoice: Stripe.Invoice | null;
   /** Quick-status pill: derived from subscription.status plus
    *  collection_paused so the admin UI doesn't have to know about
@@ -287,11 +293,37 @@ export async function getBillingSnapshot(
     stripe.subscriptions.retrieve(subscriptionId, {
       expand: ["default_payment_method", "latest_invoice"],
     }),
-    stripe.invoices.list({ subscription: subscriptionId, limit: 12 }),
+    stripe.invoices.list({
+      subscription: subscriptionId,
+      limit: 12,
+      // `payments` is expandable-only — needed below to tell a real
+      // Stripe charge from an out-of-band payment record.
+      expand: ["data.payments"],
+    }),
   ]);
 
+  // Refundable = money that moved THROUGH Stripe: a succeeded payment
+  // backed by a PaymentIntent or Charge (the exact objects
+  // `refundInvoice` refunds). Out-of-band check/cash payments appear
+  // as a `payment_record` with neither, and $0 invoices (auto-paid at
+  // creation for deferred-start subscriptions) carry no payment at
+  // all — both are `status: "paid"`, which is how status alone put a
+  // Refund button on families who never paid a cent. NOTE: the
+  // `paid_out_of_band` invoice field is NOT usable here — Basil
+  // removed it from the Invoice resource (it survives only as an
+  // `invoices.pay` request param), so the payments list is the only
+  // reliable discriminator on our pinned dahlia version.
   const lastPaidInvoice =
-    invoiceList.data.find((inv) => inv.status === "paid") ?? null;
+    invoiceList.data.find(
+      (inv) =>
+        inv.status === "paid" &&
+        (inv.amount_paid ?? 0) > 0 &&
+        (inv.payments?.data ?? []).some(
+          (p) =>
+            p.status === "paid" &&
+            (p.payment?.payment_intent || p.payment?.charge)
+        )
+    ) ?? null;
 
   let statusLabel: BillingSnapshot["statusLabel"] = "Unknown";
   if (subscription.pause_collection) {

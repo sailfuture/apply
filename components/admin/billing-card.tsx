@@ -81,11 +81,16 @@ interface BillingSnapshot {
     customer: string | { id: string };
     pause_collection: unknown | null;
     cancel_at_period_end: boolean;
-    current_period_end: number;
+    /** Only present on pre-Basil API payloads — Stripe's 2025-03-31
+     *  release moved the billing period onto each SubscriptionItem.
+     *  Our pinned dahlia version returns it item-level only. */
+    current_period_end?: number;
     items: {
       data: Array<{
         id: string;
         quantity?: number;
+        /** Basil+ home of the billing period (unix seconds). */
+        current_period_end?: number;
         price: {
           unit_amount: number | null;
           currency: string;
@@ -104,7 +109,16 @@ interface BillingSnapshot {
     hosted_invoice_url: string | null;
     invoice_pdf: string | null;
   }>;
-  lastPaidInvoice: { id: string } | null;
+  /** Only present when money was actually collected through Stripe
+   *  (the server excludes $0 auto-paid invoices and out-of-band
+   *  check/cash payments) — its absence hides the Refund button. */
+  lastPaidInvoice: {
+    id: string;
+    /** Cents actually collected — shown in the refund confirm. */
+    amount_paid?: number | null;
+    /** Invoice creation (unix seconds) — dates the refund confirm. */
+    created?: number | null;
+  } | null;
   statusLabel:
     | "Not Started"
     | "Active"
@@ -274,7 +288,7 @@ export function BillingCard({
         : null;
     const startDisabled = pending !== null || blockReason !== null;
     return (
-      <div className="rounded-md border bg-muted/10 p-6 space-y-4">
+      <div className="rounded-md border bg-white p-6 space-y-4">
         <div className="flex items-start gap-3">
           <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-muted/50">
             <CreditCard className="size-5 text-muted-foreground" aria-hidden="true" />
@@ -373,16 +387,43 @@ export function BillingCard({
   const cancelingAtPeriodEnd = sub.cancel_at_period_end;
   const customerId = typeof sub.customer === "string" ? sub.customer : sub.customer.id;
   const stripeDashboardUrl = stripeCustomerDashboardUrl(customerId);
-  const nextInvoiceDate = sub.current_period_end
-    ? new Date(sub.current_period_end * 1000).toLocaleDateString("en-US", {
+  // Basil+ API versions carry the billing period on the subscription
+  // ITEMS, not the subscription itself — read it there (max across
+  // items; they share a cycle on a standard subscription), keeping the
+  // top-level read for any legacy payload shape. Without the fallback
+  // this rendered a permanent "—" under our dahlia API pin.
+  const periodEndUnix =
+    sub.current_period_end ??
+    Math.max(
+      0,
+      ...(sub.items?.data ?? []).map((it) => it.current_period_end ?? 0)
+    );
+  const nextInvoiceDate = periodEndUnix
+    ? new Date(periodEndUnix * 1000).toLocaleDateString("en-US", {
         month: "long",
         day: "numeric",
         year: "numeric",
       })
     : "—";
 
+  // Refund confirm specifics — say exactly how much money moves and
+  // which invoice it came from, so admin confirms a concrete action
+  // rather than a vague "refund something".
+  const refundAmountLabel = data.lastPaidInvoice?.amount_paid
+    ? `$${(data.lastPaidInvoice.amount_paid / 100).toLocaleString("en-US", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })}`
+    : null;
+  const refundDateLabel = data.lastPaidInvoice?.created
+    ? new Date(data.lastPaidInvoice.created * 1000).toLocaleDateString(
+        "en-US",
+        { month: "long", day: "numeric", year: "numeric" }
+      )
+    : null;
+
   return (
-    <div className="rounded-md border bg-muted/10 p-4 space-y-5">
+    <div className="rounded-md border bg-white p-4 space-y-5">
       {/* Header — status pill + amount + next invoice */}
       <div className="space-y-1.5">
         <div className="flex items-center gap-2">
@@ -519,10 +560,24 @@ export function BillingCard({
           <AlertDialogHeader>
             <AlertDialogTitle>Refund last payment?</AlertDialogTitle>
             <AlertDialogDescription>
-              Issues a full refund for the most recent paid invoice. The family
-              sees the refund on their original payment method in 5-10
-              business days. Partial refunds can be issued via the Stripe
-              Dashboard.
+              Refunds the family&rsquo;s most recent Stripe payment
+              {refundAmountLabel ? (
+                <>
+                  {" "}
+                  —{" "}
+                  <span className="font-semibold text-foreground">
+                    {refundAmountLabel}
+                  </span>
+                </>
+              ) : null}
+              {refundDateLabel ? `, collected ${refundDateLabel}` : ""}. If
+              part of it was already refunded via the Stripe Dashboard,
+              only the remainder is returned. The family sees the refund
+              on their original payment method in 5-10 business days.{" "}
+              <span className="font-medium text-red-700">
+                Refunds can&rsquo;t be reversed once issued.
+              </span>{" "}
+              Partial refunds can be issued via the Stripe Dashboard.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -538,6 +593,11 @@ export function BillingCard({
                 }).then(() => setConfirmRefund(false));
               }}
             >
+              {/* No amount in the button — after a Dashboard partial
+                  refund, Stripe returns only the remainder, and a
+                  button asserting the full figure would confirm a
+                  number that isn't what moves. The description above
+                  carries the amount with that caveat spelled out. */}
               {pending === "refund" ? "Refunding…" : "Issue refund"}
             </AlertDialogAction>
           </AlertDialogFooter>
