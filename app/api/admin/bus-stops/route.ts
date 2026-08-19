@@ -50,20 +50,32 @@ export async function GET(req: NextRequest) {
       return null;
     };
 
-    const ridersByStop = new Map<string, BusStopRider[]>();
+    // Winning application row per student — newest (highest id)
+    // ACTIVE row for the year is the family's current word. A global
+    // winner (not per-stop dedupe) so re-created rows can't list one
+    // student under two stops, double-count the totals, or let an
+    // older row's stale election override the fresh one.
+    const winnerByStudent = new Map<number, (typeof apps)[number]>();
     for (const a of apps) {
       if (Number(a.registration_school_years_id) !== yearId) continue;
       if (a.isActive === false) continue;
-      if (a.is_bus_transportation !== true) continue;
       const sid = Number(a.registration_students_id);
-      const student = sid ? studentById.get(sid) : null;
+      if (!sid) continue;
+      const prev = winnerByStudent.get(sid);
+      if (!prev || Number(a.id) > Number(prev.id)) {
+        winnerByStudent.set(sid, a);
+      }
+    }
+
+    const ridersByStop = new Map<string, BusStopRider[]>();
+    for (const [sid, a] of winnerByStudent) {
+      if (a.is_bus_transportation !== true) continue;
+      const student = studentById.get(sid);
       if (!student || student.isArchived === true) continue;
       const fid = Number(a.registration_families_id) || 0;
       const parent = primaryParent(fid);
       const stopName = (a.bus_stop ?? "").trim() || "No stop selected";
       const list = ridersByStop.get(stopName) ?? [];
-      // One row per student even if application rows were re-created.
-      if (list.some((r) => r.student_id === sid)) continue;
       list.push({
         student_id: sid,
         student_name:
@@ -92,6 +104,10 @@ export async function GET(req: NextRequest) {
       (a.name ?? "").localeCompare(b.name ?? "")
     )) {
       const name = (s.name ?? "").trim() || `Stop #${s.id}`;
+      // One card per trimmed NAME — duplicate catalog rows would
+      // otherwise each render the same rider list and double every
+      // rider in Copy all / Export CSV.
+      if (catalogNames.has(name)) continue;
       catalogNames.add(name);
       out.push({
         id: s.id,
