@@ -130,8 +130,12 @@ function extractIds(items: any[]): number[] {
  * "row exists but I can't see it → create another one" duplicates.
  * Returns null when the value can't be coerced (e.g. `null`, missing
  * object id field, string that doesn't parse).
+ *
+ * Exported for API routes that join bulk table reads by FK (e.g. the
+ * admissions pipeline) — the same expanded-relation hazard applies
+ * anywhere a raw row's FK is compared to an id.
  */
-function toIdOrNull(v: unknown): number | null {
+export function toIdOrNull(v: unknown): number | null {
   if (v == null) return null;
   if (typeof v === "number" && Number.isFinite(v)) return v;
   if (typeof v === "string") {
@@ -664,6 +668,15 @@ export interface XanoPaymentTransaction {
   /** Last time the webhook (or backfill) wrote this row. Used by
    *  the backfill endpoint to detect drift / re-sync stale rows. */
   last_synced_at: number;
+  /** How an out-of-band payment was collected ("Check — #1234",
+   *  "Cash", …), stamped by the admin mark-paid route. Empty/absent
+   *  for invoices paid through Stripe. XANO SCHEMA NOTE: requires a
+   *  `payment_method` text column + the input on the table's add/edit
+   *  endpoints; until then the write is silently ignored and the UI
+   *  just omits the method label (Stripe invoice metadata still
+   *  carries it). Webhook/backfill sync payloads deliberately omit
+   *  this key so re-syncs never clobber it. */
+  payment_method?: string | null;
 }
 
 /** Audit row written by `lib/emails/send.ts` after every Resend API
@@ -737,6 +750,13 @@ export interface XanoVolunteerHours {
   /** FK to `school_calendar_events` — 0 = manual entry not tied to a
    *  calendar event. */
   school_calendar_events_id: number;
+  /** Free-text note on the entry ("rising junior meeting w/ Mr.
+   *  Angelo") — what a manual entry was FOR. Optional: the column
+   *  must exist on `registration_families_volunteer_hours` in Xano
+   *  for writes to land (add as text, default ""); until then the
+   *  API passes it through and Xano drops it. " " = cleared (Xano
+   *  edits drop empty-string inputs). */
+  note?: string;
   /** Legacy columns dropped from the table (2026-07) — optional so
    *  older readers keep compiling; new rows never carry them. */
   activity_description?: string;
@@ -3014,9 +3034,7 @@ export const xano = {
     },
 
     async getAll(): Promise<XanoStudent[]> {
-      const res = await fetch(`${getBaseUrl()}/registration_students`, {
-        cache: "no-store",
-      });
+      const res = await fetchRetry(`${getBaseUrl()}/registration_students`);
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
       return res.json();
     },
@@ -3166,9 +3184,7 @@ export const xano = {
     },
 
     async getAll(): Promise<XanoApplication[]> {
-      const res = await fetch(`${getBaseUrl()}/registration_application`, {
-        cache: "no-store",
-      });
+      const res = await fetchRetry(`${getBaseUrl()}/registration_application`);
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
       return res.json();
     },
@@ -5605,7 +5621,18 @@ export const xano = {
       // If the row doesn't echo the body we sent, remove the orphan
       // and throw with the exact fix, instead of returning a "success"
       // that poisons the log.
-      if (data.body && row.body !== data.body) {
+      //
+      // Compared TRIMMED on both sides: Xano also trims whitespace on
+      // text columns at save time, so a body ending in a space/newline
+      // round-trips as "different" under strict equality — which made
+      // this guard delete legitimate inbound rows and wedge the sync
+      // (Aug 2026 incident). A trimmed compare still catches the real
+      // failure it exists for: an unwired endpoint echoes an EMPTY
+      // body, which can never equal a non-empty trimmed send.
+      if (
+        (data.body ?? "").trim() &&
+        (row.body ?? "").trim() !== (data.body ?? "").trim()
+      ) {
         await this.delete(row.id).catch((err) => {
           console.error(
             "[xano.smsMessages.create] failed to clean up empty row:",
@@ -5816,7 +5843,7 @@ export const xano = {
           `${getBaseUrl()}/registration_family_application_progress_by_year`
         );
         url.searchParams.set("registration_school_years_id", String(yearId));
-        const res = await fetch(url.toString(), { cache: "no-store" });
+        const res = await fetchRetry(url.toString());
         if (!res.ok) {
           const body = await res.text().catch(() => "");
           console.error(
@@ -6142,7 +6169,7 @@ export const xano = {
           `${getBaseUrl()}/registration_student_registration_progress_by_year`
         );
         url.searchParams.set("registration_school_years_id", String(yearId));
-        const res = await fetch(url.toString(), { cache: "no-store" });
+        const res = await fetchRetry(url.toString());
         if (!res.ok) {
           const body = await res.text().catch(() => "");
           console.error(
