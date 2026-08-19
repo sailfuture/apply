@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const [stops, apps, students, families, parents, fap, srp] =
+    const [stops, apps, students, families, parents, fap, srp, packets] =
       await Promise.all([
         xano.busStops.getAll().catch(() => []),
         xano.applications.getAll().catch(() => []),
@@ -36,7 +36,20 @@ export async function GET(req: NextRequest) {
         xano.parents.getAll().catch(() => []),
         xano.familyApplicationProgress.getByYear(yearId).catch(() => []),
         xano.studentRegistrationProgress.getByYear(yearId).catch(() => []),
+        xano.studentRegistration.getByYear(yearId).catch(() => []),
       ]);
+
+    // Grade comes ONLY from the admin packet's `grade_level` dropdown
+    // — the application's `current_grade` is parent-typed free text
+    // ("10" / "10th" / "9Th" all coexist), so mixing the two rendered
+    // the same roster in three different styles. No packet placement
+    // yet = no grade shown.
+    const gradeByStudent = new Map<number, string>();
+    for (const p of packets) {
+      const sid = Number(p.registration_students_id);
+      const grade = (p.grade_level ?? "").trim();
+      if (sid && grade) gradeByStudent.set(sid, grade);
+    }
 
     // Year-archived families are OFF the roster (user rule: archived
     // shouldn't appear anywhere) — same definition the pipeline uses:
@@ -106,7 +119,7 @@ export async function GET(req: NextRequest) {
         student_name:
           `${student.first_name ?? ""} ${student.last_name ?? ""}`.trim() ||
           `Student #${sid}`,
-        grade: (a.current_grade ?? "").trim(),
+        grade: gradeByStudent.get(sid) ?? "",
         family_id: fid,
         family_name:
           familyById.get(fid)?.family_name?.trim() || `Family #${fid}`,

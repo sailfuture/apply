@@ -47,12 +47,24 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const [students, families, apps, years] = await Promise.all([
+    const [students, families, apps, years, packets] = await Promise.all([
       xano.students.getAll(),
       xano.families.getAll().catch(() => []),
       xano.applications.getAll().catch(() => []),
       xano.schoolYears.getAll().catch(() => []),
+      xano.studentRegistration.getByYear(yearId).catch(() => []),
     ]);
+
+    // Grade comes ONLY from the admin packet's `grade_level` dropdown
+    // — `current_grade` on the application is parent-typed free text
+    // and renders inconsistently ("10" vs "10th"). Blank when the
+    // student has no packet placement for the year.
+    const gradeByStudent = new Map<number, string>();
+    for (const p of packets) {
+      const sid = Number(p.registration_students_id);
+      const grade = (p.grade_level ?? "").trim();
+      if (sid && grade) gradeByStudent.set(sid, grade);
+    }
 
     const familyNameById = new Map(
       families.map((f) => [
@@ -167,7 +179,7 @@ export async function GET(req: NextRequest) {
           student_name:
             `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim() ||
             `Student #${s.id}`,
-          grade: (yearApp?.current_grade ?? "").trim(),
+          grade: gradeByStudent.get(s.id) ?? "",
           family_id: fid,
           family_name: familyNameById.get(fid) ?? `Family #${fid}`,
           residential,

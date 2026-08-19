@@ -43,26 +43,31 @@ export async function GET(
       return NextResponse.json({ error: "Invalid id" }, { status: 400 });
     }
 
-    const [family, students, apps] = await Promise.all([
+    const [family, students, packets] = await Promise.all([
       xano.families.getById(id),
       xano.students.getByFamilyId(id).catch(() => []),
-      xano.applications.getByFamilyId(id).catch(() => []),
+      xano.studentRegistration.getAll().catch(() => []),
     ]);
     if (!family) {
       return NextResponse.json({ error: "Family not found" }, { status: 404 });
     }
 
-    // Grade per student — newest ACTIVE application row wins (the
-    // re-created-row convention used across the admin surfaces).
-    const gradeRowByStudent = new Map<number, { appId: number; grade: string }>();
-    for (const a of apps) {
-      if (a.isActive === false) continue;
-      const sid = Number(a.registration_students_id);
-      const grade = (a.current_grade ?? "").trim();
+    // Grade comes ONLY from the admin packet's `grade_level` dropdown
+    // — the application's `current_grade` is parent-typed free text
+    // ("10" / "10th" / "9Th"), which is why grades rendered three
+    // different ways across admin. Newest packet wins (one per year);
+    // no placement yet = no grade shown.
+    const gradeRowByStudent = new Map<
+      number,
+      { packetId: number; grade: string }
+    >();
+    for (const p of packets) {
+      const sid = Number(p.registration_students_id);
+      const grade = (p.grade_level ?? "").trim();
       if (!sid || !grade) continue;
       const prev = gradeRowByStudent.get(sid);
-      if (!prev || Number(a.id) > prev.appId) {
-        gradeRowByStudent.set(sid, { appId: Number(a.id), grade });
+      if (!prev || Number(p.id) > prev.packetId) {
+        gradeRowByStudent.set(sid, { packetId: Number(p.id), grade });
       }
     }
 
