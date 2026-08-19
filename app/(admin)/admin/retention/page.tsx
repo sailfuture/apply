@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { ChevronRight, UserMinus } from "lucide-react";
@@ -42,13 +42,23 @@ export default function RetentionPage() {
     adminFetcher
   );
 
-  const ratePct = useMemo(
-    () =>
-      data?.retentionRate != null
-        ? `${(data.retentionRate * 100).toFixed(1).replace(/\.0$/, "")}%`
-        : "—",
-    [data]
-  );
+  // All / Community / Residential — residential (foster) placements
+  // churn by design, so their departures shouldn't drag the
+  // community retention number (and vice versa).
+  const [segment, setSegment] = useState<Segment>("all");
+  const filteredUnenrolled = useMemo(() => {
+    const rows = data?.unenrolled ?? [];
+    if (segment === "all") return rows;
+    return rows.filter((u) =>
+      segment === "residential" ? u.residential : !u.residential
+    );
+  }, [data, segment]);
+  const enrolledCount = data?.enrolled[segment] ?? 0;
+  const total = enrolledCount + filteredUnenrolled.length;
+  const ratePct =
+    total > 0
+      ? `${((enrolledCount / total) * 100).toFixed(1).replace(/\.0$/, "")}%`
+      : "—";
 
   if (!yearId) {
     return (
@@ -85,46 +95,44 @@ export default function RetentionPage() {
         </div>
       ) : (
         <>
-          {/* Headline numbers */}
+          {/* Segment filter — chips, single-select. */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            {SEGMENTS.map((s) => (
+              <button
+                key={s.value}
+                type="button"
+                aria-pressed={segment === s.value}
+                onClick={() => setSegment(s.value)}
+                className={cn(
+                  "rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors",
+                  segment === s.value
+                    ? "border-foreground bg-foreground text-background"
+                    : "border-border bg-white text-muted-foreground hover:border-foreground/40 hover:text-foreground"
+                )}
+              >
+                {s.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Headline numbers — derived from the selected segment. */}
           <Card className="overflow-hidden gap-0 py-0 bg-white">
             <CardContent className="px-4 py-4 bg-white">
               <dl className="grid grid-cols-3 gap-4 text-sm">
-                <Stat label="Enrolled" value={String(data.enrolledCount)} tone="positive" />
+                <Stat
+                  label="Enrolled"
+                  value={String(enrolledCount)}
+                  tone="positive"
+                />
                 <Stat
                   label="Unenrolled"
-                  value={String(data.unenrolledCount)}
-                  tone={data.unenrolledCount > 0 ? "negative" : "muted"}
+                  value={String(filteredUnenrolled.length)}
+                  tone={filteredUnenrolled.length > 0 ? "negative" : "muted"}
                 />
                 <Stat label="Retention rate" value={ratePct} tone="muted" />
               </dl>
             </CardContent>
           </Card>
-
-          {/* Why students left — free-text reasons grouped verbatim. */}
-          {data.reasons.length > 0 ? (
-            <Card className="overflow-hidden gap-0 py-0 bg-white">
-              <CardHeader className="py-3 !pb-3 border-b">
-                <CardTitle className="text-base">
-                  Unenrollment reasons
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="px-4 py-3 bg-white">
-                <ul className="divide-y">
-                  {data.reasons.map((r) => (
-                    <li
-                      key={r.reason.toLowerCase()}
-                      className="flex items-center justify-between gap-3 py-2 text-sm"
-                    >
-                      <span className="min-w-0 truncate">{r.reason}</span>
-                      <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs font-medium tabular-nums">
-                        {r.count}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </CardContent>
-            </Card>
-          ) : null}
 
           {/* The departures themselves */}
           <Card className="overflow-hidden gap-0 py-0 bg-white">
@@ -134,15 +142,17 @@ export default function RetentionPage() {
                   Unenrolled students
                 </CardTitle>
                 <span className="text-xs tabular-nums text-muted-foreground">
-                  ({data.unenrolled.length})
+                  ({filteredUnenrolled.length})
                 </span>
               </div>
             </CardHeader>
             <CardContent className="px-3 pb-3 bg-white">
-              {data.unenrolled.length === 0 ? (
+              {filteredUnenrolled.length === 0 ? (
                 <div className="px-3 py-10 text-center text-sm text-muted-foreground">
                   <UserMinus className="mx-auto mb-2 size-6 text-muted-foreground/50" />
-                  No students have been unenrolled this year.
+                  {segment === "all"
+                    ? "No students have been unenrolled this year."
+                    : `No ${segment} students have been unenrolled this year.`}
                 </div>
               ) : (
                 <Table className="table-fixed">
@@ -170,7 +180,7 @@ export default function RetentionPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {data.unenrolled.map((u) => (
+                    {filteredUnenrolled.map((u) => (
                       <TableRow
                         key={u.student_id}
                         onClick={() =>
@@ -189,8 +199,15 @@ export default function RetentionPage() {
                           {u.grade || "—"}
                         </TableCell>
                         <TableCell className="text-sm">
-                          <span className="block truncate">
-                            {u.family_name}
+                          <span className="flex min-w-0 items-center gap-1.5">
+                            <span className="truncate">{u.family_name}</span>
+                            {/* Only useful in the mixed view — the
+                                segmented views are already homogeneous. */}
+                            {u.residential && segment === "all" ? (
+                              <span className="shrink-0 rounded-full border border-border bg-muted px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                                Residential
+                              </span>
+                            ) : null}
                           </span>
                         </TableCell>
                         <TableCell className="text-sm tabular-nums text-muted-foreground">
@@ -227,6 +244,14 @@ export default function RetentionPage() {
     </div>
   );
 }
+
+type Segment = "all" | "community" | "residential";
+
+const SEGMENTS: Array<{ value: Segment; label: string }> = [
+  { value: "all", label: "All" },
+  { value: "community", label: "Community" },
+  { value: "residential", label: "Residential" },
+];
 
 function Stat({
   label,

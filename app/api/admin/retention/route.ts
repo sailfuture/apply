@@ -139,10 +139,20 @@ export async function GET(req: NextRequest) {
       return latestMemberYear(memberYears);
     };
 
-    let enrolledCount = 0;
+    // Community vs residential segmentation (user request):
+    // residential/foster placements churn by design, so mixing them
+    // into one retention number buries the community signal. A family
+    // is residential when its `is_residential` flag is set.
+    const residentialFamilies = new Set(
+      families.filter((f) => f.is_residential === true).map((f) => f.id)
+    );
+
+    const enrolled = { all: 0, community: 0, residential: 0 };
     const unenrolled: RetentionUnenrolledRow[] = [];
     for (const s of students) {
       const yearApp = winnerByStudentYear.get(`${s.id}:${yearId}`);
+      const fid = Number(s.registration_families_id) || 0;
+      const residential = residentialFamilies.has(fid);
       const officiallyUnenrolled =
         s.isArchived === true &&
         Boolean(
@@ -152,7 +162,6 @@ export async function GET(req: NextRequest) {
         );
       if (officiallyUnenrolled) {
         if (attributeDepartureYear(s) !== yearId) continue;
-        const fid = Number(s.registration_families_id) || 0;
         unenrolled.push({
           student_id: s.id,
           student_name:
@@ -161,6 +170,7 @@ export async function GET(req: NextRequest) {
           grade: (yearApp?.current_grade ?? "").trim(),
           family_id: fid,
           family_name: familyNameById.get(fid) ?? `Family #${fid}`,
+          residential,
           date: s.unenrollment_date ?? null,
           reason: (s.unenrollment_reason ?? "").trim(),
           notes: (s.unenrollment_notes ?? "").trim(),
@@ -170,35 +180,17 @@ export async function GET(req: NextRequest) {
         s.isArchived !== true &&
         s.isEnrolled === true
       ) {
-        enrolledCount += 1;
+        enrolled.all += 1;
+        if (residential) enrolled.residential += 1;
+        else enrolled.community += 1;
       }
     }
 
     // Newest departures first; undated rows sink to the bottom.
     unenrolled.sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""));
 
-    // Reason rollup — free-text strings grouped verbatim (trimmed,
-    // case-insensitive key, first-seen casing displayed).
-    const reasonCounts = new Map<string, { reason: string; count: number }>();
-    for (const u of unenrolled) {
-      const label = u.reason || "No reason recorded";
-      const key = label.toLowerCase();
-      const bucket = reasonCounts.get(key) ?? { reason: label, count: 0 };
-      bucket.count += 1;
-      reasonCounts.set(key, bucket);
-    }
-    const reasons = [...reasonCounts.values()].sort(
-      (a, b) => b.count - a.count
-    );
-
-    const total = enrolledCount + unenrolled.length;
     return NextResponse.json({
-      enrolledCount,
-      unenrolledCount: unenrolled.length,
-      // Share of the year's student body still enrolled. Null until
-      // anyone is counted at all — 0/0 isn't "0% retention".
-      retentionRate: total > 0 ? enrolledCount / total : null,
-      reasons,
+      enrolled,
       unenrolled,
     } satisfies RetentionResponse);
   } catch (err) {
@@ -212,6 +204,9 @@ export interface RetentionUnenrolledRow {
   grade: string;
   family_id: number;
   family_name: string;
+  /** True when the family's `is_residential` flag is set — drives
+   *  the page's All / Community / Residential filter. */
+  residential: boolean;
   /** `YYYY-MM-DD` effective date from the Unenroll modal, or null. */
   date: string | null;
   reason: string;
@@ -219,12 +214,9 @@ export interface RetentionUnenrolledRow {
 }
 
 export interface RetentionResponse {
-  enrolledCount: number;
-  unenrolledCount: number;
-  /** enrolled / (enrolled + unenrolled); null when the year has no
-   *  counted students yet. */
-  retentionRate: number | null;
-  /** Distinct unenrollment reasons, most common first. */
-  reasons: Array<{ reason: string; count: number }>;
+  /** Currently-enrolled counts, segmented by family type — the page
+   *  derives the displayed count and retention rate from whichever
+   *  segment its filter selects. */
+  enrolled: { all: number; community: number; residential: number };
   unenrolled: RetentionUnenrolledRow[];
 }
