@@ -1,8 +1,15 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from "react";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import useSWR from "swr";
+import { Loader2 } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -33,6 +40,28 @@ export function YearSelector() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const currentYearId = searchParams.get("yearId");
+
+  // Full-screen "switching year" overlay (user request): a year
+  // change swaps the data under EVERY widget on the page, and
+  // without an explicit signal the half-old half-new render reads
+  // as broken. Shown from the moment of selection until the route
+  // transition lands, held to a minimum beat so it never strobes;
+  // each page's own skeletons take over from there. The initial
+  // default-year injection (the effect below) deliberately doesn't
+  // trigger it.
+  const [switchingTo, setSwitchingTo] = useState<string | null>(null);
+  const [isPending, startTransition] = useTransition();
+  const switchStartedAt = useRef(0);
+  useEffect(() => {
+    if (!switchingTo || isPending) return;
+    const MIN_OVERLAY_MS = 900;
+    const remaining = Math.max(
+      0,
+      MIN_OVERLAY_MS - (Date.now() - switchStartedAt.current)
+    );
+    const t = setTimeout(() => setSwitchingTo(null), remaining);
+    return () => clearTimeout(t);
+  }, [switchingTo, isPending]);
 
   const { data: yearsRaw, isLoading } = useSWR<SchoolYear[]>(
     "/api/school-years",
@@ -85,27 +114,56 @@ export function YearSelector() {
   }
 
   function handleChange(value: string) {
+    if (value === (currentYearId ?? String(defaultYear?.id ?? ""))) return;
+    const picked = years.find((y) => String(y.id) === value);
+    switchStartedAt.current = Date.now();
+    setSwitchingTo(picked?.year_name || "the selected year");
     const params = new URLSearchParams(searchParams.toString());
     params.set("yearId", value);
-    router.push(`${pathname}?${params.toString()}`);
+    startTransition(() => {
+      router.push(`${pathname}?${params.toString()}`);
+    });
   }
 
   return (
-    <Select
-      value={currentYearId ?? String(defaultYear?.id ?? "")}
-      onValueChange={handleChange}
-    >
-      <SelectTrigger className="w-full bg-white">
-        <SelectValue placeholder="Select year" />
-      </SelectTrigger>
-      <SelectContent>
-        {years.map((year) => (
-          <SelectItem key={year.id} value={String(year.id)}>
-            {year.year_name || `Year #${year.id}`}
-            {year.isNextYear ? " · Upcoming" : year.isActive ? " · Active" : ""}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <>
+      <Select
+        value={currentYearId ?? String(defaultYear?.id ?? "")}
+        onValueChange={handleChange}
+      >
+        <SelectTrigger className="w-full bg-white">
+          <SelectValue placeholder="Select year" />
+        </SelectTrigger>
+        <SelectContent>
+          {years.map((year) => (
+            <SelectItem key={year.id} value={String(year.id)}>
+              {year.year_name || `Year #${year.id}`}
+              {year.isNextYear ? " · Upcoming" : year.isActive ? " · Active" : ""}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+
+      {switchingTo ? (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-background/80 backdrop-blur-sm"
+          role="status"
+          aria-live="polite"
+        >
+          <div className="flex flex-col items-center gap-3 rounded-lg border bg-white px-8 py-6 shadow-lg">
+            <Loader2
+              className="size-6 animate-spin text-muted-foreground"
+              aria-hidden="true"
+            />
+            <p className="text-sm font-medium">
+              Switching to {switchingTo}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Loading that school year&rsquo;s data…
+            </p>
+          </div>
+        </div>
+      ) : null}
+    </>
   );
 }
