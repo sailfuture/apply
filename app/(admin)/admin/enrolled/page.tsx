@@ -9,9 +9,12 @@ import {
   ChevronRight,
   ChevronsUpDown,
   ChevronUp,
+  FileDown,
   GraduationCap,
+  Loader2,
   Search,
 } from "lucide-react";
+import { toast } from "sonner";
 import { ActivityLogSheet } from "@/components/admin/activity-log-sheet";
 import { Button } from "@/components/ui/button";
 import type { ColumnDef } from "@/components/admin/data-table";
@@ -56,6 +59,15 @@ import type { EnrolledStudentRow } from "@/app/api/admin/enrolled/route";
  * blank "—" bucket drop to the end so unexpected values keep
  * rendering instead of crashing the sort.
  */
+/** Row-vs-search-text match — one predicate shared by the page-level
+ *  IEP download count and each roster card's filtering so the two can
+ *  never disagree about what "currently shown" means. */
+function matchesEnrolledSearch(r: EnrolledStudentRow, q: string): boolean {
+  return `${r.student_full_name} ${r.family_name} ${r.primary_email ?? ""} ${r.primary_name ?? ""} ${r.grade_level} ${r.enrolled_year_name ?? ""}`
+    .toLowerCase()
+    .includes(q);
+}
+
 function gradeSortKey(grade: string): [number, string] {
   const trimmed = (grade ?? "").trim();
   if (!trimmed || trimmed === "—") return [Number.MAX_SAFE_INTEGER, "zz"];
@@ -143,7 +155,35 @@ export default function EnrolledStudentsPage() {
     adminFetcher
   );
 
-  const rows = useMemo(() => (Array.isArray(data) ? data : []), [data]);
+  const allRows = useMemo(() => (Array.isArray(data) ? data : []), [data]);
+
+  // Cohort filter — "new" = the student's first year (derived cross-
+  // year server-side as `enrolled_year_id`) IS the selected year;
+  // "returning" = they started in an earlier year. Lets admin split
+  // incoming students from returners without exporting first.
+  const [cohortFilter, setCohortFilter] = useState<
+    "all" | "new" | "returning"
+  >("all");
+  // IEP chip — only students with at least one uploaded IEP document.
+  const [iepOnly, setIepOnly] = useState(false);
+
+  const rows = useMemo(
+    () =>
+      allRows.filter((r) => {
+        if (cohortFilter === "new" && r.enrolled_year_id !== r.year_id) {
+          return false;
+        }
+        if (
+          cohortFilter === "returning" &&
+          r.enrolled_year_id === r.year_id
+        ) {
+          return false;
+        }
+        if (iepOnly && !r.has_iep) return false;
+        return true;
+      }),
+    [allRows, cohortFilter, iepOnly]
+  );
 
   // Two top-level groups: currently enrolled, and formerly
   // enrolled but later unenrolled. We deliberately exclude the
@@ -183,6 +223,59 @@ export default function EnrolledStudentsPage() {
   const [search, setSearch] = useState("");
   // Row-click quick-detail sheet (contact info + required documents).
   const [sheetRow, setSheetRow] = useState<EnrolledStudentRow | null>(null);
+
+  // Batch IEP download — zips the actual IEP files for every ENROLLED
+  // student currently shown (cohort/IEP chips + search all apply), so
+  // "filter to Crew of interest, download their IEPs" works in two
+  // clicks. Unenrolled students are deliberately excluded.
+  const [downloadingIeps, setDownloadingIeps] = useState(false);
+  const iepCandidates = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return enrolledRows.filter(
+      (r) => r.has_iep && (!q || matchesEnrolledSearch(r, q))
+    );
+  }, [enrolledRows, search]);
+
+  async function downloadIeps() {
+    if (downloadingIeps || iepCandidates.length === 0) return;
+    setDownloadingIeps(true);
+    try {
+      const res = await fetch("/api/admin/enrolled/iep-export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studentIds: iepCandidates.map((r) => r.student_id),
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        throw new Error(err?.error ?? `Download failed (${res.status})`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      const slug = (schoolYear?.year_name ?? `year-${yearId}`)
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/(^-|-$)/g, "");
+      anchor.href = url;
+      anchor.download = `iep-documents-${slug || yearId}.zip`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+      toast.success(
+        `Downloaded IEP files for ${iepCandidates.length} student${iepCandidates.length === 1 ? "" : "s"}.`
+      );
+    } catch (err) {
+      console.error("[downloadIeps] failed:", err);
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't download IEP files."
+      );
+    } finally {
+      setDownloadingIeps(false);
+    }
+  }
 
   const columns: ColumnDef<EnrolledStudentRow>[] = [
     {
@@ -385,8 +478,11 @@ export default function EnrolledStudentsPage() {
     },
   ];
 
+  // Empty state only when the YEAR has no rows — a cohort/IEP filter
+  // that matches nothing should render the (empty) roster cards, not
+  // the "no enrolled students" hero.
   const showEmptyState =
-    !!yearId && !isLoading && !error && rows.length === 0;
+    !!yearId && !isLoading && !error && allRows.length === 0;
 
   return (
     <div className="p-6 space-y-6">
@@ -440,25 +536,97 @@ export default function EnrolledStudentsPage() {
           spanning the same width as the roster cards below. The
           search filters both cards. */}
       {yearId ? (
-        <div className="flex items-center gap-2">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground/60" />
-            <Input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search enrolled students…"
-              className="pl-9 bg-white"
+        <>
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground/60" />
+              <Input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search enrolled students…"
+                className="pl-9 bg-white"
+              />
+            </div>
+            {/* Bulk school-account backfill — year-independent (it
+                covers every enrolled student), but it lives here next
+                to Export since this is the enrolled-roster home. */}
+            <SchoolAccountBackfillDialog />
+            <Button
+              variant="outline"
+              className="bg-white shrink-0"
+              disabled={downloadingIeps || iepCandidates.length === 0}
+              onClick={() => void downloadIeps()}
+              title={
+                iepCandidates.length === 0
+                  ? "No shown enrolled students have IEP documents on file"
+                  : "Download a zip of the IEP documents for every enrolled student currently shown"
+              }
+            >
+              {downloadingIeps ? (
+                <Loader2
+                  className="size-3.5 mr-1.5 animate-spin"
+                  aria-hidden="true"
+                />
+              ) : (
+                <FileDown className="size-3.5 mr-1.5" aria-hidden="true" />
+              )}
+              IEP files
+              {iepCandidates.length > 0 ? ` (${iepCandidates.length})` : ""}
+            </Button>
+            <EnrolledExportDialog
+              yearId={Number(yearId)}
+              yearName={schoolYear?.year_name}
             />
           </div>
-          {/* Bulk school-account backfill — year-independent (it
-              covers every enrolled student), but it lives here next
-              to Export since this is the enrolled-roster home. */}
-          <SchoolAccountBackfillDialog />
-          <EnrolledExportDialog
-            yearId={Number(yearId)}
-            yearName={schoolYear?.year_name}
-          />
-        </div>
+
+          {/* Cohort + IEP narrowing chips — applied before the
+              enrolled/unenrolled split so both cards reflect them. */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+              Cohort
+            </span>
+            {(
+              [
+                { value: "all", label: "All" },
+                { value: "new", label: "New this year" },
+                { value: "returning", label: "Returning" },
+              ] as const
+            ).map((c) => {
+              const on = cohortFilter === c.value;
+              return (
+                <button
+                  key={c.value}
+                  type="button"
+                  aria-pressed={on}
+                  onClick={() => setCohortFilter(c.value)}
+                  className={cn(
+                    "rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors",
+                    on
+                      ? "border-foreground bg-foreground text-background"
+                      : "border-border bg-white text-muted-foreground hover:border-foreground/40 hover:text-foreground"
+                  )}
+                >
+                  {c.label}
+                </button>
+              );
+            })}
+            <span className="mx-1 h-4 w-px bg-border" aria-hidden />
+            <button
+              type="button"
+              aria-pressed={iepOnly}
+              onClick={() => setIepOnly((v) => !v)}
+              className={cn(
+                "rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors",
+                iepOnly
+                  ? "border-foreground bg-foreground text-background"
+                  : "border-border bg-white text-muted-foreground hover:border-foreground/40 hover:text-foreground"
+              )}
+              title="Only students with at least one uploaded IEP document"
+            >
+              Has IEP
+            </button>
+          </div>
+        </>
       ) : null}
 
       {error ? (
@@ -585,12 +753,11 @@ function EnrolledRoster({
   const visibleGrouped = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return grouped;
-    const filterRow = (r: EnrolledStudentRow) =>
-      `${r.student_full_name} ${r.family_name} ${r.primary_email ?? ""} ${r.primary_name ?? ""} ${r.grade_level} ${r.enrolled_year_name ?? ""}`
-        .toLowerCase()
-        .includes(q);
     return grouped
-      .map((g) => ({ ...g, rows: g.rows.filter(filterRow) }))
+      .map((g) => ({
+        ...g,
+        rows: g.rows.filter((r) => matchesEnrolledSearch(r, q)),
+      }))
       .filter((g) => g.rows.length > 0);
   }, [grouped, search]);
   const visibleCount = useMemo(

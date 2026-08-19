@@ -345,6 +345,10 @@ export async function GET(req: NextRequest) {
           doc_transcripts_submitted: hasFiles(student.transcripts),
           doc_transcripts_approved:
             student.transcripts_admin_confirm === true,
+          // IEP presence — parent (or admin) uploaded at least one
+          // file to the student's evergreen `iep` document slot.
+          // Drives the roster's IEP filter + the batch IEP download.
+          has_iep: hasFiles(student.iep),
         },
       ];
     });
@@ -435,6 +439,9 @@ export interface EnrolledStudentRow {
   doc_school_health_form_approved: boolean;
   doc_transcripts_submitted: boolean;
   doc_transcripts_approved: boolean;
+  /** Student has at least one file in the evergreen `iep` document
+   *  slot. Drives the roster's IEP filter and batch IEP download. */
+  has_iep: boolean;
   /** True when the student is officially enrolled for the year:
    *  `student.isEnrolled === true && student.isArchived !== true`.
    *  Drives the Enrolled vs Not Enrolled grouping on the page. */
