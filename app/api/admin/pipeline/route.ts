@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
-import { xano } from "@/lib/xano";
+import { xano, toIdOrNull } from "@/lib/xano";
 
 /**
  * Admissions Pipeline — one row per family per year, with a derived
@@ -85,7 +85,10 @@ export async function GET(req: NextRequest) {
     const familyById = new Map(families.map((f) => [f.id, f]));
     const studentById = new Map(studentsAll.map((s) => [s.id, s]));
     const regByFamily = new Map(
-      regRows.map((r) => [r.registration_families_id, r])
+      regRows.map((r) => [
+        toIdOrNull(r.registration_families_id) ?? r.registration_families_id,
+        r,
+      ])
     );
 
     const parentsByFamily = new Map<number, typeof parents>();
@@ -96,31 +99,51 @@ export async function GET(req: NextRequest) {
       parentsByFamily.set(family.id, matched);
     }
 
-    // Active-student ids per family for the year — one application row
-    // per student; `isActive === false` rows are soft-deleted.
-    const studentIdsByFamily = new Map<number, number[]>();
+    // Active students per family for the year — one application row per
+    // student; `isActive === false` rows are soft-deleted. FKs on the
+    // application row are coerced with `toIdOrNull` because Xano
+    // sometimes returns them as expanded `{ id, ... }` relation objects
+    // — `Number(object)` is NaN, which silently zeroed every student
+    // count (and blanked every card's student-names line) whenever the
+    // endpoint responded in that shape.
+    //
+    // The per-student detail (grade, bus stop, pickup address, …) rides
+    // along for the export: bus-route planning needs one line per
+    // student, and all of it lives on the application + student rows
+    // this route already fetches.
+    const studentsByFamily = new Map<number, PipelineStudentDetail[]>();
     for (const a of apps) {
-      if (Number(a.registration_school_years_id) !== yearId) continue;
+      if (toIdOrNull(a.registration_school_years_id) !== yearId) continue;
       if (a.isActive === false) continue;
-      const fid = Number(a.registration_families_id);
-      const arr = studentIdsByFamily.get(fid) ?? [];
-      arr.push(Number(a.registration_students_id));
-      studentIdsByFamily.set(fid, arr);
+      const fid = toIdOrNull(a.registration_families_id);
+      const sid = toIdOrNull(a.registration_students_id);
+      if (fid == null || sid == null) continue;
+      const s = studentById.get(sid);
+      const arr = studentsByFamily.get(fid) ?? [];
+      arr.push({
+        student_id: sid,
+        name: s
+          ? `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim()
+          : "",
+        date_of_birth: s?.date_of_birth ?? "",
+        gender: s?.gender ?? "",
+        grade: a.current_grade ?? "",
+        is_bus_transportation: a.is_bus_transportation === true,
+        bus_stop: a.bus_stop ?? "",
+        pickup_address: a.primary_home ?? "",
+        transportation_cost: a.transportation_cost ?? null,
+      });
+      studentsByFamily.set(fid, arr);
     }
 
     const rows: PipelineFamilyRow[] = applyRows.map((p) => {
-      const familyId = p.registration_families_id;
+      const familyId =
+        toIdOrNull(p.registration_families_id) ?? p.registration_families_id;
       const family = familyById.get(familyId) ?? null;
       const familyParents = parentsByFamily.get(familyId) ?? [];
       const primary = familyParents[0] ?? null;
-      const studentIds = studentIdsByFamily.get(familyId) ?? [];
-      const studentNames = studentIds
-        .map((sid) => {
-          const s = studentById.get(sid);
-          if (!s) return "";
-          return `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim();
-        })
-        .filter(Boolean);
+      const students = studentsByFamily.get(familyId) ?? [];
+      const studentNames = students.map((s) => s.name).filter(Boolean);
 
       const reg = regByFamily.get(familyId) ?? null;
       const isAccepted = !!p.isAccepted;
@@ -159,8 +182,9 @@ export async function GET(req: NextRequest) {
           : "",
         primary_email: primary?.email ?? "",
         primary_phone: primary?.phone ?? "",
-        student_count: studentIds.length,
+        student_count: students.length,
         student_names: studentNames.join(", "),
+        students,
         app_sections_complete: appSections,
         app_sections_total: 4,
         isSubmitted: !!p.isSubmitted,
@@ -202,6 +226,25 @@ export async function GET(req: NextRequest) {
  *  registration-confirmed latch moves registration → enrollment. */
 export type PipelineStage = "application" | "registration" | "enrollment";
 
+/** Per-student detail joined from the student's application row (bus
+ *  election + grade) and student row (name / DOB / gender). Backs the
+ *  export's Student-details columns and its one-row-per-student mode. */
+export interface PipelineStudentDetail {
+  student_id: number;
+  name: string;
+  /** ISO `YYYY-MM-DD` from the student row; empty when unset. */
+  date_of_birth: string;
+  gender: string;
+  /** `current_grade` off the application row. */
+  grade: string;
+  is_bus_transportation: boolean;
+  bus_stop: string;
+  /** Formatted pickup-address snapshot (`primary_home`) captured when
+   *  the family picked the bus stop. Empty when no bus election. */
+  pickup_address: string;
+  transportation_cost: number | null;
+}
+
 export interface PipelineFamilyRow {
   /** family_application_progress row id */
   id: number;
@@ -216,6 +259,9 @@ export interface PipelineFamilyRow {
   student_count: number;
   /** Comma-joined active-student names for the year. */
   student_names: string;
+  /** One entry per active student on the year — see
+   *  `PipelineStudentDetail`. */
+  students: PipelineStudentDetail[];
   app_sections_complete: number;
   app_sections_total: number;
   isSubmitted: boolean;

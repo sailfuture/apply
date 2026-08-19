@@ -23,6 +23,7 @@ import {
   PIPELINE_EXPORT_COLUMN_GROUPS,
   buildPipelineExportRows,
   type PipelineExportColumnKey,
+  type PipelineExportRowPer,
 } from "@/lib/pipeline-export-columns";
 
 /**
@@ -44,7 +45,9 @@ export function PipelineExportDialog({
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button variant="outline" size="sm" className="bg-white shrink-0">
+        {/* Default (h-9) size so the trigger lines up with the search
+            input it shares a row with on the pipeline page. */}
+        <Button variant="outline" className="bg-white shrink-0">
           <Download className="size-3.5 mr-1.5" aria-hidden="true" />
           Export
         </Button>
@@ -95,6 +98,22 @@ function ExportDialogBody({
     registration: true,
     enrollment: true,
   });
+  // Row shape — "family" is the original one-row-per-family export;
+  // "student" puts every applicant on their own row (the shape bus-stop
+  // routing needs). Switching to student mode auto-selects the Student
+  // Name column (a per-student sheet without it is unreadable); it
+  // never deselects anything.
+  const [rowPer, setRowPerState] = useState<PipelineExportRowPer>("family");
+  function setRowPer(mode: PipelineExportRowPer) {
+    setRowPerState(mode);
+    if (mode === "student") {
+      setSelected((prev) =>
+        prev.has("student_name")
+          ? prev
+          : new Set([...prev, "student_name" as PipelineExportColumnKey])
+      );
+    }
+  }
   const [downloading, setDownloading] = useState(false);
 
   // Archived families never export — the pipeline export is the
@@ -140,9 +159,14 @@ function ExportDialogBody({
     });
   }
 
+  const exportRows = useMemo(
+    () => buildPipelineExportRows(filtered, rowPer),
+    [filtered, rowPer]
+  );
+
   const canExport =
     selectedColumns.length > 0 &&
-    filtered.length > 0 &&
+    exportRows.length > 0 &&
     filename.trim().length > 0 &&
     !downloading;
 
@@ -152,12 +176,14 @@ function ExportDialogBody({
     try {
       const { exportPipelineXlsx } = await import("@/lib/pipeline-export");
       await exportPipelineXlsx({
-        rows: buildPipelineExportRows(filtered),
+        rows: exportRows,
         columns: selectedColumns,
         filename: filename.trim(),
       });
       toast.success(
-        `Exported ${filtered.length} famil${filtered.length === 1 ? "y" : "ies"}.`
+        rowPer === "student"
+          ? `Exported ${exportRows.length} student${exportRows.length === 1 ? "" : "s"}.`
+          : `Exported ${filtered.length} famil${filtered.length === 1 ? "y" : "ies"}.`
       );
       onClose();
     } catch (err) {
@@ -173,9 +199,8 @@ function ExportDialogBody({
       <DialogHeader>
         <DialogTitle>Export admissions pipeline</DialogTitle>
         <DialogDescription>
-          Pick a filename, the columns to include, and which stages to
-          export. Each row is a family; archived families are always
-          excluded.
+          Pick a filename, the row format, the columns to include, and
+          which stages to export. Archived families are always excluded.
         </DialogDescription>
       </DialogHeader>
 
@@ -195,6 +220,34 @@ function ExportDialogBody({
               .xlsx
             </span>
           </div>
+        </div>
+
+        {/* Row format */}
+        <div className="rounded-md border bg-muted/10 p-3 space-y-1.5">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Rows
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+            <RadioRow
+              name="pipeline-export-row-per"
+              label="One row per family"
+              checked={rowPer === "family"}
+              onSelect={() => setRowPer("family")}
+            />
+            <RadioRow
+              name="pipeline-export-row-per"
+              label="One row per student"
+              checked={rowPer === "student"}
+              onSelect={() => setRowPer("student")}
+            />
+          </div>
+          {rowPer === "student" ? (
+            <p className="text-xs text-muted-foreground">
+              Each applicant gets their own row — pair with the Students
+              columns (bus stop, grade, pickup address) for bus-route
+              planning. Family columns repeat per student.
+            </p>
+          ) : null}
         </div>
 
         {/* Stage filter */}
@@ -268,7 +321,9 @@ function ExportDialogBody({
             ? "Loading families…"
             : error
               ? "Failed to load families."
-              : `${filtered.length} famil${filtered.length === 1 ? "y" : "ies"} · ${selectedColumns.length} column${selectedColumns.length === 1 ? "" : "s"}`}
+              : rowPer === "student"
+                ? `${exportRows.length} student${exportRows.length === 1 ? "" : "s"} across ${filtered.length} famil${filtered.length === 1 ? "y" : "ies"} · ${selectedColumns.length} column${selectedColumns.length === 1 ? "" : "s"}`
+                : `${filtered.length} famil${filtered.length === 1 ? "y" : "ies"} · ${selectedColumns.length} column${selectedColumns.length === 1 ? "" : "s"}`}
         </p>
         <div className="flex items-center gap-2">
           <Button variant="outline" onClick={onClose} disabled={downloading}>
@@ -288,6 +343,31 @@ function ExportDialogBody({
         </div>
       </DialogFooter>
     </DialogContent>
+  );
+}
+
+function RadioRow({
+  name,
+  label,
+  checked,
+  onSelect,
+}: {
+  name: string;
+  label: string;
+  checked: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+      <input
+        type="radio"
+        name={name}
+        checked={checked}
+        onChange={onSelect}
+        className="size-4 shrink-0 border-input accent-foreground"
+      />
+      <span className="truncate">{label}</span>
+    </label>
   );
 }
 

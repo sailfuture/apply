@@ -1,5 +1,6 @@
 import type {
   PipelineFamilyRow,
+  PipelineStudentDetail,
   PipelineStage,
 } from "@/app/api/admin/pipeline/route";
 
@@ -9,7 +10,17 @@ import type {
  * pre-formatted string (booleans → "Yes"/"No", timestamps →
  * "YYYY-MM-DD"); the `stage` field is a filter, never a column —
  * the visible stage column is `stage_label`.
+ *
+ * The export has two row shapes, picked in the dialog:
+ *   - "family"  — one row per family (the original shape). Per-student
+ *     columns join every student's value, name-prefixed when the family
+ *     has more than one ("Alice Smith: Stop 3; Bob Smith: Stop 4").
+ *   - "student" — one row per student, family columns repeating. This
+ *     is the shape bus-route planning wants: every applicant on their
+ *     own line with grade / bus stop / pickup address.
  */
+export type PipelineExportRowPer = "family" | "student";
+
 export interface PipelineExportRow {
   /** Filter-only — which board column the family sits in. */
   stage: PipelineStage;
@@ -34,6 +45,14 @@ export interface PipelineExportRow {
   registration_submitted_date: string;
   registration_confirmed: string;
   registration_confirmed_date: string;
+  student_name: string;
+  student_grade: string;
+  student_dob: string;
+  student_gender: string;
+  bus_transportation: string;
+  bus_stop: string;
+  pickup_address: string;
+  transportation_cost: string;
 }
 
 export type PipelineExportColumnKey = Exclude<
@@ -43,6 +62,7 @@ export type PipelineExportColumnKey = Exclude<
 
 export type PipelineExportColumnGroup =
   | "Family"
+  | "Students"
   | "Application"
   | "Registration";
 
@@ -55,6 +75,7 @@ export interface PipelineExportColumn {
 
 export const PIPELINE_EXPORT_COLUMN_GROUPS: PipelineExportColumnGroup[] = [
   "Family",
+  "Students",
   "Application",
   "Registration",
 ];
@@ -66,6 +87,14 @@ export const PIPELINE_EXPORT_COLUMNS: PipelineExportColumn[] = [
   { key: "primary_phone", label: "Phone", group: "Family", defaultSelected: true },
   { key: "student_names", label: "Students", group: "Family", defaultSelected: true },
   { key: "student_count", label: "Student Count", group: "Family" },
+  { key: "student_name", label: "Student Name", group: "Students" },
+  { key: "student_grade", label: "Grade", group: "Students" },
+  { key: "student_dob", label: "Date of Birth", group: "Students" },
+  { key: "student_gender", label: "Gender", group: "Students" },
+  { key: "bus_transportation", label: "Bus Transportation", group: "Students" },
+  { key: "bus_stop", label: "Bus Stop", group: "Students" },
+  { key: "pickup_address", label: "Pickup Address", group: "Students" },
+  { key: "transportation_cost", label: "Transportation Cost", group: "Students" },
   { key: "stage_label", label: "Pipeline Stage", group: "Application", defaultSelected: true },
   { key: "application_type", label: "Application Type", group: "Application", defaultSelected: true },
   { key: "application_status", label: "Application Status", group: "Application", defaultSelected: true },
@@ -110,13 +139,69 @@ function applicationStatusLabel(row: PipelineFamilyRow): string {
   return "Not Started";
 }
 
+function fmtCost(v: number | null | undefined): string {
+  return typeof v === "number" && Number.isFinite(v) ? String(v) : "";
+}
+
+/** One student's slice of the Students-group columns. */
+function studentFields(s: PipelineStudentDetail) {
+  return {
+    student_name: s.name,
+    student_grade: s.grade,
+    student_dob: s.date_of_birth,
+    student_gender: s.gender,
+    bus_transportation: yesNo(s.is_bus_transportation),
+    bus_stop: s.bus_stop,
+    pickup_address: s.pickup_address,
+    transportation_cost: fmtCost(s.transportation_cost),
+  };
+}
+
+/** Family-row mode: join every student's value into one cell,
+ *  name-prefixed once the family has more than one student so the
+ *  routing team can tell whose stop is whose. */
+function joinedStudentFields(students: PipelineStudentDetail[]) {
+  const keys = [
+    "student_name",
+    "student_grade",
+    "student_dob",
+    "student_gender",
+    "bus_transportation",
+    "bus_stop",
+    "pickup_address",
+    "transportation_cost",
+  ] as const;
+  const perStudent = students.map((s) => studentFields(s));
+  const joined = {} as Record<(typeof keys)[number], string>;
+  for (const key of keys) {
+    if (key === "student_name") {
+      joined[key] = perStudent.map((f) => f.student_name).filter(Boolean).join(", ");
+      continue;
+    }
+    joined[key] =
+      perStudent.length <= 1
+        ? (perStudent[0]?.[key] ?? "")
+        : perStudent
+            .map((f) => `${f.student_name || "Student"}: ${f[key] || "—"}`)
+            .join("; ");
+  }
+  return joined;
+}
+
 /** Project raw pipeline rows into pre-formatted export rows. Callers
  *  should filter out `is_archived` rows before (or after) calling —
- *  the pipeline export never includes archived families. */
+ *  the pipeline export never includes archived families.
+ *
+ *  `rowPer` picks the shape: "family" (default) emits one row per
+ *  family with per-student columns joined; "student" emits one row per
+ *  student with the family columns repeated. Families with no active
+ *  students for the year have no applicants, so they contribute no
+ *  rows in student mode. */
 export function buildPipelineExportRows(
-  rows: PipelineFamilyRow[]
+  rows: PipelineFamilyRow[],
+  rowPer: PipelineExportRowPer = "family"
 ): PipelineExportRow[] {
-  return rows.map((r) => ({
+  const familyFields = (r: PipelineFamilyRow) => ({
     stage: r.stage,
     family_name: r.family_name,
     primary_name: r.primary_name,
@@ -140,5 +225,19 @@ export function buildPipelineExportRows(
     registration_submitted_date: fmtDate(r.reg_submitted_date),
     registration_confirmed: yesNo(r.is_registration_confirmed),
     registration_confirmed_date: fmtDate(r.registration_confirmed_time),
+  });
+
+  if (rowPer === "student") {
+    return rows.flatMap((r) =>
+      (r.students ?? []).map((s) => ({
+        ...familyFields(r),
+        ...studentFields(s),
+      }))
+    );
+  }
+
+  return rows.map((r) => ({
+    ...familyFields(r),
+    ...joinedStudentFields(r.students ?? []),
   }));
 }
