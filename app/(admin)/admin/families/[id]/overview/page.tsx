@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { useParams, useSearchParams } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import {
   CheckCircle2,
@@ -37,6 +37,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { DashboardBreadcrumb } from "@/components/dashboard-breadcrumb";
+import { ActivityLogSheet } from "@/components/admin/activity-log-sheet";
 import { EmailNotificationsCard } from "@/components/admin/email-notifications-card";
 import { FamilyStudentsNav, StageNav } from "@/components/admin/stage-nav";
 import { adminFetcher } from "@/lib/admin-fetcher";
@@ -69,6 +70,7 @@ type Parent = AdminFamilyOverviewResponse["parents"][number];
  */
 export default function FamilyOverviewPage() {
   const params = useParams<{ id: string }>();
+  const router = useRouter();
   const searchParams = useSearchParams();
   const familyId = Number(params.id);
   const yearIdParam = searchParams.get("yearId");
@@ -237,6 +239,21 @@ export default function FamilyOverviewPage() {
     if (yid > prev) latestYearByStudent.set(sid, yid);
   }
 
+  // The activity stream aggregates per family + YEAR, but this page is
+  // cross-year: use the year admin arrived with, else the family's most
+  // recent cycle (highest id across applications + registration rows).
+  // 0 when the family has neither — the trigger renders disabled rather
+  // than opening an empty stream.
+  const activityYearId =
+    yearId ||
+    Math.max(
+      0,
+      ...applications.map((a) => Number(a.registration_school_years_id) || 0),
+      ...registration_progress.map(
+        (p) => Number(p.registration_school_years_id) || 0
+      )
+    );
+
   return (
     <div className="p-6 space-y-6">
       <div className="space-y-1 min-w-0">
@@ -260,6 +277,27 @@ export default function FamilyOverviewPage() {
       </div>
 
       {navBand}
+
+      {/* Action row — sits between "where can I go" (the nav band) and
+          the content, matching the enrolled student page. The whole
+          account timeline (notes, texts, emails, milestones) for this
+          family, in one sheet. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <span
+          title={
+            activityYearId
+              ? `Activity for ${yearLabel(activityYearId)}`
+              : "No application or registration on file yet — nothing to show"
+          }
+        >
+          <ActivityLogSheet
+            familyId={Number(family.id)}
+            yearId={activityYearId}
+            contextLabel={familyName}
+            disabled={!activityYearId}
+          />
+        </span>
+      </div>
 
       {/* Family settings — residential / foster flag. When on, the
           parent's enrolled dashboard surfaces a "Create New
@@ -590,10 +628,13 @@ export default function FamilyOverviewPage() {
                     <TableRow
                       key={inq.id}
                       className="cursor-pointer"
+                      title="Open this inquiry on the Inquiries page"
                       onClick={() => {
-                        // Inquiries list page — admin can drill into
-                        // the full inquiry record from there.
-                        window.location.href = "/admin/inquiries";
+                        // Deep link — the inquiries page reads
+                        // `inquiryId` and opens that row's detail
+                        // sheet on arrival, so admin lands on the
+                        // record itself rather than the whole list.
+                        router.push(`/admin/inquiries?inquiryId=${inq.id}`);
                       }}
                     >
                       <TableCell className="tabular-nums text-xs text-muted-foreground whitespace-nowrap">

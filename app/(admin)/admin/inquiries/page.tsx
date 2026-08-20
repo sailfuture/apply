@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import useSWR, { useSWRConfig } from "swr";
 import { toast } from "sonner";
 import { Archive, Check, Loader2, Trash2, Undo2, UserX, X } from "lucide-react";
@@ -234,6 +235,13 @@ export default function InquiriesPage() {
   );
   const { mutate: globalMutate } = useSWRConfig();
   const [active, setActive] = useState<Inquiry | null>(null);
+  // Deep link — `?inquiryId=N` opens that inquiry's sheet on arrival
+  // (the family overview's Inquiries rows link here). Consumed once
+  // per id so closing the sheet doesn't immediately reopen it.
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const deepLinkId = Number(searchParams.get("inquiryId")) || 0;
+  const consumedDeepLink = useRef(0);
   // null = any year; 0 = only the untagged ones (the working bucket).
   const [yearFilter, setYearFilter] = useState<number | null>(null);
   const { data: yearData } = useSWR<SchoolYearOption[]>(
@@ -279,6 +287,24 @@ export default function InquiriesPage() {
         .sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0)),
     [data]
   );
+
+  // Open the deep-linked inquiry once its row has loaded. The sheet
+  // renders outside the filtered groups, so it opens even when the
+  // current filter/year selection would hide that row.
+  useEffect(() => {
+    if (!deepLinkId || consumedDeepLink.current === deepLinkId) return;
+    const match = rows.find((r) => r.id === deepLinkId);
+    if (!match) return;
+    consumedDeepLink.current = deepLinkId;
+    setActive(match);
+  }, [deepLinkId, rows]);
+
+  /** Close the detail sheet, dropping a consumed `?inquiryId=` from
+   *  the URL so a refresh (or a later visit) doesn't reopen it. */
+  function closeActive() {
+    setActive(null);
+    if (deepLinkId) router.replace("/admin/inquiries", { scroll: false });
+  }
 
   const groups = useMemo(() => {
     const followedUp: Inquiry[] = [];
@@ -1105,7 +1131,7 @@ export default function InquiriesPage() {
           do there. Inquiry-only facts ride along as extraFields. */}
       <LeadSheet
         lead={active ? { source: "inquiry", id: active.id } : null}
-        onOpenChange={(o) => !o && setActive(null)}
+        onOpenChange={(o) => !o && closeActive()}
         extraFields={
           active
             ? [
