@@ -17,17 +17,6 @@ const VIEWED_KEY = "sms-viewed-v1";
 export const SMS_VIEWED_EVENT = "sms-viewed-changed";
 
 /**
- * Count of SMS threads waiting on a reply that this admin hasn't
- * opened yet — the nav badge's number.
- *
- * Two halves, matching the inbox's own unread dots exactly:
- *   - server: the thread's newest message is inbound (needs a reply)
- *   - client: `sms-viewed-v1` has no view newer than that message
- *
- * The viewed map is read after mount (never during render) so SSR and
- * hydration produce identical markup — the badge pops in a tick later.
- */
-/**
  * Live view of the `sms-viewed-v1` map — the client half of "unread".
  * Reads after mount (never during render) so SSR and hydration match,
  * then stays current via the same-tab event and cross-tab `storage`.
@@ -56,6 +45,18 @@ export function useSmsViewedMap(): Record<string, number> {
   return viewed;
 }
 
+/**
+ * Count of SMS threads waiting on a reply that this admin hasn't
+ * opened yet — the nav badge's number.
+ *
+ * Three conditions, ALL required:
+ *   - server: the thread's newest message is inbound (needs a reply)
+ *   - client: `sms-viewed-v1` has no view newer than that message
+ *   - recency: the server's `recent` flag (see the unread route's
+ *     `BADGE_WINDOW_MS`) — older needs-reply threads still show dots
+ *     in the inbox and rows on the dashboard card, but they don't
+ *     bubble the nav
+ */
 export function useUnreadMessageCount(): number {
   const { data } = useSWR<UnreadMessagesResponse>(
     "/api/admin/messages/unread",
@@ -72,7 +73,7 @@ export function useUnreadMessageCount(): number {
   const viewed = useSmsViewedMap();
 
   return (data?.conversations ?? []).filter(
-    (c) => (viewed[c.key] ?? 0) < c.lastAt
+    (c) => c.recent && (viewed[c.key] ?? 0) < c.lastAt
   ).length;
 }
 

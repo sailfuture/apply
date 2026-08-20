@@ -238,6 +238,8 @@ export function QuickTextDialog({
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder="Search families…"
+                  type="search"
+                  autoComplete="off"
                 />
               ) : null}
               {isLoading && !data ? (

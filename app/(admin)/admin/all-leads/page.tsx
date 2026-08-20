@@ -810,6 +810,8 @@ export default function AllLeadsPage() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search by student, parent, school, phone, or email…"
+            type="search"
+            autoComplete="off"
             className="min-w-0 flex-1 bg-white"
           />
           {/* Auto-match rides with the search — it's an action, not a

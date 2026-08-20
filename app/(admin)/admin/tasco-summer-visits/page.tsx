@@ -388,6 +388,8 @@ export default function TascoSummerVisitsPage() {
               </Select>
               <Input
                 placeholder="Search by student, school, center, or contact…"
+                type="search"
+                autoComplete="off"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 className="h-9 w-full sm:min-w-0 sm:flex-1"

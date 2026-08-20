@@ -208,6 +208,24 @@ export async function updateStudent(
   return data.response.student;
 }
 
+/** PUT /public/v2/students/:id/archive — flags the Toddle student as
+ *  archived (hidden from active rosters; reversible). No body. */
+export async function archiveStudent(id: string): Promise<void> {
+  await toddleFetch(
+    `/public/v2/students/${encodeURIComponent(id)}/archive`,
+    { method: "PUT" }
+  );
+}
+
+/** PUT /public/v2/students/:id/unarchive — restores an archived
+ *  Toddle student to the active roster. No body. */
+export async function unarchiveStudent(id: string): Promise<void> {
+  await toddleFetch(
+    `/public/v2/students/${encodeURIComponent(id)}/unarchive`,
+    { method: "PUT" }
+  );
+}
+
 /** PUT /public/v2/students/:id/profileImageUpload — replaces the
  *  student's Toddle profile photo. Body is a base64-encoded image
  *  string (raw base64, no data-URI prefix). Handled outside

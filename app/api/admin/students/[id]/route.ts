@@ -5,6 +5,7 @@ import type { XanoStudent } from "@/lib/xano";
 import { removeStripeItemsForArchivedStudent } from "@/lib/per-student-billing";
 import { reconcileFamilySubscriptionItems } from "@/lib/billing";
 import { sendBillingAlert } from "@/lib/billing-alerts";
+import { setToddleArchiveState } from "@/lib/toddle-sync";
 
 /**
  * Document-confirm pairs — each entry maps the confirm bool to its
@@ -63,7 +64,10 @@ const DOC_CONFIRM_PAIRS: Array<{
  *     `unenrollment_date` + `unenrollment_notes`. Captured by the
  *     Unenroll modal on the enrolled student detail page. Lives on
  *     the student row so the audit follows the student across
- *     re-enrollment attempts in future years.
+ *     re-enrollment attempts in future years. The archive flip is
+ *     mirrored into Toddle best-effort (archive on unenroll,
+ *     unarchive on re-enroll, archive on hard delete) via
+ *     `lib/toddle-sync.ts#setToddleArchiveState`.
  *
  * The `is_verified` flag on the student row was briefly written by
  * this route too, but admin verification was moved back to the
@@ -287,6 +291,25 @@ export async function PATCH(
           );
         }
       });
+      // Mirror the unenrollment into Toddle — archive the LMS record
+      // so teachers stop seeing the student. Best-effort: a Toddle
+      // hiccup can't fail the admin's unenroll (already landed), and
+      // never-synced students are skipped.
+      after(async () => {
+        try {
+          const outcome = await setToddleArchiveState(
+            id,
+            updated.toddle_student_id,
+            true
+          );
+          console.log(`[/api/admin/students/${id}] Toddle: ${outcome}`);
+        } catch (err) {
+          console.error(
+            `[/api/admin/students/${id}] Toddle archive failed:`,
+            err
+          );
+        }
+      });
     }
 
     // Un-archive (true → false): a re-enrolled student belongs back on
@@ -296,6 +319,23 @@ export async function PATCH(
     // Alert on failure: a Stripe hiccup can't fail the admin's
     // un-archive, but it also can't pass silently.
     if (patch.isArchived === false && priorIsArchived === true) {
+      // Symmetric Toddle mirror — a re-enrolled student comes back out
+      // of the LMS archive.
+      after(async () => {
+        try {
+          const outcome = await setToddleArchiveState(
+            id,
+            updated.toddle_student_id,
+            false
+          );
+          console.log(`[/api/admin/students/${id}] Toddle: ${outcome}`);
+        } catch (err) {
+          console.error(
+            `[/api/admin/students/${id}] Toddle unarchive failed:`,
+            err
+          );
+        }
+      });
       after(async () => {
         try {
           const familyId = Number(updated.registration_families_id);
@@ -376,6 +416,7 @@ export async function DELETE(
     // cleanup) and its packet-id lineage before removing the row.
     let familyId: number | null = null;
     let packetIds: number[] = [];
+    let toddleId: string | undefined;
     try {
       const student = await xano.students.getById(id);
       const fid = Number(student.registration_families_id);
@@ -385,12 +426,29 @@ export async function DELETE(
             (p): p is number => typeof p === "number"
           )
         : [];
+      toddleId = student.toddle_student_id;
     } catch (err) {
       console.warn(
         `[/api/admin/students/${id}] couldn't read student before delete:`,
         err
       );
     }
+
+    // A hard-deleted student may still exist in Toddle from a prior
+    // sync — archive them there so the LMS doesn't keep an active
+    // record pointing at a student this portal no longer knows.
+    // Best-effort, off the response path.
+    after(async () => {
+      try {
+        const outcome = await setToddleArchiveState(id, toddleId, true);
+        console.log(`[/api/admin/students/${id}] Toddle: ${outcome}`);
+      } catch (err) {
+        console.error(
+          `[/api/admin/students/${id}] Toddle archive on delete failed:`,
+          err
+        );
+      }
+    });
 
     // 0. Stripe item cleanup — most test students have none, but a real
     //    enrolled student could be on the family's subscription.

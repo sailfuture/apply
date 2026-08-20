@@ -328,6 +328,8 @@ export default function ApplicationsPage() {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search all applications…"
+          type="search"
+          autoComplete="off"
           className="flex-1 bg-white"
         />
         <Select

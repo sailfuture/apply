@@ -657,6 +657,8 @@ export function ToursPanel() {
       <div className="flex flex-wrap items-center gap-2">
         <Input
           placeholder="Search by parent, student, email, or location…"
+          type="search"
+          autoComplete="off"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="min-w-64 flex-1"
@@ -1000,6 +1002,8 @@ function LeadPickerDialog({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search by parent, student, email, phone, or school…"
+            type="search"
+            autoComplete="off"
             className="h-9 bg-white pl-8"
           />
         </div>

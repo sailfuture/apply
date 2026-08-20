@@ -378,6 +378,8 @@ export default function PipelinePage() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search families, students…"
+            type="search"
+            autoComplete="off"
             className="w-full bg-white pl-8"
           />
         </div>

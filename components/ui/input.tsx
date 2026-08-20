@@ -30,8 +30,13 @@ function Input({ className, type, onWheel, ...props }: React.ComponentProps<"inp
       type={type}
       onWheel={handleWheel}
       data-slot="input"
+      // `[&::-webkit-search-*]` — search inputs are typed `search` for
+      // correct browser semantics (no credit-card/address autofill on
+      // search boxes), but the native WebKit clear "X" is hidden so
+      // they look identical to text inputs and never double up with
+      // our own clear affordances.
       className={cn(
-        "h-9 w-full min-w-0 rounded-md border border-input bg-background px-2.5 py-1 text-base shadow-xs transition-[color,box-shadow] outline-none file:my-0.5 file:mr-3 file:inline-flex file:h-7 file:cursor-pointer file:rounded-md file:border file:border-input file:bg-background file:px-3 file:text-sm file:font-medium file:text-foreground file:transition-colors hover:file:bg-muted placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 md:text-sm dark:bg-input/30 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40",
+        "h-9 w-full min-w-0 rounded-md border border-input bg-background px-2.5 py-1 text-base shadow-xs transition-[color,box-shadow] outline-none file:my-0.5 file:mr-3 file:inline-flex file:h-7 file:cursor-pointer file:rounded-md file:border file:border-input file:bg-background file:px-3 file:text-sm file:font-medium file:text-foreground file:transition-colors hover:file:bg-muted placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 md:text-sm dark:bg-input/30 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40 [&::-webkit-search-cancel-button]:appearance-none [&::-webkit-search-decoration]:appearance-none",
         className
       )}
       {...props}

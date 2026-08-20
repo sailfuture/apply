@@ -14,6 +14,10 @@ import {
   getCourses,
   getCourseStudentIds,
   getAllStudents,
+  getStudentsBySourceIds,
+  archiveStudent,
+  unarchiveStudent,
+  isToddleConfigured,
   ToddleSyncError,
 } from "@/lib/toddle";
 import type {
@@ -299,6 +303,35 @@ export async function syncStudentToToddle(
   }
 
   return { ...result, persisted, photo, familyMembers, crew };
+}
+
+/**
+ * Mirror an apply-portal enrollment change onto Toddle: unenrolling a
+ * student here archives them there, re-enrolling unarchives. Resolves
+ * the Toddle student via the stored `toddle_student_id`, falling back
+ * to the `sfa-<id>` sourceId lookup for students synced before the
+ * Xano columns existed. Returns a short status string for logs; the
+ * caller decides whether a failure matters (unenroll flows treat this
+ * as best-effort — the portal-side archive already landed).
+ */
+export async function setToddleArchiveState(
+  studentXanoId: number,
+  storedToddleId: string | null | undefined,
+  archived: boolean
+): Promise<string> {
+  if (!isToddleConfigured()) return "skipped — Toddle not configured";
+  let toddleId = (storedToddleId ?? "").trim();
+  if (!toddleId) {
+    const matches = await getStudentsBySourceIds([`sfa-${studentXanoId}`]);
+    toddleId = matches[0] ? String(matches[0].id) : "";
+  }
+  if (!toddleId) return "skipped — student has never been synced to Toddle";
+  if (archived) {
+    await archiveStudent(toddleId);
+    return `archived Toddle student ${toddleId}`;
+  }
+  await unarchiveStudent(toddleId);
+  return `unarchived Toddle student ${toddleId}`;
 }
 
 /** Pick a fetchable URL out of the Xano image-metadata blob on

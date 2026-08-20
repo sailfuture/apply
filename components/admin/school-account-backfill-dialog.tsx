@@ -207,34 +207,18 @@ function BackfillDialogBody({
                   </span>
                 ))}
             </div>
-            <div className="rounded-md border overflow-hidden">
-              {/* Fixed layout with per-column widths so the table always
-                  fits the dialog — long values truncate (full value on
-                  hover) instead of forcing a horizontal scroll. */}
-              <table className="w-full table-fixed text-sm">
-                <colgroup>
-                  <col className="w-[21%]" />
-                  <col className="w-[12%]" />
-                  <col className="w-[31%]" />
-                  <col className="w-[16%]" />
-                  <col className="w-[20%]" />
-                </colgroup>
-                <thead>
-                  <tr className="border-b bg-muted/40 text-left text-xs text-muted-foreground">
-                    <th className="px-3 py-2 font-medium">Student</th>
-                    <th className="px-3 py-2 font-medium">Year</th>
-                    <th className="px-3 py-2 font-medium">Email</th>
-                    <th className="px-3 py-2 font-medium">Password</th>
-                    <th className="px-3 py-2 font-medium">Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y">
-                  {shown.rows.map((row) => (
-                    <BackfillRowView key={row.student_id} row={row} />
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            {/* Two groups: students WITHOUT an account first (the ones
+                this action is for — planned generates and anything
+                blocking one), then the already-covered roster below. */}
+            <RowGroup
+              title="Without an email account"
+              emptyText="Every enrolled student already has an email account."
+              rows={shown.rows.filter((r) => r.status !== "skipped_existing")}
+            />
+            <RowGroup
+              title="Already has an email account"
+              rows={shown.rows.filter((r) => r.status === "skipped_existing")}
+            />
           </>
         )}
       </div>
@@ -274,6 +258,58 @@ function BackfillDialogBody({
   );
 }
 
+/** One bordered table card for a group of rows, headed by the group
+ *  title + count. Passwords are deliberately NOT shown here — each
+ *  student's School Account card is the place to read them. */
+function RowGroup({
+  title,
+  rows,
+  emptyText,
+}: {
+  title: string;
+  rows: BackfillRow[];
+  /** Rendered instead of the card when the group is empty; omit to
+   *  hide an empty group entirely. */
+  emptyText?: string;
+}) {
+  if (rows.length === 0) {
+    return emptyText ? (
+      <p className="text-sm text-muted-foreground">{emptyText}</p>
+    ) : null;
+  }
+  return (
+    <div className="rounded-md border overflow-hidden">
+      <p className="border-b bg-muted/40 px-3 py-2 text-xs font-semibold">
+        {title} ({rows.length})
+      </p>
+      {/* Fixed layout with per-column widths so the table always fits
+          the dialog — long values truncate (full value on hover)
+          instead of forcing a horizontal scroll. */}
+      <table className="w-full table-fixed text-sm">
+        <colgroup>
+          <col className="w-[26%]" />
+          <col className="w-[14%]" />
+          <col className="w-[38%]" />
+          <col className="w-[22%]" />
+        </colgroup>
+        <thead>
+          <tr className="border-b bg-muted/40 text-left text-xs text-muted-foreground">
+            <th className="px-3 py-2 font-medium">Student</th>
+            <th className="px-3 py-2 font-medium">Year</th>
+            <th className="px-3 py-2 font-medium">Email</th>
+            <th className="px-3 py-2 font-medium">Status</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y">
+          {rows.map((row) => (
+            <BackfillRowView key={row.student_id} row={row} />
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function BackfillRowView({ row }: { row: BackfillRow }) {
   const meta = STATUS_META[row.status];
   return (
@@ -292,12 +328,6 @@ function BackfillRowView({ row }: { row: BackfillRow }) {
         title={row.email || undefined}
       >
         {row.email || "—"}
-      </td>
-      <td
-        className="px-3 py-2 font-mono text-[13px] overflow-hidden text-ellipsis whitespace-nowrap"
-        title={row.password || undefined}
-      >
-        {row.password || "—"}
       </td>
       <td className="px-3 py-2 overflow-hidden whitespace-nowrap">
         {/* Row-level explanation (missing year, conflict, write error)

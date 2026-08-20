@@ -1,12 +1,10 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { toast } from "sonner";
 import {
-  ArrowLeft,
   Banknote,
   CheckCircle2,
   Circle,
@@ -48,6 +46,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { BillingCard } from "@/components/admin/billing-card";
+import { DashboardBreadcrumb } from "@/components/dashboard-breadcrumb";
 import { FamilyStudentsNav, StageNav } from "@/components/admin/stage-nav";
 import { TuitionBreakdownTable } from "@/components/admin/tuition-breakdown-table";
 import { adminFetcher } from "@/lib/admin-fetcher";
@@ -57,6 +56,7 @@ import type {
   ScheduleSlot,
 } from "@/app/api/admin/families/[id]/billing/schedule/route";
 import type { AdminFamilyRegistrationResponse } from "@/app/api/admin/registrations/[id]/route";
+import type { AdminFamilyOverviewResponse } from "@/app/api/admin/family-overview/[id]/route";
 
 /**
  * Per-family billing detail page — 12-month schedule view backed
@@ -114,6 +114,45 @@ export default function FamilyBillingPage() {
     ? `/admin/billing?yearId=${yearId}`
     : "/admin/billing";
 
+  // Family name for the header — the nav band's shared family-overview
+  // payload is almost always already in the SWR cache (any student /
+  // family surface fetched it), so the title paints instantly instead
+  // of waiting on the schedule query.
+  const { data: overview } = useSWR<AdminFamilyOverviewResponse>(
+    Number.isFinite(familyId)
+      ? `/api/admin/family-overview/${familyId}`
+      : null,
+    adminFetcher,
+    { revalidateOnFocus: false, dedupingInterval: 30_000 }
+  );
+  const familyName =
+    (data?.familyName ?? "").trim() ||
+    (overview?.family.family_name ?? "").trim();
+
+  // Shared header — identical structure to the enrolled student and
+  // family overview pages so nothing shifts when switching surfaces.
+  const header = (
+    <div className="space-y-1 min-w-0">
+      <DashboardBreadcrumb
+        items={[
+          { label: "Billing", href: backHref },
+          ...(familyName ? [{ label: familyName }] : []),
+        ]}
+      />
+      {familyName ? (
+        <h1 className="text-2xl font-semibold truncate">{familyName}</h1>
+      ) : (
+        <Skeleton className="h-8 w-72" />
+      )}
+      <p className="text-sm text-muted-foreground">
+        12-month invoice schedule for the year. Stripe issues one
+        invoice per month starting on the billing start date — paid
+        invoices clear, open invoices stay billable, future months
+        haven&rsquo;t generated an invoice yet.
+      </p>
+    </div>
+  );
+
   // The nav band renders in EVERY state — familyId comes from the
   // URL — so moving between family / billing / student surfaces keeps
   // the navigation fixed in place while the content loads below.
@@ -132,7 +171,7 @@ export default function FamilyBillingPage() {
   if (!yearId) {
     return (
       <div className="p-6 space-y-6">
-        <BackLink href={backHref} />
+        {header}
         {navBand}
         <div className="rounded-lg border bg-white px-6 py-12 text-center text-sm text-muted-foreground">
           Missing <code>yearId</code> in the URL.
@@ -144,11 +183,7 @@ export default function FamilyBillingPage() {
   if (isLoading && !data) {
     return (
       <div className="p-6 space-y-6">
-        <BackLink href={backHref} />
-        <div className="space-y-1">
-          <Skeleton className="h-8 w-72" />
-          <Skeleton className="h-4 w-96" />
-        </div>
+        {header}
         {navBand}
         <Skeleton className="h-24 w-full" />
         <Skeleton className="h-96 w-full" />
@@ -159,7 +194,7 @@ export default function FamilyBillingPage() {
   if (error || !data) {
     return (
       <div className="p-6 space-y-6">
-        <BackLink href={backHref} />
+        {header}
         {navBand}
         <div className="rounded-lg border bg-white px-6 py-12 text-center text-sm text-muted-foreground">
           {error instanceof Error
@@ -172,25 +207,7 @@ export default function FamilyBillingPage() {
 
   return (
     <div className="p-6 space-y-6">
-      <BackLink href={backHref} />
-
-      <div className="space-y-1">
-        {/* Family name bullet-joined into the primary title so admin
-            always knows whose schedule they're looking at — this page
-            is reached from both the Billing list and the registration
-            detail page, and the table itself carries no family label. */}
-        <h1 className="text-2xl font-semibold">
-          Billing schedule
-          <span className="text-muted-foreground font-normal"> · </span>
-          {data.familyName}
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          12-month invoice schedule for the year. Stripe issues one
-          invoice per month starting on the billing start date — paid
-          invoices clear, open invoices stay billable, future months
-          haven&rsquo;t generated an invoice yet.
-        </p>
-      </div>
+      {header}
 
       {navBand}
 
@@ -575,17 +592,6 @@ function StatusPill({
         <span className="font-normal opacity-80">· via {methodWord}</span>
       ) : null}
     </span>
-  );
-}
-
-function BackLink({ href }: { href: string }) {
-  return (
-    <Button asChild variant="outline" size="sm" className="bg-white w-fit">
-      <Link href={href}>
-        <ArrowLeft className="size-3.5 mr-1.5" />
-        Back to billing
-      </Link>
-    </Button>
   );
 }
 

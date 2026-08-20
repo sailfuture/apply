@@ -553,6 +553,8 @@ export default function EnrolledStudentsPage() {
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search enrolled students…"
+                type="search"
+                autoComplete="off"
                 className="pl-9 bg-white"
               />
             </div>

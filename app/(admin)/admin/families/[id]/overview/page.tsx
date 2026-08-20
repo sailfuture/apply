@@ -5,7 +5,6 @@ import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import {
-  ArrowLeft,
   CheckCircle2,
   ExternalLink,
   Mail,
@@ -37,6 +36,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { DashboardBreadcrumb } from "@/components/dashboard-breadcrumb";
 import { EmailNotificationsCard } from "@/components/admin/email-notifications-card";
 import { FamilyStudentsNav, StageNav } from "@/components/admin/stage-nav";
 import { adminFetcher } from "@/lib/admin-fetcher";
@@ -76,6 +76,12 @@ export default function FamilyOverviewPage() {
     yearIdParam && Number.isFinite(Number(yearIdParam))
       ? Number(yearIdParam)
       : null;
+
+  // Back destination — the enrolled roster (year-scoped when known),
+  // matching where admin works from day to day.
+  const backHref = yearId
+    ? `/admin/enrolled?yearId=${yearId}`
+    : "/admin/enrolled";
 
   const swrKey = Number.isFinite(familyId)
     ? `/api/admin/family-overview/${familyId}`
@@ -144,8 +150,10 @@ export default function FamilyOverviewPage() {
   if (isLoading && !data) {
     return (
       <div className="p-6 space-y-6">
-        <BackLink />
-        <div className="space-y-1">
+        <div className="space-y-1 min-w-0">
+          <DashboardBreadcrumb
+            items={[{ label: "Enrolled Students", href: backHref }]}
+          />
           <Skeleton className="h-8 w-72" />
           <Skeleton className="h-4 w-96" />
         </div>
@@ -160,7 +168,11 @@ export default function FamilyOverviewPage() {
   if (error || !data) {
     return (
       <div className="p-6 space-y-6">
-        <BackLink />
+        <div className="space-y-1 min-w-0">
+          <DashboardBreadcrumb
+            items={[{ label: "Enrolled Students", href: backHref }]}
+          />
+        </div>
         {navBand}
         <div className="rounded-lg border bg-white px-6 py-12 text-center text-sm text-muted-foreground">
           {error instanceof Error
@@ -227,9 +239,13 @@ export default function FamilyOverviewPage() {
 
   return (
     <div className="p-6 space-y-6">
-      <BackLink />
-
-      <div className="space-y-1">
+      <div className="space-y-1 min-w-0">
+        <DashboardBreadcrumb
+          items={[
+            { label: "Enrolled Students", href: backHref },
+            { label: familyName },
+          ]}
+        />
         <h1 className="text-2xl font-semibold truncate">{familyName}</h1>
         <p className="text-sm text-muted-foreground">
           Cross-year family overview · {parents.length}{" "}
@@ -1088,14 +1104,3 @@ function formatDateShort(ms: number): string {
 
 /** Back link mirroring the style on every other admin detail
  *  page so the chrome reads as one product. */
-function BackLink() {
-  return (
-    <Button asChild variant="outline" size="sm" className="bg-white w-fit">
-      <Link href="/admin/applications">
-        <ArrowLeft className="size-3.5 mr-1.5" />
-        Back to applications
-      </Link>
-    </Button>
-  );
-}
-

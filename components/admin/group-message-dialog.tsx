@@ -566,6 +566,8 @@ export function GroupMessageDialog({
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   placeholder="Search families, parents, or students…"
+                  type="search"
+                  autoComplete="off"
                   className="pl-8"
                 />
               </div>

@@ -98,6 +98,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import type { AdminEnrolledStudentResponse } from "@/app/api/admin/enrolled/[id]/route";
+import type { AdminFamilyOverviewResponse } from "@/app/api/admin/family-overview/[id]/route";
 import type { XanoBusStop } from "@/lib/xano";
 import type { StudentGoogleAccountStatus } from "@/app/api/admin/students/[id]/google-account/route";
 
@@ -131,6 +132,22 @@ export default function EnrolledStudentDetailPage() {
   // lands — keeping the navigation fixed in place while switching
   // between family / billing / sibling surfaces.
   const familyIdParam = Number(searchParams.get("familyId")) || 0;
+
+  // The nav band's shared family-overview payload (same SWR key, so
+  // it's already cached on band navigation) — gives us this student's
+  // name for the breadcrumb + title while the page's own payload is
+  // still loading, so switching surfaces never blanks the header.
+  const { data: overviewCache } = useSWR<AdminFamilyOverviewResponse>(
+    familyIdParam ? `/api/admin/family-overview/${familyIdParam}` : null,
+    adminFetcher,
+    { revalidateOnFocus: false, dedupingInterval: 30_000 }
+  );
+  const cachedStudent = overviewCache?.students.find(
+    (s) => s.id === studentId
+  );
+  const cachedName = cachedStudent
+    ? `${cachedStudent.first_name ?? ""} ${cachedStudent.last_name ?? ""}`.trim()
+    : "";
 
   const swrKey =
     Number.isFinite(studentId) && yearId
@@ -180,9 +197,16 @@ export default function EnrolledStudentDetailPage() {
       <div className="p-6 space-y-6">
         <div className="space-y-1 min-w-0">
           <DashboardBreadcrumb
-            items={[{ label: "Enrolled Students", href: backHref }]}
+            items={[
+              { label: "Enrolled Students", href: backHref },
+              ...(cachedName ? [{ label: cachedName }] : []),
+            ]}
           />
-          <Skeleton className="h-8 w-72" />
+          {cachedName ? (
+            <h1 className="text-2xl font-semibold truncate">{cachedName}</h1>
+          ) : (
+            <Skeleton className="h-8 w-72" />
+          )}
           <Skeleton className="h-4 w-96" />
         </div>
         {navBand(familyIdParam)}
@@ -198,7 +222,10 @@ export default function EnrolledStudentDetailPage() {
       <div className="p-6 space-y-6">
         <div className="space-y-1 min-w-0">
           <DashboardBreadcrumb
-            items={[{ label: "Enrolled Students", href: backHref }]}
+            items={[
+              { label: "Enrolled Students", href: backHref },
+              ...(cachedName ? [{ label: cachedName }] : []),
+            ]}
           />
         </div>
         {navBand(familyIdParam)}
@@ -381,9 +408,7 @@ export default function EnrolledStudentDetailPage() {
             existingReason={student.unenrollment_reason ?? ""}
             existingDate={student.unenrollment_date ?? ""}
             existingNotes={student.unenrollment_notes ?? ""}
-            onChanged={() => {
-              void mutate();
-            }}
+            onChanged={() => mutate()}
           />
         </div>
       </div>
@@ -517,7 +542,7 @@ function StudentPhotoCard({
   onChanged,
 }: {
   student: AdminEnrolledStudentResponse["student"];
-  onChanged: () => void;
+  onChanged: () => void | Promise<unknown>;
 }) {
   const [uploading, setUploading] = useState(false);
   const [removing, setRemoving] = useState(false);
@@ -559,7 +584,7 @@ function StudentPhotoCard({
         throw new Error(body?.error ?? `Save failed (${patchRes.status})`);
       }
       toast.success("Student photo updated.");
-      onChanged();
+      await onChanged();
     } catch (err) {
       console.error("[StudentPhotoCard.handleFile]", err);
       toast.error(err instanceof Error ? err.message : "Couldn't upload photo.");
@@ -581,7 +606,7 @@ function StudentPhotoCard({
         throw new Error(body?.error ?? `Remove failed (${res.status})`);
       }
       toast.success("Student photo removed.");
-      onChanged();
+      await onChanged();
     } catch (err) {
       console.error("[StudentPhotoCard.handleRemove]", err);
       toast.error(err instanceof Error ? err.message : "Couldn't remove photo.");
@@ -707,7 +732,7 @@ function PlacementCard({
 }: {
   packet: AdminEnrolledStudentResponse["packet"];
   schoolYear: AdminEnrolledStudentResponse["school_year"];
-  onChanged: () => void;
+  onChanged: () => void | Promise<unknown>;
 }) {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -752,7 +777,7 @@ function PlacementCard({
       }
       toast.success("Placement saved.");
       setEditing(false);
-      onChanged();
+      await onChanged();
     } catch (err) {
       console.error("[PlacementCard.runSave]", err);
       toast.error(err instanceof Error ? err.message : "Couldn't save.");
@@ -867,7 +892,7 @@ function SchoolAccountCard({
   onChanged,
 }: {
   student: AdminEnrolledStudentResponse["student"];
-  onChanged: () => void;
+  onChanged: () => void | Promise<unknown>;
 }) {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -936,7 +961,7 @@ function SchoolAccountCard({
       }
       toast.success("School account saved.");
       setEditing(false);
-      onChanged();
+      await onChanged();
     } catch (err) {
       console.error("[SchoolAccountCard.runSave]", err);
       toast.error(err instanceof Error ? err.message : "Couldn't save.");
@@ -1190,7 +1215,7 @@ function StudentBioCard({
   /** Called after a successful edit-mode save so the parent can
    *  refetch the detail payload — keeps the read mode in sync
    *  with the now-persisted values. */
-  onChanged: () => void;
+  onChanged: () => void | Promise<unknown>;
 }) {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -1319,7 +1344,7 @@ function StudentBioCard({
       }
       toast.success("Student details saved.");
       setEditing(false);
-      onChanged();
+      await onChanged();
     } catch (err) {
       console.error("[StudentBioCard.runSave]", err);
       toast.error(err instanceof Error ? err.message : "Couldn't save.");
@@ -1696,7 +1721,7 @@ function FamilyInformationCard({
   emergencyContacts: AdminEnrolledStudentResponse["emergency_contacts"];
   /** Re-fetch the surrounding student-detail payload after a row
    *  save so the read mode reflects the persisted values. */
-  onChanged: () => void;
+  onChanged: () => void | Promise<unknown>;
 }) {
   return (
     <Card className="overflow-hidden gap-0 py-0 bg-white">
@@ -2179,7 +2204,7 @@ function ParentRowEditable({
 }: {
   parent: AdminEnrolledStudentResponse["parents"][number];
   indexLabel: string | null;
-  onChanged: () => void;
+  onChanged: () => void | Promise<unknown>;
 }) {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -2234,7 +2259,7 @@ function ParentRowEditable({
       }
       toast.success("Parent saved.");
       setEditing(false);
-      onChanged();
+      await onChanged();
     } catch (err) {
       console.error("[ParentRowEditable.runSave]", err);
       toast.error(err instanceof Error ? err.message : "Couldn't save.");
@@ -2358,7 +2383,7 @@ function EmergencyContactRowEditable({
 }: {
   contact: AdminEnrolledStudentResponse["emergency_contacts"][number];
   indexLabel: string | null;
-  onChanged: () => void;
+  onChanged: () => void | Promise<unknown>;
 }) {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -2413,7 +2438,7 @@ function EmergencyContactRowEditable({
       }
       toast.success("Emergency contact saved.");
       setEditing(false);
-      onChanged();
+      await onChanged();
     } catch (err) {
       console.error("[EmergencyContactRowEditable.runSave]", err);
       toast.error(err instanceof Error ? err.message : "Couldn't save.");
@@ -2569,7 +2594,7 @@ function PacketCard({
   packet: AdminEnrolledStudentResponse["packet"];
   student: AdminEnrolledStudentResponse["student"];
   schoolYear: AdminEnrolledStudentResponse["school_year"];
-  onChanged: () => void;
+  onChanged: () => void | Promise<unknown>;
 }) {
   const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -2622,7 +2647,7 @@ function PacketCard({
           ? `${student.first_name} marked pending.`
           : `${student.first_name} marked confirmed.`
       );
-      onChanged();
+      await onChanged();
     } catch (err) {
       console.error("[PacketCard.toggleConfirmed]", err);
       toast.error(err instanceof Error ? err.message : "Couldn't update.");
@@ -2721,7 +2746,7 @@ function PacketCard({
       }
       toast.success("Packet saved.");
       setEditing(false);
-      onChanged();
+      await onChanged();
     } catch (err) {
       console.error("[PacketCard.runSave]", err);
       toast.error(err instanceof Error ? err.message : "Couldn't save.");
@@ -3394,7 +3419,7 @@ function TestingCard({
 }: {
   student: AdminEnrolledStudentResponse["student"];
   app: AdminEnrolledStudentResponse["app"];
-  onChanged: () => void;
+  onChanged: () => void | Promise<unknown>;
 }) {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -3518,7 +3543,7 @@ function TestingCard({
       }
       toast.success("Testing details saved.");
       setEditing(false);
-      onChanged();
+      await onChanged();
     } catch (err) {
       console.error("[TestingCard.runSave]", err);
       toast.error(err instanceof Error ? err.message : "Couldn't save.");
@@ -3686,7 +3711,7 @@ function EnrolledDocsToReviewTable({
   onChanged,
 }: {
   student: AdminEnrolledStudentResponse["student"];
-  onChanged: () => void;
+  onChanged: () => void | Promise<unknown>;
 }) {
   // Track which doc's PATCH is mid-flight so each row's spinner
   // is scoped to itself rather than blanking all four buttons.
@@ -3772,7 +3797,7 @@ function EnrolledDocsToReviewTable({
           ? `${doc.label} confirmed.`
           : `${doc.label} confirmation cleared.`
       );
-      onChanged();
+      await onChanged();
     } catch (err) {
       console.error("[EnrolledDocsToReviewTable.toggleDoc]", err);
       toast.error(err instanceof Error ? err.message : "Couldn't update.");
@@ -4084,7 +4109,7 @@ function OptionalDocRow({
     | "passport"
     | "student_state_id"
     | "discipline";
-  onChanged: () => void;
+  onChanged: () => void | Promise<unknown>;
 }) {
   const entries = Array.isArray(files) ? files : [];
   if (entries.length === 0) {
@@ -4281,7 +4306,7 @@ function AdminFileRemoveButton({
   /** File name shown in the confirm dialog. Falls back to a
    *  generic phrase when the metadata didn't include one. */
   fileName: string | null;
-  onChanged: () => void;
+  onChanged: () => void | Promise<unknown>;
 }) {
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -4301,7 +4326,7 @@ function AdminFileRemoveButton({
       }
       toast.success("File removed.");
       setOpen(false);
-      onChanged();
+      await onChanged();
     } catch (err) {
       console.error("[AdminFileRemoveButton.runRemove]", err);
       toast.error(err instanceof Error ? err.message : "Couldn't remove file.");
@@ -4770,7 +4795,7 @@ function UnenrollStudentButton({
   existingReason: string;
   existingDate: string;
   existingNotes: string;
-  onChanged: () => void;
+  onChanged: () => void | Promise<unknown>;
 }) {
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -4827,7 +4852,7 @@ function UnenrollStudentButton({
       }
       toast.success(`${studentName} unenrolled.`);
       setOpen(false);
-      onChanged();
+      await onChanged();
     } catch (err) {
       console.error("[UnenrollStudentButton.runUnenroll] failed:", err);
       toast.error(err instanceof Error ? err.message : "Couldn't unenroll.");
@@ -4859,7 +4884,7 @@ function UnenrollStudentButton({
         throw new Error(errBody?.error ?? `Reverse failed (${res.status})`);
       }
       toast.success(`${studentName} re-enrolled.`);
-      onChanged();
+      await onChanged();
     } catch (err) {
       console.error("[UnenrollStudentButton.runReverse] failed:", err);
       toast.error(

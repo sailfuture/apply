@@ -269,6 +269,8 @@ export function DashboardSearch() {
         }}
         onKeyDown={onKeyDown}
         placeholder="Search students, parents, families, inquiries…"
+        type="search"
+        autoComplete="off"
         className="h-10 bg-white pl-9"
         role="combobox"
         aria-expanded={showPanel}

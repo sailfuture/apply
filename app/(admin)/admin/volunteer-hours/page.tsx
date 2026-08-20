@@ -1430,6 +1430,8 @@ function AttendeesDialog({
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Search enrolled families…"
+                type="search"
+                autoComplete="off"
                 className="flex-1"
               />
               <div className="flex w-28 shrink-0 items-center gap-1.5">
@@ -1724,6 +1726,8 @@ function BulkHoursDialog({
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search enrolled families…"
+              type="search"
+              autoComplete="off"
             />
             {candidates.length === 0 ? (
               <p className="py-2 text-sm text-muted-foreground">

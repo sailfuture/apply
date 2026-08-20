@@ -192,6 +192,8 @@ export default function AdminStorePage() {
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search family, student, item, email…"
+                type="search"
+                autoComplete="off"
                 className="h-8 w-full bg-white pl-8 text-sm"
               />
             </div>

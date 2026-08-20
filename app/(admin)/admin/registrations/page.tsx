@@ -542,6 +542,8 @@ export default function RegistrationsPage() {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search all registrations…"
+          type="search"
+          autoComplete="off"
           className="flex-1 bg-white"
         />
         <Select

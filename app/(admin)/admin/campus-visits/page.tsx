@@ -369,6 +369,8 @@ export default function CampusVisitsPage() {
             <div className="flex flex-wrap items-center gap-2">
               <Input
                 placeholder="Search by parent, email, student, or school…"
+                type="search"
+                autoComplete="off"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 className="h-9 w-full sm:min-w-0 sm:flex-1"

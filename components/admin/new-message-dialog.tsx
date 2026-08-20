@@ -171,6 +171,8 @@ export function NewMessageDialog({
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search families, parents, students — or type a phone number…"
+              type="search"
+              autoComplete="off"
               className="pl-8"
             />
           </div>

@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { toast } from "sonner";
 import {
+  CheckCheck,
   Loader2,
   MessageSquareText,
   Search,
@@ -321,6 +322,34 @@ export function MessagesInbox({ mode }: { mode: InboxMode }) {
   const isUnread = (c: SmsConversation) =>
     c.needsReply &&
     (viewedMap[`${c.contactType}:${c.contactId}`] ?? 0) < c.lastAt;
+  // Stamp EVERY needs-reply thread viewed in one write — the escape
+  // hatch for a browser whose viewed map has fallen behind (new
+  // device, cleared storage, threads a colleague already handled).
+  // Marks the FULL feed, not just this page's slice: the nav badge
+  // counts both inboxes, so clearing only one page's threads would
+  // leave a bubble this page can't show the reason for.
+  function markAllViewed() {
+    setViewedMap((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const c of conversations) {
+        if (!c.needsReply) continue;
+        const key = `${c.contactType}:${c.contactId}`;
+        if ((next[key] ?? 0) >= c.lastAt) continue;
+        next[key] = c.lastAt;
+        changed = true;
+      }
+      if (!changed) return prev;
+      try {
+        localStorage.setItem("sms-viewed-v1", JSON.stringify(next));
+        window.dispatchEvent(new Event(SMS_VIEWED_EVENT));
+      } catch {
+        // Storage full/blocked — dots still gray for this session.
+      }
+      return next;
+    });
+  }
+  const anyUnread = conversations.some(isUnread);
 
   // Deep link: `?open=<contactType>:<contactId>` (the same key shape
   // the unread feed and viewed map use) selects that thread once the
@@ -545,6 +574,7 @@ export function MessagesInbox({ mode }: { mode: InboxMode }) {
           type="text"
           value={search}
           onChange={(e) => changeSearch(e.target.value)}
+          autoComplete="off"
           placeholder="Search by student, parent, or phone…"
           className="w-full rounded-md border bg-white py-1.5 pl-8 pr-7 text-sm outline-none placeholder:text-muted-foreground focus:border-foreground/40"
         />
@@ -650,6 +680,18 @@ export function MessagesInbox({ mode }: { mode: InboxMode }) {
           )}
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          {anyUnread ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={markAllViewed}
+              title="Clear the unread dots and the nav bubble without opening each thread"
+            >
+              <CheckCheck className="mr-1.5 size-3.5" />
+              Mark all read
+            </Button>
+          ) : null}
           <SmsNotificationToggle />
           <NewMessageDialog
             onPick={(contact) => {

@@ -25,7 +25,21 @@ export interface UnreadConversation {
   /** First line of the inbound text, truncated — the notification
    *  body. */
   preview: string;
+  /** True when the message is newer than `BADGE_WINDOW_MS`. The nav
+   *  badge only counts recent threads — a needs-reply thread flagged
+   *  months ago (a "Thanks!" nobody replied to, or one this browser's
+   *  viewed map never saw) is backlog for the dashboard card, not a
+   *  notification. Computed here so clients never call the clock
+   *  during render. */
+  recent: boolean;
 }
+
+/** Nav-badge recency window. The server flags a thread as needing a
+ *  reply for as long as its newest message is inbound — forever, for
+ *  a text that needs no answer — and the client's viewed map is
+ *  per-browser. Without a cutoff every new device/browser bubbles
+ *  the nav with months-old texts. */
+const BADGE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Cap on name resolution. Unread counts are small in practice; this
  *  keeps a pathological backlog from fanning out dozens of lookups on
@@ -141,12 +155,14 @@ export async function GET() {
       })
     );
 
+    const cutoff = Date.now() - BADGE_WINDOW_MS;
     const conversations: UnreadConversation[] = pending.map((p, i) => ({
       key: p.key,
       lastAt: p.lastAt,
       name:
         names[i] ?? (formatUSPhone(p.phone) || p.phone || "Unknown number"),
       preview: p.preview,
+      recent: p.lastAt > cutoff,
     }));
 
     return NextResponse.json({

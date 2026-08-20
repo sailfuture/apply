@@ -112,6 +112,8 @@ export default function AdminLaptopsPage() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search asset, serial, student…"
+            type="search"
+            autoComplete="off"
             className="w-full bg-white pl-8"
           />
         </div>

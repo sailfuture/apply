@@ -303,6 +303,8 @@ export function EventReminderDialog({
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Search families…"
+                type="search"
+                autoComplete="off"
               />
               {isLoading && !data ? (
                 <div className="flex justify-center py-6">
