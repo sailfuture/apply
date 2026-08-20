@@ -38,6 +38,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { EmailNotificationsCard } from "@/components/admin/email-notifications-card";
+import { FamilyStudentsNav, StageNav } from "@/components/admin/stage-nav";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { toast } from "sonner";
 import { formatUSPhone } from "@/lib/phone";
@@ -123,11 +124,32 @@ export default function FamilyOverviewPage() {
     }
   }
 
+  // The nav band renders in EVERY state — familyId comes from the
+  // URL, so switching between family / billing / student surfaces
+  // keeps the navigation fixed in place while content loads below.
+  // Layout mirrors the enrolled student page (full-width `p-6
+  // space-y-6`, header block, then the band) so nothing jumps when
+  // moving between the surfaces.
+  const navBand = (
+    <div className="flex flex-wrap items-center justify-between gap-2 border-b pb-4">
+      <FamilyStudentsNav
+        familyId={familyId}
+        yearId={yearId}
+        currentSection="overview"
+      />
+      <StageNav current="none" familyId={familyId} yearId={yearId} />
+    </div>
+  );
+
   if (isLoading && !data) {
     return (
-      <div className="p-6 max-w-7xl mx-auto space-y-4">
-        <Skeleton className="h-8 w-48" />
-        <Skeleton className="h-10 w-72" />
+      <div className="p-6 space-y-6">
+        <BackLink />
+        <div className="space-y-1">
+          <Skeleton className="h-8 w-72" />
+          <Skeleton className="h-4 w-96" />
+        </div>
+        {navBand}
         <Skeleton className="h-48 w-full" />
         <Skeleton className="h-48 w-full" />
         <Skeleton className="h-48 w-full" />
@@ -137,8 +159,9 @@ export default function FamilyOverviewPage() {
 
   if (error || !data) {
     return (
-      <div className="p-6 max-w-7xl mx-auto">
+      <div className="p-6 space-y-6">
         <BackLink />
+        {navBand}
         <div className="rounded-lg border bg-white px-6 py-12 text-center text-sm text-muted-foreground">
           {error instanceof Error
             ? error.message
@@ -203,7 +226,7 @@ export default function FamilyOverviewPage() {
   }
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-6">
+    <div className="p-6 space-y-6">
       <BackLink />
 
       <div className="space-y-1">
@@ -219,6 +242,8 @@ export default function FamilyOverviewPage() {
             : "emergency contacts"}
         </p>
       </div>
+
+      {navBand}
 
       {/* Family settings — residential / foster flag. When on, the
           parent's enrolled dashboard surfaces a "Create New

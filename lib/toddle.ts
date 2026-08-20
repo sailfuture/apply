@@ -394,14 +394,20 @@ export interface ToddleFamilyMemberResult {
  * card on the student (matched by email, falling back to name).
  * Per-member failures are reported, never thrown — one bad row
  * shouldn't undo the rest of the sync.
+ *
+ * `preloaded.parents` lets a bulk run fetch the org's parent list
+ * once and share it across students; parents created here are pushed
+ * back onto that array so a sibling synced later in the same run
+ * matches them instead of double-creating.
  */
 export async function syncFamilyMembers(
   studentToddleId: string,
-  members: ToddleFamilyMemberInput[]
+  members: ToddleFamilyMemberInput[],
+  preloaded?: { parents?: ToddleParentRecord[] }
 ): Promise<ToddleFamilyMemberResult[]> {
   if (members.length === 0) return [];
   const [allParents, existingContacts] = await Promise.all([
-    getParents(),
+    preloaded?.parents ?? getParents(),
     getContactDetails(studentToddleId),
   ]);
   const results: ToddleFamilyMemberResult[] = [];
@@ -446,7 +452,7 @@ export async function syncFamilyMembers(
           });
           result.account = alreadyLinked ? "updated" : "linked";
         } else {
-          await createParent({
+          const created = await createParent({
             firstName: m.firstName,
             lastName: m.lastName,
             email: m.email!.trim(),
@@ -459,6 +465,8 @@ export async function syncFamilyMembers(
                 }
               : {}),
           });
+          // Visible to later students in the same (bulk) run.
+          allParents.push(created);
           result.account = "created";
         }
       } catch (err) {
@@ -517,13 +525,24 @@ export async function syncFamilyMembers(
  * them from any OTHER "Crew …" class so a crew move here moves them
  * there. Returns a short human status for the admin toast; throws
  * nothing (crew is best-effort, like the photo).
+ *
+ * `preloaded` lets a bulk run share one courses fetch and one roster
+ * fetch per crew class across every student — rosters are kept
+ * current in place as students are added/removed.
  */
 export async function syncCrewClass(
   studentToddleId: string,
-  crewName: string
+  crewName: string,
+  preloaded?: {
+    courses?: ToddleCourse[];
+    /** courseId → student ids currently enrolled. Mutated on add/remove. */
+    rosters?: Map<string, string[]>;
+  }
 ): Promise<string> {
   try {
-    const courses = (await getCourses()).filter((c) => !c.isArchived);
+    const courses = (preloaded?.courses ?? (await getCourses())).filter(
+      (c) => !c.isArchived
+    );
     const titleOf = (c: ToddleCourse) => (c.title ?? c.name ?? "").trim();
     const want = crewName.trim().toLowerCase();
     const target = courses.find((c) => titleOf(c).toLowerCase() === want);
@@ -533,19 +552,28 @@ export async function syncCrewClass(
     const crewCourses = courses.filter((c) =>
       /^crew\b/i.test(titleOf(c))
     );
+    const rosterOf = async (courseId: string): Promise<string[]> => {
+      const cached = preloaded?.rosters?.get(courseId);
+      if (cached) return cached;
+      const ids = await getCourseStudentIds(courseId);
+      preloaded?.rosters?.set(courseId, ids);
+      return ids;
+    };
     const notes: string[] = [];
     for (const course of crewCourses) {
-      const ids = await getCourseStudentIds(course.id);
+      const ids = await rosterOf(course.id);
       const enrolled = ids.includes(studentToddleId);
       if (course.id === target.id) {
         if (enrolled) {
           notes.unshift(`already in ${titleOf(course)}`);
         } else {
           await addStudentsToCourse(course.id, [studentToddleId]);
+          ids.push(studentToddleId);
           notes.unshift(`added to ${titleOf(course)}`);
         }
       } else if (enrolled) {
         await removeStudentsFromCourse(course.id, [studentToddleId]);
+        ids.splice(ids.indexOf(studentToddleId), 1);
         notes.push(`removed from ${titleOf(course)}`);
       }
     }

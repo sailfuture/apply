@@ -48,6 +48,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { BillingCard } from "@/components/admin/billing-card";
+import { FamilyStudentsNav, StageNav } from "@/components/admin/stage-nav";
 import { TuitionBreakdownTable } from "@/components/admin/tuition-breakdown-table";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { cn } from "@/lib/utils";
@@ -113,10 +114,26 @@ export default function FamilyBillingPage() {
     ? `/admin/billing?yearId=${yearId}`
     : "/admin/billing";
 
+  // The nav band renders in EVERY state — familyId comes from the
+  // URL — so moving between family / billing / student surfaces keeps
+  // the navigation fixed in place while the content loads below.
+  // Layout mirrors the enrolled student page and the family overview.
+  const navBand = Number.isFinite(familyId) ? (
+    <div className="flex flex-wrap items-center justify-between gap-2 border-b pb-4">
+      <FamilyStudentsNav
+        familyId={familyId}
+        yearId={yearId}
+        currentSection="billing"
+      />
+      <StageNav current="none" familyId={familyId} yearId={yearId} />
+    </div>
+  ) : null;
+
   if (!yearId) {
     return (
-      <div className="p-6 space-y-4">
+      <div className="p-6 space-y-6">
         <BackLink href={backHref} />
+        {navBand}
         <div className="rounded-lg border bg-white px-6 py-12 text-center text-sm text-muted-foreground">
           Missing <code>yearId</code> in the URL.
         </div>
@@ -126,9 +143,13 @@ export default function FamilyBillingPage() {
 
   if (isLoading && !data) {
     return (
-      <div className="p-6 space-y-4">
+      <div className="p-6 space-y-6">
         <BackLink href={backHref} />
-        <Skeleton className="h-8 w-64" />
+        <div className="space-y-1">
+          <Skeleton className="h-8 w-72" />
+          <Skeleton className="h-4 w-96" />
+        </div>
+        {navBand}
         <Skeleton className="h-24 w-full" />
         <Skeleton className="h-96 w-full" />
       </div>
@@ -137,8 +158,9 @@ export default function FamilyBillingPage() {
 
   if (error || !data) {
     return (
-      <div className="p-6 space-y-4">
+      <div className="p-6 space-y-6">
         <BackLink href={backHref} />
+        {navBand}
         <div className="rounded-lg border bg-white px-6 py-12 text-center text-sm text-muted-foreground">
           {error instanceof Error
             ? error.message
@@ -169,6 +191,8 @@ export default function FamilyBillingPage() {
           haven&rsquo;t generated an invoice yet.
         </p>
       </div>
+
+      {navBand}
 
       {/* Subscription state + lifecycle actions — the same BillingCard
           the registration detail page renders, so Start Monthly

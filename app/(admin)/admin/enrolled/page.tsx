@@ -48,6 +48,7 @@ import { formatUSPhone } from "@/lib/phone";
 import { EnrolledExportDialog } from "@/components/admin/enrolled-export-dialog";
 import { SchoolAccountBackfillDialog } from "@/components/admin/school-account-backfill-dialog";
 import { SyncToddleButton } from "@/components/admin/sync-toddle-button";
+import { ToddleSyncAllDialog } from "@/components/admin/toddle-sync-all-dialog";
 import type { EnrolledStudentRow } from "@/app/api/admin/enrolled/route";
 
 /**
@@ -297,7 +298,11 @@ export default function EnrolledStudentsPage() {
           onClick={(e) => {
             e.stopPropagation();
             router.push(
-              `/admin/enrolled/${row.student_id}?yearId=${row.year_id}`
+              // familyId lets the detail page paint its family nav
+              // band before its payload lands.
+              `/admin/enrolled/${row.student_id}?yearId=${row.year_id}${
+                Number(row.family_id) > 0 ? `&familyId=${row.family_id}` : ""
+              }`
             );
           }}
         >
@@ -506,7 +511,11 @@ export default function EnrolledStudentsPage() {
           onClose={() => setSheetRow(null)}
           onOpenFull={() => {
             router.push(
-              `/admin/enrolled/${sheetRow.student_id}?yearId=${sheetRow.year_id}`
+              `/admin/enrolled/${sheetRow.student_id}?yearId=${sheetRow.year_id}${
+                Number(sheetRow.family_id) > 0
+                  ? `&familyId=${sheetRow.family_id}`
+                  : ""
+              }`
             );
           }}
         />
@@ -551,6 +560,9 @@ export default function EnrolledStudentsPage() {
                 covers every enrolled student), but it lives here next
                 to Export since this is the enrolled-roster home. */}
             <SchoolAccountBackfillDialog />
+            {/* Bulk Toddle push — the per-student Sync to Toddle,
+                run across the whole enrolled roster. */}
+            <ToddleSyncAllDialog />
             <Button
               variant="outline"
               className="bg-white shrink-0"

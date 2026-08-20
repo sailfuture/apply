@@ -76,7 +76,7 @@ export function SchoolAccountBackfillDialog({
       <DialogTrigger asChild>
         <Button variant="outline" size="sm" className="bg-white shrink-0">
           <KeyRound className="size-3.5 mr-1.5" aria-hidden="true" />
-          Generate school accounts
+          Create Student Emails
         </Button>
       </DialogTrigger>
       {open ? (
@@ -169,9 +169,9 @@ function BackfillDialogBody({
   const actionable = preview ? preview.totals.planned : 0;
 
   return (
-    <DialogContent className="sm:max-w-3xl max-h-[88vh] flex flex-col gap-0 overflow-hidden">
+    <DialogContent className="sm:max-w-4xl max-h-[88vh] flex flex-col gap-0 overflow-hidden">
       <DialogHeader>
-        <DialogTitle>Generate school accounts</DialogTitle>
+        <DialogTitle>Create Student Emails</DialogTitle>
         <DialogDescription>
           Creates the school email + starter password for every enrolled
           student who doesn&rsquo;t have one, using each student&rsquo;s
@@ -208,7 +208,17 @@ function BackfillDialogBody({
                 ))}
             </div>
             <div className="rounded-md border overflow-hidden">
-              <table className="w-full text-sm">
+              {/* Fixed layout with per-column widths so the table always
+                  fits the dialog — long values truncate (full value on
+                  hover) instead of forcing a horizontal scroll. */}
+              <table className="w-full table-fixed text-sm">
+                <colgroup>
+                  <col className="w-[21%]" />
+                  <col className="w-[12%]" />
+                  <col className="w-[31%]" />
+                  <col className="w-[16%]" />
+                  <col className="w-[20%]" />
+                </colgroup>
                 <thead>
                   <tr className="border-b bg-muted/40 text-left text-xs text-muted-foreground">
                     <th className="px-3 py-2 font-medium">Student</th>
@@ -268,27 +278,34 @@ function BackfillRowView({ row }: { row: BackfillRow }) {
   const meta = STATUS_META[row.status];
   return (
     <tr className="align-top">
-      <td className="px-3 py-2 font-medium whitespace-nowrap">
+      <td
+        className="px-3 py-2 font-medium overflow-hidden text-ellipsis whitespace-nowrap"
+        title={row.student_name}
+      >
         {row.student_name}
       </td>
       <td className="px-3 py-2 whitespace-nowrap text-muted-foreground">
         {row.year_name || "—"}
       </td>
-      <td className="px-3 py-2 font-mono text-[13px]">
+      <td
+        className="px-3 py-2 font-mono text-[13px] overflow-hidden text-ellipsis whitespace-nowrap"
+        title={row.email || undefined}
+      >
         {row.email || "—"}
-        {row.detail ? (
-          <p className="mt-0.5 font-sans text-xs text-muted-foreground">
-            {row.detail}
-          </p>
-        ) : null}
       </td>
-      <td className="px-3 py-2 font-mono text-[13px] whitespace-nowrap">
+      <td
+        className="px-3 py-2 font-mono text-[13px] overflow-hidden text-ellipsis whitespace-nowrap"
+        title={row.password || undefined}
+      >
         {row.password || "—"}
       </td>
-      <td className="px-3 py-2 whitespace-nowrap">
+      <td className="px-3 py-2 overflow-hidden whitespace-nowrap">
+        {/* Row-level explanation (missing year, conflict, write error)
+            lives on the badge tooltip — the table itself stays terse. */}
         <span
+          title={row.detail || undefined}
           className={cn(
-            "inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium",
+            "inline-flex max-w-full items-center overflow-hidden text-ellipsis rounded-full border px-2 py-0.5 text-xs font-medium",
             meta.className
           )}
         >

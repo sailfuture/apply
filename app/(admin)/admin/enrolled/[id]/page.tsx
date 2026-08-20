@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, type ChangeEvent } from "react";
+import { useMemo, useState, useRef, type ChangeEvent } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import useSWR from "swr";
@@ -98,6 +98,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import type { AdminEnrolledStudentResponse } from "@/app/api/admin/enrolled/[id]/route";
+import type { XanoBusStop } from "@/lib/xano";
 import type { StudentGoogleAccountStatus } from "@/app/api/admin/students/[id]/google-account/route";
 
 /**
@@ -125,6 +126,11 @@ export default function EnrolledStudentDetailPage() {
   const searchParams = useSearchParams();
   const yearId = searchParams.get("yearId");
   const studentId = Number(params.id);
+  // familyId rides in on links from the family nav band so the band
+  // can render here immediately — before this page's own payload
+  // lands — keeping the navigation fixed in place while switching
+  // between family / billing / sibling surfaces.
+  const familyIdParam = Number(searchParams.get("familyId")) || 0;
 
   const swrKey =
     Number.isFinite(studentId) && yearId
@@ -153,11 +159,33 @@ export default function EnrolledStudentDetailPage() {
     );
   }
 
+  // Loading / error shells mirror the loaded layout — breadcrumb,
+  // title slot, then the SAME nav band in the same position (when the
+  // family is known from the URL), so switching surfaces never makes
+  // the navigation vanish or the page structure jump.
+  const navBand = (familyIdNum: number) =>
+    familyIdNum ? (
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b pb-4">
+        <FamilyStudentsNav
+          familyId={familyIdNum}
+          yearId={yearId}
+          currentStudentId={studentId}
+        />
+        <StageNav current="enrollment" familyId={familyIdNum} yearId={yearId} />
+      </div>
+    ) : null;
+
   if (isLoading && !data) {
     return (
-      <div className="p-6 space-y-4">
-        <BackLink href={backHref} />
-        <Skeleton className="h-10 w-72" />
+      <div className="p-6 space-y-6">
+        <div className="space-y-1 min-w-0">
+          <DashboardBreadcrumb
+            items={[{ label: "Enrolled Students", href: backHref }]}
+          />
+          <Skeleton className="h-8 w-72" />
+          <Skeleton className="h-4 w-96" />
+        </div>
+        {navBand(familyIdParam)}
         <Skeleton className="h-48 w-full" />
         <Skeleton className="h-64 w-full" />
         <Skeleton className="h-64 w-full" />
@@ -167,8 +195,13 @@ export default function EnrolledStudentDetailPage() {
 
   if (error || !data) {
     return (
-      <div className="p-6 space-y-4">
-        <BackLink href={backHref} />
+      <div className="p-6 space-y-6">
+        <div className="space-y-1 min-w-0">
+          <DashboardBreadcrumb
+            items={[{ label: "Enrolled Students", href: backHref }]}
+          />
+        </div>
+        {navBand(familyIdParam)}
         <div className="rounded-lg border bg-white px-6 py-12 text-center text-sm text-muted-foreground">
           {error instanceof Error
             ? error.message
@@ -264,20 +297,7 @@ export default function EnrolledStudentDetailPage() {
           the two groups reading as one long strip of equal choices.
           Kept apart from the action row so "where can I go" never
           reads as "what can I do". */}
-      {family ? (
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b pb-4">
-          <FamilyStudentsNav
-            familyId={Number(family.id)}
-            yearId={yearId}
-            currentStudentId={student.id}
-          />
-          <StageNav
-            current="enrollment"
-            familyId={Number(family.id)}
-            yearId={yearId}
-          />
-        </div>
-      ) : null}
+      {navBand(Number(family?.id) || familyIdParam)}
       {/* Action row sits right above the Student Information card,
           split by consequence: the routine, reversible things admin
           reaches for daily on the left, and the two that end this
@@ -1188,6 +1208,31 @@ function StudentBioCard({
     bus_stop: app?.bus_stop ?? "",
   });
 
+  // Catalog stops for the edit-mode Bus stop dropdown — the same
+  // `registration_bus` list the parent students form picks from, so
+  // admin edits can't introduce a stop name the rosters won't match.
+  // Lazy: only fetched once the card enters edit mode.
+  const { data: busStopRows } = useSWR<XanoBusStop[]>(
+    editing ? "/api/bus-stops" : null,
+    adminFetcher,
+    { revalidateOnFocus: false }
+  );
+  const busStopOptions = useMemo(() => {
+    const unique = [
+      ...new Set(
+        (busStopRows ?? [])
+          .map((s) => (s.name ?? "").trim())
+          .filter(Boolean)
+      ),
+    ].sort((a, b) => a.localeCompare(b));
+    // A stored stop that's no longer in the catalog (renamed/deleted)
+    // still lists — otherwise the select renders blank and saving
+    // would silently drop the student's existing assignment.
+    const current = (draft.bus_stop ?? "").trim();
+    if (current && !unique.includes(current)) unique.unshift(current);
+    return unique;
+  }, [busStopRows, draft.bus_stop]);
+
   function enterEdit() {
     setDraft({
       first_name: student.first_name ?? "",
@@ -1417,10 +1462,11 @@ function StudentBioCard({
                   options={["Yes", "No"]}
                   disabled={saving}
                 />
-                <EditField
+                <EditSelectField
                   label="Bus stop"
                   value={draft.bus_stop}
                   onChange={(v) => setDraft((d) => ({ ...d, bus_stop: v }))}
+                  options={busStopOptions}
                   disabled={saving || !draft.is_bus_transportation}
                 />
               </>

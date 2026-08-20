@@ -5,6 +5,7 @@ import useSWR from "swr";
 import {
   ChevronDown,
   ClipboardList,
+  CreditCard,
   FileText,
   GraduationCap,
   Users,
@@ -57,11 +58,15 @@ export function StageNav({
   yearId,
   students = [],
 }: {
-  current: AdmissionStage;
+  /** `"none"` renders every stage as a link — for family surfaces
+   *  (overview / billing) that sit outside the three stages. */
+  current: AdmissionStage | "none";
   familyId: number;
   /** Selected school year — propagated on every link. */
   yearId: number | string | null | undefined;
-  /** The year's students, for the per-student Enrollment jump. */
+  /** The year's students, for the per-student Enrollment jump. Pages
+   *  that don't hold a student list can omit it — the overview
+   *  payload fetched here fills in as a fallback. */
   students?: Array<{ id: number; name: string }>;
 }) {
   const { data } = useSWR<AdminFamilyOverviewResponse>(
@@ -73,6 +78,18 @@ export function StageNav({
   if (!familyId) return null;
   const year = yearId ? `?yearId=${yearId}` : "";
   const yearNum = Number(yearId) || 0;
+
+  // Fallback student list from the shared overview payload, so
+  // Enrollment can link even from pages that didn't pass students.
+  const studentOptions =
+    students.length > 0
+      ? students
+      : (data?.students ?? []).map((s) => ({
+          id: s.id,
+          name:
+            `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim() ||
+            `Student #${s.id}`,
+        }));
 
   // Until the payload lands we can't tell reached-from-unreached, so
   // stages stay enabled — a button that starts disabled and flips
@@ -88,12 +105,17 @@ export function StageNav({
       )
     : true;
 
-  const enrollmentReady = hasRegistration && students.length > 0;
+  const enrollmentReady = hasRegistration && studentOptions.length > 0;
   const enrollmentReason = !hasRegistration
     ? "No registration for this year yet"
-    : students.length === 0
+    : studentOptions.length === 0
       ? "No students on this family for this year"
       : "";
+
+  // Student links carry familyId so the enrolled page can render its
+  // nav band immediately, before its own payload lands.
+  const studentHref = (studentId: number) =>
+    `/admin/enrolled/${studentId}${year}${year ? "&" : "?"}familyId=${familyId}&from=${current}`;
 
   return (
     <div className="inline-flex items-center gap-0.5 rounded-lg border bg-muted/50 p-0.5">
@@ -127,14 +149,12 @@ export function StageNav({
           disabled
           reason={enrollmentReason}
         />
-      ) : students.length === 1 ? (
+      ) : studentOptions.length === 1 ? (
         <StageButton
           icon={<GraduationCap className="size-3.5 mr-1.5" />}
           label="Enrollment"
           active={false}
-          href={`/admin/enrolled/${students[0].id}${year}${
-            year ? "&" : "?"
-          }from=${current}`}
+          href={studentHref(studentOptions[0].id)}
         />
       ) : (
         <DropdownMenu>
@@ -146,15 +166,9 @@ export function StageNav({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            {students.map((s) => (
+            {studentOptions.map((s) => (
               <DropdownMenuItem key={s.id} asChild>
-                <Link
-                  href={`/admin/enrolled/${s.id}${year}${
-                    year ? "&" : "?"
-                  }from=${current}`}
-                >
-                  {s.name}
-                </Link>
+                <Link href={studentHref(s.id)}>{s.name}</Link>
               </DropdownMenuItem>
             ))}
           </DropdownMenuContent>
@@ -166,10 +180,10 @@ export function StageNav({
 
 /**
  * Family-scoped sibling navigation — a second segmented group for the
- * per-student surfaces: the family overview first, then one segment
- * per student in the family, with the student being viewed rendered
- * as the current (filled, inert) segment. Lets admin hop between
- * siblings without routing back through a list page.
+ * per-student surfaces: the family overview and billing first, then
+ * one segment per student in the family, with the surface being
+ * viewed rendered as the current (filled, inert) segment. Lets admin
+ * hop between siblings without routing back through a list page.
  *
  * Reads the same `/api/admin/family-overview` payload as `StageNav`
  * (same SWR key — pages showing both pay for one fetch). All of the
@@ -181,12 +195,17 @@ export function FamilyStudentsNav({
   familyId,
   yearId,
   currentStudentId,
+  currentSection,
 }: {
   familyId: number;
   /** Selected school year — propagated on every link. */
   yearId: number | string | null | undefined;
-  /** The student whose page we're on — rendered as the active segment. */
-  currentStudentId: number;
+  /** The student whose page we're on — rendered as the active segment.
+   *  Omit on family-level surfaces (overview / billing). */
+  currentStudentId?: number;
+  /** Which family-level segment is active, when the page is one of
+   *  them rather than a student page. */
+  currentSection?: "overview" | "billing";
 }) {
   const { data } = useSWR<AdminFamilyOverviewResponse>(
     familyId ? `/api/admin/family-overview/${familyId}` : null,
@@ -203,8 +222,14 @@ export function FamilyStudentsNav({
       <StageButton
         icon={<Users className="size-3.5 mr-1.5" />}
         label="Family"
-        active={false}
+        active={currentSection === "overview"}
         href={`/admin/families/${familyId}/overview${year}`}
+      />
+      <StageButton
+        icon={<CreditCard className="size-3.5 mr-1.5" />}
+        label="Billing"
+        active={currentSection === "billing"}
+        href={`/admin/families/${familyId}/billing${year}`}
       />
       {students.map((s) => {
         const name =
@@ -216,7 +241,9 @@ export function FamilyStudentsNav({
             icon={null}
             label={name}
             active={s.id === currentStudentId}
-            href={`/admin/enrolled/${s.id}${year}`}
+            // familyId rides along so the student page can paint this
+            // nav band before its own data arrives.
+            href={`/admin/enrolled/${s.id}${year}${year ? "&" : "?"}familyId=${familyId}`}
           />
         );
       })}
