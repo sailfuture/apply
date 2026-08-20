@@ -5,14 +5,25 @@ import {
   isToddleConfigured,
   upsertStudent,
   uploadStudentProfileImage,
+  syncFamilyMembers,
+  syncCrewClass,
   ToddleSyncError,
+  type ToddleFamilyMemberInput,
 } from "@/lib/toddle";
+import type { XanoParent } from "@/lib/xano";
 
 /**
  * Admin-only "Sync to Toddle" — pushes one enrolled student into the
  * school's Toddle org. Updates the existing Toddle student when one
  * matches (stored id → sourceId lookup → name fallback, see
  * `lib/toddle.ts#upsertStudent`), creates one when none does.
+ *
+ * Beyond the core identity fields, the push includes the school
+ * email, enrollment date (start of the first-enrolled school year),
+ * home address (primary contact's address on file), the student
+ * photo, every family contact (primary + secondary) as both a Toddle
+ * parent account and a contact-details card, and crew placement via
+ * membership in the org's matching "Crew …" class.
  *
  * Body (optional): `{ gradeLevel?: string }` — the admin-assigned
  * placement grade ("9th") from the student's packet. The client sends
@@ -79,6 +90,59 @@ export async function POST(
     const phone = (student.student_phone ?? "").trim();
     const phoneNumber = /^\d{10}$/.test(phone) ? phone : undefined;
 
+    // Gather the wider context in parallel: the family's parents
+    // (primary = lowest id, matching every other admin surface), the
+    // per-year packet (crew + server-side grade fallback), and the
+    // school-year list (active year for the packet lookup, plus the
+    // student's first-enrolled year for enrollmentDate). Each leg is
+    // best-effort — a miss just omits those fields from the push.
+    const familyId = Number(student.registration_families_id) || 0;
+    const [family, allYears] = await Promise.all([
+      familyId
+        ? xano.families.getById(familyId).catch(() => null)
+        : Promise.resolve(null),
+      xano.schoolYears.getAll().catch(() => []),
+    ]);
+    const activeYear = allYears.find((y) => y.isActive) ?? null;
+    const packet = activeYear
+      ? ((await xano.studentRegistration
+          .getByStudentAndYear(id, activeYear.id)
+          .catch(() => null)) ??
+        (await xano.studentRegistration.getByStudentId(id).catch(() => null)))
+      : await xano.studentRegistration.getByStudentId(id).catch(() => null);
+
+    const parentIds = family ? xano.families.getParentIds(family) : [];
+    const familyParents = (
+      await Promise.all(
+        parentIds.map((pid) =>
+          xano.parents.getById(pid).catch(() => null as XanoParent | null)
+        )
+      )
+    )
+      .filter((p): p is XanoParent => p !== null)
+      .sort((a, b) => a.id - b.id);
+    const primaryParent = familyParents[0] ?? null;
+
+    // School email → Toddle login email (only when it looks like one).
+    const schoolEmail = (student.school_email ?? "").trim();
+    const email = /@/.test(schoolEmail) ? schoolEmail : undefined;
+
+    // Enrollment date = start of the school year the student first
+    // enrolled in (the School Account card's year pick).
+    const enrollmentYear = allYears.find(
+      (y) => y.id === Number(student.enrollment_school_years_id)
+    );
+    const startRaw = (enrollmentYear?.start_date ?? "").trim();
+    const enrollmentDate = /^\d{4}-\d{2}-\d{2}/.test(startRaw)
+      ? startRaw.slice(0, 10)
+      : undefined;
+
+    // Home address — the primary contact's address on file.
+    const addr = (v: string | null | undefined) => {
+      const t = (v ?? "").trim();
+      return t.length > 0 ? t : undefined;
+    };
+
     const result = await upsertStudent(
       {
         sourceId: `sfa-${id}`,
@@ -87,7 +151,15 @@ export async function POST(
         dob,
         gender,
         phoneNumber,
-        gradeLevel: gradeLevel || undefined,
+        gradeLevel:
+          gradeLevel || (packet?.grade_level ?? "").trim() || undefined,
+        email,
+        enrollmentDate,
+        addressLine1: addr(primaryParent?.address_line_1),
+        addressLine2: addr(primaryParent?.address_line_2),
+        city: addr(primaryParent?.city),
+        state: addr(primaryParent?.state),
+        zipcode: addr(primaryParent?.zipcode),
       },
       student.toddle_student_id || undefined
     );
@@ -112,6 +184,45 @@ export async function POST(
       }
     }
 
+    // Family members → Toddle parent accounts + contact-details cards
+    // on the student, primary and secondary contacts alike. Per-member
+    // outcomes come back for the toast; failures never fail the sync.
+    const memberInputs: ToddleFamilyMemberInput[] = familyParents
+      .filter((p) => (p.first_name ?? "").trim() && (p.last_name ?? "").trim())
+      .map((p) => {
+        const digits = (p.phone ?? "").replace(/\D/g, "");
+        const memberPhone =
+          digits.length === 10
+            ? `+1${digits}`
+            : digits.length === 11 && digits.startsWith("1")
+              ? `+${digits}`
+              : digits || undefined;
+        const memberEmail = (p.email ?? "").trim();
+        return {
+          firstName: p.first_name.trim(),
+          lastName: p.last_name.trim(),
+          email: /@/.test(memberEmail) ? memberEmail : undefined,
+          phoneNumber: memberPhone,
+          relationship: (p.relationship ?? "").trim() || undefined,
+        };
+      });
+    let familyMembers: Awaited<ReturnType<typeof syncFamilyMembers>> = [];
+    try {
+      familyMembers = await syncFamilyMembers(result.toddleId, memberInputs);
+    } catch (err) {
+      console.error(
+        `[/api/admin/students/${id}/toddle-sync] family member sync failed:`,
+        err
+      );
+    }
+
+    // Crew → membership in the matching "Crew …" Toddle class (adds
+    // to the right one, pulls out of a stale one on crew moves).
+    const crewName = (packet?.crew_assignment ?? "").trim();
+    const crew = crewName
+      ? await syncCrewClass(result.toddleId, crewName)
+      : null;
+
     // Persist the Toddle id back onto the student row so the next
     // sync is a direct update. Routed through the admin API group
     // like the other admin-added columns. Best-effort: if the
@@ -131,7 +242,13 @@ export async function POST(
       );
     }
 
-    return NextResponse.json({ ...result, persisted, photo });
+    return NextResponse.json({
+      ...result,
+      persisted,
+      photo,
+      familyMembers,
+      crew,
+    });
   } catch (err) {
     if (err instanceof ToddleSyncError) {
       // Admin-fixable condition (missing placement, ambiguous match,

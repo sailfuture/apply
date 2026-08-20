@@ -61,16 +61,35 @@ export function SyncToddleButton({
         data?.action === "created"
           ? `${studentName} created in Toddle.`
           : `${studentName}'s Toddle profile updated.`;
-      // `photo` reports the best-effort headshot push: "synced",
-      // "none" (no student_photo on file), or "failed" (sync itself
-      // still succeeded — details in the server logs).
-      toast.success(
-        data?.photo === "synced"
-          ? `${base} Photo pushed.`
-          : data?.photo === "failed"
-            ? `${base} Photo upload failed — check server logs.`
-            : base
-      );
+      // Best-effort extras, each reported without failing the sync:
+      // `photo` ("synced"/"none"/"failed"), `familyMembers` (per-
+      // contact account+contact outcomes), `crew` (class membership).
+      const parts: string[] = [base];
+      if (data?.photo === "synced") parts.push("Photo pushed.");
+      else if (data?.photo === "failed")
+        parts.push("Photo upload failed — check server logs.");
+      const members: Array<{
+        name: string;
+        account: string;
+        contact: string;
+      }> = Array.isArray(data?.familyMembers) ? data.familyMembers : [];
+      if (members.length > 0) {
+        const failed = members.filter(
+          (m) => m.account === "failed" || m.contact === "failed"
+        );
+        const okCount = members.length - failed.length;
+        if (okCount > 0)
+          parts.push(
+            `${okCount} family member${okCount === 1 ? "" : "s"} synced.`
+          );
+        if (failed.length > 0)
+          parts.push(
+            `${failed.map((m) => m.name).join(", ")} failed — see server logs.`
+          );
+      }
+      if (typeof data?.crew === "string" && data.crew)
+        parts.push(`Crew: ${data.crew}.`);
+      toast.success(parts.join(" "));
       setOpen(false);
       onSynced?.();
     } catch (err) {
@@ -112,8 +131,13 @@ export function SyncToddleButton({
               {gradeLevel?.trim()
                 ? ` in the ${gradeLevel.trim()} grade year group`
                 : ""}{" "}
-              if none exists. Name, date of birth, gender, phone, and
-              the student photo are pushed from the record here.
+              if none exists. Name, date of birth, gender, phone,
+              school email, enrollment date, home address, and the
+              student photo are pushed from the record here; the
+              family&rsquo;s primary and secondary contacts are added
+              as Toddle family members with their contact info, and
+              the student is placed in their crew&rsquo;s Toddle
+              class.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

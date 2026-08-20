@@ -114,6 +114,39 @@ export interface ToddleStudentBody {
   yearGroupId?: string;
   phoneNumber?: string;
   enrollmentDate?: string;
+  addressLine1?: string;
+  addressLine2?: string;
+  city?: string;
+  state?: string;
+  zipcode?: string;
+}
+
+/** One row from GET /public/v2/parents — a Toddle parent (family
+ *  member) account. `children` carries the linked students. */
+export interface ToddleParentRecord {
+  id: number | string;
+  firstName: string | null;
+  lastName: string | null;
+  email: string | null;
+  children?: Array<{ id: string; relationship?: string | null }>;
+}
+
+/** One row from GET /public/v2/contact-details/:studentId — the
+ *  contact card shown on the Toddle student. */
+export interface ToddleContactDetail {
+  id: number | string;
+  firstName: string | null;
+  lastName: string | null;
+  email: string | null;
+  phoneNumber: string | null;
+  relationship: string | null;
+}
+
+export interface ToddleCourse {
+  id: string;
+  title?: string | null;
+  name?: string | null;
+  isArchived?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -201,6 +234,325 @@ export async function uploadStudentProfileImage(
     throw new Error(
       `Toddle profile-image error ${res.status}: ${text.slice(0, 500)}`
     );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Parents (family member accounts), contact details, and classes
+// ---------------------------------------------------------------------------
+
+/** GET /public/v2/parents — every parent account in the org (the API
+ *  has no email filter, so upserts match against this list). */
+export async function getParents(): Promise<ToddleParentRecord[]> {
+  const data = await toddleFetch<{ response: { parents: ToddleParentRecord[] } }>(
+    `/public/v2/parents`
+  );
+  return data.response?.parents ?? [];
+}
+
+/** POST /public/v2/parents — email + children are required by Toddle. */
+export async function createParent(body: {
+  firstName: string;
+  lastName: string;
+  email: string;
+  children: string[];
+  relationships?: Array<{ childId: string; relationship: string }>;
+}): Promise<ToddleParentRecord> {
+  const data = await toddleFetch<{ response: { parent: ToddleParentRecord } }>(
+    `/public/v2/parents`,
+    { method: "POST", body: JSON.stringify(body) }
+  );
+  return data.response.parent;
+}
+
+export async function updateParent(
+  id: number | string,
+  body: {
+    firstName?: string;
+    lastName?: string;
+    email?: string;
+    addedChildren?: string[];
+    removedChildren?: string[];
+    relationships?: Array<{ childId: string; relationship: string }>;
+  }
+): Promise<ToddleParentRecord> {
+  const data = await toddleFetch<{ response: { parent: ToddleParentRecord } }>(
+    `/public/v2/parents/${encodeURIComponent(String(id))}`,
+    { method: "PUT", body: JSON.stringify(body) }
+  );
+  return data.response.parent;
+}
+
+/** GET /public/v2/contact-details/:id — takes the TODDLE STUDENT id
+ *  and returns that student's contact cards. */
+export async function getContactDetails(
+  studentToddleId: string
+): Promise<ToddleContactDetail[]> {
+  const data = await toddleFetch<{
+    response: { contactDetails: ToddleContactDetail[] };
+  }>(`/public/v2/contact-details/${encodeURIComponent(studentToddleId)}`);
+  return data.response?.contactDetails ?? [];
+}
+
+export async function createContactDetail(body: {
+  firstName: string;
+  lastName: string;
+  studentId: string;
+  relationship: string;
+  email?: string;
+  phoneNumber?: string;
+}): Promise<void> {
+  await toddleFetch(`/public/v2/contact-details`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function updateContactDetail(
+  id: number | string,
+  body: {
+    firstName?: string;
+    lastName?: string;
+    relationship?: string;
+    email?: string;
+    phoneNumber?: string;
+  }
+): Promise<void> {
+  await toddleFetch(
+    `/public/v2/contact-details/${encodeURIComponent(String(id))}`,
+    { method: "PUT", body: JSON.stringify(body) }
+  );
+}
+
+export async function getCourses(): Promise<ToddleCourse[]> {
+  const data = await toddleFetch<{ response: { courses: ToddleCourse[] } }>(
+    `/public/v2/courses`
+  );
+  return data.response?.courses ?? [];
+}
+
+export async function getCourseStudentIds(
+  courseId: string
+): Promise<string[]> {
+  const data = await toddleFetch<{
+    response: { students: Array<{ id: number | string }> };
+  }>(`/public/v2/courses/${encodeURIComponent(courseId)}/students`);
+  return (data.response?.students ?? []).map((s) => String(s.id));
+}
+
+export async function addStudentsToCourse(
+  courseId: string,
+  studentIds: string[]
+): Promise<void> {
+  await toddleFetch(
+    `/public/v2/courses/${encodeURIComponent(courseId)}/students/add`,
+    { method: "PUT", body: JSON.stringify({ studentIds }) }
+  );
+}
+
+export async function removeStudentsFromCourse(
+  courseId: string,
+  studentIds: string[]
+): Promise<void> {
+  await toddleFetch(
+    `/public/v2/courses/${encodeURIComponent(courseId)}/students/remove`,
+    { method: "PUT", body: JSON.stringify({ studentIds }) }
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Family member + contact sync
+// ---------------------------------------------------------------------------
+
+/** One family member (a registration_parents row) as pushed to
+ *  Toddle — becomes both a parent ACCOUNT (login, linked to the
+ *  student) and a contact-details CARD (phone/email on the student). */
+export interface ToddleFamilyMemberInput {
+  firstName: string;
+  lastName: string;
+  /** Missing/invalid email ⇒ the parent ACCOUNT is skipped (Toddle
+   *  requires email to create one); the contact card still syncs. */
+  email?: string;
+  phoneNumber?: string;
+  /** e.g. "Mother" — defaults to "Guardian" on contact creation. */
+  relationship?: string;
+}
+
+export interface ToddleFamilyMemberResult {
+  name: string;
+  /** created = new Toddle parent; linked = existing parent newly
+   *  attached to this student; updated = already attached (name
+   *  refreshed); skipped = no email to create an account with. */
+  account: "created" | "linked" | "updated" | "skipped (no email)" | "failed";
+  contact: "created" | "updated" | "failed";
+  error?: string;
+}
+
+/**
+ * Push the family's contacts onto a Toddle student: upsert each as a
+ * parent account (matched org-wide by email) AND as a contact-details
+ * card on the student (matched by email, falling back to name).
+ * Per-member failures are reported, never thrown — one bad row
+ * shouldn't undo the rest of the sync.
+ */
+export async function syncFamilyMembers(
+  studentToddleId: string,
+  members: ToddleFamilyMemberInput[]
+): Promise<ToddleFamilyMemberResult[]> {
+  if (members.length === 0) return [];
+  const [allParents, existingContacts] = await Promise.all([
+    getParents(),
+    getContactDetails(studentToddleId),
+  ]);
+  const results: ToddleFamilyMemberResult[] = [];
+
+  for (const m of members) {
+    const name = `${m.firstName} ${m.lastName}`.trim();
+    const email = (m.email ?? "").trim().toLowerCase();
+    const result: ToddleFamilyMemberResult = {
+      name,
+      account: "skipped (no email)",
+      contact: "failed",
+    };
+
+    // 1. Parent account (Toddle requires an email to create one).
+    if (email) {
+      try {
+        const existing = allParents.find(
+          (p) => (p.email ?? "").trim().toLowerCase() === email
+        );
+        if (existing) {
+          const alreadyLinked = (existing.children ?? []).some(
+            (c) => String(c.id) === studentToddleId
+          );
+          await updateParent(existing.id, {
+            firstName: m.firstName,
+            lastName: m.lastName,
+            ...(alreadyLinked
+              ? {}
+              : {
+                  addedChildren: [studentToddleId],
+                  ...(m.relationship
+                    ? {
+                        relationships: [
+                          {
+                            childId: studentToddleId,
+                            relationship: m.relationship,
+                          },
+                        ],
+                      }
+                    : {}),
+                }),
+          });
+          result.account = alreadyLinked ? "updated" : "linked";
+        } else {
+          await createParent({
+            firstName: m.firstName,
+            lastName: m.lastName,
+            email: m.email!.trim(),
+            children: [studentToddleId],
+            ...(m.relationship
+              ? {
+                  relationships: [
+                    { childId: studentToddleId, relationship: m.relationship },
+                  ],
+                }
+              : {}),
+          });
+          result.account = "created";
+        }
+      } catch (err) {
+        result.account = "failed";
+        result.error = err instanceof Error ? err.message.slice(0, 300) : String(err);
+      }
+    }
+
+    // 2. Contact-details card on the student.
+    try {
+      const match = existingContacts.find((c) => {
+        const cEmail = (c.email ?? "").trim().toLowerCase();
+        if (email && cEmail) return cEmail === email;
+        return (
+          (c.firstName ?? "").trim().toLowerCase() ===
+            m.firstName.trim().toLowerCase() &&
+          (c.lastName ?? "").trim().toLowerCase() ===
+            m.lastName.trim().toLowerCase()
+        );
+      });
+      if (match) {
+        await updateContactDetail(match.id, {
+          firstName: m.firstName,
+          lastName: m.lastName,
+          ...(m.email?.trim() ? { email: m.email.trim() } : {}),
+          ...(m.phoneNumber ? { phoneNumber: m.phoneNumber } : {}),
+          // Only overwrite a relationship we actually know.
+          ...(m.relationship ? { relationship: m.relationship } : {}),
+        });
+        result.contact = "updated";
+      } else {
+        await createContactDetail({
+          firstName: m.firstName,
+          lastName: m.lastName,
+          studentId: studentToddleId,
+          relationship: m.relationship || "Guardian",
+          ...(m.email?.trim() ? { email: m.email.trim() } : {}),
+          ...(m.phoneNumber ? { phoneNumber: m.phoneNumber } : {}),
+        });
+        result.contact = "created";
+      }
+    } catch (err) {
+      result.contact = "failed";
+      const msg = err instanceof Error ? err.message.slice(0, 300) : String(err);
+      result.error = result.error ? `${result.error}; ${msg}` : msg;
+    }
+
+    results.push(result);
+  }
+  return results;
+}
+
+/**
+ * Put the student in the Toddle class matching their crew — the org
+ * mirrors our crews as classes titled "Crew A"–"Crew E". Also removes
+ * them from any OTHER "Crew …" class so a crew move here moves them
+ * there. Returns a short human status for the admin toast; throws
+ * nothing (crew is best-effort, like the photo).
+ */
+export async function syncCrewClass(
+  studentToddleId: string,
+  crewName: string
+): Promise<string> {
+  try {
+    const courses = (await getCourses()).filter((c) => !c.isArchived);
+    const titleOf = (c: ToddleCourse) => (c.title ?? c.name ?? "").trim();
+    const want = crewName.trim().toLowerCase();
+    const target = courses.find((c) => titleOf(c).toLowerCase() === want);
+    if (!target) {
+      return `no Toddle class titled "${crewName.trim()}"`;
+    }
+    const crewCourses = courses.filter((c) =>
+      /^crew\b/i.test(titleOf(c))
+    );
+    const notes: string[] = [];
+    for (const course of crewCourses) {
+      const ids = await getCourseStudentIds(course.id);
+      const enrolled = ids.includes(studentToddleId);
+      if (course.id === target.id) {
+        if (enrolled) {
+          notes.unshift(`already in ${titleOf(course)}`);
+        } else {
+          await addStudentsToCourse(course.id, [studentToddleId]);
+          notes.unshift(`added to ${titleOf(course)}`);
+        }
+      } else if (enrolled) {
+        await removeStudentsFromCourse(course.id, [studentToddleId]);
+        notes.push(`removed from ${titleOf(course)}`);
+      }
+    }
+    return notes.join(", ");
+  } catch (err) {
+    console.error(`[toddle.syncCrewClass] failed for "${crewName}":`, err);
+    return "failed — see server logs";
   }
 }
 
@@ -294,6 +646,17 @@ export interface ToddleSyncFields {
   phoneNumber?: string;
   /** Our grade label ("9th") — resolved to a yearGroupId here. */
   gradeLevel?: string;
+  /** The generated school Google email — becomes the Toddle login. */
+  email?: string;
+  /** `YYYY-MM-DD`, pre-validated by the caller (start of the school
+   *  year the student first enrolled in). */
+  enrollmentDate?: string;
+  /** Home address — sourced from the family's primary contact. */
+  addressLine1?: string;
+  addressLine2?: string;
+  city?: string;
+  state?: string;
+  zipcode?: string;
 }
 
 export interface ToddleUpsertResult {
@@ -335,6 +698,13 @@ export async function upsertStudent(
   if (fields.dob) body.dob = fields.dob;
   if (fields.gender) body.gender = fields.gender;
   if (fields.phoneNumber) body.phoneNumber = fields.phoneNumber;
+  if (fields.email) body.email = fields.email;
+  if (fields.enrollmentDate) body.enrollmentDate = fields.enrollmentDate;
+  if (fields.addressLine1) body.addressLine1 = fields.addressLine1;
+  if (fields.addressLine2) body.addressLine2 = fields.addressLine2;
+  if (fields.city) body.city = fields.city;
+  if (fields.state) body.state = fields.state;
+  if (fields.zipcode) body.zipcode = fields.zipcode;
 
   // Keep the Toddle grade current on updates too — but a resolution
   // failure only blocks creation (where yearGroupId is required);
