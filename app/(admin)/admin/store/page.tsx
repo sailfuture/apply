@@ -173,9 +173,12 @@ export default function AdminStorePage() {
               {orders ? (
                 <p className="mt-0.5 text-xs text-muted-foreground">
                   {awaiting > 0 ? (
-                    <span className="font-medium text-amber-700">
-                      {awaiting} awaiting pickup
-                    </span>
+                    <>
+                      <span className="font-bold text-foreground">
+                        {awaiting}
+                      </span>{" "}
+                      Pick Up
+                    </>
                   ) : (
                     "All orders distributed"
                   )}
@@ -328,7 +331,7 @@ function OrderRow({
       <TableCell>{order.item}</TableCell>
       <TableCell className="whitespace-nowrap">
         {(order.size ?? "").trim() ? (
-          <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-semibold">
+          <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-semibold uppercase">
             {(order.size ?? "").trim()}
           </span>
         ) : (
@@ -341,21 +344,25 @@ function OrderRow({
       <TableCell className="pr-4 text-right whitespace-nowrap">
         {order.distributed ? (
           <span className="inline-flex items-center gap-2">
-            <span
-              className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-emerald-200"
+            {/* Same button treatment as "Mark distributed" — a static
+                state display, not an action (undo lives next door). */}
+            <Button
+              size="sm"
+              variant="outline"
+              className="bg-white hover:bg-white cursor-default"
               title={
                 order.distributed_by?.trim()
                   ? `By ${order.distributed_by.trim()} · ${fmtDateTime(order.distributed_at)}`
                   : fmtDateTime(order.distributed_at)
               }
             >
-              <Check className="size-3" />
+              <Check className="size-3.5 mr-1.5" />
               Distributed
-            </span>
+            </Button>
             <Button
               size="icon"
-              variant="ghost"
-              className="size-7 text-muted-foreground"
+              variant="outline"
+              className="size-8 bg-white text-muted-foreground"
               disabled={saving}
               onClick={() => void setDistributed(false)}
               aria-label="Undo distribution"
@@ -467,7 +474,7 @@ function ItemsCard({
                 <TableHead className="pl-4">Item</TableHead>
                 <TableHead className="text-right">Price</TableHead>
                 <TableHead className="text-right">Sold</TableHead>
-                <TableHead className="text-right">Awaiting pickup</TableHead>
+                <TableHead className="text-right">Pick Up</TableHead>
                 <TableHead>Payment link</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead className="pr-4 text-right">Actions</TableHead>
@@ -481,14 +488,7 @@ function ItemsCard({
                   <TableCell className="pl-4">
                     <div className="flex items-center gap-2.5 min-w-0">
                       <ShoppingBag className="size-4 shrink-0 text-muted-foreground" />
-                      <div className="min-w-0">
-                        <p className="font-medium">{item.name}</p>
-                        {item.description?.trim() ? (
-                          <p className="text-xs text-muted-foreground truncate max-w-xs">
-                            {item.description}
-                          </p>
-                        ) : null}
-                      </div>
+                      <p className="min-w-0 font-medium">{item.name}</p>
                     </div>
                   </TableCell>
                   <TableCell className="text-right tabular-nums">
@@ -500,7 +500,7 @@ function ItemsCard({
                   <TableCell className="text-right tabular-nums">
                     {orders ? (
                       r.awaiting > 0 ? (
-                        <span className="font-medium text-amber-700">
+                        <span className="font-bold text-foreground">
                           {r.awaiting}
                         </span>
                       ) : (
