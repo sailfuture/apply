@@ -189,6 +189,7 @@ export function BillingCard({
   );
 
   const [pending, setPending] = useState<BillingAction | null>(null);
+  const [openingPortal, setOpeningPortal] = useState(false);
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [confirmRefund, setConfirmRefund] = useState(false);
 
@@ -219,6 +220,34 @@ export function BillingCard({
       toast.error(err instanceof Error ? err.message : "Action failed");
     } finally {
       setPending(null);
+    }
+  }
+
+  /** Open the family's Stripe Customer Portal — the same screen the
+   *  parent sees from their tuition page (saved payment methods,
+   *  autopay, past invoices). Useful on a support call where admin
+   *  needs to look at what the parent is looking at, or add a card
+   *  the parent reads out. Hard navigation: Stripe-hosted origin. */
+  async function openPortal(): Promise<void> {
+    if (openingPortal) return;
+    setOpeningPortal(true);
+    try {
+      const res = await fetch(
+        `/api/admin/families/${familyId}/billing/portal?yearId=${yearId}`,
+        { method: "POST" }
+      );
+      const body = await res.json().catch(() => null);
+      if (!res.ok || !body?.url) {
+        throw new Error(body?.error ?? `Portal open failed (${res.status})`);
+      }
+      window.location.href = body.url;
+    } catch (err) {
+      toast.error(
+        err instanceof Error
+          ? err.message
+          : "Couldn't open the billing portal."
+      );
+      setOpeningPortal(false);
     }
   }
 
@@ -470,6 +499,24 @@ export function BillingCard({
             <ExternalLink className="size-3.5 mr-1.5" aria-hidden="true" />
             View in Stripe
           </a>
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          className="bg-white"
+          disabled={openingPortal || pending !== null}
+          onClick={openPortal}
+          title="Open the family's Stripe billing portal — payment methods, autopay, past invoices"
+        >
+          {openingPortal ? (
+            <Loader2
+              className="size-3.5 mr-1.5 animate-spin"
+              aria-hidden="true"
+            />
+          ) : (
+            <CreditCard className="size-3.5 mr-1.5" aria-hidden="true" />
+          )}
+          Manage billing &amp; autopay
         </Button>
         {!isCanceled ? (
           <>
