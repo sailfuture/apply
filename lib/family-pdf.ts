@@ -46,7 +46,6 @@ import type {
   XanoScholarshipVehicle,
   XanoSchoolYear,
 } from "@/lib/xano";
-import { sumFamilyBillingTotals } from "@/lib/per-student-billing";
 
 interface ExportInput {
   familyId: number;
@@ -140,6 +139,68 @@ const SUFS_TIER_LABELS: Record<string, string> = {
 function sufsTierLabel(type: string | null | undefined): string {
   const key = (type ?? "").trim();
   return SUFS_TIER_LABELS[key] ?? (key.length > 0 ? key : "—");
+}
+
+/* ─────────────── WinAnsi text safety ─────────────── */
+
+/**
+ * jsPDF's built-in Helvetica is a PDF standard font, which can only
+ * encode WinAnsi (cp1252). Any character outside that repertoire is
+ * neither measurable nor drawable: jsPDF emits garbage bytes AND
+ * computes the wrong string width, so autoTable lays the cell out
+ * against a bogus width. The visible symptom is a row whose text
+ * renders letter-spaced and overflowing its column — e.g. a `→`
+ * (U+2192) turned `$0/mo → $0/yr` into `$ 0 / m o !' $ 0 / y r`, and
+ * a true minus `−` (U+2212) turned `(value − debt)` into
+ * `( v a l u e " d e b t )`.
+ *
+ * `pdfSafe` maps the characters we actually reach for to WinAnsi
+ * equivalents, then drops anything still outside the repertoire.
+ * Applied at the two choke points every glyph passes through
+ * (`pdfTable` for table content, `pdfText` for free-drawn text), so
+ * neither a future edit here nor arbitrary parent-entered text out
+ * of Xano — an advocacy letter pasted from Word, a smart-quoted
+ * address, an emoji — can reintroduce the bug.
+ */
+const PDF_CHAR_MAP: Record<string, string> = {
+  "→": "->",
+  "←": "<-",
+  "↔": "<->",
+  "⇒": "=>",
+  "−": "-", // true minus
+  "‒": "-", // figure dash
+  "―": "-", // horizontal bar
+  "⁄": "/", // fraction slash
+  "′": "'", // prime
+  "″": '"', // double prime
+  "≤": "<=",
+  "≥": ">=",
+  "≠": "!=",
+  "≈": "~",
+  " ": " ", // nbsp — draws fine but breaks autoTable's wrapping
+  " ": " ",
+  " ": " ",
+  "​": "", // zero-width space
+  "﻿": "",
+};
+
+/** cp1252 repertoire: ASCII + Latin-1 supplement + the 27 printable
+ *  characters Windows maps into 0x80–0x9F (curly quotes, en/em dash,
+ *  bullet, ellipsis, †, ‰, €, ™ …). Everything else must go. */
+const WINANSI_OK =
+  /[\t\n\r\x20-\x7E\xA0-\xFF€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ]/;
+
+function pdfSafe(value: string): string {
+  let out = "";
+  for (const ch of value) {
+    const mapped = PDF_CHAR_MAP[ch];
+    if (mapped !== undefined) {
+      out += mapped;
+      continue;
+    }
+    out += WINANSI_OK.test(ch) ? ch : "?";
+  }
+  return out;
 }
 
 /** Link-text color (blue-600) applied to clickable cells so the
@@ -428,11 +489,6 @@ export async function exportFamilyPDF({
   for (const a of admins) {
     if (a.teacherId > 0) adminNameByTeacherId.set(a.teacherId, a.name);
   }
-  // Per-student billing math lives on the application row.
-  // `activeApps` already carries the seven billing columns, so we
-  // sum directly — no second fetch needed.
-  const familyBillingTotals = sumFamilyBillingTotals(activeApps);
-
   // The endpoint pre-joins the student row, family row, and
   // school-year row onto every app — read the first app's addons
   // for the shared labels. Falls back gracefully when the family
@@ -514,7 +570,6 @@ export async function exportFamilyPDF({
     (scholarship?.trusts_monthly ?? 0) +
     (scholarship?.other_income_monthly ?? 0);
   const passiveAnnualIncome = passiveMonthlyIncome * 12;
-  const totalAnnualIncome = wagesAnnualIncome + passiveAnnualIncome;
   const liquidAssets =
     (scholarship?.assets_checking ?? 0) +
     (scholarship?.assets_savings ?? 0) +
@@ -522,21 +577,10 @@ export async function exportFamilyPDF({
     (scholarship?.assets_stocks_bonds_securities ?? 0) +
     (scholarship?.assets_trusts_inheritance ?? 0) +
     (scholarship?.assets_business ?? 0);
-  const homeEquity = homes.reduce(
-    (acc, h) => acc + ((h.total_value ?? 0) - (h.outstanding_debt ?? 0)),
-    0
-  );
-  const vehicleEquity = vehicles.reduce(
-    (acc, v) => acc + ((v.total_value ?? 0) - (v.remaining_debt ?? 0)),
-    0
-  );
-  const totalAssets = liquidAssets + homeEquity + vehicleEquity;
   const totalDebts =
     (scholarship?.debts_credit_cards ?? 0) +
     (scholarship?.debts_student_loans ?? 0) +
     (scholarship?.debts_personal_loans ?? 0);
-  const netAssets = totalAssets - totalDebts;
-  const useNetAssetsMatrix = netAssets > 100_000;
 
   // Financial Aid section verification stamp (progress row).
   const faVerified = progress?.financial_aid_admin_confirm === true;
@@ -565,22 +609,70 @@ export async function exportFamilyPDF({
    *  to start without manual addPage() calls. */
   let cursorY = 0;
 
+  /** Every table in the report goes through here rather than calling
+   *  `autoTable` directly, so head/body/foot content is WinAnsi-safe
+   *  before jsPDF ever measures it. See `pdfSafe`. */
+  type TableCell = Parameters<typeof autoTable>[1] extends {
+    body?: (infer R)[];
+  }
+    ? R extends (infer C)[]
+      ? C
+      : never
+    : never;
+  function cleanCell(cell: unknown): unknown {
+    if (typeof cell === "string") return pdfSafe(cell);
+    if (typeof cell === "number") return cell;
+    if (cell && typeof cell === "object" && "content" in cell) {
+      const c = cell as { content?: unknown };
+      return typeof c.content === "string"
+        ? { ...cell, content: pdfSafe(c.content) }
+        : cell;
+    }
+    return cell;
+  }
+  function cleanRows(rows: unknown): unknown {
+    if (!Array.isArray(rows)) return rows;
+    return rows.map((row) =>
+      Array.isArray(row) ? row.map(cleanCell) : cleanCell(row)
+    );
+  }
+  function pdfTable(options: Parameters<typeof autoTable>[1]): void {
+    const o = options as Record<string, unknown>;
+    autoTable(doc, {
+      ...options,
+      ...(o.head ? { head: cleanRows(o.head) as TableCell[][] } : {}),
+      ...(o.body ? { body: cleanRows(o.body) as TableCell[][] } : {}),
+      ...(o.foot ? { foot: cleanRows(o.foot) as TableCell[][] } : {}),
+    });
+  }
+
+  /** Sanitizing wrapper for free-drawn text (headers, captions,
+   *  signature lines) — the non-table half of the same guarantee. */
+  function pdfText(
+    text: string,
+    x: number,
+    y: number,
+    options?: Parameters<typeof doc.text>[3]
+  ): void {
+    doc.text(pdfSafe(text), x, y, options);
+  }
+
   function documentHeader(): void {
     let y = 36;
     doc.setFont("helvetica", "normal");
     doc.setFontSize(7.5);
     doc.setTextColor(120);
-    doc.text("SAILFUTURE ACADEMY · ADMISSIONS", marginX, y);
+    pdfText("SAILFUTURE ACADEMY · ADMISSIONS", marginX, y);
     y += 14;
     doc.setFont("helvetica", "bold");
     doc.setFontSize(17);
     doc.setTextColor(20);
-    doc.text("Scholarship Award Summary", marginX, y);
+    pdfText("Scholarship Award Summary", marginX, y);
     y += 12;
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9.5);
     doc.setTextColor(120);
-    doc.text(
+    pdfText(
       `${familyName} · ${schoolYear?.year_name ?? ""}`,
       marginX,
       y
@@ -606,7 +698,7 @@ export async function exportFamilyPDF({
     doc.setFont("helvetica", "bold");
     doc.setFontSize(11);
     doc.setTextColor(20);
-    doc.text(title, marginX, cursorY);
+    pdfText(title, marginX, cursorY);
     cursorY += 5;
     doc.setDrawColor(225);
     doc.setLineWidth(0.4);
@@ -619,7 +711,7 @@ export async function exportFamilyPDF({
     doc.setFont("helvetica", "italic");
     doc.setFontSize(9);
     doc.setTextColor(120);
-    doc.text(text, marginX, cursorY + 4, { maxWidth: contentWidth });
+    pdfText(text, marginX, cursorY + 4, { maxWidth: contentWidth });
     cursorY += 18;
   }
 
@@ -635,7 +727,7 @@ export async function exportFamilyPDF({
 
   /** Labeled key/value sub-table (dark header strip). */
   function subTable(title: string, rows: Array<[string, string]>): void {
-    autoTable(doc, {
+    pdfTable({
       startY: cursorY,
       head: [[title, ""]],
       body: rows,
@@ -675,7 +767,7 @@ export async function exportFamilyPDF({
   const activeStudentsCell =
     activeStudentNames.length > 0 ? activeStudentNames.join(", ") : "—";
 
-  autoTable(doc, {
+  pdfTable({
     startY: cursorY,
     head: [["Field", "Value"]],
     body: [
@@ -721,7 +813,7 @@ export async function exportFamilyPDF({
       (acc, a) => acc + (a.opportunity_scholarship_award_amount ?? 0),
       0
     );
-    autoTable(doc, {
+    pdfTable({
       startY: cursorY,
       head: [
         [
@@ -781,7 +873,7 @@ export async function exportFamilyPDF({
       doc.setFontSize(8);
       doc.setTextColor(100);
       for (const line of confirmLines) {
-        doc.text(line, marginX, cursorY + 8, { maxWidth: contentWidth });
+        pdfText(line, marginX, cursorY + 8, { maxWidth: contentWidth });
         cursorY += 10;
       }
       cursorY += 4;
@@ -832,7 +924,7 @@ export async function exportFamilyPDF({
       if (benefits.length === 0) {
         sectionNote("Benefits declared, but no benefit rows on file.");
       } else {
-        autoTable(doc, {
+        pdfTable({
           startY: cursorY,
           head: [["Government Benefit — Type", "Monthly Amount"]],
           body: benefits.map((b) => [
@@ -878,7 +970,7 @@ export async function exportFamilyPDF({
     } else if (members.length === 0) {
       sectionNote("No household members with income on file.");
     } else {
-      autoTable(doc, {
+      pdfTable({
         startY: cursorY,
         head: [
           [
@@ -943,10 +1035,11 @@ export async function exportFamilyPDF({
     if (otherDesc.length > 0) {
       incomeRows.push(["Describe Other Income", otherDesc]);
     }
-    incomeRows.push([
-      "Total per month",
-      `${fmt$(passiveMonthlyIncome)}/mo → ${fmt$(passiveAnnualIncome)}/yr`,
-    ]);
+    // Two rows rather than one "X/mo -> Y/yr" cell: the value column
+    // is half the content width and right-aligned, so the combined
+    // string was the widest thing in the table and crowded its edge.
+    incomeRows.push(["Total per month", fmt$(passiveMonthlyIncome)]);
+    incomeRows.push(["Total per year", fmt$(passiveAnnualIncome)]);
     subTable("Other Money Your Household Receives Each Month", incomeRows);
 
     /* ── Savings, Property & Other Assets ── */
@@ -978,7 +1071,7 @@ export async function exportFamilyPDF({
       emptyMessage: string
     ): void {
       if (body.length === 0) {
-        autoTable(doc, {
+        pdfTable({
           startY: cursorY,
           head: [[head[0]]],
           body: [[emptyMessage]],
@@ -989,7 +1082,7 @@ export async function exportFamilyPDF({
           bodyStyles: { fontSize: 9.5, textColor: 120 },
         });
       } else {
-        autoTable(doc, {
+        pdfTable({
           startY: cursorY,
           head: [head],
           body,
@@ -1125,14 +1218,14 @@ export async function exportFamilyPDF({
       doc.setFont("helvetica", "normal");
       doc.setFontSize(8.5);
       doc.setTextColor(80);
-      doc.text(
+      pdfText(
         `${confirmedCount}/${confirmable.length} documents confirmed. File names link to the uploaded document — click to open.`,
         marginX,
         cursorY + 4,
         { maxWidth: contentWidth }
       );
       cursorY += 14;
-      autoTable(doc, {
+      pdfTable({
         startY: cursorY,
         head: [["Document", "File(s)", "Status", "Confirmed by", "Date"]],
         body,
@@ -1143,10 +1236,13 @@ export async function exportFamilyPDF({
         bodyStyles: { fontSize: 8 },
         columnStyles: {
           0: { cellWidth: contentWidth * 0.27 },
-          1: { cellWidth: contentWidth * 0.36 },
+          1: { cellWidth: contentWidth * 0.33 },
           2: { cellWidth: contentWidth * 0.11 },
           3: { cellWidth: contentWidth * 0.16 },
-          4: { cellWidth: contentWidth * 0.1 },
+          // 0.10 left only 44pt of usable width — 3pt short of
+          // "Aug 21, 2026" at 8pt, so every confirmed row wrapped its
+          // date onto a second line. The File(s) column had the slack.
+          4: { cellWidth: contentWidth * 0.13 },
         },
         didParseCell: (data) => {
           if (data.section !== "body") return;
@@ -1191,7 +1287,7 @@ export async function exportFamilyPDF({
   if (scholarship && !scholarship.isNotParticipating && !scholarship.isSNAPBenefits) {
     sectionHeader("Advocacy Letter & Signature");
     const advocacy = scholarship.scholarship_advocacy_letter?.trim() ?? "";
-    autoTable(doc, {
+    pdfTable({
       startY: cursorY,
       head: [["Why the Family Needs the Scholarship", ""]],
       body: [
@@ -1236,13 +1332,13 @@ export async function exportFamilyPDF({
     doc.setFont("helvetica", "bold");
     doc.setFontSize(8);
     doc.setTextColor(100);
-    doc.text("SIGNATURE", marginX, cursorY + 6);
+    pdfText("SIGNATURE", marginX, cursorY + 6);
     cursorY += 16;
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9.5);
     if (typedName.length > 0) {
       doc.setTextColor(20);
-      doc.text(`Signed (typed): ${typedName}`, marginX, cursorY);
+      pdfText(`Signed (typed): ${typedName}`, marginX, cursorY);
       cursorY += 13;
     }
     if (signatureUrl) {
@@ -1254,7 +1350,7 @@ export async function exportFamilyPDF({
     } else if (typedName.length === 0) {
       doc.setFont("helvetica", "italic");
       doc.setTextColor(120);
-      doc.text("No signature on file.", marginX, cursorY);
+      pdfText("No signature on file.", marginX, cursorY);
       cursorY += 13;
     }
     // Section verification stamp — mirrors the card footer on the
@@ -1262,80 +1358,16 @@ export async function exportFamilyPDF({
     doc.setFont("helvetica", "italic");
     doc.setFontSize(8.5);
     doc.setTextColor(faVerified ? 22 : 150, faVerified ? 130 : 150, faVerified ? 70 : 150);
-    doc.text(`Financial Aid section: ${faStamp}`, marginX, cursorY + 2);
+    pdfText(`Financial Aid section: ${faStamp}`, marginX, cursorY + 2);
     cursorY += 14;
   }
-
-  /* ────────── Award Determination ────────── */
-
-  sectionHeader("Award Determination Inputs");
-  subTable("Computed Family Financial Picture", [
-    ["Household size", String(householdSize)],
-    ["Wages (contributing members, annual)", fmt$(wagesAnnualIncome)],
-    [
-      "Passive income (monthly × 12)",
-      `${fmt$(passiveMonthlyIncome)}/mo → ${fmt$(passiveAnnualIncome)}`,
-    ],
-    ["Total annual income", fmt$(totalAnnualIncome)],
-    ["Liquid assets", fmt$(liquidAssets)],
-    ["Home equity (value − debt)", fmt$(homeEquity)],
-    ["Vehicle equity (value − debt)", fmt$(vehicleEquity)],
-    ["Total assets", fmt$(totalAssets)],
-    ["Total debts", fmt$(totalDebts)],
-    ["Net assets", fmt$(netAssets)],
-    [
-      "Matrix path",
-      useNetAssetsMatrix
-        ? "High-net-assets sliding scale (net assets > $100k)"
-        : "Standard household-size × income matrix",
-    ],
-  ]);
-
-  /* ────────── Tuition & Billing Summary ────────── */
-
-  sectionHeader("Tuition & Billing Summary");
-  const monthly =
-    familyBillingTotals.monthlyTotal > 0
-      ? familyBillingTotals.monthlyTotal
-      : null;
-  const annualFromMonthly = monthly != null ? monthly * 12 : null;
-  autoTable(doc, {
-    startY: cursorY,
-    head: [["Receipt", ""]],
-    body: [
-      ["Active students", String(activeApps.length)],
-      ["SUFS scholarship awarded", fmt$(familyBillingTotals.sufsTotal)],
-      ["Annual admin fees", fmt$(familyBillingTotals.annualFeeTotal)],
-      ["Annual transportation", fmt$(familyPayment?.transportation_total)],
-      ["Monthly tuition payment", fmt$(monthly)],
-      ["Annual tuition (monthly × 12)", fmt$(annualFromMonthly)],
-    ],
-    theme: "striped",
-    margin: { left: marginX, right: marginX },
-    styles: { cellPadding: compactCellPadding },
-    headStyles: { fillColor: [60, 60, 60], textColor: 255, fontSize: 8.5 },
-    bodyStyles: { fontSize: 9.5 },
-    columnStyles: {
-      0: { cellWidth: contentWidth * 0.5, fontStyle: "bold" },
-      1: { cellWidth: contentWidth * 0.5, halign: "right" },
-    },
-    didParseCell: (cell) => {
-      // Bold + green-tinted highlight on the final annual row so
-      // admin's eye lands on the headline number.
-      if (cell.section === "body" && cell.row.index === 5) {
-        cell.cell.styles.fontStyle = "bold";
-        cell.cell.styles.fillColor = [220, 240, 220];
-      }
-    },
-  });
-  bumpCursorAfterTable(4);
 
   // Footer timestamp on the last drawn page — admin reading the
   // PDF days later can tell when it was generated.
   doc.setFont("helvetica", "italic");
   doc.setFontSize(8);
   doc.setTextColor(140);
-  doc.text(
+  pdfText(
     `Generated ${new Date().toLocaleString()}`,
     marginX,
     doc.internal.pageSize.getHeight() - 24
