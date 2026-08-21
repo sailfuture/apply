@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
 import useSWR from "swr";
@@ -18,8 +18,16 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { StateSelect } from "@/components/state-select";
+import type { XanoBusStop } from "@/lib/xano";
 import type {
   XanoAdminFamilyDetail,
   XanoApplication,
@@ -651,12 +659,11 @@ function StudentAppCard({
                 Will use bus transportation
               </label>
               {draft.is_bus_transportation ? (
-                <FieldRow
+                <BusStopSelectRow
                   label=""
                   value={draft.bus_stop}
                   editing={editing}
                   onChange={(v) => setDraft((d) => ({ ...d, bus_stop: v }))}
-                  placeholder="Bus stop name"
                 />
               ) : null}
             </div>
@@ -1137,12 +1144,11 @@ function TransportCard({
             disabled={!editing}
           />
           {bus ? (
-            <FieldRow
+            <BusStopSelectRow
               label="Bus stop"
               value={stop}
               editing={editing}
               onChange={setStop}
-              placeholder="e.g. Lakewood Pickup"
             />
           ) : null}
         </CardContent>
@@ -1212,6 +1218,60 @@ function FieldRow({
         placeholder={placeholder}
         className="border-input disabled:opacity-100 disabled:bg-muted/30 disabled:cursor-default"
       />
+    </Field>
+  );
+}
+
+/**
+ * Bus-stop picker row — `FieldRow`'s shape (same chrome in both
+ * modes, `disabled` toggled by `editing`) but a Select over the
+ * `registration_bus` catalog instead of free text, so admin edits
+ * can't introduce a stop name the bus rosters won't match. The
+ * catalog is only fetched once a card enters edit mode; in view
+ * mode the stored value renders as its own option, which also keeps
+ * a legacy/renamed stop visible instead of blanking the select.
+ */
+function BusStopSelectRow({
+  label,
+  value,
+  editing,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  editing: boolean;
+  onChange: (v: string) => void;
+}) {
+  const { data: stops } = useSWR<XanoBusStop[]>(
+    editing ? "/api/bus-stops" : null,
+    adminFetcher,
+    { revalidateOnFocus: false }
+  );
+  const options = useMemo(() => {
+    const unique = [
+      ...new Set(
+        (stops ?? []).map((s) => (s.name ?? "").trim()).filter(Boolean)
+      ),
+    ].sort((a, b) => a.localeCompare(b));
+    const current = (value ?? "").trim();
+    if (current && !unique.includes(current)) unique.unshift(current);
+    return unique;
+  }, [stops, value]);
+  return (
+    <Field>
+      {label ? <FieldLabel className="text-xs">{label}</FieldLabel> : null}
+      <Select value={value} onValueChange={onChange} disabled={!editing}>
+        <SelectTrigger className="w-full border-input disabled:opacity-100 disabled:bg-muted/30 disabled:cursor-default">
+          <SelectValue placeholder="Select a bus stop" />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((opt) => (
+            <SelectItem key={opt} value={opt}>
+              {opt}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </Field>
   );
 }

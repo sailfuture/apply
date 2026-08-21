@@ -440,7 +440,14 @@ function ScheduleRow({
   // `days_until_due: 15`. We render Stripe's calculated date rather
   // than recomputing client-side so we stay aligned with whatever
   // Stripe actually told the family on the hosted invoice.
-  const sentLabel = inv?.finalizedAt ? formatDate(inv.finalizedAt) : "—";
+  // A scheduled month shows WHEN its invoice goes out (server-read
+  // from Stripe: drafted first invoice's finalization time, trial
+  // end, or the running cycle's period end) in the same column.
+  const sentLabel = inv?.finalizedAt
+    ? formatDate(inv.finalizedAt)
+    : slot.status === "scheduled" && slot.scheduledSendsAt
+      ? `Sends ${formatDate(slot.scheduledSendsAt)}`
+      : "—";
   const dueLabel = inv?.dueDate ? formatDate(inv.dueDate) : "—";
   const amountDue = inv ? inv.amountDueCents / 100 : null;
   const amountPaid = inv ? inv.amountPaidCents / 100 : null;

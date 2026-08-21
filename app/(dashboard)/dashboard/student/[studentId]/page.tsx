@@ -267,7 +267,7 @@ export default function StudentDetailPage() {
   const optionalDocs = DOC_LABELS.filter((d) => !d.required);
 
   return (
-    <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
+    <div className="flex flex-1 flex-col gap-6 p-4 sm:p-6 mx-auto w-full max-w-4xl">
       <DashboardPageHeader
         backHref={dashboardHref}
         backLabel="Back to Dashboard"
@@ -430,25 +430,23 @@ export default function StudentDetailPage() {
         </div>
         <div className="rounded-xl bg-background p-1.5 shadow-sm border">
           <div className="overflow-hidden rounded-lg border">
-            <table className="w-full text-sm">
-              <tbody className="divide-y">
-                {requiredDocs.map(({ key, label, confirmKey }) => (
-                  <DocRow
-                    key={key}
-                    field={key}
-                    label={label}
-                    approved={
-                      confirmKey ? student[confirmKey] === true : undefined
-                    }
-                    files={(student[key] as FileMetadata[] | undefined) ?? []}
-                    studentId={student.id}
-                    onChanged={() => {
-                      void swrMutate("/api/students");
-                    }}
-                  />
-                ))}
-              </tbody>
-            </table>
+            <div className="divide-y text-sm">
+              {requiredDocs.map(({ key, label, confirmKey }) => (
+                <DocRow
+                  key={key}
+                  field={key}
+                  label={label}
+                  approved={
+                    confirmKey ? student[confirmKey] === true : undefined
+                  }
+                  files={(student[key] as FileMetadata[] | undefined) ?? []}
+                  studentId={student.id}
+                  onChanged={() => {
+                    void swrMutate("/api/students");
+                  }}
+                />
+              ))}
+            </div>
           </div>
         </div>
       </div>
@@ -462,22 +460,20 @@ export default function StudentDetailPage() {
         </div>
         <div className="rounded-xl bg-background p-1.5 shadow-sm border">
           <div className="overflow-hidden rounded-lg border">
-            <table className="w-full text-sm">
-              <tbody className="divide-y">
-                {optionalDocs.map(({ key, label }) => (
-                  <DocRow
-                    key={key}
-                    field={key}
-                    label={label}
-                    files={(student[key] as FileMetadata[] | undefined) ?? []}
-                    studentId={student.id}
-                    onChanged={() => {
-                      void swrMutate("/api/students");
-                    }}
-                  />
-                ))}
-              </tbody>
-            </table>
+            <div className="divide-y text-sm">
+              {optionalDocs.map(({ key, label }) => (
+                <DocRow
+                  key={key}
+                  field={key}
+                  label={label}
+                  files={(student[key] as FileMetadata[] | undefined) ?? []}
+                  studentId={student.id}
+                  onChanged={() => {
+                    void swrMutate("/api/students");
+                  }}
+                />
+              ))}
+            </div>
           </div>
         </div>
       </div>
@@ -495,7 +491,7 @@ export default function StudentDetailPage() {
  */
 function StudentDetailSkeleton() {
   return (
-    <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
+    <div className="flex flex-1 flex-col gap-6 p-4 sm:p-6 mx-auto w-full max-w-4xl">
       {/* Header — matches DashboardPageHeader: breadcrumb + title above a
           row with the Back button (left) and request-change action (right). */}
       <div className="border-b pb-4 space-y-3">
@@ -543,24 +539,28 @@ function SectionSkeleton({ rows }: { rows: number }) {
   );
 }
 
+/** Label/value rows. Stacked (label above value) on phones; label
+ *  column left, value right from `sm` up — a fixed side-by-side
+ *  layout left long values squeezed into a sliver on mobile. */
 function DetailTable({ rows }: { rows: [string, string][] }) {
   return (
     <div className="rounded-xl bg-background p-1.5 shadow-sm border">
       <div className="overflow-hidden rounded-lg border">
-        <table className="w-full text-sm">
-          <tbody className="divide-y">
-            {rows.map(([label, value]) => (
-              <tr key={label}>
-                <td className="px-4 py-3 text-xs text-muted-foreground w-56 align-top">
-                  {label}
-                </td>
-                <td className="px-4 py-3 font-medium whitespace-pre-wrap">
-                  {value}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <dl className="divide-y text-sm">
+          {rows.map(([label, value]) => (
+            <div
+              key={label}
+              className="px-4 py-3 sm:grid sm:grid-cols-[14rem_1fr] sm:gap-3"
+            >
+              <dt className="text-xs text-muted-foreground sm:pt-0.5">
+                {label}
+              </dt>
+              <dd className="mt-1 min-w-0 font-medium whitespace-pre-wrap break-words sm:mt-0">
+                {value}
+              </dd>
+            </div>
+          ))}
+        </dl>
       </div>
     </div>
   );
@@ -653,8 +653,10 @@ function DocRow({
 
   return (
     <>
-      <tr>
-        <td className="px-4 py-3 align-top w-72">
+      {/* Stacked on phones (label → files → button); the old three-
+          column table row from `sm` up. */}
+      <div className="px-4 py-3 sm:flex sm:items-start sm:gap-4">
+        <div className="sm:w-64 sm:shrink-0">
           <p className="font-medium flex items-center gap-2 flex-wrap">
             <FileText className="size-4 text-muted-foreground" />
             {label}
@@ -681,8 +683,8 @@ function DocRow({
               )}
             </p>
           ) : null}
-        </td>
-        <td className="px-4 py-3">
+        </div>
+        <div className="mt-2 min-w-0 sm:mt-0 sm:flex-1">
           {validFiles.length === 0 ? (
             <p className="text-xs text-muted-foreground">No file on record.</p>
           ) : (
@@ -696,7 +698,7 @@ function DocRow({
                     href={(f.url as string) ?? `${xanoBase}${f.path}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1.5 text-xs font-medium text-primary underline underline-offset-2 hover:no-underline truncate"
+                    className="inline-flex min-w-0 items-center gap-1.5 text-xs font-medium text-primary underline underline-offset-2 hover:no-underline truncate"
                   >
                     {(f.name as string) || `File ${i + 1}`}
                     <ExternalLink className="size-3 shrink-0" />
@@ -705,7 +707,7 @@ function DocRow({
                     type="button"
                     variant="ghost"
                     size="icon"
-                    className="size-6 text-muted-foreground hover:text-red-600"
+                    className="size-6 shrink-0 text-muted-foreground hover:text-red-600"
                     onClick={() => setPendingDelete(i)}
                     aria-label={`Remove ${f.name ?? `file ${i + 1}`}`}
                   >
@@ -715,8 +717,8 @@ function DocRow({
               ))}
             </ul>
           )}
-        </td>
-        <td className="px-4 py-3 text-right whitespace-nowrap w-32">
+        </div>
+        <div className="mt-3 sm:mt-0 sm:shrink-0">
           <input
             ref={fileInputRef}
             type="file"
@@ -729,7 +731,7 @@ function DocRow({
             type="button"
             variant="outline"
             size="sm"
-            className="bg-white"
+            className="w-full bg-white sm:w-auto"
             disabled={uploading}
             onClick={() => fileInputRef.current?.click()}
           >
@@ -745,8 +747,8 @@ function DocRow({
               </>
             )}
           </Button>
-        </td>
-      </tr>
+        </div>
+      </div>
 
       <AlertDialog
         open={pendingDelete !== null}

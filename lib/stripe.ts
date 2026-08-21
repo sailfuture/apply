@@ -279,6 +279,63 @@ export interface BillingSnapshot {
   statusLabel: "Active" | "Scheduled" | "Past Due" | "Paused" | "Canceled" | "Incomplete" | "Unknown";
 }
 
+/** When a subscription's next invoice will actually be EMAILED, from
+ *  the Stripe fact that holds the date. Sources, in precedence order:
+ *    - "draft"  — the invoice already exists as a draft; Stripe
+ *      auto-finalizes (and emails) it at `automatically_finalizes_at`
+ *      (24h after subscription creation for `send_invoice` subs). The
+ *      webhook mirror can't see drafts — it fills on
+ *      `invoice.finalized` — so a family's first day of billing reads
+ *      as "no invoices" everywhere the mirror feeds.
+ *    - "trial"  — future-anchored subscription; first invoice lands at
+ *      `trial_end`.
+ *    - "anchor" — future `billing_cycle_anchor` (the ≤48h create
+ *      path); first invoice lands at the anchor.
+ *    - "cycle"  — normal running subscription; next invoice at the
+ *      current period's end. NOTE for zero-invoice mirrors: "cycle"
+ *      means Stripe already issued an invoice this period, so a mirror
+ *      showing none is a webhook/mirror problem, not a pending first
+ *      invoice — callers deciding between "scheduled" and "something's
+ *      wrong" must branch on the source.
+ */
+export interface NextInvoiceTiming {
+  sendsAtMs: number;
+  source: "draft" | "trial" | "anchor" | "cycle";
+}
+
+export async function getNextInvoiceTiming(
+  subscriptionId: string
+): Promise<NextInvoiceTiming | null> {
+  const stripe = getStripeClient();
+  const subscription = await stripe.subscriptions.retrieve(subscriptionId, {
+    expand: ["latest_invoice"],
+  });
+  const latest = subscription.latest_invoice as Stripe.Invoice | null;
+  if (latest?.status === "draft" && latest.automatically_finalizes_at) {
+    return {
+      sendsAtMs: latest.automatically_finalizes_at * 1000,
+      source: "draft",
+    };
+  }
+  const nowUnix = Math.floor(Date.now() / 1000);
+  if (subscription.status === "trialing" && subscription.trial_end) {
+    return { sendsAtMs: subscription.trial_end * 1000, source: "trial" };
+  }
+  if (subscription.billing_cycle_anchor > nowUnix) {
+    return {
+      sendsAtMs: subscription.billing_cycle_anchor * 1000,
+      source: "anchor",
+    };
+  }
+  // Billing periods live on the items (flexible billing mode has no
+  // subscription-level current_period_end).
+  const cycleEnd = subscription.items.data[0]?.current_period_end;
+  if (cycleEnd && cycleEnd > nowUnix) {
+    return { sendsAtMs: cycleEnd * 1000, source: "cycle" };
+  }
+  return null;
+}
+
 /**
  * Fetch subscription + last 12 invoices in two parallel calls. Used by
  * the admin Billing card on the family registration detail page. We
@@ -725,7 +782,10 @@ export async function createSubscriptionWithStudentItems(
         family_id: String(input.familyId),
         year_id: String(input.yearId),
       },
-      description: `SailFuture Academy monthly tuition · family ${input.familyId} · year ${input.yearId}`,
+      // Parent-visible: the customer portal ("Manage subscription")
+      // renders this description verbatim, so it carries names only —
+      // the internal Xano ids live in `metadata` below.
+      description: `SailFuture Academy Monthly Tuition — ${input.familyName} (${input.yearName})`,
     },
     input.idempotencyKeyBase
       ? { idempotencyKey: `${input.idempotencyKeyBase}:sub` }

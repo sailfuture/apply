@@ -47,7 +47,6 @@ import type {
   XanoSchoolYear,
 } from "@/lib/xano";
 import { sumFamilyBillingTotals } from "@/lib/per-student-billing";
-import type jsPDF from "jspdf";
 
 interface ExportInput {
   familyId: number;
@@ -60,22 +59,6 @@ interface ScholarshipDetailsPayload {
   vehicles: XanoScholarshipVehicle[];
   contributing_members: XanoScholarshipContributingMember[];
   benefits: XanoScholarshipBenefit[];
-}
-
-/** Bracket cell shape returned by the matrix endpoints. Cells from
- *  the household-size × income matrix carry `household_size` +
- *  `income_min/max` + `tuition_percentage`. Cells from the high-net-
- *  assets matrix carry `net_asset_min/max` + `percentage_of_total_tuition`.
- *  Both endpoints return the same TS shape (every field optional);
- *  consumers inspect whichever fields apply to the path they're on. */
-interface AwardBracketCell {
-  household_size?: number;
-  income_min?: number;
-  income_max?: number | null;
-  net_asset_min?: number;
-  net_asset_max?: number | null;
-  tuition_percentage?: number;
-  percentage_of_total_tuition?: number;
 }
 
 /** File metadata shape Xano returns inside the multi-file array
@@ -138,14 +121,6 @@ function fmtDate(ts: number | null | undefined): string {
     year: "numeric",
   });
 }
-function bracketLabel(
-  min: number,
-  max: number | null | undefined
-): string {
-  if (max === null || max === undefined) return `${fmt$(min)} +`;
-  return `${fmt$(min)} – ${fmt$(max)}`;
-}
-
 /** SUFS tier key → human label. Mirrors the SUFS_TIERS list on the
  *  family detail page (keys are the `sufs_type` column values); the
  *  PDF only needs the label side, not the school-year amount
@@ -417,8 +392,6 @@ export async function exportFamilyPDF({
   const [
     appsRes,
     paymentRes,
-    payCellsRes,
-    netAssetsCellsRes,
     progressRes,
     adminsRes,
   ] = await Promise.all([
@@ -428,8 +401,6 @@ export async function exportFamilyPDF({
     fetch(
       `/api/admin/family-payment?familyId=${familyId}&yearId=${yearId}`
     ),
-    fetch(`/api/admin/school-year-brackets?yearId=${yearId}`),
-    fetch(`/api/admin/school-year-net-assets-brackets?yearId=${yearId}`),
     fetch(
       `/api/admin/family-progress?familyId=${familyId}&yearId=${yearId}`
     ),
@@ -442,12 +413,6 @@ export async function exportFamilyPDF({
   const familyPayment = paymentRes.ok
     ? ((await paymentRes.json()) as XanoFamilyPayment | null)
     : null;
-  const payCells: AwardBracketCell[] = payCellsRes.ok
-    ? ((await payCellsRes.json()) as AwardBracketCell[])
-    : [];
-  const netAssetsCells: AwardBracketCell[] = netAssetsCellsRes.ok
-    ? ((await netAssetsCellsRes.json()) as AwardBracketCell[])
-    : [];
   const progress = progressRes.ok
     ? ((await progressRes.json()) as XanoFamilyApplicationProgress | null)
     : null;
@@ -477,19 +442,28 @@ export async function exportFamilyPDF({
     firstApp?._registration_school_years ?? null;
   const familyName =
     firstApp?._registration_families?.family_name ?? "Family";
-  const scholarship: XanoScholarship | null =
-    firstApp?._registration_opportunity_scholarship ?? null;
-
-  // Composite scholarship payload — contributing members, homes,
-  // vehicles, benefits. Skip when no scholarship row exists.
+  // Scholarship + its child rows, resolved by (family, year).
+  //
+  // NOT read off `firstApp._registration_opportunity_scholarship`:
+  // that addon comes back NULL on every row of the by-family query
+  // (the application table has no FK to the scholarship — it's keyed
+  // by family + year), which silently emptied this report. Every
+  // financial-aid section and the whole Documents-to-Review table are
+  // gated on `scholarship` being non-null, so the addon returning
+  // null rendered the PDF as "no scholarship on file" for families
+  // who had a complete application on the page.
+  let scholarship: XanoScholarship | null = null;
   let scholarshipDetails: ScholarshipDetailsPayload | null = null;
-  if (scholarship?.id) {
-    const detailsRes = await fetch(
-      `/api/admin/scholarship-details?id=${scholarship.id}`
-    );
-    if (detailsRes.ok) {
-      scholarshipDetails =
-        (await detailsRes.json()) as ScholarshipDetailsPayload;
+  const scholarshipRes = await fetch(
+    `/api/admin/scholarships?familyId=${familyId}&yearId=${yearId}`
+  );
+  if (scholarshipRes.ok) {
+    const payload = (await scholarshipRes.json()) as
+      | (ScholarshipDetailsPayload & { scholarship: XanoScholarship | null })
+      | null;
+    if (payload?.scholarship) {
+      scholarship = payload.scholarship;
+      scholarshipDetails = payload as ScholarshipDetailsPayload;
     }
   }
 
@@ -815,6 +789,15 @@ export async function exportFamilyPDF({
   }
 
   /* ────────── Financial Aid Application ────────── */
+  //
+  // Sections + field labels below deliberately MIRROR the parent-
+  // facing application (`/apply/year/[yearId]/scholarship`) so admin
+  // reads this as the family's filled-in copy of the form they
+  // submitted — same order, same wording:
+  //   Household Information → Household Members with Income → Other
+  //   Money Received Each Month → Savings, Property & Other Assets →
+  //   Your Tuition Contribution.
+  // Keep them in sync when the form's wording changes.
 
   sectionHeader(`Financial Aid Application — ${path}`);
   if (!scholarship) {
@@ -828,94 +811,248 @@ export async function exportFamilyPDF({
       "Family pre-qualified via SNAP benefits — the award letter below stands in for the full financial application."
     );
   } else {
-    subTable("Household", [
-      ["Adults", String(scholarship.household_adults ?? 0)],
-      ["Children", String(scholarship.household_children ?? 0)],
+    /* ── Household Information ── */
+    subTable("Household Information", [
+      ["Number of Adults", String(scholarship.household_adults ?? 0)],
+      ["Number of Children", String(scholarship.household_children ?? 0)],
+      ["Household size", String(householdSize)],
       [
-        "No contributing members",
-        scholarship.no_contributing_member ? "Yes" : "No",
-      ],
-      [
-        "Government benefits",
+        "Household receives government benefits",
         scholarship.government_benefits ? "Yes" : "No",
       ],
+      [
+        "No household members earn income",
+        scholarship.no_contributing_member ? "Yes" : "No",
+      ],
     ]);
-    const incomeRows: Array<[string, string]> = [
-      ["Business", fmt$(scholarship.business_income_monthly)],
-      ["Capital gains", fmt$(scholarship.capital_gains_monthly)],
-      ["Child support", fmt$(scholarship.child_support_monthly)],
-      ["Alimony", fmt$(scholarship.alimony_monthly)],
-      ["Trusts", fmt$(scholarship.trusts_monthly)],
-      ["Other", fmt$(scholarship.other_income_monthly)],
-    ];
-    const otherDesc = (scholarship.describe_other_income ?? "").trim();
-    if (otherDesc.length > 0) {
-      incomeRows.push(["Other income description", otherDesc]);
+
+    // Government benefit rows carry the form's own "Type / Monthly
+    // Amount" pair; the paperwork for each lands in Documents below.
+    if (scholarship.government_benefits) {
+      if (benefits.length === 0) {
+        sectionNote("Benefits declared, but no benefit rows on file.");
+      } else {
+        autoTable(doc, {
+          startY: cursorY,
+          head: [["Government Benefit — Type", "Monthly Amount"]],
+          body: benefits.map((b) => [
+            fmtMaybe(b.type) === "—" ? "Government benefit" : b.type,
+            fmt$(b.amount_monthly ?? 0),
+          ]),
+          foot: [
+            [
+              { content: "Total", styles: { fontStyle: "bold" } },
+              {
+                content: fmt$(
+                  benefits.reduce((a, b) => a + (b.amount_monthly ?? 0), 0)
+                ),
+                styles: { fontStyle: "bold", halign: "right" },
+              },
+            ],
+          ],
+          theme: "striped",
+          margin: { left: marginX, right: marginX },
+          styles: { cellPadding: compactCellPadding },
+          headStyles: {
+            fillColor: [60, 60, 60],
+            textColor: 255,
+            fontSize: 8.5,
+          },
+          bodyStyles: { fontSize: 8.5 },
+          footStyles: { fillColor: [240, 240, 240], textColor: 20 },
+          columnStyles: {
+            0: { cellWidth: contentWidth * 0.6 },
+            1: { cellWidth: contentWidth * 0.4, halign: "right" },
+          },
+        });
+        bumpCursorAfterTable(4);
+      }
     }
-    subTable("Income (Monthly)", incomeRows);
-    subTable("Assets", [
-      ["Checking", fmt$(scholarship.assets_checking)],
-      ["Savings", fmt$(scholarship.assets_savings)],
-      ["Retirement", fmt$(scholarship.assets_retirement_savings)],
-      ["Securities", fmt$(scholarship.assets_stocks_bonds_securities)],
-      ["Trusts / inheritance", fmt$(scholarship.assets_trusts_inheritance)],
-      ["Business", fmt$(scholarship.assets_business)],
-    ]);
-  }
 
-  /* ────────── Contributing Members ────────── */
-
-  if (scholarship && !scholarship.isNotParticipating && !scholarship.isSNAPBenefits) {
-    sectionHeader("Contributing Members");
+    /* ── Household Members with Income ── */
+    sectionHeader("Household Members with Income");
     if (scholarship.no_contributing_member) {
-      sectionNote("Family declared no contributing members.");
+      sectionNote(
+        "Family declared that no household member earns income. Unemployment / termination paperwork is listed in Documents to Review."
+      );
     } else if (members.length === 0) {
-      sectionNote("No contributing members on file.");
+      sectionNote("No household members with income on file.");
     } else {
       autoTable(doc, {
         startY: cursorY,
-        head: [["Name", "Address", "Annual income", "Documentation"]],
+        head: [
+          [
+            "First / Last Name",
+            "Street Address",
+            "City / State / ZIP",
+            "Estimated Annual Income",
+            "Income Verification",
+          ],
+        ],
         body: members.map((m) => [
           fmtMaybe(`${m.first_name ?? ""} ${m.last_name ?? ""}`),
-          [m.address_1, m.city, m.state, m.zipcode]
-            .filter(Boolean)
-            .join(", ") || "—",
+          [m.address_1, m.address_2].filter(Boolean).join(", ") || "—",
+          [m.city, m.state, m.zipcode].filter(Boolean).join(", ") || "—",
           fmt$(m.estimated_annual_income),
           m.isW2 ? "W-2" : m.isPayStubs ? "Pay stubs" : "—",
         ]),
+        foot: [
+          [
+            {
+              content: "Total estimated annual income",
+              colSpan: 3,
+              styles: { fontStyle: "bold" },
+            },
+            {
+              content: fmt$(wagesAnnualIncome),
+              styles: { fontStyle: "bold", halign: "right" },
+            },
+            { content: "" },
+          ],
+        ],
         theme: "striped",
         margin: { left: marginX, right: marginX },
         styles: { cellPadding: compactCellPadding },
-        headStyles: { fillColor: [60, 60, 60], textColor: 255, fontSize: 8.5 },
+        headStyles: { fillColor: [60, 60, 60], textColor: 255, fontSize: 8 },
         bodyStyles: { fontSize: 8.5 },
-        columnStyles: { 2: { halign: "right" } },
-      });
-      bumpCursorAfterTable(4);
-    }
-
-    // Government benefits declared alongside the members — the docs
-    // table below carries their paperwork; this table carries the
-    // declared amounts.
-    if (scholarship.government_benefits && benefits.length > 0) {
-      autoTable(doc, {
-        startY: cursorY,
-        head: [["Government Benefit", "Monthly amount"]],
-        body: benefits.map((b) => [
-          fmtMaybe(b.type) === "—" ? "Government benefit" : b.type,
-          fmt$(b.amount_monthly ?? 0),
-        ]),
-        theme: "striped",
-        margin: { left: marginX, right: marginX },
-        styles: { cellPadding: compactCellPadding },
-        headStyles: { fillColor: [60, 60, 60], textColor: 255, fontSize: 8.5 },
-        bodyStyles: { fontSize: 8.5 },
+        footStyles: { fillColor: [240, 240, 240], textColor: 20, fontSize: 8.5 },
         columnStyles: {
-          0: { cellWidth: contentWidth * 0.5 },
-          1: { cellWidth: contentWidth * 0.5, halign: "right" },
+          0: { cellWidth: contentWidth * 0.2 },
+          1: { cellWidth: contentWidth * 0.24 },
+          2: { cellWidth: contentWidth * 0.22 },
+          3: { cellWidth: contentWidth * 0.19, halign: "right" },
+          4: { cellWidth: contentWidth * 0.15 },
         },
       });
       bumpCursorAfterTable(4);
     }
+
+    /* ── Other Money Your Household Receives Each Month ── */
+    const incomeRows: Array<[string, string]> = [
+      [
+        "Money from a Business or Side Job",
+        fmt$(scholarship.business_income_monthly),
+      ],
+      ["Money from Investments", fmt$(scholarship.capital_gains_monthly)],
+      ["Child Support", fmt$(scholarship.child_support_monthly)],
+      ["Alimony / Spousal Support", fmt$(scholarship.alimony_monthly)],
+      ["Money from Trusts or Inheritance", fmt$(scholarship.trusts_monthly)],
+      ["Other Income", fmt$(scholarship.other_income_monthly)],
+    ];
+    const otherDesc = (scholarship.describe_other_income ?? "").trim();
+    if (otherDesc.length > 0) {
+      incomeRows.push(["Describe Other Income", otherDesc]);
+    }
+    incomeRows.push([
+      "Total per month",
+      `${fmt$(passiveMonthlyIncome)}/mo → ${fmt$(passiveAnnualIncome)}/yr`,
+    ]);
+    subTable("Other Money Your Household Receives Each Month", incomeRows);
+
+    /* ── Savings, Property & Other Assets ── */
+    subTable("Savings, Property & Other Assets", [
+      ["Money in Checking Accounts", fmt$(scholarship.assets_checking)],
+      ["Money in Savings Accounts", fmt$(scholarship.assets_savings)],
+      [
+        "Retirement Accounts (401k, IRA)",
+        fmt$(scholarship.assets_retirement_savings),
+      ],
+      [
+        "Investments (Stocks or Bonds)",
+        fmt$(scholarship.assets_stocks_bonds_securities),
+      ],
+      [
+        "Trust Funds or Inheritance",
+        fmt$(scholarship.assets_trusts_inheritance),
+      ],
+      ["Money in a Business You Own", fmt$(scholarship.assets_business)],
+      ["Total liquid assets", fmt$(liquidAssets)],
+    ]);
+
+    /** Array-backed sub-block (properties / vehicles) — renders a
+     *  muted one-liner instead of an empty table when the family
+     *  declared none. */
+    function arrayTable(
+      head: string[],
+      body: string[][],
+      emptyMessage: string
+    ): void {
+      if (body.length === 0) {
+        autoTable(doc, {
+          startY: cursorY,
+          head: [[head[0]]],
+          body: [[emptyMessage]],
+          theme: "plain",
+          margin: { left: marginX, right: marginX },
+          styles: { cellPadding: compactCellPadding },
+          headStyles: { fontStyle: "bold", fontSize: 9 },
+          bodyStyles: { fontSize: 9.5, textColor: 120 },
+        });
+      } else {
+        autoTable(doc, {
+          startY: cursorY,
+          head: [head],
+          body,
+          theme: "striped",
+          margin: { left: marginX, right: marginX },
+          styles: { cellPadding: compactCellPadding },
+          headStyles: {
+            fillColor: [60, 60, 60],
+            textColor: 255,
+            fontSize: 8.5,
+          },
+          bodyStyles: { fontSize: 8.5 },
+          columnStyles: {
+            2: { halign: "right" },
+            3: { halign: "right" },
+          },
+        });
+      }
+      bumpCursorAfterTable(4);
+    }
+
+    arrayTable(
+      ["Property — Type", "Address", "Total Value", "Outstanding Debt"],
+      homes.map((h) => [
+        fmtMaybe(h.type),
+        [h.address_1, h.address_2, h.city, h.state, h.zipcode]
+          .filter(Boolean)
+          .join(", ") || "—",
+        fmt$(h.total_value),
+        fmt$(h.outstanding_debt),
+      ]),
+      "No property declared."
+    );
+    arrayTable(
+      [
+        "Vehicle — Type",
+        "Year / Make / Model",
+        "Total Value",
+        "Remaining Debt",
+      ],
+      vehicles.map((v) => [
+        fmtMaybe(v.type),
+        [v.car_year, v.car_make, v.car_model].filter(Boolean).join(" ") || "—",
+        fmt$(v.total_value),
+        fmt$(v.remaining_debt),
+      ]),
+      "No vehicles declared."
+    );
+
+    subTable("Debts", [
+      ["Credit Cards (total owed)", fmt$(scholarship.debts_credit_cards)],
+      ["Student Loans (total owed)", fmt$(scholarship.debts_student_loans)],
+      ["Other Loans (total owed)", fmt$(scholarship.debts_personal_loans)],
+      ["Total debts", fmt$(totalDebts)],
+    ]);
+
+    /* ── Your Tuition Contribution ── */
+    subTable("Your Tuition Contribution", [
+      [
+        "Amount the family can contribute per month",
+        fmt$(scholarship.family_contribution_per_month),
+      ],
+    ]);
   }
 
   /* ────────── Documents to Review (clickable links) ────────── */
@@ -1049,78 +1186,6 @@ export async function exportFamilyPDF({
     }
   }
 
-  /* ────────── Property, Debts & Family Contribution ────────── */
-
-  if (scholarship && !scholarship.isNotParticipating && !scholarship.isSNAPBenefits) {
-    sectionHeader("Property, Debts & Family Contribution");
-    function arrayTable(
-      head: string[],
-      body: string[][],
-      emptyMessage: string
-    ): void {
-      if (body.length === 0) {
-        autoTable(doc, {
-          startY: cursorY,
-          head: [[head[0]]],
-          body: [[emptyMessage]],
-          theme: "plain",
-          margin: { left: marginX, right: marginX },
-          styles: { cellPadding: compactCellPadding },
-          headStyles: { fontStyle: "bold", fontSize: 9 },
-          bodyStyles: { fontSize: 9.5, textColor: 120 },
-        });
-      } else {
-        autoTable(doc, {
-          startY: cursorY,
-          head: [head],
-          body,
-          theme: "striped",
-          margin: { left: marginX, right: marginX },
-          styles: { cellPadding: compactCellPadding },
-          headStyles: { fillColor: [60, 60, 60], textColor: 255, fontSize: 8.5 },
-          bodyStyles: { fontSize: 8.5 },
-        });
-      }
-      bumpCursorAfterTable(4);
-    }
-    arrayTable(
-      ["Purchased Houses", "Address", "Total value", "Outstanding debt"],
-      homes.map((h) => [
-        fmtMaybe(h.type),
-        [h.address_1, h.city, h.state, h.zipcode]
-          .filter(Boolean)
-          .join(", ") || "—",
-        fmt$(h.total_value),
-        fmt$(h.outstanding_debt),
-      ]),
-      "No purchased houses declared."
-    );
-    arrayTable(
-      [
-        "Purchased Vehicles",
-        "Make / Model / Year",
-        "Total value",
-        "Remaining debt",
-      ],
-      vehicles.map((v) => [
-        fmtMaybe(v.type),
-        [v.car_make, v.car_model, v.car_year].filter(Boolean).join(" ") ||
-          "—",
-        fmt$(v.total_value),
-        fmt$(v.remaining_debt),
-      ]),
-      "No purchased vehicles declared."
-    );
-    subTable("Debts", [
-      ["Credit cards", fmt$(scholarship.debts_credit_cards)],
-      ["Student loans", fmt$(scholarship.debts_student_loans)],
-      ["Personal loans", fmt$(scholarship.debts_personal_loans)],
-    ]);
-    subTable("Family Contribution", [
-      ["Per month", fmt$(scholarship.family_contribution_per_month)],
-    ]);
-  }
-
   /* ────────── Advocacy Letter + Signature ────────── */
 
   if (scholarship && !scholarship.isNotParticipating && !scholarship.isSNAPBenefits) {
@@ -1226,47 +1291,6 @@ export async function exportFamilyPDF({
     ],
   ]);
 
-  /* ────────── Pay Matrix (full table with highlighted row) ────────── */
-
-  sectionHeader(
-    useNetAssetsMatrix
-      ? "Net Assets > $100k Payment Matrix"
-      : "Family Tuition Payment Matrix"
-  );
-  // Context line above the matrix so admin reading the PDF knows
-  // which bracket the family lands in without having to scan the
-  // whole table.
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(8.5);
-  doc.setTextColor(80);
-  const contextLine = useNetAssetsMatrix
-    ? `Net assets ${fmt$(netAssets)} exceed $100k — high-net-assets sliding scale.`
-    : `Household of ${householdSize}, annual income ${fmt$(totalAnnualIncome)} — standard tuition matrix.`;
-  doc.text(contextLine, marginX, cursorY, { maxWidth: contentWidth });
-  cursorY += 10;
-  const baseTuition = schoolYear?.tuition ?? 0;
-  if (useNetAssetsMatrix) {
-    renderNetAssetsMatrix(doc, autoTable, {
-      cells: netAssetsCells,
-      netAssets,
-      baseTuition,
-      marginX,
-      contentWidth,
-      startY: cursorY,
-    });
-  } else {
-    renderStandardMatrix(doc, autoTable, {
-      cells: payCells,
-      householdSize,
-      totalAnnualIncome,
-      baseTuition,
-      marginX,
-      contentWidth,
-      startY: cursorY,
-    });
-  }
-  bumpCursorAfterTable(4);
-
   /* ────────── Tuition & Billing Summary ────────── */
 
   sectionHeader("Tuition & Billing Summary");
@@ -1322,242 +1346,4 @@ export async function exportFamilyPDF({
   const safeName = familyName.replace(/[/\\:*?"<>|]+/g, "").trim() || "Family";
   const year = schoolYear?.year_name ?? `Year ${yearId}`;
   doc.save(`${safeName} · ${year} · Award Summary.pdf`);
-}
-
-/* ─────────────────────── Matrix renderers ─────────────────────── */
-
-type AutoTableFn = (typeof import("jspdf-autotable"))["default"];
-
-/**
- * Render the standard 2D household-size × income pay matrix as a
- * table, highlighting the row + column where the family lands.
- * Mirrors `PayMatrixView` on the page: each cell shows the tuition
- * percentage. The matched cell gets a stronger fill; the matched
- * row + column get a softer fill so admin's eye is guided to the
- * intersection.
- */
-function renderStandardMatrix(
-  doc: jsPDF,
-  autoTable: AutoTableFn,
-  {
-    cells,
-    householdSize,
-    totalAnnualIncome,
-    baseTuition,
-    marginX,
-    contentWidth,
-    startY,
-  }: {
-    cells: AwardBracketCell[];
-    householdSize: number;
-    totalAnnualIncome: number;
-    baseTuition: number;
-    marginX: number;
-    contentWidth: number;
-    startY: number;
-  }
-): void {
-  void baseTuition;
-  if (cells.length === 0) {
-    doc.setFont("helvetica", "italic");
-    doc.setFontSize(9);
-    doc.setTextColor(120);
-    doc.text(
-      "No matrix configured for this year yet.",
-      marginX,
-      startY
-    );
-    return;
-  }
-
-  // Distinct household sizes (rows) sorted ascending.
-  const sizes = Array.from(
-    new Set(cells.map((c) => c.household_size ?? 0).filter((s) => s > 0))
-  ).sort((a, b) => a - b);
-
-  // Distinct income brackets (columns), sorted by `income_min`;
-  // null `income_max` (open-ended "+" bracket) sinks to the bottom.
-  const brackets: Array<{
-    key: string;
-    min: number;
-    max: number | null;
-  }> = [];
-  const seen = new Set<string>();
-  for (const c of cells) {
-    const min = c.income_min ?? 0;
-    const max = c.income_max ?? null;
-    const key = `${min}-${max ?? "null"}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      brackets.push({ key, min, max });
-    }
-  }
-  brackets.sort((a, b) => {
-    if (a.max === null && b.max !== null) return 1;
-    if (b.max === null && a.max !== null) return -1;
-    return a.min - b.min;
-  });
-
-  // Find the matched (row, col) so we can highlight in `didParseCell`.
-  const matchedRowIdx = sizes.indexOf(householdSize); // -1 when missing
-  const matchedColIdx = brackets.findIndex(
-    (b) =>
-      b.min <= totalAnnualIncome &&
-      (b.max === null || totalAnnualIncome < b.max)
-  );
-
-  // Build a lookup so cell renders pull the percentage by
-  // `${size}::${bracket.key}`.
-  const cellLookup = new Map<string, AwardBracketCell>();
-  for (const c of cells) {
-    cellLookup.set(
-      `${c.household_size}::${c.income_min}-${c.income_max ?? "null"}`,
-      c
-    );
-  }
-
-  // Header row: first col = "Household", then one column per bracket.
-  const head: string[] = ["Household"];
-  for (const b of brackets) head.push(bracketLabel(b.min, b.max));
-
-  // Body rows: first cell = household-size label, then percentages.
-  const body: string[][] = sizes.map((size) => {
-    const row: string[] = [`${size} ${size === 1 ? "person" : "people"}`];
-    for (const b of brackets) {
-      const cell = cellLookup.get(`${size}::${b.key}`);
-      const pct = cell?.tuition_percentage ?? 0;
-      row.push(`${pct}%`);
-    }
-    return row;
-  });
-
-  autoTable(doc, {
-    startY,
-    head: [head],
-    body,
-    theme: "grid",
-    margin: { left: marginX, right: marginX },
-    styles: { cellPadding: compactCellPadding },
-    headStyles: {
-      fillColor: [60, 60, 60],
-      textColor: 255,
-      fontSize: 7.5,
-      fontStyle: "bold",
-      halign: "center",
-    },
-    bodyStyles: { fontSize: 7.5, halign: "center" },
-    columnStyles: {
-      0: {
-        cellWidth: contentWidth * 0.18,
-        halign: "left",
-        fontStyle: "bold",
-      },
-    },
-    // Per-cell highlight — soft yellow on the matched row, soft
-    // yellow on the matched column, slightly darker yellow on
-    // their intersection. Use jspdf-autotable's `didParseCell`
-    // hook to override the body/head style on the fly. Matched
-    // row index lines up with body's `row.index`; matched col
-    // includes the +1 offset because column 0 is the Household
-    // label.
-    didParseCell: (cell) => {
-      if (cell.section === "head") {
-        if (matchedColIdx >= 0 && cell.column.index === matchedColIdx + 1) {
-          cell.cell.styles.fillColor = [255, 240, 160];
-          cell.cell.styles.textColor = 30;
-        }
-        return;
-      }
-      if (cell.section !== "body") return;
-      const isMatchedRow =
-        matchedRowIdx >= 0 && cell.row.index === matchedRowIdx;
-      const isMatchedCol =
-        matchedColIdx >= 0 && cell.column.index === matchedColIdx + 1;
-      if (isMatchedRow && isMatchedCol) {
-        cell.cell.styles.fillColor = [253, 224, 71]; // amber-300
-        cell.cell.styles.fontStyle = "bold";
-      } else if (isMatchedRow || isMatchedCol) {
-        cell.cell.styles.fillColor = [254, 252, 232]; // amber-50
-      }
-    },
-  });
-}
-
-/**
- * Render the 1D net-assets payment matrix as a two-column table.
- * Each row shows a bracket and the family-pays percentage; the
- * row where the family's `netAssets` falls is highlighted.
- */
-function renderNetAssetsMatrix(
-  doc: jsPDF,
-  autoTable: AutoTableFn,
-  {
-    cells,
-    netAssets,
-    baseTuition,
-    marginX,
-    contentWidth,
-    startY,
-  }: {
-    cells: AwardBracketCell[];
-    netAssets: number;
-    baseTuition: number;
-    marginX: number;
-    contentWidth: number;
-    startY: number;
-  }
-): void {
-  if (cells.length === 0) {
-    doc.setFont("helvetica", "italic");
-    doc.setFontSize(9);
-    doc.setTextColor(120);
-    doc.text(
-      "No high-net-assets brackets configured for this year yet.",
-      marginX,
-      startY
-    );
-    return;
-  }
-
-  // Sort by net_asset_min; null max sinks to the bottom.
-  const sorted = [...cells].sort((a, b) => {
-    if (a.net_asset_max === null && b.net_asset_max !== null) return 1;
-    if (b.net_asset_max === null && a.net_asset_max !== null) return -1;
-    return (a.net_asset_min ?? 0) - (b.net_asset_min ?? 0);
-  });
-  const matchedIdx = sorted.findIndex(
-    (c) =>
-      (c.net_asset_min ?? 0) <= netAssets &&
-      (c.net_asset_max === null ||
-        c.net_asset_max === undefined ||
-        netAssets < (c.net_asset_max as number))
-  );
-
-  autoTable(doc, {
-    startY,
-    head: [["Net Asset Bracket", "Family Pays"]],
-    body: sorted.map((c) => {
-      const pct = c.percentage_of_total_tuition ?? 0;
-      const dollars = baseTuition * (pct / 100);
-      return [
-        bracketLabel(c.net_asset_min ?? 0, c.net_asset_max),
-        `${pct}% • ${fmt$(dollars)}`,
-      ];
-    }),
-    theme: "grid",
-    margin: { left: marginX, right: marginX },
-    styles: { cellPadding: compactCellPadding },
-    headStyles: { fillColor: [60, 60, 60], textColor: 255, fontSize: 8.5 },
-    bodyStyles: { fontSize: 9 },
-    columnStyles: {
-      0: { cellWidth: contentWidth * 0.5, fontStyle: "bold" },
-      1: { cellWidth: contentWidth * 0.5, halign: "right" },
-    },
-    didParseCell: (cell) => {
-      if (cell.section === "body" && cell.row.index === matchedIdx) {
-        cell.cell.styles.fillColor = [253, 224, 71]; // amber-300
-        cell.cell.styles.fontStyle = "bold";
-      }
-    },
-  });
 }

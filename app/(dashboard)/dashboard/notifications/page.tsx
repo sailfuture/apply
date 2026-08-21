@@ -136,7 +136,7 @@ export default function NotificationsPage() {
   const loading = !data;
 
   return (
-    <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
+    <div className="flex flex-1 flex-col gap-6 p-4 sm:p-6 mx-auto w-full max-w-4xl">
       <DashboardPageHeader
         backHref={dashboardHref}
         backLabel="Back to Dashboard"

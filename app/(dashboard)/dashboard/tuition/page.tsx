@@ -289,7 +289,7 @@ export default function DashboardTuitionPage() {
   const loading = !students || !applications || !yearsData;
 
   return (
-    <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
+    <div className="flex flex-1 flex-col gap-6 p-4 sm:p-6 mx-auto w-full max-w-4xl">
       <DashboardPageHeader
         backHref={dashboardHref}
         backLabel="Back to Dashboard"
@@ -602,12 +602,9 @@ function BillingSkeleton() {
         <div className="divide-y px-3">
           {Array.from({ length: 6 }).map((_, i) => (
             <div key={i} className="flex items-center gap-4 py-3">
-              <Skeleton className="h-4 w-[14%]" />
-              <Skeleton className="h-4 w-[16%]" />
-              <Skeleton className="h-4 w-[16%]" />
-              <Skeleton className="h-4 w-[12%] ml-auto" />
-              <Skeleton className="h-5 w-[14%] rounded-full" />
-              <Skeleton className="h-4 w-[12%]" />
+              <Skeleton className="h-4 w-[30%]" />
+              <Skeleton className="h-5 w-[20%] rounded-full" />
+              <Skeleton className="h-4 w-[15%] ml-auto" />
             </div>
           ))}
         </div>
@@ -837,25 +834,19 @@ function BillingScheduleCard({ slots }: { slots: ParentScheduleSlot[] }) {
         <CardTitle className="text-base">Monthly invoices</CardTitle>
       </CardHeader>
       <CardContent className="px-3 pb-3 bg-white">
+        {/* Three columns so the table fits a phone with no horizontal
+            scroll — month (with due date + amount tucked underneath),
+            paid/unpaid status, and the link to view or pay. */}
         <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead className="text-[10px] text-muted-foreground w-[16%]">
+              <TableHead className="text-[10px] text-muted-foreground w-[44%]">
                 Month
               </TableHead>
-              <TableHead className="text-[10px] text-muted-foreground w-[18%]">
-                Invoice Sent
-              </TableHead>
-              <TableHead className="text-[10px] text-muted-foreground w-[18%]">
-                Due By
-              </TableHead>
-              <TableHead className="text-[10px] text-muted-foreground w-[14%] text-right">
-                Amount
-              </TableHead>
-              <TableHead className="text-[10px] text-muted-foreground w-[16%]">
+              <TableHead className="text-[10px] text-muted-foreground w-[28%]">
                 Status
               </TableHead>
-              <TableHead className="text-[10px] text-muted-foreground w-[18%] text-right">
+              <TableHead className="text-[10px] text-muted-foreground w-[28%] text-right">
                 Invoice
               </TableHead>
             </TableRow>
@@ -873,20 +864,26 @@ function BillingScheduleCard({ slots }: { slots: ParentScheduleSlot[] }) {
 
 function BillingScheduleRow({ slot }: { slot: ParentScheduleSlot }) {
   const inv = slot.invoice;
-  const sentLabel = inv?.finalizedAt ? formatBillingDate2(inv.finalizedAt) : "—";
-  const dueLabel = inv?.dueDate ? formatBillingDate2(inv.dueDate) : "—";
+  const dueLabel = inv?.dueDate ? formatBillingDate2(inv.dueDate) : null;
+  const sentLabel = inv?.finalizedAt
+    ? formatBillingDate2(inv.finalizedAt)
+    : null;
   const amountDue = inv ? inv.amountDueCents / 100 : null;
+  // One compact sub-line under the month replaces the old Sent / Due /
+  // Amount columns.
+  const subParts = [
+    dueLabel ? `Due ${dueLabel}` : sentLabel ? `Sent ${sentLabel}` : null,
+    amountDue != null ? formatUsd(amountDue) : null,
+  ].filter(Boolean);
   return (
     <TableRow className={cn(slot.status === "not_started" && "opacity-70")}>
-      <TableCell className="font-medium">{slot.monthLabel}</TableCell>
-      <TableCell className="text-muted-foreground tabular-nums">
-        {sentLabel}
-      </TableCell>
-      <TableCell className="text-muted-foreground tabular-nums">
-        {dueLabel}
-      </TableCell>
-      <TableCell className="text-right tabular-nums">
-        {amountDue != null ? formatUsd(amountDue) : "—"}
+      <TableCell className="font-medium whitespace-normal">
+        {slot.monthLabel}
+        {subParts.length > 0 ? (
+          <span className="mt-0.5 block text-xs font-normal text-muted-foreground tabular-nums">
+            {subParts.join(" · ")}
+          </span>
+        ) : null}
       </TableCell>
       <TableCell>
         <ScheduleStatusPill status={slot.status} />

@@ -33,7 +33,11 @@ import { xano } from "@/lib/xano";
  *   application  — apply-flow milestones + apply-phase notes
  *   registration — packet/docs/agreement milestones + reg-phase notes
  *   sufs         — Step Up pipeline milestones + `section:"sufs"` notes
- *   enrollment   — billing invoices, crew changes, unenrollment
+ *   enrollment   — crew changes, unenrollment, enrolled-year emails
+ *   billing      — Stripe invoice lifecycle (emailed / overdue /
+ *                  paid / voided), billing emails, `section:"billing"`
+ *                  notes; this is what the Billing page's activity
+ *                  icon filters to
  *   general      — untagged notes
  */
 export async function GET(req: NextRequest) {
@@ -130,7 +134,9 @@ export async function GET(req: NextRequest) {
       const scope: ActivityScope =
         typeof n.section === "string" && n.section.startsWith("sufs")
           ? "sufs"
-          : n.registration_student_registration_progress_id
+          : typeof n.section === "string" && n.section.startsWith("billing")
+            ? "billing"
+            : n.registration_student_registration_progress_id
             ? "registration"
             : n.registration_family_application_progress_id ||
                 n.reapply_family_progress_id
@@ -188,7 +194,7 @@ export async function GET(req: NextRequest) {
         id: `email-${e.id}`,
         ts: e.created_at,
         kind: "email",
-        scope: EMAIL_TEMPLATE_SCOPE[e.template] ?? "general",
+        scope: EMAIL_TEMPLATE_SCOPE[e.template] ?? emailScopeFallback(e.template),
         title:
           e.status === "failed" ? "Email failed to send" : "Email sent",
         body: e.subject,
@@ -462,27 +468,79 @@ export async function GET(req: NextRequest) {
     }
 
     // ── Stripe invoices (payment-transactions mirror) ────────────────
+    const money = (cents: number | null | undefined) =>
+      ((cents ?? 0) / 100).toLocaleString("en-US", {
+        style: "currency",
+        currency: "USD",
+      });
+    const dayLabel = (ms: number) =>
+      new Date(ms).toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+        timeZone: "America/New_York",
+      });
+
     for (const t of transactions) {
-      const dollars = ((t.amount_due_cents ?? 0) / 100).toLocaleString(
-        "en-US",
-        { style: "currency", currency: "USD" }
-      );
+      const dollars = money(t.amount_due_cents);
+      const dueDate = coerceTs(t.due_date);
+      const dueLabel = dueDate ? dayLabel(dueDate) : "";
+
+      // Subscriptions bill in `send_invoice` mode (see lib/stripe.ts),
+      // so finalizing IS the moment Stripe emails the invoice to the
+      // family. That email never goes through Resend, so this mirror
+      // row is the only record of it — hence "emailed", not just
+      // "sent", and an explicit Stripe author.
       push({
         id: `inv-sent-${t.id}`,
         ts: t.finalized_at,
         kind: "system",
-        scope: "enrollment",
-        title: `Invoice sent — ${dollars}`,
-        body: "",
-        author: "",
+        scope: "billing",
+        title: `Invoice emailed — ${dollars}`,
+        body: dueLabel
+          ? `Stripe emailed the invoice · due ${dueLabel}`
+          : "Stripe emailed the invoice",
+        author: "Stripe (automated)",
       });
+
       if (t.status === "paid") {
         push({
           id: `inv-paid-${t.id}`,
           ts: t.paid_at,
           kind: "system",
-          scope: "enrollment",
-          title: `Invoice paid — ${dollars}`,
+          scope: "billing",
+          title: `Invoice paid — ${money(
+            t.amount_paid_cents || t.amount_due_cents
+          )}`,
+          // Out-of-band payments carry how they were collected
+          // ("Check — #1234"); Stripe-collected ones leave it empty.
+          body: (t.payment_method ?? "").trim(),
+          author: "",
+        });
+      } else if (t.status === "open" && dueDate && dueDate < Date.now()) {
+        // Open past its due date — the outstanding balance admin needs
+        // to chase, placed on the timeline at the date it came due.
+        push({
+          id: `inv-overdue-${t.id}`,
+          ts: dueDate,
+          kind: "system",
+          scope: "billing",
+          title: `Payment overdue — ${dollars}`,
+          body: `Invoice still unpaid · was due ${dueLabel}`,
+          author: "",
+        });
+      } else if (t.status === "void" || t.status === "uncollectible") {
+        // No dedicated timestamp for these transitions in the mirror —
+        // the webhook write is the closest marker we have.
+        push({
+          id: `inv-${t.status}-${t.id}`,
+          ts: t.last_synced_at,
+          kind: "system",
+          scope: "billing",
+          title:
+            t.status === "void"
+              ? `Invoice voided — ${dollars}`
+              : `Invoice written off — ${dollars}`,
           body: "",
           author: "",
         });
@@ -537,6 +595,17 @@ const EMAIL_TEMPLATE_SCOPE: Record<string, ActivityScope> = {
   "sms-reply-received": "general",
 };
 
+/** Templates added after this map was written (billing receipts,
+ *  past-due notices, …) land in the billing scope by name, so the
+ *  Billing page's filtered sheet picks them up without a map edit. */
+function emailScopeFallback(
+  template: string | null | undefined
+): ActivityScope {
+  return /invoice|payment|billing|receipt|tuition/i.test(template ?? "")
+    ? "billing"
+    : "general";
+}
+
 /** Human label for a note's category bucket. */
 function categoryLabel(category: string | null | undefined): string {
   switch (category) {
@@ -575,6 +644,7 @@ export type ActivityScope =
   | "registration"
   | "sufs"
   | "enrollment"
+  | "billing"
   | "general";
 
 export interface ActivityEvent {

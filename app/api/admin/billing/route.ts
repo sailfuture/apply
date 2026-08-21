@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano, activeStripeSubscriptionId } from "@/lib/xano";
 import { parseAnchorDate, buildMonthSlots } from "@/lib/billing-schedule";
-import { getStripeClient } from "@/lib/stripe";
+import { getNextInvoiceTiming, getStripeClient } from "@/lib/stripe";
 
 /**
  * Admin Billing list — one row per family with a Stripe subscription
@@ -311,6 +311,35 @@ export async function GET(req: NextRequest) {
 
     rows.sort((a, b) => a.family_name.localeCompare(b.family_name));
 
+    // Zero-invoice rows: the mirror can't see a first invoice that's
+    // still a Stripe DRAFT (it fills on `invoice.finalized`, and
+    // `send_invoice` drafts auto-finalize 24h after subscription
+    // creation), so a family's first day of billing reads as the
+    // alarming "no invoices" state with a projected date. Ask Stripe
+    // when the first invoice actually sends; a genuinely-upcoming one
+    // (draft/trial/anchor) flips the row to Scheduled with the exact
+    // date. A "cycle" answer means Stripe already invoiced this period
+    // and the MIRROR missed it — that keeps the alarm state.
+    await Promise.all(
+      rows
+        .filter((r) => r.invoices_issued === 0 && r.stripe_subscription_id)
+        .map(async (r) => {
+          try {
+            const timing = await getNextInvoiceTiming(
+              r.stripe_subscription_id!
+            );
+            if (timing && timing.source !== "cycle") {
+              r.status = "scheduled";
+              r.next_invoice_at = timing.sendsAtMs;
+              r.next_invoice_exact = true;
+            }
+          } catch {
+            // Stripe unavailable / per-row hiccup — keep the
+            // mirror-derived state, as before.
+          }
+        })
+    );
+
     // "Billing not started" — families whose registration is
     // confirmed (the precondition `startMonthlyBilling` enforces) but
     // who have NO live subscription for the year. These are the
@@ -407,6 +436,7 @@ export async function GET(req: NextRequest) {
               stripe_subscription_id: trialing?.id ?? pending?.id ?? null,
               status: "scheduled",
               next_invoice_at: startsAt,
+              next_invoice_exact: startsAt != null,
             });
           } catch {
             // Per-family Stripe hiccup — leave them in Not started.
@@ -488,6 +518,13 @@ export interface BillingRow {
   status: BillingRowStatus;
   /** Next projected invoice date (unix ms) from the year's billing
    *  anchor; an estimate (Stripe owns the real cycle), null when the
-   *  anchor is unset or the year's window has ended. */
+   *  anchor is unset or the year's window has ended. When
+   *  `next_invoice_exact` is true this is instead the EXACT send date
+   *  read from Stripe (a drafted first invoice's finalization time,
+   *  trial end, or future anchor). */
   next_invoice_at: number | null;
+  /** True when `next_invoice_at` came from Stripe for a
+   *  pending-first-invoice row rather than the anchor projection —
+   *  drives the tooltip wording on the Next Invoice cell. */
+  next_invoice_exact?: boolean;
 }

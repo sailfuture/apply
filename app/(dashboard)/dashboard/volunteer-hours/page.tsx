@@ -10,6 +10,8 @@ import {
   Clock,
   Loader2,
   MapPin,
+  Minus,
+  Plus,
   Users,
 } from "lucide-react";
 import { DashboardPageHeader } from "@/components/dashboard-page-header";
@@ -22,7 +24,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
@@ -186,7 +187,7 @@ export default function VolunteerHoursPage() {
   const loading = entriesLoading || !yearsData;
 
   return (
-    <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
+    <div className="flex flex-1 flex-col gap-6 p-4 sm:p-6 mx-auto w-full max-w-4xl">
       <DashboardPageHeader
         backHref={dashboardHref}
         backLabel="Back to Dashboard"
@@ -276,7 +277,7 @@ export default function VolunteerHoursPage() {
                     <TableHead className="px-4 py-2 text-right whitespace-nowrap">
                       Hours
                     </TableHead>
-                    <TableHead className="px-4 py-2 text-right whitespace-nowrap">
+                    <TableHead className="hidden px-4 py-2 text-right whitespace-nowrap sm:table-cell">
                       Status
                     </TableHead>
                   </TableRow>
@@ -287,7 +288,7 @@ export default function VolunteerHoursPage() {
                       <TableCell className="px-4 py-3 whitespace-nowrap">
                         {formatEntryDate(entry.entry_date)}
                       </TableCell>
-                      <TableCell className="px-4 py-3">
+                      <TableCell className="px-4 py-3 whitespace-normal">
                         <p className="font-medium">
                           {entry.activity_description || "—"}
                         </p>
@@ -296,11 +297,23 @@ export default function VolunteerHoursPage() {
                             {entry.activity_category}
                           </p>
                         ) : null}
+                        {/* Mobile stand-in for the hidden Status column. */}
+                        <p className="mt-1 sm:hidden">
+                          {entry.is_approved ? (
+                            <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-[11px] font-medium text-green-700">
+                              Approved
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-700">
+                              Pending
+                            </span>
+                          )}
+                        </p>
                       </TableCell>
                       <TableCell className="px-4 py-3 text-right font-medium whitespace-nowrap">
                         {formatHours(Number(entry.hours) || 0)}
                       </TableCell>
-                      <TableCell className="px-4 py-3 text-right whitespace-nowrap">
+                      <TableCell className="hidden px-4 py-3 text-right whitespace-nowrap sm:table-cell">
                         {entry.is_approved ? (
                           <span className="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700">
                             Approved
@@ -407,7 +420,11 @@ function UpcomingEventsSection({ yearId }: { yearId: number | null }) {
               : Math.max(ev.spots_total - ev.spots_taken, 0);
             const dateObj = parseDate(ev.date);
             return (
-              <div key={ev.id} className="flex gap-4 px-4 py-4">
+              <div
+                key={ev.id}
+                className="px-4 py-4 sm:flex sm:items-center sm:gap-4"
+              >
+                <div className="flex min-w-0 gap-4 sm:flex-1">
                 {/* Date block */}
                 <div className="flex h-14 w-14 shrink-0 flex-col items-center justify-center rounded-lg border bg-muted/30">
                   <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
@@ -469,26 +486,47 @@ function UpcomingEventsSection({ yearId }: { yearId: number | null }) {
                     </p>
                   ) : null}
                   {needs.length > 0 ? (
-                    <div className="mt-1.5">
+                    <div className="mt-2">
                       <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                         Event needs
                       </p>
-                      {/* Live counts, not just a list — a parent
-                          scanning the card can see what's still
-                          uncovered before opening the dialog. */}
-                      <ul className="mt-0.5 list-disc pl-4 text-xs text-muted-foreground marker:text-muted-foreground/60">
-                        {needs.map((n) => (
-                          <li key={n.id}>
-                            {n.label}
-                            <span className="text-muted-foreground/70">
-                              {" — "}
-                              {n.claimed >= n.quantity
-                                ? "covered"
-                                : `${n.claimed} of ${n.quantity}`}
+                      {/* Live counts as wrapping chips rather than a
+                          bullet list — one row across on desktop
+                          instead of a tall left-hugging column, and a
+                          parent can still see what's uncovered before
+                          opening the dialog. Covered items go green. */}
+                      <div className="mt-1.5 flex flex-wrap gap-1.5">
+                        {needs.map((n) => {
+                          const covered = n.claimed >= n.quantity;
+                          return (
+                            <span
+                              key={n.id}
+                              className={cn(
+                                "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium",
+                                covered
+                                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                                  : "border-border bg-muted/40 text-foreground"
+                              )}
+                            >
+                              {covered ? (
+                                <CheckCircle2 className="size-3 shrink-0" />
+                              ) : null}
+                              {n.label}
+                              <span
+                                className={
+                                  covered
+                                    ? "font-normal"
+                                    : "font-normal text-muted-foreground"
+                                }
+                              >
+                                {covered
+                                  ? "covered"
+                                  : `${n.claimed} of ${n.quantity}`}
+                              </span>
                             </span>
-                          </li>
-                        ))}
-                      </ul>
+                          );
+                        })}
+                      </div>
                     </div>
                   ) : null}
                   {ev.my_rsvp ? (
@@ -499,25 +537,32 @@ function UpcomingEventsSection({ yearId }: { yearId: number | null }) {
                     </p>
                   ) : null}
                 </div>
+                </div>
 
-                {/* Action */}
-                <div className="shrink-0 self-center">
+                {/* Action — full-width button below the details on
+                    phones (so the title never fights the button for
+                    width); right-aligned beside them from sm up. */}
+                <div className="mt-3 sm:mt-0 sm:shrink-0 sm:self-center">
                   {ev.my_rsvp ? (
                     <Button
                       size="sm"
                       variant="outline"
-                      className="bg-white"
+                      className="w-full bg-white sm:w-auto"
                       onClick={() => setRsvpTarget(ev)}
                     >
                       Edit RSVP
                     </Button>
                   ) : left > 0 ? (
-                    <Button size="sm" onClick={() => setRsvpTarget(ev)}>
+                    <Button
+                      size="sm"
+                      className="w-full sm:w-auto"
+                      onClick={() => setRsvpTarget(ev)}
+                    >
                       <CalendarDays className="size-3.5 mr-1.5" />
                       Sign up
                     </Button>
                   ) : (
-                    <span className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground">
+                    <span className="block rounded-full bg-muted px-2.5 py-1 text-center text-xs font-medium text-muted-foreground sm:inline-block">
                       Full
                     </span>
                   )}
@@ -554,7 +599,7 @@ function UpcomingEventsSection({ yearId }: { yearId: number | null }) {
                     <th className="px-4 py-2 text-left text-xs font-medium text-muted-foreground">
                       Event
                     </th>
-                    <th className="px-4 py-2 text-left text-xs font-medium text-muted-foreground">
+                    <th className="hidden px-4 py-2 text-left text-xs font-medium text-muted-foreground sm:table-cell">
                       You signed up
                     </th>
                     <th className="px-4 py-2 text-left text-xs font-medium text-muted-foreground">
@@ -592,8 +637,17 @@ function UpcomingEventsSection({ yearId }: { yearId: number | null }) {
                               {ev.location}
                             </span>
                           ) : null}
+                          {/* Mobile stand-in for the hidden "You signed
+                              up" column. */}
+                          {ev.my_rsvp ? (
+                            <span className="mt-0.5 flex items-center gap-1 text-xs text-emerald-700 sm:hidden">
+                              <CheckCircle2 className="size-3 shrink-0" />
+                              You signed up · {ev.my_rsvp.spots}{" "}
+                              {ev.my_rsvp.spots === 1 ? "spot" : "spots"}
+                            </span>
+                          ) : null}
                         </td>
-                        <td className="whitespace-nowrap px-4 py-2 text-xs">
+                        <td className="hidden whitespace-nowrap px-4 py-2 text-xs sm:table-cell">
                           {ev.my_rsvp ? (
                             <span className="inline-flex items-center gap-1.5 text-emerald-700">
                               <CheckCircle2 className="size-3.5 shrink-0" />
@@ -638,6 +692,58 @@ function UpcomingEventsSection({ yearId }: { yearId: number | null }) {
   );
 }
 
+/** Tap-friendly − / + number stepper — replaces bare `type="number"`
+ *  inputs whose tiny native spin arrows are hard to hit, especially on
+ *  touch screens. Clamping lives in the caller; the buttons simply
+ *  disable at the bounds. */
+function Stepper({
+  value,
+  min,
+  max,
+  onChange,
+  label,
+}: {
+  value: number;
+  min: number;
+  max: number;
+  onChange: (next: number) => void;
+  /** What's being counted — used for the buttons' aria-labels. */
+  label: string;
+}) {
+  return (
+    <div className="flex shrink-0 items-center gap-1">
+      <Button
+        type="button"
+        variant="outline"
+        size="icon"
+        className="size-8 bg-white"
+        disabled={value <= min}
+        onClick={() => onChange(Math.max(value - 1, min))}
+        aria-label={`Fewer ${label}`}
+      >
+        <Minus className="size-3.5" />
+      </Button>
+      <span
+        className="w-8 text-center text-sm font-medium tabular-nums"
+        aria-live="polite"
+      >
+        {value}
+      </span>
+      <Button
+        type="button"
+        variant="outline"
+        size="icon"
+        className="size-8 bg-white"
+        disabled={value >= max}
+        onClick={() => onChange(Math.min(value + 1, max))}
+        aria-label={`More ${label}`}
+      >
+        <Plus className="size-3.5" />
+      </Button>
+    </div>
+  );
+}
+
 /** Reserve / edit / cancel the family's RSVP for one event. */
 function RsvpDialog({
   event,
@@ -657,7 +763,7 @@ function RsvpDialog({
           (existing?.spots ?? 0),
         20
       );
-  const [spots, setSpots] = useState(String(existing?.spots ?? 1));
+  const [spots, setSpots] = useState(existing?.spots ?? 1);
   const [comment, setComment] = useState(existing?.comment ?? "");
   const [saving, setSaving] = useState(false);
   const [canceling, setCanceling] = useState(false);
@@ -674,7 +780,7 @@ function RsvpDialog({
     return seed;
   });
 
-  const spotsNum = Number(spots);
+  const spotsNum = spots;
   const valid =
     Number.isInteger(spotsNum) && spotsNum >= 1 && spotsNum <= maxSpots;
 
@@ -752,7 +858,7 @@ function RsvpDialog({
     <Dialog open onOpenChange={(o) => !o && !saving && !canceling && onDone(false)}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>
+          <DialogTitle className="leading-snug">
             {existing ? "Edit your RSVP" : `Sign up — ${event.title}`}
           </DialogTitle>
           <DialogDescription>
@@ -763,16 +869,13 @@ function RsvpDialog({
         </DialogHeader>
         <div className="space-y-4">
           <div className="space-y-1.5">
-            <Label htmlFor="rsvp-spots">Parent spots to reserve</Label>
-            <Input
-              id="rsvp-spots"
-              type="number"
+            <Label>Parent spots to reserve</Label>
+            <Stepper
+              value={spots}
               min={1}
               max={maxSpots}
-              step={1}
-              value={spots}
-              onChange={(e) => setSpots(e.target.value)}
-              className="w-24"
+              onChange={setSpots}
+              label="parent spots"
             />
             <p className="text-[11px] text-muted-foreground">
               {maxSpots} available to your family.
@@ -808,26 +911,19 @@ function RsvpDialog({
                             : `${othersHave + claimedByMe} of ${it.quantity} claimed`}
                         </p>
                       </div>
-                      <Input
-                        type="number"
+                      <Stepper
+                        value={claimedByMe}
                         min={0}
                         max={max}
-                        step={1}
-                        disabled={covered && claimedByMe === 0}
-                        aria-label={`How many ${it.label} you can bring`}
-                        value={String(claimedByMe)}
-                        onChange={(e) =>
-                          setClaim(it, Math.floor(Number(e.target.value) || 0))
-                        }
-                        className="h-8 w-16 shrink-0 text-center tabular-nums"
+                        onChange={(next) => setClaim(it, next)}
+                        label={it.label}
                       />
                     </li>
                   );
                 })}
               </ul>
               <p className="text-[11px] text-muted-foreground">
-                Put in how many of each you can bring. Leave at 0 for
-                anything you can&rsquo;t.
+                Use the + button on anything you can bring.
               </p>
             </div>
           ) : null}

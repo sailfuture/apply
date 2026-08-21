@@ -12,6 +12,7 @@ import {
   History,
   Loader2,
   OctagonAlert,
+  Play,
   Search,
 } from "lucide-react";
 import { ActivityLogSheet } from "@/components/admin/activity-log-sheet";
@@ -365,6 +366,7 @@ export default function AdminBillingPage() {
           {notStarted.length > 0 ? (
             <NotStartedTable
               rows={notStarted}
+              onStarted={() => mutate()}
               onRowClick={(row) =>
                 router.push(
                   `/admin/families/${row.family_id}/billing?yearId=${row.year_id}`
@@ -429,7 +431,8 @@ function StatusPill({ status }: { status: BillingRowStatus }) {
     scheduled: {
       label: "Scheduled",
       className: "border-blue-200 bg-blue-50 text-blue-700",
-      title: "Subscription is live; the first invoice lands on the billing start date.",
+      title:
+        "Subscription is live and the first invoice hasn't gone out yet — the Next Invoice column shows when it sends.",
     },
     past_due: {
       label: "Past due",
@@ -465,10 +468,55 @@ function StatusPill({ status }: { status: BillingRowStatus }) {
 function NotStartedTable({
   rows,
   onRowClick,
+  onStarted,
 }: {
   rows: NotStartedRow[];
   onRowClick: (row: NotStartedRow) => void;
+  /** Revalidate the list once a subscription exists — the family
+   *  moves out of this table and into the subscriptions one. */
+  onStarted: () => void | Promise<unknown>;
 }) {
+  // Row awaiting confirmation, and the one currently starting.
+  const [confirmRow, setConfirmRow] = useState<NotStartedRow | null>(null);
+  const [startingId, setStartingId] = useState<number | null>(null);
+
+  /** Same endpoint + payload as the Start Monthly Billing button on
+   *  the family billing page, so both paths hit the identical
+   *  server-side preconditions (registration confirmed + tuition
+   *  set) rather than a second, drifting implementation. */
+  async function startBilling(row: NotStartedRow) {
+    if (startingId !== null) return;
+    setStartingId(row.family_id);
+    try {
+      const res = await fetch(
+        `/api/admin/families/${row.family_id}/billing?yearId=${row.year_id}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "start" }),
+        }
+      );
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(
+          body?.error ?? `Couldn't start billing (${res.status})`
+        );
+      }
+      // Hold the spinner until the refreshed list has rendered, so the
+      // row visibly moves instead of flashing back as "not started".
+      await onStarted();
+      toast.success(`Monthly billing started for ${row.family_name}.`);
+      setConfirmRow(null);
+    } catch (err) {
+      console.error("[NotStartedTable.startBilling]", err);
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't start billing."
+      );
+    } finally {
+      setStartingId(null);
+    }
+  }
+
   return (
     <Card className="overflow-hidden border-amber-200 bg-white py-0 gap-0">
       <CardHeader className="py-4 border-b border-amber-200 bg-amber-50/50">
@@ -481,7 +529,8 @@ function NotStartedTable({
           </span>
           <p className="text-xs text-amber-800/70">
             Registration confirmed, but no subscription exists yet — these
-            families aren&rsquo;t being billed. Click one to start billing.
+            families aren&rsquo;t being billed. Start billing right here, or
+            click a row for the family&rsquo;s full billing page.
           </p>
         </div>
       </CardHeader>
@@ -489,19 +538,19 @@ function NotStartedTable({
         <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead className="text-[10px] text-muted-foreground w-[30%]">
+              <TableHead className="text-[10px] text-muted-foreground w-[24%]">
                 Family
               </TableHead>
-              <TableHead className="text-[10px] text-muted-foreground w-[34%]">
+              <TableHead className="text-[10px] text-muted-foreground w-[28%]">
                 Primary Contact
               </TableHead>
-              <TableHead className="text-[10px] text-muted-foreground w-[18%] text-right">
+              <TableHead className="text-[10px] text-muted-foreground w-[16%] text-right">
                 Monthly (Once Started)
               </TableHead>
               <TableHead className="text-[10px] text-muted-foreground w-[14%]">
                 Readiness
               </TableHead>
-              <TableHead className="w-[4%]" />
+              <TableHead className="w-[18%]" />
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -534,14 +583,86 @@ function NotStartedTable({
                     </span>
                   )}
                 </TableCell>
-                <TableCell className="text-right">
-                  <ChevronRight className="size-4 text-muted-foreground inline" />
+                {/* Stops row-click propagation: the row navigates to
+                    the family billing page, the button bills them. */}
+                <TableCell
+                  className="text-right whitespace-nowrap"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <Button
+                    size="sm"
+                    className="h-7"
+                    disabled={row.monthly_tuition == null || startingId !== null}
+                    title={
+                      row.monthly_tuition == null
+                        ? "Set each student's tuition on the Scholarship Determination card first."
+                        : `Create the Stripe subscription for ${row.family_name}`
+                    }
+                    onClick={() => setConfirmRow(row)}
+                  >
+                    {startingId === row.family_id ? (
+                      <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                    ) : (
+                      <Play className="size-3.5 mr-1.5" />
+                    )}
+                    Start billing
+                  </Button>
+                  <ChevronRight className="ml-1 size-4 text-muted-foreground inline" />
                 </TableCell>
               </TableRow>
             ))}
           </TableBody>
         </Table>
       </CardContent>
+
+      {/* Starting billing creates a real Stripe subscription and mails
+          the family invoices, so it confirms first — the list rows are
+          click-to-navigate and a misfire here is outward-facing. */}
+      <AlertDialog
+        open={confirmRow !== null}
+        onOpenChange={(o) => {
+          if (!o && startingId === null) setConfirmRow(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Start monthly billing for {confirmRow?.family_name}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Creates this family&rsquo;s subscription in Stripe at{" "}
+              {formatMonthly(confirmRow?.monthly_tuition ?? null)} per month.
+              Stripe emails each invoice to{" "}
+              {confirmRow?.primary_email || "the primary contact"} once the
+              year&rsquo;s billing start date arrives — the family sees this.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={startingId !== null}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={startingId !== null}
+              onClick={(e) => {
+                e.preventDefault();
+                if (confirmRow) void startBilling(confirmRow);
+              }}
+            >
+              {startingId !== null ? (
+                <>
+                  <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                  Starting
+                </>
+              ) : (
+                <>
+                  <Play className="size-3.5 mr-1.5" />
+                  Start billing
+                </>
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Card>
   );
 }
@@ -574,6 +695,11 @@ function BillingTable({
   // that's the collection work order; the settled groups stay
   // alphabetical for lookup.
   //
+  // Order: Not Yet Billed → Outstanding → Paid in Full. Not-yet-billed
+  // leads because it is the group admin has to reason about (did
+  // something go wrong, or is the first invoice simply not due yet?);
+  // paid-in-full needs no attention, so it sinks to the bottom.
+  //
   // A third bucket is needed for correctness: a scheduled subscription
   // has $0 outstanding AND $0 paid, so lumping it into "paid" would
   // claim money we never collected. It only renders when non-empty.
@@ -590,6 +716,17 @@ function BillingTable({
     const sum = (list: BillingRow[], key: "paid_cents" | "outstanding_cents") =>
       list.reduce((acc, r) => acc + r[key], 0);
     return [
+      {
+        key: "unbilled",
+        label: "Not Yet Billed",
+        hint: "Subscription is live and billing is already set up — the first invoice hasn’t been emailed yet; Next Invoice shows when it sends. Families with NO subscription appear in Billing Not Started above.",
+        rows: unbilled,
+        cardClassName: "border-blue-200",
+        headerClassName: "border-blue-200 bg-blue-50/50",
+        titleClassName: "text-blue-800",
+        mutedClassName: "text-blue-800/70",
+        total: null,
+      },
       {
         key: "outstanding",
         label: "Outstanding",
@@ -611,17 +748,6 @@ function BillingTable({
         titleClassName: "text-emerald-800",
         mutedClassName: "text-emerald-800/70",
         total: `${formatCents(sum(settled, "paid_cents"))} collected`,
-      },
-      {
-        key: "unbilled",
-        label: "Not Yet Billed",
-        hint: "Live subscription, but no invoice has been paid or issued yet.",
-        rows: unbilled,
-        cardClassName: "border-blue-200",
-        headerClassName: "border-blue-200 bg-blue-50/50",
-        titleClassName: "text-blue-800",
-        mutedClassName: "text-blue-800/70",
-        total: null,
       },
     ].filter((g) => g.rows.length > 0);
   }, [visible]);
@@ -785,7 +911,11 @@ function BillingGroupCard({
                 </TableCell>
                 <TableCell
                   className="text-sm text-right tabular-nums text-muted-foreground"
-                  title="Projected from the year's billing anchor — Stripe owns the exact cycle date."
+                  title={
+                    row.next_invoice_exact
+                      ? "From Stripe — the first invoice is already prepared and sends on this date."
+                      : "Projected from the year's billing anchor — Stripe owns the exact cycle date."
+                  }
                 >
                   {formatUpcoming(row.next_invoice_at)}
                 </TableCell>

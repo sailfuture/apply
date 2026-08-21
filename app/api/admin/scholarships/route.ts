@@ -29,6 +29,61 @@ import { xano } from "@/lib/xano";
  *   - `path` (optional) — initial path flag to set true at create
  *     time. Accepts the same three flag names as the PATCH route.
  */
+/**
+ * Admin GET — the family's scholarship for a year, plus every child
+ * row, resolved by `(familyId, yearId)`.
+ *
+ *   GET /api/admin/scholarships?familyId=F&yearId=Y
+ *   → { scholarship, homes, vehicles, contributing_members, benefits }
+ *   → 200 with `{ scholarship: null, ... }` when the family has no row.
+ *
+ * Exists because the `registration_application_by_family` query's
+ * `_registration_opportunity_scholarship` addon comes back NULL for
+ * every row (the application table has no FK to the scholarship — the
+ * scholarship is keyed by family + year). Anything that read the
+ * scholarship off that addon silently saw "no scholarship on file".
+ * Resolve it here from the plain table instead, the same way
+ * `xano.scholarship.getByFamilyAndYear` does everywhere else.
+ */
+export async function GET(req: NextRequest) {
+  try {
+    await requireAdmin();
+    const familyId = Number(req.nextUrl.searchParams.get("familyId"));
+    const yearId = Number(req.nextUrl.searchParams.get("yearId"));
+    if (!Number.isFinite(familyId) || familyId <= 0) {
+      return NextResponse.json(
+        { error: "familyId is required" },
+        { status: 400 }
+      );
+    }
+    if (!Number.isFinite(yearId) || yearId <= 0) {
+      return NextResponse.json(
+        { error: "yearId is required" },
+        { status: 400 }
+      );
+    }
+    const scholarship = await xano.scholarship.getByFamilyAndYear(
+      familyId,
+      yearId
+    );
+    if (!scholarship?.id) {
+      return NextResponse.json({
+        scholarship: null,
+        homes: [],
+        vehicles: [],
+        contributing_members: [],
+        benefits: [],
+      });
+    }
+    const payload = await xano.scholarship.getByIdWithChildren(
+      scholarship.id
+    );
+    return NextResponse.json(payload);
+  } catch (err) {
+    return handleAdminError(err);
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
     await requireAdmin();

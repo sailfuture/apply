@@ -278,7 +278,7 @@ export default function ParentCalendarPage() {
   const loading = !applications || !yearsData || (yearId !== null && !data && !error);
 
   return (
-    <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-5xl">
+    <div className="flex flex-1 flex-col gap-6 p-4 sm:p-6 mx-auto w-full max-w-5xl">
       <DashboardPageHeader
         backHref={dashboardHref}
         backLabel="Back to Dashboard"
@@ -339,48 +339,54 @@ export default function ParentCalendarPage() {
       ) : (
         <>
           {/* Toolbar — month nav on the left, legend + view toggle on
-              the right. */}
+              the right. Mobile only ever shows the agenda, so the
+              month nav and the Month/Agenda toggle are desktop-only. */}
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-1">
-              <Button
-                variant="outline"
-                size="sm"
-                className="mr-1 bg-white"
-                disabled={
-                  view !== "month" ||
-                  todayMonthIdx < 0 ||
-                  todayMonthIdx === effectiveMonthIdx
-                }
-                onClick={() => setMonthIdx(todayMonthIdx)}
-              >
-                Today
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="size-8 p-0"
-                disabled={view !== "month" || effectiveMonthIdx <= 0}
-                onClick={() => setMonthIdx(effectiveMonthIdx - 1)}
-                aria-label="Previous month"
-              >
-                <ChevronLeft className="size-4" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="size-8 p-0"
-                disabled={
-                  view !== "month" || effectiveMonthIdx >= months.length - 1
-                }
-                onClick={() => setMonthIdx(effectiveMonthIdx + 1)}
-                aria-label="Next month"
-              >
-                <ChevronRight className="size-4" />
-              </Button>
-              <h2 className="ml-2 text-lg font-semibold tracking-tight">
-                {view === "month" && monthKey
-                  ? monthLabel(monthKey)
-                  : "All events"}
+              <div className="hidden items-center gap-1 md:flex">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mr-1 bg-white"
+                  disabled={
+                    view !== "month" ||
+                    todayMonthIdx < 0 ||
+                    todayMonthIdx === effectiveMonthIdx
+                  }
+                  onClick={() => setMonthIdx(todayMonthIdx)}
+                >
+                  Today
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="size-8 p-0"
+                  disabled={view !== "month" || effectiveMonthIdx <= 0}
+                  onClick={() => setMonthIdx(effectiveMonthIdx - 1)}
+                  aria-label="Previous month"
+                >
+                  <ChevronLeft className="size-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="size-8 p-0"
+                  disabled={
+                    view !== "month" || effectiveMonthIdx >= months.length - 1
+                  }
+                  onClick={() => setMonthIdx(effectiveMonthIdx + 1)}
+                  aria-label="Next month"
+                >
+                  <ChevronRight className="size-4" />
+                </Button>
+              </div>
+              <h2 className="text-lg font-semibold tracking-tight md:ml-2">
+                <span className="md:hidden">All events</span>
+                <span className="hidden md:inline">
+                  {view === "month" && monthKey
+                    ? monthLabel(monthKey)
+                    : "All events"}
+                </span>
               </h2>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -394,7 +400,7 @@ export default function ParentCalendarPage() {
                   Holiday
                 </span>
               </div>
-              <div className="flex items-center rounded-md border bg-white p-0.5">
+              <div className="hidden items-center rounded-md border bg-white p-0.5 md:flex">
                 <button
                   type="button"
                   aria-pressed={view === "month"}
@@ -427,8 +433,11 @@ export default function ParentCalendarPage() {
             </div>
           </div>
 
+          {/* Month grid — desktop only. Mobile always shows the agenda
+              below regardless of the toggle: a 7-column grid is
+              unreadable on a phone. */}
           {view === "month" ? (
-            <div className="overflow-hidden rounded-xl border bg-white shadow-sm">
+            <div className="hidden overflow-hidden rounded-xl border bg-white shadow-sm md:block">
               {/* Weekday header */}
               <div className="grid grid-cols-7 border-b">
                 {WEEKDAYS.map((w) => (
@@ -481,11 +490,17 @@ export default function ParentCalendarPage() {
                 })}
               </div>
             </div>
-          ) : (
-            /* Agenda — every event on the year's calendar, oldest first,
-               grouped by day with sticky date headers. */
-            <div className="overflow-hidden rounded-xl border bg-white shadow-sm">
-              {agendaGroups.length === 0 ? (
+          ) : null}
+          {/* Agenda — every event on the year's calendar, oldest first,
+              grouped by day with sticky date headers. Always the view
+              on mobile; on desktop only when the toggle says so. */}
+          <div
+            className={cn(
+              "overflow-hidden rounded-xl border bg-white shadow-sm",
+              view === "month" && "md:hidden"
+            )}
+          >
+            {agendaGroups.length === 0 ? (
                 <p className="px-6 py-12 text-center text-sm text-muted-foreground">
                   No events on this year&rsquo;s calendar yet.
                 </p>
@@ -558,8 +573,7 @@ export default function ParentCalendarPage() {
                   </div>
                 ))
               )}
-            </div>
-          )}
+          </div>
         </>
       )}
 
@@ -986,20 +1000,23 @@ function DetailLine({
   );
 }
 
-/** Loading skeleton mirroring the toolbar + month grid. */
+/** Loading skeleton mirroring the toolbar + month grid on desktop and
+ *  the agenda list on mobile (where the grid never renders). */
 function CalendarSkeleton() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Skeleton className="h-8 w-16 rounded-md" />
-          <Skeleton className="h-8 w-8 rounded-md" />
-          <Skeleton className="h-8 w-8 rounded-md" />
-          <Skeleton className="ml-2 h-6 w-40" />
+          <div className="hidden items-center gap-2 md:flex">
+            <Skeleton className="h-8 w-16 rounded-md" />
+            <Skeleton className="h-8 w-8 rounded-md" />
+            <Skeleton className="h-8 w-8 rounded-md" />
+          </div>
+          <Skeleton className="h-6 w-40 md:ml-2" />
         </div>
-        <Skeleton className="h-8 w-36 rounded-md" />
+        <Skeleton className="hidden h-8 w-36 rounded-md md:block" />
       </div>
-      <div className="overflow-hidden rounded-xl border bg-white shadow-sm">
+      <div className="hidden overflow-hidden rounded-xl border bg-white shadow-sm md:block">
         <div className="grid grid-cols-7 border-b">
           {Array.from({ length: 7 }).map((_, i) => (
             <div key={i} className="flex justify-center py-2">
@@ -1021,6 +1038,21 @@ function CalendarSkeleton() {
             </div>
           ))}
         </div>
+      </div>
+      <div className="overflow-hidden rounded-xl border bg-white shadow-sm md:hidden">
+        {Array.from({ length: 8 }).map((_, i) => (
+          <div
+            key={i}
+            className={cn(
+              "flex items-center gap-3 px-4 py-3",
+              i > 0 && "border-t"
+            )}
+          >
+            <Skeleton className="size-2.5 rounded-full" />
+            <Skeleton className="h-3 w-24" />
+            <Skeleton className="h-3 flex-1" />
+          </div>
+        ))}
       </div>
     </div>
   );

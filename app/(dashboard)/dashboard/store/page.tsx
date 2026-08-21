@@ -112,7 +112,7 @@ export default function StorePage() {
   const loading = !items || !orders || !familyData;
 
   return (
-    <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
+    <div className="flex flex-1 flex-col gap-6 p-4 sm:p-6 mx-auto w-full max-w-4xl">
       <DashboardPageHeader
         backHref={dashboardHref}
         backLabel="Back to Dashboard"
@@ -219,7 +219,9 @@ export default function StorePage() {
                   <Table className="text-sm">
                     <TableHeader>
                       <TableRow className="hover:bg-transparent">
-                        <TableHead className="px-4 py-2">Date</TableHead>
+                        <TableHead className="hidden px-4 py-2 sm:table-cell">
+                          Date
+                        </TableHead>
                         <TableHead className="px-4 py-2">Item</TableHead>
                         <TableHead className="px-4 py-2 text-right whitespace-nowrap">
                           Amount
@@ -232,28 +234,41 @@ export default function StorePage() {
                     <TableBody>
                       {(orders ?? []).map((o) => (
                         <TableRow key={o.id} className="hover:bg-transparent">
-                          <TableCell className="px-4 py-3 whitespace-nowrap tabular-nums">
+                          <TableCell className="hidden px-4 py-3 whitespace-nowrap tabular-nums sm:table-cell">
                             {fmtDate(o.paid_at)}
                           </TableCell>
-                          <TableCell className="px-4 py-3 font-medium">
+                          <TableCell className="px-4 py-3 font-medium whitespace-normal">
                             {o.item}
+                            {/* Mobile stand-in for the hidden Date column. */}
+                            <span className="mt-0.5 block text-xs font-normal text-muted-foreground tabular-nums sm:hidden">
+                              {fmtDate(o.paid_at)}
+                            </span>
                           </TableCell>
                           <TableCell className="px-4 py-3 text-right tabular-nums whitespace-nowrap">
                             ${((o.total_amount_cents ?? 0) / 100).toFixed(2)}
                           </TableCell>
-                          <TableCell className="px-4 py-3 text-right whitespace-nowrap">
+                          <TableCell className="px-4 py-3 text-right whitespace-normal">
                             {o.distributed ? (
                               <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-emerald-200">
-                                <CheckCircle2 className="size-3.5" />
-                                Delivered
-                                {o.distributed_at
-                                  ? ` · ${fmtDate(o.distributed_at)}`
-                                  : ""}
+                                <CheckCircle2 className="size-3.5 shrink-0" />
+                                <span>
+                                  Delivered
+                                  {o.distributed_at ? (
+                                    <span className="hidden sm:inline">
+                                      {` · ${fmtDate(o.distributed_at)}`}
+                                    </span>
+                                  ) : null}
+                                </span>
                               </span>
                             ) : (
                               <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-700 ring-1 ring-blue-200">
-                                <Clock className="size-3.5" />
-                                Paid — awaiting pickup
+                                <Clock className="size-3.5 shrink-0" />
+                                <span>
+                                  Paid{" "}
+                                  <span className="hidden sm:inline">
+                                    — awaiting pickup
+                                  </span>
+                                </span>
                               </span>
                             )}
                           </TableCell>
@@ -279,8 +294,10 @@ export default function StorePage() {
                       <TableRow className="hover:bg-transparent">
                         <TableHead className="px-4 py-2">Student</TableHead>
                         <TableHead className="px-4 py-2">Device</TableHead>
-                        <TableHead className="px-4 py-2">Serial #</TableHead>
-                        <TableHead className="px-4 py-2 text-right whitespace-nowrap">
+                        <TableHead className="hidden px-4 py-2 sm:table-cell">
+                          Serial #
+                        </TableHead>
+                        <TableHead className="hidden px-4 py-2 text-right whitespace-nowrap sm:table-cell">
                           Assigned
                         </TableHead>
                       </TableRow>
@@ -288,12 +305,12 @@ export default function StorePage() {
                     <TableBody>
                       {laptops.map((l) => (
                         <TableRow key={l.id} className="hover:bg-transparent">
-                          <TableCell className="px-4 py-3 font-medium whitespace-nowrap">
+                          <TableCell className="px-4 py-3 font-medium whitespace-normal">
                             {l.student_name || "—"}
                           </TableCell>
-                          <TableCell className="px-4 py-3">
-                            <span className="inline-flex items-center gap-1.5">
-                              <Laptop className="size-3.5 text-muted-foreground" />
+                          <TableCell className="px-4 py-3 whitespace-normal">
+                            <span className="inline-flex flex-wrap items-center gap-1.5">
+                              <Laptop className="size-3.5 shrink-0 text-muted-foreground" />
                               {l.make_model}
                               {l.asset_tag ? (
                                 <span className="text-xs text-muted-foreground">
@@ -301,11 +318,16 @@ export default function StorePage() {
                                 </span>
                               ) : null}
                             </span>
+                            {/* Mobile stand-in for the hidden Serial /
+                                Assigned columns. */}
+                            <span className="mt-0.5 block font-mono text-xs text-muted-foreground sm:hidden">
+                              {l.serial_number}
+                            </span>
                           </TableCell>
-                          <TableCell className="px-4 py-3 font-mono text-xs">
+                          <TableCell className="hidden px-4 py-3 font-mono text-xs sm:table-cell">
                             {l.serial_number}
                           </TableCell>
-                          <TableCell className="px-4 py-3 text-right whitespace-nowrap tabular-nums">
+                          <TableCell className="hidden px-4 py-3 text-right whitespace-nowrap tabular-nums sm:table-cell">
                             {fmtDate(l.assigned_date)}
                           </TableCell>
                         </TableRow>

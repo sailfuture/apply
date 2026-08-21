@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import {
   Activity,
   Ban,
+  CircleAlert,
   CircleCheck,
   Loader2,
   MessageSquareText,
@@ -678,9 +679,30 @@ function EmailPreviewDialog({
  *  enrolled) render as a larger green bubble so they pop in the
  *  stream; everything else keeps the compact muted marker. */
 function SystemRow({ event }: { event: ActivityEvent }) {
-  const milestone = /accepted|confirmed|enrolled|invoice paid|payment/i.test(
+  // Billing events share vocabulary with the happy path ("payment"),
+  // so failures are excluded FIRST — an overdue invoice rendering as
+  // a green success pill is worse than no styling at all.
+  const negative = /overdue|failed|unpaid|void|written off|declined/i.test(
     event.title
   );
+  const milestone =
+    !negative &&
+    /accepted|confirmed|enrolled|invoice paid|payment/i.test(event.title);
+  if (negative) {
+    return (
+      <div className="flex justify-center py-1">
+        <div className="inline-flex max-w-full items-center gap-2 rounded-full border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900">
+          <CircleAlert className="size-4 shrink-0 text-amber-600" />
+          <span className="min-w-0 truncate">
+            <span className="font-semibold">{event.title}</span>
+            {event.studentName ? <> — {event.studentName}</> : null}
+            {event.body ? <> · {event.body}</> : null}
+            <span className="tabular-nums"> · {shortWhen(event.ts)}</span>
+          </span>
+        </div>
+      </div>
+    );
+  }
   if (milestone) {
     return (
       <div className="flex justify-center py-1">

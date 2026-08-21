@@ -12,6 +12,7 @@ import {
   indexTransactionsByMonth,
   stripeStatusToUi,
 } from "@/lib/billing-schedule";
+import { getNextInvoiceTiming } from "@/lib/stripe";
 
 /**
  * Per-family 12-month billing schedule for the admin billing
@@ -139,6 +140,24 @@ export async function GET(
       });
     }
 
+    // WHEN the scheduled month's invoice actually sends — the mirror
+    // can't say (it fills on `invoice.finalized`), but Stripe already
+    // knows: a first invoice commonly sits as a 24h draft right after
+    // Start Monthly Billing, and a running subscription's next invoice
+    // lands at the current period's end. One Stripe read, best-effort —
+    // a bare "Scheduled" (as before) on any failure.
+    let scheduledSendsAt: number | null = null;
+    if (nextScheduledIdx >= 0) {
+      const subId = activeStripeSubscriptionId(
+        paymentRow?.stripe_subscription_id
+      );
+      if (subId) {
+        scheduledSendsAt = await getNextInvoiceTiming(subId)
+          .then((t) => t?.sendsAtMs ?? null)
+          .catch(() => null);
+      }
+    }
+
     const enrichedSlots = slots.map((slot, i) => {
       const k = monthKey(new Date(slot.periodStart));
       const tx = txByMonthKey.get(k) ?? null;
@@ -149,6 +168,8 @@ export async function GET(
             i === nextScheduledIdx
               ? ("scheduled" as const)
               : ("not_started" as const),
+          scheduledSendsAt:
+            i === nextScheduledIdx ? scheduledSendsAt : null,
           invoice: null,
         };
       }
@@ -156,6 +177,7 @@ export async function GET(
       return {
         ...slot,
         status,
+        scheduledSendsAt: null,
         invoice: {
           stripeInvoiceId: tx.stripe_invoice_id,
           amountDueCents: tx.amount_due_cents,
@@ -234,6 +256,11 @@ export interface ScheduleSlot {
   /** Human label ("Aug 2026") for the row. */
   monthLabel: string;
   status: "not_started" | "scheduled" | "open" | "paid" | "failed" | "void";
+  /** For the "scheduled" slot only: unix ms when Stripe will email the
+   *  month's invoice (drafted-first-invoice finalization, trial end,
+   *  future anchor, or the running cycle's period end). Null when
+   *  Stripe couldn't say — the pill just renders without a date. */
+  scheduledSendsAt: number | null;
   invoice: {
     stripeInvoiceId: string;
     amountDueCents: number;

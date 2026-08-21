@@ -465,13 +465,13 @@ export function EnrolledFamilyDashboard({
   }
 
   return (
-    <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
+    <div className="flex flex-1 flex-col gap-6 p-4 sm:p-6 mx-auto w-full max-w-4xl">
       {/* Header — label, heading, year picker. The label + subheading
           copy pivots on `currentYearMode` so the same screen reads
           naturally for an enrolled-year view ("enrolled, confirmed on
           ...") and for a re-applying year ("re-application in
           progress for ..."). */}
-      <div className="flex items-start justify-between gap-4 border-b pb-4">
+      <div className="flex flex-col gap-4 border-b pb-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           {/* Top eyebrow label — shows the school year the dashboard
               is currently scoped to. Replaces a generic
@@ -542,7 +542,7 @@ export function EnrolledFamilyDashboard({
 
         if (submitted) {
           return (
-            <div className="rounded-xl border bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-900 p-5 flex items-start justify-between gap-4">
+            <div className="rounded-xl border bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-900 p-5 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <p className="text-sm font-semibold text-emerald-900 dark:text-emerald-100">
                   {nextYear.year_name} re-application submitted
@@ -566,7 +566,7 @@ export function EnrolledFamilyDashboard({
 
         if (hasNextYearApp) {
           return (
-            <div className="rounded-xl border bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-900 p-5 flex items-start justify-between gap-4">
+            <div className="rounded-xl border bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-900 p-5 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <p className="text-sm font-semibold text-amber-900 dark:text-amber-100">
                   {nextYear.year_name} re-application in progress
@@ -587,7 +587,7 @@ export function EnrolledFamilyDashboard({
         }
 
         return (
-          <div className="rounded-xl border bg-blue-50 dark:bg-blue-950/30 border-blue-200 dark:border-blue-900 p-5 flex items-start justify-between gap-4">
+          <div className="rounded-xl border bg-blue-50 dark:bg-blue-950/30 border-blue-200 dark:border-blue-900 p-5 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <p className="text-sm font-semibold text-blue-900 dark:text-blue-100">
                 Re-apply for {nextYear.year_name}
@@ -751,7 +751,9 @@ export function EnrolledFamilyDashboard({
                 No students enrolled for this year.
               </p>
             ) : (
-              <Table className="text-sm">
+              // table-fixed so long student names truncate instead of
+              // widening the table into horizontal scroll on phones.
+              <Table className="text-sm table-fixed">
                 <TableBody>
                   {enrolledStudents.map(({ student, app }) => {
                     // Photo can be either a string URL (older rows) or a
@@ -825,7 +827,7 @@ export function EnrolledFamilyDashboard({
           <h2 className="text-sm font-semibold mb-3">Pending Registrations</h2>
           <div className="rounded-xl bg-background p-1.5 shadow-sm border">
             <div className="overflow-hidden rounded-lg border">
-              <Table className="text-sm">
+              <Table className="text-sm table-fixed">
                 <TableBody>
                   {pendingResidentialAdds.map(({ student, app }) => {
                     // Two states, both derived from whether the packet
@@ -869,9 +871,11 @@ export function EnrolledFamilyDashboard({
                             </div>
                           </div>
                         </TableCell>
-                        <TableCell className="px-4 py-3 text-right whitespace-nowrap">
+                        <TableCell className="w-12 px-4 py-3 text-right whitespace-nowrap sm:w-48">
                           <span className="inline-flex items-center gap-1.5 text-xs font-medium text-primary">
-                            {started ? "Continue registration" : "Finish"}
+                            <span className="hidden sm:inline">
+                              {started ? "Continue registration" : "Finish"}
+                            </span>
                             <ChevronRight className="size-4" />
                           </span>
                         </TableCell>
@@ -935,39 +939,37 @@ export function EnrolledFamilyDashboard({
                 .
               </p>
             ) : (
-              <Table className="text-sm">
-                <TableBody>
-                  {primary ? (
-                    <ContactTableRow
-                      contact={primary}
-                      role="Primary"
-                      invite={{ status: primary.invite_status }}
-                      onEdit={() =>
-                        setEditing({ kind: "parent", record: primary })
-                      }
-                    />
-                  ) : (
-                    <ContactEmptyRow note="No primary parent on file." />
-                  )}
-                  {secondary ? (
-                    <ContactTableRow
-                      contact={secondary}
-                      role="Secondary"
-                      invite={{ status: secondary.invite_status }}
-                      onEdit={() =>
-                        setEditing({ kind: "parent", record: secondary })
-                      }
-                      onDelete={() =>
-                        setPendingDelete({
-                          kind: "parent",
-                          id: secondary.id,
-                          name: `${secondary.first_name} ${secondary.last_name}`,
-                        })
-                      }
-                    />
-                  ) : null}
-                </TableBody>
-              </Table>
+              <div className="divide-y text-sm">
+                {primary ? (
+                  <ContactRow
+                    contact={primary}
+                    role="Primary"
+                    invite={{ status: primary.invite_status }}
+                    onEdit={() =>
+                      setEditing({ kind: "parent", record: primary })
+                    }
+                  />
+                ) : (
+                  <ContactEmptyRow note="No primary parent on file." />
+                )}
+                {secondary ? (
+                  <ContactRow
+                    contact={secondary}
+                    role="Secondary"
+                    invite={{ status: secondary.invite_status }}
+                    onEdit={() =>
+                      setEditing({ kind: "parent", record: secondary })
+                    }
+                    onDelete={() =>
+                      setPendingDelete({
+                        kind: "parent",
+                        id: secondary.id,
+                        name: `${secondary.first_name} ${secondary.last_name}`,
+                      })
+                    }
+                  />
+                ) : null}
+              </div>
             )}
           </div>
         </div>
@@ -995,26 +997,24 @@ export function EnrolledFamilyDashboard({
                 No emergency contacts on file.
               </p>
             ) : (
-              <Table className="text-sm">
-                <TableBody>
-                  {(emergencyContacts ?? []).map((ec) => (
-                    <ContactTableRow
-                      key={ec.id}
-                      contact={ec}
-                      onEdit={() =>
-                        setEditing({ kind: "emergency", record: ec })
-                      }
-                      onDelete={() =>
-                        setPendingDelete({
-                          kind: "emergency",
-                          id: ec.id,
-                          name: `${ec.first_name} ${ec.last_name}`,
-                        })
-                      }
-                    />
-                  ))}
-                </TableBody>
-              </Table>
+              <div className="divide-y text-sm">
+                {(emergencyContacts ?? []).map((ec) => (
+                  <ContactRow
+                    key={ec.id}
+                    contact={ec}
+                    onEdit={() =>
+                      setEditing({ kind: "emergency", record: ec })
+                    }
+                    onDelete={() =>
+                      setPendingDelete({
+                        kind: "emergency",
+                        id: ec.id,
+                        name: `${ec.first_name} ${ec.last_name}`,
+                      })
+                    }
+                  />
+                ))}
+              </div>
             )}
           </div>
         </div>
@@ -1290,19 +1290,17 @@ function ReApplicationProgressCard({
 
 /** Empty-state row used when a group has no contacts on file. */
 function ContactEmptyRow({ note }: { note: string }) {
-  return (
-    <TableRow className="hover:bg-transparent">
-      <TableCell colSpan={2} className="px-4 py-3 text-xs text-muted-foreground">
-        {note}
-      </TableCell>
-    </TableRow>
-  );
+  return <p className="px-4 py-3 text-xs text-muted-foreground">{note}</p>;
 }
 
 /** Single contact row — name + relationship + phone/email + edit + delete.
  *  Delete is opt-in via `onDelete`; primary parent rows omit it because
- *  the family always needs at least one primary on file. */
-function ContactTableRow({
+ *  the family always needs at least one primary on file.
+ *
+ *  Plain flex rows rather than a <Table>: table cells default to
+ *  `whitespace-nowrap`, so a long email forced the whole card into
+ *  horizontal scroll on phones. Here the text column wraps instead. */
+function ContactRow({
   contact,
   onEdit,
   onDelete,
@@ -1321,10 +1319,8 @@ function ContactTableRow({
   invite?: { status?: string | null; clerkUserId?: string | null };
 }) {
   return (
-    // Not clickable — suppress the table's default row hover so only
-    // the action buttons read as interactive.
-    <TableRow className="hover:bg-transparent">
-      <TableCell className="px-4 py-3">
+    <div className="flex items-start justify-between gap-2 px-4 py-3">
+      <div className="min-w-0 flex-1">
         <p className="font-medium flex items-center gap-2 flex-wrap">
           <span>
             {contact.first_name} {contact.last_name}
@@ -1346,18 +1342,18 @@ function ContactTableRow({
             />
           ) : null}
         </p>
-        <p className="text-xs text-muted-foreground mt-0.5">
+        <p className="text-xs text-muted-foreground mt-0.5 break-words">
           {[contact.phone, contact.email].filter(Boolean).join(" · ") || "—"}
         </p>
-      </TableCell>
-      <TableCell className="px-4 py-3 text-right whitespace-nowrap">
+      </div>
+      <div className="flex shrink-0 items-center">
         {invite ? (
           <ResendInviteButton
             parentId={contact.id}
             status={invite.status}
             clerkUserId={invite.clerkUserId}
             size="xs"
-            className="mr-1 align-middle"
+            className="mr-1"
           />
         ) : null}
         <Button
@@ -1380,7 +1376,7 @@ function ContactTableRow({
             <Trash2 className="size-4" />
           </Button>
         )}
-      </TableCell>
-    </TableRow>
+      </div>
+    </div>
   );
 }
