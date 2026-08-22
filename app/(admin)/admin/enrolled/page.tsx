@@ -159,10 +159,11 @@ export default function EnrolledStudentsPage() {
 
   const allRows = useMemo(() => (Array.isArray(data) ? data : []), [data]);
 
-  // Cohort filter — "new" = the student's first year (derived cross-
-  // year server-side as `enrolled_year_id`) IS the selected year;
-  // "returning" = they started in an earlier year. Lets admin split
-  // incoming students from returners without exporting first.
+  // Cohort filter — "returning" = the student's first year (resolved
+  // server-side as `enrolled_year_id`, and flagged as `is_returning`)
+  // sits chronologically BEFORE the selected year; "new" = everyone
+  // else, i.e. this year is their first. Lets admin split incoming
+  // students from returners without exporting first.
   const [cohortFilter, setCohortFilter] = useState<
     "all" | "new" | "returning"
   >("all");
@@ -172,15 +173,8 @@ export default function EnrolledStudentsPage() {
   const rows = useMemo(
     () =>
       allRows.filter((r) => {
-        if (cohortFilter === "new" && r.enrolled_year_id !== r.year_id) {
-          return false;
-        }
-        if (
-          cohortFilter === "returning" &&
-          r.enrolled_year_id === r.year_id
-        ) {
-          return false;
-        }
+        if (cohortFilter === "new" && r.is_returning) return false;
+        if (cohortFilter === "returning" && !r.is_returning) return false;
         if (iepOnly && !r.has_iep) return false;
         return true;
       }),
@@ -478,16 +472,20 @@ export default function EnrolledStudentsPage() {
         <span
           className="text-sm tabular-nums text-muted-foreground"
           title={
-            row.enrolled_year_basis === "confirmed"
-              ? "First year with an admin-confirmed registration packet."
-              : "No confirmed registration packet on file — showing their earliest application year instead."
+            row.enrolled_year_basis === "admin"
+              ? "Enrollment year set on this student's School Account card."
+              : row.enrolled_year_basis === "confirmed"
+                ? "First year with an admin-confirmed registration packet."
+                : "No enrollment year set and no earlier registration packet on file — showing their earliest application year instead."
           }
         >
           {row.enrolled_year_name || "—"}
-          {/* Soft-signal marker. A derived cohort year that came from
-              an application rather than a confirmed packet is a
-              guess, and admin sorting a roster by it deserves to see
-              which rows are guesses without hovering every cell. */}
+          {/* Soft-signal marker. A cohort year that fell all the way
+              through to an application year is a guess — and since
+              applications only ever exist for the current cycle, it
+              really means "we don't know". Admin sorting a roster by
+              this column deserves to see which rows are guesses
+              without hovering every cell. */}
           {row.enrolled_year_basis === "application" ? (
             <span className="ml-0.5 text-muted-foreground/60">*</span>
           ) : null}

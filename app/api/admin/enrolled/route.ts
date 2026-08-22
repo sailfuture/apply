@@ -170,18 +170,30 @@ export async function GET(req: NextRequest) {
     //
     // The roster is scoped to ONE school year, so "which year did
     // this student enrol?" can't be read off the row — it's a
-    // cross-year question. Two tiers, best signal first:
+    // cross-year question. Three tiers, best signal first:
     //
-    //   1. The earliest year in which the student has a packet with
-    //      `registrationConfirmed === true`. That's the real
-    //      "admin signed off on this student's registration" event,
-    //      so it's the honest answer to "when did they start here."
-    //   2. Failing that (packet drift, legacy rows, a student
+    //   1. `student.enrollment_school_years_id` — the year admin
+    //      picked on the student's School Account card (or that the
+    //      bulk backfill wrote). An explicit human statement of
+    //      "this is the year they started", so nothing derived
+    //      outranks it.
+    //   2. The earliest year in which the student has a packet with
+    //      `registrationConfirmed === true` — admin signed off on a
+    //      registration that year.
+    //   3. Failing that (packet drift, legacy rows, a student
     //      enrolled via the family-level cascade before their own
     //      packet was confirmed), the earliest year they hold an
     //      active application for.
     //
-    // Tier 2 always resolves for anyone in this list — an active
+    // Tiers 2 and 3 are only as deep as the data behind them, and in
+    // practice that data does NOT go back: every application and
+    // packet row currently in Xano belongs to the newest year, because
+    // returning students get a fresh row each cycle rather than a
+    // historical trail. Deriving from them alone therefore answers
+    // "this year" for literally everyone and empties the Returning
+    // bucket — which is exactly why tier 1 leads.
+    //
+    // Tier 3 always resolves for anyone in this list — an active
     // application for the selected year is the list's own gate — so
     // every row gets a year. `basis` rides along so the column can
     // hover-explain which tier answered, rather than presenting a
@@ -280,16 +292,34 @@ export async function GET(req: NextRequest) {
         0;
       const isEnrolled =
         student.isEnrolled === true && student.isArchived !== true;
-      // Cohort year — see the two-tier derivation above. Falls all
+      // Cohort year — see the three-tier derivation above. Falls all
       // the way back to the selected year so the column never renders
       // blank on a row that is, by definition, here for this year.
+      // The admin pick only counts when it names a year we actually
+      // know about, so a stale id pointing at a deleted year drops
+      // through to the derived tiers instead of rendering "—".
+      const adminCohortYearId =
+        Number(student.enrollment_school_years_id) > 0 &&
+        yearById.has(Number(student.enrollment_school_years_id))
+          ? Number(student.enrollment_school_years_id)
+          : null;
       const confirmedCohortYearId =
         firstConfirmedYearByStudent.get(studentId) ?? null;
       const cohortYearId =
+        adminCohortYearId ??
         confirmedCohortYearId ??
         firstAppliedYearByStudent.get(studentId) ??
         yearId;
       const cohortYear = yearById.get(cohortYearId) ?? null;
+      // Returning = their first year sits chronologically BEFORE the
+      // year this roster is scoped to. Deliberately not a `!==` on the
+      // year id: an unknown or later cohort year is not evidence that
+      // someone was here last year, and the compare has to happen
+      // here, where both years' sort keys are known.
+      const selectedYearSort =
+        yearKeyById.get(yearId) ?? Number.MAX_SAFE_INTEGER;
+      const cohortYearSort =
+        yearKeyById.get(cohortYearId) ?? Number.MAX_SAFE_INTEGER;
       return [
         {
           id: studentId,
@@ -319,9 +349,14 @@ export async function GET(req: NextRequest) {
           confirmed_at: enrolledAt,
           enrolled_year_id: cohortYearId,
           enrolled_year_name: cohortYear?.year_name?.trim() || "—",
-          enrolled_year_sort: yearKeyById.get(cohortYearId) ?? Number.MAX_SAFE_INTEGER,
+          enrolled_year_sort: cohortYearSort,
           enrolled_year_basis:
-            confirmedCohortYearId !== null ? "confirmed" : "application",
+            adminCohortYearId !== null
+              ? "admin"
+              : confirmedCohortYearId !== null
+                ? "confirmed"
+                : "application",
+          is_returning: cohortYearSort < selectedYearSort,
           liability_waiver_status: packet?.liability_waiver_status ?? "",
           liability_waiver_pdf_url: packet?.liability_waiver_pdf_url ?? "",
           is_enrolled: isEnrolled,
@@ -426,12 +461,19 @@ export interface EnrolledStudentRow {
    *  The column sorts on THIS, not on `enrolled_year_name` — a
    *  string sort would put "—" ahead of every real year. */
   enrolled_year_sort: number;
-  /** Which tier of the derivation answered: `"confirmed"` (a
-   *  registration packet was admin-confirmed that year — hard
-   *  signal) or `"application"` (no confirmed packet anywhere, so
-   *  we fell back to their earliest active application year — soft
-   *  signal). Drives the column's hover text. */
-  enrolled_year_basis: "confirmed" | "application";
+  /** Which tier of the derivation answered: `"admin"` (the year set
+   *  on the student's School Account card — an explicit human
+   *  statement), `"confirmed"` (a registration packet was
+   *  admin-confirmed that year — hard signal) or `"application"` (no
+   *  confirmed packet anywhere, so we fell back to their earliest
+   *  active application year — soft signal). Drives the column's
+   *  hover text. */
+  enrolled_year_basis: "admin" | "confirmed" | "application";
+  /** True when `enrolled_year_id` sits chronologically BEFORE the
+   *  year this roster is scoped to — i.e. the student was already
+   *  here in an earlier year. Drives the New/Returning cohort chips.
+   *  Computed server-side because it needs both years' sort keys. */
+  is_returning: boolean;
   liability_waiver_status: string;
   liability_waiver_pdf_url: string;
   /** Primary parent's phone (bare digits as stored) — surfaced in the
