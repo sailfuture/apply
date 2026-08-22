@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { formatNoteTimestamp } from "@/lib/format-note-time";
+import { formatToddleFieldList } from "@/lib/toddle-fields";
 import type {
   BulkToddleSyncResponse,
   BulkToddleSyncRow,
@@ -141,24 +142,79 @@ export function ToddleSyncAllDialog({
             </div>
           ) : result ? (
             <>
+              {/* Every outcome gets a chip, including the zeroes: "0
+                  new profiles" and "0 failed" are answers, and hiding
+                  them makes a clean run look like a partial report. */}
               <div className="flex flex-wrap gap-1.5">
-                {result.totals.created > 0 ? (
-                  <TotalChip
-                    className="bg-blue-50 text-blue-700 border-blue-200"
-                    label={`${result.totals.created} · Created`}
-                  />
-                ) : null}
+                <TotalChip
+                  className="bg-blue-50 text-blue-700 border-blue-200"
+                  label={`${result.totals.created} · New in Toddle`}
+                />
                 <TotalChip
                   className="bg-emerald-50 text-emerald-700 border-emerald-200"
-                  label={`${result.totals.updated} · Updated`}
+                  label={`${result.totals.updated} · Changed`}
                 />
-                {result.totals.failed > 0 ? (
-                  <TotalChip
-                    className="bg-red-50 text-red-700 border-red-200"
-                    label={`${result.totals.failed} · Failed`}
-                  />
-                ) : null}
+                <TotalChip
+                  className="bg-muted text-muted-foreground border-border"
+                  label={`${result.totals.unchanged} · Already current`}
+                />
+                <TotalChip
+                  className={cn(
+                    result.totals.failed > 0
+                      ? "bg-red-50 text-red-700 border-red-200"
+                      : "bg-muted text-muted-foreground border-border"
+                  )}
+                  label={`${result.totals.failed} · Not synced`}
+                />
               </div>
+
+              {/* Students Toddle neither matched nor accepted, pulled
+                  out of the table so they can't be missed in a
+                  75-row scroll. Each carries the reason Toddle gave. */}
+              {result.totals.failed > 0 ? (
+                <div className="rounded-md border border-red-200 bg-red-50/60 p-3">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-red-700">
+                    Not added or found in Toddle
+                  </p>
+                  <ul className="mt-2 space-y-1.5">
+                    {result.rows
+                      .filter((r) => r.action === "failed")
+                      .map((r) => (
+                        <li key={r.student_id} className="text-sm">
+                          <span className="font-medium">{r.student_name}</span>
+                          <span className="text-red-700">
+                            {" — "}
+                            {r.error ?? "Sync failed."}
+                          </span>
+                        </li>
+                      ))}
+                  </ul>
+                </div>
+              ) : null}
+
+              {/* Loose matches: the Toddle record didn't carry our
+                  sourceId, so it was identified by name alone. Worth
+                  eyeballing once — a wrong match writes one student's
+                  details onto another's profile. */}
+              {result.rows.some((r) => r.matched_by === "name") ? (
+                <div className="rounded-md border border-amber-200 bg-amber-50/60 p-3">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-amber-700">
+                    Matched by name only
+                  </p>
+                  <p className="mt-1 text-xs text-amber-800">
+                    These Toddle records weren&rsquo;t carrying our student
+                    ID, so they were matched on name. The sync stamps the
+                    ID as it goes, so this should be a one-time notice per
+                    student.
+                  </p>
+                  <p className="mt-1.5 text-sm">
+                    {result.rows
+                      .filter((r) => r.matched_by === "name")
+                      .map((r) => r.student_name)
+                      .join(", ")}
+                  </p>
+                </div>
+              ) : null}
               <div className="rounded-md border overflow-hidden">
                 <table className="w-full table-fixed text-sm">
                   <colgroup>
@@ -174,7 +230,9 @@ export function ToddleSyncAllDialog({
                       <th className="px-3 py-2 font-medium">Result</th>
                       <th className="px-3 py-2 font-medium">Photo</th>
                       <th className="px-3 py-2 font-medium">Family</th>
-                      <th className="px-3 py-2 font-medium">Crew / notes</th>
+                      <th className="px-3 py-2 font-medium">
+                        What changed / notes
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y">
@@ -198,7 +256,9 @@ export function ToddleSyncAllDialog({
         <DialogFooter className="flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-t pt-4">
           <p className="text-xs text-muted-foreground">
             {result
-              ? "Done — each student's Toddle link is saved on their record."
+              ? `Done — ${result.totals.created + result.totals.updated} of ${
+                  result.rows.length
+                } student${result.rows.length === 1 ? "" : "s"} moved; each student's Toddle link is saved on their record.`
               : ""}
           </p>
           <div className="flex items-center gap-2">
@@ -248,23 +308,40 @@ function TotalChip({ className, label }: { className: string; label: string }) {
 function ResultRow({ row }: { row: BulkToddleSyncRow }) {
   const resultMeta =
     row.action === "failed"
-      ? { label: "Failed", className: "bg-red-50 text-red-700 border-red-200" }
+      ? {
+          label: "Not synced",
+          className: "bg-red-50 text-red-700 border-red-200",
+        }
       : row.action === "created"
         ? {
             label: "Created",
             className: "bg-blue-50 text-blue-700 border-blue-200",
           }
-        : {
-            label: "Updated",
-            className: "bg-emerald-50 text-emerald-700 border-emerald-200",
-          };
+        : row.action === "unchanged"
+          ? {
+              label: "No change",
+              className: "bg-muted text-muted-foreground border-border",
+            }
+          : {
+              label: "Changed",
+              className: "bg-emerald-50 text-emerald-700 border-emerald-200",
+            };
   const family =
     row.family_synced + row.family_failed === 0
       ? "—"
       : row.family_failed > 0
         ? `${row.family_synced} ok · ${row.family_failed} failed`
         : `${row.family_synced} synced`;
-  const notes = row.error ?? row.crew ?? "—";
+  // What actually moved, most specific first: the failure reason, the
+  // named field changes, then the crew placement. A "Changed" row with
+  // no field list means the prior record couldn't be read to compare,
+  // which is a different thing from nothing having changed.
+  const changed =
+    row.changed_fields.length > 0
+      ? formatToddleFieldList(row.changed_fields)
+      : "";
+  const notes =
+    row.error ?? [changed, row.crew].filter(Boolean).join(" · ");
   return (
     <tr className="align-top">
       <td
@@ -294,9 +371,9 @@ function ResultRow({ row }: { row: BulkToddleSyncRow }) {
           "px-3 py-2 overflow-hidden text-ellipsis whitespace-nowrap",
           row.error ? "text-red-700" : "text-muted-foreground"
         )}
-        title={notes !== "—" ? notes : undefined}
+        title={notes || undefined}
       >
-        {notes}
+        {notes || "—"}
       </td>
     </tr>
   );

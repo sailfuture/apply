@@ -90,9 +90,25 @@ export interface ToddleStudent {
   email?: string | null;
   grade?: string | null;
   yearGroup?: string | null;
+  /** Year-group id — what the sync diff compares grade on, since
+   *  `yearGroup` is a cohort label ("Batch of 2028") rather than the
+   *  grade we push. */
+  yearGroupId?: string | null;
   sourceId?: string | null;
   dob?: string | null;
   isArchived?: boolean;
+  /** Echoed back on GET, so the sync can report exactly which profile
+   *  fields a push changed. */
+  gender?: string | null;
+  phoneNumber?: string | null;
+  /** ISO stamp ("2024-08-19T00:00:00") even though we push a plain
+   *  YYYY-MM-DD — compared on the calendar day. */
+  enrollmentDate?: string | null;
+  addressLine1?: string | null;
+  addressLine2?: string | null;
+  city?: string | null;
+  state?: string | null;
+  zipcode?: string | null;
 }
 
 export interface ToddleYearGroup {
@@ -706,16 +722,100 @@ export interface ToddleSyncFields {
 }
 
 export interface ToddleUpsertResult {
-  action: "created" | "updated";
+  /** `unchanged` means the record was pushed but every field Toddle
+   *  reports back already matched — nothing about the profile moved.
+   *  We still send the PUT (fields Toddle does NOT report back, like
+   *  the address, would otherwise drift silently), so this is a
+   *  statement about the comparable fields, not about the request. */
+  action: "created" | "updated" | "unchanged";
   toddleId: string;
   /** How the existing record was found — `stored` (id we saved on the
    *  Xano row), `sourceId` (Toddle-side lookup), or `name` (fallback
    *  match for pre-integration records). Null when created. */
   matchedBy: "stored" | "sourceId" | "name" | null;
+  /** Which fields differed from what Toddle held, in our own field
+   *  names ("email", "gradeLevel"). Empty when nothing visible changed
+   *  or when the record was created. */
+  changedFields: string[];
+  /** False when we never saw the prior record (no preloaded roster
+   *  entry on the direct-update path), so "unchanged" could not be
+   *  determined and `action` falls back to `updated`. Lets callers say
+   *  "updated" without implying anything actually differed. */
+  compared: boolean;
 }
 
 function normName(v: string | null | undefined): string {
   return (v ?? "").trim().toLowerCase();
+}
+
+/** Fields we push that Toddle may echo back on a student record.
+ *  Compared case-insensitively, trimmed; dates down to YYYY-MM-DD. */
+const COMPARABLE_FIELDS = [
+  "firstName",
+  "lastName",
+  "email",
+  "dob",
+  "gender",
+  "phoneNumber",
+  "enrollmentDate",
+  "addressLine1",
+  "addressLine2",
+  "city",
+  "state",
+  "zipcode",
+] as const;
+
+function normValue(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  const s = String(v).trim();
+  // Dates arrive as full ISO stamps on one side and YYYY-MM-DD on the
+  // other; compare the calendar day only.
+  return /^\d{4}-\d{2}-\d{2}T/.test(s) ? s.slice(0, 10) : s.toLowerCase();
+}
+
+/**
+ * Which of the fields we're about to push actually differ from the
+ * record Toddle currently holds.
+ *
+ * Only fields the existing record actually carries are compared — a
+ * key Toddle doesn't echo back can't be diffed, and guessing "changed"
+ * on absent keys would mark every student as updated forever.
+ * `compared` reports whether any comparison was possible at all, so
+ * callers never present "no changes" when they simply couldn't look.
+ *
+ * Grade is compared on the resolved `yearGroupId`, NOT on any label:
+ * Toddle names its year groups by cohort ("Batch of 2028") while we
+ * push "9th", so a label comparison would report a grade change on
+ * every student on every run, forever.
+ */
+function diffStudentFields(
+  existing: ToddleStudent | null | undefined,
+  body: ToddleStudentBody
+): { changedFields: string[]; compared: boolean } {
+  if (!existing) return { changedFields: [], compared: false };
+  const record = existing as unknown as Record<string, unknown>;
+  const changedFields: string[] = [];
+  let compared = false;
+
+  for (const key of COMPARABLE_FIELDS) {
+    const next = (body as Record<string, unknown>)[key];
+    if (next === undefined) continue; // not pushed this run
+    if (!(key in record)) continue; // Toddle doesn't report it
+    compared = true;
+    if (normValue(record[key]) !== normValue(next)) changedFields.push(key);
+  }
+
+  // Year group, by id. Reported under "gradeLevel" because that's the
+  // field an admin recognizes.
+  const nextYearGroupId = (body as Record<string, unknown>).yearGroupId;
+  if (nextYearGroupId !== undefined && "yearGroupId" in record) {
+    compared = true;
+    if (normValue(record.yearGroupId) !== normValue(nextYearGroupId)) {
+      changedFields.push("gradeLevel");
+    }
+  }
+
+  return { changedFields, compared };
 }
 
 /**
@@ -734,7 +834,11 @@ function normName(v: string | null | undefined): string {
  */
 export async function upsertStudent(
   fields: ToddleSyncFields,
-  knownToddleId?: string
+  knownToddleId?: string,
+  /** The record Toddle currently holds, when the caller already has it
+   *  (the bulk run preloads the whole roster). Only used to report
+   *  what changed — never to decide whether to write. */
+  existing?: ToddleStudent | null
 ): Promise<ToddleUpsertResult> {
   const body: ToddleStudentBody = {
     firstName: fields.firstName,
@@ -772,8 +876,17 @@ export async function upsertStudent(
   // 1. Direct update via the id we stored on the Xano row.
   if (knownToddleId) {
     try {
+      const diff = diffStudentFields(existing, updateBody);
       const updated = await updateStudent(knownToddleId, updateBody);
-      return { action: "updated", toddleId: updated.id ?? knownToddleId, matchedBy: "stored" };
+      return {
+        action:
+          diff.compared && diff.changedFields.length === 0
+            ? "unchanged"
+            : "updated",
+        toddleId: updated.id ?? knownToddleId,
+        matchedBy: "stored",
+        ...diff,
+      };
     } catch (err) {
       // Stale id (deleted on Toddle's side) → fall through and re-match.
       console.warn(
@@ -787,8 +900,17 @@ export async function upsertStudent(
   const bySource = await getStudentsBySourceIds([fields.sourceId]);
   if (bySource.length > 0) {
     const target = bySource.find((s) => !s.isArchived) ?? bySource[0];
+    const diff = diffStudentFields(target, updateBody);
     const updated = await updateStudent(target.id, updateBody);
-    return { action: "updated", toddleId: updated.id ?? target.id, matchedBy: "sourceId" };
+    return {
+      action:
+        diff.compared && diff.changedFields.length === 0
+          ? "unchanged"
+          : "updated",
+      toddleId: updated.id ?? target.id,
+      matchedBy: "sourceId",
+      ...diff,
+    };
   }
 
   // 3. Name(+DOB) fallback for pre-integration Toddle records.
@@ -804,8 +926,17 @@ export async function upsertStudent(
     if (active.length >= 1) matches = active;
   }
   if (matches.length === 1) {
+    const diff = diffStudentFields(matches[0], updateBody);
     const updated = await updateStudent(matches[0].id, updateBody);
-    return { action: "updated", toddleId: updated.id ?? matches[0].id, matchedBy: "name" };
+    return {
+      action:
+        diff.compared && diff.changedFields.length === 0
+          ? "unchanged"
+          : "updated",
+      toddleId: updated.id ?? matches[0].id,
+      matchedBy: "name",
+      ...diff,
+    };
   }
   if (matches.length > 1) {
     throw new ToddleSyncError(
@@ -828,5 +959,11 @@ export async function upsertStudent(
     );
   }
   const created = await createStudent({ ...body, yearGroupId });
-  return { action: "created", toddleId: created.id, matchedBy: null };
+  return {
+    action: "created",
+    toddleId: created.id,
+    matchedBy: null,
+    changedFields: [],
+    compared: true,
+  };
 }

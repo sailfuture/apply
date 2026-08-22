@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 import { formatNoteTimestamp } from "@/lib/format-note-time";
+import { formatToddleFieldList } from "@/lib/toddle-fields";
 
 /**
  * Admin "Sync to Toddle" — POSTs to
@@ -75,10 +76,21 @@ export function SyncToddleButton({
       if (!res.ok) {
         throw new Error(data?.error ?? `Sync failed (${res.status})`);
       }
+      // Three distinct outcomes, said plainly: a new Toddle record, a
+      // real change (naming what moved), or a push that found nothing
+      // different. "Updated" with no field list means we couldn't read
+      // the prior record to compare, not that nothing changed.
+      const changed: string[] = Array.isArray(data?.changedFields)
+        ? data.changedFields
+        : [];
       const base =
         data?.action === "created"
           ? `${studentName} created in Toddle.`
-          : `${studentName}'s Toddle profile updated.`;
+          : data?.action === "unchanged"
+            ? `${studentName}'s Toddle profile was already up to date.`
+            : changed.length > 0
+              ? `${studentName}'s Toddle profile updated — ${formatToddleFieldList(changed)}.`
+              : `${studentName}'s Toddle profile updated.`;
       // Best-effort extras, each reported without failing the sync:
       // `photo` ("synced"/"none"/"failed"), `familyMembers` (per-
       // contact account+contact outcomes), `crew` (class membership).

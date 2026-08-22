@@ -24,7 +24,9 @@ import {
  * back to the packet itself. Required only when the sync has to
  * CREATE the Toddle student (Toddle mandates a year group).
  *
- * Response: `{ action, toddleId, matchedBy, persisted, photo,
+ * Response: `{ action ("created" | "updated" | "unchanged"),
+ * changedFields (which profile fields actually differed), compared,
+ * toddleId, matchedBy, persisted, photo,
  * familyMembers, crew }`.
  */
 export async function POST(

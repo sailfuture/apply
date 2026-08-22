@@ -25,6 +25,7 @@ import type {
   ToddleFamilyMemberInput,
   ToddleFamilyMemberResult,
   ToddleParentRecord,
+  ToddleStudent,
   ToddleUpsertResult,
 } from "@/lib/toddle";
 
@@ -62,6 +63,12 @@ export interface ToddleSyncShared {
   /** Toddle roster keyed by sourceId ("sfa-<id>") — lets the bulk run
    *  hand `upsertStudent` a known id instead of per-student lookups. */
   toddleIdBySource?: Map<string, string>;
+  /** The same roster, whole records rather than ids, so the upsert can
+   *  report WHICH fields changed. Comes from the one roster fetch the
+   *  bulk run already makes, so the diff costs no extra API calls —
+   *  which matters: Toddle rate-limits, and a per-student read on a
+   *  75-student run would trip it. */
+  toddleStudentBySource?: Map<string, ToddleStudent>;
 }
 
 export async function buildToddleSyncShared(opts?: {
@@ -83,10 +90,14 @@ export async function buildToddleSyncShared(opts?: {
     ]);
     shared.toddleParents = toddleParents;
     shared.courses = courses;
+    const ours = roster.filter(
+      (s) => (s.sourceId ?? "").startsWith("sfa-") && !s.isArchived
+    );
     shared.toddleIdBySource = new Map(
-      roster
-        .filter((s) => (s.sourceId ?? "").startsWith("sfa-") && !s.isArchived)
-        .map((s) => [s.sourceId as string, String(s.id)])
+      ours.map((s) => [s.sourceId as string, String(s.id)])
+    );
+    shared.toddleStudentBySource = new Map(
+      ours.map((s) => [s.sourceId as string, s])
     );
     // Crew-class rosters, fetched once and kept current by
     // `syncCrewClass` as students move.
@@ -198,6 +209,17 @@ export async function syncStudentToToddle(
   const knownToddleId =
     student.toddle_student_id || shared.toddleIdBySource?.get(sourceId);
 
+  // What Toddle holds right now, for the changed-fields report. The
+  // bulk run has it preloaded; a single-student sync spends one lookup
+  // to get it, and simply reports "updated" if that lookup fails.
+  let existing = shared.toddleStudentBySource?.get(sourceId) ?? null;
+  if (!existing && knownToddleId) {
+    existing =
+      (await getStudentsBySourceIds([sourceId])
+        .then((rows) => rows.find((r) => !r.isArchived) ?? rows[0] ?? null)
+        .catch(() => null)) ?? null;
+  }
+
   const result = await upsertStudent(
     {
       sourceId,
@@ -218,7 +240,8 @@ export async function syncStudentToToddle(
       state: addr(primaryParent?.state),
       zipcode: addr(primaryParent?.zipcode),
     },
-    knownToddleId || undefined
+    knownToddleId || undefined,
+    existing
   );
 
   // Push the student's headshot (the admin-uploaded `student_photo`

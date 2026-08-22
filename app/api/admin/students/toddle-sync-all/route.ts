@@ -20,7 +20,10 @@ import {
  * rows with the message — one bad student never stops the rest.
  *
  * Response: `{ totals, rows: BulkToddleSyncRow[] }`, rows in roster
- * order (last name, first name).
+ * order (last name, first name). Each row says which of four things
+ * happened — created, updated (with the fields that differed),
+ * unchanged, or failed (with the reason Toddle gave) — so a run
+ * answers "what actually moved?" rather than just "it ran".
  */
 export const maxDuration = 300;
 
@@ -65,6 +68,8 @@ export async function POST() {
             student_id: s.id,
             student_name: name,
             action: outcome.action,
+            matched_by: outcome.matchedBy,
+            changed_fields: outcome.changedFields,
             photo: outcome.photo,
             family_synced: outcome.familyMembers.filter(
               (m) => m.account !== "failed" && m.contact !== "failed"
@@ -79,6 +84,8 @@ export async function POST() {
             student_id: s.id,
             student_name: name,
             action: "failed",
+            matched_by: null,
+            changed_fields: [],
             photo: "none",
             family_synced: 0,
             family_failed: 0,
@@ -97,7 +104,7 @@ export async function POST() {
       Array.from({ length: Math.min(CONCURRENCY, enrolled.length) }, worker)
     );
 
-    const totals = { created: 0, updated: 0, failed: 0 };
+    const totals = { created: 0, updated: 0, unchanged: 0, failed: 0 };
     for (const row of rows) totals[row.action] += 1;
 
     return NextResponse.json({ totals, rows });
@@ -109,7 +116,18 @@ export async function POST() {
 export interface BulkToddleSyncRow {
   student_id: number;
   student_name: string;
-  action: "created" | "updated" | "failed";
+  /** `unchanged` = the record was pushed but every field Toddle
+   *  reports back already matched. `failed` = Toddle neither matched
+   *  nor accepted this student; `error` says why. */
+  action: "created" | "updated" | "unchanged" | "failed";
+  /** How Toddle found the existing record: `stored` (the id we saved),
+   *  `sourceId`, or `name` — a name match means the Toddle record was
+   *  NOT carrying our sourceId, so it was loosely identified. Null on
+   *  create and on failure. */
+  matched_by: "stored" | "sourceId" | "name" | null;
+  /** Fields that actually differed from what Toddle held, e.g.
+   *  ["email", "gradeLevel"]. Empty on created / unchanged. */
+  changed_fields: string[];
   photo: "synced" | "none" | "failed";
   /** Family contacts fully synced (account + contact card). */
   family_synced: number;
@@ -121,6 +139,11 @@ export interface BulkToddleSyncRow {
 }
 
 export interface BulkToddleSyncResponse {
-  totals: { created: number; updated: number; failed: number };
+  totals: {
+    created: number;
+    updated: number;
+    unchanged: number;
+    failed: number;
+  };
   rows: BulkToddleSyncRow[];
 }
