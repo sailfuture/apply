@@ -6,6 +6,10 @@ import {
   buildToddleSyncShared,
   syncStudentToToddle,
 } from "@/lib/toddle-sync";
+import {
+  evaluateToddleReadiness,
+  type ToddleReadiness,
+} from "@/lib/toddle-readiness";
 
 /**
  * Bulk "Sync all to Toddle" — runs the full per-student Toddle sync
@@ -28,6 +32,88 @@ import {
 export const maxDuration = 300;
 
 const CONCURRENCY = 3;
+
+/**
+ * Pre-flight — what would happen if you ran the sync right now.
+ *
+ *   GET → { rows: ToddleReadiness[] }
+ *
+ * Reads only Xano: no Toddle call at all, so opening the dialog is
+ * free and can't burn into Toddle's rate limit before the run that
+ * needs it. Every rule comes from `lib/toddle-readiness.ts`, the same
+ * module the sync itself uses to decide what to push.
+ */
+export async function GET() {
+  try {
+    await requireAdmin();
+    const [students, parents, families, years, packets, apps] =
+      await Promise.all([
+        xano.students.getAll(),
+        xano.parents.getAll().catch(() => []),
+        xano.families.getAll().catch(() => []),
+        xano.schoolYears.getAll().catch(() => []),
+        xano.studentRegistration.getAll().catch(() => []),
+        xano.applications.getAll().catch(() => []),
+      ]);
+
+    const activeYear = years.find((y) => y.isActive) ?? null;
+    // Contacts hang off the FAMILY row's id array, and the sync treats
+    // the lowest id as primary — the address it pushes comes from that
+    // one, so the ordering has to match here too.
+    const parentById = new Map(parents.map((p) => [p.id, p]));
+    const familyParents = new Map<number, typeof parents>();
+    for (const f of families) {
+      const contacts = xano.families
+        .getParentIds(f)
+        .map((id) => parentById.get(id))
+        .filter((p): p is NonNullable<typeof p> => Boolean(p))
+        .sort((a, b) => a.id - b.id);
+      familyParents.set(f.id, contacts);
+    }
+    // Packet per student — the active year's when there is one, else
+    // whatever packet exists, mirroring the sync's own fallback.
+    const packetByStudent = new Map<number, (typeof packets)[number]>();
+    for (const pk of packets) {
+      const sid = Number(pk.registration_students_id);
+      const current = packetByStudent.get(sid);
+      const isActiveYear =
+        activeYear && Number(pk.registration_school_years_id) === activeYear.id;
+      if (!current || isActiveYear) packetByStudent.set(sid, pk);
+    }
+    const appByStudent = new Map<number, (typeof apps)[number]>();
+    for (const a of apps) {
+      if (a.isActive === false) continue;
+      const sid = Number(a.registration_students_id);
+      const current = appByStudent.get(sid);
+      const isActiveYear =
+        activeYear && Number(a.registration_school_years_id) === activeYear.id;
+      if (!current || isActiveYear) appByStudent.set(sid, a);
+    }
+
+    const rows: ToddleReadiness[] = students
+      .filter((s) => s.isEnrolled === true && s.isArchived !== true)
+      .sort((a, b) =>
+        `${a.last_name ?? ""} ${a.first_name ?? ""}`.localeCompare(
+          `${b.last_name ?? ""} ${b.first_name ?? ""}`
+        )
+      )
+      .map((s) => {
+        const famId = Number(s.registration_families_id) || 0;
+        const contacts = familyParents.get(famId) ?? [];
+        return evaluateToddleReadiness({
+          student: s,
+          packet: packetByStudent.get(s.id) ?? null,
+          applicationGrade: appByStudent.get(s.id)?.current_grade ?? null,
+          parents: contacts,
+          years,
+        });
+      });
+
+    return NextResponse.json({ rows });
+  } catch (err) {
+    return handleAdminError(err);
+  }
+}
 
 export async function POST() {
   try {

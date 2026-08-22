@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,7 @@ import {
 import { cn } from "@/lib/utils";
 import { formatNoteTimestamp } from "@/lib/format-note-time";
 import { formatToddleFieldList } from "@/lib/toddle-fields";
+import type { ToddleReadiness } from "@/lib/toddle-readiness";
 import type {
   BulkToddleSyncResponse,
   BulkToddleSyncRow,
@@ -47,6 +48,27 @@ export function ToddleSyncAllDialog({
   const [open, setOpen] = useState(false);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<BulkToddleSyncResponse | null>(null);
+  // Pre-flight: what each student is missing, BEFORE anything is
+  // pushed. Xano-only on the server, so opening the dialog costs no
+  // Toddle quota.
+  const [readiness, setReadiness] = useState<ToddleReadiness[] | null>(null);
+  const [loadingReadiness, setLoadingReadiness] = useState(false);
+
+  useEffect(() => {
+    if (!open || readiness || loadingReadiness) return;
+    setLoadingReadiness(true);
+    fetch("/api/admin/students/toddle-sync-all")
+      .then(async (res) => {
+        if (!res.ok) throw new Error(String(res.status));
+        const data = await res.json();
+        setReadiness(Array.isArray(data?.rows) ? data.rows : []);
+      })
+      .catch((err) => {
+        console.error("[ToddleSyncAllDialog] readiness check failed:", err);
+        setReadiness([]);
+      })
+      .finally(() => setLoadingReadiness(false));
+  }, [open, readiness, loadingReadiness]);
 
   async function run() {
     setRunning(true);
@@ -244,12 +266,10 @@ export function ToddleSyncAllDialog({
               </div>
             </>
           ) : (
-            <p className="py-6 text-center text-sm text-muted-foreground">
-              Every enrolled student will be pushed to Toddle. Students
-              missing pieces (no grade for a first-time create, no photo,
-              parent without an email) are reported per row — one
-              student&rsquo;s problem never stops the rest.
-            </p>
+            <PreflightPanel
+              readiness={readiness}
+              loading={loadingReadiness}
+            />
           )}
         </div>
 
@@ -289,6 +309,126 @@ export function ToddleSyncAllDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * What the run will do, before it does it. Two questions an admin has
+ * standing at this dialog: who CAN'T sync (and why), and what will land
+ * incomplete. Blocking problems come first and by name; the
+ * profile-level gaps are aggregated, because "31 students have no
+ * photo" is the actionable shape, not 31 rows saying "no photo".
+ */
+function PreflightPanel({
+  readiness,
+  loading,
+}: {
+  readiness: ToddleReadiness[] | null;
+  loading: boolean;
+}) {
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
+        <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+        Checking what each student is missing…
+      </div>
+    );
+  }
+  if (!readiness || readiness.length === 0) {
+    return (
+      <p className="py-6 text-center text-sm text-muted-foreground">
+        Every enrolled student will be pushed to Toddle. One
+        student&rsquo;s problem never stops the rest.
+      </p>
+    );
+  }
+
+  const blocked = readiness.filter((r) => !r.ready);
+  const ready = readiness.length - blocked.length;
+
+  // Roll the profile-level gaps up by field: label → who's missing it.
+  const gaps = new Map<string, { label: string; names: string[] }>();
+  for (const row of readiness) {
+    for (const f of row.fields) {
+      if (f.severity !== "profile" || f.status === "ok") continue;
+      const entry = gaps.get(f.key) ?? { label: f.label, names: [] };
+      entry.names.push(row.student_name);
+      gaps.set(f.key, entry);
+    }
+  }
+  const gapList = [...gaps.values()].sort(
+    (a, b) => b.names.length - a.names.length
+  );
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap gap-1.5">
+        <TotalChip
+          className="bg-emerald-50 text-emerald-700 border-emerald-200"
+          label={`${ready} · Ready to sync`}
+        />
+        <TotalChip
+          className={cn(
+            blocked.length > 0
+              ? "bg-red-50 text-red-700 border-red-200"
+              : "bg-muted text-muted-foreground border-border"
+          )}
+          label={`${blocked.length} · Can't sync yet`}
+        />
+      </div>
+
+      {blocked.length > 0 ? (
+        <div className="rounded-md border border-red-200 bg-red-50/60 p-3">
+          <p className="text-xs font-semibold uppercase tracking-wider text-red-700">
+            Missing something Toddle requires
+          </p>
+          <ul className="mt-2 space-y-1.5">
+            {blocked.map((row) => (
+              <li key={row.student_id} className="text-sm">
+                <span className="font-medium">{row.student_name}</span>
+                <span className="text-red-700">
+                  {" — "}
+                  {row.fields
+                    .filter((f) => f.severity === "blocking" && f.status !== "ok")
+                    .map((f) => `${f.label} (${f.fixedOn})`)
+                    .join("; ")}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          Every enrolled student has what Toddle requires — a first and
+          last name, plus a grade level for anyone not in Toddle yet.
+        </p>
+      )}
+
+      {gapList.length > 0 ? (
+        <div className="rounded-md border p-3">
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            Will sync, but these fields stay empty
+          </p>
+          <ul className="mt-2 space-y-1">
+            {gapList.map((gap) => (
+              <li
+                key={gap.label}
+                className="flex items-baseline justify-between gap-3 text-sm"
+              >
+                <span className="text-muted-foreground">{gap.label}</span>
+                <span
+                  className="shrink-0 tabular-nums"
+                  title={gap.names.slice(0, 40).join(", ")}
+                >
+                  {gap.names.length} student
+                  {gap.names.length === 1 ? "" : "s"}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </div>
   );
 }
 

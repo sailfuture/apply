@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,7 @@ import {
 import { cn } from "@/lib/utils";
 import { formatNoteTimestamp } from "@/lib/format-note-time";
 import { formatToddleFieldList } from "@/lib/toddle-fields";
+import type { ToddleReadiness } from "@/lib/toddle-readiness";
 
 /**
  * Admin "Sync to Toddle" — POSTs to
@@ -63,6 +64,32 @@ export function SyncToddleButton({
   const [syncedAt, setSyncedAt] = useState<number | null>(
     lastSyncedAt ?? null
   );
+  // Field-by-field readiness, fetched when the confirm dialog opens.
+  // Xano-only on the server, so it costs no Toddle quota — which lets
+  // admin see WHY a student would fail before pushing, instead of
+  // reading it off an error toast afterwards.
+  const [readiness, setReadiness] = useState<ToddleReadiness | null>(null);
+
+  useEffect(() => {
+    if (!open || readiness) return;
+    let cancelled = false;
+    fetch(`/api/admin/students/${studentId}/toddle-sync`)
+      .then(async (res) => {
+        if (!res.ok) throw new Error(String(res.status));
+        return res.json();
+      })
+      .then((data) => {
+        if (!cancelled) setReadiness(data as ToddleReadiness);
+      })
+      .catch((err) => {
+        // Non-fatal: the dialog still syncs, it just can't show the
+        // checklist.
+        console.error("[SyncToddleButton] readiness check failed:", err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, readiness, studentId]);
 
   async function runSync() {
     setSaving(true);
@@ -196,6 +223,58 @@ export function SyncToddleButton({
               class.
             </AlertDialogDescription>
           </AlertDialogHeader>
+          {readiness ? (
+            <div className="max-h-64 overflow-y-auto rounded-md border">
+              {!readiness.ready ? (
+                <p className="border-b bg-red-50 px-3 py-2 text-sm text-red-700">
+                  This student can&rsquo;t sync yet — fix the blocking
+                  fields below first.
+                </p>
+              ) : null}
+              <ul className="divide-y">
+                {readiness.fields.map((field) => (
+                  <li
+                    key={field.key}
+                    className="flex items-baseline gap-2 px-3 py-1.5 text-sm"
+                  >
+                    <span
+                      className={cn(
+                        "shrink-0 text-xs font-medium tabular-nums",
+                        field.status === "ok"
+                          ? "text-emerald-600"
+                          : field.severity === "blocking"
+                            ? "text-red-600"
+                            : "text-muted-foreground"
+                      )}
+                      aria-hidden="true"
+                    >
+                      {field.status === "ok"
+                        ? "OK"
+                        : field.severity === "blocking"
+                          ? "REQ"
+                          : "—"}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span
+                        className={cn(
+                          "font-medium",
+                          field.status !== "ok" &&
+                            field.severity === "blocking" &&
+                            "text-red-700"
+                        )}
+                      >
+                        {field.label}
+                      </span>
+                      <span className="block text-xs text-muted-foreground">
+                        {field.detail}
+                        {field.status !== "ok" ? ` · ${field.fixedOn}` : ""}
+                      </span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={saving}>Cancel</AlertDialogCancel>
             <AlertDialogAction

@@ -20,6 +20,13 @@ import {
   isToddleConfigured,
   ToddleSyncError,
 } from "@/lib/toddle";
+import {
+  toddleDob,
+  toddleEmail,
+  toddleEnrollmentDate,
+  toddleGender,
+  toddlePhone,
+} from "@/lib/toddle-readiness";
 import type {
   ToddleCourse,
   ToddleFamilyMemberInput,
@@ -142,17 +149,13 @@ export async function syncStudentToToddle(
 
   // Only pass fields that survive Toddle's validations: DOB must be
   // YYYY-MM-DD, gender must map onto M/F, phone must be the canonical
-  // 10-digit form. Anything else is simply omitted.
-  const dobRaw = (student.date_of_birth ?? "").trim();
-  const dob = /^\d{4}-\d{2}-\d{2}/.test(dobRaw) ? dobRaw.slice(0, 10) : undefined;
-  const gender =
-    student.gender === "Male"
-      ? ("M" as const)
-      : student.gender === "Female"
-        ? ("F" as const)
-        : undefined;
-  const phone = (student.student_phone ?? "").trim();
-  const phoneNumber = /^\d{10}$/.test(phone) ? phone : undefined;
+  // 10-digit form. Anything else is simply omitted. These predicates
+  // live in `lib/toddle-readiness.ts` and are shared with the
+  // pre-flight checklist, so what admin is told will be pushed is
+  // decided by the same code that pushes it.
+  const dob = toddleDob(student.date_of_birth);
+  const gender = toddleGender(student.gender);
+  const phoneNumber = toddlePhone(student.student_phone);
 
   // Family + parents (primary = lowest id, matching every other admin
   // surface) — cached across siblings in a bulk run.
@@ -186,18 +189,14 @@ export async function syncStudentToToddle(
     : await xano.studentRegistration.getByStudentId(id).catch(() => null);
 
   // School email → Toddle login email (only when it looks like one).
-  const schoolEmail = (student.school_email ?? "").trim();
-  const email = /@/.test(schoolEmail) ? schoolEmail : undefined;
+  const email = toddleEmail(student.school_email);
 
   // Enrollment date = start of the school year the student first
   // enrolled in (the School Account card's year pick).
   const enrollmentYear = shared.years.find(
     (y) => y.id === Number(student.enrollment_school_years_id)
   );
-  const startRaw = (enrollmentYear?.start_date ?? "").trim();
-  const enrollmentDate = /^\d{4}-\d{2}-\d{2}/.test(startRaw)
-    ? startRaw.slice(0, 10)
-    : undefined;
+  const enrollmentDate = toddleEnrollmentDate(enrollmentYear);
 
   // Home address — the primary contact's address on file.
   const addr = (v: string | null | undefined) => {
@@ -276,11 +275,10 @@ export async function syncStudentToToddle(
           : digits.length === 11 && digits.startsWith("1")
             ? `+${digits}`
             : digits || undefined;
-      const memberEmail = (p.email ?? "").trim();
       return {
         firstName: p.first_name.trim(),
         lastName: p.last_name.trim(),
-        email: /@/.test(memberEmail) ? memberEmail : undefined,
+        email: toddleEmail(p.email),
         phoneNumber: memberPhone,
         relationship: (p.relationship ?? "").trim() || undefined,
       };
