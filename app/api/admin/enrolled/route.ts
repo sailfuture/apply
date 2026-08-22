@@ -349,6 +349,15 @@ export async function GET(req: NextRequest) {
           // file to the student's evergreen `iep` document slot.
           // Drives the roster's IEP filter + the batch IEP download.
           has_iep: hasFiles(student.iep),
+          // School Google account generated (email + password stored
+          // on the student row). A boolean, deliberately NOT the
+          // credentials themselves — the printable sign-in sheets read
+          // those server-side in
+          // `/api/admin/enrolled/credential-cards`, so passwords never
+          // ride along in the roster payload.
+          has_school_account:
+            (student.school_email ?? "").trim().length > 0 &&
+            (student.school_password ?? "").trim().length > 0,
         },
       ];
     });
@@ -442,6 +451,11 @@ export interface EnrolledStudentRow {
   /** Student has at least one file in the evergreen `iep` document
    *  slot. Drives the roster's IEP filter and batch IEP download. */
   has_iep: boolean;
+  /** Student has a generated school Google account (both
+   *  `school_email` and `school_password` stored). Drives the count on
+   *  the "Sign-in sheets" button; the credentials themselves stay
+   *  server-side. */
+  has_school_account: boolean;
   /** True when the student is officially enrolled for the year:
    *  `student.isEnrolled === true && student.isArchived !== true`.
    *  Drives the Enrolled vs Not Enrolled grouping on the page. */

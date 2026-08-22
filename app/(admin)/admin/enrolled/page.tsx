@@ -12,6 +12,7 @@ import {
   FileDown,
   GraduationCap,
   Loader2,
+  Printer,
   Search,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -275,6 +276,82 @@ export default function EnrolledStudentsPage() {
       );
     } finally {
       setDownloadingIeps(false);
+    }
+  }
+
+  // Printable sign-in sheets — one branded page per student carrying
+  // their school email + password, for handing out on the first day.
+  // Downloads a zip organized into one folder per crew, each holding
+  // that crew's whole stack as a single printable PDF.
+  // Same "every ENROLLED student currently shown" contract as the IEP
+  // download above, narrowed further to students who actually have an
+  // account generated (the rest need "Create Student Emails" first).
+  const [printingLogins, setPrintingLogins] = useState(false);
+  const loginCandidates = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return enrolledRows.filter(
+      (r) => r.has_school_account && (!q || matchesEnrolledSearch(r, q))
+    );
+  }, [enrolledRows, search]);
+  // Shown students still missing an account — drives the button's
+  // hover text so a short stack is explained before it prints.
+  const missingLoginCount = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return enrolledRows.filter(
+      (r) => !r.has_school_account && (!q || matchesEnrolledSearch(r, q))
+    ).length;
+  }, [enrolledRows, search]);
+
+  async function downloadLogins() {
+    if (printingLogins || loginCandidates.length === 0) return;
+    setPrintingLogins(true);
+    try {
+      const res = await fetch("/api/admin/enrolled/credential-cards", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studentIds: loginCandidates.map((r) => r.student_id),
+          yearId: Number(yearId),
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        throw new Error(err?.error ?? `Download failed (${res.status})`);
+      }
+      const skipped = Number(res.headers.get("X-Skipped-Count") ?? 0);
+      const crews = Number(res.headers.get("X-Crew-Count") ?? 0);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      const slug = (schoolYear?.year_name ?? `year-${yearId}`)
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/(^-|-$)/g, "");
+      anchor.href = url;
+      anchor.download = `student-logins-${slug || yearId}.zip`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+      const printed = loginCandidates.length - skipped;
+      toast.success(
+        `Downloaded sign-in sheets for ${printed} student${printed === 1 ? "" : "s"}${
+          crews > 0 ? ` in ${crews} crew folder${crews === 1 ? "" : "s"}` : ""
+        }.${
+          skipped > 0
+            ? ` ${skipped} skipped — no school account on file.`
+            : ""
+        }`
+      );
+    } catch (err) {
+      console.error("[downloadLogins] failed:", err);
+      toast.error(
+        err instanceof Error
+          ? err.message
+          : "Couldn't build the sign-in sheets."
+      );
+    } finally {
+      setPrintingLogins(false);
     }
   }
 
@@ -586,6 +663,37 @@ export default function EnrolledStudentsPage() {
               )}
               IEP files
               {iepCandidates.length > 0 ? ` (${iepCandidates.length})` : ""}
+            </Button>
+            {/* Printable student sign-in sheets — one branded page per
+                student with their school email + password. */}
+            <Button
+              variant="outline"
+              size="sm"
+              className="bg-white shrink-0"
+              disabled={printingLogins || loginCandidates.length === 0}
+              onClick={() => void downloadLogins()}
+              title={
+                loginCandidates.length === 0
+                  ? 'No shown enrolled students have a school account yet — run "Create Student Emails" first'
+                  : `Download a zip of printable sign-in pages, one folder per crew${
+                      missingLoginCount > 0
+                        ? ` (${missingLoginCount} shown student${
+                            missingLoginCount === 1 ? "" : "s"
+                          } still need an account generated)`
+                        : ""
+                    }`
+              }
+            >
+              {printingLogins ? (
+                <Loader2
+                  className="size-3.5 mr-1.5 animate-spin"
+                  aria-hidden="true"
+                />
+              ) : (
+                <Printer className="size-3.5 mr-1.5" aria-hidden="true" />
+              )}
+              Sign-in sheets
+              {loginCandidates.length > 0 ? ` (${loginCandidates.length})` : ""}
             </Button>
             <EnrolledExportDialog
               yearId={Number(yearId)}
