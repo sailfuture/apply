@@ -10,6 +10,12 @@
  * Deliberately pure: no Toddle calls, no Xano calls. Toddle rate-limits
  * hard (see `lib/toddle-sync.ts`), so a roster-wide pre-flight has to
  * be answerable from data we already hold.
+ *
+ * The student PHOTO is deliberately absent from this checklist. The
+ * sync still pushes one whenever it exists — photos are simply being
+ * collected on their own timeline, and listing them here buried the
+ * fields someone can actually act on today under a 74-student count
+ * nobody was going to clear. Don't add it back without asking.
  */
 
 import type { XanoParent, XanoSchoolYear, XanoStudent } from "@/lib/xano";
@@ -248,18 +254,6 @@ export function evaluateToddleReadiness(
         ? `${contactCount} contact${contactCount === 1 ? "" : "s"} become Toddle family members.`
         : "No contact has both a first and last name, so none can be pushed.",
     fixedOn: "Family contact records",
-  });
-
-  const hasPhoto = Boolean(student.student_photo);
-  fields.push({
-    key: "student_photo",
-    label: "Student photo",
-    status: hasPhoto ? "ok" : "missing",
-    severity: "profile",
-    detail: hasPhoto
-      ? "Uploaded onto the Toddle profile."
-      : "No photo on file, so the Toddle profile stays blank.",
-    fixedOn: "Student Photo card",
   });
 
   const crew = (packet?.crew_assignment ?? "").trim();
