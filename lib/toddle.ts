@@ -736,9 +736,11 @@ export interface ToddleUpsertResult {
   action: "created" | "updated" | "unchanged";
   toddleId: string;
   /** How the existing record was found — `stored` (id we saved on the
-   *  Xano row), `sourceId` (Toddle-side lookup), or `name` (fallback
-   *  match for pre-integration records). Null when created. */
-  matchedBy: "stored" | "sourceId" | "name" | null;
+   *  Xano row), `sourceId` (Toddle-side lookup), `email` (the school
+   *  address we generated, which is unique in Toddle), or `name`
+   *  (fallback for records pre-dating this integration). Null when
+   *  created. */
+  matchedBy: "stored" | "sourceId" | "email" | "name" | null;
   /** Which fields differed from what Toddle held, in our own field
    *  names ("email", "gradeLevel"). Empty when nothing visible changed
    *  or when the record was created. */
@@ -822,6 +824,71 @@ export function diffStudentFields(
   }
 
   return { changedFields, compared };
+}
+
+/** Name key for matching: case, spacing and punctuation removed.
+ *  Toddle holds "Daiquan Carbart" where we hold "Dai'quan Carbart" —
+ *  an apostrophe is not a different child. */
+function nameKey(first: string | null | undefined, last: string | null | undefined): string {
+  return `${first ?? ""} ${last ?? ""}`
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+export interface ToddleRosterMatch {
+  student: ToddleStudent;
+  matchedBy: "email" | "name";
+}
+
+/**
+ * Find a student on the Toddle roster that is definitely ours, when
+ * neither the stored id nor our sourceId turned one up.
+ *
+ * Order matters:
+ *
+ *   1. School email. It is unique in Toddle and WE generate it, so a
+ *      record holding it is our student — regardless of how their name
+ *      or date of birth is spelled on Toddle's side. This tier exists
+ *      because those two fields drift constantly ("Creary Jr.", a
+ *      typo'd "Kavliauskas", two students whose DOBs got swapped), and
+ *      every drift used to end as a create that Toddle rejected for a
+ *      duplicate email — the sync failing on the very evidence that
+ *      proved the record was already there.
+ *   2. Name, ignoring case and punctuation, with dates of birth
+ *      required to agree only when BOTH sides carry one. Several
+ *      matches means twins or duplicates: return nothing and let the
+ *      caller raise rather than guess.
+ *
+ * Archived records are preferred against only as a last resort — an
+ * active record is always the better target.
+ */
+export function matchToddleStudent(
+  roster: ToddleStudent[],
+  fields: { firstName: string; lastName: string; dob?: string; email?: string }
+): ToddleRosterMatch | null {
+  const email = (fields.email ?? "").trim().toLowerCase();
+  if (email) {
+    const byEmail = roster.filter(
+      (s) => (s.email ?? "").trim().toLowerCase() === email
+    );
+    const target = byEmail.find((s) => !s.isArchived) ?? byEmail[0];
+    if (target) return { student: target, matchedBy: "email" };
+  }
+
+  const key = nameKey(fields.firstName, fields.lastName);
+  let matches = roster.filter(
+    (s) =>
+      nameKey(s.firstName, s.lastName) === key &&
+      (!fields.dob || !s.dob || s.dob.slice(0, 10) === fields.dob)
+  );
+  if (matches.length > 1) {
+    const active = matches.filter((s) => !s.isArchived);
+    if (active.length >= 1) matches = active;
+  }
+  if (matches.length === 1) return { student: matches[0], matchedBy: "name" };
+  return null;
 }
 
 /**
@@ -927,34 +994,32 @@ export async function upsertStudent(
     };
   }
 
-  // 3. Name(+DOB) fallback for pre-integration Toddle records.
+  // 3. Email, then name(+DOB), against the roster — see
+  //    `matchToddleStudent`. Updating what we find also stamps our
+  //    sourceId onto it, so the next sync goes straight to step 1.
   const roster = await getAllStudents();
-  let matches = roster.filter(
-    (s) =>
-      normName(s.firstName) === normName(fields.firstName) &&
-      normName(s.lastName) === normName(fields.lastName) &&
-      (!fields.dob || !s.dob || s.dob.slice(0, 10) === fields.dob)
-  );
-  if (matches.length > 1) {
-    const active = matches.filter((s) => !s.isArchived);
-    if (active.length >= 1) matches = active;
-  }
-  if (matches.length === 1) {
-    const diff = diffStudentFields(matches[0], updateBody);
-    const updated = await updateStudent(matches[0].id, updateBody);
+  const rosterMatch = matchToddleStudent(roster, fields);
+  if (rosterMatch) {
+    const diff = diffStudentFields(rosterMatch.student, updateBody);
+    const updated = await updateStudent(rosterMatch.student.id, updateBody);
     return {
       action:
         diff.compared && diff.changedFields.length === 0
           ? "unchanged"
           : "updated",
-      toddleId: updated.id ?? matches[0].id,
-      matchedBy: "name",
+      toddleId: updated.id ?? rosterMatch.student.id,
+      matchedBy: rosterMatch.matchedBy === "email" ? "email" : "name",
       ...diff,
     };
   }
-  if (matches.length > 1) {
+  const ambiguous = roster.filter(
+    (s) =>
+      normName(s.firstName) === normName(fields.firstName) &&
+      normName(s.lastName) === normName(fields.lastName)
+  );
+  if (ambiguous.length > 1) {
     throw new ToddleSyncError(
-      `${fields.firstName} ${fields.lastName} matches ${matches.length} students in Toddle — set the sourceId "${fields.sourceId}" on the right one in Toddle, then sync again.`
+      `${fields.firstName} ${fields.lastName} matches ${ambiguous.length} students in Toddle — set the sourceId "${fields.sourceId}" on the right one in Toddle, then sync again.`
     );
   }
 
@@ -972,7 +1037,25 @@ export async function upsertStudent(
       )
     );
   }
-  const created = await createStudent({ ...body, yearGroupId });
+  const created = await createStudent({ ...body, yearGroupId }).catch(
+    (err: unknown) => {
+      // Toddle enforces uniqueness on sourceId and email, and its list
+      // endpoints do not return archived students — so a create can
+      // collide with a record we were never shown. Say that plainly
+      // instead of surfacing a bare 400.
+      const message = err instanceof Error ? err.message : String(err);
+      if (/already exists/i.test(message)) {
+        throw new ToddleSyncError(
+          `Toddle refused to create ${fields.firstName} ${fields.lastName}: ${
+            /sourceId/i.test(message)
+              ? `a hidden record already uses the id "${fields.sourceId}" — it is most likely archived in Toddle, since archived students don't appear in any lookup. Unarchive or delete it there, then sync again.`
+              : `a hidden record already uses ${fields.email ?? "this email"} — it is most likely archived in Toddle. Unarchive or delete it there, then sync again.`
+          }`
+        );
+      }
+      throw err;
+    }
+  );
   return {
     action: "created",
     toddleId: created.id,

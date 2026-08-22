@@ -283,10 +283,11 @@ export interface BulkToddleSyncRow {
    *  nor accepted this student; `error` says why. */
   action: "created" | "updated" | "unchanged" | "failed";
   /** How Toddle found the existing record: `stored` (the id we saved),
-   *  `sourceId`, or `name` — a name match means the Toddle record was
-   *  NOT carrying our sourceId, so it was loosely identified. Null on
-   *  create and on failure. */
-  matched_by: "stored" | "sourceId" | "name" | null;
+   *  `sourceId`, `email` (the school address, unique in Toddle), or
+   *  `name`. The last two mean the Toddle record was NOT carrying our
+   *  sourceId, so it was identified indirectly. Null on create and on
+   *  failure. */
+  matched_by: "stored" | "sourceId" | "email" | "name" | null;
   /** Fields that actually differed from what Toddle held, e.g.
    *  ["email", "gradeLevel"]. Empty on created / unchanged. */
   changed_fields: string[];

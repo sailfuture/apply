@@ -7,6 +7,7 @@ import type {
 } from "@/lib/xano";
 import {
   diffStudentFields,
+  matchToddleStudent,
   toStudentBody,
   upsertStudent,
   uploadStudentProfileImage,
@@ -187,7 +188,7 @@ export interface ToddleSyncPreview {
   changedFields: string[];
   /** How the existing record was found, mirroring the sync's own
    *  matching order. Null when nothing matched. */
-  matchedBy: "stored" | "sourceId" | "name" | null;
+  matchedBy: "stored" | "sourceId" | "email" | "name" | null;
   /** Set on `conflict` — what Toddle already has, so admin can go fix
    *  the record rather than re-running a sync that can't succeed. */
   note?: string;
@@ -240,17 +241,12 @@ export function previewToddleStudent({
     if (match) matchedBy = "sourceId";
   }
   if (!match) {
-    const byName = roster.filter(
-      (r) =>
-        (r.firstName ?? "").trim().toLowerCase() ===
-          fields.firstName.trim().toLowerCase() &&
-        (r.lastName ?? "").trim().toLowerCase() ===
-          fields.lastName.trim().toLowerCase() &&
-        (!fields.dob || !r.dob || r.dob.slice(0, 10) === fields.dob)
-    );
-    if (byName.length === 1) {
-      match = byName[0];
-      matchedBy = "name";
+    // Same helper the sync uses — email first, then punctuation-blind
+    // name + DOB — so the preview can't promise a different outcome.
+    const rosterMatch = matchToddleStudent(roster, fields);
+    if (rosterMatch) {
+      match = rosterMatch.student;
+      matchedBy = rosterMatch.matchedBy;
     }
   }
 
