@@ -209,8 +209,8 @@ function daySeasons(
   if (!am && !pm) return null;
   return {
     am: am ? (badge.get(am) ?? null) : null,
-    pm: pm && pm !== am ? (badge.get(pm) ?? null) : null,
-    handoff: Number(day.season_handoff) || 0,
+    pm: pm ? (badge.get(pm) ?? null) : null,
+    handoff: seasonHandoffOf(day),
   };
 }
 
@@ -1849,8 +1849,8 @@ function TermsSeasonsDialog({
     for (const d of days) {
       const am = seasonAmOf(d);
       const pm = seasonPmOf(d);
-      const handoff = Number(d.season_handoff) || 0;
-      for (const sid of pm && pm !== am ? [am, pm] : [am]) {
+      const handoff = seasonHandoffOf(d);
+      for (const sid of pm ? [am, pm] : [am]) {
         if (!sid) continue;
         const cur = m.get(sid) ?? {
           start: d.date,
@@ -1869,7 +1869,7 @@ function TermsSeasonsDialog({
         }
         if (d.date >= cur.end) {
           cur.end = d.date;
-          cur.sharedEnd = sid === am && pm > 0 && pm !== am;
+          cur.sharedEnd = sid === am && pm > 0;
           cur.endHandoff = cur.sharedEnd ? handoff : 0;
         }
         cur.total += 1;

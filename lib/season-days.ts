@@ -27,9 +27,18 @@ export function seasonAmOf(day: XanoSchoolCalendarDay): number {
   return Number(day.seasons_id) || 0;
 }
 
-/** Season taking over mid-day; 0 unless the day is a changeover. */
+/** Season taking over mid-day; 0 unless the day is a changeover.
+ *
+ *  A row naming the SAME season in both slots isn't a changeover — a
+ *  season can't hand off to itself. That state is reachable: the old
+ *  assignment route wrote `seasons_id` alone, so re-saving a season
+ *  over a shared date takes the morning and strands the afternoon
+ *  pointing at the same id. Normalising here means every reader —
+ *  badges, derived ranges, the planner — sees a plain whole day, and
+ *  the next save clears the leftovers. */
 export function seasonPmOf(day: XanoSchoolCalendarDay): number {
-  return Number(day.seasons_id_pm) || 0;
+  const pm = Number(day.seasons_id_pm) || 0;
+  return pm && pm !== seasonAmOf(day) ? pm : 0;
 }
 
 /** Minutes past midnight for the changeover, 0 when unset. */
