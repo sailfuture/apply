@@ -404,6 +404,10 @@ export async function GET(req: NextRequest) {
           // those server-side in
           // `/api/admin/enrolled/credential-cards`, so passwords never
           // ride along in the roster payload.
+          // Toddle (LMS) push state — stamped by `lib/toddle-sync.ts`
+          // on every successful sync. Surfaced so admin can see how
+          // stale the LMS is without opening each student.
+          toddle_synced_at: student.toddle_synced_at ?? null,
           has_school_account:
             (student.school_email ?? "").trim().length > 0 &&
             (student.school_password ?? "").trim().length > 0,
@@ -507,6 +511,10 @@ export interface EnrolledStudentRow {
   /** Student has at least one file in the evergreen `iep` document
    *  slot. Drives the roster's IEP filter and batch IEP download. */
   has_iep: boolean;
+  /** Unix-ms of the last successful Toddle sync for this student, or
+   *  `null` when they have never been pushed. Drives the "Last synced"
+   *  line next to the sync actions and the roster-level summary. */
+  toddle_synced_at: number | null;
   /** Student has a generated school Google account (both
    *  `school_email` and `school_password` stored). Drives the count on
    *  the "Sign-in sheets" button; the credentials themselves stay

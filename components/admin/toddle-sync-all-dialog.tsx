@@ -14,6 +14,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+import { formatNoteTimestamp } from "@/lib/format-note-time";
 import type {
   BulkToddleSyncResponse,
   BulkToddleSyncRow,
@@ -26,8 +27,22 @@ import type {
  * via `/api/admin/students/toddle-sync-all`, then shows the
  * per-student results. Idempotent — students already in Toddle are
  * matched and updated, never duplicated — so re-running is safe.
+ *
+ * `lastSyncedAt` / `neverSyncedCount` (derived by the host from the
+ * roster's `toddle_synced_at` stamps) render under the trigger as the
+ * roster-wide answer to "when did we last push to Toddle?", so that
+ * question doesn't require running a sync to find out.
  */
-export function ToddleSyncAllDialog() {
+export function ToddleSyncAllDialog({
+  lastSyncedAt,
+  neverSyncedCount,
+}: {
+  /** Most recent successful sync across the shown enrolled students,
+   *  or null when none of them has ever been pushed. */
+  lastSyncedAt?: number | null;
+  /** How many of those students have never been pushed. */
+  neverSyncedCount?: number;
+} = {}) {
   const [open, setOpen] = useState(false);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<BulkToddleSyncResponse | null>(null);
@@ -77,9 +92,32 @@ export function ToddleSyncAllDialog() {
       }}
     >
       <DialogTrigger asChild>
-        <Button variant="outline" size="sm" className="bg-white shrink-0">
+        <Button
+          variant="outline"
+          size="sm"
+          className="bg-white shrink-0"
+          title={
+            lastSyncedAt
+              ? `Most recent Toddle sync: ${new Date(lastSyncedAt).toLocaleString(
+                  "en-US",
+                  { dateStyle: "medium", timeStyle: "short" }
+                )}${
+                  neverSyncedCount
+                    ? ` · ${neverSyncedCount} shown student${
+                        neverSyncedCount === 1 ? "" : "s"
+                      } never synced`
+                    : ""
+                }`
+              : "No shown enrolled student has ever been pushed to Toddle"
+          }
+        >
           <RefreshCw className="size-3.5 mr-1.5" aria-hidden="true" />
           Sync All to Toddle
+          {lastSyncedAt ? (
+            <span className="ml-1.5 text-[11px] font-normal text-muted-foreground">
+              · {formatNoteTimestamp(lastSyncedAt)}
+            </span>
+          ) : null}
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-4xl max-h-[88vh] flex flex-col gap-0 overflow-hidden">

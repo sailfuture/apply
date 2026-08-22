@@ -193,6 +193,10 @@ function shapeStudent(s: XanoStudent) {
      *  card can default the enrollment year to the student's earliest
      *  associated school year when nothing is stored yet. */
     enrollment_school_years_id: s.enrollment_school_years_id ?? null,
+    /** Unix-ms of the last successful Toddle sync, stamped by
+     *  `lib/toddle-sync.ts`. Null until the student has been pushed —
+     *  the Sync to Toddle button reads it for its "Last synced" line. */
+    toddle_synced_at: s.toddle_synced_at ?? null,
     school_email: s.school_email ?? "",
     school_password: s.school_password ?? "",
     registration_school_years_id: Array.isArray(s.registration_school_years_id)

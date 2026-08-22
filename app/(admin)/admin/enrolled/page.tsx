@@ -296,6 +296,29 @@ export default function EnrolledStudentsPage() {
     ).length;
   }, [enrolledRows, search]);
 
+  // Roster-wide Toddle freshness — the most recent successful sync
+  // across the ENROLLED students currently shown, plus how many of
+  // them have never been pushed. Feeds the "Sync All to Toddle"
+  // trigger so "when did we last sync?" is answerable without running
+  // one.
+  const toddleFreshness = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const shown = enrolledRows.filter(
+      (r) => !q || matchesEnrolledSearch(r, q)
+    );
+    let latest: number | null = null;
+    let never = 0;
+    for (const r of shown) {
+      const ts = r.toddle_synced_at;
+      if (typeof ts === "number" && ts > 0) {
+        if (latest === null || ts > latest) latest = ts;
+      } else {
+        never++;
+      }
+    }
+    return { latest, never };
+  }, [enrolledRows, search]);
+
   async function downloadLogins() {
     if (printingLogins || loginCandidates.length === 0) return;
     setPrintingLogins(true);
@@ -639,7 +662,10 @@ export default function EnrolledStudentsPage() {
             <SchoolAccountBackfillDialog />
             {/* Bulk Toddle push — the per-student Sync to Toddle,
                 run across the whole enrolled roster. */}
-            <ToddleSyncAllDialog />
+            <ToddleSyncAllDialog
+              lastSyncedAt={toddleFreshness.latest}
+              neverSyncedCount={toddleFreshness.never}
+            />
             <Button
               variant="outline"
               className="bg-white shrink-0"
@@ -1326,6 +1352,7 @@ function StudentDetailSheet({
               studentId={row.student_id}
               studentName={row.student_full_name}
               gradeLevel={row.grade_level?.trim() || row.student_grade || null}
+              lastSyncedAt={row.toddle_synced_at}
               className="w-full"
             />
           </div>

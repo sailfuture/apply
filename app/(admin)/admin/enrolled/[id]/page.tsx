@@ -369,6 +369,7 @@ export default function EnrolledStudentDetailPage() {
             gradeLevel={
               packet?.grade_level?.trim() || app?.current_grade || null
             }
+            lastSyncedAt={student.toddle_synced_at ?? null}
           />
           {/* Family overview moved into the header's family nav group
               — keeping a second copy here would be the same journey

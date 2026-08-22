@@ -15,6 +15,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
+import { formatNoteTimestamp } from "@/lib/format-note-time";
 
 /**
  * Admin "Sync to Toddle" — POSTs to
@@ -28,22 +29,39 @@ import { cn } from "@/lib/utils";
  * it lands). `gradeLevel` is the packet's placement grade — required
  * by Toddle only when the sync has to create; the server explains via
  * the error toast when it's missing.
+ *
+ * `lastSyncedAt` (unix-ms, stamped on the student row by every
+ * successful sync) renders under the button as "Last synced …" — the
+ * only place that state was ever visible was Toddle itself, so a
+ * student who silently stopped syncing looked identical to one pushed
+ * this morning. Optional: callers without the field just get the
+ * button, and the line updates optimistically after a sync here rather
+ * than waiting for the parent's refetch.
  */
 export function SyncToddleButton({
   studentId,
   studentName,
   gradeLevel,
+  lastSyncedAt,
   className,
   onSynced,
 }: {
   studentId: number;
   studentName: string;
   gradeLevel?: string | null;
+  /** Unix-ms of this student's last successful Toddle sync, or null /
+   *  undefined when they have never been pushed. */
+  lastSyncedAt?: number | null;
   className?: string;
   onSynced?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  // Local echo of the prop so the line updates the moment a sync
+  // lands, without waiting for the host's SWR revalidation.
+  const [syncedAt, setSyncedAt] = useState<number | null>(
+    lastSyncedAt ?? null
+  );
 
   async function runSync() {
     setSaving(true);
@@ -90,6 +108,7 @@ export function SyncToddleButton({
       if (typeof data?.crew === "string" && data.crew)
         parts.push(`Crew: ${data.crew}.`);
       toast.success(parts.join(" "));
+      setSyncedAt(Date.now());
       setOpen(false);
       onSynced?.();
     } catch (err) {
@@ -104,17 +123,42 @@ export function SyncToddleButton({
 
   return (
     <>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        disabled={saving}
-        onClick={() => setOpen(true)}
-        className={cn("bg-white", className)}
-      >
-        <RefreshCw className="size-3.5 mr-1.5" />
-        Sync to Toddle
-      </Button>
+      {/* inline-flex so the stack keeps its intrinsic width and
+          doesn't stretch inside the detail page's button row; callers
+          that want a full-width block (the roster sheet) pass w-full. */}
+      <div className={cn("inline-flex flex-col items-start gap-1", className)}>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={saving}
+          onClick={() => setOpen(true)}
+          className="bg-white w-full"
+        >
+          <RefreshCw className="size-3.5 mr-1.5" />
+          Sync to Toddle
+        </Button>
+        {/* Sync freshness. `lastSyncedAt === undefined` means the
+            caller doesn't carry the field, which is not the same as
+            "never synced" — say nothing rather than claim never. */}
+        {lastSyncedAt !== undefined ? (
+          <span
+            className="text-[11px] text-muted-foreground"
+            title={
+              syncedAt
+                ? new Date(syncedAt).toLocaleString("en-US", {
+                    dateStyle: "medium",
+                    timeStyle: "short",
+                  })
+                : "This student has never been pushed to Toddle."
+            }
+          >
+            {syncedAt
+              ? `Last synced ${formatNoteTimestamp(syncedAt)}`
+              : "Never synced"}
+          </span>
+        ) : null}
+      </div>
       <AlertDialog
         open={open}
         onOpenChange={(next) => {
