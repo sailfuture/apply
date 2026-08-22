@@ -420,6 +420,8 @@ export default function EnrolledStudentDetailPage() {
       <PlacementCard
         packet={packet}
         schoolYear={school_year}
+        student={student}
+        isResidential={family?.is_residential === true}
         onChanged={() => mutate()}
       />
 
@@ -701,6 +703,16 @@ const PLACEMENT_GRADE_OPTIONS = [
   "12th",
 ] as const;
 
+/** The two residential homes a foster placement can live in. Offered
+ *  only when the student's family carries `is_residential`.
+ *
+ *  Deliberately no blank/"unassign" entry: Xano's edit endpoints drop
+ *  empty-string inputs, so writing "" back would silently no-op and
+ *  leave the old house on screen after a save that appeared to work.
+ *  Reassigning between the two works fine; genuinely clearing a house
+ *  needs a sentinel value the way inquiry `status` does. */
+const RESIDENTIAL_HOUSE_OPTIONS = ["Lakewood", "Waterfront"] as const;
+
 /** Crew options for the admin Placement card's crew select. */
 const PLACEMENT_CREW_OPTIONS = [
   "Crew A",
@@ -728,10 +740,19 @@ const PLACEMENT_CREW_OPTIONS = [
 function PlacementCard({
   packet,
   schoolYear,
+  student,
+  isResidential,
   onChanged,
 }: {
   packet: AdminEnrolledStudentResponse["packet"];
   schoolYear: AdminEnrolledStudentResponse["school_year"];
+  /** Residential home lives on the STUDENT row (evergreen), unlike
+   *  grade + crew which are per-year packet columns — so this card
+   *  saves to two different endpoints depending on what changed. */
+  student: AdminEnrolledStudentResponse["student"];
+  /** Family's `is_residential` flag — the house select only renders
+   *  for foster/residential families. */
+  isResidential: boolean;
   onChanged: () => void | Promise<unknown>;
 }) {
   const [editing, setEditing] = useState(false);
@@ -739,6 +760,7 @@ function PlacementCard({
   const [draft, setDraft] = useState({
     grade_level: packet?.grade_level ?? "",
     crew_assignment: packet?.crew_assignment ?? "",
+    residential_house: student.residential_house ?? "",
   });
   const yearSuffix = schoolYear?.year_name ? ` · ${schoolYear.year_name}` : "";
 
@@ -746,6 +768,7 @@ function PlacementCard({
     setDraft({
       grade_level: packet?.grade_level ?? "",
       crew_assignment: packet?.crew_assignment ?? "",
+      residential_house: student.residential_house ?? "",
     });
     setEditing(true);
   }
@@ -760,20 +783,46 @@ function PlacementCard({
       patch.grade_level = draft.grade_level;
     if (draft.crew_assignment !== (packet.crew_assignment ?? ""))
       patch.crew_assignment = draft.crew_assignment;
-    if (Object.keys(patch).length === 0) {
+    // Residential home is evergreen on the student row, so it goes to
+    // the student endpoint rather than the per-year packet one.
+    const houseChanged =
+      isResidential &&
+      draft.residential_house !== (student.residential_house ?? "") &&
+      draft.residential_house !== "";
+    if (Object.keys(patch).length === 0 && !houseChanged) {
       setEditing(false);
       return;
     }
     setSaving(true);
     try {
-      const res = await fetch(`/api/admin/student-registration/${packet.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(patch),
-      });
-      if (!res.ok) {
-        const errBody = await res.json().catch(() => null);
-        throw new Error(errBody?.error ?? `Save failed (${res.status})`);
+      if (Object.keys(patch).length > 0) {
+        const res = await fetch(
+          `/api/admin/student-registration/${packet.id}`,
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(patch),
+          }
+        );
+        if (!res.ok) {
+          const errBody = await res.json().catch(() => null);
+          throw new Error(errBody?.error ?? `Save failed (${res.status})`);
+        }
+      }
+      if (houseChanged) {
+        const res = await fetch(`/api/admin/students/${student.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            residential_house: draft.residential_house,
+          }),
+        });
+        if (!res.ok) {
+          const errBody = await res.json().catch(() => null);
+          throw new Error(
+            errBody?.error ?? `Residential home save failed (${res.status})`
+          );
+        }
       }
       toast.success("Placement saved.");
       setEditing(false);
@@ -837,6 +886,17 @@ function PlacementCard({
                     options={PLACEMENT_CREW_OPTIONS}
                     disabled={saving}
                   />
+                  {isResidential ? (
+                    <EditSelectField
+                      label="Residential home"
+                      value={draft.residential_house}
+                      onChange={(v) =>
+                        setDraft((d) => ({ ...d, residential_house: v }))
+                      }
+                      options={RESIDENTIAL_HOUSE_OPTIONS}
+                      disabled={saving}
+                    />
+                  ) : null}
                 </>
               ) : (
                 <>
@@ -845,6 +905,12 @@ function PlacementCard({
                     label="Crew assignment"
                     value={packet.crew_assignment}
                   />
+                  {isResidential ? (
+                    <ReadField
+                      label="Residential home"
+                      value={student.residential_house}
+                    />
+                  ) : null}
                 </>
               )}
             </div>

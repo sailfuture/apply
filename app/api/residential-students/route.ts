@@ -1,6 +1,8 @@
 import { auth, currentUser } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
 import { xano } from "@/lib/xano";
+import { sendEmail } from "@/lib/emails/send";
+import { residentialStudentAdded } from "@/lib/emails/templates";
 
 /**
  * Create a brand-new student for a residential / foster family and open
@@ -162,6 +164,48 @@ export async function POST(req: NextRequest) {
     enrollment_agreement_sent_at: null,
     enrollment_agreement_pdf_url: "",
   });
+
+  // 3. Notify staff. Foster placements arrive mid-year with no
+  //    admissions queue to surface them, so without this the new
+  //    student sits unnoticed until someone opens the roster.
+  //    Best-effort: the student and application are already created,
+  //    and a mail failure must not fail the request or the parent
+  //    would retry and create a duplicate student.
+  try {
+    const schoolYear = await xano.schoolYears
+      .getById(yearId)
+      .catch(() => null);
+    const appBase = (
+      process.env.NEXT_PUBLIC_APP_URL ?? "https://apply.sailfutureacademy.org"
+    ).replace(/\/$/, "");
+    await sendEmail({
+      to: [
+        process.env.RESIDENTIAL_ALERTS_EMAIL ?? "admissions@sailfuture.org",
+      ],
+      // Explicit CC rather than the dean+admissions default: this one
+      // is already addressed TO admissions, so the default list would
+      // deliver them a duplicate copy.
+      cc: ["dean@sailfuture.org"],
+      content: residentialStudentAdded({
+        student_name: `${first_name} ${last_name}`.trim(),
+        student_dob: date_of_birth,
+        family_name: family.family_name?.trim() || `Family #${familyId}`,
+        // Staff assign the home after the fact — the creating family
+        // never picks it, so it is always unset at this point.
+        residential_house: student.residential_house?.trim() || null,
+        year_name: schoolYear?.year_name?.trim() || `Year ${yearId}`,
+        student_url: `${appBase}/admin/enrolled/${student.id}?yearId=${yearId}`,
+      }),
+      tag: "residential-student-added",
+      familyId,
+      yearId,
+    });
+  } catch (err) {
+    console.error(
+      `[/api/residential-students] staff notification failed for student ${student.id}:`,
+      err
+    );
+  }
 
   return NextResponse.json({ student, application }, { status: 201 });
 }

@@ -191,6 +191,11 @@ export interface XanoStudent {
    *  via the shared `PhoneInput`. Optional contact field — empty
    *  string when unset, and legacy rows pre-date the column add. */
   student_phone?: string;
+  /** Which residential home a foster/residential placement lives in
+   *  ("Lakewood" / "Waterfront"). Evergreen on the student row, not
+   *  the per-year packet, so it follows a placement across years.
+   *  Empty for community (non-residential) students. */
+  residential_house?: string;
   photo: string | null;
   /** Student photo — an Xano *image* column populated via the admin
    *  Student Photo card (client-compressed JPEG, uploaded through

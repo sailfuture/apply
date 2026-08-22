@@ -603,3 +603,94 @@ export function recordsRequest(ctx: RecordsRequestContext): EmailContent {
   ].join("\n");
   return { subject, html, text };
 }
+
+/* ─────────────────────── Staff notification ─────────────────────── */
+/* A residential/foster family added a new student mid-cycle. */
+
+export interface ResidentialStudentAddedContext {
+  /** New student's full name. */
+  student_name: string;
+  /** Date of birth as entered, or null when the family skipped it. */
+  student_dob: string | null;
+  /** The residential family that added them. */
+  family_name: string;
+  /** Which home the placement is in, once staff assign it. Null at
+   *  creation time — the family doesn't pick it, staff do. */
+  residential_house: string | null;
+  /** School year label the application was opened against. */
+  year_name: string;
+  /** Deep link to the student's admin record. */
+  student_url: string;
+}
+
+/**
+ * Fired when a residential family creates a new student from their
+ * enrolled dashboard. Unlike every other template here this one is
+ * STAFF-facing: foster placements arrive mid-year with no admissions
+ * queue to surface them, so without this email a new student could sit
+ * unnoticed until someone happened to open the roster.
+ *
+ * The residential home is deliberately shown as "Not assigned yet" at
+ * creation rather than omitted — assigning it is the action this email
+ * is asking someone to take.
+ */
+export function residentialStudentAdded(
+  ctx: ResidentialStudentAddedContext
+): EmailContent {
+  const subject = `New residential placement: ${ctx.student_name}`;
+  const preheader = `${ctx.family_name} added ${ctx.student_name} for ${ctx.year_name}.`;
+
+  const row = (label: string, value: string, muted = false) =>
+    `<tr>
+      <td style="padding:6px 12px 6px 0;font-size:14px;color:#6b7280;white-space:nowrap;vertical-align:top;">${escapeHtml(label)}</td>
+      <td style="padding:6px 0;font-size:14px;color:${muted ? "#9ca3af" : "#111827"};word-break:break-word;">${escapeHtml(value)}</td>
+    </tr>`;
+
+  const houseLabel = ctx.residential_house ?? "Not assigned yet";
+  const detailRows = [
+    row("Student", ctx.student_name),
+    ctx.student_dob ? row("Date of birth", ctx.student_dob) : "",
+    row("Family", ctx.family_name),
+    row("Residential home", houseLabel, !ctx.residential_house),
+    row("School year", ctx.year_name),
+  ].join("");
+
+  const html = layout({
+    preheader,
+    body:
+      `<h2 style="margin:0 0 16px;font-size:18px;">New residential placement added</h2>` +
+      p(
+        `${escapeHtml(ctx.family_name)} added a new student from their family dashboard. The registration packet is open for them to complete — no admissions review is required for residential placements.`
+      ) +
+      `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 16px;">${detailRows}</table>` +
+      (ctx.residential_house
+        ? ""
+        : p(
+            `Set the residential home on the student's Placement card so the roster reflects where they're living.`
+          )),
+    buttonHref: ctx.student_url,
+    buttonLabel: "Open student record",
+  });
+
+  const text = [
+    `New residential placement added`,
+    "",
+    `Student: ${ctx.student_name}`,
+    ctx.student_dob ? `Date of birth: ${ctx.student_dob}` : "",
+    `Family: ${ctx.family_name}`,
+    `Residential home: ${houseLabel}`,
+    `School year: ${ctx.year_name}`,
+    "",
+    `${ctx.family_name} added this student from their family dashboard. The registration packet is open for them to complete — no admissions review is required for residential placements.`,
+    "",
+    ctx.residential_house
+      ? ""
+      : `Set the residential home on the student's Placement card so the roster reflects where they're living.`,
+    "",
+    `Open student record: ${ctx.student_url}`,
+  ]
+    .filter((line) => line !== "")
+    .join("\n");
+
+  return { subject, html, text };
+}

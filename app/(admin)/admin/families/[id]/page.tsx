@@ -6011,22 +6011,17 @@ function ScholarshipReviewBlock({
    *  benefits. */
   onScholarshipChanged: () => void;
 }) {
-  const { data: payCells, isLoading: payLoading } = useSWR<AwardBracketCell[]>(
-    yearId ? `/api/admin/school-year-brackets?yearId=${yearId}` : null,
-    adminFetcher
-  );
-  const { data: netAssetsCells, isLoading: netLoading } = useSWR<
-    AwardBracketCell[]
-  >(
-    yearId ? `/api/admin/school-year-net-assets-brackets?yearId=${yearId}` : null,
-    adminFetcher
-  );
+  // Bracket fetches used to live here to drive the removed
+  // financial-picture table. The award math reads the parent's own
+  // copies (see `monthlyAmountFromMatrix`), so these were two HTTP
+  // requests per render feeding nothing.
+  //
   // Admin name lookup used to live here for the SNAP doc confirm
   // row; now that SNAP renders inside `<DocumentsToReviewBlock>`'s
   // table, the lookup lives there. No reason to duplicate the
   // fetch on this surface.
 
-  const showSkeleton = loading || payLoading || netLoading;
+  const showSkeleton = loading;
 
   if (showSkeleton) {
     return (
@@ -6268,231 +6263,14 @@ function ScholarshipReviewBlock({
     );
   }
 
-  // Read the admin-endpoint expansions. Each is a single object today
-  // (Xano returns the first matching child); guard against null so a
-  // family with no member / home / vehicle still renders. Xano's
-  // alias suffixes have drifted across revisions of the
-  // `admin_family_application` query (e.g. `_1` on contributing
-  // members, `_3` on home), so each read falls back through the
-  // known suffix variants and lands on `null` if none match.
-  const member =
-    scholarship._registration_opportunity_scholarship_contributing_members_of_registration_opportunity_scholarship_1 ??
-    scholarship._registration_opportunity_scholarship_contributing_members_of_registration_opportunity_scholarship ??
-    null;
-  const home =
-    scholarship._registration_opportunity_scholarship_home_of_registration_opportunity_scholarship_3 ??
-    scholarship._registration_opportunity_scholarship_home_of_registration_opportunity_scholarship ??
-    null;
-  const vehicle =
-    scholarship._registration_opportunity_scholarship_vehicles_of_registration_opportunity_scholarship ??
-    scholarship._registration_opportunity_scholarship_vehicles_of_registration_opportunity_scholarship_2 ??
-    null;
-
-  const householdSize =
-    (scholarship.household_adults ?? 0) +
-    (scholarship.household_children ?? 0);
-
-  const wagesAnnualIncome = member?.estimated_annual_income ?? 0;
-  const passiveAnnualIncome =
-    ((scholarship.business_income_monthly ?? 0) +
-      (scholarship.capital_gains_monthly ?? 0) +
-      (scholarship.child_support_monthly ?? 0) +
-      (scholarship.alimony_monthly ?? 0) +
-      (scholarship.trusts_monthly ?? 0) +
-      (scholarship.other_income_monthly ?? 0)) *
-    12;
-  const totalAnnualIncome = wagesAnnualIncome + passiveAnnualIncome;
-
-  // Assets in three buckets: liquid, home equity, vehicle equity.
-  // Net the home / vehicle debts into their respective equities so
-  // the Personal Debt row stays focused on unsecured liabilities
-  // (credit cards / student loans / personal loans).
-  const liquidAssets =
-    (scholarship.assets_checking ?? 0) +
-    (scholarship.assets_savings ?? 0) +
-    (scholarship.assets_retirement_savings ?? 0) +
-    (scholarship.assets_stocks_bonds_securities ?? 0) +
-    (scholarship.assets_trusts_inheritance ?? 0) +
-    (scholarship.assets_business ?? 0);
-  const homeEquity =
-    home && Number.isFinite(home.total_value)
-      ? (home.total_value ?? 0) - (home.outstanding_debt ?? 0)
-      : 0;
-  const vehicleEquity =
-    vehicle && Number.isFinite(vehicle.total_value)
-      ? (vehicle.total_value ?? 0) - (vehicle.remaining_debt ?? 0)
-      : 0;
-  const totalAssets = liquidAssets + homeEquity + vehicleEquity;
-
-  const totalDebts =
-    (scholarship.debts_credit_cards ?? 0) +
-    (scholarship.debts_student_loans ?? 0) +
-    (scholarship.debts_personal_loans ?? 0);
-
-  const netAssets = totalAssets - totalDebts;
-  const familyNet = totalAnnualIncome + totalAssets - totalDebts;
-
-  // Path selection. >$100k net assets routes to the dedicated
-  // sliding-scale table on `_net_assets_bracket`.
-  const useNetAssetsMatrix = netAssets > 100_000;
-
-  let matchedCell: AwardBracketCell | null = null;
-  let tuitionPct = 0;
-
-  if (useNetAssetsMatrix) {
-    matchedCell =
-      (netAssetsCells ?? []).find(
-        (c) =>
-          (c.net_asset_min ?? 0) <= netAssets &&
-          (c.net_asset_max === null ||
-            c.net_asset_max === undefined ||
-            netAssets < (c.net_asset_max as number))
-      ) ?? null;
-    tuitionPct = matchedCell?.percentage_of_total_tuition ?? 0;
-  } else {
-    matchedCell =
-      (payCells ?? []).find(
-        (c) =>
-          c.household_size === householdSize &&
-          (c.income_min ?? 0) <= totalAnnualIncome &&
-          (c.income_max === null ||
-            c.income_max === undefined ||
-            totalAnnualIncome < (c.income_max as number))
-      ) ?? null;
-    tuitionPct = matchedCell?.tuition_percentage ?? 0;
-  }
-
-  // `baseTuition`, `baseTransport`, `annualFees` are all hoisted
-  // above the SNAP branch (the SNAP cost table needs them too).
-  const calculatedTuition = baseTuition * (tuitionPct / 100);
-  // Bus transportation is a per-family fee, but the opt-in flag lives
-  // on each `registration_application`. OR across the family's apps —
-  // a single student riding pulls the family into the fee. When no
-  // student opts in, we zero out the row entirely (and dash it in the
-  // table below) so the matrix doesn't bake a fee the family didn't
-  // sign up for.
-  const anyBusTransportation = apps.some((a) => a.is_bus_transportation);
-  const transportBeforeOptIn = useNetAssetsMatrix
-    ? baseTransport
-    : baseTransport * (tuitionPct / 100);
-  // High-net-assets families pay the full transportation fee; on the
-  // standard matrix transport scales with the same percentage.
-  const calculatedTransport = anyBusTransportation
-    ? transportBeforeOptIn
-    : 0;
-
-  // SNAP and opt-out paths short-circuit above this point — the
-  // remainder of the block is the full Opportunity Scholarship
-  // review (financial picture + matrix + documents). No SNAP
-  // banner inline here anymore; SNAP families render their
-  // dedicated SNAP-only view from the early return up top.
-
-  return (
-    <div className="space-y-4">
-      {/* Scholarship review — financial picture rendered with the
-          same wrapper shell as the Pay Matrix Determination block
-          below: outer rounded border, header strip with title +
-          subtitle, table inside. Keeps both blocks visually in
-          conversation rather than the prior plain-table treatment. */}
-      <div className="rounded-md border bg-muted/20 overflow-hidden">
-        <div className="px-4 py-2 border-b bg-muted/40">
-          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Scholarship Review
-          </p>
-        </div>
-        <p className="text-xs text-muted-foreground px-4 pt-3 pb-2 bg-white">
-          Auto-calculated from the family&rsquo;s Financial Aid
-          submission. Use the bracket determination below to inform
-          the per-student Opportunity Scholarship awards.
-        </p>
-        {/* Body rows are explicit `bg-white` so the muted wrapper only
-            shows through the header strip + the totals row. Without
-            this the middle rows inherit the muted `bg-muted/20`
-            wrapper tone and the table reads as one flat block. */}
-        <table className="w-full text-sm">
-          <tbody className="divide-y border-t">
-            <tr className="bg-white">
-              <td className="px-4 py-2 font-medium">
-                Annual income
-                <span className="block text-[11px] text-muted-foreground font-normal">
-                  {formatCurrency(wagesAnnualIncome)} wages +{" "}
-                  {formatCurrency(passiveAnnualIncome)} passive
-                </span>
-              </td>
-              <td
-                className={cn(
-                  "px-4 py-2 text-right tabular-nums align-top",
-                  totalAnnualIncome > 0 && "text-green-600"
-                )}
-              >
-                {formatCurrency(totalAnnualIncome)}
-              </td>
-            </tr>
-            <tr className="bg-white">
-              <td className="px-4 py-2 font-medium">
-                Total assets
-                <span className="block text-[11px] text-muted-foreground font-normal">
-                  {formatCurrency(liquidAssets)} liquid
-                  {homeEquity !== 0
-                    ? ` · ${formatCurrency(homeEquity)} home equity`
-                    : ""}
-                  {vehicleEquity !== 0
-                    ? ` · ${formatCurrency(vehicleEquity)} vehicle equity`
-                    : ""}
-                </span>
-              </td>
-              <td
-                className={cn(
-                  "px-4 py-2 text-right tabular-nums align-top",
-                  totalAssets > 0 && "text-green-600",
-                  // Underwater total assets (debts/equity netting
-                  // out below zero) read as red, matching the
-                  // negative-balance pattern used on the Personal
-                  // debt row below.
-                  totalAssets < 0 && "text-red-600"
-                )}
-              >
-                {formatCurrency(totalAssets)}
-              </td>
-            </tr>
-            <tr className="bg-white">
-              <td className="px-4 py-2 font-medium">
-                Personal debt / liabilities
-                <span className="block text-[11px] text-muted-foreground font-normal">
-                  Credit cards, student loans, personal loans
-                </span>
-              </td>
-              <td
-                className={cn(
-                  "px-4 py-2 text-right tabular-nums align-top",
-                  totalDebts > 0 && "text-red-600"
-                )}
-              >
-                -{formatCurrency(totalDebts)}
-              </td>
-            </tr>
-            <tr className="bg-muted/40">
-              <td className="px-4 py-2 font-semibold">Family Net</td>
-              <td
-                className={cn(
-                  "px-4 py-2 text-right tabular-nums font-semibold",
-                  familyNet < 0 ? "text-red-600" : "text-green-600"
-                )}
-              >
-                {formatCurrency(familyNet)}
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-
-      {/* `DocumentsToReviewBlock` moved out — now rendered once at
-          the `DecisionCard` level (between the per-student SUFS
-          rows and this block) so the card flow reads:
-            SUFS rows → Documents to Review → Scholarship Review →
-            Student-Specific Payments. */}
-    </div>
-  );
+  // Standard Opportunity Scholarship path renders nothing. The
+  // financial-picture table that used to live here (annual income /
+  // total assets / personal debt / family net) was removed at admin's
+  // request. Everything it computed was display-only: the bracket math
+  // that actually drives awards lives in `monthlyAmountFromMatrix`
+  // above, off the parent's own bracket fetches. The SNAP, opted-out
+  // and no-scholarship branches above still render.
+  return null;
 }
 
 /**

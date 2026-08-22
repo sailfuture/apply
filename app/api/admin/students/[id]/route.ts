@@ -128,6 +128,11 @@ export async function PATCH(
       // Lives on the default group's CRUD (like the bio fields above),
       // so it doesn't flip `touchesAdminGroupFields`.
       "student_phone",
+      // Residential home ("Lakewood" / "Waterfront") for foster
+      // placements, set on the enrolled-detail Placement card.
+      // Evergreen on the student row so it follows the placement
+      // across years.
+      "residential_house",
       // Student photo — Xano image-column metadata object set by the
       // admin Student Photo card (client-compressed, uploaded via
       // `/upload/image`). Stored as the metadata blob Xano returns.

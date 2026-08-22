@@ -143,6 +143,9 @@ export async function GET(
         ? {
             id: family.id,
             family_name: family.family_name ?? "",
+            // Gates the Placement card's residential-home select —
+            // the concept only exists for foster/residential families.
+            is_residential: family.is_residential === true,
           }
         : null,
       primary: primary ? shapeParent(primary) : null,
@@ -171,6 +174,10 @@ function shapeStudent(s: XanoStudent) {
     /** Student's own phone — canonical 10-digit US digits. Evergreen
      *  on the student row; editable from the Student Information card. */
     student_phone: s.student_phone ?? "",
+    /** Residential home ("Lakewood" / "Waterfront") for foster
+     *  placements — set on the admin Placement card. Empty for
+     *  community students, who never see the field. */
+    residential_house: s.residential_house ?? "",
     photo: s.photo ?? null,
     /** Student photo — Xano image-column metadata set by the admin
      *  Student Photo card. Passed through as-is for the card to render
@@ -396,7 +403,11 @@ export interface AdminEnrolledStudentResponse {
   student: ReturnType<typeof shapeStudent>;
   app: ReturnType<typeof shapeApp> | null;
   packet: ReturnType<typeof shapePacket> | null;
-  family: { id: number; family_name: string } | null;
+  family: {
+    id: number;
+    family_name: string;
+    is_residential: boolean;
+  } | null;
   /** Lowest-id parent — kept on the response for the page header
    *  subtitle that's been there since the page was first built. */
   primary: ReturnType<typeof shapeParent> | null;

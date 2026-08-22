@@ -12,6 +12,7 @@ import {
   MapPin,
   Pencil,
   Plus,
+  Search,
   Trash2,
   Users,
 } from "lucide-react";
@@ -232,6 +233,22 @@ export default function AdminVolunteerHoursPage() {
       pendingCount: pendingEntries.length,
     };
   }, [familyRows, pendingEntries]);
+
+  // Family-progress search. Matches the family name OR any of the
+  // family's students, so staff who know a kid but not which family
+  // row they sit under can still find the record — the table itself
+  // only ever showed family names. `students` is the dot-joined
+  // full-name list the API already builds for the crediting dialogs.
+  const [familyQuery, setFamilyQuery] = useState("");
+  const visibleFamilyRows = useMemo(() => {
+    const q = familyQuery.trim().toLowerCase();
+    if (!q) return familyRows;
+    return familyRows.filter(
+      ({ family }) =>
+        family.name.toLowerCase().includes(q) ||
+        family.students.toLowerCase().includes(q)
+    );
+  }, [familyRows, familyQuery]);
 
   // ── UI state ──
   const [openFamilyId, setOpenFamilyId] = useState<number | null>(null);
@@ -632,9 +649,29 @@ export default function AdminVolunteerHoursPage() {
           {/* ── Family progress ── */}
           <Card className="bg-white py-0 gap-0 overflow-hidden">
             <CardHeader className="border-b py-4">
-              <CardTitle className="text-base">
-                Family progress ({familyRows.length})
-              </CardTitle>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <CardTitle className="text-base">
+                  Family progress (
+                  {familyQuery.trim()
+                    ? `${visibleFamilyRows.length} of ${familyRows.length}`
+                    : familyRows.length}
+                  )
+                </CardTitle>
+                <div className="relative w-full sm:w-72">
+                  <Search
+                    className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground/60"
+                    aria-hidden="true"
+                  />
+                  <Input
+                    value={familyQuery}
+                    onChange={(e) => setFamilyQuery(e.target.value)}
+                    placeholder="Search family or student…"
+                    type="search"
+                    autoComplete="off"
+                    className="pl-9 bg-white"
+                  />
+                </div>
+              </div>
             </CardHeader>
             <CardContent
               aria-busy={refreshing}
@@ -658,17 +695,19 @@ export default function AdminVolunteerHoursPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {familyRows.length === 0 ? (
+                  {visibleFamilyRows.length === 0 ? (
                     <TableRow>
                       <TableCell
                         colSpan={5}
                         className="py-6 text-center text-sm text-muted-foreground"
                       >
-                        No enrolled families for this school year yet.
+                        {familyQuery.trim()
+                          ? `No family or student matches “${familyQuery.trim()}”.`
+                          : "No enrolled families for this school year yet."}
                       </TableCell>
                     </TableRow>
                   ) : (
-                    familyRows.map(({ family, approved, pending }) => {
+                    visibleFamilyRows.map(({ family, approved, pending }) => {
                       const pct = Math.min(
                         100,
                         (approved / HOURS_GOAL) * 100
@@ -685,6 +724,11 @@ export default function AdminVolunteerHoursPage() {
                             {!family.enrolled ? (
                               <span className="ml-1.5 rounded-full border px-1.5 py-px text-[10px] font-medium text-muted-foreground align-middle">
                                 Not enrolled
+                              </span>
+                            ) : null}
+                            {family.students ? (
+                              <span className="block text-xs font-normal text-muted-foreground">
+                                {family.students}
                               </span>
                             ) : null}
                           </TableCell>

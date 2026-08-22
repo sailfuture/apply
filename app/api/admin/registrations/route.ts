@@ -144,6 +144,21 @@ export async function GET(req: NextRequest) {
       progressRows.map((p) => [p.registration_families_id, p])
     );
 
+    // Archived registrations are hidden from the active queues. The
+    // Archive button on the registration detail page flips
+    // `isArchived` on the family's per-year
+    // `registration_student_registration_progress` row — the same row
+    // these packet booleans come from — but this route never read it,
+    // so an archived family kept sitting in In Progress / Not Started
+    // with no way to clear it. (Verified on 2026-2027: Fluellen
+    // (Kenneth), Murray (Maleah) and Hohlfeld were all archived and
+    // still listed.)
+    const archivedFamilyIds = new Set(
+      progressRows
+        .filter((p) => p.isArchived === true)
+        .map((p) => Number(p.registration_families_id))
+    );
+
     // Set of family ids whose per-year application progress row says
     // accepted. The Approve flow on the Scholarship Determination card
     // patches `isAccepted=true` on this row, NOT on the per-student
@@ -167,6 +182,8 @@ export async function GET(req: NextRequest) {
     const acceptedApps = apps.filter((a) => {
       if (Number(a.registration_school_years_id) !== yearId) return false;
       if ((a as { isActive?: boolean }).isActive === false) return false;
+      if (archivedFamilyIds.has(Number(a.registration_families_id)))
+        return false;
       const familyAccepted = acceptedFamilyIds.has(
         Number(a.registration_families_id)
       );
