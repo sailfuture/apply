@@ -10,13 +10,11 @@ import {
 /**
  * Student sign-in sheets — letter-size school-account handouts,
  * printable in black and white and handed out on the first day of
- * classes, delivered as a zip organized BY CREW:
+ * classes, delivered as a zip of one PDF per CREW:
  *
- *   Crew A/
- *     Crew A - 24 students.pdf   ← the crew's whole stack, one print job
- *   Crew B/
- *     ...
- *   No crew assigned/
+ *   Crew A - 24 students.pdf   ← the crew's whole stack, one print job
+ *   Crew B - 19 students.pdf
+ *   No crew assigned - 3 students.pdf
  *
  *   POST { studentIds: number[], yearId: number }  →  application/zip
  *
@@ -39,11 +37,11 @@ export const maxDuration = 60;
 
 const MAX_STUDENTS = 400;
 
-/** Folder name for students whose crew hasn't been set yet. Sorts
- *  last because the crew sort key pushes blanks to the end. */
-const NO_CREW_FOLDER = "No crew assigned";
+/** File label for students whose crew hasn't been set yet. Sorts last
+ *  because the crew sort key pushes blanks to the end. */
+const NO_CREW_LABEL = "No crew assigned";
 
-/** Strip characters that break zip paths on Windows extractors —
+/** Strip characters that break file names on Windows extractors —
  *  same guard the IEP export uses. */
 function safeName(s: string): string {
   return s.replace(/[\\/:*?"<>|]+/g, "_").trim();
@@ -179,30 +177,31 @@ export async function POST(req: NextRequest) {
       return a.firstName.localeCompare(b.firstName);
     });
 
-    // One folder per crew, in the sorted order above (Map preserves
-    // insertion order, so the folders come out A, B, C… then blank).
+    // One bucket per crew, in the sorted order above (Map preserves
+    // insertion order, so the files come out A, B, C… then blank).
     const byCrew = new Map<string, CredentialCardStudent[]>();
     for (const card of cards) {
-      const folder = card.crew.trim() || NO_CREW_FOLDER;
-      const bucket = byCrew.get(folder);
+      const label = card.crew.trim() || NO_CREW_LABEL;
+      const bucket = byCrew.get(label);
       if (bucket) bucket.push(card);
-      else byCrew.set(folder, [card]);
+      else byCrew.set(label, [card]);
     }
 
     const pdfOptions = { yearName: yearName || `Year #${yearId}` };
     const zip = new JSZip();
 
     for (const [crewName, crewCards] of byCrew) {
-      const folder = safeName(crewName) || NO_CREW_FOLDER;
+      const label = safeName(crewName) || NO_CREW_LABEL;
       // One document per crew — the crew's whole stack, in roll order,
-      // so printing it is a single job. The filename repeats the crew
-      // so it still identifies itself once moved out of its folder.
+      // so printing it is a single job. Flat at the zip root: a folder
+      // holding exactly one file is just an extra click before the
+      // print dialog.
       const combined = await generateStudentCredentialPdf(
         crewCards,
         pdfOptions
       );
       zip.file(
-        `${folder}/${folder} - ${crewCards.length} student${
+        `${label} - ${crewCards.length} student${
           crewCards.length === 1 ? "" : "s"
         }.pdf`,
         combined

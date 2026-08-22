@@ -275,8 +275,8 @@ export default function EnrolledStudentsPage() {
 
   // Printable sign-in sheets — one branded page per student carrying
   // their school email + password, for handing out on the first day.
-  // Downloads a zip organized into one folder per crew, each holding
-  // that crew's whole stack as a single printable PDF.
+  // Downloads a zip holding one printable PDF per crew — that crew's
+  // whole stack, in roll order.
   // Same "every ENROLLED student currently shown" contract as the IEP
   // download above, narrowed further to students who actually have an
   // account generated (the rest need "Create Student Emails" first).
@@ -330,7 +330,7 @@ export default function EnrolledStudentsPage() {
       const printed = loginCandidates.length - skipped;
       toast.success(
         `Downloaded sign-in sheets for ${printed} student${printed === 1 ? "" : "s"}${
-          crews > 0 ? ` in ${crews} crew folder${crews === 1 ? "" : "s"}` : ""
+          crews > 0 ? ` across ${crews} crew PDF${crews === 1 ? "" : "s"}` : ""
         }.${
           skipped > 0
             ? ` ${skipped} skipped — no school account on file.`
@@ -673,7 +673,7 @@ export default function EnrolledStudentsPage() {
               title={
                 loginCandidates.length === 0
                   ? 'No shown enrolled students have a school account yet — run "Create Student Emails" first'
-                  : `Download a zip of printable sign-in pages, one folder per crew${
+                  : `Download a zip of printable sign-in pages, one PDF per crew${
                       missingLoginCount > 0
                         ? ` (${missingLoginCount} shown student${
                             missingLoginCount === 1 ? "" : "s"
