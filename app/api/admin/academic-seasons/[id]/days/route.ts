@@ -1,13 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
-import { planSeasonDays } from "@/lib/season-days";
+import { previewSeasonSave } from "@/lib/season-days";
 
 /**
  * Assign a date range of calendar days to a season.
  *
  *   POST { yearId, start_date, end_date, handoff_start?, handoff_end? }
  *     → { assigned, shared, cleared, total }
+ *     → 409 { error, issues } when the save would break the chain
+ *       (split a season in two, or leave one with no dates at all).
+ *       Gaps and unshared boundaries are warnings, not refusals — see
+ *       `previewSeasonSave`.
  *
  * Stamps `school_calendar.seasons_id` on the day rows in
  * [start_date, end_date] and releases rows previously assigned to this
@@ -74,15 +78,35 @@ export async function POST(
       );
     }
 
-    const days = await xano.schoolCalendar.getByYear(yearId);
-    const plan = planSeasonDays({
+    const [days, seasons] = await Promise.all([
+      xano.schoolCalendar.getByYear(yearId),
+      xano.academicSeasons.getByYear(yearId),
+    ]);
+    const nameOf = (sid: number) =>
+      seasons.find((s) => s.id === sid)?.name ?? `Season #${sid}`;
+    const preview = previewSeasonSave({
       days,
       seasonId: id,
       start,
       end,
       handoffStart: coerceMinutes(body.handoff_start),
       handoffEnd: coerceMinutes(body.handoff_end),
+      nameOf,
     });
+
+    // Chain safety net. The editor shows the same verdict live, so a
+    // 409 here means a stale client or a direct call — hence the full
+    // reasons in the body rather than a bare status.
+    if (preview.blocked) {
+      return NextResponse.json(
+        {
+          error: preview.errors.map((e) => e.message).join(" "),
+          issues: preview.errors,
+        },
+        { status: 409 }
+      );
+    }
+    const plan = preview.plan;
 
     await inChunks(plan.writes, 10, (w) =>
       xano.schoolCalendar.update(w.id, w.patch)

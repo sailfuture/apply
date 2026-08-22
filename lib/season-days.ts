@@ -41,6 +41,14 @@ export function seasonPmOf(day: XanoSchoolCalendarDay): number {
   return pm && pm !== seasonAmOf(day) ? pm : 0;
 }
 
+/** When seasons change over, in minutes past midnight — 10:30am.
+ *
+ *  Every changeover here happens at the same hour, so this is the
+ *  value a shared day gets unless a caller names another one: nobody
+ *  should have to set the time on each boundary, and a shared day is
+ *  never left without one. */
+export const DEFAULT_HANDOFF_MINUTES = 10 * 60 + 30;
+
 /** Minutes past midnight for the changeover, 0 when unset. */
 export function seasonHandoffOf(day: XanoSchoolCalendarDay): number {
   return Number(day.season_handoff) || 0;
@@ -161,10 +169,10 @@ export interface SeasonDayPlan {
  * Pass a blank range to release every day.
  *
  * `handoffStart` / `handoffEnd` set the switch time on the shared
- * endpoints, in minutes past midnight. The caller is authoritative
- * there — 0 means "no time set" and CLEARS a stored one, so the ✕ on
- * the editor's time picker actually removes the handoff rather than
- * appearing to. Days that aren't shared always end up at 0.
+ * endpoints, in minutes past midnight; 0 (or omitted) falls back to
+ * `DEFAULT_HANDOFF_MINUTES`, so a shared day always carries a time
+ * even when the save came from the other season's editor or a client
+ * that doesn't send one. Days that aren't shared always end up at 0.
  */
 export function planSeasonDays({
   days,
@@ -207,7 +215,7 @@ export function planSeasonDays({
         day: d,
         patch: {
           seasons_id_pm: seasonId,
-          season_handoff: handoffStart,
+          season_handoff: handoffStart || DEFAULT_HANDOFF_MINUTES,
         },
       });
       continue;
@@ -220,7 +228,7 @@ export function planSeasonDays({
         patch: {
           seasons_id: seasonId,
           seasons_id_pm: partners.end,
-          season_handoff: handoffEnd,
+          season_handoff: handoffEnd || DEFAULT_HANDOFF_MINUTES,
         },
       });
       continue;
@@ -280,4 +288,313 @@ function changesDay(
   )
     return true;
   return false;
+}
+
+/* ── Chain safety nets ────────────────────────────────────────────── */
+
+/**
+ * A year's seasons are meant to form one continuous chain: each runs
+ * until the next starts, handing over part-way through the shared
+ * date. Nothing enforced that, so a mis-picked range could quietly
+ * carve days out of a neighbour or leave a stretch of the year
+ * belonging to nobody.
+ *
+ * `checkSeasonChain` reports what's wrong with a chain as it stands.
+ * `previewSeasonSave` reports what a proposed save would ADD to that
+ * list, which is the useful question — nobody should be blocked by a
+ * mess that was already there. Errors mean the save would corrupt a
+ * season and are refused; warnings (a gap, a boundary with no shared
+ * date) are shown and allowed, because restructuring a year needs
+ * those states on the way through.
+ */
+
+/** Stand-in id for a season that doesn't exist yet, so the New season
+ *  dialog can check a range before the row is created. Negative so it
+ *  can't collide with a real Xano id. */
+export const NEW_SEASON_ID = -1;
+
+export type SeasonIssueCode =
+  | "hole"
+  | "emptied"
+  | "overlap"
+  | "gap"
+  | "hard-cut"
+  | "reversed"
+  | "orphan-afternoon";
+
+export interface SeasonIssue {
+  /** Stable identity, so the same problem seen before and after a save
+   *  is recognised as pre-existing rather than newly introduced. */
+  key: string;
+  level: "error" | "warning";
+  code: SeasonIssueCode;
+  /** Season the problem is about, and the neighbour when two are. */
+  seasonId: number;
+  otherSeasonId?: number;
+  /** Dates involved, ascending. */
+  dates: string[];
+  message: string;
+}
+
+/** id -> display name, for readable messages. */
+export type SeasonNamer = (id: number) => string;
+
+const MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split(" ");
+
+/** "2026-09-14" -> "Sep 14". Built from the parts rather than a Date
+ *  so it can't drift a day across timezones. */
+function shortDate(iso: string): string {
+  const [, m, d] = iso.split("-").map(Number);
+  return `${MONTHS[(m ?? 1) - 1]} ${d}`;
+}
+
+function listDates(dates: string[]): string {
+  const shown = dates.slice(0, 3).map(shortDate);
+  const rest = dates.length - shown.length;
+  return rest > 0 ? `${shown.join(", ")} and ${rest} more` : shown.join(", ");
+}
+
+/** Does this season hold any part of the day? */
+function holds(day: XanoSchoolCalendarDay, seasonId: number): boolean {
+  return seasonAmOf(day) === seasonId || seasonPmOf(day) === seasonId;
+}
+
+interface DetailedSpan {
+  id: number;
+  start: string;
+  end: string;
+  /** Dates inside the span the season doesn't hold — so it isn't one
+   *  continuous stretch. */
+  holes: string[];
+}
+
+/** Every season present in these day rows, with its span and any break
+ *  in the middle of it. Days must be date-ascending. */
+function detailedSpans(days: XanoSchoolCalendarDay[]): DetailedSpan[] {
+  const ids = new Set<number>();
+  for (const d of days) {
+    const a = seasonAmOf(d);
+    const p = seasonPmOf(d);
+    if (a) ids.add(a);
+    if (p) ids.add(p);
+  }
+  const spans: DetailedSpan[] = [];
+  for (const id of ids) {
+    let first = -1;
+    let last = -1;
+    for (let i = 0; i < days.length; i++) {
+      if (!holds(days[i], id)) continue;
+      if (first < 0) first = i;
+      last = i;
+    }
+    if (first < 0) continue;
+    const holes: string[] = [];
+    for (let i = first; i <= last; i++) {
+      if (!holds(days[i], id)) holes.push(days[i].date);
+    }
+    spans.push({ id, start: days[first].date, end: days[last].date, holes });
+  }
+  return spans.sort((a, b) => a.start.localeCompare(b.start) || a.id - b.id);
+}
+
+/**
+ * Everything wrong with the season chain these day rows describe.
+ *
+ * Errors: a season split in two by another's range, or two seasons
+ * overlapping by more than the single date they hand over on.
+ * Warnings: unassigned days between neighbours, a boundary where the
+ * next season starts the day after instead of sharing the date, a
+ * shared date whose halves run in the wrong order, an afternoon with
+ * no morning.
+ */
+export function checkSeasonChain(
+  days: XanoSchoolCalendarDay[],
+  nameOf: SeasonNamer
+): SeasonIssue[] {
+  const sorted = [...days].sort((a, b) => a.date.localeCompare(b.date));
+  const indexOf = new Map(sorted.map((d, i) => [d.date, i]));
+  const spans = detailedSpans(sorted);
+  const issues: SeasonIssue[] = [];
+
+  for (const sp of spans) {
+    if (!sp.holes.length) continue;
+    issues.push({
+      key: `hole:${sp.id}:${sp.holes.join(",")}`,
+      level: "error",
+      code: "hole",
+      seasonId: sp.id,
+      dates: sp.holes,
+      message: `${nameOf(sp.id)} would not be continuous — it runs ${shortDate(sp.start)} to ${shortDate(sp.end)} but doesn't hold ${listDates(sp.holes)}.`,
+    });
+  }
+
+  for (const d of sorted) {
+    if (!seasonPmOf(d) || seasonAmOf(d)) continue;
+    issues.push({
+      key: `orphan-afternoon:${d.date}`,
+      level: "warning",
+      code: "orphan-afternoon",
+      seasonId: seasonPmOf(d),
+      dates: [d.date],
+      message: `${shortDate(d.date)} hands over to ${nameOf(seasonPmOf(d))} mid-day, but no season holds the morning.`,
+    });
+  }
+
+  for (let i = 1; i < spans.length; i++) {
+    const prev = spans[i - 1];
+    const cur = spans[i];
+
+    if (cur.start < prev.end) {
+      issues.push({
+        key: `overlap:${prev.id}:${cur.id}`,
+        level: "error",
+        code: "overlap",
+        seasonId: prev.id,
+        otherSeasonId: cur.id,
+        dates: [cur.start, prev.end],
+        message: `${nameOf(prev.id)} runs to ${shortDate(prev.end)} but ${nameOf(cur.id)} already starts ${shortDate(cur.start)} — seasons can only share the one date they hand over on.`,
+      });
+      continue;
+    }
+
+    if (cur.start === prev.end) {
+      const day = sorted[indexOf.get(cur.start) ?? -1];
+      const ordered =
+        day && seasonAmOf(day) === prev.id && seasonPmOf(day) === cur.id;
+      if (!ordered) {
+        issues.push({
+          key: `reversed:${cur.start}`,
+          level: "warning",
+          code: "reversed",
+          seasonId: prev.id,
+          otherSeasonId: cur.id,
+          dates: [cur.start],
+          message: `On ${shortDate(cur.start)}, ${nameOf(cur.id)} holds the morning and ${nameOf(prev.id)} the afternoon — the wrong way round for the order they run in.`,
+        });
+      }
+      continue;
+    }
+
+    const from = (indexOf.get(prev.end) ?? -1) + 1;
+    const to = indexOf.get(cur.start) ?? 0;
+    const between = sorted.slice(from, to);
+    if (between.length) {
+      issues.push({
+        key: `gap:${prev.id}:${cur.id}`,
+        level: "warning",
+        code: "gap",
+        seasonId: prev.id,
+        otherSeasonId: cur.id,
+        dates: between.map((d) => d.date),
+        message: `${listDates(between.map((d) => d.date))} would belong to no season — ${nameOf(prev.id)} ends ${shortDate(prev.end)} and ${nameOf(cur.id)} doesn't start until ${shortDate(cur.start)}.`,
+      });
+    } else {
+      // Only worth flagging when a changeover was actually possible.
+      // Seasons meeting either side of a holiday can't share a date —
+      // there's no school day to hand over on — so that boundary is
+      // correct as it stands and shouldn't nag forever.
+      const day = sorted[indexOf.get(cur.start) ?? -1];
+      if (day && canBeChangeover(day)) {
+        issues.push({
+          key: `hard-cut:${prev.id}:${cur.id}`,
+          level: "warning",
+          code: "hard-cut",
+          seasonId: prev.id,
+          otherSeasonId: cur.id,
+          dates: [prev.end, cur.start],
+          message: `${nameOf(cur.id)} starts ${shortDate(cur.start)}, the day after ${nameOf(prev.id)} ends — they don't share a changeover date.`,
+        });
+      }
+    }
+  }
+
+  return issues;
+}
+
+/** The day rows as they'd look with a plan applied — pure, so a save
+ *  can be checked before any of it is written. */
+export function applyPlan(
+  days: XanoSchoolCalendarDay[],
+  plan: SeasonDayPlan
+): XanoSchoolCalendarDay[] {
+  const byId = new Map(plan.writes.map((w) => [w.id, w.patch]));
+  return days.map((d) => {
+    const patch = byId.get(d.id);
+    return patch ? { ...d, ...patch } : d;
+  });
+}
+
+export interface SeasonSavePreview {
+  plan: SeasonDayPlan;
+  /** Problems this save would INTRODUCE — pre-existing ones are left
+   *  out, so nobody is blocked by a mess already there. */
+  errors: SeasonIssue[];
+  warnings: SeasonIssue[];
+  /** True when the save would corrupt a season and must be refused. */
+  blocked: boolean;
+}
+
+/**
+ * What saving this range would do to the chain, before anything is
+ * written. The season editor renders this live and the assignment
+ * endpoint refuses on `blocked`, so the two can't disagree about what
+ * is allowed.
+ */
+export function previewSeasonSave({
+  days,
+  seasonId,
+  start,
+  end,
+  handoffStart = 0,
+  handoffEnd = 0,
+  nameOf,
+}: {
+  days: XanoSchoolCalendarDay[];
+  seasonId: number;
+  start: string | null;
+  end: string | null;
+  handoffStart?: number;
+  handoffEnd?: number;
+  nameOf: SeasonNamer;
+}): SeasonSavePreview {
+  const plan = planSeasonDays({
+    days,
+    seasonId,
+    start,
+    end,
+    handoffStart,
+    handoffEnd,
+  });
+  const after = applyPlan(days, plan);
+  const known = new Set(checkSeasonChain(days, nameOf).map((i) => i.key));
+  const introduced = checkSeasonChain(after, nameOf).filter(
+    (i) => !known.has(i.key)
+  );
+
+  // A range that swallows a neighbour whole leaves it reading "No
+  // dates set" with no hint of where its days went. The season being
+  // saved is exempt when the range was deliberately blanked — that is
+  // how you clear one.
+  const clearing = !start || !end;
+  const sorted = [...days].sort((a, b) => a.date.localeCompare(b.date));
+  for (const sp of detailedSpans(sorted)) {
+    if (sp.id === seasonId && clearing) continue;
+    if (after.some((d) => holds(d, sp.id))) continue;
+    introduced.push({
+      key: `emptied:${sp.id}`,
+      level: "error",
+      code: "emptied",
+      seasonId: sp.id,
+      dates: [sp.start, sp.end],
+      message: `This would take every day from ${nameOf(sp.id)} (${shortDate(sp.start)}–${shortDate(sp.end)}), leaving it with no dates.`,
+    });
+  }
+
+  const errors = introduced.filter((i) => i.level === "error");
+  return {
+    plan,
+    errors,
+    warnings: introduced.filter((i) => i.level === "warning"),
+    blocked: errors.length > 0,
+  };
 }

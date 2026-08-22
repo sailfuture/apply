@@ -72,7 +72,11 @@ import {
 } from "@/components/ui/alert-dialog";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import {
+  DEFAULT_HANDOFF_MINUTES,
+  NEW_SEASON_ID,
   changeoverPartners,
+  checkSeasonChain,
+  previewSeasonSave,
   seasonAmOf,
   seasonHandoffOf,
   seasonPmOf,
@@ -1885,6 +1889,18 @@ function TermsSeasonsDialog({
     [terms]
   );
 
+  /** Whatever is wrong with the year's season chain right now — a
+   *  season split in two, a stretch belonging to nobody, a boundary
+   *  with no shared changeover date. Empty (and silent) when the
+   *  chain is continuous. */
+  const chainIssues = useMemo(() => {
+    const nameById = new Map(seasons.map((s) => [s.id, s.name]));
+    return checkSeasonChain(
+      days,
+      (id) => nameById.get(id) ?? `Season #${id}`
+    );
+  }, [days, seasons]);
+
   async function runDelete(url: string, label: string, after: () => void) {
     if (deleting) return;
     setDeleting(true);
@@ -2126,6 +2142,23 @@ function TermsSeasonsDialog({
                   </TableBody>
                 </Table>
               </div>
+              {chainIssues.length ? (
+                <div className="space-y-1.5">
+                  {chainIssues.map((issue) => (
+                    <p
+                      key={issue.key}
+                      className={cn(
+                        "rounded-md border px-3 py-2 text-[11px] leading-relaxed",
+                        issue.level === "error"
+                          ? "border-red-200 bg-red-50 text-red-700"
+                          : "border-amber-200 bg-amber-50/60 text-amber-800"
+                      )}
+                    >
+                      {issue.message}
+                    </p>
+                  ))}
+                </div>
+              ) : null}
               <p className="text-[11px] text-muted-foreground">
                 Season dates come from the calendar days assigned to the
                 season — pick the range in the season editor. Two
@@ -2493,17 +2526,57 @@ function SeasonEditDialog({
     [days, existing?.id, startDate, endDate]
   );
 
-  const [startHandoff, setStartHandoff] = useState(
-    assigned[0] ? minutesToTimeInput(seasonHandoffOf(assigned[0])) : ""
+  // Changeovers all happen at the same hour here, so the pickers open
+  // on 10:30 and can't be emptied — a shared day always has a time.
+  const seedHandoff = (day: XanoSchoolCalendarDay | undefined) =>
+    minutesToTimeInput(
+      (day ? seasonHandoffOf(day) : 0) || DEFAULT_HANDOFF_MINUTES
+    );
+  const [startHandoff, setStartHandoff] = useState(() =>
+    seedHandoff(assigned[0])
   );
-  const [endHandoff, setEndHandoff] = useState(() => {
-    const last = assigned[assigned.length - 1];
-    return last ? minutesToTimeInput(seasonHandoffOf(last)) : "";
-  });
+  const [endHandoff, setEndHandoff] = useState(() =>
+    seedHandoff(assigned[assigned.length - 1])
+  );
+
+  // Live chain verdict for the picked range — the same call the /days
+  // endpoint refuses on, so the dialog can't promise a save the server
+  // will reject. A season being created has no id yet, so it previews
+  // under NEW_SEASON_ID.
+  const previewId = existing?.id ?? NEW_SEASON_ID;
+  const preview = useMemo(
+    () =>
+      rangeInvalid
+        ? null
+        : previewSeasonSave({
+            days,
+            seasonId: previewId,
+            start: startDate || null,
+            end: endDate || null,
+            handoffStart: timeInputToMinutes(startHandoff),
+            handoffEnd: timeInputToMinutes(endHandoff),
+            nameOf: (id) =>
+              id === previewId
+                ? name.trim() || "This season"
+                : (seasonNameById.get(id) ?? `Season #${id}`),
+          }),
+    [
+      days,
+      previewId,
+      startDate,
+      endDate,
+      startHandoff,
+      endHandoff,
+      rangeInvalid,
+      name,
+      seasonNameById,
+    ]
+  );
+  const blocked = preview?.blocked === true;
 
   async function save() {
     const trimmed = name.trim();
-    if (!trimmed || saving || rangeInvalid) return;
+    if (!trimmed || saving || rangeInvalid || blocked) return;
     setSaving(true);
     try {
       const res = await fetch(
@@ -2658,6 +2731,7 @@ function SeasonEditDialog({
                 value={startHandoff}
                 onChange={setStartHandoff}
                 ariaLabel="Changeover time on the first day"
+                clearable={false}
               />
             </div>
           ) : null}
@@ -2676,7 +2750,30 @@ function SeasonEditDialog({
                 value={endHandoff}
                 onChange={setEndHandoff}
                 ariaLabel="Changeover time on the last day"
+                clearable={false}
               />
+            </div>
+          ) : null}
+          {/* Chain safety nets — errors block the save, warnings don't. */}
+          {preview && (preview.errors.length > 0 || preview.warnings.length > 0) ? (
+            <div className="space-y-1.5">
+              {preview.errors.map((issue) => (
+                <p
+                  key={issue.key}
+                  className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[11px] leading-relaxed text-red-700"
+                >
+                  <span className="font-medium">Can&rsquo;t save: </span>
+                  {issue.message}
+                </p>
+              ))}
+              {preview.warnings.map((issue) => (
+                <p
+                  key={issue.key}
+                  className="rounded-md border border-amber-200 bg-amber-50/60 px-3 py-2 text-[11px] leading-relaxed text-amber-800"
+                >
+                  {issue.message}
+                </p>
+              ))}
             </div>
           ) : null}
           {halfRange ? (
@@ -2716,7 +2813,7 @@ function SeasonEditDialog({
           <Button
             size="sm"
             onClick={() => void save()}
-            disabled={saving || !name.trim() || rangeInvalid}
+            disabled={saving || !name.trim() || rangeInvalid || blocked}
           >
             {saving ? (
               <>
