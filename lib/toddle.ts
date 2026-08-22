@@ -750,6 +750,10 @@ export interface ToddleUpsertResult {
    *  determined and `action` falls back to `updated`. Lets callers say
    *  "updated" without implying anything actually differed. */
   compared: boolean;
+  /** True when Toddle refused our sourceId because another (invisible,
+   *  almost certainly archived) record already holds it. The profile
+   *  still synced; the id just couldn't be stamped. */
+  sourceIdBlocked?: boolean;
 }
 
 function normName(v: string | null | undefined): string {
@@ -927,6 +931,43 @@ export function toStudentBody(fields: ToddleSyncFields): ToddleStudentBody {
   return body;
 }
 
+/**
+ * PUT a student, tolerating a sourceId that Toddle says is taken.
+ *
+ * Toddle enforces sourceId uniqueness across ALL records including
+ * archived ones, and its lookups return only active ones — so a
+ * student whose old profile was archived leaves a ghost holding
+ * "sfa-<id>". Stamping that id onto their live record is then rejected
+ * outright, and the whole sync for that student used to die on it even
+ * though every other field was ready to write.
+ *
+ * On that specific rejection we retry once WITHOUT the sourceId: the
+ * profile still gets every field we hold, and the caller persists the
+ * matched Toddle id on our side so the next sync addresses the record
+ * directly and never needs the sourceId again. The ghost is reported
+ * rather than worked around silently — someone still has to delete it
+ * in Toddle.
+ */
+async function updateStudentTolerantOfSourceId(
+  id: string,
+  body: ToddleStudentBody
+): Promise<{ student: ToddleStudent; sourceIdBlocked: boolean }> {
+  try {
+    return { student: await updateStudent(id, body), sourceIdBlocked: false };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const isSourceIdConflict =
+      /already exists/i.test(message) && /sourceid/i.test(message);
+    if (!isSourceIdConflict || body.sourceId === undefined) throw err;
+    const withoutSourceId: ToddleStudentBody = { ...body };
+    delete withoutSourceId.sourceId;
+    return {
+      student: await updateStudent(id, withoutSourceId),
+      sourceIdBlocked: true,
+    };
+  }
+}
+
 export async function upsertStudent(
   fields: ToddleSyncFields,
   knownToddleId?: string,
@@ -982,7 +1023,8 @@ export async function upsertStudent(
   if (bySource.length > 0) {
     const target = bySource.find((s) => !s.isArchived) ?? bySource[0];
     const diff = diffStudentFields(target, updateBody);
-    const updated = await updateStudent(target.id, updateBody);
+    const { student: updated, sourceIdBlocked } =
+      await updateStudentTolerantOfSourceId(target.id, updateBody);
     return {
       action:
         diff.compared && diff.changedFields.length === 0
@@ -990,6 +1032,7 @@ export async function upsertStudent(
           : "updated",
       toddleId: updated.id ?? target.id,
       matchedBy: "sourceId",
+      sourceIdBlocked,
       ...diff,
     };
   }
@@ -1001,7 +1044,11 @@ export async function upsertStudent(
   const rosterMatch = matchToddleStudent(roster, fields);
   if (rosterMatch) {
     const diff = diffStudentFields(rosterMatch.student, updateBody);
-    const updated = await updateStudent(rosterMatch.student.id, updateBody);
+    const { student: updated, sourceIdBlocked } =
+      await updateStudentTolerantOfSourceId(
+        rosterMatch.student.id,
+        updateBody
+      );
     return {
       action:
         diff.compared && diff.changedFields.length === 0
@@ -1009,6 +1056,7 @@ export async function upsertStudent(
           : "updated",
       toddleId: updated.id ?? rosterMatch.student.id,
       matchedBy: rosterMatch.matchedBy === "email" ? "email" : "name",
+      sourceIdBlocked,
       ...diff,
     };
   }

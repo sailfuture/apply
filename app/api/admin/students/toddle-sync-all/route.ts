@@ -232,6 +232,7 @@ export async function POST() {
             action: outcome.action,
             matched_by: outcome.matchedBy,
             changed_fields: outcome.changedFields,
+            source_id_blocked: outcome.sourceIdBlocked === true,
             photo: outcome.photo,
             family_synced: outcome.familyMembers.filter(
               (m) => m.account !== "failed" && m.contact !== "failed"
@@ -248,6 +249,7 @@ export async function POST() {
             action: "failed",
             matched_by: null,
             changed_fields: [],
+            source_id_blocked: false,
             photo: "none",
             family_synced: 0,
             family_failed: 0,
@@ -291,6 +293,11 @@ export interface BulkToddleSyncRow {
   /** Fields that actually differed from what Toddle held, e.g.
    *  ["email", "gradeLevel"]. Empty on created / unchanged. */
   changed_fields: string[];
+  /** The profile synced, but our student id couldn't be stamped onto
+   *  it — an archived Toddle record still holds that id. Harmless for
+   *  this run (we address the record directly from now on), but the
+   *  ghost record wants deleting in Toddle. */
+  source_id_blocked: boolean;
   photo: "synced" | "none" | "failed";
   /** Family contacts fully synced (account + contact card). */
   family_synced: number;

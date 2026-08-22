@@ -219,7 +219,29 @@ export function ToddleSyncAllDialog({
                 </div>
               ) : null}
 
-              {/* Loose matches: the Toddle record didn't carry our
+              {/* Ghost records: synced fine, but an archived Toddle record is
+          squatting on the student id, so it couldn't be stamped. */}
+      {result.rows.some((r) => r.source_id_blocked) ? (
+        <div className="rounded-md border border-amber-200 bg-amber-50/60 p-3">
+          <p className="text-xs font-semibold uppercase tracking-wider text-amber-700">
+            Archived duplicate in Toddle
+          </p>
+          <p className="mt-1 text-xs text-amber-800">
+            These students synced, but an archived Toddle record still
+            holds their student ID, so it couldn&rsquo;t be written onto
+            their live profile. Delete the archived duplicate in Toddle
+            when you get a chance — nothing breaks until then.
+          </p>
+          <p className="mt-1.5 text-sm">
+            {result.rows
+              .filter((r) => r.source_id_blocked)
+              .map((r) => r.student_name)
+              .join(", ")}
+          </p>
+        </div>
+      ) : null}
+
+      {/* Loose matches: the Toddle record didn't carry our
                   sourceId, so it was identified by name alone. Worth
                   eyeballing once — a wrong match writes one student's
                   details onto another's profile. */}
