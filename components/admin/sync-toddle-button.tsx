@@ -18,6 +18,7 @@ import { cn } from "@/lib/utils";
 import { formatNoteTimestamp } from "@/lib/format-note-time";
 import { formatToddleFieldList } from "@/lib/toddle-fields";
 import type { ToddleReadiness } from "@/lib/toddle-readiness";
+import type { ToddleSyncPreview } from "@/lib/toddle-sync";
 
 /**
  * Admin "Sync to Toddle" — POSTs to
@@ -68,7 +69,9 @@ export function SyncToddleButton({
   // Xano-only on the server, so it costs no Toddle quota — which lets
   // admin see WHY a student would fail before pushing, instead of
   // reading it off an error toast afterwards.
-  const [readiness, setReadiness] = useState<ToddleReadiness | null>(null);
+  const [readiness, setReadiness] = useState<
+    (ToddleReadiness & { preview?: ToddleSyncPreview }) | null
+  >(null);
 
   useEffect(() => {
     if (!open || readiness) return;
@@ -223,6 +226,39 @@ export function SyncToddleButton({
               class.
             </AlertDialogDescription>
           </AlertDialogHeader>
+          {readiness?.preview ? (
+            <div
+              className={cn(
+                "rounded-md border px-3 py-2 text-sm",
+                readiness.preview.status === "conflict"
+                  ? "border-red-200 bg-red-50 text-red-700"
+                  : readiness.preview.status === "current"
+                    ? "bg-muted/40 text-muted-foreground"
+                    : "bg-emerald-50 text-emerald-800 border-emerald-200"
+              )}
+            >
+              {readiness.preview.status === "create" ? (
+                <>This will create a new Toddle profile for them.</>
+              ) : readiness.preview.status === "change" ? (
+                <>
+                  This will change{" "}
+                  <span className="font-medium">
+                    {formatToddleFieldList(readiness.preview.changedFields)}
+                  </span>{" "}
+                  on their Toddle profile.
+                </>
+              ) : readiness.preview.status === "current" ? (
+                <>Their Toddle profile already matches — nothing will change.</>
+              ) : readiness.preview.status === "conflict" ? (
+                <>{readiness.preview.note}</>
+              ) : (
+                <>
+                  Couldn&rsquo;t reach Toddle to compare, so what changes
+                  is unknown until the sync runs.
+                </>
+              )}
+            </div>
+          ) : null}
           {readiness ? (
             <div className="max-h-64 overflow-y-auto rounded-md border">
               {!readiness.ready ? (

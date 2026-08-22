@@ -6,6 +6,8 @@ import type {
   XanoStudent,
 } from "@/lib/xano";
 import {
+  diffStudentFields,
+  toStudentBody,
   upsertStudent,
   uploadStudentProfileImage,
   syncFamilyMembers,
@@ -33,6 +35,7 @@ import type {
   ToddleFamilyMemberResult,
   ToddleParentRecord,
   ToddleStudent,
+  ToddleSyncFields,
   ToddleUpsertResult,
 } from "@/lib/toddle";
 
@@ -124,6 +127,164 @@ export async function buildToddleSyncShared(opts?: {
   return shared;
 }
 
+/**
+ * Assemble exactly the fields a sync would push for one student.
+ *
+ * Pure — the caller supplies the rows it already has. Split out of
+ * `syncStudentToToddle` so the pre-sync preview can diff the SAME
+ * payload the sync sends: a preview built from a parallel copy of this
+ * logic would drift, and a preview that lies about what will change is
+ * worse than no preview.
+ */
+export function buildToddleSyncFields({
+  student,
+  packet,
+  primaryParent,
+  enrollmentYear,
+  gradeLevelHint,
+}: {
+  student: XanoStudent;
+  packet?: { grade_level?: string; crew_assignment?: string } | null;
+  primaryParent?: XanoParent | null;
+  enrollmentYear?: XanoSchoolYear | null;
+  gradeLevelHint?: string;
+}): ToddleSyncFields {
+  const addr = (v: string | null | undefined) => {
+    const t = (v ?? "").trim();
+    return t.length > 0 ? t : undefined;
+  };
+  return {
+    sourceId: `sfa-${student.id}`,
+    firstName: (student.first_name ?? "").trim(),
+    lastName: (student.last_name ?? "").trim(),
+    dob: toddleDob(student.date_of_birth),
+    gender: toddleGender(student.gender),
+    phoneNumber: toddlePhone(student.student_phone),
+    gradeLevel:
+      (gradeLevelHint ?? "").trim() ||
+      (packet?.grade_level ?? "").trim() ||
+      undefined,
+    email: toddleEmail(student.school_email),
+    enrollmentDate: toddleEnrollmentDate(enrollmentYear),
+    addressLine1: addr(primaryParent?.address_line_1),
+    addressLine2: addr(primaryParent?.address_line_2),
+    city: addr(primaryParent?.city),
+    state: addr(primaryParent?.state),
+    zipcode: addr(primaryParent?.zipcode),
+  };
+}
+
+/* ────────────────────────── Pre-sync preview ────────────────────── */
+
+export interface ToddleSyncPreview {
+  /** `create` — no Toddle record matches, one will be made.
+   *  `change` — matched, and these fields differ.
+   *  `current` — matched, nothing differs.
+   *  `conflict` — would create, but Toddle already holds a record with
+   *    this student's school email, so the create will be REJECTED.
+   *  `unknown` — Toddle couldn't be read, so no comparison was made. */
+  status: "create" | "change" | "current" | "conflict" | "unknown";
+  changedFields: string[];
+  /** How the existing record was found, mirroring the sync's own
+   *  matching order. Null when nothing matched. */
+  matchedBy: "stored" | "sourceId" | "name" | null;
+  /** Set on `conflict` — what Toddle already has, so admin can go fix
+   *  the record rather than re-running a sync that can't succeed. */
+  note?: string;
+}
+
+/**
+ * What a sync WOULD do to one student, without touching Toddle.
+ *
+ * Matching mirrors `upsertStudent` exactly — stored id, then our
+ * sourceId, then name (+DOB when both sides carry one) — so the
+ * preview can't promise an update the sync will turn into a create.
+ * That fidelity is the point: the failures this surfaces are precisely
+ * the ones where Toddle holds the student under a different spelling
+ * ("Daiquan" vs "Dai'quan", a "Jr." suffix) or a different DOB, so the
+ * matcher misses, the create fires, and Toddle rejects it because the
+ * school email is already taken.
+ *
+ * `roster` is Toddle's student list. Note that it excludes ARCHIVED
+ * records, which is why a student whose Toddle profile was archived
+ * can preview as `create` and still fail on a sourceId collision.
+ */
+export function previewToddleStudent({
+  student,
+  fields,
+  roster,
+  yearGroupId,
+}: {
+  student: XanoStudent;
+  fields: ToddleSyncFields;
+  roster: ToddleStudent[] | null;
+  /** Resolved year group for the student's grade, when the caller
+   *  could resolve one. Compared by id, never by label. */
+  yearGroupId?: string;
+}): ToddleSyncPreview {
+  if (!roster) {
+    return { status: "unknown", changedFields: [], matchedBy: null };
+  }
+
+  const storedId = (student.toddle_student_id ?? "").trim();
+  let match: ToddleStudent | undefined;
+  let matchedBy: ToddleSyncPreview["matchedBy"] = null;
+
+  if (storedId) {
+    match = roster.find((r) => String(r.id) === storedId);
+    if (match) matchedBy = "stored";
+  }
+  if (!match) {
+    const bySource = roster.filter((r) => r.sourceId === fields.sourceId);
+    match = bySource.find((r) => !r.isArchived) ?? bySource[0];
+    if (match) matchedBy = "sourceId";
+  }
+  if (!match) {
+    const byName = roster.filter(
+      (r) =>
+        (r.firstName ?? "").trim().toLowerCase() ===
+          fields.firstName.trim().toLowerCase() &&
+        (r.lastName ?? "").trim().toLowerCase() ===
+          fields.lastName.trim().toLowerCase() &&
+        (!fields.dob || !r.dob || r.dob.slice(0, 10) === fields.dob)
+    );
+    if (byName.length === 1) {
+      match = byName[0];
+      matchedBy = "name";
+    }
+  }
+
+  if (!match) {
+    // No match means a create — which Toddle refuses if the email is
+    // already spoken for. Worth knowing BEFORE the run, since that is
+    // the exact failure mode a stale name or DOB produces.
+    const email = (fields.email ?? "").toLowerCase();
+    const emailOwner = email
+      ? roster.find((r) => (r.email ?? "").toLowerCase() === email)
+      : undefined;
+    if (emailOwner) {
+      return {
+        status: "conflict",
+        changedFields: [],
+        matchedBy: null,
+        note: `Toddle already has "${(emailOwner.firstName ?? "").trim()} ${(
+          emailOwner.lastName ?? ""
+        ).trim()}" on ${fields.email} — the create will be rejected. Fix the name or date of birth on either side so they match, or set sourceId "${fields.sourceId}" on that Toddle record.`,
+      };
+    }
+    return { status: "create", changedFields: [], matchedBy: null };
+  }
+
+  const body = toStudentBody(fields);
+  const withYearGroup = yearGroupId ? { ...body, yearGroupId } : body;
+  const diff = diffStudentFields(match, withYearGroup);
+  return {
+    status: diff.compared && diff.changedFields.length === 0 ? "current" : "change",
+    changedFields: diff.changedFields,
+    matchedBy,
+  };
+}
+
 export interface ToddleStudentSyncOutcome extends ToddleUpsertResult {
   persisted: boolean;
   photo: "synced" | "none" | "failed";
@@ -146,16 +307,6 @@ export async function syncStudentToToddle(
       "Student needs both a first and last name to sync."
     );
   }
-
-  // Only pass fields that survive Toddle's validations: DOB must be
-  // YYYY-MM-DD, gender must map onto M/F, phone must be the canonical
-  // 10-digit form. Anything else is simply omitted. These predicates
-  // live in `lib/toddle-readiness.ts` and are shared with the
-  // pre-flight checklist, so what admin is told will be pushed is
-  // decided by the same code that pushes it.
-  const dob = toddleDob(student.date_of_birth);
-  const gender = toddleGender(student.gender);
-  const phoneNumber = toddlePhone(student.student_phone);
 
   // Family + parents (primary = lowest id, matching every other admin
   // surface) — cached across siblings in a bulk run.
@@ -188,21 +339,12 @@ export async function syncStudentToToddle(
       (await xano.studentRegistration.getByStudentId(id).catch(() => null)))
     : await xano.studentRegistration.getByStudentId(id).catch(() => null);
 
-  // School email → Toddle login email (only when it looks like one).
-  const email = toddleEmail(student.school_email);
-
   // Enrollment date = start of the school year the student first
   // enrolled in (the School Account card's year pick).
-  const enrollmentYear = shared.years.find(
-    (y) => y.id === Number(student.enrollment_school_years_id)
-  );
-  const enrollmentDate = toddleEnrollmentDate(enrollmentYear);
-
-  // Home address — the primary contact's address on file.
-  const addr = (v: string | null | undefined) => {
-    const t = (v ?? "").trim();
-    return t.length > 0 ? t : undefined;
-  };
+  const enrollmentYear =
+    shared.years.find(
+      (y) => y.id === Number(student.enrollment_school_years_id)
+    ) ?? null;
 
   const sourceId = `sfa-${id}`;
   const knownToddleId =
@@ -220,25 +362,13 @@ export async function syncStudentToToddle(
   }
 
   const result = await upsertStudent(
-    {
-      sourceId,
-      firstName,
-      lastName,
-      dob,
-      gender,
-      phoneNumber,
-      gradeLevel:
-        (gradeLevelHint ?? "").trim() ||
-        (packet?.grade_level ?? "").trim() ||
-        undefined,
-      email,
-      enrollmentDate,
-      addressLine1: addr(primaryParent?.address_line_1),
-      addressLine2: addr(primaryParent?.address_line_2),
-      city: addr(primaryParent?.city),
-      state: addr(primaryParent?.state),
-      zipcode: addr(primaryParent?.zipcode),
-    },
+    buildToddleSyncFields({
+      student,
+      packet,
+      primaryParent,
+      enrollmentYear,
+      gradeLevelHint,
+    }),
     knownToddleId || undefined,
     existing
   );

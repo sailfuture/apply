@@ -1,10 +1,20 @@
 import { NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
-import { isToddleConfigured, ToddleSyncError } from "@/lib/toddle";
 import {
+  getAllStudents,
+  getYearGroups,
+  isToddleConfigured,
+  resolveYearGroupId,
+  ToddleSyncError,
+  type ToddleStudent,
+} from "@/lib/toddle";
+import {
+  buildToddleSyncFields,
   buildToddleSyncShared,
+  previewToddleStudent,
   syncStudentToToddle,
+  type ToddleSyncPreview,
 } from "@/lib/toddle-sync";
 import {
   evaluateToddleReadiness,
@@ -36,12 +46,18 @@ const CONCURRENCY = 3;
 /**
  * Pre-flight — what would happen if you ran the sync right now.
  *
- *   GET → { rows: ToddleReadiness[] }
+ *   GET → { rows: (ToddleReadiness & { preview })[], comparedToToddle }
  *
- * Reads only Xano: no Toddle call at all, so opening the dialog is
- * free and can't burn into Toddle's rate limit before the run that
- * needs it. Every rule comes from `lib/toddle-readiness.ts`, the same
- * module the sync itself uses to decide what to push.
+ * Two halves. The readiness half is Xano-only — what each student is
+ * missing. The preview half reads Toddle ONCE (the roster, plus the
+ * year-group list) and reports, per student, whether the run would
+ * create them, change specific fields, leave them untouched, or fail
+ * on an email already taken by another Toddle record.
+ *
+ * Toddle rate-limits hard, so the preview is capped at those two
+ * requests for the whole roster and degrades to `comparedToToddle:
+ * false` rather than failing the dialog — an admin who can't see the
+ * comparison can still see what's missing and still run the sync.
  */
 export async function GET() {
   try {
@@ -90,26 +106,86 @@ export async function GET() {
       if (!current || isActiveYear) appByStudent.set(sid, a);
     }
 
-    const rows: ToddleReadiness[] = students
+    const enrolled = students
       .filter((s) => s.isEnrolled === true && s.isArchived !== true)
       .sort((a, b) =>
         `${a.last_name ?? ""} ${a.first_name ?? ""}`.localeCompare(
           `${b.last_name ?? ""} ${b.first_name ?? ""}`
         )
       )
-      .map((s) => {
-        const famId = Number(s.registration_families_id) || 0;
-        const contacts = familyParents.get(famId) ?? [];
-        return evaluateToddleReadiness({
-          student: s,
-          packet: packetByStudent.get(s.id) ?? null,
-          applicationGrade: appByStudent.get(s.id)?.current_grade ?? null,
-          parents: contacts,
-          years,
-        });
-      });
+      .map((s) => s);
 
-    return NextResponse.json({ rows });
+    // One roster read + one year-group read for the whole preview.
+    let roster: ToddleStudent[] | null = null;
+    let yearGroups: Awaited<ReturnType<typeof getYearGroups>> = [];
+    if (isToddleConfigured()) {
+      try {
+        [roster, yearGroups] = await Promise.all([
+          getAllStudents(),
+          getYearGroups().catch(() => []),
+        ]);
+      } catch (err) {
+        // Rate limit or outage — report readiness without the diff.
+        console.error(
+          "[/api/admin/students/toddle-sync-all] preview read failed:",
+          err
+        );
+        roster = null;
+      }
+    }
+
+    // Grades repeat across a roster, so resolve each label once.
+    const yearGroupCache = new Map<string, string | undefined>();
+    async function yearGroupFor(label: string): Promise<string | undefined> {
+      const key = label.trim();
+      if (!key) return undefined;
+      if (yearGroupCache.has(key)) return yearGroupCache.get(key);
+      const resolved = await resolveYearGroupId(key, yearGroups).catch(
+        () => undefined
+      );
+      yearGroupCache.set(key, resolved);
+      return resolved;
+    }
+
+    const rows: Array<ToddleReadiness & { preview: ToddleSyncPreview }> = [];
+    for (const s of enrolled) {
+      const famId = Number(s.registration_families_id) || 0;
+      const contacts = familyParents.get(famId) ?? [];
+      const packet = packetByStudent.get(s.id) ?? null;
+      const applicationGrade = appByStudent.get(s.id)?.current_grade ?? null;
+      const readiness = evaluateToddleReadiness({
+        student: s,
+        packet,
+        applicationGrade,
+        parents: contacts,
+        years,
+      });
+      const fields = buildToddleSyncFields({
+        student: s,
+        packet,
+        primaryParent: contacts[0] ?? null,
+        enrollmentYear:
+          years.find(
+            (y) => y.id === Number(s.enrollment_school_years_id)
+          ) ?? null,
+        // No hint: the bulk sync passes none either, so the packet's
+        // placement grade decides. Passing the application grade here
+        // would preview a year group the run wouldn't actually send.
+      });
+      rows.push({
+        ...readiness,
+        preview: previewToddleStudent({
+          student: s,
+          fields,
+          roster,
+          yearGroupId: roster
+            ? await yearGroupFor(fields.gradeLevel ?? "")
+            : undefined,
+        }),
+      });
+    }
+
+    return NextResponse.json({ rows, comparedToToddle: roster !== null });
   } catch (err) {
     return handleAdminError(err);
   }

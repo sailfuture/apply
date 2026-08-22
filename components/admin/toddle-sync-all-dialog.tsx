@@ -17,6 +17,9 @@ import { cn } from "@/lib/utils";
 import { formatNoteTimestamp } from "@/lib/format-note-time";
 import { formatToddleFieldList } from "@/lib/toddle-fields";
 import type { ToddleReadiness } from "@/lib/toddle-readiness";
+import type { ToddleSyncPreview } from "@/lib/toddle-sync";
+
+type PreflightRow = ToddleReadiness & { preview?: ToddleSyncPreview };
 import type {
   BulkToddleSyncResponse,
   BulkToddleSyncRow,
@@ -51,7 +54,8 @@ export function ToddleSyncAllDialog({
   // Pre-flight: what each student is missing, BEFORE anything is
   // pushed. Xano-only on the server, so opening the dialog costs no
   // Toddle quota.
-  const [readiness, setReadiness] = useState<ToddleReadiness[] | null>(null);
+  const [readiness, setReadiness] = useState<PreflightRow[] | null>(null);
+  const [comparedToToddle, setComparedToToddle] = useState(true);
   const [loadingReadiness, setLoadingReadiness] = useState(false);
 
   useEffect(() => {
@@ -62,6 +66,7 @@ export function ToddleSyncAllDialog({
         if (!res.ok) throw new Error(String(res.status));
         const data = await res.json();
         setReadiness(Array.isArray(data?.rows) ? data.rows : []);
+        setComparedToToddle(data?.comparedToToddle !== false);
       })
       .catch((err) => {
         console.error("[ToddleSyncAllDialog] readiness check failed:", err);
@@ -269,6 +274,7 @@ export function ToddleSyncAllDialog({
             <PreflightPanel
               readiness={readiness}
               loading={loadingReadiness}
+              comparedToToddle={comparedToToddle}
             />
           )}
         </div>
@@ -322,15 +328,17 @@ export function ToddleSyncAllDialog({
 function PreflightPanel({
   readiness,
   loading,
+  comparedToToddle,
 }: {
-  readiness: ToddleReadiness[] | null;
+  readiness: PreflightRow[] | null;
   loading: boolean;
+  comparedToToddle: boolean;
 }) {
   if (loading) {
     return (
       <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
         <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-        Checking what each student is missing…
+        Comparing every student against Toddle…
       </div>
     );
   }
@@ -345,6 +353,17 @@ function PreflightPanel({
 
   const blocked = readiness.filter((r) => !r.ready);
   const ready = readiness.length - blocked.length;
+
+  const counts = { create: 0, change: 0, current: 0, conflict: 0, unknown: 0 };
+  for (const row of readiness) {
+    counts[row.preview?.status ?? "unknown"] += 1;
+  }
+  // Only the students something would happen to — a 75-row list where
+  // 66 say "no change" hides the nine that matter.
+  const changing = readiness.filter(
+    (r) => r.preview?.status === "create" || r.preview?.status === "change"
+  );
+  const conflicts = readiness.filter((r) => r.preview?.status === "conflict");
 
   // Roll the profile-level gaps up by field: label → who's missing it.
   const gaps = new Map<string, { label: string; names: string[] }>();
@@ -376,6 +395,72 @@ function PreflightPanel({
           label={`${blocked.length} · Can't sync yet`}
         />
       </div>
+
+      {/* What the run would actually do, compared against Toddle right
+          now — the point being that admin sees it BEFORE pushing. */}
+      {comparedToToddle ? (
+        <div className="rounded-md border p-3">
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            This run would
+          </p>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            <TotalChip
+              className="bg-blue-50 text-blue-700 border-blue-200"
+              label={`${counts.create} · Create`}
+            />
+            <TotalChip
+              className="bg-emerald-50 text-emerald-700 border-emerald-200"
+              label={`${counts.change} · Change`}
+            />
+            <TotalChip
+              className="bg-muted text-muted-foreground border-border"
+              label={`${counts.current} · Leave as-is`}
+            />
+            {counts.conflict > 0 ? (
+              <TotalChip
+                className="bg-red-50 text-red-700 border-red-200"
+                label={`${counts.conflict} · Will be rejected`}
+              />
+            ) : null}
+          </div>
+          {changing.length > 0 ? (
+            <ul className="mt-2.5 space-y-1">
+              {changing.map((row) => (
+                <li key={row.student_id} className="text-sm">
+                  <span className="font-medium">{row.student_name}</span>
+                  <span className="text-muted-foreground">
+                    {row.preview?.status === "create"
+                      ? " — new Toddle profile"
+                      : ` — ${formatToddleFieldList(
+                          row.preview?.changedFields ?? []
+                        )}`}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : counts.conflict === 0 ? (
+            <p className="mt-2 text-sm text-muted-foreground">
+              Nothing differs — every student already matches Toddle.
+            </p>
+          ) : null}
+          {conflicts.length > 0 ? (
+            <ul className="mt-2.5 space-y-1.5">
+              {conflicts.map((row) => (
+                <li key={row.student_id} className="text-sm text-red-700">
+                  <span className="font-medium">{row.student_name}</span> —{" "}
+                  {row.preview?.note}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : (
+        <p className="rounded-md border border-amber-200 bg-amber-50/60 p-3 text-sm text-amber-800">
+          Couldn&rsquo;t read Toddle just now (it rate-limits after a
+          run), so this preview can&rsquo;t say what would change. The
+          checks below come from our own records and are still accurate.
+        </p>
+      )}
 
       {blocked.length > 0 ? (
         <div className="rounded-md border border-red-200 bg-red-50/60 p-3">

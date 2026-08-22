@@ -2,7 +2,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
 import { evaluateToddleReadiness } from "@/lib/toddle-readiness";
-import { isToddleConfigured, ToddleSyncError } from "@/lib/toddle";
+import {
+  buildToddleSyncFields,
+  previewToddleStudent,
+} from "@/lib/toddle-sync";
+import {
+  getStudentsBySourceIds,
+  isToddleConfigured,
+  resolveYearGroupId,
+  ToddleSyncError,
+} from "@/lib/toddle";
 import {
   buildToddleSyncShared,
   syncStudentToToddle,
@@ -82,9 +91,51 @@ export async function GET(
       parents.sort((a, b) => a.id - b.id);
     }
 
-    return NextResponse.json(
-      evaluateToddleReadiness({ student, packet, parents, years })
-    );
+    const readiness = evaluateToddleReadiness({
+      student,
+      packet,
+      parents,
+      years,
+    });
+
+    // What the sync would actually change. One Toddle lookup by our
+    // sourceId — not the whole roster — so the confirm dialog costs a
+    // single request. Falls back to `unknown` if Toddle can't be
+    // reached (it rate-limits), which the dialog states plainly rather
+    // than implying nothing would change.
+    let preview = undefined;
+    if (isToddleConfigured()) {
+      const fields = buildToddleSyncFields({
+        student,
+        packet,
+        primaryParent: parents[0] ?? null,
+        enrollmentYear:
+          years.find(
+            (y) => y.id === Number(student.enrollment_school_years_id)
+          ) ?? null,
+        // Mirrors the hint the button sends on the POST.
+        gradeLevelHint:
+          (packet?.grade_level ?? "").trim() || undefined,
+      });
+      const roster = await getStudentsBySourceIds([fields.sourceId]).catch(
+        () => null
+      );
+      const yearGroupId = fields.gradeLevel
+        ? await resolveYearGroupId(fields.gradeLevel).catch(() => undefined)
+        : undefined;
+      preview = previewToddleStudent({
+        student,
+        fields,
+        // A sourceId lookup that returns nothing is a real "no match",
+        // but it can't see records held under a different sourceId —
+        // so an empty result previews as `create`, exactly as the sync
+        // would attempt.
+        roster: roster ?? null,
+        yearGroupId,
+      });
+    }
+
+    return NextResponse.json({ ...readiness, preview });
   } catch (err) {
     return handleAdminError(err);
   }

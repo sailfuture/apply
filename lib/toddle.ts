@@ -639,7 +639,13 @@ export async function syncCrewClass(
  * `ToddleSyncError` that lists what Toddle actually has, so the admin
  * can set the env map instead of us guessing wrong.
  */
-export async function resolveYearGroupId(gradeLevel: string): Promise<string> {
+export async function resolveYearGroupId(
+  gradeLevel: string,
+  /** Preloaded org year groups. A roster-wide preview resolves dozens
+   *  of grades and must not fetch this list once per student — Toddle
+   *  rate-limits long before that finishes. */
+  preloaded?: ToddleYearGroup[]
+): Promise<string> {
   const rawMap = process.env.TODDLE_YEAR_GROUP_MAP;
   if (rawMap) {
     try {
@@ -660,7 +666,7 @@ export async function resolveYearGroupId(gradeLevel: string): Promise<string> {
     );
   }
 
-  const yearGroups = await getYearGroups();
+  const yearGroups = preloaded ?? (await getYearGroups());
   const candidates = yearGroups.filter((yg) =>
     (yg.grades ?? []).some(
       (g) => (g.name ?? "").match(/\d+/)?.[0] === digits
@@ -788,7 +794,7 @@ function normValue(v: unknown): string {
  * push "9th", so a label comparison would report a grade change on
  * every student on every run, forever.
  */
-function diffStudentFields(
+export function diffStudentFields(
   existing: ToddleStudent | null | undefined,
   body: ToddleStudentBody
 ): { changedFields: string[]; compared: boolean } {
@@ -832,14 +838,10 @@ function diffStudentFields(
  *   4. Nothing found → POST create, which requires the grade level to
  *      resolve to a year group.
  */
-export async function upsertStudent(
-  fields: ToddleSyncFields,
-  knownToddleId?: string,
-  /** The record Toddle currently holds, when the caller already has it
-   *  (the bulk run preloads the whole roster). Only used to report
-   *  what changed — never to decide whether to write. */
-  existing?: ToddleStudent | null
-): Promise<ToddleUpsertResult> {
+/** The exact PUT/POST body a set of sync fields turns into. Exported
+ *  so the pre-sync preview diffs the same payload the sync sends,
+ *  rather than a hand-rolled approximation of it. */
+export function toStudentBody(fields: ToddleSyncFields): ToddleStudentBody {
   const body: ToddleStudentBody = {
     firstName: fields.firstName,
     lastName: fields.lastName,
@@ -855,6 +857,18 @@ export async function upsertStudent(
   if (fields.city) body.city = fields.city;
   if (fields.state) body.state = fields.state;
   if (fields.zipcode) body.zipcode = fields.zipcode;
+  return body;
+}
+
+export async function upsertStudent(
+  fields: ToddleSyncFields,
+  knownToddleId?: string,
+  /** The record Toddle currently holds, when the caller already has it
+   *  (the bulk run preloads the whole roster). Only used to report
+   *  what changed — never to decide whether to write. */
+  existing?: ToddleStudent | null
+): Promise<ToddleUpsertResult> {
+  const body = toStudentBody(fields);
 
   // Keep the Toddle grade current on updates too — but a resolution
   // failure only blocks creation (where yearGroupId is required);
