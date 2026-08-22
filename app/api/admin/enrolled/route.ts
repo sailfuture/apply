@@ -290,8 +290,22 @@ export async function GET(req: NextRequest) {
         packet?.created_at ??
         student.created_at ??
         0;
+      // Enrolled = not unenrolled, AND either the student row carries
+      // the flag or admin has confirmed their packet for this year.
+      //
+      // The packet clause is what makes residential students visible.
+      // `isEnrolled` is written by the family-level "Confirm Family
+      // Registration" cascade, but a foster placement is added
+      // mid-year, long after that confirmation already fired for the
+      // family — nothing runs it again, so their flag stays false even
+      // though admin verified their packet. Those students then fell
+      // through BOTH roster cards (the page renders `is_enrolled` and
+      // `is_archived` and nothing else) and vanished from the page
+      // entirely. A confirmed packet is the same statement the
+      // cascade makes, so it counts here too.
       const isEnrolled =
-        student.isEnrolled === true && student.isArchived !== true;
+        student.isArchived !== true &&
+        (student.isEnrolled === true || packet?.registrationConfirmed === true);
       // Cohort year — see the three-tier derivation above. Falls all
       // the way back to the selected year so the column never renders
       // blank on a row that is, by definition, here for this year.

@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { xano } from "@/lib/xano";
 import { sendEmail } from "@/lib/emails/send";
 import { residentialStudentAdded } from "@/lib/emails/templates";
+import { parseResidentialHouse } from "@/lib/residential";
 
 /**
  * Create a brand-new student for a residential / foster family and open
@@ -30,7 +31,8 @@ import { residentialStudentAdded } from "@/lib/emails/templates";
  *     auto-accepted at submit; admin's per-student gate is confirming
  *     the completed packet (`registrationConfirmed`).
  *
- * Body: { first_name, last_name, date_of_birth?, gender?, ethnicity?, yearId }
+ * Body: { first_name, last_name, date_of_birth?, gender?, ethnicity?,
+ *         residential_house?, yearId }
  * Returns: { student, application }
  */
 export async function POST(req: NextRequest) {
@@ -64,6 +66,13 @@ export async function POST(req: NextRequest) {
       : null;
   const gender = typeof body?.gender === "string" ? body.gender : "";
   const ethnicity = typeof body?.ethnicity === "string" ? body.ethnicity : "";
+  // Which residential home the placement lives in, chosen by the adult
+  // adding them. Narrowed to a known house rather than stored raw: a
+  // typo'd house silently splits every roster that groups on it. An
+  // unrecognized value is treated as unset (staff assign it later on
+  // the student's Placement card) rather than failing the create —
+  // losing the student record over a bad string would be worse.
+  const residential_house = parseResidentialHouse(body?.residential_house);
   const yearId = Number(body?.yearId);
 
   if (!first_name || !last_name) {
@@ -109,6 +118,7 @@ export async function POST(req: NextRequest) {
     gender,
     ethnicity,
     photo: null,
+    residential_house: residential_house ?? "",
     registration_families_id: familyId,
     registration_school_years_id: [yearId],
     isArchived: false,
@@ -125,6 +135,31 @@ export async function POST(req: NextRequest) {
     discipline: [],
     student_phone: "",
   });
+
+  // Xano's create endpoint writes only the inputs its own schema
+  // declares, and `residential_house` was added to the table well after
+  // that endpoint was built — so the value above may have been dropped
+  // on the floor. Follow up with the same PATCH the admin Placement
+  // card uses, but only when the create didn't already take it, so the
+  // common path stays one request. Best-effort: the student and their
+  // application matter more than the home, which staff can still set
+  // from the Placement card.
+  let studentRow = student;
+  if (
+    residential_house &&
+    (student.residential_house ?? "").trim() !== residential_house
+  ) {
+    try {
+      studentRow = await xano.students.update(student.id, {
+        residential_house,
+      });
+    } catch (err) {
+      console.error(
+        `[/api/residential-students] could not set residential_house on student ${student.id}:`,
+        err
+      );
+    }
+  }
 
   const existingStudentIds = xano.families.getStudentIds(family);
   if (!existingStudentIds.includes(student.id)) {
@@ -190,9 +225,11 @@ export async function POST(req: NextRequest) {
         student_name: `${first_name} ${last_name}`.trim(),
         student_dob: date_of_birth,
         family_name: family.family_name?.trim() || `Family #${familyId}`,
-        // Staff assign the home after the fact — the creating family
-        // never picks it, so it is always unset at this point.
-        residential_house: student.residential_house?.trim() || null,
+        // Picked by the adult adding the student. Still nullable —
+        // a request that omitted it (or sent an unknown house) lands
+        // here as "Not assigned yet" for staff to resolve.
+        residential_house:
+          residential_house ?? studentRow.residential_house?.trim() ?? null,
         year_name: schoolYear?.year_name?.trim() || `Year ${yearId}`,
         student_url: `${appBase}/admin/enrolled/${student.id}?yearId=${yearId}`,
       }),
@@ -207,5 +244,8 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  return NextResponse.json({ student, application }, { status: 201 });
+  return NextResponse.json(
+    { student: studentRow, application },
+    { status: 201 }
+  );
 }

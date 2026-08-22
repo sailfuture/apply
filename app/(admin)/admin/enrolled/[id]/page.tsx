@@ -79,6 +79,7 @@ import { DashboardBreadcrumb } from "@/components/dashboard-breadcrumb";
 import { InviteStatusBadge, ResendInviteButton } from "@/components/invite-status";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { cn } from "@/lib/utils";
+import { RESIDENTIAL_HOUSES } from "@/lib/residential";
 import {
   formatNoteTimestamp,
   formatRelativeShort,
@@ -704,14 +705,16 @@ const PLACEMENT_GRADE_OPTIONS = [
 ] as const;
 
 /** The two residential homes a foster placement can live in. Offered
- *  only when the student's family carries `is_residential`.
+ *  only when the student's family carries `is_residential`. Shared with
+ *  the family-facing "Create New Registration" sheet, which now asks
+ *  for the home up front, and with the API that persists it.
  *
  *  Deliberately no blank/"unassign" entry: Xano's edit endpoints drop
  *  empty-string inputs, so writing "" back would silently no-op and
  *  leave the old house on screen after a save that appeared to work.
  *  Reassigning between the two works fine; genuinely clearing a house
  *  needs a sentinel value the way inquiry `status` does. */
-const RESIDENTIAL_HOUSE_OPTIONS = ["Lakewood", "Waterfront"] as const;
+const RESIDENTIAL_HOUSE_OPTIONS = RESIDENTIAL_HOUSES;
 
 /** Crew options for the admin Placement card's crew select. */
 const PLACEMENT_CREW_OPTIONS = [

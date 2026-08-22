@@ -233,6 +233,28 @@ export async function PATCH(
           err
         );
       }
+
+      // Cascade 2: mark the student enrolled. The family-level
+      // "Confirm Family Registration" flow does this for a whole
+      // cohort at once, but a student confirmed on their own —
+      // every residential / foster placement, which arrives
+      // mid-year after the family was already confirmed — never
+      // passes through it, so their `isEnrolled` stayed false and
+      // the enrolled roster couldn't show them. Verifying a packet
+      // is the same statement that cascade makes, per student.
+      //
+      // Guarded on `isArchived`: re-verifying an old packet for a
+      // student admin has since unenrolled must not quietly pull
+      // them back into the roster. Best-effort like the cascade
+      // above — the verify itself has already succeeded.
+      try {
+        await cascadeStudentEnrolled(updated);
+      } catch (err) {
+        console.error(
+          "[/api/admin/student-registration/[id]] cascade to student isEnrolled failed:",
+          err
+        );
+      }
     }
 
     return NextResponse.json(updated);
@@ -284,6 +306,34 @@ export async function DELETE(
  * different concern handled by the parent-side cascade when they
  * unlock + edit something.
  */
+/**
+ * Flip `student.isEnrolled = true` for the student whose packet admin
+ * just verified.
+ *
+ * The family-level confirm flow
+ * (`/api/admin/registration-progress` → `cascadeIsEnrolledTrue`) does
+ * this for a whole cohort when admin confirms a family's registration.
+ * A student verified on their own never reaches it — which is every
+ * residential / foster placement, since those are added mid-year, after
+ * their family's confirmation already fired and will not fire again.
+ * Their `isEnrolled` therefore stayed false forever and the enrolled
+ * roster had nowhere to put them.
+ *
+ * Skipped when the student is archived (admin-unenrolled — re-verifying
+ * an old packet must not re-enroll them) or already flagged, so the
+ * common case costs one read and no write.
+ */
+async function cascadeStudentEnrolled(
+  packet: XanoStudentRegistration
+): Promise<void> {
+  const studentId = Number(packet.registration_students_id);
+  if (!studentId) return;
+  const student = await xano.students.getById(studentId);
+  if (student.isArchived === true) return;
+  if (student.isEnrolled === true) return;
+  await xano.students.updateOnAdminGroup(studentId, { isEnrolled: true });
+}
+
 async function cascadeFamilyRegistrationCompleted(
   packet: XanoStudentRegistration
 ): Promise<void> {

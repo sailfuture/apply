@@ -21,6 +21,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { mutateApplications, mutateStudents } from "@/hooks/use-api";
+import { RESIDENTIAL_HOUSES } from "@/lib/residential";
 
 interface Props {
   open: boolean;
@@ -36,6 +37,7 @@ const blankForm = {
   date_of_birth: "",
   gender: "",
   ethnicity: "",
+  residential_house: "",
 };
 
 /**
@@ -67,6 +69,13 @@ export function AddResidentialStudentSheet({
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (submitting) return;
+    // Belt-and-braces alongside the Select's `required`: Radix renders
+    // its own hidden control for native validation, so a friendly
+    // message here beats relying on the browser bubble finding it.
+    if (!form.residential_house) {
+      setError("Please choose which residential home this student lives in.");
+      return;
+    }
     setSubmitting(true);
     setError("");
     try {
@@ -79,6 +88,7 @@ export function AddResidentialStudentSheet({
           date_of_birth: form.date_of_birth || null,
           gender: form.gender,
           ethnicity: form.ethnicity,
+          residential_house: form.residential_house,
           yearId,
         }),
       });
@@ -153,6 +163,31 @@ export function AddResidentialStudentSheet({
                 value={form.date_of_birth}
                 onChange={(e) => update("date_of_birth", e.target.value)}
               />
+            </Field>
+            {/* Which house the placement lives in. Asked here, at the
+                moment the adult adding the student knows the answer —
+                staff used to have to chase it down afterwards. Required
+                because it drives who is responsible for the student day
+                to day; admin can still change it later on the student's
+                Placement card if a placement moves. */}
+            <Field>
+              <FieldLabel>Residential Home</FieldLabel>
+              <Select
+                value={form.residential_house}
+                onValueChange={(v) => update("residential_house", v)}
+                required
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="Select home" />
+                </SelectTrigger>
+                <SelectContent>
+                  {RESIDENTIAL_HOUSES.map((house) => (
+                    <SelectItem key={house} value={house}>
+                      {house}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </Field>
             <Field>
               <FieldLabel>Gender</FieldLabel>
