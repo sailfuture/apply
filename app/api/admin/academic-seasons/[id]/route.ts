@@ -79,14 +79,29 @@ export async function DELETE(
     // Un-assign every calendar day pointing at this season BEFORE
     // deleting the row, so day rows never carry a dangling seasons_id.
     // All-years scan because the season row is the only thing that
-    // knows its year and we're about to delete it anyway.
+    // knows its year and we're about to delete it anyway. Both slots
+    // count: on a changeover date the season may hold only the
+    // afternoon (`seasons_id_pm`). Losing the morning half promotes
+    // the incoming season to sole owner rather than leaving an
+    // afternoon with nobody before it.
     const days = await xano.schoolCalendar.getAll();
-    const assigned = days.filter((d) => Number(d.seasons_id) === id);
+    const assigned = days.filter(
+      (d) => Number(d.seasons_id) === id || Number(d.seasons_id_pm) === id
+    );
     for (let i = 0; i < assigned.length; i += 10) {
       await Promise.all(
-        assigned
-          .slice(i, i + 10)
-          .map((d) => xano.schoolCalendar.update(d.id, { seasons_id: 0 }))
+        assigned.slice(i, i + 10).map((d) =>
+          xano.schoolCalendar.update(
+            d.id,
+            Number(d.seasons_id) === id
+              ? {
+                  seasons_id: Number(d.seasons_id_pm) || 0,
+                  seasons_id_pm: 0,
+                  season_handoff: 0,
+                }
+              : { seasons_id_pm: 0, season_handoff: 0 }
+          )
+        )
       );
     }
     await xano.academicSeasons.delete(id);

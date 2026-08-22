@@ -2544,7 +2544,23 @@ export interface XanoSchoolCalendarDay {
   /** YYYY-MM-DD. */
   date: string;
   terms_id: number;
+  /** The season that owns the day — or just its morning, when the day
+   *  is a season changeover (see `seasons_id_pm`). 0 = unassigned. */
   seasons_id: number;
+  /** The incoming season on a changeover date: `seasons_id` holds the
+   *  day until `season_handoff`, this one holds it after. 0 (the
+   *  normal case) = the whole day belongs to `seasons_id`. Seasons can
+   *  only share a date at their range endpoints — one season ending
+   *  mid-day as the next begins. Optional: legacy rows predate the
+   *  column. */
+  seasons_id_pm?: number;
+  /** When the changeover happens, in minutes past local midnight
+   *  (10:30am = 630). 0 = unset; only meaningful alongside
+   *  `seasons_id_pm > 0`. Minutes rather than "HH:MM" because Xano's
+   *  edit endpoints drop empty-string inputs but apply integer 0
+   *  fine — so a handoff can actually be cleared. Optional: legacy
+   *  rows predate the column. */
+  season_handoff?: number;
   /** "School" | "Weekend" | "Break". */
   type: string;
   day_of_week: string;

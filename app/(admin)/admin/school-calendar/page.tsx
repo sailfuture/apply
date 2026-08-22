@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import {
   EventUpsertDialog,
+  TimeSelect,
   eventColor,
   parseDate,
 } from "@/components/admin/event-upsert-dialog";
@@ -70,6 +71,12 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { adminFetcher } from "@/lib/admin-fetcher";
+import {
+  changeoverPartners,
+  seasonAmOf,
+  seasonHandoffOf,
+  seasonPmOf,
+} from "@/lib/season-days";
 import { cn } from "@/lib/utils";
 import type { SchoolCalendarResponse } from "@/app/api/admin/school-calendar/route";
 import type {
@@ -98,6 +105,9 @@ import type {
  * `registration_academic_terms` / `registration_academic_seasons` —
  * season dates aren't columns, they derive from the calendar day rows
  * assigned via `seasons_id` (the season editor stamps a date range).
+ * A changeover date belongs to two seasons — the outgoing one until
+ * `season_handoff`, the incoming one (`seasons_id_pm`) after — and
+ * shows as an amber "S1→S2" badge.
  * The year comes from the top-bar year picker; ordinal "Term N"
  * labels remain the fallback for `terms_id`s the terms table doesn't
  * know.
@@ -155,6 +165,80 @@ function agendaDateLabel(iso: string): string {
   });
 }
 
+/* ── Season changeover days ───────────────────────────────────────── */
+
+/** Minutes past midnight (10:30am = 630) → "10:30 AM", "" when 0. */
+function fmtMinutes(minutes: number | null | undefined): string {
+  const m = Number(minutes) || 0;
+  if (m <= 0) return "";
+  const d = new Date(2000, 0, 1, Math.floor(m / 60), m % 60);
+  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+/** Minutes past midnight ⇄ the "HH:MM" strings `TimeSelect` speaks. */
+function minutesToTimeInput(minutes: number | null | undefined): string {
+  const m = Number(minutes) || 0;
+  if (m <= 0) return "";
+  return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(
+    m % 60
+  ).padStart(2, "0")}`;
+}
+
+function timeInputToMinutes(hhmm: string): number {
+  if (!hhmm) return 0;
+  const [hh, mm] = hhmm.split(":").map(Number);
+  const m = (hh || 0) * 60 + (mm || 0);
+  return m > 0 && m < 24 * 60 ? m : 0;
+}
+
+/** Both seasons on a day, in order: `am` holds it (until `handoff`
+ *  when `pm` is set), `pm` takes over. Null when unassigned. */
+interface DaySeasons {
+  am: { code: string; name: string } | null;
+  pm: { code: string; name: string } | null;
+  /** Minutes past midnight; 0 when the changeover time is unset. */
+  handoff: number;
+}
+
+function daySeasons(
+  day: XanoSchoolCalendarDay,
+  badge: Map<number, { code: string; name: string }>
+): DaySeasons | null {
+  const am = seasonAmOf(day);
+  const pm = seasonPmOf(day);
+  if (!am && !pm) return null;
+  return {
+    am: am ? (badge.get(am) ?? null) : null,
+    pm: pm && pm !== am ? (badge.get(pm) ?? null) : null,
+    handoff: Number(day.season_handoff) || 0,
+  };
+}
+
+/** A season's span as derived from its day rows — the seasons table
+ *  has no date columns of its own. */
+interface SeasonInfo {
+  start: string;
+  end: string;
+  total: number;
+  school: number;
+  /** The season starts mid-way through `start` (the previous season
+   *  holds that morning) / ends mid-way through `end`. */
+  sharedStart: boolean;
+  sharedEnd: boolean;
+  /** Changeover times on those days, minutes past midnight; 0 unset. */
+  startHandoff: number;
+  endHandoff: number;
+}
+
+/** "Season 1", or "Season 1 → Season 2 (10:30 AM)" on a changeover. */
+function seasonSummary(s: DaySeasons | null): string {
+  if (!s) return "";
+  const am = s.am?.name ?? "";
+  if (!s.pm) return am;
+  const at = fmtMinutes(s.handoff);
+  return `${am || "—"} → ${s.pm.name}${at ? ` (${at})` : ""}`;
+}
+
 export default function SchoolCalendarPage() {
   const searchParams = useSearchParams();
   const yearId = searchParams.get("yearId");
@@ -201,8 +285,9 @@ export default function SchoolCalendarPage() {
     return m;
   }, [days, terms]);
 
-  /** seasons_id → ordinal badge ("S1"…) + full name, in table order —
-   *  shown on day cells for days assigned to a season. */
+  /** season id → ordinal badge ("S1"…) + full name, in table order —
+   *  shown on day cells for days assigned to a season (both slots:
+   *  a changeover date shows "S1→S2"). */
   const seasonBadge = useMemo(() => {
     const m = new Map<number, { code: string; name: string }>();
     seasons.forEach((s, i) =>
@@ -522,9 +607,7 @@ export default function SchoolCalendarPage() {
                       : ""
                   }
                   season={
-                    cell.day && cell.day.seasons_id > 0
-                      ? (seasonBadge.get(cell.day.seasons_id) ?? null)
-                      : null
+                    cell.day ? daySeasons(cell.day, seasonBadge) : null
                   }
                   isToday={cell.date === todayIso}
                   dimmed={
@@ -550,11 +633,7 @@ export default function SchoolCalendarPage() {
           days={days}
           events={eventsByDay.get(selectedDay.id) ?? []}
           termLabel={termLabel.get(selectedDay.terms_id) ?? ""}
-          seasonName={
-            selectedDay.seasons_id > 0
-              ? (seasonBadge.get(selectedDay.seasons_id)?.name ?? "")
-              : ""
-          }
+          seasonName={seasonSummary(daySeasons(selectedDay, seasonBadge))}
           onClose={() => setSelectedDayId(null)}
           onChanged={() => void mutate()}
           onRemind={(event) =>
@@ -1034,9 +1113,9 @@ function DayCell({
   day: XanoSchoolCalendarDay | null;
   events: XanoSchoolCalendarEvent[];
   termLabel: string;
-  /** Ordinal season badge ("S1") + full name when the day is assigned
-   *  to a season. */
-  season: { code: string; name: string } | null;
+  /** Ordinal season badges ("S1") + full names for the day — two of
+   *  them when it's a changeover date. Null when unassigned. */
+  season: DaySeasons | null;
   isToday: boolean;
   /** True when a term filter is active and this day falls outside its
    *  date range — the cell fades so the term's span pops. */
@@ -1083,7 +1162,7 @@ function DayCell({
       onClick={onOpen}
       title={[
         `${day.day_of_week} · ${day.type}${workType ? ` · ${workType}` : ""}`,
-        season ? season.name : "",
+        seasonSummary(season),
         day.holiday ? "Holiday" : "",
         ...boundaries,
         ...events.map((e) =>
@@ -1122,10 +1201,19 @@ function DayCell({
           ) : null}
           {season ? (
             <span
-              title={season.name}
-              className="rounded-full bg-teal-100 px-1 py-px text-[9px] font-semibold text-teal-700"
+              title={seasonSummary(season)}
+              className={cn(
+                "rounded-full px-1 py-px text-[9px] font-semibold",
+                // A changeover date carries both seasons — amber so it
+                // reads as a boundary, not just another assigned day.
+                season.pm
+                  ? "bg-amber-100 text-amber-800"
+                  : "bg-teal-100 text-teal-700"
+              )}
             >
-              {season.code}
+              {season.pm
+                ? `${season.am?.code ?? "—"}→${season.pm.code}`
+                : (season.am?.code ?? "")}
             </span>
           ) : null}
           {workType === "Externship" ? (
@@ -1751,26 +1839,43 @@ function TermsSeasonsDialog({
   }, [days]);
 
   /** Derived per-season info from assigned day rows: date range,
-   *  total assigned days, school-day count. */
+   *  total assigned days, school-day count, and whether either end of
+   *  the range is a changeover date shared with the neighbouring
+   *  season (`sharedStart` = this season comes in mid-day). A shared
+   *  date counts as a day for BOTH seasons — each really does hold
+   *  part of it. */
   const seasonInfo = useMemo(() => {
-    const m = new Map<
-      number,
-      { start: string; end: string; total: number; school: number }
-    >();
+    const m = new Map<number, SeasonInfo>();
     for (const d of days) {
-      const sid = Number(d.seasons_id);
-      if (!sid) continue;
-      const cur = m.get(sid) ?? {
-        start: d.date,
-        end: d.date,
-        total: 0,
-        school: 0,
-      };
-      if (d.date < cur.start) cur.start = d.date;
-      if (d.date > cur.end) cur.end = d.date;
-      cur.total += 1;
-      if (d.type === "School") cur.school += 1;
-      m.set(sid, cur);
+      const am = seasonAmOf(d);
+      const pm = seasonPmOf(d);
+      const handoff = Number(d.season_handoff) || 0;
+      for (const sid of pm && pm !== am ? [am, pm] : [am]) {
+        if (!sid) continue;
+        const cur = m.get(sid) ?? {
+          start: d.date,
+          end: d.date,
+          total: 0,
+          school: 0,
+          sharedStart: false,
+          sharedEnd: false,
+          startHandoff: 0,
+          endHandoff: 0,
+        };
+        if (d.date <= cur.start) {
+          cur.start = d.date;
+          cur.sharedStart = sid === pm && am > 0;
+          cur.startHandoff = cur.sharedStart ? handoff : 0;
+        }
+        if (d.date >= cur.end) {
+          cur.end = d.date;
+          cur.sharedEnd = sid === am && pm > 0 && pm !== am;
+          cur.endHandoff = cur.sharedEnd ? handoff : 0;
+        }
+        cur.total += 1;
+        if (d.type === "School") cur.school += 1;
+        m.set(sid, cur);
+      }
     }
     return m;
   }, [days]);
@@ -1970,6 +2075,20 @@ function TermsSeasonsDialog({
                               {info
                                 ? `${fmtMedDate(info.start)} – ${fmtMedDate(info.end)}`
                                 : "No dates set"}
+                              {info && (info.sharedStart || info.sharedEnd) ? (
+                                <div className="text-[11px] text-muted-foreground">
+                                  {[
+                                    info.sharedStart
+                                      ? `${fmtShortDate(info.start)} from ${fmtMinutes(info.startHandoff) || "mid-day"}`
+                                      : "",
+                                    info.sharedEnd
+                                      ? `${fmtShortDate(info.end)} until ${fmtMinutes(info.endHandoff) || "mid-day"}`
+                                      : "",
+                                  ]
+                                    .filter(Boolean)
+                                    .join(" · ")}
+                                </div>
+                              ) : null}
                             </TableCell>
                             <TableCell className="text-right tabular-nums">
                               {info?.school ?? 0}
@@ -2009,7 +2128,9 @@ function TermsSeasonsDialog({
               </div>
               <p className="text-[11px] text-muted-foreground">
                 Season dates come from the calendar days assigned to the
-                season — pick the range in the season editor.
+                season — pick the range in the season editor. Two
+                seasons can share a changeover date, one holding the
+                morning and the other the rest of the day.
               </p>
             </section>
           </div>
@@ -2033,6 +2154,7 @@ function TermsSeasonsDialog({
           key={seasonEdit.existing?.id ?? 0}
           yearId={yearId}
           terms={terms}
+          seasons={seasons}
           days={days}
           existing={seasonEdit.existing}
           onDone={(saved) => {
@@ -2294,25 +2416,38 @@ function TermEditDialog({
  * every day row in the range (via the season's /days endpoint) and
  * clears rows that fell out of it, so the season always reflects the
  * selected dates. Both dates blank = clear the assignment.
+ *
+ * Endpoints may overlap the neighbouring season — a season that ends
+ * at 10:30am as the next one starts really does share that date. When
+ * the picked start (or end) lands on a day another season already
+ * runs through, the day is split instead of stolen and a changeover
+ * time appears for it.
  */
 function SeasonEditDialog({
   yearId,
   terms,
+  seasons,
   days,
   existing,
   onDone,
 }: {
   yearId: number;
   terms: XanoAcademicTerm[];
+  /** The year's seasons — names the season on the other side of a
+   *  shared changeover date. */
+  seasons: XanoAcademicSeason[];
   days: XanoSchoolCalendarDay[];
   /** Null = creating a new season. */
   existing: XanoAcademicSeason | null;
   onDone: (saved: boolean) => void;
 }) {
-  // Days currently assigned to this season (days arrive date-sorted),
-  // seeding the range inputs with the season's present span.
+  // Days currently assigned to this season, either slot (days arrive
+  // date-sorted), seeding the range inputs with its present span.
   const assigned = existing
-    ? days.filter((d) => Number(d.seasons_id) === existing.id)
+    ? days.filter(
+        (d) =>
+          seasonAmOf(d) === existing.id || seasonPmOf(d) === existing.id
+      )
     : [];
   const [name, setName] = useState(existing?.name ?? "");
   const [termId, setTermId] = useState(
@@ -2339,6 +2474,32 @@ function SeasonEditDialog({
             d.type === "School"
         ).length
       : 0;
+
+  // Which endpoints the picked range shares with a neighbouring
+  // season — planned through the same module the /days endpoint uses,
+  // so what the dialog promises is what gets written.
+  const seasonNameById = useMemo(
+    () => new Map(seasons.map((s) => [s.id, s.name])),
+    [seasons]
+  );
+  const { start: shareStartWith, end: shareEndWith } = useMemo(
+    () =>
+      changeoverPartners({
+        days,
+        seasonId: existing?.id ?? 0,
+        start: startDate,
+        end: endDate,
+      }),
+    [days, existing?.id, startDate, endDate]
+  );
+
+  const [startHandoff, setStartHandoff] = useState(
+    assigned[0] ? minutesToTimeInput(seasonHandoffOf(assigned[0])) : ""
+  );
+  const [endHandoff, setEndHandoff] = useState(() => {
+    const last = assigned[assigned.length - 1];
+    return last ? minutesToTimeInput(seasonHandoffOf(last)) : "";
+  });
 
   async function save() {
     const trimmed = name.trim();
@@ -2383,6 +2544,16 @@ function SeasonEditDialog({
               yearId,
               start_date: wantAssign ? startDate : null,
               end_date: wantAssign ? endDate : null,
+              // Only meaningful on a shared endpoint — the endpoint
+              // ignores them otherwise.
+              handoff_start:
+                wantAssign && shareStartWith
+                  ? timeInputToMinutes(startHandoff)
+                  : 0,
+              handoff_end:
+                wantAssign && shareEndWith
+                  ? timeInputToMinutes(endHandoff)
+                  : 0,
             }),
           }
         );
@@ -2471,6 +2642,43 @@ function SeasonEditDialog({
               />
             </div>
           </div>
+          {/* Changeover times — one picker per shared endpoint. */}
+          {shareStartWith ? (
+            <div className="flex items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50/60 px-3 py-2">
+              <div className="space-y-0.5">
+                <p className="text-xs font-medium">
+                  Starts mid-day {fmtShortDate(startDate)}
+                </p>
+                <p className="text-[11px] text-muted-foreground">
+                  {seasonNameById.get(shareStartWith) ?? "The season before"}{" "}
+                  keeps that morning.
+                </p>
+              </div>
+              <TimeSelect
+                value={startHandoff}
+                onChange={setStartHandoff}
+                ariaLabel="Changeover time on the first day"
+              />
+            </div>
+          ) : null}
+          {shareEndWith ? (
+            <div className="flex items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50/60 px-3 py-2">
+              <div className="space-y-0.5">
+                <p className="text-xs font-medium">
+                  Ends mid-day {fmtShortDate(endDate)}
+                </p>
+                <p className="text-[11px] text-muted-foreground">
+                  {seasonNameById.get(shareEndWith) ?? "The next season"}{" "}
+                  takes over after.
+                </p>
+              </div>
+              <TimeSelect
+                value={endHandoff}
+                onChange={setEndHandoff}
+                ariaLabel="Changeover time on the last day"
+              />
+            </div>
+          ) : null}
           {halfRange ? (
             <p className="text-xs text-red-600">
               Set both dates — or leave both blank to clear the
@@ -2483,8 +2691,10 @@ function SeasonEditDialog({
           ) : startDate && endDate ? (
             <p className="text-[11px] text-muted-foreground">
               Assigns every calendar day in this range to the season
-              ({schoolDaysInRange} school days). Days already in another
-              season move to this one.
+              ({schoolDaysInRange} school days). Days inside the range
+              move here from other seasons; the first and last day are
+              shared with the neighbouring season instead when it runs
+              through them.
             </p>
           ) : (
             <p className="text-[11px] text-muted-foreground">
