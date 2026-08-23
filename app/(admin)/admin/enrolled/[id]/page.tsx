@@ -102,6 +102,7 @@ import type { AdminEnrolledStudentResponse } from "@/app/api/admin/enrolled/[id]
 import type { AdminFamilyOverviewResponse } from "@/app/api/admin/family-overview/[id]/route";
 import type { XanoBusStop } from "@/lib/xano";
 import type { StudentGoogleAccountStatus } from "@/app/api/admin/students/[id]/google-account/route";
+import { SendLiabilityWaiverButton } from "@/components/admin/send-liability-waiver-button";
 
 /**
  * Admin Enrolled Student detail page.
@@ -495,6 +496,8 @@ export default function EnrolledStudentDetailPage() {
         packet={packet}
         student={student}
         schoolYear={school_year}
+        primary={primary}
+        onChanged={() => mutate()}
       />
 
       <TestingCard
@@ -3349,10 +3352,16 @@ function LiabilityWaiverCard({
   packet,
   student,
   schoolYear,
+  primary,
+  onChanged,
 }: {
   packet: AdminEnrolledStudentResponse["packet"];
   student: AdminEnrolledStudentResponse["student"];
   schoolYear: AdminEnrolledStudentResponse["school_year"];
+  /** Lowest-id parent — the address the waiver goes to. Display only;
+   *  the send route resolves the recipient itself. */
+  primary: AdminEnrolledStudentResponse["primary"];
+  onChanged?: () => void | Promise<unknown>;
 }) {
   const yearName = schoolYear?.year_name ?? "";
   const yearSuffix = yearName ? ` · ${yearName}` : "";
@@ -3385,6 +3394,34 @@ function LiabilityWaiverCard({
     ]
       .filter(Boolean)
       .join("-") + ".pdf";
+
+  // Admin send / resend. Offered in both unsigned states — a family
+  // whose registration was pushed through to enrollment without a
+  // waiver has usually stopped opening the portal, so the apply
+  // flow's embedded signing session will never be reached. PandaDoc
+  // emails them a link instead. Hidden once signed: there is nothing
+  // to chase, and re-sending would retire the signature's envelope.
+  const sendAction =
+    schoolYear?.id && student.id ? (
+      <div className="shrink-0">
+        <SendLiabilityWaiverButton
+          studentId={student.id}
+          yearId={schoolYear.id}
+          studentName={
+            `${student.first_name ?? ""} ${student.last_name ?? ""}`.trim() ||
+            "this student"
+          }
+          recipientEmail={primary?.email ?? ""}
+          recipientName={
+            primary
+              ? `${primary.first_name ?? ""} ${primary.last_name ?? ""}`.trim()
+              : undefined
+          }
+          status={status}
+          onSent={onChanged}
+        />
+      </div>
+    ) : null;
 
   return (
     <Card className="overflow-hidden gap-0 py-0 bg-white">
@@ -3445,30 +3482,36 @@ function LiabilityWaiverCard({
             </div>
           </div>
         ) : status ? (
-          <div className="flex items-start gap-3">
-            <div className="flex size-9 shrink-0 items-center justify-center rounded-md border bg-muted/40">
-              <FileText className="size-4 text-muted-foreground" />
+          <div className="flex items-start justify-between gap-4 flex-wrap">
+            <div className="flex items-start gap-3 min-w-0">
+              <div className="flex size-9 shrink-0 items-center justify-center rounded-md border bg-muted/40">
+                <FileText className="size-4 text-muted-foreground" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-medium">
+                  Waiver {formatWaiverStatus(status).toLowerCase()} — not
+                  signed yet
+                </p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {sentAt
+                    ? `Sent ${formatNoteTimestamp(new Date(sentAt).getTime())}. `
+                    : ""}
+                  The signed PDF will be available to download here once the
+                  family completes it.
+                </p>
+              </div>
             </div>
-            <div className="min-w-0">
-              <p className="text-sm font-medium">
-                Waiver {formatWaiverStatus(status).toLowerCase()} — not signed
-                yet
-              </p>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                {sentAt
-                  ? `Sent ${formatNoteTimestamp(new Date(sentAt).getTime())}. `
-                  : ""}
-                The signed PDF will be available to download here once the
-                family completes it.
-              </p>
-            </div>
+            {sendAction}
           </div>
         ) : (
-          <p className="text-sm text-muted-foreground">
-            {packet
-              ? "The family hasn’t signed the liability waiver for this school year yet."
-              : "No registration packet on file for this student yet, so there’s no liability waiver to download."}
-          </p>
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <p className="text-sm text-muted-foreground">
+              {packet
+                ? "The family hasn’t signed the liability waiver for this school year yet."
+                : "No registration packet on file for this student yet — sending the waiver will create one."}
+            </p>
+            {sendAction}
+          </div>
         )}
       </CardContent>
     </Card>

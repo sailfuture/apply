@@ -114,19 +114,70 @@ export async function createDocumentFromTemplate(
   return res.json();
 }
 
-export async function sendDocument(documentId: string): Promise<void> {
+export interface SendDocumentOptions {
+  /** `true` (the default) moves the envelope to `sent` WITHOUT
+   *  emailing anyone. That's right for the parent-side flow, which
+   *  hands the signer an embedded session in the app moments later —
+   *  a PandaDoc email there would just be a confusing second path to
+   *  the same signature. Admin-initiated sends flip this to `false`
+   *  so PandaDoc emails the recipient its own signing link, which is
+   *  the entire point when the family has stopped opening the portal. */
+  silent?: boolean;
+  /** Body of PandaDoc's email. Ignored when `silent` is true. */
+  message?: string;
+  /** Subject line of PandaDoc's email. Ignored when `silent` is true. */
+  subject?: string;
+}
+
+export async function sendDocument(
+  documentId: string,
+  options: SendDocumentOptions = {}
+): Promise<void> {
+  const {
+    silent = true,
+    message = "Please review and sign this document.",
+    subject,
+  } = options;
+  const body: Record<string, unknown> = { message, silent };
+  if (subject) body.subject = subject;
+
   const res = await fetch(
     `${PANDADOC_API_BASE}/documents/${documentId}/send`,
     {
       method: "POST",
       headers: headers(),
-      body: JSON.stringify({ message: "Please review and sign this document.", silent: true }),
+      body: JSON.stringify(body),
     }
   );
 
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`PandaDoc send failed (${res.status}): ${text}`);
+  }
+}
+
+/**
+ * Move a document to `deleted`.
+ *
+ * Used when admin re-sends a waiver: the fresh envelope replaces the
+ * unsigned one, and leaving the old link live is actively dangerous —
+ * the family could sign it, and the webhook's id guard (which only
+ * accepts the document id currently on the packet row) would drop
+ * that completion on the floor. A signature nobody records is worse
+ * than no signature at all.
+ *
+ * Treats 404 as success: an envelope that's already gone is the state
+ * we wanted.
+ */
+export async function deleteDocument(documentId: string): Promise<void> {
+  const res = await fetch(`${PANDADOC_API_BASE}/documents/${documentId}`, {
+    method: "DELETE",
+    headers: headers(),
+  });
+
+  if (!res.ok && res.status !== 404) {
+    const text = await res.text();
+    throw new Error(`PandaDoc delete failed (${res.status}): ${text}`);
   }
 }
 
