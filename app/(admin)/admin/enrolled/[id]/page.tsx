@@ -103,6 +103,7 @@ import type { AdminFamilyOverviewResponse } from "@/app/api/admin/family-overvie
 import type { XanoBusStop } from "@/lib/xano";
 import type { StudentGoogleAccountStatus } from "@/app/api/admin/students/[id]/google-account/route";
 import { SendLiabilityWaiverButton } from "@/components/admin/send-liability-waiver-button";
+import { WaiverSignatureCheck } from "@/components/admin/waiver-signature-check";
 
 /**
  * Admin Enrolled Student detail page.
@@ -3501,7 +3502,21 @@ function LiabilityWaiverCard({
                 </p>
               </div>
             </div>
-            {sendAction}
+            <div className="flex items-center gap-2 shrink-0">
+              {/* Self-heal for the email path: PandaDoc is asked
+                  directly on render, so a webhook that never landed
+                  can't leave a signed waiver reading as "Sent". */}
+              {schoolYear?.id ? (
+                <WaiverSignatureCheck
+                  studentId={student.id}
+                  yearId={schoolYear.id}
+                  pandadocId={pandadocId}
+                  status={status}
+                  onChanged={onChanged}
+                />
+              ) : null}
+              {sendAction}
+            </div>
           </div>
         ) : (
           <div className="flex items-center justify-between gap-4 flex-wrap">
