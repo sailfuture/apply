@@ -20,6 +20,10 @@ import { Field, FieldLabel } from "@/components/ui/field";
 import { CheckCircle2, Loader2, HelpCircle } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import SignatureCanvas from "react-signature-canvas";
+import {
+  resolveStudentReceiptAmounts,
+  sumStudentMonthly,
+} from "@/lib/student-receipt";
 
 /** Human-readable labels for SUFS award types */
 const SUFS_LABELS: Record<string, string> = {
@@ -53,6 +57,11 @@ interface StudentRow {
    *  line and the OS Cost Per Student breakout. */
   hasOSDetermination: boolean;
   subtotal: number;
+  /** What Stripe invoices for this student each month — the stored
+   *  `monthly_amount` that becomes their SubscriptionItem. Summed
+   *  (not `subtotal / 12`) for the family's monthly figure so the
+   *  receipt matches the invoice to the cent. */
+  monthly: number;
 }
 
 function formatCurrency(value: number): string {
@@ -269,6 +278,7 @@ export default function TuitionPage() {
       opportunity_award_amount?: number | null;
       annual_fee?: number | null;
       remaining_opportunity_amount?: number | null;
+      monthly_amount?: number | null;
       confirmed_scholarship?: boolean;
     }[]).filter((a) => a.registration_school_years_id === yearId);
 
@@ -341,6 +351,7 @@ export default function TuitionPage() {
         familyPaysForTuition,
         hasOSDetermination,
         subtotal,
+        monthly: resolveStudentReceiptAmounts(app).monthly,
       });
     }
 
@@ -356,6 +367,11 @@ export default function TuitionPage() {
 
   // Totals
   const grandTotal = studentRows.reduce((sum, r) => sum + r.subtotal, 0);
+  // Sum of the per-student monthlies rather than `grandTotal / 12`:
+  // Stripe invoices one line per student at that student's own
+  // rounded amount, so two students at $41.67 are billed $83.34 and
+  // the old division printed a cent less than the family owes.
+  const monthlyTotal = sumStudentMonthly(studentRows);
 
   async function handleSignatureEnd() {
     if (!sigCanvasRef.current || sigCanvasRef.current.isEmpty()) return;
@@ -621,7 +637,7 @@ export default function TuitionPage() {
                 </tr>
                 <tr className="border-t bg-white">
                   <td className="px-4 py-3 font-bold">Monthly Payment (Aug – Jul, 12 months)</td>
-                  <td className="px-4 py-3 text-right font-bold">${formatCurrency(grandTotal / 12)}/mo</td>
+                  <td className="px-4 py-3 text-right font-bold">${formatCurrency(monthlyTotal)}/mo</td>
                 </tr>
               </tbody>
             </table>

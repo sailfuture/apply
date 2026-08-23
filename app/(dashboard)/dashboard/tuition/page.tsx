@@ -44,6 +44,10 @@ import type {
   ParentScheduleResponse,
   ParentScheduleSlot,
 } from "@/app/api/billing/schedule/route";
+import {
+  resolveStudentReceiptAmounts,
+  sumStudentMonthly,
+} from "@/lib/student-receipt";
 
 const SUFS_LABELS: Record<string, string> = {
   fes_eo_8: "FES-EO · Grade 8",
@@ -78,6 +82,11 @@ interface StudentRow {
    *  line and the OS Cost Per Student breakout. */
   hasOSDetermination: boolean;
   subtotal: number;
+  /** What Stripe invoices for this student each month — the stored
+   *  `monthly_amount` that becomes their SubscriptionItem. Summed
+   *  (not `subtotal / 12`) for the family's monthly figure so the
+   *  receipt matches the invoice to the cent. */
+  monthly: number;
 }
 
 function formatCurrency(value: number): string {
@@ -209,6 +218,7 @@ export default function DashboardTuitionPage() {
         opportunity_award_amount?: number | null;
         annual_fee?: number | null;
         remaining_opportunity_amount?: number | null;
+        monthly_amount?: number | null;
         confirmed_scholarship?: boolean;
       }[]
     ).filter((a) => a.registration_school_years_id === yearId);
@@ -272,6 +282,7 @@ export default function DashboardTuitionPage() {
         familyPaysForTuition,
         hasOSDetermination,
         subtotal,
+        monthly: resolveStudentReceiptAmounts(app).monthly,
       });
     }
     return rows;
@@ -285,6 +296,11 @@ export default function DashboardTuitionPage() {
   ]);
 
   const grandTotal = studentRows.reduce((sum, r) => sum + r.subtotal, 0);
+  // Sum of the per-student monthlies rather than `grandTotal / 12`:
+  // Stripe invoices one line per student at that student's own
+  // rounded amount, so two students at $41.67 are billed $83.34 and
+  // the old division printed a cent less than the family owes.
+  const monthlyTotal = sumStudentMonthly(studentRows);
 
   const loading = !students || !applications || !yearsData;
 
@@ -542,7 +558,7 @@ export default function DashboardTuitionPage() {
                     Monthly Payment (Aug – Jul, 12 months)
                   </td>
                   <td className="px-4 py-3 text-right font-bold">
-                    ${formatCurrency(grandTotal / 12)}/mo
+                    ${formatCurrency(monthlyTotal)}/mo
                   </td>
                 </tr>
               </tbody>

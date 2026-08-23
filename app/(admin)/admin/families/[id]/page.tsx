@@ -72,6 +72,10 @@ import { InviteStatusBadge, ResendInviteButton } from "@/components/invite-statu
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { cn } from "@/lib/utils";
 import { formatNoteTimestamp } from "@/lib/format-note-time";
+import {
+  resolveStudentReceiptAmounts,
+  sumStudentMonthly,
+} from "@/lib/student-receipt";
 import type {
   XanoApplication,
   XanoAdminFamilyDetail,
@@ -5044,7 +5048,6 @@ function TuitionBreakdownTable({
 }) {
   if (!schoolYear) return null;
   const tuition = schoolYear.tuition ?? 0;
-  const adminFee = schoolYear.annual_fees ?? 0;
 
   // Build one row group per active student; skip students whose app
   // is soft-deleted so the totals match the family-payment snapshot
@@ -5065,20 +5068,31 @@ function TuitionBreakdownTable({
   if (rows.length === 0) return null;
 
   const lineItems = rows.map(({ student, app }) => {
-    const stepUpAmount = resolveSufsAmount(app, schoolYear);
+    // Stored per-student columns only — no year-level admin fee, no
+    // SUFS tier derivation. Substituting those defaults for a student
+    // whose determination was never saved printed a subtotal nobody
+    // is invoiced for, which is how this receipt drifted away from
+    // the family's billed monthly total.
+    const amounts = resolveStudentReceiptAmounts(app);
+    const stepUpAmount = amounts.sufsAmount;
+    const adminFee = amounts.annualFee;
     const stepUpStatus = app.sufs_status ?? "";
     const stepUpType = app.sufs_type ?? "";
-    const familyPaysForTuition = app.remaining_opportunity_amount ?? 0;
+    const familyPaysForTuition = amounts.remainingTuition;
     // A row has an OS determination when the family is on a
     // scholarship path OR admin has entered a per-student amount.
     // The third clause covers the case where admin enters the
     // per-student remaining amount before formally flipping the
     // family-level scholarship path flag — the breakout row + the
-    // OS Award coverage should still render.
+    // OS Award coverage should still render. All of it is gated on
+    // something actually being saved: with a $0 SUFS award the
+    // coverage below would otherwise claim the Opportunity
+    // Scholarship pays the student's FULL tuition.
     const hasOSDetermination =
-      isOpportunityScholarshipFamily ||
-      isSnapFamily ||
-      app.remaining_opportunity_amount != null;
+      amounts.hasSavedDetermination &&
+      (isOpportunityScholarshipFamily ||
+        isSnapFamily ||
+        app.remaining_opportunity_amount != null);
     // Per-student award is only "finalized" once admin clicks
     // Confirm Scholarship Award Amount on the Determination card.
     // Until then, the Opportunity Scholarship coverage row stays
@@ -5088,7 +5102,6 @@ function TuitionBreakdownTable({
     const scholarshipCoverage = hasOSDetermination
       ? Math.max(0, tuition - stepUpAmount - familyPaysForTuition)
       : 0;
-    const subtotal = familyPaysForTuition + adminFee;
     return {
       studentName: `${student.first_name} ${student.last_name}`.trim(),
       tuition,
@@ -5100,11 +5113,16 @@ function TuitionBreakdownTable({
       scholarshipCoverage,
       awardConfirmed,
       hasOSDetermination,
-      subtotal,
+      subtotal: amounts.subtotal,
+      monthly: amounts.monthly,
+      hasSavedDetermination: amounts.hasSavedDetermination,
     };
   });
 
   const grandTotal = lineItems.reduce((sum, r) => sum + r.subtotal, 0);
+  // Σ of the per-student monthlies — one Stripe SubscriptionItem
+  // each, so this is the figure the family is actually invoiced.
+  const monthlyTotal = sumStudentMonthly(lineItems);
 
   return (
     <div className="rounded-lg border bg-white overflow-hidden">
@@ -5121,6 +5139,14 @@ function TuitionBreakdownTable({
                   <span className="font-semibold text-foreground">
                     {row.studentName}
                   </span>
+                  {/* No billing columns saved on this student's
+                      application — the $0s below are absence, not a
+                      decision, and Stripe bills nothing for them. */}
+                  {!row.hasSavedDetermination ? (
+                    <span className="ml-2 inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-700">
+                      Determination not saved — not billed
+                    </span>
+                  ) : null}
                 </td>
               </tr>
 
@@ -5281,7 +5307,7 @@ function TuitionBreakdownTable({
               Monthly Payment (Aug – Jul, 12 months)
             </td>
             <td className="px-4 py-3 text-right font-bold tabular-nums">
-              ${formatCurrency2(grandTotal / 12)}/mo
+              ${formatCurrency2(monthlyTotal)}/mo
             </td>
           </tr>
         </tbody>
@@ -6338,6 +6364,19 @@ function DecisionStudentRow({
   // — every render branch downstream reads it — but the source of
   // truth on the row is the new column.
   const sufsConfirmed = app?.confirmed_scholarship === true;
+  // Confirming is a plain bool toggle — it doesn't require the
+  // billing columns to exist. So a row could be confirmed with
+  // nothing saved, and the lock below then made it unrepairable:
+  // the tier select skipped its derived write, both dollar inputs
+  // were disabled, and the student sat on every receipt while
+  // Stripe billed $0 for them (the Marshall family's second student
+  // reached exactly that state). The lock protects an amount the
+  // family signed against — when no amount was ever stored there is
+  // nothing to protect, so leave the inputs open until one is.
+  const savedDetermination = resolveStudentReceiptAmounts(
+    app ?? {}
+  ).hasSavedDetermination;
+  const amountsLocked = sufsConfirmed && savedDetermination;
 
   // The "Remaining Amount Family Pays" input reads from the
   // `remaining_opportunity_amount` column on the app row. There's
@@ -6558,8 +6597,9 @@ function DecisionStudentRow({
             </h4>
             {sufsConfirmed ? (
               <p className="text-[11px] text-muted-foreground">
-                Scholarship confirmed — tier, status, and award ID stay
-                editable; award amounts are locked.
+                {amountsLocked
+                  ? "Scholarship confirmed — tier, status, and award ID stay editable; award amounts are locked."
+                  : "Scholarship confirmed, but no award amounts were ever saved — this student is billed $0. Set the tier (or the amounts below) to write them; they lock once saved."}
               </p>
             ) : null}
             <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
@@ -6607,12 +6647,14 @@ function DecisionStudentRow({
                       }));
                       return;
                     }
-                    // Once the scholarship is confirmed, the tier
-                    // label may change but the billed amount is
-                    // locked — skip the derived-amount write so a
-                    // post-confirmation correction can't re-price
-                    // billing.
-                    if (sufsConfirmed) return;
+                    // Once the scholarship is confirmed AND an
+                    // amount is on file, the tier label may change
+                    // but the billed amount is locked — skip the
+                    // derived-amount write so a post-confirmation
+                    // correction can't re-price billing. A confirmed
+                    // row with nothing saved isn't protected by that
+                    // rule; it needs this write to exist at all.
+                    if (amountsLocked) return;
                     const nextAmount = sufsAmountFor(nextType, schoolYear);
                     void patchPerStudentBilling({
                       sufsAwardAmount: nextAmount,
@@ -6670,7 +6712,7 @@ function DecisionStudentRow({
                       inputMode="decimal"
                       min={0}
                       placeholder="0"
-                      disabled={sufsConfirmed}
+                      disabled={amountsLocked}
                       onChange={(e) =>
                         setDraft((d) => ({
                           ...d,
@@ -6809,7 +6851,7 @@ function DecisionStudentRow({
                   type="number"
                   inputMode="decimal"
                   placeholder="0"
-                  disabled={sufsConfirmed}
+                  disabled={amountsLocked}
                   onChange={(e) =>
                     setDraft((d) => ({
                       ...d,

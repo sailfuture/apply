@@ -7,6 +7,10 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  resolveStudentReceiptAmounts,
+  sumStudentMonthly,
+} from "@/lib/student-receipt";
 import type {
   AdminFamilyRegistrationResponse,
   AdminFamilyRegistrationStudentRow,
@@ -24,17 +28,6 @@ import type {
  * Data comes from `/api/admin/registrations/[id]` — pass its
  * `students`, `school_year`, and `scholarship` through unchanged.
  */
-
-const SUFS_FIELDS: Record<string, keyof TuitionBreakdownSchoolYear> = {
-  fes_eo_8: "fes_eo_8",
-  fes_eo_9: "fes_eo_9",
-  ftc_8: "ftc_8",
-  ftc_9: "ftc_9",
-  fes_ua_8_ese_1_3: "fes_ua_8_ese_1_3",
-  fes_ua_9_ese_1_3: "fes_ua_9_ese_1_3",
-  fes_ua_ese_4: "fes_ua_ese_4",
-  fes_ua_ese_5: "fes_ua_ese_5",
-};
 
 /** Human label for each SUFS tier — same set the parent dashboard uses. */
 const SUFS_LABELS: Record<string, string> = {
@@ -102,9 +95,9 @@ function tuitionStatusBadge(status: string) {
  * editor jump-offs.
  *
  * Math mirrors `/dashboard/tuition` line-for-line — admin's view
- * has to agree with the parent's view to the penny, so we
- * deliberately re-implement the same formula here rather than
- * importing partial fragments and risking drift.
+ * has to agree with the parent's view to the penny, so the
+ * per-student figures and the monthly total both come from the
+ * shared `lib/student-receipt` helpers the parent pages use.
  *
  * Transportation is no longer a separate line item — it's been
  * rolled into the annual tuition figure. SNAP families still get
@@ -133,7 +126,6 @@ export function TuitionBreakdownTable({
     return null;
   }
   const tuition = schoolYear.tuition ?? 0;
-  const adminFees = schoolYear.annual_fees ?? 0;
   // SNAP families with the SNAP award letter admin-confirmed get
   // the auto-coverage treatment. Pre-confirm SNAP families still
   // read the raw column so a half-set-up row doesn't get a
@@ -142,17 +134,15 @@ export function TuitionBreakdownTable({
     scholarship.isSNAPBenefits && scholarship.is_snap_confirmed;
 
   const rows = students.map((s) => {
-    const sufsField = SUFS_FIELDS[s.sufs_type];
-    // Prefer the canonical `sufs_amount` (the only home of a "Custom
-    // amount" tier's typed value); the school-year tier derivation is
-    // $0 for "custom". Fall back to the derivation for legacy rows
-    // that pre-date the column.
-    const stepUpAmount =
-      typeof s.sufs_amount === "number"
-        ? s.sufs_amount
-        : sufsField
-          ? (schoolYear[sufsField] as number | undefined) ?? 0
-          : 0;
+    // Every dollar figure comes from the application row's SAVED
+    // billing columns — never from year-level policy. Reading
+    // `school_year.annual_fees` / the SUFS tier table for a student
+    // whose determination was never saved printed a $500 subtotal
+    // and a tier-derived award for someone Stripe bills $0, which is
+    // exactly how this table came to disagree with the Year summary
+    // and the Start Monthly Billing button above it.
+    const amounts = resolveStudentReceiptAmounts(s);
+    const stepUpAmount = amounts.sufsAmount;
     // Remaining Tuition Amount comes from the application row's
     // `remaining_opportunity_amount` column — admin's "Remaining
     // Amount Family Pays" input on the Determination card.
@@ -164,11 +154,15 @@ export function TuitionBreakdownTable({
     // automatically. The `null` sentinel below distinguishes "no
     // scholarship determination at all" from "$0 award" so the
     // rendered row shows `—` instead of $0 for opted-out families.
-    const familyPaysForTuition = s.remaining_opportunity_amount ?? 0;
+    const familyPaysForTuition = amounts.remainingTuition;
+    // A row with nothing saved gets no coverage line either: with a
+    // $0 SUFS award the formula below would otherwise claim the
+    // Opportunity Scholarship covers the FULL tuition.
     const hasOSDetermination =
-      isSnapAutoCover ||
-      scholarship.isOpportunityScholarship === true ||
-      s.remaining_opportunity_amount != null;
+      amounts.hasSavedDetermination &&
+      (isSnapAutoCover ||
+        scholarship.isOpportunityScholarship === true ||
+        s.remaining_opportunity_amount != null);
     // Per-student award is only "finalized" once admin clicks
     // Confirm Scholarship Award Amount on the family-page
     // Determination card. Until then, the Opportunity Scholarship
@@ -178,7 +172,6 @@ export function TuitionBreakdownTable({
     const scholarshipAmount: number | null = hasOSDetermination
       ? Math.max(0, tuition - stepUpAmount - familyPaysForTuition)
       : null;
-    const subtotal = familyPaysForTuition + adminFees;
     return {
       studentName: s.student_full_name,
       tuition,
@@ -187,13 +180,19 @@ export function TuitionBreakdownTable({
       stepUpAmount,
       scholarshipAmount,
       awardConfirmed,
-      adminFees,
+      adminFees: amounts.annualFee,
       familyPaysForTuition,
       hasOSDetermination,
-      subtotal,
+      subtotal: amounts.subtotal,
+      monthly: amounts.monthly,
+      hasSavedDetermination: amounts.hasSavedDetermination,
     };
   });
   const grandTotal = rows.reduce((sum, r) => sum + r.subtotal, 0);
+  // Sum of the per-student monthlies, matching the one Stripe
+  // SubscriptionItem each student is billed on — see
+  // `sumStudentMonthly` for why this isn't `grandTotal / 12`.
+  const monthlyTotal = sumStudentMonthly(rows);
   const yearName = schoolYear.year_name ?? "";
 
   return (
@@ -212,6 +211,16 @@ export function TuitionBreakdownTable({
                   <span className="font-semibold text-foreground">
                     {row.studentName}
                   </span>
+                  {/* Nothing saved on this student's billing columns:
+                      every figure below is $0 by absence, and the
+                      student contributes nothing to the family's
+                      monthly bill. Say so, rather than letting the
+                      reader assume a $0 receipt is a finished one. */}
+                  {!row.hasSavedDetermination ? (
+                    <span className="ml-2 inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-700">
+                      Determination not saved — not billed
+                    </span>
+                  ) : null}
                 </td>
               </tr>
 
@@ -379,7 +388,7 @@ export function TuitionBreakdownTable({
               Monthly Payment (Aug – Jul, 12 months)
             </td>
             <td className="px-4 py-3 text-right font-bold">
-              ${formatTuitionCurrency(grandTotal / 12)}/mo
+              ${formatTuitionCurrency(monthlyTotal)}/mo
             </td>
           </tr>
         </tbody>
