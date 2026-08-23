@@ -7013,15 +7013,33 @@ function DecisionStudentRow({
               // student-specific intent obvious — important when
               // the family has multiple kids and admin is working
               // through them one at a time.
-              <div className="flex items-center justify-end">
+              <div className="flex items-center justify-end gap-3">
+                {/* Confirming with nothing saved is what produced a
+                    student who sat on the family's receipt while
+                    Stripe billed $0 for them: the flag is a plain
+                    bool, and the amount inputs lock behind it. Gate
+                    the button on the row actually carrying billing
+                    math — picking a tier or typing the remaining
+                    amount (even $0) writes all seven columns. */}
+                {!savedDetermination ? (
+                  <span className="text-[11px] text-amber-700 text-right">
+                    Set the SUFS tier or enter the Remaining Amount
+                    Family Pays first — nothing is saved yet, so{" "}
+                    {student.first_name} would be billed $0.
+                  </span>
+                ) : null}
                 <Button
                   type="button"
                   variant="default"
                   size="sm"
-                  disabled={confirming}
+                  disabled={confirming || !savedDetermination}
                   onClick={toggleConfirmed}
                   className="bg-blue-600 hover:bg-blue-700 text-white"
-                  title={`Confirm ${student.first_name}'s scholarship award amount`}
+                  title={
+                    savedDetermination
+                      ? `Confirm ${student.first_name}'s scholarship award amount`
+                      : `${student.first_name} has no saved award amounts yet — set the SUFS tier or the Remaining Amount Family Pays before confirming`
+                  }
                 >
                   {confirming ? (
                     <span className="inline-flex items-center gap-1.5">

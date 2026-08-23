@@ -572,15 +572,29 @@ function NotStartedTable({
                   {formatMonthly(row.monthly_tuition)}
                 </TableCell>
                 <TableCell className="text-xs">
-                  {row.monthly_tuition != null ? (
-                    <span className="text-emerald-700">Ready to start</span>
-                  ) : (
+                  {/* A family with SOME students priced used to read
+                      "Ready to start" off a monthly total that was
+                      silently short those students, and the Start
+                      click then failed server-side. Partial pricing
+                      is its own state now. */}
+                  {row.monthly_tuition == null ? (
                     <span
                       className="text-amber-700"
                       title="Set each student's tuition on the Scholarship Determination card first."
                     >
                       Tuition not set
                     </span>
+                  ) : row.students_missing_tuition > 0 ? (
+                    <span
+                      className="text-amber-700"
+                      title="The monthly total above excludes these students. Save their Scholarship Determination before starting billing."
+                    >
+                      {row.students_missing_tuition} student
+                      {row.students_missing_tuition === 1 ? "" : "s"} missing
+                      tuition
+                    </span>
+                  ) : (
+                    <span className="text-emerald-700">Ready to start</span>
                   )}
                 </TableCell>
                 {/* Stops row-click propagation: the row navigates to
@@ -592,11 +606,17 @@ function NotStartedTable({
                   <Button
                     size="sm"
                     className="h-7"
-                    disabled={row.monthly_tuition == null || startingId !== null}
+                    disabled={
+                      row.monthly_tuition == null ||
+                      row.students_missing_tuition > 0 ||
+                      startingId !== null
+                    }
                     title={
                       row.monthly_tuition == null
                         ? "Set each student's tuition on the Scholarship Determination card first."
-                        : `Create the Stripe subscription for ${row.family_name}`
+                        : row.students_missing_tuition > 0
+                          ? `${row.students_missing_tuition} of ${row.family_name}'s students have no tuition saved — billing would leave them off the invoice.`
+                          : `Create the Stripe subscription for ${row.family_name}`
                     }
                     onClick={() => setConfirmRow(row)}
                   >

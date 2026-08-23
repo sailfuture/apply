@@ -156,6 +156,13 @@ export async function GET(req: NextRequest) {
     // counting them here would overstate every total on this list
     // and the XLSX export.
     const monthlyByFamily = new Map<number, number>();
+    // Active students carrying NO monthly amount. They contribute
+    // $0 to the sum above, so a family with one priced student and
+    // one unpriced one looks perfectly startable here while
+    // `startMonthlyBilling` would refuse and the receipt would show
+    // a bigger number. Count them so the Not-started list can say
+    // "2 of 3 priced" instead of quietly under-reporting.
+    const unpricedByFamily = new Map<number, number>();
     for (const app of yearApps) {
       if (app.isActive === false) continue;
       if (archivedStudentIds.has(Number(app.registration_students_id))) {
@@ -165,7 +172,10 @@ export async function GET(req: NextRequest) {
       if (!fid) continue;
       const amount =
         typeof app.monthly_amount === "number" ? app.monthly_amount : 0;
-      if (amount <= 0) continue;
+      if (amount <= 0) {
+        unpricedByFamily.set(fid, (unpricedByFamily.get(fid) ?? 0) + 1);
+        continue;
+      }
       monthlyByFamily.set(fid, (monthlyByFamily.get(fid) ?? 0) + amount);
     }
 
@@ -368,6 +378,7 @@ export async function GET(req: NextRequest) {
             : "",
           primary_email: primary?.email ?? "",
           monthly_tuition: monthly && monthly > 0 ? monthly : null,
+          students_missing_tuition: unpricedByFamily.get(fid) ?? 0,
         };
       })
       // De-dupe defensively (progress rows should be unique per
@@ -480,6 +491,11 @@ export interface NotStartedRow {
   /** Σ active students' monthly_amount, or null when tuition isn't
    *  set yet (family isn't startable until it is). */
   monthly_tuition: number | null;
+  /** How many active students have no `monthly_amount` at all. Any
+   *  non-zero value means `monthly_tuition` above is short by those
+   *  students and Start Monthly Billing will refuse until admin
+   *  saves their Scholarship Determination. */
+  students_missing_tuition: number;
 }
 
 export interface BillingListResponse {
