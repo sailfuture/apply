@@ -1,3 +1,5 @@
+import { getDocumentDownloadUrl as pandaDocDownloadUrl } from "@/lib/pandadoc";
+
 const BASE_URL = process.env.XANO_API_BASE_URL;
 
 function getBaseUrl() {
@@ -5285,7 +5287,43 @@ export const xano = {
       // etc.) stay honest without each call site remembering to
       // set it. Caller-supplied values are intentionally
       // overridden — the source of truth is "right now".
-      const body = { ...data, last_edited_time: Date.now() };
+      const body: Record<string, unknown> = {
+        ...data,
+        last_edited_time: Date.now(),
+      };
+
+      // Derive `liability_waiver_pdf_url` on the completion
+      // transition. The apply-flow registration page marks a signed
+      // waiver with a status-only PATCH straight from the browser, so
+      // the column ends up empty on the majority of waivers that are
+      // very much signed — the six that carry a url are the ones that
+      // happened to complete through the webhook / status-poll paths,
+      // which write both. Nothing DOWNLOADS through this column
+      // (every surface builds its link from
+      // `liability_waiver_pandadoc_id`), but the enrolled list reads a
+      // non-empty url as a signed marker, and a column that's
+      // populated one time in twelve is a trap for whoever trusts it
+      // next. Deriving here means every caller lands the same shape
+      // no matter how thin their patch.
+      if (
+        body.liability_waiver_status === "completed" &&
+        !body.liability_waiver_pdf_url
+      ) {
+        let docId =
+          typeof body.liability_waiver_pandadoc_id === "string"
+            ? body.liability_waiver_pandadoc_id
+            : "";
+        if (!docId) {
+          // One extra read, and only on this transition — a status-only
+          // patch doesn't carry the envelope id.
+          const current = await this.getById(id).catch(() => null);
+          docId = current?.liability_waiver_pandadoc_id ?? "";
+        }
+        if (docId) {
+          body.liability_waiver_pdf_url = pandaDocDownloadUrl(docId);
+        }
+      }
+
       const res = await fetch(`${getBaseUrl()}/registration_student_registration/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
