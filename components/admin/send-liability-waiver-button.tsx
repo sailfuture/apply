@@ -77,15 +77,20 @@ export function SendLiabilityWaiverButton({
         body: JSON.stringify({ studentId, yearId }),
       });
       const body = (await res.json().catch(() => null)) as
-        | { sentTo?: string; error?: string }
+        | { sentTo?: string; cc?: string[]; error?: string }
         | null;
       if (!res.ok) {
         throw new Error(
           body?.error ?? `Couldn't send the waiver (${res.status})`
         );
       }
+      const cc = body?.cc ?? [];
       toast.success(
-        `Liability waiver sent to ${body?.sentTo ?? recipientEmail}.`
+        `Liability waiver sent to ${body?.sentTo ?? recipientEmail}.` +
+          // Names the actual addresses the server CC'd rather than a
+          // guess — the list is env-configurable, so the client has no
+          // business asserting who it is.
+          (cc.length ? ` Copied to ${cc.join(", ")}.` : "")
       );
       setOpen(false);
       // Await the refetch before dropping the spinner — the card
@@ -145,7 +150,8 @@ export function SendLiabilityWaiverButton({
                     {recipientName ? `${recipientName} · ` : ""}
                     {recipientEmail}
                   </span>
-                  . They can sign from the email — no portal login needed.
+                  . They can sign from the email — no portal login
+                  needed, and the admissions inbox is copied.
                 </p>
                 {isResend ? (
                   <p>

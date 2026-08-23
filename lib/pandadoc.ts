@@ -29,6 +29,12 @@ interface CreateDocumentParams {
    *  the env to override per template, and pass `getTemplateRole(type)`
    *  in here from the caller. */
   role?: string;
+  /** Non-signing recipients who get a copy of the document. PandaDoc
+   *  decides signer-vs-CC purely by the presence of `role` — per their
+   *  spec, "a recipient will be added in CC if a role parameter is not
+   *  provided" — so these are emitted with the role omitted. There is
+   *  no `recipient_type` field to set. */
+  cc?: Array<{ email: string; firstName?: string; lastName?: string }>;
   /** Plain-text tokens (mail-merge style) — replace `{{token.name}}`
    *  placeholders in the document content. Use for prose references
    *  the signer doesn't interact with. */
@@ -73,6 +79,22 @@ export async function createDocumentFromTemplate(
         last_name: params.recipientLastName,
         role: params.role ?? "Client",
       },
+      // CC recipients — role deliberately omitted, which is the ONLY
+      // thing that distinguishes them from a signer. Anyone already on
+      // as the signer is dropped: PandaDoc rejects the create when the
+      // same address appears twice in `recipients`.
+      ...(params.cc ?? [])
+        .filter(
+          (c) =>
+            c.email &&
+            c.email.trim().toLowerCase() !==
+              params.recipientEmail.trim().toLowerCase()
+        )
+        .map((c) => ({
+          email: c.email.trim(),
+          first_name: c.firstName ?? "",
+          last_name: c.lastName ?? "",
+        })),
     ],
     tokens: params.tokens
       ? Object.entries(params.tokens).map(([name, value]) => ({
@@ -339,6 +361,25 @@ export function getTemplateId(
  * sync with the live templates means the code Just Works even if
  * the env var hasn't propagated through Vercel after a deploy.
  */
+/**
+ * Addresses CC'd on an admin-sent waiver so the office keeps a copy
+ * of what went out and of the signed result, without anyone having
+ * to remember to forward it.
+ *
+ * Comma-separated `PANDADOC_WAIVER_CC`, defaulting to the admissions
+ * inbox — same convention as `RESEND_REPLY_TO` in lib/emails/resend.
+ * Set it to a single space to turn CC off entirely.
+ */
+export function getWaiverCcRecipients(): Array<{ email: string }> {
+  const raw =
+    process.env.PANDADOC_WAIVER_CC ?? "admissions@sailfuture.org";
+  return raw
+    .split(",")
+    .map((e) => e.trim())
+    .filter((e) => e.includes("@"))
+    .map((email) => ({ email }));
+}
+
 export function getTemplateRole(
   type: "liability_waiver" | "enrollment_agreement"
 ): string {

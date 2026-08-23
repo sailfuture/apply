@@ -7,6 +7,7 @@ import {
   getDocumentStatus,
   getTemplateId,
   getTemplateRole,
+  getWaiverCcRecipients,
   sendDocument,
   waitForDocumentStatus,
 } from "@/lib/pandadoc";
@@ -227,6 +228,11 @@ async function doSend(
     recipientFirstName,
     recipientLastName,
     role: getTemplateRole("liability_waiver"),
+    // Copy the admissions inbox so the office has the outgoing
+    // request and the signed result on file without depending on
+    // anyone forwarding it. CC'd recipients carry no role, which is
+    // what keeps them off the signature block.
+    cc: getWaiverCcRecipients(),
     // Echoed on every webhook event — this is what lets the
     // completion land on the packet row with no admin-specific
     // plumbing.
@@ -310,6 +316,9 @@ async function doSend(
     body: {
       documentId: doc.id,
       sentTo: recipientEmail,
+      // Surfaced so the success toast can name who else got a copy —
+      // admin shouldn't have to open PandaDoc to find out.
+      cc: getWaiverCcRecipients().map((c) => c.email),
       sentAt,
       studentName,
     },
