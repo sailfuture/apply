@@ -1,4 +1,5 @@
 import { createSign } from "crypto";
+import { stripNameSuffix } from "@/lib/name-suffix";
 
 /**
  * Google Workspace admin client for Chromebook sign-in restriction —
@@ -11,7 +12,9 @@ import { createSign } from "crypto";
  * OU per student, named after them, inside the Students OU — the
  * student's Chromebook lives in their OU. So restricting a device:
  *
- *   1. ensure `/Students/<Student Name>` exists (Directory API)
+ *   1. ensure `/SailFuture Academy/Student/<Student Name>` exists
+ *      (Directory API) — the same OU the student's own Workspace
+ *      account is placed in, via `resolveStudentOuPath`
  *   2. apply chrome.devices.SignInRestriction to that OU with the
  *      student's school email as the allowlist (Chrome Policy API)
  *   3. move the device into the OU (Directory API, by serial number)
@@ -31,9 +34,12 @@ import { createSign } from "crypto";
  *   - GOOGLE_CALENDAR_CLIENT_EMAIL — service account's client_email
  *   - GOOGLE_CALENDAR_PRIVATE_KEY  — service account's private_key
  *   - GOOGLE_ADMIN_IMPERSONATE     — a super-admin workspace user
- *   - GOOGLE_DEVICE_OU_PARENT      — optional OU that holds the
- *     per-student OUs (default "/Students"); un-restricted devices
- *     are parked here
+ *   - GOOGLE_STUDENT_OU            — optional OU that holds the
+ *     per-student OUs (default "/SailFuture Academy/Student",
+ *     verified against the live tree)
+ *   - GOOGLE_DEVICE_OU_PARENT      — optional override for where
+ *     devices park; defaults to GOOGLE_STUDENT_OU so a student and
+ *     their Chromebook share one OU
  *   - GOOGLE_DEVICE_EXTRA_ALLOWLIST — optional comma-separated staff
  *     emails always included in every device allowlist so IT can
  *     still sign in
@@ -89,11 +95,93 @@ export function isGoogleAdminConfigured(): boolean {
 }
 
 /** OU every per-student OU lives under; un-restricted devices are
- *  parked here. Normalized to a leading slash, no trailing slash. */
+ *  parked here. Defaults to the student OU rather than a separate
+ *  tree: a device restricted to one student has to sit in the SAME
+ *  per-student OU as that student's account for the sign-in policy to
+ *  mean anything. (The old "/Students" default doesn't exist in the
+ *  domain — `ensureOrgUnit` would have created a stray one at the
+ *  root.) `GOOGLE_DEVICE_OU_PARENT` still overrides. */
 export function deviceOuParent(): string {
   const raw = (process.env.GOOGLE_DEVICE_OU_PARENT ?? "").trim();
-  const path = raw || "/Students";
+  if (!raw) return studentOuPath();
+  return `/${raw.replace(/^\/+|\/+$/g, "")}`;
+}
+
+/**
+ * OU that newly created student accounts are placed in.
+ *
+ * Default verified live against the Workspace tree: the org's student
+ * OU is `/SailFuture Academy/Student` — singular, and nested under the
+ * "SailFuture Academy" OU rather than sitting at the root. Existing
+ * student accounts are in it (some in a per-student child OU beneath
+ * it, which is the Chromebook sign-in restriction's doing).
+ *
+ * Without this, `createWorkspaceUser` defaulted to "/" and every
+ * account we made landed in the root OU — outside whatever policy the
+ * student OU carries. Override with `GOOGLE_STUDENT_OU` if the tree
+ * is ever renamed; normalized to a leading slash, no trailing slash.
+ */
+export function studentOuPath(): string {
+  const raw = (process.env.GOOGLE_STUDENT_OU ?? "").trim();
+  const path = raw || "/SailFuture Academy/Student";
   return `/${path.replace(/^\/+|\/+$/g, "")}`;
+}
+
+/**
+ * The OU for ONE student — their own child OU under the student OU,
+ * e.g. "/SailFuture Academy/Student/Craig Mebane Jr.".
+ *
+ * `chrome.devices.SignInRestriction` is a DEVICE policy: it is set on
+ * the OU the Chromebook sits in and names which accounts may sign in
+ * there. So it is the DEVICE's placement that enforces anything — the
+ * student's own account living in the same OU is organisational, not
+ * load-bearing.
+ *
+ * What matters here is that both sides agree on the path. Account
+ * creation and the laptop restriction build it through this one
+ * helper because two spellings would silently become two OUs, and the
+ * policy would end up on the one the device isn't in.
+ *
+ * Suffix-free, matching the email and the Toddle push. Synchronous,
+ * so it names where a student's OU WOULD go — use
+ * `resolveStudentOuPath` before creating or moving anything, since an
+ * OU may already exist under the other spelling.
+ */
+export function studentOuPathFor(displayName: string): string {
+  const name = studentOuName(stripNameSuffix(displayName));
+  return name ? `${studentOuPath()}/${name}` : studentOuPath();
+}
+
+/**
+ * The student's OU path, preferring one that ALREADY exists.
+ *
+ * The tree was built by hand and isn't consistent about suffixes —
+ * "Craig Mebane Jr." has one, "Steven Petros" doesn't, and both are
+ * the same convention as far as anyone using the console is
+ * concerned. Picking a spelling blindly would create a second OU
+ * beside the student's existing one and strand whatever device
+ * restriction is attached to the first.
+ *
+ * So: check both spellings, reuse whichever is already there, and
+ * only when neither exists fall back to creating the suffix-free
+ * name. New students converge on one rule; existing ones are left
+ * where they are.
+ */
+export async function resolveStudentOuPath(
+  displayName: string
+): Promise<string> {
+  const parent = studentOuPath();
+  const names = [
+    studentOuName(stripNameSuffix(displayName)),
+    studentOuName(displayName),
+  ].filter((n, i, all) => n && all.indexOf(n) === i);
+  if (names.length === 0) return parent;
+
+  for (const name of names) {
+    const path = `${parent}/${name}`;
+    if (await getOrgUnit(path).catch(() => null)) return path;
+  }
+  return `${parent}/${names[0]}`;
 }
 
 /** Staff emails included in every device allowlist. */
@@ -498,5 +586,26 @@ export async function createWorkspaceUser(input: {
     }),
   });
   if (!res.ok) await fail(res, "Workspace user create");
+  return toWorkspaceUser(await res.json());
+}
+
+/**
+ * Move an existing account into an org unit.
+ *
+ * For students already in Workspace before this app placed accounts —
+ * they sit directly in the student OU with no per-student OU of their
+ * own, so a device sign-in restriction has nothing to attach them to.
+ * Only `orgUnitPath` is sent: a Directory PATCH merges, so the
+ * password, name and everything else are untouched.
+ */
+export async function moveWorkspaceUserToOu(
+  email: string,
+  orgUnitPath: string
+): Promise<WorkspaceUser> {
+  const res = await googleFetch(
+    `${DIRECTORY_BASE}/users/${encodeURIComponent(email.trim().toLowerCase())}`,
+    { method: "PATCH", body: JSON.stringify({ orgUnitPath }) }
+  );
+  if (!res.ok) await fail(res, "Workspace user move");
   return toWorkspaceUser(await res.json());
 }

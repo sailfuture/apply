@@ -970,6 +970,13 @@ function SchoolAccountCard({
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [draftYearId, setDraftYearId] = useState("");
+  // The generated values are a starting point, not a verdict. Once
+  // the admin types, `touched` stops the year picker from overwriting
+  // what they wrote — changing the year should still refresh an
+  // untouched field, which is the whole point of generating it.
+  const [draftEmail, setDraftEmail] = useState("");
+  const [draftPassword, setDraftPassword] = useState("");
+  const [touched, setTouched] = useState({ email: false, password: false });
   // Full year list for the picker — the detail payload only carries
   // the single viewed year, and the enrollment year is often earlier.
   const { data: years } = useSWR<Array<{ id: number; year_name: string }>>(
@@ -995,7 +1002,58 @@ function SchoolAccountCard({
       next = associated[0] ? String(associated[0].id) : "";
     }
     setDraftYearId(next);
+    // Seed from what's STORED when there is one. A student with a
+    // live mailbox must not have a freshly-generated address quietly
+    // proposed under them just because the generator's rules have
+    // changed since — that address is a real account people log into.
+    const storedEmail = (student.school_email ?? "").trim();
+    const storedPassword = (student.school_password ?? "").trim();
+    const yearName = next ? (yearNameById.get(Number(next)) ?? "") : "";
+    setDraftEmail(
+      storedEmail ||
+        generateSchoolEmail(student.first_name, student.last_name, yearName) ||
+        ""
+    );
+    setDraftPassword(
+      storedPassword ||
+        generateSchoolPassword(
+          student.first_name,
+          student.last_name,
+          yearName
+        ) ||
+        ""
+    );
+    setTouched({ email: Boolean(storedEmail), password: Boolean(storedPassword) });
     setEditing(true);
+  }
+
+  /** Year picker: refresh whatever the admin hasn't taken over. */
+  function pickYear(nextYearId: string) {
+    setDraftYearId(nextYearId);
+    const yearName = nextYearId
+      ? (yearNameById.get(Number(nextYearId)) ?? "")
+      : "";
+    if (!touched.email) {
+      setDraftEmail(
+        generateSchoolEmail(student.first_name, student.last_name, yearName) ??
+          ""
+      );
+    }
+    if (!touched.password) {
+      setDraftPassword(
+        generateSchoolPassword(
+          student.first_name,
+          student.last_name,
+          yearName
+        ) ?? ""
+      );
+    }
+  }
+
+  function resetToGenerated() {
+    setDraftEmail(previewEmail ?? "");
+    setDraftPassword(previewPassword ?? "");
+    setTouched({ email: false, password: false });
   }
 
   const draftYearName = draftYearId
@@ -1012,9 +1070,28 @@ function SchoolAccountCard({
     draftYearName
   );
 
+  const email = draftEmail.trim();
+  const password = draftPassword.trim();
+  const emailLooksWrong = email.length > 0 && !/^\S+@\S+\.\S+$/.test(email);
+  const offDomain =
+    email.length > 0 &&
+    !emailLooksWrong &&
+    !email.toLowerCase().endsWith("@sailfuture.org");
+  const differsFromGenerated =
+    (previewEmail !== null && email !== previewEmail) ||
+    (previewPassword !== null && password !== previewPassword);
+
   async function runSave() {
-    if (!draftYearId || !previewEmail || !previewPassword) {
+    if (!draftYearId) {
       toast.error("Pick the enrollment year first.");
+      return;
+    }
+    if (!email || !password) {
+      toast.error("School email and password can't be empty.");
+      return;
+    }
+    if (emailLooksWrong) {
+      toast.error("That doesn't look like an email address.");
       return;
     }
     setSaving(true);
@@ -1024,8 +1101,8 @@ function SchoolAccountCard({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           enrollment_school_years_id: Number(draftYearId),
-          school_email: previewEmail,
-          school_password: previewPassword,
+          school_email: email,
+          school_password: password,
         }),
       });
       if (!res.ok) {
@@ -1070,7 +1147,7 @@ function SchoolAccountCard({
                 <FieldLabel className="text-xs">Enrollment year</FieldLabel>
                 <Select
                   value={draftYearId}
-                  onValueChange={setDraftYearId}
+                  onValueChange={pickYear}
                   disabled={saving}
                 >
                   <SelectTrigger className="w-full">
@@ -1085,15 +1162,67 @@ function SchoolAccountCard({
                   </SelectContent>
                 </Select>
               </Field>
-              <ReadField label="School email" value={previewEmail ?? ""} />
-              <ReadField label="Password" value={previewPassword ?? ""} />
+              <Field>
+                <FieldLabel className="text-xs">School email</FieldLabel>
+                <Input
+                  value={draftEmail}
+                  onChange={(e) => {
+                    setDraftEmail(e.target.value);
+                    setTouched((t) => ({ ...t, email: true }));
+                  }}
+                  disabled={saving}
+                  spellCheck={false}
+                  autoComplete="off"
+                  placeholder="first.last26@sailfuture.org"
+                  aria-invalid={emailLooksWrong || undefined}
+                  className="bg-white"
+                />
+              </Field>
+              <Field>
+                <FieldLabel className="text-xs">Password</FieldLabel>
+                <Input
+                  value={draftPassword}
+                  onChange={(e) => {
+                    setDraftPassword(e.target.value);
+                    setTouched((t) => ({ ...t, password: true }));
+                  }}
+                  disabled={saving}
+                  spellCheck={false}
+                  autoComplete="off"
+                  className="bg-white"
+                />
+              </Field>
             </div>
-            <p className="text-xs text-muted-foreground">
-              Email and password regenerate from the student&rsquo;s name
-              and the selected enrollment year on save — a student who
-              enrolls mid-year still belongs to that school year&rsquo;s
-              cohort.
-            </p>
+            <div className="space-y-1">
+              <p className="text-xs text-muted-foreground">
+                Both fill in from the student&rsquo;s name and the
+                selected enrollment year — a student who enrolls
+                mid-year still belongs to that school year&rsquo;s
+                cohort — and both are yours to edit. What&rsquo;s in the
+                boxes is what gets saved and what the Google account,
+                sign-in sheets and Toddle all use.
+              </p>
+              {emailLooksWrong ? (
+                <p className="text-xs text-red-600">
+                  That doesn&rsquo;t look like an email address.
+                </p>
+              ) : offDomain ? (
+                <p className="text-xs text-amber-700">
+                  Heads up — that isn&rsquo;t a @sailfuture.org address.
+                  Saving it anyway is fine if you meant to.
+                </p>
+              ) : null}
+              {differsFromGenerated && (previewEmail || previewPassword) ? (
+                <button
+                  type="button"
+                  onClick={resetToGenerated}
+                  disabled={saving}
+                  className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                >
+                  Reset to the generated {previewEmail ?? ""}
+                </button>
+              ) : null}
+            </div>
           </>
         ) : (
           <>
@@ -1145,6 +1274,35 @@ function CreateGoogleAccountRow({
   );
   const [confirming, setConfirming] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [moving, setMoving] = useState(false);
+
+  /** Put an existing account into the student's own OU (creating that
+   *  OU if needed). No confirm dialog: it moves one account between
+   *  two org units and is undone by moving it back. */
+  async function runMove() {
+    if (moving) return;
+    setMoving(true);
+    try {
+      const res = await fetch(
+        `/api/admin/students/${studentId}/google-account`,
+        { method: "PATCH" }
+      );
+      const payload = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(payload?.error ?? `Failed (${res.status})`);
+      toast.success(
+        `Moved to ${payload?.orgUnitPath ?? "their org unit"}` +
+          (payload?.signInRestricted === false
+            ? " — but the sign-in restriction couldn't be applied."
+            : ".")
+      );
+      void mutate();
+    } catch (err) {
+      console.error("[CreateGoogleAccountRow.runMove]", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't move.");
+    } finally {
+      setMoving(false);
+    }
+  }
 
   async function runCreate() {
     if (creating) return;
@@ -1158,7 +1316,13 @@ function CreateGoogleAccountRow({
       if (!res.ok) {
         throw new Error(payload?.error ?? `Failed (${res.status})`);
       }
-      toast.success(`Google account created for ${email}.`);
+      toast.success(
+        `Google account created for ${email}` +
+          (payload?.orgUnitPath ? ` in ${payload.orgUnitPath}` : "") +
+          (payload?.signInRestricted === false
+            ? " — but the sign-in restriction couldn't be applied."
+            : ".")
+      );
       setConfirming(false);
       void mutate();
     } catch (err) {
@@ -1179,13 +1343,64 @@ function CreateGoogleAccountRow({
 
   if (data.exists) {
     return (
-      <p className="inline-flex items-center gap-1.5 text-xs text-emerald-700">
-        <CheckCircle2 className="size-3.5 shrink-0" />
-        Google account active
-        {data.orgUnitPath ? (
-          <span className="text-muted-foreground">· {data.orgUnitPath}</span>
+      <div className="space-y-1.5">
+        <p className="inline-flex items-center gap-1.5 text-xs text-emerald-700">
+          <CheckCircle2 className="size-3.5 shrink-0" />
+          Google account active
+          {data.orgUnitPath ? (
+            <span className="font-mono text-muted-foreground">
+              · {data.orgUnitPath}
+            </span>
+          ) : null}
+        </p>
+        {/* Whether the OU actually restricts sign-in, and to whom. A
+            populated allowlist with the mode never switched to
+            RESTRICTED_LIST reads as "locked down" in the console and
+            enforces nothing — so say which it is, and name the
+            addresses, because an allowlist holding a stale address
+            locks the student out of their own laptop. */}
+        {data.inOwnOrgUnit ? (
+          <p className="text-xs text-muted-foreground">
+            {data.signInRestricted ? (
+              <>
+                Laptops in this org unit accept{" "}
+                <span className="font-mono">
+                  {data.signInAllowlist.join(", ") || "no one"}
+                </span>
+                .
+              </>
+            ) : (
+              <span className="text-amber-700">
+                This org unit doesn&rsquo;t restrict sign-in yet — any
+                laptop in it accepts any account. Restricting the
+                student&rsquo;s laptop on the Laptops page turns it on.
+              </span>
+            )}
+          </p>
         ) : null}
-      </p>
+
+        {/* An account parked in the parent OU isn't with the org unit
+            its laptop gets locked to. Offer the fix where it shows. */}
+        {!data.inOwnOrgUnit ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="bg-white"
+              disabled={moving || !data.targetOrgUnitExists}
+              onClick={() => void runMove()}
+            >
+              {moving ? "Moving…" : "Move to their own org unit"}
+            </Button>
+            <span className="text-xs text-muted-foreground">
+              Not in{" "}
+              <span className="font-mono">{data.targetOrgUnitPath}</span> yet —
+              the org unit their laptop gets locked to.
+            </span>
+          </div>
+        ) : null}
+      </div>
     );
   }
 
@@ -1214,16 +1429,48 @@ function CreateGoogleAccountRow({
           <AlertDialogHeader>
             <AlertDialogTitle>Create this Google account?</AlertDialogTitle>
             <AlertDialogDescription>
-              This creates a real Workspace account at{" "}
-              <span className="font-mono">{email}</span> with the password
-              shown above. The student can sign in immediately — they
-              won&rsquo;t be asked to change it.
+              This creates a real Workspace account the student can sign
+              in to immediately — they won&rsquo;t be asked to change the
+              password. Check the address: it&rsquo;s editable on this
+              card, and a wrong one here becomes a real mailbox.
             </AlertDialogDescription>
           </AlertDialogHeader>
+          {/* The two facts worth confirming, big enough to actually
+              read. The OU is here because "which org unit did this
+              land in?" is the question nobody asks until a policy
+              doesn't apply to a student. */}
+          <dl className="rounded-md border bg-muted/40 p-3 text-sm">
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <dt className="text-xs uppercase tracking-wider text-muted-foreground">
+                Address
+              </dt>
+              <dd className="font-mono font-medium break-all">{email}</dd>
+            </div>
+            <div className="mt-2 flex flex-wrap items-baseline justify-between gap-2">
+              <dt className="text-xs uppercase tracking-wider text-muted-foreground">
+                Org unit
+              </dt>
+              <dd className="font-mono text-xs break-all">
+                {data.targetOrgUnitPath || "/"}
+              </dd>
+            </div>
+          </dl>
+          <p className="text-xs text-muted-foreground">
+            The student gets their own org unit here, created if it
+            doesn&rsquo;t exist. Their Chromebook moves into the same
+            one when you restrict it on the Laptops page — that&rsquo;s
+            the step that limits sign-in to this student.
+          </p>
+          {!data.targetOrgUnitExists ? (
+            <p className="text-xs text-amber-700">
+              The parent org unit isn&rsquo;t in Workspace yet — create
+              it there first, or the account can&rsquo;t be placed.
+            </p>
+          ) : null}
           <AlertDialogFooter>
             <AlertDialogCancel disabled={creating}>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              disabled={creating}
+              disabled={creating || !data.targetOrgUnitExists}
               onClick={(e) => {
                 e.preventDefault();
                 void runCreate();

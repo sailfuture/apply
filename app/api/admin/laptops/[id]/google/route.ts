@@ -4,6 +4,7 @@ import { xano } from "@/lib/xano";
 import {
   deviceOuParent,
   ensureOrgUnit,
+  resolveStudentOuPath,
   extraAllowlist,
   clearSignInRestriction,
   getChromeDeviceBySerial,
@@ -26,9 +27,11 @@ import {
  *            so the UI can label the restrict button.
  *   POST   → restrict the device to the current holder's school
  *            account (+ GOOGLE_DEVICE_EXTRA_ALLOWLIST staff): ensure
- *            the student's own OU (`/Students/<Name>`), apply the
- *            policy there, move the device in. Requires an open
- *            assignment linked to a student with a school_email.
+ *            the student's own OU (`/SailFuture Academy/Student/<Name>`
+ *            — the same one their Workspace account is placed in,
+ *            resolved via `resolveStudentOuPath`), apply the policy
+ *            there, move the device in. Requires an open assignment
+ *            linked to a student with a school_email.
  *   DELETE → lift the restriction: revert the student OU's policy to
  *            inherited and park the device in the parent OU. Student
  *            OUs are never deleted — they're school directory
@@ -139,11 +142,15 @@ export async function POST(
       );
     }
 
-    // The student's own OU, by name; a blank name (shouldn't happen,
-    // but names are editable) falls back to the account local-part.
-    const ouName =
-      studentOuName(holder.name) || holder.email.split("@")[0] || serial;
-    const ouPath = `${deviceOuParent()}/${ouName}`;
+    // The student's own OU — resolved through the SAME helper the
+    // School Account card places their Workspace account with, so the
+    // device and its student land in one org unit. A restriction
+    // applied to an OU the student isn't in restricts nothing.
+    // A blank name (shouldn't happen, but names are editable) falls
+    // back to the account local-part.
+    const ouPath = studentOuName(holder.name)
+      ? await resolveStudentOuPath(holder.name)
+      : `${deviceOuParent()}/${holder.email.split("@")[0] || serial}`;
     const ou = await ensureOrgUnit(ouPath);
     await setSignInRestriction(ou.orgUnitId, [
       holder.email,
