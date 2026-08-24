@@ -97,11 +97,27 @@ export function LaptopAssignDialog({
               notes: notes.trim(),
             }),
           });
+      const body = await res.json().catch(() => null);
       if (!res.ok) {
-        const body = await res.json().catch(() => null);
         throw new Error(body?.error ?? `Assign failed (${res.status})`);
       }
-      toast.success(linking ? "Student linked." : "Laptop assigned.");
+      // The org-unit move is best-effort on the server, so the row can
+      // save while Google doesn't. Say which happened rather than a
+      // flat "assigned" that hides a device nobody can sign in to.
+      const google = body?.google as
+        | { ok: boolean; message: string }
+        | undefined;
+      if (linking) {
+        toast.success("Student linked.");
+      } else if (google && !google.ok) {
+        toast.warning("Laptop assigned, but not locked to the student.", {
+          description: google.message,
+        });
+      } else {
+        toast.success("Laptop assigned.", {
+          description: google?.message || undefined,
+        });
+      }
       onDone(true);
     } catch (err) {
       console.error("Failed to assign laptop:", err);

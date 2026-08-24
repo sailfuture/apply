@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
 import { buildLaptopLinkResolver, NO_LAPTOP_LINKS } from "@/lib/laptop-links";
+import { placeLaptopInStudentOu, reportLaptopOu } from "@/lib/laptop-google";
 
 /**
  * Open a laptop checkout — assign a device to an enrolled student.
@@ -18,6 +19,13 @@ import { buildLaptopLinkResolver, NO_LAPTOP_LINKS } from "@/lib/laptop-links";
  * otherwise sail through and end up with two. The enrolled family id
  * is derived from the student row so the parent Store page can match
  * the assignment.
+ *
+ * On success the device is also moved into the student's Google org
+ * unit and restricted to their school account — the same thing the
+ * Restrict button does, done automatically so nobody has to remember.
+ * Best-effort: the checkout row is already written by then, so a
+ * Google failure is reported alongside a successful assignment rather
+ * than turning it into an error.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -135,7 +143,18 @@ export async function POST(req: NextRequest) {
       returned_condition: "",
       notes: typeof b.notes === "string" ? b.notes.trim() : "",
     });
-    return NextResponse.json(created);
+
+    const google = await reportLaptopOu(
+      () =>
+        placeLaptopInStudentOu({
+          serial: (device.serial_number ?? "").trim(),
+          studentName: `${student.first_name} ${student.last_name}`.trim(),
+          studentEmail: (student.school_email ?? "").trim(),
+        }),
+      "[/api/admin/laptops/assignments]"
+    );
+
+    return NextResponse.json({ ...created, google });
   } catch (err) {
     return handleAdminError(err);
   }

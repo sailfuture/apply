@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
+import { parkLaptop, reportLaptopOu } from "@/lib/laptop-google";
 
 /**
  * One laptop checkout row.
@@ -16,6 +17,12 @@ import { xano } from "@/lib/xano";
  *   DELETE — remove the row entirely. For undoing a mis-assignment
  *     (wrong student / wrong device) without polluting the device's
  *     history with a fake return.
+ *
+ * Closing a checkout also moves the device out of the student's Google
+ * org unit and back to the shared park OU. Without that half, a
+ * returned laptop would sit on the shelf still restricted to whoever
+ * last had it, and the next person to be handed it — via the RFID
+ * scanner, which doesn't go through this app — couldn't sign in.
  */
 export async function PATCH(
   req: NextRequest,
@@ -88,6 +95,19 @@ export async function PATCH(
     }
 
     const updated = await xano.laptopAssignments.update(id, patch);
+
+    // Only on a return; editing notes or re-linking a student must
+    // not pull a device out of the OU it belongs in.
+    if (patch.returned_date) {
+      const laptop = await xano.laptops
+        .getById(Number(updated.laptops_id))
+        .catch(() => null);
+      const google = await reportLaptopOu(
+        () => parkLaptop((laptop?.serial_number ?? "").trim()),
+        "[/api/admin/laptops/assignments/[id]]"
+      );
+      return NextResponse.json({ ...updated, google });
+    }
     return NextResponse.json(updated);
   } catch (err) {
     return handleAdminError(err);

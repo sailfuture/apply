@@ -5,17 +5,14 @@ import { buildLaptopLinkResolver } from "@/lib/laptop-links";
 import {
   deviceOuParent,
   ensureOrgUnit,
-  resolveStudentOuPath,
-  extraAllowlist,
   clearSignInRestriction,
   getChromeDeviceBySerial,
   getOrgUnit,
   getSignInRestriction,
   isGoogleAdminConfigured,
   moveChromeDeviceToOu,
-  setSignInRestriction,
-  studentOuName,
 } from "@/lib/google-admin";
+import { placeLaptopInStudentOu } from "@/lib/laptop-google";
 
 /**
  * Google Workspace sign-in restriction for one laptop — the bridge
@@ -133,32 +130,24 @@ export async function POST(
       );
     }
 
-    const device = await getChromeDeviceBySerial(serial);
-    if (!device) {
+    // Same code path the assign flow runs — see lib/laptop-google.ts.
+    // Preconditions come back as `skipped`; here, where an admin
+    // pressed a button and expects the device locked, they're errors.
+    const result = await placeLaptopInStudentOu({
+      serial,
+      studentName: holder.name,
+      studentEmail: holder.email,
+    });
+    if (result.status === "skipped") {
       return NextResponse.json(
         {
-          error: `No enrolled ChromeOS device matches serial "${serial}" — is the device enrolled in the Workspace domain?`,
+          error:
+            result.reason === "device-not-found"
+              ? `${result.detail} — is the device enrolled in the Workspace domain?`
+              : result.detail,
         },
-        { status: 404 }
+        { status: result.reason === "device-not-found" ? 404 : 409 }
       );
-    }
-
-    // The student's own OU — resolved through the SAME helper the
-    // School Account card places their Workspace account with, so the
-    // device and its student land in one org unit. A restriction
-    // applied to an OU the student isn't in restricts nothing.
-    // A blank name (shouldn't happen, but names are editable) falls
-    // back to the account local-part.
-    const ouPath = studentOuName(holder.name)
-      ? await resolveStudentOuPath(holder.name)
-      : `${deviceOuParent()}/${holder.email.split("@")[0] || serial}`;
-    const ou = await ensureOrgUnit(ouPath);
-    await setSignInRestriction(ou.orgUnitId, [
-      holder.email,
-      ...extraAllowlist().filter((e) => e !== holder.email),
-    ]);
-    if (device.orgUnitPath !== ou.orgUnitPath) {
-      await moveChromeDeviceToOu(device.deviceId, ou.orgUnitPath);
     }
 
     return NextResponse.json(await buildStatus(id));

@@ -655,11 +655,25 @@ function LaptopReturnDialog({
           }),
         }
       );
+      const body = await res.json().catch(() => null);
       if (!res.ok) {
-        const body = await res.json().catch(() => null);
         throw new Error(body?.error ?? `Return failed (${res.status})`);
       }
-      toast.success("Laptop returned.");
+      // Parking the device back in the shared OU is best-effort — if
+      // it didn't happen the laptop is still locked to whoever just
+      // handed it in, which the next person needs to know about.
+      const google = body?.google as
+        | { ok: boolean; message: string }
+        | undefined;
+      if (google && !google.ok) {
+        toast.warning("Laptop returned, but still in the student's org unit.", {
+          description: google.message,
+        });
+      } else {
+        toast.success("Laptop returned.", {
+          description: google?.message || undefined,
+        });
+      }
       onDone(true);
     } catch (err) {
       console.error("Failed to return laptop:", err);
