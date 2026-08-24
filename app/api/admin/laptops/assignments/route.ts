@@ -68,6 +68,21 @@ export async function POST(req: NextRequest) {
         { status: 404 }
       );
     }
+    // Someone who has left keeps whatever they already hold — that
+    // history is real and stays linkable via PATCH — but must not be
+    // issued a new device. The picker greys them out; this is the
+    // rule actually being enforced.
+    if (student.isArchived === true || student.isEnrolled !== true) {
+      const name = `${student.first_name} ${student.last_name}`.trim();
+      return NextResponse.json(
+        {
+          error: `${name || "That student"} is ${
+            student.isArchived === true ? "archived" : "not enrolled"
+          } — re-enroll them before issuing a laptop`,
+        },
+        { status: 409 }
+      );
+    }
     // Resolve ops UUIDs so RFID-created checkouts count toward the
     // one-device-per-student rule. A roster outage falls back to
     // bridge columns only — the guard weakens, it doesn't block work.

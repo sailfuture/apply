@@ -163,16 +163,39 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // The roster carries more than the students you can issue a
+    // laptop to. Someone who left still shows up if they're holding a
+    // device or need a historical row linked to them — a checkout
+    // doesn't stop being theirs because they were archived. `status`
+    // is what makes them un-pickable for a NEW assignment; the
+    // dialogs and the POST route both read it.
+    const rosterStatus = (s: XanoStudent): LaptopStudentOption["status"] => {
+      if (s.isArchived === true) return "archived";
+      if (s.isEnrolled !== true) return "unenrolled";
+      return "active";
+    };
     const roster: LaptopStudentOption[] = students
-      .filter((s) => s.isEnrolled === true && s.isArchived !== true)
+      .filter(
+        (s) =>
+          rosterStatus(s) === "active" ||
+          // Kept for linking and for naming an open checkout.
+          s.isArchived === true ||
+          openDeviceByStudent.has(s.id)
+      )
       .map((s) => ({
         id: s.id,
         name: `${s.first_name} ${s.last_name}`.trim() || `Student #${s.id}`,
         crew: crewByStudent.get(s.id) ?? "",
         photo_url: resolvePhotoUrl(s.student_photo),
         assigned_asset: openDeviceByStudent.get(s.id) ?? "",
+        status: rosterStatus(s),
       }))
-      .sort((a, b) => a.name.localeCompare(b.name));
+      // Active students first — the common case stays at the top of
+      // the search list — then everyone else, alphabetical within.
+      .sort((a, b) => {
+        const rank = (o: LaptopStudentOption) => (o.status === "active" ? 0 : 1);
+        return rank(a) - rank(b) || a.name.localeCompare(b.name);
+      });
 
     return NextResponse.json({ laptops, students: roster });
   } catch (err) {
@@ -312,15 +335,20 @@ export interface AdminLaptopDevice {
   history: LaptopAssignmentInfo[];
 }
 
-/** Enrolled student in the assign picker. `assigned_asset` names the
- *  device they already hold ("" = free) so the picker can disable
- *  them against double-issuing. */
+/** A student in the laptop pickers. `assigned_asset` names the device
+ *  they already hold ("" = free) so the picker can disable them
+ *  against double-issuing. */
 export interface LaptopStudentOption {
   id: number;
   name: string;
   crew: string;
   photo_url: string | null;
   assigned_asset: string;
+  /** `"active"` = can be issued a laptop. `"archived"` / `"unenrolled"`
+   *  students stay listed — so a device they still hold can be named,
+   *  and so a historical checkout can be linked to them — but can't be
+   *  issued a new one. The POST route enforces the same rule. */
+  status: "active" | "archived" | "unenrolled";
 }
 
 export interface AdminLaptopsResponse {

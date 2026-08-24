@@ -50,6 +50,11 @@ import type {
  * legacy staff-system checkouts carry only the ops student UUID, so
  * this picks which enrolled student the open row belongs to and
  * PATCHes the bridge columns (no new row, no date/condition inputs).
+ *
+ * Archived and unenrolled students appear in both flows but are only
+ * pickable when linking. Linking records who actually held a device,
+ * and leaving the school doesn't change that — whereas issuing a
+ * laptop to someone who has left is the mistake worth blocking.
  */
 export function LaptopAssignDialog({
   laptop,
@@ -134,11 +139,15 @@ export function LaptopAssignDialog({
                 <CommandEmpty>No students match.</CommandEmpty>
                 {students.map((s) => {
                   const taken = !!s.assigned_asset;
+                  // Former students can be linked to a checkout they
+                  // actually had, but never issued a new one.
+                  const former = s.status !== "active";
+                  const disabled = taken || (former && !linking);
                   return (
                     <CommandItem
                       key={s.id}
                       value={`${s.name} ${s.crew}`}
-                      disabled={taken}
+                      disabled={disabled}
                       onSelect={() => setStudentId(s.id)}
                       className={cn(
                         "flex items-center justify-between gap-3",
@@ -147,11 +156,17 @@ export function LaptopAssignDialog({
                     >
                       <span
                         className={cn(
+                          "flex items-center gap-1.5",
                           studentId === s.id && "font-medium",
-                          taken && "text-muted-foreground"
+                          disabled && "text-muted-foreground"
                         )}
                       >
                         {s.name}
+                        {former ? (
+                          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                            {s.status === "archived" ? "Archived" : "Not enrolled"}
+                          </span>
+                        ) : null}
                       </span>
                       <span className="text-xs text-muted-foreground">
                         {taken ? `Has ${s.assigned_asset}` : s.crew}
@@ -164,6 +179,9 @@ export function LaptopAssignDialog({
             <p className="text-[11px] text-muted-foreground">
               Students with an open assignment are disabled to prevent
               double-issuing.
+              {linking
+                ? " Former students can be linked to a checkout they held."
+                : " Former students are listed but can't be issued a laptop."}
             </p>
           </div>
 
