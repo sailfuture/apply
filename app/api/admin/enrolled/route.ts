@@ -353,6 +353,12 @@ export async function GET(req: NextRequest) {
           // students by this. Empty until admin sets it — those rows
           // fall under the "No grade level set" group.
           grade_level: packet?.grade_level ?? "",
+          // Crew runs 1:1 with grade level in practice (8th → Crew A
+          // … 12th → Crew E), so the roster prints it beside the
+          // grade on each group card. Kept per-student rather than
+          // derived from the grade so a re-shuffle shows up here
+          // instead of quietly rendering a stale mapping.
+          crew_assignment: packet?.crew_assignment ?? "",
           family_name:
             family?.family_name?.trim() || `Family #${familyId}`,
           primary_name: primary
@@ -457,6 +463,11 @@ export interface EnrolledStudentRow {
    *  field. Distinct from `student_grade` (the application's incoming
    *  grade); empty until admin sets it on the student detail page. */
   grade_level: string;
+  /** Admin-assigned crew from the registration packet ("Crew A"–"Crew
+   *  E"), empty until set. Runs 1:1 with `grade_level` today; the
+   *  roster shows the distinct crews found inside each grade group
+   *  rather than assuming the mapping holds. */
+  crew_assignment: string;
   family_name: string;
   primary_name: string;
   primary_email: string;

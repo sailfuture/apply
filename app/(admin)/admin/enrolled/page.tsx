@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import {
@@ -65,7 +65,7 @@ import type { EnrolledStudentRow } from "@/app/api/admin/enrolled/route";
  *  IEP download count and each roster card's filtering so the two can
  *  never disagree about what "currently shown" means. */
 function matchesEnrolledSearch(r: EnrolledStudentRow, q: string): boolean {
-  return `${r.student_full_name} ${r.family_name} ${r.primary_email ?? ""} ${r.primary_name ?? ""} ${r.grade_level} ${r.enrolled_year_name ?? ""}`
+  return `${r.student_full_name} ${r.family_name} ${r.primary_email ?? ""} ${r.primary_name ?? ""} ${r.grade_level} ${r.crew_assignment ?? ""} ${r.enrolled_year_name ?? ""}`
     .toLowerCase()
     .includes(q);
 }
@@ -89,7 +89,7 @@ function gradeSortKey(grade: string): [number, string] {
  */
 function groupByGrade(
   rows: EnrolledStudentRow[]
-): Array<{ grade: string; rows: EnrolledStudentRow[] }> {
+): Array<{ grade: string; crews: string[]; rows: EnrolledStudentRow[] }> {
   const buckets = new Map<string, EnrolledStudentRow[]>();
   for (const r of rows) {
     const key = (r.grade_level ?? "").trim() || "—";
@@ -100,6 +100,19 @@ function groupByGrade(
   return Array.from(buckets.entries())
     .map(([grade, rs]) => ({
       grade,
+      // Crew tracks grade 1:1 today (8th → Crew A … 12th → Crew E),
+      // so this is normally a single label printed beside the grade
+      // on the group card. Collected from the students rather than
+      // mapped from the grade: if a crew ever spans grades — or a
+      // student is missed in a re-shuffle — the card says so instead
+      // of asserting a mapping that no longer holds.
+      crews: Array.from(
+        new Set(
+          rs
+            .map((r) => (r.crew_assignment ?? "").trim())
+            .filter((c) => c.length > 0)
+        )
+      ).sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
       // Within each grade, alphabetical by last name then first name
       // so the roster reads like a class list.
       rows: rs.slice().sort((a, b) => {
@@ -836,16 +849,15 @@ export default function EnrolledStudentsPage() {
 }
 
 /**
- * Unified roster — one card, one table, with grade-level header
- * rows interspersed between the per-grade student rows. Total
- * enrolled count renders as a footer row at the very bottom so
- * admin sees the cohort size without scanning the per-group
- * counts.
+ * Unified roster — a section header followed by one card per grade
+ * level, each card holding that grade's own table. The card header
+ * carries the grade, its crew, and the headcount, so a grade reads
+ * as a self-contained roster rather than a stripe inside a longer
+ * table.
  *
- * Renders via shadcn `<Table>` primitives directly (rather than
- * the DataTable component) because we need to splice non-data
- * rows (group headers + footer total) into the body — DataTable's
- * row loop doesn't model that.
+ * Renders via shadcn `<Table>` primitives directly (rather than the
+ * DataTable component) so the column set can be shared across every
+ * grade card and stay width-aligned between them.
  */
 function EnrolledRoster({
   title,
@@ -860,30 +872,33 @@ function EnrolledRoster({
   /** Page-level search value — one bar above the cards drives both
    *  rosters. */
   search: string;
-  /** Card header label — "Enrolled" or "Unenrolled" so the page
-   *  can render two stacked rosters with the same chrome. */
+  /** Section label — "Enrolled" or "Unenrolled" so the page can
+   *  render two stacked rosters with the same chrome. */
   title: string;
   /** One-liner explaining what's in this bucket. Sits under the
-   *  card header and helps admin orient when there are zero
+   *  section header and helps admin orient when there are zero
    *  matches in the search filter. */
   description: string;
   columns: ColumnDef<EnrolledStudentRow>[];
-  grouped: Array<{ grade: string; rows: EnrolledStudentRow[] }>;
+  grouped: Array<{
+    grade: string;
+    crews: string[];
+    rows: EnrolledStudentRow[];
+  }>;
   totalCount: number;
-  /** Copy for the zero-rows state inside this card (distinct from
-   *  the page-level "no enrolled students yet" empty state). */
+  /** Copy for the zero-rows state in this section (distinct from the
+   *  page-level "no enrolled students yet" empty state). */
   emptyLabel: string;
   onRowClick: (row: EnrolledStudentRow) => void;
 }) {
-  const colCount = columns.length;
-  // Active column sort, or `null` for the default grade grouping.
-  // Per-roster state: sorting the Enrolled card shouldn't reorder
-  // the Unenrolled one underneath it.
+  // Active column sort, or `null` for each grade's default class-list
+  // order. Per-roster state: sorting the Enrolled section shouldn't
+  // reorder the Unenrolled one underneath it.
   const [sort, setSort] = useState<{ key: string; dir: "asc" | "desc" } | null>(
     null
   );
   /** Header click cycles asc → desc → off, so the third click puts
-   *  the grade grouping back without hunting for a reset control. */
+   *  the class-list order back without hunting for a reset control. */
   function toggleSort(key: string) {
     setSort((cur) => {
       if (!cur || cur.key !== key) return { key, dir: "asc" };
@@ -891,11 +906,11 @@ function EnrolledRoster({
       return null;
     });
   }
-  // Filter each grade group's rows by the search query, then
-  // drop any groups that have zero matches so empty grade
-  // sections don't render. Matches against student name +
-  // family name + primary contact + grade + cohort year — the
-  // same fields admin's eye scans when looking for a specific row.
+  // Filter each grade group's rows by the search query, then drop any
+  // groups that have zero matches so empty grade cards don't render.
+  // Matches against student name + family name + primary contact +
+  // grade + crew + cohort year — the same fields admin's eye scans
+  // when looking for a specific row.
   const visibleGrouped = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return grouped;
@@ -910,25 +925,24 @@ function EnrolledRoster({
     () => visibleGrouped.reduce((acc, g) => acc + g.rows.length, 0),
     [visibleGrouped]
   );
-  // A column sort is necessarily global, so it dissolves the grade
-  // grouping — you can't order the whole roster by cohort year while
-  // still penning each student inside their grade bucket. When a
-  // sort is active the table renders one flat list instead, and the
-  // Grade column carries the grade that the group headers used to.
-  // `null` here means "no sort active" → keep the grouped render.
-  const sortedFlat = useMemo(() => {
-    if (!sort) return null;
+  // A column sort now reorders rows INSIDE each grade card rather
+  // than dissolving the grouping into one flat list — the grade cards
+  // are the structure of the page, so sorting can't be allowed to
+  // collapse them. Sorting by cohort year answers "who in 9th grade
+  // is returning?", which is the question admin actually has while
+  // looking at a grade.
+  const sortedGrouped = useMemo(() => {
+    if (!sort) return visibleGrouped;
     const col = columns.find((c) => c.key === sort.key);
-    if (!col) return null;
+    if (!col) return visibleGrouped;
     const valueOf = (row: EnrolledStudentRow) =>
       col.accessor
         ? col.accessor(row)
         : (row[col.key] as string | number | null | undefined);
     const dir = sort.dir === "asc" ? 1 : -1;
-    return visibleGrouped
-      .flatMap((g) => g.rows)
-      .slice()
-      .sort((a, b) => {
+    return visibleGrouped.map((g) => ({
+      ...g,
+      rows: g.rows.slice().sort((a, b) => {
         const av = valueOf(a);
         const bv = valueOf(b);
         // Blanks sink to the bottom in BOTH directions — an empty
@@ -947,21 +961,21 @@ function EnrolledRoster({
             if (cmp !== 0) return cmp * dir;
           }
         }
-        // Ties (a whole cohort year, a whole grade) fall back to the
-        // class-list order rather than whatever the fetch happened to
-        // return, so repeat renders stay stable.
+        // Ties (a whole cohort year) fall back to the class-list order
+        // rather than whatever the fetch happened to return, so repeat
+        // renders stay stable.
         return (
           (a.student_last_name ?? "").localeCompare(b.student_last_name ?? "") ||
           (a.student_first_name ?? "").localeCompare(b.student_first_name ?? "")
         );
-      });
+      }),
+    }));
   }, [sort, columns, visibleGrouped]);
   const sortedColumnHeader = sort
     ? columns.find((c) => c.key === sort.key)?.header ?? null
     : null;
-  /** One student row. Shared by the grouped and flat-sorted bodies
-   *  so the two renders can't drift in cell padding or click
-   *  behaviour. */
+  /** One student row. Hoisted so every grade card renders rows
+   *  identically — no drift in cell padding or click behaviour. */
   const renderRow = (row: EnrolledStudentRow) => (
     <TableRow
       key={row.id}
@@ -984,148 +998,134 @@ function EnrolledRoster({
       ))}
     </TableRow>
   );
+  /** Column header row — repeated at the top of every grade card so
+   *  each card stays readable on its own once the one above it has
+   *  scrolled off. */
+  const tableHead = (
+    <TableHeader>
+      <TableRow className="hover:bg-transparent">
+        {columns.map((col) => (
+          <TableHead
+            key={col.key}
+            className={cn(
+              "text-[10px] uppercase tracking-wider text-muted-foreground",
+              col.width,
+              col.align === "right" && "text-right",
+              col.align === "center" && "text-center"
+            )}
+          >
+            {col.sortable ? (
+              // `flex w-full min-w-0` bounds the button to the cell so
+              // long headers truncate instead of spilling into the
+              // next column — same treatment DataTable gives its
+              // sortable headers.
+              <button
+                type="button"
+                onClick={() => toggleSort(col.key)}
+                title={`Sort by ${col.header}`}
+                className={cn(
+                  "flex w-full min-w-0 items-center gap-1 uppercase tracking-wider transition-colors hover:text-foreground",
+                  col.align === "right" && "justify-end",
+                  col.align === "center" && "justify-center",
+                  sort?.key === col.key && "text-foreground"
+                )}
+              >
+                <span className="truncate">{col.header}</span>
+                {sort?.key === col.key ? (
+                  sort.dir === "asc" ? (
+                    <ChevronUp className="size-3 shrink-0" />
+                  ) : (
+                    <ChevronDown className="size-3 shrink-0" />
+                  )
+                ) : (
+                  <ChevronsUpDown className="size-3 shrink-0 opacity-40" />
+                )}
+              </button>
+            ) : (
+              col.header
+            )}
+          </TableHead>
+        ))}
+      </TableRow>
+    </TableHeader>
+  );
   return (
-    <Card className="overflow-hidden bg-white py-0 gap-0">
-      <CardHeader className="py-4 border-b bg-white space-y-1">
-        <div className="flex items-baseline gap-3">
-          <CardTitle className="text-sm font-semibold text-muted-foreground">
+    <section className="space-y-3">
+      {/* Section header — the bucket's name and size. Lives outside
+          the cards now that each card belongs to a grade. */}
+      <div className="space-y-1">
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <h3 className="text-sm font-semibold text-muted-foreground">
             {title}
-          </CardTitle>
+          </h3>
           <span className="text-xs tabular-nums text-muted-foreground">
-            ({totalCount})
+            (
+            {search.trim() && visibleCount !== totalCount
+              ? `${visibleCount} of ${totalCount}`
+              : totalCount}
+            )
           </span>
+          {/* Sorting no longer breaks the grouping, but it does
+              override each card's class-list order — say so, and offer
+              the way back explicitly rather than relying on admin
+              finding the third header click. */}
+          {sort && sortedColumnHeader ? (
+            <button
+              type="button"
+              onClick={() => setSort(null)}
+              className="text-left text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+            >
+              Sorted by {sortedColumnHeader} (
+              {sort.dir === "asc" ? "ascending" : "descending"}) · reset to name
+              order
+            </button>
+          ) : null}
         </div>
         <p className="text-xs text-muted-foreground">{description}</p>
-        {/* Sort indicator — the grade group headers vanish while a
-            sort is active, so say why and offer the way back
-            explicitly rather than relying on admin finding the
-            third header click. */}
-        {sort && sortedColumnHeader ? (
-          <button
-            type="button"
-            onClick={() => setSort(null)}
-            // `w-fit` because CardHeader is a grid with stretched
-            // items — without it the click target spans the card.
-            className="w-fit text-left text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+      </div>
+      {sortedGrouped.length === 0 ? (
+        <Card className="bg-white">
+          <CardContent className="py-8 px-6 text-center text-sm italic text-muted-foreground">
+            {search.trim() ? `No students match "${search}".` : emptyLabel}
+          </CardContent>
+        </Card>
+      ) : (
+        sortedGrouped.map((group) => (
+          <Card
+            key={group.grade}
+            className="overflow-hidden bg-white py-0 gap-0"
           >
-            Sorted by {sortedColumnHeader} (
-            {sort.dir === "asc" ? "ascending" : "descending"}) · reset to
-            grade groups
-          </button>
-        ) : null}
-      </CardHeader>
-      <CardContent className="p-6 bg-white space-y-3">
-        <Table>
-          <TableHeader>
-            <TableRow className="hover:bg-transparent">
-              {columns.map((col) => (
-                <TableHead
-                  key={col.key}
-                  className={cn(
-                    "text-[10px] uppercase tracking-wider text-muted-foreground",
-                    col.width,
-                    col.align === "right" && "text-right",
-                    col.align === "center" && "text-center"
-                  )}
-                >
-                  {col.sortable ? (
-                    // `flex w-full min-w-0` bounds the button to the
-                    // cell so long headers truncate instead of
-                    // spilling into the next column — same treatment
-                    // DataTable gives its sortable headers.
-                    <button
-                      type="button"
-                      onClick={() => toggleSort(col.key)}
-                      title={`Sort by ${col.header}`}
-                      className={cn(
-                        "flex w-full min-w-0 items-center gap-1 uppercase tracking-wider transition-colors hover:text-foreground",
-                        col.align === "right" && "justify-end",
-                        col.align === "center" && "justify-center",
-                        sort?.key === col.key && "text-foreground"
-                      )}
-                    >
-                      <span className="truncate">{col.header}</span>
-                      {sort?.key === col.key ? (
-                        sort.dir === "asc" ? (
-                          <ChevronUp className="size-3 shrink-0" />
-                        ) : (
-                          <ChevronDown className="size-3 shrink-0" />
-                        )
-                      ) : (
-                        <ChevronsUpDown className="size-3 shrink-0 opacity-40" />
-                      )}
-                    </button>
-                  ) : (
-                    col.header
-                  )}
-                </TableHead>
-              ))}
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {visibleGrouped.length === 0 ? (
-              <TableRow className="hover:bg-transparent">
-                <TableCell
-                  colSpan={colCount}
-                  className="py-8 text-center text-sm italic text-muted-foreground"
-                >
-                  {search.trim()
-                    ? `No students match "${search}".`
-                    : emptyLabel}
-                </TableCell>
-              </TableRow>
-            ) : sortedFlat ? (
-              // Sorted: one flat list, no grade banners. The Grade
-              // column still shows each student's grade, so nothing
-              // is lost by dropping the group headers here.
-              sortedFlat.map(renderRow)
-            ) : (
-              visibleGrouped.map((group) => (
-                <Fragment key={group.grade}>
-                  {/* Group header row — full-width banner introducing
-                      the grade. `colSpan` covers every column so the
-                      label reads as one bar across the table. */}
-                  <TableRow className="bg-muted/40 hover:bg-muted/40">
-                    <TableCell
-                      colSpan={colCount}
-                      className="py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"
-                    >
-                      {group.grade === "—"
-                        ? "No grade level set"
-                        : `${group.grade} Grade`}
-                      <span className="ml-2 normal-case tabular-nums text-muted-foreground/70">
-                        ({group.rows.length})
-                      </span>
-                    </TableCell>
-                  </TableRow>
-                  {group.rows.map(renderRow)}
-                </Fragment>
-              ))
-            )}
-            {/* Total row — bookends the table so the bucket size
-                is the last thing admin sees. When a search is
-                active, the row shows the filtered count alongside
-                the total so admin sees both at a glance. Label is
-                "Total" rather than "Total enrolled" because the
-                page now stacks two rosters and "enrolled" doesn't
-                apply to the Unenrolled bucket. */}
-            <TableRow className="bg-muted/30 hover:bg-muted/30 border-t-2">
-              <TableCell
-                colSpan={colCount}
-                className="py-3 text-sm font-semibold text-foreground"
-              >
-                Total
-                <span className="ml-2 tabular-nums text-muted-foreground">
-                  {search.trim() && visibleCount !== totalCount
-                    ? `${visibleCount} of ${totalCount}`
-                    : totalCount}
+            <CardHeader className="py-4 border-b bg-white">
+              <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                <CardTitle className="text-sm font-semibold">
+                  {group.grade === "—"
+                    ? "No grade level set"
+                    : `${group.grade} Grade`}
+                </CardTitle>
+                {/* Crew sits beside the grade. Normally a single
+                    label; joined when a grade somehow spans crews, so
+                    the card reports what is actually in it. Silent
+                    when no student in the group has a crew set. */}
+                {group.crews.length > 0 ? (
+                  <span className="text-sm text-muted-foreground">
+                    · {group.crews.join(" · ")}
+                  </span>
+                ) : null}
+                <span className="text-xs tabular-nums text-muted-foreground">
+                  ({group.rows.length})
                 </span>
-              </TableCell>
-            </TableRow>
-          </TableBody>
-        </Table>
-      </CardContent>
-    </Card>
+              </div>
+            </CardHeader>
+            <CardContent className="p-6 bg-white">
+              <Table>
+                {tableHead}
+                <TableBody>{group.rows.map(renderRow)}</TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        ))
+      )}
+    </section>
   );
 }
 
