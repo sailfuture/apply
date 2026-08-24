@@ -239,6 +239,32 @@ export async function PATCH(
       );
     }
 
+    // The school email is now admin-editable, so it can collide. It
+    // has to stay unique: it's the Google mailbox, and it's the tier
+    // the Toddle matcher leans on hardest — two students sharing one
+    // address means one student's profile gets overwritten with the
+    // other's on the next sync. Cheaper to refuse here than to unpick
+    // afterwards.
+    if (typeof patch.school_email === "string" && patch.school_email.trim()) {
+      const wanted = patch.school_email.trim().toLowerCase();
+      const clash = (await xano.students.getAll().catch(() => []))
+        .find(
+          (s) =>
+            s.id !== id && (s.school_email ?? "").trim().toLowerCase() === wanted
+        );
+      if (clash) {
+        return NextResponse.json(
+          {
+            error: `${
+              `${clash.first_name ?? ""} ${clash.last_name ?? ""}`.trim() ||
+              `Student #${clash.id}`
+            } already has ${patch.school_email.trim()}. School emails have to be unique.`,
+          },
+          { status: 409 }
+        );
+      }
+    }
+
     // Bump `last_edited_time` on every write so the enrolled
     // detail page's "Student edited 4d ago" caption stays
     // current and the Registration Packet card's last-edited
