@@ -359,6 +359,13 @@ export async function GET(req: NextRequest) {
           // derived from the grade so a re-shuffle shows up here
           // instead of quietly rendering a stale mapping.
           crew_assignment: packet?.crew_assignment ?? "",
+          // Program split — residential/foster placements vs community
+          // students. Lives on the FAMILY row (admin ticks it on the
+          // family detail page), not per-student, so every student in
+          // a residential family is residential. Same derivation the
+          // roster's XLSX export uses for its "Program" column, so
+          // the on-screen filter and the export can't disagree.
+          is_residential: family?.is_residential === true,
           family_name:
             family?.family_name?.trim() || `Family #${familyId}`,
           primary_name: primary
@@ -468,6 +475,11 @@ export interface EnrolledStudentRow {
    *  roster shows the distinct crews found inside each grade group
    *  rather than assuming the mapping holds. */
   crew_assignment: string;
+  /** True when the student's family is flagged residential/foster
+   *  (`is_residential` on the family row). Drives the roster's
+   *  Community vs Residential filter; false for community students
+   *  and for legacy family rows that predate the column. */
+  is_residential: boolean;
   family_name: string;
   primary_name: string;
   primary_email: string;

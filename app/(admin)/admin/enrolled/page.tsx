@@ -182,6 +182,13 @@ export default function EnrolledStudentsPage() {
   >("all");
   // IEP chip — only students with at least one uploaded IEP document.
   const [iepOnly, setIepOnly] = useState(false);
+  // Program split — "residential" = the student's family is flagged
+  // residential/foster, "community" = everyone else. The flag lives on
+  // the family row, so this splits whole families rather than
+  // individual students.
+  const [programFilter, setProgramFilter] = useState<
+    "all" | "community" | "residential"
+  >("all");
 
   const rows = useMemo(
     () =>
@@ -189,9 +196,11 @@ export default function EnrolledStudentsPage() {
         if (cohortFilter === "new" && r.is_returning) return false;
         if (cohortFilter === "returning" && !r.is_returning) return false;
         if (iepOnly && !r.has_iep) return false;
+        if (programFilter === "residential" && !r.is_residential) return false;
+        if (programFilter === "community" && r.is_residential) return false;
         return true;
       }),
-    [allRows, cohortFilter, iepOnly]
+    [allRows, cohortFilter, iepOnly, programFilter]
   );
 
   // Two top-level groups: currently enrolled, and formerly
@@ -738,8 +747,9 @@ export default function EnrolledStudentsPage() {
             />
           </div>
 
-          {/* Cohort + IEP narrowing chips — applied before the
-              enrolled/unenrolled split so both cards reflect them. */}
+          {/* Cohort + program + IEP narrowing chips — applied before
+              the enrolled/unenrolled split so every grade card, and
+              the batch actions above, reflect them. */}
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
               Cohort
@@ -766,6 +776,42 @@ export default function EnrolledStudentsPage() {
                   )}
                 >
                   {c.label}
+                </button>
+              );
+            })}
+            <span className="mx-1 h-4 w-px bg-border" aria-hidden />
+            <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+              Program
+            </span>
+            {(
+              [
+                { value: "all", label: "All" },
+                { value: "community", label: "Community" },
+                { value: "residential", label: "Residential" },
+              ] as const
+            ).map((pf) => {
+              const on = programFilter === pf.value;
+              return (
+                <button
+                  key={pf.value}
+                  type="button"
+                  aria-pressed={on}
+                  onClick={() => setProgramFilter(pf.value)}
+                  className={cn(
+                    "rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors",
+                    on
+                      ? "border-foreground bg-foreground text-background"
+                      : "border-border bg-white text-muted-foreground hover:border-foreground/40 hover:text-foreground"
+                  )}
+                  title={
+                    pf.value === "residential"
+                      ? "Students in residential / foster families"
+                      : pf.value === "community"
+                        ? "Students outside the residential program"
+                        : "Both residential and community students"
+                  }
+                >
+                  {pf.label}
                 </button>
               );
             })}
