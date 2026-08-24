@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { Laptop, Loader2, Plus, Search } from "lucide-react";
@@ -256,6 +256,11 @@ function LaptopGroupCard({
   onRowClick: (laptop: AdminLaptopDevice) => void;
   onAssign?: (laptop: AdminLaptopDevice) => void;
 }) {
+  const groups = useMemo(() => groupByModel(laptops), [laptops]);
+  // A single model needs no headers — they'd only repeat what the one
+  // group already is.
+  const grouped = groups.length > 1;
+
   return (
     <Card className="overflow-hidden gap-0 py-0 bg-white">
       <CardHeader className="py-3 !pb-3 border-b">
@@ -299,91 +304,111 @@ function LaptopGroupCard({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {laptops.map((l) => (
-                <TableRow
-                  key={l.id}
-                  className="cursor-pointer hover:bg-muted/30"
-                  onClick={() => onRowClick(l)}
-                >
-                  <TableCell className="pl-4 whitespace-nowrap">
-                    <span className="inline-flex items-center gap-1.5">
-                      <Laptop className="size-3.5 text-muted-foreground" />
-                      <span className="font-medium">
-                        {l.asset_number || `#${l.id}`}
-                      </span>
-                      <span className="text-xs text-muted-foreground">
-                        {l.model}
-                      </span>
-                    </span>
-                  </TableCell>
-                  <TableCell className="font-mono text-xs">
-                    {l.serial_number || "—"}
-                  </TableCell>
-                  {columns === "assigned" ? (
-                    <>
-                      <TableCell>
-                        <span className="flex items-center gap-2">
-                          <RowAvatar
-                            name={l.current?.student_name ?? ""}
-                            photoUrl={l.current?.student_photo_url ?? null}
-                          />
-                          <span>
-                            {l.current?.student_name ? (
-                              <span className="font-medium whitespace-nowrap">
-                                {l.current.student_name}
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-amber-200">
-                                Not linked
-                              </span>
-                            )}
-                            {l.current?.crew ? (
-                              <span className="ml-1.5 text-xs text-muted-foreground">
-                                {l.current.crew}
-                              </span>
-                            ) : null}
-                          </span>
+              {groups.map((g) => (
+                <Fragment key={g.model}>
+                  {grouped ? (
+                    <TableRow className="border-y bg-muted/40 hover:bg-transparent">
+                      <TableCell
+                        colSpan={COLUMN_COUNT[columns]}
+                        className="py-1.5 pl-4 text-xs font-medium text-muted-foreground"
+                      >
+                        {g.model}
+                        <span className="ml-1.5 font-normal tabular-nums">
+                          {g.laptops.length}
                         </span>
                       </TableCell>
-                      <TableCell className="whitespace-nowrap tabular-nums text-muted-foreground">
-                        {fmtLaptopDate(l.current?.assigned_date)}
-                      </TableCell>
-                      <TableCell className="pr-4">
-                        <ConditionBadge
-                          condition={l.current?.assigned_condition ?? ""}
-                        />
-                      </TableCell>
-                    </>
-                  ) : columns === "available" ? (
-                    <>
-                      <TableCell className="text-muted-foreground">
-                        {l.year_purchase || "—"}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {l.rfid_uid.length || "—"}
-                      </TableCell>
-                      <TableCell className="pr-4 text-right whitespace-nowrap">
-                        {onAssign ? (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="bg-white"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onAssign(l);
-                            }}
-                          >
-                            Assign
-                          </Button>
-                        ) : null}
-                      </TableCell>
-                    </>
-                  ) : (
-                    <TableCell className="pr-4 text-muted-foreground">
-                      {l.reason_for_archive || "—"}
+                    </TableRow>
+                  ) : null}
+                  {g.laptops.map((l) => (
+                  <TableRow
+                    key={l.id}
+                    className="cursor-pointer hover:bg-muted/30"
+                    onClick={() => onRowClick(l)}
+                  >
+                    <TableCell className="pl-4 whitespace-nowrap">
+                      <span className="inline-flex items-center gap-1.5">
+                        <Laptop className="size-3.5 text-muted-foreground" />
+                        <span className="font-medium">
+                          {l.asset_number || `#${l.id}`}
+                        </span>
+                        {/* The group header already names the model. */}
+                        {grouped ? null : (
+                          <span className="text-xs text-muted-foreground">
+                            {l.model}
+                          </span>
+                        )}
+                      </span>
                     </TableCell>
-                  )}
-                </TableRow>
+                    <TableCell className="font-mono text-xs">
+                      {l.serial_number || "—"}
+                    </TableCell>
+                    {columns === "assigned" ? (
+                      <>
+                        <TableCell>
+                          <span className="flex items-center gap-2">
+                            <RowAvatar
+                              name={l.current?.student_name ?? ""}
+                              photoUrl={l.current?.student_photo_url ?? null}
+                            />
+                            <span>
+                              {l.current?.student_name ? (
+                                <span className="font-medium whitespace-nowrap">
+                                  {l.current.student_name}
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-amber-200">
+                                  Not linked
+                                </span>
+                              )}
+                              {l.current?.crew ? (
+                                <span className="ml-1.5 text-xs text-muted-foreground">
+                                  {l.current.crew}
+                                </span>
+                              ) : null}
+                            </span>
+                          </span>
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap tabular-nums text-muted-foreground">
+                          {fmtLaptopDate(l.current?.assigned_date)}
+                        </TableCell>
+                        <TableCell className="pr-4">
+                          <ConditionBadge
+                            condition={l.current?.assigned_condition ?? ""}
+                          />
+                        </TableCell>
+                      </>
+                    ) : columns === "available" ? (
+                      <>
+                        <TableCell className="text-muted-foreground">
+                          {l.year_purchase || "—"}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {l.rfid_uid.length || "—"}
+                        </TableCell>
+                        <TableCell className="pr-4 text-right whitespace-nowrap">
+                          {onAssign ? (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="bg-white"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onAssign(l);
+                              }}
+                            >
+                              Assign
+                            </Button>
+                          ) : null}
+                        </TableCell>
+                      </>
+                    ) : (
+                      <TableCell className="pr-4 text-muted-foreground">
+                        {l.reason_for_archive || "—"}
+                      </TableCell>
+                    )}
+                  </TableRow>
+                  ))}
+                </Fragment>
               ))}
             </TableBody>
           </Table>
@@ -391,6 +416,37 @@ function LaptopGroupCard({
       </CardContent>
     </Card>
   );
+}
+
+/** Columns each table variant renders — the group header row spans
+ *  all of them. Keep in sync with the <TableHead> block above. */
+const COLUMN_COUNT = { assigned: 5, available: 5, deactivated: 3 } as const;
+
+const NO_MODEL = "No model recorded";
+
+/**
+ * Split a section's devices by model, biggest fleet first. Devices
+ * with no model recorded collect in one bucket at the end rather than
+ * each becoming its own group of one.
+ */
+function groupByModel(
+  laptops: AdminLaptopDevice[]
+): { model: string; laptops: AdminLaptopDevice[] }[] {
+  const by = new Map<string, AdminLaptopDevice[]>();
+  for (const l of laptops) {
+    const model = l.model.trim() || NO_MODEL;
+    const bucket = by.get(model);
+    if (bucket) bucket.push(l);
+    else by.set(model, [l]);
+  }
+  return [...by.entries()]
+    .map(([model, list]) => ({ model, laptops: list }))
+    .sort(
+      (a, b) =>
+        Number(a.model === NO_MODEL) - Number(b.model === NO_MODEL) ||
+        b.laptops.length - a.laptops.length ||
+        a.model.localeCompare(b.model)
+    );
 }
 
 function RowAvatar({
