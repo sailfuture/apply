@@ -72,22 +72,35 @@ export function SyncToddleButton({
   const [readiness, setReadiness] = useState<
     (ToddleReadiness & { preview?: ToddleSyncPreview }) | null
   >(null);
+  // Whether that check has landed yet. Sync stays disabled until it
+  // settles, because a dialog whose whole job is "review this first"
+  // shouldn't be confirmable before the thing to review has arrived —
+  // the check takes a couple of seconds, and until it did, this read
+  // as a bare "are you sure?" box. "error" re-enables Sync rather
+  // than trapping the admin behind a panel that will never load.
+  const [checkState, setCheckState] = useState<"loading" | "ready" | "error">(
+    "loading"
+  );
 
   useEffect(() => {
     if (!open || readiness) return;
     let cancelled = false;
+    setCheckState("loading");
     fetch(`/api/admin/students/${studentId}/toddle-sync`)
       .then(async (res) => {
         if (!res.ok) throw new Error(String(res.status));
         return res.json();
       })
       .then((data) => {
-        if (!cancelled) setReadiness(data as ToddleReadiness);
+        if (cancelled) return;
+        setReadiness(data as ToddleReadiness);
+        setCheckState("ready");
       })
       .catch((err) => {
         // Non-fatal: the dialog still syncs, it just can't show the
         // checklist.
         console.error("[SyncToddleButton] readiness check failed:", err);
+        if (!cancelled) setCheckState("error");
       });
     return () => {
       cancelled = true;
@@ -226,6 +239,18 @@ export function SyncToddleButton({
               class.
             </AlertDialogDescription>
           </AlertDialogHeader>
+          {checkState === "loading" ? (
+            <div className="flex items-center gap-2 rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+              <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+              Checking what this would change in Toddle — nothing has
+              been pushed yet.
+            </div>
+          ) : checkState === "error" ? (
+            <div className="rounded-md border px-3 py-2 text-sm text-muted-foreground">
+              Couldn&rsquo;t run the pre-sync check, so what changes is
+              unknown until the sync runs. You can still sync.
+            </div>
+          ) : null}
           {readiness?.preview ? (
             <div
               className={cn(
@@ -314,7 +339,12 @@ export function SyncToddleButton({
           <AlertDialogFooter>
             <AlertDialogCancel disabled={saving}>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              disabled={saving}
+              disabled={saving || checkState === "loading"}
+              title={
+                checkState === "loading"
+                  ? "Still checking what this sync would change."
+                  : undefined
+              }
               onClick={(e) => {
                 e.preventDefault();
                 void runSync();

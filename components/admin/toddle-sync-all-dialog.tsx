@@ -426,7 +426,9 @@ export function ToddleSyncAllDialog({
               ? `Done — ${result.totals.created + result.totals.updated} of ${
                   result.rows.length
                 } student${result.rows.length === 1 ? "" : "s"} moved; each student's Toddle link is saved on their record.`
-              : ""}
+              : loadingReadiness
+                ? "Comparing only — nothing has been pushed to Toddle yet."
+                : ""}
           </p>
           <div className="flex items-center gap-2">
             <Button
@@ -440,7 +442,15 @@ export function ToddleSyncAllDialog({
               {result ? "Close" : "Cancel"}
             </Button>
             {!result ? (
-              <Button onClick={() => void run()} disabled={running}>
+              <Button
+                onClick={() => void run()}
+                disabled={running || loadingReadiness}
+                title={
+                  loadingReadiness
+                    ? "Still comparing the roster against Toddle — the review lands first."
+                    : undefined
+                }
+              >
                 {running ? (
                   <Loader2
                     className="size-3.5 mr-1.5 animate-spin"
