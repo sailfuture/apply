@@ -3,7 +3,7 @@
 import { useState } from "react";
 import useSWR from "swr";
 import { toast } from "sonner";
-import { Loader2, Lock, LockOpen, ShieldCheck } from "lucide-react";
+import { ArrowRight, Loader2, Lock, LockOpen, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import type { LaptopGoogleStatus } from "@/app/api/admin/laptops/[id]/google/route";
@@ -56,6 +56,17 @@ export function LaptopGoogleCard({ laptop }: { laptop: AdminLaptopDevice }) {
   }
 
   if (data && !data.configured) return null;
+
+  // Restricting always applies the policy; it only MOVES the device
+  // when it isn't already in the student's org unit. The button says
+  // which, so pressing it holds no surprises.
+  const target = data?.targetOuPath ?? "";
+  const willMove = !!target && data?.device?.orgUnitPath !== target;
+  const actionLabel = data?.studentName
+    ? willMove
+      ? `Move to ${data.studentName}'s org unit`
+      : `Restrict to ${data.studentName}`
+    : "Restrict";
 
   return (
     <div className="space-y-2">
@@ -120,7 +131,9 @@ export function LaptopGoogleCard({ laptop }: { laptop: AdminLaptopDevice }) {
                     onClick={() =>
                       void run(
                         "POST",
-                        `Sign-in updated to ${data.studentName}.`
+                        willMove
+                          ? `Moved to ${data.studentName}'s org unit.`
+                          : `Sign-in updated to ${data.studentName}.`
                       )
                     }
                   >
@@ -129,7 +142,7 @@ export function LaptopGoogleCard({ laptop }: { laptop: AdminLaptopDevice }) {
                     ) : (
                       <ShieldCheck className="size-3.5" />
                     )}
-                    Update to {data.studentName}
+                    {actionLabel}
                   </Button>
                 ) : null}
                 <Button
@@ -156,7 +169,9 @@ export function LaptopGoogleCard({ laptop }: { laptop: AdminLaptopDevice }) {
                 onClick={() =>
                   void run(
                     "POST",
-                    `Sign-in restricted to ${data.studentName}.`
+                    willMove
+                      ? `Moved to ${data.studentName}'s org unit.`
+                      : `Sign-in restricted to ${data.studentName}.`
                   )
                 }
               >
@@ -165,7 +180,7 @@ export function LaptopGoogleCard({ laptop }: { laptop: AdminLaptopDevice }) {
                 ) : (
                   <Lock className="size-3.5" />
                 )}
-                Restrict to {data.studentName}
+                {actionLabel}
               </Button>
             ) : null}
           </div>
@@ -188,16 +203,39 @@ export function LaptopGoogleCard({ laptop }: { laptop: AdminLaptopDevice }) {
               </p>
             ) : null
           ) : null}
-          <p className="text-xs text-muted-foreground">
-            Google OU:{" "}
-            <span className="font-mono">{data.device.orgUnitPath || "—"}</span>
-            {data.device.recentUser ? (
+          {/* Where the device is, and where it's going. The move is
+              the part that was previously invisible — it only showed
+              up afterwards, as a changed "Google OU" line. */}
+          <div className="space-y-1 border-t pt-2 text-xs text-muted-foreground">
+            {willMove ? (
               <>
-                {" · last sign-in "}
-                <span className="font-mono">{data.device.recentUser}</span>
+                <p>
+                  Currently in{" "}
+                  <span className="font-mono">
+                    {data.device.orgUnitPath || "—"}
+                  </span>
+                </p>
+                <p className="text-foreground">
+                  <ArrowRight className="mr-1 inline size-3" />
+                  Moves to <span className="font-mono">{target}</span>
+                </p>
               </>
+            ) : (
+              <p>
+                Org unit:{" "}
+                <span className="font-mono">
+                  {data.device.orgUnitPath || "—"}
+                </span>
+                {target ? " — already the right one" : ""}
+              </p>
+            )}
+            {data.device.recentUser ? (
+              <p>
+                Last sign-in{" "}
+                <span className="font-mono">{data.device.recentUser}</span>
+              </p>
             ) : null}
-          </p>
+          </div>
         </div>
       )}
     </div>

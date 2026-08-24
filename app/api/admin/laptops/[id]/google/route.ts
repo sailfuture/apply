@@ -5,6 +5,8 @@ import { buildLaptopLinkResolver } from "@/lib/laptop-links";
 import {
   deviceOuParent,
   ensureOrgUnit,
+  resolveStudentOuPath,
+  studentOuName,
   clearSignInRestriction,
   getChromeDeviceBySerial,
   getOrgUnit,
@@ -57,6 +59,12 @@ export interface LaptopGoogleStatus {
   allowlist: string[];
   /** True when the device sits in a per-device OU we manage. */
   managed: boolean;
+  /** Where the device SHOULD be — the current holder's own org unit.
+   *  "" when nobody holds it, or the holder has no school account, in
+   *  which case there's nowhere to move it to. Compare against
+   *  `device.orgUnitPath` to see whether restricting will also move
+   *  the device. */
+  targetOuPath: string;
   /** Current holder's school Google account ("" = none usable). */
   studentEmail: string;
   studentName: string;
@@ -273,10 +281,20 @@ async function buildStatus(laptopId: number): Promise<LaptopGoogleStatus> {
     restricted: false,
     allowlist: [],
     managed: false,
+    targetOuPath: "",
     studentEmail: holder?.email ?? "",
     studentName: holder?.name ?? "",
   };
   if (!base.configured || !serial) return base;
+
+  // Named up front so the card can say where the device is going,
+  // not just where it is. Same resolution the restrict action uses,
+  // so the path shown is the path it will actually move to.
+  if (holder?.email) {
+    base.targetOuPath = studentOuName(holder.name)
+      ? await resolveStudentOuPath(holder.name).catch(() => "")
+      : `${deviceOuParent()}/${holder.email.split("@")[0] || serial}`;
+  }
 
   try {
     const device = await getChromeDeviceBySerial(serial);
