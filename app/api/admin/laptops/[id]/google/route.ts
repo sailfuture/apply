@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
+import { buildLaptopLinkResolver } from "@/lib/laptop-links";
 import {
   deviceOuParent,
   ensureOrgUnit,
@@ -216,7 +217,16 @@ export async function DELETE(
   }
 }
 
-/** Open assignment's linked student, with their school account. */
+/**
+ * Open assignment's student, with their school account.
+ *
+ * Reads the bridge column first, then falls back to resolving the ops
+ * UUID the RFID check-in system leaves on rows it creates — which is
+ * how most of the fleet is checked out. Without that fallback this
+ * returns null for nearly every device and the card just says "assign
+ * this laptop to a student first" about a laptop a student is
+ * visibly holding.
+ */
 async function currentHolder(
   laptopId: number
 ): Promise<{ name: string; email: string } | null> {
@@ -224,14 +234,29 @@ async function currentHolder(
   const open = assignments.find(
     (a) => Number(a.laptops_id) === laptopId && !a.returned_date
   );
-  const studentId = Number(open?.enrolled_students_id) || 0;
-  if (!studentId) return null;
-  const student = await xano.students.getById(studentId).catch(() => null);
+  if (!open) return null;
+
+  const studentId = Number(open.enrolled_students_id) || 0;
+  const student = studentId
+    ? await xano.students.getById(studentId).catch(() => null)
+    : await resolveHolder(open.students_id);
   if (!student) return null;
   return {
     name: `${student.first_name} ${student.last_name}`.trim(),
     email: (student.school_email ?? "").trim().toLowerCase(),
   };
+}
+
+/** Ops UUID → enrolled student. Both rosters are only fetched on the
+ *  fallback path, so linked rows stay a single lookup. */
+async function resolveHolder(uuid: string | null | undefined) {
+  if (!uuid) return null;
+  const [opsStudents, students] = await Promise.all([
+    xano.opsStudents.getAll().catch(() => null),
+    xano.students.getAll().catch(() => null),
+  ]);
+  if (!opsStudents || !students) return null;
+  return buildLaptopLinkResolver(opsStudents, students).resolve(uuid)?.student ?? null;
 }
 
 /**

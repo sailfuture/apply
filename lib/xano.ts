@@ -55,6 +55,14 @@ function getOpsBaseUrl(): string {
   return `${getXanoHost()}/api:jzQ2liPL`;
 }
 
+/** The Toddle API group, which is where the staff-side `students`
+ *  roster is exposed. Same Xano instance again — this is the only
+ *  group that serves the ops student table the laptop RFID system
+ *  keys its `students_id` UUIDs against. */
+function getToddleBaseUrl(): string {
+  return `${getXanoHost()}/api:fJsHVIeC`;
+}
+
 export interface XanoParent {
   id: number;
   created_at: number;
@@ -868,6 +876,34 @@ export interface XanoLaptop {
   /** The ops system's own student UUID for the current holder —
    *  maintained by the staff RFID flow, not by this app. */
   students_id?: string | null;
+}
+
+/**
+ * A row from the staff-side `students` roster — the table the laptop
+ * RFID system points its `students_id` UUIDs at. Lives on the same
+ * Xano instance as everything else, but in the operations workspace,
+ * and is only exposed through the Toddle API group.
+ *
+ * This app never writes it. It reads it for exactly one job: turning
+ * an ops UUID on a laptop assignment into one of OUR enrolled
+ * students — see `lib/laptop-links.ts`. Only the columns that job
+ * needs are typed; the real table is far wider (grades, banking,
+ * graduation requirements) and none of it belongs here.
+ */
+export interface XanoOpsStudent {
+  /** UUID primary key — what `laptop_assignments.students_id` and
+   *  `laptops.students_id` hold. */
+  id: string;
+  /** Toddle LMS id. The strongest join key we have: it matches
+   *  `registration_students.toddle_student_id` exactly, and both
+   *  sides are stamped by the same Toddle sync. */
+  toddleID?: string | null;
+  /** `first.last<YY>@sailfuture.org` — matches
+   *  `registration_students.school_email`. */
+  studentEmail?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+  isArchived?: boolean | null;
 }
 
 /**
@@ -4918,6 +4954,21 @@ export const xano = {
         method: "DELETE",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+    },
+  },
+
+  /** The staff-side student roster (read-only). Exposed on the
+   *  Toddle group rather than the ops group — see
+   *  `getToddleBaseUrl`. Used only to resolve the ops `students_id`
+   *  UUID on a laptop row to an enrolled student. */
+  opsStudents: {
+    async getAll(): Promise<XanoOpsStudent[]> {
+      const res = await fetch(`${getToddleBaseUrl()}/students`, {
+        cache: "no-store",
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      const rows = await res.json();
+      return Array.isArray(rows) ? rows : [];
     },
   },
 

@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano, type XanoLaptopAssignment, type XanoStudent } from "@/lib/xano";
+import {
+  buildLaptopLinkResolver,
+  NO_LAPTOP_LINKS,
+  type LaptopLinkResolver,
+} from "@/lib/laptop-links";
 
 /**
  * Laptop inventory — the admin management surface for the ops-group
@@ -17,25 +22,32 @@ import { xano, type XanoLaptopAssignment, type XanoStudent } from "@/lib/xano";
  *
  * Assignments created here always stamp the enrolled bridge columns
  * (`enrolled_students_id`/`enrolled_families_id`) so the parent
- * Store page keeps showing families their checked-out devices.
+ * Store page keeps showing families their checked-out devices. Rows
+ * the RFID check-in system created carry only its own ops UUID, so
+ * those fall back to resolving that UUID against the ops roster
+ * (`lib/laptop-links.ts`) — otherwise most of the fleet would render
+ * as "Not linked to an enrolled student" despite us knowing exactly
+ * who holds each device.
  */
 export async function GET(req: NextRequest) {
   try {
     await requireAdmin();
     const yearIdParam = Number(req.nextUrl.searchParams.get("yearId"));
 
-    const [devicesR, assignmentsR, studentsR, yearsR] =
+    const [devicesR, assignmentsR, studentsR, yearsR, opsStudentsR] =
       await Promise.allSettled([
         xano.laptops.getAll(),
         xano.laptopAssignments.getAll(),
         xano.students.getAll(),
         xano.schoolYears.getAll(),
+        xano.opsStudents.getAll(),
       ]);
     for (const [label, r] of [
       ["devices", devicesR],
       ["assignments", assignmentsR],
       ["students", studentsR],
       ["years", yearsR],
+      ["ops students", opsStudentsR],
     ] as const) {
       if (r.status === "rejected") {
         console.error(`[/api/admin/laptops] ${label} unavailable:`, r.reason);
@@ -46,6 +58,12 @@ export async function GET(req: NextRequest) {
       assignmentsR.status === "fulfilled" ? assignmentsR.value : [];
     const students = studentsR.status === "fulfilled" ? studentsR.value : [];
     const years = yearsR.status === "fulfilled" ? yearsR.value : [];
+    // Roster outage degrades to unlinked rows rather than a 500 —
+    // the page is still useful without the UUID fallback.
+    const links: LaptopLinkResolver =
+      opsStudentsR.status === "fulfilled"
+        ? buildLaptopLinkResolver(opsStudentsR.value, students)
+        : NO_LAPTOP_LINKS;
 
     // Crew placements live on the year's registration packet. Use the
     // requested year (top-nav picker) or fall back to the active one.
@@ -67,11 +85,16 @@ export async function GET(req: NextRequest) {
 
     const studentById = new Map(students.map((s) => [s.id, s]));
     const shapeAssignment = (a: XanoLaptopAssignment): LaptopAssignmentInfo => {
-      const student = studentById.get(Number(a.enrolled_students_id));
+      // Prefer the stamped bridge column. Failing that, derive the
+      // student from the ops UUID the RFID system left behind.
+      const stamped = studentById.get(Number(a.enrolled_students_id));
+      const derived = stamped ? null : links.resolve(a.students_id);
+      const student = stamped ?? derived?.student;
       return {
         id: a.id,
         laptops_id: Number(a.laptops_id) || 0,
-        enrolled_students_id: Number(a.enrolled_students_id) || 0,
+        enrolled_students_id: student ? Number(student.id) || 0 : 0,
+        link_source: stamped ? "stamped" : derived ? "derived" : "none",
         student_name: student
           ? `${student.first_name} ${student.last_name}`.trim()
           : "",
@@ -243,13 +266,20 @@ function resolvePhotoUrl(
 }
 
 /** One checkout row (open or closed), joined to the enrolled
- *  student. `student_name` is "" for legacy staff-system rows that
- *  were never linked to an enrolled student. */
+ *  student. `student_name` is "" only when the row can be tied to an
+ *  enrolled student neither by its bridge column nor by its ops
+ *  UUID — i.e. the holder never went through registration. */
 export interface LaptopAssignmentInfo {
   id: number;
   laptops_id: number;
-  /** 0 = not linked to an enrolled student. */
+  /** The enrolled student, however we got there. 0 = unresolvable. */
   enrolled_students_id: number;
+  /** Where `enrolled_students_id` came from: `"stamped"` = read
+   *  straight off the row's bridge column; `"derived"` = resolved
+   *  from the ops UUID at request time and NOT yet written back (run
+   *  `scripts/backfill-laptop-links.ts` to persist those); `"none"` =
+   *  no enrolled student found, so the row still needs a hand-link. */
+  link_source: "stamped" | "derived" | "none";
   student_name: string;
   student_photo_url: string | null;
   /** Crew placement from the year's packet ("Crew A"–"Crew E"). */

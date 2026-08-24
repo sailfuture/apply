@@ -393,7 +393,7 @@ export function LaptopDetailSheet({
                           />
                         </div>
                         <div className="flex items-center gap-2">
-                          {!current.enrolled_students_id ? (
+                          {current.link_source === "none" ? (
                             <Button
                               variant="outline"
                               size="sm"

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
+import { buildLaptopLinkResolver, NO_LAPTOP_LINKS } from "@/lib/laptop-links";
 
 /**
  * Open a laptop checkout — assign a device to an enrolled student.
@@ -11,8 +12,12 @@ import { xano } from "@/lib/xano";
  * Guards: the device must exist and be active with no open checkout;
  * the student must exist and not already hold a device (the picker
  * disables them client-side, but the server is the real gate against
- * double-issuing). The enrolled family id is derived from the
- * student row so the parent Store page can match the assignment.
+ * double-issuing). That gate has to look past the bridge columns:
+ * most open checkouts were created by the RFID system and carry only
+ * an ops UUID, so a student already holding one of those would
+ * otherwise sail through and end up with two. The enrolled family id
+ * is derived from the student row so the parent Store page can match
+ * the assignment.
  */
 export async function POST(req: NextRequest) {
   try {
@@ -37,11 +42,14 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const [device, student, assignments] = await Promise.all([
-      xano.laptops.getById(laptopId).catch(() => null),
-      xano.students.getById(studentId).catch(() => null),
-      xano.laptopAssignments.getAll(),
-    ]);
+    const [device, student, assignments, opsStudents, allStudents] =
+      await Promise.all([
+        xano.laptops.getById(laptopId).catch(() => null),
+        xano.students.getById(studentId).catch(() => null),
+        xano.laptopAssignments.getAll(),
+        xano.opsStudents.getAll().catch(() => null),
+        xano.students.getAll().catch(() => null),
+      ]);
     if (!device) {
       return NextResponse.json(
         { error: `Laptop ${laptopId} not found` },
@@ -60,6 +68,13 @@ export async function POST(req: NextRequest) {
         { status: 404 }
       );
     }
+    // Resolve ops UUIDs so RFID-created checkouts count toward the
+    // one-device-per-student rule. A roster outage falls back to
+    // bridge columns only — the guard weakens, it doesn't block work.
+    const links =
+      opsStudents && allStudents
+        ? buildLaptopLinkResolver(opsStudents, allStudents)
+        : NO_LAPTOP_LINKS;
     const open = assignments.filter((a) => !a.returned_date);
     const deviceBusy = open.find((a) => Number(a.laptops_id) === laptopId);
     if (deviceBusy) {
@@ -69,12 +84,19 @@ export async function POST(req: NextRequest) {
       );
     }
     const studentBusy = open.find(
-      (a) => Number(a.enrolled_students_id) === studentId
+      (a) =>
+        Number(a.enrolled_students_id) === studentId ||
+        links.resolve(a.students_id)?.enrolled_students_id === studentId
     );
     if (studentBusy) {
+      const heldAsset = (
+        await xano.laptops.getById(Number(studentBusy.laptops_id)).catch(() => null)
+      )?.asset_number;
       return NextResponse.json(
         {
-          error: `${student.first_name} ${student.last_name} already has a laptop checked out`,
+          error: `${student.first_name} ${student.last_name} already has a laptop checked out${
+            heldAsset ? ` (${heldAsset.trim()})` : ""
+          }`,
         },
         { status: 409 }
       );

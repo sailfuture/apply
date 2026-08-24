@@ -1,16 +1,20 @@
 import { auth, currentUser } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
 import { xano } from "@/lib/xano";
+import { buildLaptopLinkResolver, NO_LAPTOP_LINKS } from "@/lib/laptop-links";
 
 /**
  * Devices currently checked out to the authenticated family's
  * students — read from the staff-side laptop inventory
  * (`laptop_assignments` + `laptops` on the operations Xano group).
  *
- * Only assignments admin has LINKED to an enrolled student/family
- * (bridge columns `enrolled_students_id` / `enrolled_families_id`)
- * are visible, and only while un-returned. Returns [] on any lookup
- * failure so the parent Store section simply hides.
+ * A device is this family's if the bridge columns say so
+ * (`enrolled_students_id` / `enrolled_families_id`), or — for rows
+ * the staff RFID system created, which carry only its own ops UUID —
+ * if that UUID resolves to one of the family's students via
+ * `lib/laptop-links.ts`. Without that fallback nearly every family
+ * saw an empty list. Only un-returned rows are shown. Returns [] on
+ * any lookup failure so the parent Store section simply hides.
  */
 export async function GET() {
   const { userId } = await auth();
@@ -29,25 +33,46 @@ export async function GET() {
   }
 
   try {
-    const [students, assignments, devices] = await Promise.all([
+    const [students, assignments, devices, opsStudents] = await Promise.all([
       xano.students.getByFamilyId(familyId),
       xano.laptopAssignments.getAll(),
       xano.laptops.getAll(),
+      // Only needed for the UUID fallback — a failure here should
+      // narrow the list, not empty the page.
+      xano.opsStudents.getAll().catch((err) => {
+        console.error("[/api/laptops] ops roster unavailable:", err);
+        return null;
+      }),
     ]);
     const studentNameById = new Map(
       students.map((s) => [s.id, `${s.first_name} ${s.last_name}`.trim()])
     );
     const deviceById = new Map(devices.map((d) => [d.id, d]));
+    // Resolve against this family's students only — a UUID belonging
+    // to some other family's child can then never match here.
+    const links = opsStudents
+      ? buildLaptopLinkResolver(opsStudents, students)
+      : NO_LAPTOP_LINKS;
+
+    const holderOf = (a: (typeof assignments)[number]): number => {
+      const stamped = Number(a.enrolled_students_id) || 0;
+      if (studentNameById.has(stamped)) return stamped;
+      // The family bridge column alone still counts as ownership,
+      // even when we can't name which of their students holds it.
+      if (Number(a.enrolled_families_id) === familyId) return stamped;
+      return links.resolve(a.students_id)?.enrolled_students_id ?? 0;
+    };
 
     const own = assignments
       .filter((a) => {
         // Still checked out…
         if (a.returned_date) return false;
-        // …and linked to this family (directly, or via one of its
-        // students).
+        // …and linked to this family (directly, via one of its
+        // students, or via the ops UUID on an RFID-created row).
         return (
           Number(a.enrolled_families_id) === familyId ||
-          studentNameById.has(Number(a.enrolled_students_id))
+          studentNameById.has(Number(a.enrolled_students_id)) ||
+          studentNameById.has(holderOf(a))
         );
       })
       .sort((a, b) => (a.assigned_date ?? 0) - (b.assigned_date ?? 0))
@@ -55,8 +80,7 @@ export async function GET() {
         const device = deviceById.get(Number(a.laptops_id));
         return {
           id: a.id,
-          student_name:
-            studentNameById.get(Number(a.enrolled_students_id)) ?? "",
+          student_name: studentNameById.get(holderOf(a)) ?? "",
           make_model: device?.model ?? "School laptop",
           serial_number: device?.serial_number ?? "",
           asset_tag: device?.asset_number ?? "",
