@@ -12,6 +12,7 @@ import {
 } from "@/lib/sms/triggers";
 import { activeStripeSubscriptionId } from "@/lib/xano";
 import { sendBillingAlert } from "@/lib/billing-alerts";
+import { getStripeClient } from "@/lib/stripe";
 
 /**
  * Daily cron sweep that drives the three time-based reminder emails:
@@ -252,34 +253,68 @@ export async function GET(req: NextRequest) {
           ? Date.parse(`${year.billing_start_date}T00:00:00Z`)
           : NaN;
         const graceMs = 7 * ONE_DAY_MS;
-        if (Number.isFinite(billingStartMs)) {
+        if (
+          Number.isFinite(billingStartMs) &&
+          Date.now() > billingStartMs + graceMs
+        ) {
           const payments = await xano.familyPayments.getAllByYear(year.id);
           const familiesWithInvoices = new Set(
             txns.map((t) => t.registration_families_id)
           );
-          const silent = payments.filter((p) => {
-            const live = activeStripeSubscriptionId(p.stripe_subscription_id);
-            if (!live) return false;
-            if (familiesWithInvoices.has(p.registration_families_id)) {
-              return false;
-            }
-            // Grace: billing anchor AND the subscription's payment row
-            // must both be comfortably in the past — a just-started
-            // family legitimately has no invoices yet.
-            const startedMs = Math.max(
-              billingStartMs,
-              Number(p.created_at) || 0
-            );
-            return Date.now() > startedMs + graceMs;
+          const candidates = payments.flatMap((p) => {
+            const subId = activeStripeSubscriptionId(p.stripe_subscription_id);
+            if (!subId) return [];
+            if (familiesWithInvoices.has(p.registration_families_id)) return [];
+            return [{ familyId: p.registration_families_id, subId }];
           });
+
+          // Grace runs from the SUBSCRIPTION's own creation date, not
+          // from the billing anchor or the payment row. The row is
+          // written when a family starts payment setup, which runs
+          // days-to-weeks ahead of the subscription actually being
+          // created (measured: 7-28 days), so anchoring there made a
+          // one-day-old subscription look weeks overdue — and flagged
+          // every newly-enrolled family exactly once.
+          //
+          // The same window covers the ~24h this account takes to
+          // finalize a `send_invoice` draft: no `invoice.finalized`
+          // event fires until then, so the mirror is legitimately
+          // empty for the subscription's first day.
+          //
+          // Stripe is the only place the subscription's age lives, so
+          // each candidate costs one lookup — the set is normally
+          // empty, and only ever a handful of new families.
+          const stripe = getStripeClient();
+          const silent: { familyId: number; subId: string; age: string }[] = [];
+          for (const c of candidates) {
+            try {
+              const sub = await stripe.subscriptions.retrieve(c.subId);
+              const ageMs = Date.now() - sub.created * 1000;
+              if (ageMs > graceMs) {
+                silent.push({
+                  ...c,
+                  age: `created ${Math.floor(ageMs / ONE_DAY_MS)} days ago`,
+                });
+              }
+            } catch (err) {
+              // An unreadable subscription (deleted, wrong account, or
+              // a transport blip) is its own kind of drift — surface
+              // it rather than silently dropping the family.
+              console.error(
+                `[cron/email-reminders] drift check could not read ${c.subId}:`,
+                err
+              );
+              silent.push({ ...c, age: "could not be read from Stripe" });
+            }
+          }
           if (silent.length > 0) {
             await sendBillingAlert(
               `${silent.length} live subscription(s) with no mirrored invoices (${year.year_name})`,
               [
-                `These families have a live Stripe subscription for ${year.year_name} but ZERO invoices in the billing mirror, more than a week past billing start:`,
+                `These families have a Stripe subscription for ${year.year_name} that is more than a week old, but ZERO invoices in the billing mirror:`,
                 ...silent.map(
-                  (p) =>
-                    `  - family #${p.registration_families_id} (subscription ${activeStripeSubscriptionId(p.stripe_subscription_id)})`
+                  (s) =>
+                    `  - family #${s.familyId} (subscription ${s.subId}, ${s.age})`
                 ),
                 ``,
                 `Most likely cause: the Stripe webhook isn't reaching /api/webhooks/stripe (check the endpoint + STRIPE_WEBHOOK_SECRET in the Stripe Dashboard), or the subscription isn't generating invoices.`,
