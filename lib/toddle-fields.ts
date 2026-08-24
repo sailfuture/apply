@@ -22,6 +22,7 @@ const TODDLE_FIELD_LABELS: Record<string, string> = {
   city: "city",
   state: "state",
   zipcode: "ZIP code",
+  crew: "crew",
 };
 
 /** "gradeLevel" → "grade level"; unknown keys pass through so a field

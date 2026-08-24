@@ -111,6 +111,16 @@ export interface ToddleStudent {
   city?: string | null;
   state?: string | null;
   zipcode?: string | null;
+  /** The student's crew, as Toddle REPORTS it. Toddle has no crew
+   *  field of its own, so the org repurposed an extra profile slot and
+   *  relabelled it "Crew" — which is why a field named for a name
+   *  holds "Crew A".
+   *
+   *  It is written under a DIFFERENT name: `first_additional_field`
+   *  (see `ToddleStudentBody`). Writing `first_name_locale` back is
+   *  accepted with a 200 and silently discarded, so the two names are
+   *  not interchangeable and the diff can't treat them as one key. */
+  first_name_locale?: string | null;
   /** ISO stamp of when the record was made in Toddle. Only used to
    *  date a near-match in the duplicate prompt ("created 13 Mar"),
    *  which is often what tells an admin which of two records is the
@@ -142,6 +152,13 @@ export interface ToddleStudentBody {
   city?: string;
   state?: string;
   zipcode?: string;
+  /** Crew ("Crew B"). Toddle's extra profile slots are written as
+   *  `first_additional_field` … `eighth_additional_field` but read
+   *  back under their configured names — this one comes back as
+   *  `first_name_locale`, which is the field the org labels "Crew".
+   *  Writing to the name it reads back under is accepted with a 200
+   *  and discarded, so it has to be this one. Verified live. */
+  first_additional_field?: string;
 }
 
 /** One row from GET /public/v2/parents — a Toddle parent (family
@@ -732,6 +749,11 @@ export interface ToddleSyncFields {
   city?: string;
   state?: string;
   zipcode?: string;
+  /** Crew ("Crew B") from the student's packet. Crew lives in two
+   *  places in Toddle — the "Crew …" class and a profile field — and
+   *  only the class half was ever synced, so a crew move left the
+   *  profile showing the old crew. */
+  crew?: string;
 }
 
 export interface ToddleUpsertResult {
@@ -782,6 +804,8 @@ const COMPARABLE_FIELDS = [
   "city",
   "state",
   "zipcode",
+  // Crew is not here: Toddle writes and reads it under two different
+  // names, so it can't be compared key-for-key. See below.
 ] as const;
 
 function normValue(v: unknown): string {
@@ -822,6 +846,18 @@ export function diffStudentFields(
     if (!(key in record)) continue; // Toddle doesn't report it
     compared = true;
     if (normValue(record[key]) !== normValue(next)) changedFields.push(key);
+  }
+
+  // Crew. Pushed as `first_additional_field`, reported back by Toddle
+  // as `first_name_locale` — the same slot under its configured name.
+  // Compared across the two names and reported as "crew", which is
+  // what the profile calls it and what an admin will look for.
+  const nextCrew = (body as Record<string, unknown>).first_additional_field;
+  if (nextCrew !== undefined && "first_name_locale" in record) {
+    compared = true;
+    if (normValue(record.first_name_locale) !== normValue(nextCrew)) {
+      changedFields.push("crew");
+    }
   }
 
   // Year group, by id. Reported under "gradeLevel" because that's the
@@ -1067,6 +1103,7 @@ export function toStudentBody(fields: ToddleSyncFields): ToddleStudentBody {
   if (fields.city) body.city = fields.city;
   if (fields.state) body.state = fields.state;
   if (fields.zipcode) body.zipcode = fields.zipcode;
+  if (fields.crew) body.first_additional_field = fields.crew;
   return body;
 }
 

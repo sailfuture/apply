@@ -178,6 +178,7 @@ export function buildToddleSyncFields({
     city: addr(primaryParent?.city),
     state: addr(primaryParent?.state),
     zipcode: addr(primaryParent?.zipcode),
+    crew: (packet?.crew_assignment ?? "").trim() || undefined,
   };
 }
 
