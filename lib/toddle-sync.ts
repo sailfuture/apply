@@ -1,3 +1,4 @@
+import { stripNameSuffix } from "@/lib/name-suffix";
 import { xano } from "@/lib/xano";
 import type {
   XanoFamily,
@@ -7,6 +8,7 @@ import type {
 } from "@/lib/xano";
 import {
   diffStudentFields,
+  findDuplicateCandidates,
   matchToddleStudent,
   toStudentBody,
   upsertStudent,
@@ -32,6 +34,7 @@ import {
 } from "@/lib/toddle-readiness";
 import type {
   ToddleCourse,
+  ToddleDuplicateCandidate,
   ToddleFamilyMemberInput,
   ToddleFamilyMemberResult,
   ToddleParentRecord,
@@ -156,8 +159,11 @@ export function buildToddleSyncFields({
   };
   return {
     sourceId: `sfa-${student.id}`,
-    firstName: (student.first_name ?? "").trim(),
-    lastName: (student.last_name ?? "").trim(),
+    // Suffixes are dropped on the way out: Toddle is a roster, not a
+    // formal record, and "Mebane Jr." there beside "Mebane" is how one
+    // student becomes two. Xano keeps what the family actually wrote.
+    firstName: stripNameSuffix(student.first_name),
+    lastName: stripNameSuffix(student.last_name),
     dob: toddleDob(student.date_of_birth),
     gender: toddleGender(student.gender),
     phoneNumber: toddlePhone(student.student_phone),
@@ -181,10 +187,18 @@ export interface ToddleSyncPreview {
   /** `create` — no Toddle record matches, one will be made.
    *  `change` — matched, and these fields differ.
    *  `current` — matched, nothing differs.
+   *  `review` — would create, but the roster holds a near-match, so
+   *    the sync stops and asks rather than risking a duplicate.
    *  `conflict` — would create, but Toddle already holds a record with
    *    this student's school email, so the create will be REJECTED.
    *  `unknown` — Toddle couldn't be read, so no comparison was made. */
-  status: "create" | "change" | "current" | "conflict" | "unknown";
+  status:
+    | "create"
+    | "change"
+    | "current"
+    | "review"
+    | "conflict"
+    | "unknown";
   changedFields: string[];
   /** How the existing record was found, mirroring the sync's own
    *  matching order. Null when nothing matched. */
@@ -192,6 +206,8 @@ export interface ToddleSyncPreview {
   /** Set on `conflict` — what Toddle already has, so admin can go fix
    *  the record rather than re-running a sync that can't succeed. */
   note?: string;
+  /** Set on `review` — the records this student might already be. */
+  candidates?: ToddleDuplicateCandidate[];
 }
 
 /**
@@ -268,6 +284,13 @@ export function previewToddleStudent({
         ).trim()}" on ${fields.email} — the create will be rejected. Fix the name or date of birth on either side so they match, or set sourceId "${fields.sourceId}" on that Toddle record.`,
       };
     }
+    // Same near-match check the sync runs before it creates, so the
+    // dialog can collect the decision up front instead of failing 76
+    // students into an error list.
+    const candidates = findDuplicateCandidates(roster, fields);
+    if (candidates.length > 0) {
+      return { status: "review", changedFields: [], matchedBy: null, candidates };
+    }
     return { status: "create", changedFields: [], matchedBy: null };
   }
 
@@ -293,7 +316,12 @@ export async function syncStudentToToddle(
   /** Grade label ("9th") from the caller when it has a fresher source
    *  (the client sends the packet grade); the packet is the fallback. */
   gradeLevelHint: string | undefined,
-  shared: ToddleSyncShared
+  shared: ToddleSyncShared,
+  opts?: {
+    /** The admin looked at the near-matches for this student and said
+     *  it really is a new child — create rather than stopping. */
+    allowCreate?: boolean;
+  }
 ): Promise<ToddleStudentSyncOutcome> {
   const id = student.id;
   const firstName = (student.first_name ?? "").trim();
@@ -366,7 +394,8 @@ export async function syncStudentToToddle(
       gradeLevelHint,
     }),
     knownToddleId || undefined,
-    existing
+    existing,
+    { allowCreate: opts?.allowCreate }
   );
 
   // Push the student's headshot (the admin-uploaded `student_photo`

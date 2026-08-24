@@ -1,3 +1,5 @@
+import { stripNameSuffix } from "@/lib/name-suffix";
+
 /**
  * School Google-account credential generation for enrolled students.
  *
@@ -9,6 +11,9 @@
  * Password: `<F><L>sfa<YYYY>!` — uppercase first + last initials,
  * literal "sfa", the full start year, and a trailing exclamation
  * (e.g. Hunter Thompson, 2024-2025 → "HTsfa2024!").
+ *
+ * A generational suffix is dropped from both: "Craig Mebane Jr."
+ * generates `craig.mebane25@`, not `craig.mebanejr25@`.
  */
 
 /** Parse the start year out of a "2024-2025"-style year name.
@@ -21,9 +26,15 @@ export function schoolYearStartYear(
 }
 
 /**
- * Lowercase a name into an email-safe token: strip diacritics (NFD then
- * drop combining marks), KEEP apostrophes and hyphens, drop spaces and
- * everything else ("O'Brien-Smith" → "o'brien-smith").
+ * Lowercase a name into an email-safe token: drop a generational
+ * suffix, strip diacritics (NFD then drop combining marks), KEEP
+ * apostrophes and hyphens, drop spaces and everything else
+ * ("O'Brien-Smith" → "o'brien-smith", "Mebane Jr." → "mebane").
+ *
+ * The suffix goes because an address is an identifier, not a formal
+ * name: "craig.mebanejr25@" and "craig.mebane25@" are two different
+ * mailboxes for one student, and the second is the one every other
+ * system already knows.
  *
  * Apostrophes and hyphens are kept because that is what the accounts in
  * Google Workspace actually carry — `ja'cori.bolden26@`,
@@ -35,7 +46,7 @@ export function schoolYearStartYear(
  * them; those are corrected on their student record, not here.
  */
 function emailToken(name: string): string {
-  return name
+  return stripNameSuffix(name)
     .normalize("NFD")
     .replace(/[̀-ͯ]/g, "")
     .toLowerCase()
@@ -46,7 +57,7 @@ function emailToken(name: string): string {
  *  `emailToken` now keeps punctuation and a surname like "'Alvelo"
  *  would otherwise contribute an apostrophe as its initial. */
 function nameInitial(name: string): string {
-  const letters = name
+  const letters = stripNameSuffix(name)
     .normalize("NFD")
     .replace(/[̀-ͯ]/g, "")
     .toLowerCase()

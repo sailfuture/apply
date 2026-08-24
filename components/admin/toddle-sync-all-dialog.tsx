@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Loader2, RefreshCw } from "lucide-react";
+import { ChevronRight, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -20,6 +20,13 @@ import type { ToddleReadiness } from "@/lib/toddle-readiness";
 import type { ToddleSyncPreview } from "@/lib/toddle-sync";
 
 type PreflightRow = ToddleReadiness & { preview?: ToddleSyncPreview };
+
+/** What the admin said about a student the preview flagged as a
+ *  possible duplicate: point them at the record Toddle already has,
+ *  or confirm this really is a different child. */
+type Decision =
+  | { kind: "link"; toddleId: string; name: string }
+  | { kind: "create" };
 import type {
   BulkToddleSyncResponse,
   BulkToddleSyncRow,
@@ -57,6 +64,12 @@ export function ToddleSyncAllDialog({
   const [readiness, setReadiness] = useState<PreflightRow[] | null>(null);
   const [comparedToToddle, setComparedToToddle] = useState(true);
   const [loadingReadiness, setLoadingReadiness] = useState(false);
+  // Answers to "Toddle may already have this child" — one per
+  // flagged student, kept here rather than re-derived, because the
+  // run needs the "create anyway" set and the panel needs to stop
+  // asking about the ones already answered.
+  const [decisions, setDecisions] = useState<Map<number, Decision>>(new Map());
+  const [linkingId, setLinkingId] = useState<number | null>(null);
 
   useEffect(() => {
     if (!open || readiness || loadingReadiness) return;
@@ -75,11 +88,59 @@ export function ToddleSyncAllDialog({
       .finally(() => setLoadingReadiness(false));
   }, [open, readiness, loadingReadiness]);
 
+  /** "Yes, that's him" — store the Toddle id on our student so the
+   *  run updates that record instead of creating a second one. The
+   *  row resolves locally rather than re-running the whole preview,
+   *  which would cost another Toddle roster read per decision. */
+  async function link(studentId: number, toddleId: string, name: string) {
+    setLinkingId(studentId);
+    try {
+      const res = await fetch(
+        `/api/admin/students/${studentId}/toddle-link`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ toddleId }),
+        }
+      );
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error ?? `Couldn't link (${res.status})`);
+      setDecisions((prev) =>
+        new Map(prev).set(studentId, { kind: "link", toddleId, name })
+      );
+      toast.success(`Linked to ${name} in Toddle.`);
+    } catch (err) {
+      console.error("[ToddleSyncAllDialog.link]", err);
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't link that student."
+      );
+    } finally {
+      setLinkingId(null);
+    }
+  }
+
+  function createAnyway(studentId: number) {
+    setDecisions((prev) => new Map(prev).set(studentId, { kind: "create" }));
+  }
+
+  function undecide(studentId: number) {
+    setDecisions((prev) => {
+      const next = new Map(prev);
+      next.delete(studentId);
+      return next;
+    });
+  }
+
   async function run() {
     setRunning(true);
     try {
+      const allowCreateStudentIds = [...decisions.entries()]
+        .filter(([, d]) => d.kind === "create")
+        .map(([id]) => id);
       const res = await fetch("/api/admin/students/toddle-sync-all", {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ allowCreateStudentIds }),
       });
       const data = await res.json().catch(() => null);
       if (!res.ok) {
@@ -93,6 +154,13 @@ export function ToddleSyncAllDialog({
           `Synced ${ok} student${ok === 1 ? "" : "s"} to Toddle` +
             (live.totals.created > 0 ? ` (${live.totals.created} created)` : "") +
             "."
+        );
+      }
+      if (live.totals.skipped > 0) {
+        toast.warning(
+          `${live.totals.skipped} student${
+            live.totals.skipped === 1 ? "" : "s"
+          } skipped — Toddle may already have them. Nothing was created.`
         );
       }
       if (live.totals.failed > 0) {
@@ -116,7 +184,14 @@ export function ToddleSyncAllDialog({
       onOpenChange={(next) => {
         if (running) return;
         setOpen(next);
-        if (!next) setResult(null);
+        if (!next) {
+          setResult(null);
+          // Decisions are answers about a specific preview. Reopening
+          // re-reads Toddle, so carrying stale ones over would let a
+          // "create anyway" outlive the situation that justified it.
+          setDecisions(new Map());
+          setReadiness(null);
+        }
       }}
     >
       <DialogTrigger asChild>
@@ -185,6 +260,12 @@ export function ToddleSyncAllDialog({
                   className="bg-muted text-muted-foreground border-border"
                   label={`${result.totals.unchanged} · Already current`}
                 />
+                {result.totals.skipped > 0 ? (
+                  <TotalChip
+                    className="bg-amber-50 text-amber-700 border-amber-200"
+                    label={`${result.totals.skipped} · Needs a decision`}
+                  />
+                ) : null}
                 <TotalChip
                   className={cn(
                     result.totals.failed > 0
@@ -194,6 +275,39 @@ export function ToddleSyncAllDialog({
                   label={`${result.totals.failed} · Not synced`}
                 />
               </div>
+
+              {/* Nothing was written for these — the run stopped short
+                  of creating a second record for a child Toddle looks
+                  to already have. Reopening the dialog offers the
+                  link-or-create choice per student. */}
+              {result.totals.skipped > 0 ? (
+                <div className="rounded-md border border-amber-200 bg-amber-50/60 p-3">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-amber-700">
+                    Skipped — Toddle may already have these students
+                  </p>
+                  <p className="mt-1 text-xs text-amber-800">
+                    Nothing was created or changed for them. Close and
+                    reopen this dialog to link each one to the record
+                    Toddle already holds, or to confirm it&rsquo;s a
+                    different child.
+                  </p>
+                  <ul className="mt-2 space-y-1">
+                    {result.rows
+                      .filter((r) => r.action === "skipped")
+                      .map((r) => (
+                        <li key={r.student_id} className="text-sm">
+                          <span className="font-medium">{r.student_name}</span>
+                          <span className="text-amber-800">
+                            {" — looks like "}
+                            {(r.candidates ?? [])
+                              .map((c) => c.name)
+                              .join(", ") || "an existing Toddle record"}
+                          </span>
+                        </li>
+                      ))}
+                  </ul>
+                </div>
+              ) : null}
 
               {/* Students Toddle neither matched nor accepted, pulled
                   out of the table so they can't be missed in a
@@ -297,6 +411,11 @@ export function ToddleSyncAllDialog({
               readiness={readiness}
               loading={loadingReadiness}
               comparedToToddle={comparedToToddle}
+              decisions={decisions}
+              linkingId={linkingId}
+              onLink={link}
+              onCreateAnyway={createAnyway}
+              onUndecide={undecide}
             />
           )}
         </div>
@@ -341,20 +460,37 @@ export function ToddleSyncAllDialog({
 }
 
 /**
- * What the run will do, before it does it. Two questions an admin has
- * standing at this dialog: who CAN'T sync (and why), and what will land
- * incomplete. Blocking problems come first and by name; the
- * profile-level gaps are aggregated, because "31 students have no
- * photo" is the actionable shape, not 31 rows saying "no photo".
+ * What the run will do, before it does it.
+ *
+ * The report leads: which students carry data Toddle doesn't have
+ * yet, and exactly which fields move on each. That is the question an
+ * admin is standing here to answer — "76 are ready" is not, because
+ * the run is safe either way.
+ *
+ * Below it, in descending order of "you have to act on this": students
+ * Toddle will reject, students missing something Toddle requires, and
+ * — folded away — the fields we hold no data for, which land blank.
+ * That last list is aggregated by field, because "46 students have no
+ * phone" is the actionable shape, not 46 rows saying "no phone".
  */
 function PreflightPanel({
   readiness,
   loading,
   comparedToToddle,
+  decisions,
+  linkingId,
+  onLink,
+  onCreateAnyway,
+  onUndecide,
 }: {
   readiness: PreflightRow[] | null;
   loading: boolean;
   comparedToToddle: boolean;
+  decisions: Map<number, Decision>;
+  linkingId: number | null;
+  onLink: (studentId: number, toddleId: string, name: string) => void;
+  onCreateAnyway: (studentId: number) => void;
+  onUndecide: (studentId: number) => void;
 }) {
   if (loading) {
     return (
@@ -374,18 +510,41 @@ function PreflightPanel({
   }
 
   const blocked = readiness.filter((r) => !r.ready);
-  const ready = readiness.length - blocked.length;
 
-  const counts = { create: 0, change: 0, current: 0, conflict: 0, unknown: 0 };
+  const counts = {
+    create: 0,
+    change: 0,
+    current: 0,
+    review: 0,
+    conflict: 0,
+    unknown: 0,
+  };
   for (const row of readiness) {
     counts[row.preview?.status ?? "unknown"] += 1;
   }
   // Only the students something would happen to — a 75-row list where
-  // 66 say "no change" hides the nine that matter.
+  // 66 say "no change" hides the nine that matter. A flagged student
+  // who has been linked joins them: the run will now update the record
+  // they were linked to.
   const changing = readiness.filter(
-    (r) => r.preview?.status === "create" || r.preview?.status === "change"
+    (r) =>
+      r.preview?.status === "create" ||
+      r.preview?.status === "change" ||
+      (r.preview?.status === "review" &&
+        decisions.get(r.student_id) !== undefined)
   );
   const conflicts = readiness.filter((r) => r.preview?.status === "conflict");
+  const reviews = readiness.filter((r) => r.preview?.status === "review");
+  const undecided = reviews.filter((r) => !decisions.has(r.student_id));
+  // Chips follow the decisions, not the raw preview — once a flagged
+  // student is linked they'll be updated, and once confirmed as new
+  // they'll be created. Leaving them out of the counts would make the
+  // table and the chips disagree in front of the admin.
+  for (const row of reviews) {
+    const d = decisions.get(row.student_id);
+    if (d?.kind === "link") counts.change += 1;
+    else if (d?.kind === "create") counts.create += 1;
+  }
 
   // Roll the profile-level gaps up by field: label → who's missing it.
   const gaps = new Map<string, { label: string; names: string[] }>();
@@ -403,77 +562,126 @@ function PreflightPanel({
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap gap-1.5">
-        <TotalChip
-          className="bg-emerald-50 text-emerald-700 border-emerald-200"
-          label={`${ready} · Ready to sync`}
-        />
-        <TotalChip
-          className={cn(
-            blocked.length > 0
-              ? "bg-red-50 text-red-700 border-red-200"
-              : "bg-muted text-muted-foreground border-border"
-          )}
-          label={`${blocked.length} · Can't sync yet`}
-        />
-      </div>
-
-      {/* What the run would actually do, compared against Toddle right
-          now — the point being that admin sees it BEFORE pushing. */}
-      {comparedToToddle ? (
-        <div className="rounded-md border p-3">
-          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            This run would
+      {/* Comes first and can't be collapsed: this is the only thing in
+          the dialog that asks the admin for something, and the only
+          outcome a re-run can't repair. Undecided students are simply
+          skipped — the sync never creates past this point on its own. */}
+      {reviews.length > 0 ? (
+        <div className="rounded-md border border-amber-300 bg-amber-50/60 p-3">
+          <p className="text-xs font-semibold uppercase tracking-wider text-amber-800">
+            Toddle may already have {reviews.length === 1 ? "this student" : "these students"}
           </p>
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            <TotalChip
-              className="bg-blue-50 text-blue-700 border-blue-200"
-              label={`${counts.create} · Create`}
-            />
-            <TotalChip
-              className="bg-emerald-50 text-emerald-700 border-emerald-200"
-              label={`${counts.change} · Change`}
-            />
-            <TotalChip
-              className="bg-muted text-muted-foreground border-border"
-              label={`${counts.current} · Leave as-is`}
-            />
-            {counts.conflict > 0 ? (
-              <TotalChip
-                className="bg-red-50 text-red-700 border-red-200"
-                label={`${counts.conflict} · Will be rejected`}
+          <p className="mt-1 text-xs text-amber-900">
+            Their name and school email don&rsquo;t line up with anything
+            in Toddle, but something close does — usually a spelling
+            difference (a suffix, a compound last name). Creating them
+            makes a second record someone has to merge by hand, so
+            nothing happens until you say which it is.{" "}
+            {undecided.length > 0
+              ? `${undecided.length} still ${
+                  undecided.length === 1 ? "needs" : "need"
+                } an answer and will be skipped.`
+              : "All answered."}
+          </p>
+          <ul className="mt-2.5 space-y-2.5">
+            {reviews.map((row) => (
+              <ReviewRow
+                key={row.student_id}
+                row={row}
+                decision={decisions.get(row.student_id)}
+                linking={linkingId === row.student_id}
+                onLink={onLink}
+                onCreateAnyway={onCreateAnyway}
+                onUndecide={onUndecide}
               />
-            ) : null}
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {/* The report: who moves on this push, and what moves on them.
+          Compared against Toddle right now, BEFORE anything is sent. */}
+      {comparedToToddle ? (
+        <div className="rounded-md border overflow-hidden">
+          <div className="border-b bg-muted/40 px-3 py-2.5">
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              What this push will change
+            </p>
+            <p className="mt-1 text-sm">
+              {changing.length === 0
+                ? `Nothing — all ${readiness.length} enrolled students already match Toddle.`
+                : `${changing.length} of ${readiness.length} enrolled students have data Toddle doesn't have yet. The other ${counts.current} already match and won't be touched.`}
+            </p>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              <TotalChip
+                className="bg-blue-50 text-blue-700 border-blue-200"
+                label={`${counts.create} · New in Toddle`}
+              />
+              <TotalChip
+                className="bg-emerald-50 text-emerald-700 border-emerald-200"
+                label={`${counts.change} · Updated`}
+              />
+              <TotalChip
+                className="bg-muted text-muted-foreground border-border"
+                label={`${counts.current} · Already match`}
+              />
+              {undecided.length > 0 ? (
+                <TotalChip
+                  className="bg-amber-50 text-amber-700 border-amber-200"
+                  label={`${undecided.length} · Skipped, needs a decision`}
+                />
+              ) : null}
+              {counts.conflict > 0 ? (
+                <TotalChip
+                  className="bg-red-50 text-red-700 border-red-200"
+                  label={`${counts.conflict} · Will be rejected`}
+                />
+              ) : null}
+              {blocked.length > 0 ? (
+                <TotalChip
+                  className="bg-red-50 text-red-700 border-red-200"
+                  label={`${blocked.length} · Can't sync yet`}
+                />
+              ) : null}
+            </div>
           </div>
           {changing.length > 0 ? (
-            <ul className="mt-2.5 space-y-1">
-              {changing.map((row) => (
-                <li key={row.student_id} className="text-sm">
-                  <span className="font-medium">{row.student_name}</span>
-                  <span className="text-muted-foreground">
-                    {row.preview?.status === "create"
-                      ? " — new Toddle profile"
-                      : ` — ${formatToddleFieldList(
-                          row.preview?.changedFields ?? []
-                        )}`}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          ) : counts.conflict === 0 ? (
-            <p className="mt-2 text-sm text-muted-foreground">
-              Nothing differs — every student already matches Toddle.
-            </p>
-          ) : null}
-          {conflicts.length > 0 ? (
-            <ul className="mt-2.5 space-y-1.5">
-              {conflicts.map((row) => (
-                <li key={row.student_id} className="text-sm text-red-700">
-                  <span className="font-medium">{row.student_name}</span> —{" "}
-                  {row.preview?.note}
-                </li>
-              ))}
-            </ul>
+            <table className="w-full table-fixed text-sm">
+              <colgroup>
+                <col className="w-[30%]" />
+                <col className="w-[70%]" />
+              </colgroup>
+              <thead>
+                <tr className="border-b bg-muted/20 text-left text-xs text-muted-foreground">
+                  <th className="px-3 py-1.5 font-medium">Student</th>
+                  <th className="px-3 py-1.5 font-medium">
+                    What Toddle gets from us
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {changing.map((row) => (
+                  <tr key={row.student_id} className="align-top">
+                    <td
+                      className="px-3 py-1.5 font-medium overflow-hidden text-ellipsis whitespace-nowrap"
+                      title={row.student_name}
+                    >
+                      {row.student_name}
+                    </td>
+                    <td
+                      className={cn(
+                        "px-3 py-1.5",
+                        row.preview?.status === "create"
+                          ? "text-blue-700"
+                          : "text-muted-foreground"
+                      )}
+                    >
+                      {previewDetail(row, decisions.get(row.student_id))}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           ) : null}
         </div>
       ) : (
@@ -483,6 +691,25 @@ function PreflightPanel({
           checks below come from our own records and are still accurate.
         </p>
       )}
+
+      {/* Would be created, but Toddle already holds the school email —
+          a create it will refuse. Fixable only on one side or the
+          other, so it gets names and the reason in full. */}
+      {conflicts.length > 0 ? (
+        <div className="rounded-md border border-red-200 bg-red-50/60 p-3">
+          <p className="text-xs font-semibold uppercase tracking-wider text-red-700">
+            Toddle will reject these
+          </p>
+          <ul className="mt-2 space-y-1.5">
+            {conflicts.map((row) => (
+              <li key={row.student_id} className="text-sm text-red-700">
+                <span className="font-medium">{row.student_name}</span> —{" "}
+                {row.preview?.note}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       {blocked.length > 0 ? (
         <div className="rounded-md border border-red-200 bg-red-50/60 p-3">
@@ -504,39 +731,164 @@ function PreflightPanel({
             ))}
           </ul>
         </div>
-      ) : (
-        <p className="text-sm text-muted-foreground">
-          Every enrolled student has what Toddle requires — a first and
-          last name, plus a grade level for anyone not in Toddle yet.
-        </p>
-      )}
+      ) : null}
 
+      {/* Data quality, not a sync problem — folded away so it can't be
+          mistaken for something blocking the run, and labelled in
+          plain words so it doesn't need decoding. */}
       {gapList.length > 0 ? (
-        <div className="rounded-md border p-3">
-          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Will sync, but these fields stay empty
-          </p>
-          <ul className="mt-2 space-y-1">
-            {gapList.map((gap) => (
-              <li
-                key={gap.label}
-                className="flex items-baseline justify-between gap-3 text-sm"
-              >
-                <span className="text-muted-foreground">{gap.label}</span>
-                <span
-                  className="shrink-0 tabular-nums"
-                  title={gap.names.slice(0, 40).join(", ")}
+        <details className="rounded-md border [&[open]_.chev]:rotate-90">
+          <summary className="flex cursor-pointer list-none items-center gap-1.5 px-3 py-2 text-sm text-muted-foreground hover:text-foreground">
+            <ChevronRight
+              className="chev size-3.5 shrink-0 transition-transform"
+              aria-hidden="true"
+            />
+            We have no data for {gapList.length} field
+            {gapList.length === 1 ? "" : "s"} — they&rsquo;ll be blank in
+            Toddle
+          </summary>
+          <div className="border-t px-3 py-2.5">
+            <p className="text-xs text-muted-foreground">
+              These students sync normally. We simply hold nothing for
+              these fields, so Toddle receives them empty. Fill them in
+              on the student&rsquo;s record and re-run to push them.
+            </p>
+            <ul className="mt-2 space-y-1">
+              {gapList.map((gap) => (
+                <li
+                  key={gap.label}
+                  className="flex items-baseline justify-between gap-3 text-sm"
                 >
-                  {gap.names.length} student
-                  {gap.names.length === 1 ? "" : "s"}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </div>
+                  <span className="text-muted-foreground">{gap.label}</span>
+                  <span
+                    className="shrink-0 tabular-nums"
+                    title={gap.names.slice(0, 40).join(", ")}
+                  >
+                    {gap.names.length} student
+                    {gap.names.length === 1 ? "" : "s"}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </details>
       ) : null}
     </div>
   );
+}
+
+/**
+ * One flagged student and the choice about them: point at the record
+ * Toddle already has, or confirm this is a different child.
+ *
+ * The candidate is shown with its email, birthday and creation date
+ * because those are what actually settle it — two names can look
+ * identical and be different children, and a record created before the
+ * integration existed is usually the one to keep.
+ */
+function ReviewRow({
+  row,
+  decision,
+  linking,
+  onLink,
+  onCreateAnyway,
+  onUndecide,
+}: {
+  row: PreflightRow;
+  decision?: Decision;
+  linking: boolean;
+  onLink: (studentId: number, toddleId: string, name: string) => void;
+  onCreateAnyway: (studentId: number) => void;
+  onUndecide: (studentId: number) => void;
+}) {
+  const candidates = row.preview?.candidates ?? [];
+  return (
+    <li className="rounded border border-amber-200 bg-white p-2.5">
+      <div className="flex items-baseline justify-between gap-3">
+        <span className="text-sm font-medium">{row.student_name}</span>
+        {decision ? (
+          <button
+            type="button"
+            onClick={() => onUndecide(row.student_id)}
+            className="shrink-0 text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+          >
+            Change
+          </button>
+        ) : null}
+      </div>
+
+      {decision ? (
+        <p className="mt-1 text-xs text-emerald-700">
+          {decision.kind === "link"
+            ? `Linked to ${decision.name} — this run will update that record.`
+            : "Confirmed as a different child — this run will create a new Toddle profile."}
+        </p>
+      ) : (
+        <ul className="mt-1.5 space-y-1.5">
+          {candidates.map((c) => (
+            <li
+              key={c.toddleId}
+              className="flex flex-wrap items-baseline justify-between gap-2"
+            >
+              <span className="text-xs text-muted-foreground">
+                <span className="font-medium text-foreground">{c.name}</span>
+                {c.email ? ` · ${c.email}` : ""}
+                {c.dob ? ` · born ${c.dob}` : ""}
+                {c.createdAt
+                  ? ` · added ${new Date(c.createdAt).toLocaleDateString(
+                      "en-US",
+                      { month: "short", day: "numeric", year: "numeric" }
+                    )}`
+                  : ""}
+                {` — ${c.reason}`}
+              </span>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 shrink-0 text-xs"
+                disabled={linking}
+                onClick={() => onLink(row.student_id, c.toddleId, c.name)}
+              >
+                {linking ? (
+                  <Loader2 className="size-3 mr-1 animate-spin" aria-hidden="true" />
+                ) : null}
+                This is the same student
+              </Button>
+            </li>
+          ))}
+          <li>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 px-2 text-xs text-muted-foreground"
+              disabled={linking}
+              onClick={() => onCreateAnyway(row.student_id)}
+            >
+              None of these — create a new Toddle student
+            </Button>
+          </li>
+        </ul>
+      )}
+    </li>
+  );
+}
+
+/**
+ * What one previewed student will actually send, in words.
+ *
+ * A `change` carrying no named fields is NOT "nothing differs" — it
+ * means Toddle didn't return those fields for us to compare against,
+ * so the row is being re-sent blind. Saying so beats an empty cell
+ * that reads as a bug.
+ */
+function previewDetail(row: PreflightRow, decision?: Decision): string {
+  if (decision?.kind === "link")
+    return `Full profile — onto ${decision.name}, the record Toddle already has`;
+  if (decision?.kind === "create" || row.preview?.status === "create")
+    return "Full profile — first push";
+  const list = formatToddleFieldList(row.preview?.changedFields ?? []);
+  if (!list) return "Re-sent — Toddle didn't return these fields to compare";
+  return list.charAt(0).toUpperCase() + list.slice(1);
 }
 
 function TotalChip({ className, label }: { className: string; label: string }) {
@@ -559,7 +911,12 @@ function ResultRow({ row }: { row: BulkToddleSyncRow }) {
           label: "Not synced",
           className: "bg-red-50 text-red-700 border-red-200",
         }
-      : row.action === "created"
+      : row.action === "skipped"
+        ? {
+            label: "Skipped",
+            className: "bg-amber-50 text-amber-700 border-amber-200",
+          }
+        : row.action === "created"
         ? {
             label: "Created",
             className: "bg-blue-50 text-blue-700 border-blue-200",

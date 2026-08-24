@@ -33,6 +33,8 @@
  * their Toddle record, making every later sync direct.
  */
 
+import { stripNameSuffix } from "@/lib/name-suffix";
+
 const DEFAULT_REGION = "us-east-1";
 
 function getBaseUrl(): string {
@@ -109,6 +111,11 @@ export interface ToddleStudent {
   city?: string | null;
   state?: string | null;
   zipcode?: string | null;
+  /** ISO stamp of when the record was made in Toddle. Only used to
+   *  date a near-match in the duplicate prompt ("created 13 Mar"),
+   *  which is often what tells an admin which of two records is the
+   *  real one. */
+  createdAt?: string | null;
 }
 
 export interface ToddleYearGroup {
@@ -757,7 +764,7 @@ export interface ToddleUpsertResult {
 }
 
 function normName(v: string | null | undefined): string {
-  return (v ?? "").trim().toLowerCase();
+  return stripNameSuffix(v).toLowerCase();
 }
 
 /** Fields we push that Toddle may echo back on a student record.
@@ -830,11 +837,12 @@ export function diffStudentFields(
   return { changedFields, compared };
 }
 
-/** Name key for matching: case, spacing and punctuation removed.
- *  Toddle holds "Daiquan Carbart" where we hold "Dai'quan Carbart" —
- *  an apostrophe is not a different child. */
+/** Name key for matching: generational suffix dropped, then case,
+ *  spacing and punctuation removed. Toddle holds "Daiquan Carbart"
+ *  where we hold "Dai'quan Carbart", and "Craig Mebane" where we hold
+ *  "Craig Mebane Jr." — neither is a different child. */
 function nameKey(first: string | null | undefined, last: string | null | undefined): string {
-  return `${first ?? ""} ${last ?? ""}`
+  return `${stripNameSuffix(first)} ${stripNameSuffix(last)}`
     .normalize("NFD")
     .replace(/[̀-ͯ]/g, "")
     .toLowerCase()
@@ -882,17 +890,143 @@ export function matchToddleStudent(
   }
 
   const key = nameKey(fields.firstName, fields.lastName);
-  let matches = roster.filter(
-    (s) =>
-      nameKey(s.firstName, s.lastName) === key &&
-      (!fields.dob || !s.dob || s.dob.slice(0, 10) === fields.dob)
-  );
+  let matches = roster.filter((s) => nameKey(s.firstName, s.lastName) === key);
   if (matches.length > 1) {
     const active = matches.filter((s) => !s.isArchived);
     if (active.length >= 1) matches = active;
   }
+  // Date of birth breaks a TIE — it never eliminates the only
+  // candidate. The apply portal is the source of truth for a birthday,
+  // so a date that disagrees with Toddle's is drift for this sync to
+  // correct, not evidence of a different child. Treating it as a
+  // filter is what sent Ava Young down the create path.
+  if (matches.length > 1 && fields.dob) {
+    const byDob = matches.filter(
+      (s) => (s.dob ?? "").slice(0, 10) === fields.dob
+    );
+    if (byDob.length === 1) return { student: byDob[0], matchedBy: "name" };
+  }
   if (matches.length === 1) return { student: matches[0], matchedBy: "name" };
   return null;
+}
+
+/* ────────────────── Near-matches, before a create ───────────────── */
+
+export interface ToddleDuplicateCandidate {
+  toddleId: string;
+  name: string;
+  email: string | null;
+  dob: string | null;
+  createdAt: string | null;
+  /** Toddle's own id for the record ("TD-…" when it predates us). */
+  sourceId: string | null;
+  /** Why this looks like the same child, in words. */
+  reason: string;
+}
+
+/** Thrown instead of creating, when the roster holds a near-match.
+ *  Carries the candidates so the caller can offer a choice rather
+ *  than just an error. */
+export class ToddleDuplicateError extends ToddleSyncError {
+  readonly candidates: ToddleDuplicateCandidate[];
+  constructor(message: string, candidates: ToddleDuplicateCandidate[]) {
+    super(message);
+    this.candidates = candidates;
+  }
+}
+
+/** One name part, reduced to letters and digits for comparison —
+ *  suffix already gone via `stripNameSuffix`. */
+function bareName(v: string | null | undefined): string {
+  return stripNameSuffix(v)
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+/** Stem of a generated school address: "ajani.alvelo25@…" → "ajani.alvelo". */
+function emailStem(v: string | null | undefined): string {
+  const local = (v ?? "").toLowerCase().split("@")[0] ?? "";
+  return local.replace(/\d+$/, "").replace(/[^a-z.]/g, "");
+}
+
+/**
+ * Records on the roster that look like the student we're about to
+ * create — run only when every strict matcher has already missed.
+ *
+ * The strict matchers (sourceId → school email → name) share a blind
+ * spot: the school email is DERIVED from the name, so one spelling
+ * difference breaks both fallbacks at once and the sync creates a
+ * second record for a child Toddle already has. That is exactly how
+ * "Ajani Welch 'Alvelo" landed beside "Ajani Alvelo". Generational
+ * suffixes used to do the same and no longer can — `stripNameSuffix`
+ * removes them from the name AND the generated email — so what's left
+ * here is the drift no rule can normalise away.
+ *
+ * These rules are deliberately loose — a false positive costs one
+ * click, a false negative costs a duplicate someone has to merge by
+ * hand — but never so loose that siblings or twins trip them: every
+ * rule requires the FIRST name (or the email stem) to line up, so
+ * Ryker and Rook Alessi, and the two Powells who share a birthday,
+ * stay clear of each other.
+ *
+ * Archived Toddle records are NOT on the roster and so can't be
+ * caught here; the create's own error path names that case.
+ */
+export function findDuplicateCandidates(
+  roster: ToddleStudent[],
+  fields: ToddleSyncFields
+): ToddleDuplicateCandidate[] {
+  const first = bareName(fields.firstName);
+  const last = bareName(fields.lastName);
+  const stem = emailStem(fields.email);
+  const dob = (fields.dob ?? "").slice(0, 10);
+
+  const found: ToddleDuplicateCandidate[] = [];
+  for (const r of roster) {
+    const rFirst = bareName(r.firstName);
+    const rLast = bareName(r.lastName);
+    const rStem = emailStem(r.email);
+    const rDob = (r.dob ?? "").slice(0, 10);
+    let reason = "";
+
+    if (
+      first &&
+      first === rFirst &&
+      last &&
+      rLast &&
+      (rLast.includes(last) || last.includes(rLast))
+    ) {
+      reason = "same first name, last name spelled differently";
+    } else if (
+      dob &&
+      rDob === dob &&
+      last &&
+      last === rLast &&
+      first.slice(0, 3) === rFirst.slice(0, 3)
+    ) {
+      reason = "same last name and date of birth, first name spelled differently";
+    } else if (
+      stem &&
+      rStem &&
+      (stem === rStem || stem.includes(rStem) || rStem.includes(stem))
+    ) {
+      reason = "nearly the same school email";
+    }
+
+    if (!reason) continue;
+    found.push({
+      toddleId: String(r.id),
+      name: `${(r.firstName ?? "").trim()} ${(r.lastName ?? "").trim()}`.trim(),
+      email: r.email ?? null,
+      dob: rDob || null,
+      createdAt: r.createdAt ?? null,
+      sourceId: r.sourceId ?? null,
+      reason,
+    });
+  }
+  return found.slice(0, 3);
 }
 
 /**
@@ -906,8 +1040,13 @@ export function matchToddleStudent(
  *      when both sides have one). Exactly one match → PUT, which also
  *      stamps our sourceId onto the record so the next sync is direct.
  *      Several matches → ToddleSyncError (never guess between twins).
- *   4. Nothing found → POST create, which requires the grade level to
- *      resolve to a year group.
+ *   4. Nothing found → check the roster for a NEAR-match first
+ *      (`findDuplicateCandidates`). One exists → `ToddleDuplicateError`
+ *      rather than a create, because a wrongly-created record is the
+ *      only outcome here that can't be fixed by syncing again. Pass
+ *      `opts.allowCreate` once an admin has said it's a different
+ *      child. Otherwise → POST create, which requires the grade level
+ *      to resolve to a year group.
  */
 /** The exact PUT/POST body a set of sync fields turns into. Exported
  *  so the pre-sync preview diffs the same payload the sync sends,
@@ -974,7 +1113,13 @@ export async function upsertStudent(
   /** The record Toddle currently holds, when the caller already has it
    *  (the bulk run preloads the whole roster). Only used to report
    *  what changed — never to decide whether to write. */
-  existing?: ToddleStudent | null
+  existing?: ToddleStudent | null,
+  opts?: {
+    /** Create even though the roster holds a near-match. Set only
+     *  when an admin has looked at the candidates and said this is a
+     *  different child. */
+    allowCreate?: boolean;
+  }
 ): Promise<ToddleUpsertResult> {
   const body = toStudentBody(fields);
 
@@ -1071,7 +1216,23 @@ export async function upsertStudent(
     );
   }
 
-  // 4. Create.
+  // 4. Create — but never blindly. A near-match on the roster means
+  //    Toddle most likely already holds this child under a different
+  //    spelling, and creating is the one outcome re-running the sync
+  //    can't undo: the second record has to be merged by hand in
+  //    Toddle. So we stop and hand the decision back.
+  const candidates = findDuplicateCandidates(roster, fields);
+  if (candidates.length > 0 && !opts?.allowCreate) {
+    throw new ToddleDuplicateError(
+      `${fields.firstName} ${fields.lastName} looks like ${
+        candidates.length === 1 ? "a student" : "students"
+      } Toddle already has — ${candidates
+        .map((c) => `${c.name} (${c.reason})`)
+        .join("; ")}. Link them to that record, or choose "Create new anyway".`,
+      candidates
+    );
+  }
+
   if (!fields.gradeLevel) {
     throw new ToddleSyncError(
       "Student doesn't exist in Toddle yet, and creating one needs a grade level — set it in the Placement card first."

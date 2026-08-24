@@ -6,7 +6,9 @@ import {
   getYearGroups,
   isToddleConfigured,
   resolveYearGroupId,
+  ToddleDuplicateError,
   ToddleSyncError,
+  type ToddleDuplicateCandidate,
   type ToddleStudent,
 } from "@/lib/toddle";
 import {
@@ -191,7 +193,7 @@ export async function GET() {
   }
 }
 
-export async function POST() {
+export async function POST(req: Request) {
   try {
     await requireAdmin();
     if (!isToddleConfigured()) {
@@ -203,6 +205,19 @@ export async function POST() {
         { status: 503 }
       );
     }
+
+    // Students the admin explicitly cleared to be created even though
+    // the preview flagged a near-match in Toddle. Absent = no student
+    // gets created past the duplicate guard, which is the safe default
+    // for a bulk run nobody is watching field by field.
+    const body = await req.json().catch(() => null);
+    const allowCreate = new Set<number>(
+      Array.isArray(body?.allowCreateStudentIds)
+        ? body.allowCreateStudentIds
+            .map((v: unknown) => Number(v))
+            .filter((v: number) => Number.isFinite(v))
+        : []
+    );
 
     const students = await xano.students.getAll();
     const enrolled = students
@@ -225,7 +240,9 @@ export async function POST() {
           `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim() ||
           `Student #${s.id}`;
         try {
-          const outcome = await syncStudentToToddle(s, undefined, shared);
+          const outcome = await syncStudentToToddle(s, undefined, shared, {
+            allowCreate: allowCreate.has(s.id),
+          });
           rows[index] = {
             student_id: s.id,
             student_name: name,
@@ -243,10 +260,15 @@ export async function POST() {
             crew: outcome.crew,
           };
         } catch (err) {
+          // A near-match isn't a failure — nothing was written and
+          // nothing is broken. It's a question, and it gets its own
+          // action so a run that only needs decisions doesn't read as
+          // a run that went wrong.
+          const duplicate = err instanceof ToddleDuplicateError;
           rows[index] = {
             student_id: s.id,
             student_name: name,
-            action: "failed",
+            action: duplicate ? "skipped" : "failed",
             matched_by: null,
             changed_fields: [],
             source_id_blocked: false,
@@ -254,6 +276,7 @@ export async function POST() {
             family_synced: 0,
             family_failed: 0,
             crew: null,
+            candidates: duplicate ? err.candidates : undefined,
             error:
               err instanceof ToddleSyncError
                 ? err.message
@@ -268,7 +291,13 @@ export async function POST() {
       Array.from({ length: Math.min(CONCURRENCY, enrolled.length) }, worker)
     );
 
-    const totals = { created: 0, updated: 0, unchanged: 0, failed: 0 };
+    const totals = {
+      created: 0,
+      updated: 0,
+      unchanged: 0,
+      skipped: 0,
+      failed: 0,
+    };
     for (const row of rows) totals[row.action] += 1;
 
     return NextResponse.json({ totals, rows });
@@ -281,9 +310,12 @@ export interface BulkToddleSyncRow {
   student_id: number;
   student_name: string;
   /** `unchanged` = the record was pushed but every field Toddle
-   *  reports back already matched. `failed` = Toddle neither matched
-   *  nor accepted this student; `error` says why. */
-  action: "created" | "updated" | "unchanged" | "failed";
+   *  reports back already matched. `skipped` = nothing was written
+   *  because Toddle looks like it already holds this child under
+   *  another spelling; `candidates` says which records. `failed` =
+   *  Toddle neither matched nor accepted this student; `error` says
+   *  why. */
+  action: "created" | "updated" | "unchanged" | "skipped" | "failed";
   /** How Toddle found the existing record: `stored` (the id we saved),
    *  `sourceId`, `email` (the school address, unique in Toddle), or
    *  `name`. The last two mean the Toddle record was NOT carrying our
@@ -305,6 +337,9 @@ export interface BulkToddleSyncRow {
   /** Crew-class result ("added to Crew C", …) or null when the
    *  student has no crew assignment. */
   crew: string | null;
+  /** Set on `skipped` — the Toddle records this student might already
+   *  be, so the decision can be made without leaving the dialog. */
+  candidates?: ToddleDuplicateCandidate[];
   error?: string;
 }
 
@@ -313,6 +348,7 @@ export interface BulkToddleSyncResponse {
     created: number;
     updated: number;
     unchanged: number;
+    skipped: number;
     failed: number;
   };
   rows: BulkToddleSyncRow[];
