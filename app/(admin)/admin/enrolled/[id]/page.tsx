@@ -433,6 +433,22 @@ export default function EnrolledStudentDetailPage() {
           (first.last<YY>@sailfuture.org / <F><L>sfa<YYYY>!). */}
       <SchoolAccountCard student={student} onChanged={() => mutate()} />
 
+      {/* Registration year — which school year THIS page's paperwork
+          (application + packet) is filed under. Deliberately adjacent
+          to the School Account card so the two year concepts read as
+          neighbors: enrollment year = the cohort the student came in
+          with; registration year = where a given cycle of paperwork
+          lives. Moving it re-attributes the student's membership —
+          including which year the Retention page counts a departure
+          against. */}
+      <RegistrationYearCard
+        studentId={student.id}
+        schoolYear={school_year}
+        hasApp={Boolean(app)}
+        hasPacket={Boolean(packet)}
+        familyId={Number(family?.id) || familyIdParam}
+      />
+
       {/* Student photo — admin uploads a headshot that's compressed in
           the browser and stored on the student row's `student_photo`
           image column. Sits directly under the school account: the
@@ -1245,6 +1261,187 @@ function SchoolAccountCard({
           </>
         )}
       </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Registration Year card — moves this student's per-year paperwork
+ * (their `registration_application` row(s) + registration packet,
+ * liability waiver included) from the page's viewed year to another
+ * school year, via POST /api/admin/students/[id]/paperwork-year.
+ *
+ * Exists for enrollment-year corrections: when a student's cohort
+ * year changes, the paperwork has to follow or every membership-
+ * derived surface (the Retention page above all) keeps counting them
+ * — and any departure — against the wrong year. Family-level rows
+ * (admissions progress, scholarship, family payment) stay put; the
+ * endpoint also keeps Stripe in step when the student is on live
+ * billing.
+ *
+ * Renders nothing when the viewed year has no paperwork to move.
+ * On success the page reloads scoped to the target year, since the
+ * viewed year no longer has anything to show for this student.
+ */
+function RegistrationYearCard({
+  studentId,
+  schoolYear,
+  hasApp,
+  hasPacket,
+  familyId,
+}: {
+  studentId: number;
+  schoolYear: AdminEnrolledStudentResponse["school_year"];
+  hasApp: boolean;
+  hasPacket: boolean;
+  familyId: number;
+}) {
+  const [targetYearId, setTargetYearId] = useState("");
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [moving, setMoving] = useState(false);
+  // Same full year list the School Account card uses — the detail
+  // payload only carries the single viewed year.
+  const { data: years } = useSWR<Array<{ id: number; year_name: string }>>(
+    "/api/admin/school-years",
+    adminFetcher
+  );
+  const yearList = Array.isArray(years) ? years : [];
+
+  if (!schoolYear || (!hasApp && !hasPacket)) return null;
+  const currentYearId = schoolYear.id;
+  const targetName =
+    yearList.find((y) => String(y.id) === targetYearId)?.year_name ?? "";
+
+  const pieces = [
+    hasApp ? "application" : null,
+    hasPacket ? "registration packet (liability waiver included)" : null,
+  ]
+    .filter(Boolean)
+    .join(" and ");
+
+  async function runMove() {
+    setMoving(true);
+    try {
+      const res = await fetch(
+        `/api/admin/students/${studentId}/paperwork-year`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fromYearId: currentYearId,
+            toYearId: Number(targetYearId),
+          }),
+        }
+      );
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Move failed (${res.status})`);
+      }
+      toast.success(`Paperwork moved to ${targetName}.`);
+      // The viewed year no longer has paperwork for this student —
+      // follow it. Full navigation (not mutate) so every SWR surface
+      // re-reads under the new year.
+      window.location.href = `/admin/enrolled/${studentId}?yearId=${targetYearId}${
+        familyId ? `&familyId=${familyId}` : ""
+      }`;
+    } catch (err) {
+      console.error("[RegistrationYearCard.runMove]", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't move.");
+      setMoving(false);
+      setConfirmOpen(false);
+    }
+  }
+
+  return (
+    <Card className="overflow-hidden gap-0 py-0 bg-white">
+      <CardHeader className="py-3 !pb-3 border-b">
+        <CardTitle className="text-base">
+          Registration Year
+          <span className="ml-2 inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground align-middle">
+            Admin only
+          </span>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4 py-5 bg-white">
+        <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
+          <ReadField label="Paperwork filed under" value={schoolYear.year_name} />
+          <Field className="sm:col-span-2">
+            <FieldLabel className="text-xs">Move paperwork to</FieldLabel>
+            <div className="flex flex-wrap items-center gap-2">
+              <Select
+                value={targetYearId}
+                onValueChange={setTargetYearId}
+                disabled={moving}
+              >
+                <SelectTrigger className="w-full sm:w-64">
+                  <SelectValue placeholder="Pick the correct year…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {yearList
+                    .filter((y) => y.id !== currentYearId)
+                    .map((y) => (
+                      <SelectItem key={y.id} value={String(y.id)}>
+                        {y.year_name}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+              <Button
+                variant="outline"
+                size="sm"
+                className="bg-white"
+                disabled={!targetYearId || moving}
+                onClick={() => setConfirmOpen(true)}
+              >
+                {moving ? (
+                  <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                ) : null}
+                Move paperwork
+              </Button>
+            </div>
+          </Field>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          The school year this student&rsquo;s registration paperwork was
+          completed for — separate from the enrollment year above, which
+          is the cohort they first came in with. Moving it re-files the
+          {" "}{pieces} under the chosen year, and retention counts them
+          (and any unenrollment) against that year instead. Family-level
+          records — admissions progress, scholarship, family billing —
+          stay with each year.
+        </p>
+      </CardContent>
+
+      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Move this student&rsquo;s paperwork to {targetName}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Their {pieces} for {schoolYear.year_name} will be re-filed
+              under {targetName}. The Retention page and every year-scoped
+              roster will count them under {targetName} from now on. If the
+              student is on live billing, their Stripe line moves with them.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={moving}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={moving}
+              onClick={(e) => {
+                e.preventDefault();
+                void runMove();
+              }}
+            >
+              {moving ? (
+                <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+              ) : null}
+              Move to {targetName}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Card>
   );
 }
