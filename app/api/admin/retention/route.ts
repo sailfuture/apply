@@ -201,7 +201,12 @@ export async function GET(req: NextRequest) {
     // Newest departures first; undated rows sink to the bottom.
     unenrolled.sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""));
 
+    // The selected year's display name rides along so the page can
+    // title itself "Retention — 2026-2027" without a second fetch.
+    const selectedYear = years.find((y) => Number(y.id) === yearId);
+
     return NextResponse.json({
+      year: { id: yearId, year_name: selectedYear?.year_name ?? "" },
       enrolled,
       unenrolled,
     } satisfies RetentionResponse);
@@ -226,6 +231,10 @@ export interface RetentionUnenrolledRow {
 }
 
 export interface RetentionResponse {
+  /** The year this report covers — `year_name` is "" when the id
+   *  doesn't resolve (stale link), and the page falls back to a
+   *  plain "Retention" title. */
+  year: { id: number; year_name: string };
   /** Currently-enrolled counts, segmented by family type — the page
    *  derives the displayed count and retention rate from whichever
    *  segment its filter selects. */

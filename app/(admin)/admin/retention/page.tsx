@@ -70,15 +70,24 @@ export default function RetentionPage() {
     );
   }
 
+  // The report is year-scoped, so the title says WHICH year — the
+  // name comes back on the payload; while it loads (or if the id
+  // doesn't resolve) the title stays a plain "Retention".
+  const yearName = data?.year.year_name ?? "";
+
   return (
     <div className="space-y-6 p-6">
       <div>
-        <h1 className="text-2xl font-bold">Retention</h1>
+        <h1 className="text-2xl font-bold">
+          Retention{yearName ? ` — ${yearName}` : ""}
+        </h1>
         <p className="text-sm text-muted-foreground">
-          Enrolled vs unenrolled for the year, with each departure&rsquo;s
-          reason. Students count as unenrolled only when taken out
-          through the official Unenroll flow — archived applicants who
-          never enrolled aren&rsquo;t retention losses.
+          Enrolled vs unenrolled for the{" "}
+          {yearName ? `${yearName} school year` : "selected school year"},
+          with each departure&rsquo;s reason. Students count as unenrolled
+          only when taken out through the official Unenroll flow —
+          archived applicants who never enrolled aren&rsquo;t retention
+          losses.
         </p>
       </div>
 
