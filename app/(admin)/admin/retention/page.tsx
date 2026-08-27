@@ -192,9 +192,17 @@ export default function RetentionPage() {
                     {filteredUnenrolled.map((u) => (
                       <TableRow
                         key={u.student_id}
+                        // The OVERVIEW surface, not the per-year
+                        // registration page — that page only renders
+                        // students with an active application for the
+                        // selected year, so a departed student whose
+                        // paperwork sits under another year is invisible
+                        // there. The overview lists unenrolled students
+                        // in their own table, each clickable through to
+                        // the student detail.
                         onClick={() =>
                           router.push(
-                            `/admin/families/${u.family_id}?yearId=${yearId}`
+                            `/admin/families/${u.family_id}/overview?yearId=${yearId}`
                           )
                         }
                         className="cursor-pointer"

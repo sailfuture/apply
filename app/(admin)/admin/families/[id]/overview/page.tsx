@@ -238,6 +238,21 @@ export default function FamilyOverviewPage() {
     const prev = latestYearByStudent.get(sid) ?? 0;
     if (yid > prev) latestYearByStudent.set(sid, yid);
   }
+  // Students with no application row on this family (archived
+  // students survive the API's orphan filter precisely so the
+  // Unenrolled table can show them) still need a year to open the
+  // detail page with — fall back to the newest year in the student
+  // row's own membership array, else the year admin arrived with.
+  // A dead, unclickable row on the Unenrolled table reads as a
+  // broken page, not a data nuance.
+  for (const s of sortedStudents) {
+    if (latestYearByStudent.has(s.id)) continue;
+    const memberYears = Array.isArray(s.registration_school_years_id)
+      ? s.registration_school_years_id.map(Number).filter((y) => y > 0)
+      : [];
+    const fallback = memberYears.length > 0 ? Math.max(...memberYears) : yearId;
+    if (fallback) latestYearByStudent.set(s.id, fallback);
+  }
 
   // The activity stream aggregates per family + YEAR, but this page is
   // cross-year: use the year admin arrived with, else the family's most

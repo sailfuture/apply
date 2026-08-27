@@ -133,12 +133,20 @@ export async function GET(
     // them under a family they never actually applied to is
     // misleading. Cross-references the applications fetch above
     // so we don't need a separate query.
+    //
+    // Archived students are EXEMPT: an unenrolled student is real
+    // family history (the Unenrolled Students table exists to show
+    // exactly them), and their application rows can legitimately be
+    // gone — the residential flow hard-deletes per-student
+    // registrations, and paperwork can live under a year this
+    // family-scoped fetch missed. Hiding a student the Retention
+    // page counts as a departure reads as data loss.
     const studentIdsWithApps = new Set<number>();
     for (const a of applications) {
       studentIdsWithApps.add(Number(a.registration_students_id));
     }
-    const visibleStudents = students.filter((s) =>
-      studentIdsWithApps.has(s.id)
+    const visibleStudents = students.filter(
+      (s) => studentIdsWithApps.has(s.id) || s.isArchived === true
     );
 
     // Inquiries — match `primary_email` (the only email field on
