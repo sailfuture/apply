@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AdminTopNav } from "@/components/admin-top-nav";
+import { PastYearBanner } from "@/components/admin/past-year-banner";
 
 interface AdminUser {
   id: string;
@@ -50,8 +51,13 @@ export default function AdminLayout({
       {/* `pt-14` reserves the 56px slot for the now-`fixed` top nav so
           the first page section doesn't tuck under the bar. See the
           comment on `AdminTopNav` for why the nav is fixed instead of
-          sticky. */}
-      <main className="mx-auto w-full max-w-7xl pt-14">{children}</main>
+          sticky. The past-year banner sits inside the padded flow (not
+          the fixed bar) so it pushes content down when present and
+          sticks just under the nav while scrolling. */}
+      <div className="pt-14">
+        <PastYearBanner />
+        <main className="mx-auto w-full max-w-7xl">{children}</main>
+      </div>
     </div>
   );
 }

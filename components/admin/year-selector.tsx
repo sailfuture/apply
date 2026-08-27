@@ -35,6 +35,22 @@ interface SchoolYear {
   isFuture?: boolean;
 }
 
+/**
+ * Colored status indicator per year — shown in every dropdown item AND
+ * (via SelectValue mirroring the item content) on the closed trigger,
+ * so which kind of year you're working in is glanceable from any admin
+ * page without opening the picker. Emerald = the live school year;
+ * blue = enrollment's upcoming year; gray = history / not yet open.
+ * A year with no flags renders a hollow dot and no label.
+ */
+function yearStatus(y: SchoolYear): { label: string; dotClass: string } {
+  if (y.isActive) return { label: "Active", dotClass: "bg-emerald-500" };
+  if (y.isNextYear) return { label: "Upcoming", dotClass: "bg-blue-500" };
+  if (y.isFuture) return { label: "Future", dotClass: "bg-slate-300" };
+  if (y.isPast) return { label: "Past", dotClass: "bg-slate-400" };
+  return { label: "", dotClass: "border border-slate-300 bg-transparent" };
+}
+
 export function YearSelector() {
   const router = useRouter();
   const pathname = usePathname();
@@ -135,12 +151,25 @@ export function YearSelector() {
           <SelectValue placeholder="Select year" />
         </SelectTrigger>
         <SelectContent>
-          {years.map((year) => (
-            <SelectItem key={year.id} value={String(year.id)}>
-              {year.year_name || `Year #${year.id}`}
-              {year.isNextYear ? " · Upcoming" : year.isActive ? " · Active" : ""}
-            </SelectItem>
-          ))}
+          {years.map((year) => {
+            const status = yearStatus(year);
+            return (
+              <SelectItem key={year.id} value={String(year.id)}>
+                <span className="flex items-center gap-2">
+                  <span
+                    aria-hidden="true"
+                    className={`size-2 shrink-0 rounded-full ${status.dotClass}`}
+                  />
+                  {year.year_name || `Year #${year.id}`}
+                  {status.label ? (
+                    <span className="text-xs text-muted-foreground">
+                      {status.label}
+                    </span>
+                  ) : null}
+                </span>
+              </SelectItem>
+            );
+          })}
         </SelectContent>
       </Select>
 

@@ -38,10 +38,17 @@ const STATUS_LABEL: Record<YearStatus, string> = {
   none: "—",
 };
 
-// Status pill is monochrome — every state uses the same muted badge
-// so the table reads as plain reference data, not a status dashboard.
-// The status word itself carries the semantic.
-const STATUS_BADGE_CLASS = "bg-muted text-muted-foreground border-border";
+// Status pills are color-coded (user request — the live year has to
+// be unmistakable at a glance): emerald for the active school year,
+// blue for enrollment's upcoming year, muted for history and
+// not-yet-open years. Matches the year picker's dot colors.
+const STATUS_BADGE_CLASS: Record<YearStatus, string> = {
+  active: "bg-emerald-50 text-emerald-800 border-emerald-200",
+  next: "bg-blue-50 text-blue-800 border-blue-200",
+  past: "bg-muted text-muted-foreground border-border",
+  future: "bg-muted text-muted-foreground border-border",
+  none: "bg-muted text-muted-foreground border-border",
+};
 
 function deriveStatus(y: XanoSchoolYear): YearStatus {
   if (y.isActive) return "active";
@@ -210,7 +217,7 @@ export default function AdminSchoolYearsPage() {
                     <TableCell className="text-sm">
                       {status !== "none" ? (
                         <span
-                          className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${STATUS_BADGE_CLASS}`}
+                          className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${STATUS_BADGE_CLASS[status]}`}
                         >
                           {STATUS_LABEL[status]}
                         </span>
