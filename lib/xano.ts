@@ -3056,6 +3056,18 @@ export const xano = {
       return res.json() as Promise<XanoFamily>;
     },
 
+    /** Hard-delete the family row. ONLY the admin family-teardown
+     *  cascade (`DELETE /api/admin/families/[id]`) may call this —
+     *  every dependent row (students, applications, packets, progress,
+     *  scholarship, parents) must already be gone or it strands
+     *  orphans that no surface can reach. */
+    async delete(id: number): Promise<void> {
+      const res = await fetch(`${getBaseUrl()}/registration_families/${id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+    },
+
     async findByParentId(parentId: number): Promise<XanoFamily | null> {
       try {
         const res = await fetch(
@@ -4268,6 +4280,34 @@ export const xano = {
         );
         return [];
       }
+    },
+
+    /**
+     * Every payment row for one family across all years — backs the
+     * admin family-teardown cascade, which must cancel each year's
+     * subscription and wipe each snapshot row. THROWS on transport
+     * failure (like the Strict getter): the cascade treats "can't
+     * read the payment rows" as "don't delete anything", because a
+     * missed row here means a live subscription silently survives
+     * its family.
+     */
+    async getAllByFamily(familyId: number): Promise<XanoFamilyPayment[]> {
+      const res = await fetch(
+        `${getBaseUrl()}/registration_families_payment?registration_families_id=${familyId}`,
+        { cache: "no-store" }
+      );
+      if (!res.ok) {
+        throw new Error(
+          `Xano error ${res.status} loading payment rows for family=${familyId}: ${await res.text()}`
+        );
+      }
+      const results = await res.json();
+      const items = Array.isArray(results) ? results : [];
+      // Client-side filter is load-bearing — Xano list endpoints
+      // ignore unwired query params and return the whole table.
+      return (items as Record<string, unknown>[])
+        .filter((p) => Number(p.registration_families_id) === familyId)
+        .map((p) => normalizeFamilyPaymentPK(p));
     },
 
     async getByFamilyAndYear(familyId: number, yearId: number): Promise<XanoFamilyPayment | null> {

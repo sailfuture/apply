@@ -38,6 +38,7 @@ import {
 } from "@/components/ui/sheet";
 import { DashboardBreadcrumb } from "@/components/dashboard-breadcrumb";
 import { ActivityLogSheet } from "@/components/admin/activity-log-sheet";
+import { DeleteFamilyCard } from "@/components/admin/delete-family-card";
 import { EmailNotificationsCard } from "@/components/admin/email-notifications-card";
 import { FamilyStudentsNav, StageNav } from "@/components/admin/stage-nav";
 import { adminFetcher } from "@/lib/admin-fetcher";
@@ -888,6 +889,11 @@ export default function FamilyOverviewPage() {
       {yearId !== null ? (
         <EmailNotificationsCard familyId={familyId} yearId={yearId} />
       ) : null}
+
+      {/* Danger Zone — full permanent teardown. Last on the page so it
+          can't be reached without scrolling past everything it would
+          destroy. */}
+      <DeleteFamilyCard familyId={Number(family.id)} familyName={familyName} />
 
       <ParentDetailSheet
         parent={openParent}
