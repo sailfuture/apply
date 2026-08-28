@@ -932,6 +932,7 @@ function LeadDetailsEditor({
   details,
   headerActions,
   hideTitle = false,
+  extraFields,
   onChanged,
 }: {
   scope: LeadNoteScope;
@@ -943,6 +944,11 @@ function LeadDetailsEditor({
   /** The sheet's collapsible wrapper already labels the section —
    *  suppress the editor's own micro-header so it isn't said twice. */
   hideTitle?: boolean;
+  /** Source-specific read-only facts the family typed on the form
+   *  (an inquiry's "About the student"). Rendered directly under the
+   *  Email row — with the contact info, not buried below the pipeline
+   *  fields — and visible in edit mode too, since they never save. */
+  extraFields?: Array<{ label: string; value: string }>;
   onChanged?: () => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -1236,6 +1242,19 @@ function LeadDetailsEditor({
         )}
       </div>
 
+      {/* The family's own form answers, pinned under Email. Free text
+          runs to paragraphs: pre-wrap, never truncated. */}
+      {extraFields
+        ?.filter((f) => f.value.trim())
+        .map((f) => (
+          <div key={f.label} className="min-w-0">
+            <p className="text-[11px] text-muted-foreground">{f.label}</p>
+            <p className="whitespace-pre-wrap break-words text-sm text-foreground">
+              {f.value}
+            </p>
+          </div>
+        ))}
+
       <div className="grid grid-cols-2 gap-x-4 gap-y-2.5">
         {/* Opt-in — read-only checkbox until Edit is clicked. Camp
             leads stay locked even then (no consent column; sign-up is
@@ -1338,13 +1357,14 @@ export function LeadTriageSheet({
   schoolYearId?: number;
   /** Read-only facts a particular source carries that the shared
    *  details block doesn't — e.g. an inquiry's "About the student".
-   *  Rendered at the foot of the details block in the same style, so
-   *  hosts keep their own data without diverging on layout. Blank
+   *  Rendered directly under the Email row inside the details editor
+   *  (falling back to the foot of the block when `details` is absent),
+   *  so hosts keep their own data without diverging on layout. Blank
    *  values are dropped rather than rendered as an empty row. */
   extraFields?: Array<{ label: string; value: string }>;
   /** Source-specific markup for facts a label/value pair can't carry
    *  — the liability waiver's signature image, for one. Rendered at
-   *  the foot of the details block, below `extraFields`. */
+   *  the foot of the details block. */
   extraContent?: React.ReactNode;
   /** Badges pinned beside the title. For facts that must be seen
    *  before anything else — a camp registration's "Carries EpiPen",
@@ -1442,6 +1462,7 @@ export function LeadTriageSheet({
                 scope={scope}
                 details={details}
                 hideTitle
+                extraFields={extraFields}
                 headerActions={
                   leadStatus !== undefined ? (
                     <LeadStatusEditor
@@ -1489,22 +1510,23 @@ export function LeadTriageSheet({
                 onChanged={onChanged}
               />
             ) : null}
-            {/* Source-specific read-only facts, in the same style as
-                the fields above. `whitespace-pre-wrap` because these
-                can be free text the family typed (an inquiry's
-                "About the student" runs to paragraphs). */}
-            {extraFields
-              ?.filter((f) => f.value.trim())
-              .map((f) => (
-                <div key={f.label} className="min-w-0">
-                  <p className="text-[11px] text-muted-foreground">
-                    {f.label}
-                  </p>
-                  <p className="whitespace-pre-wrap break-words text-sm text-foreground">
-                    {f.value}
-                  </p>
-                </div>
-              ))}
+            {/* Extra fields normally render inside the details editor
+                (under Email); this fallback keeps them visible for a
+                sheet opened without editable details. */}
+            {!details
+              ? extraFields
+                  ?.filter((f) => f.value.trim())
+                  .map((f) => (
+                    <div key={f.label} className="min-w-0">
+                      <p className="text-[11px] text-muted-foreground">
+                        {f.label}
+                      </p>
+                      <p className="whitespace-pre-wrap break-words text-sm text-foreground">
+                        {f.value}
+                      </p>
+                    </div>
+                  ))
+              : null}
             {extraContent}
           </LeadDetailsCollapsible>
         ) : null}
