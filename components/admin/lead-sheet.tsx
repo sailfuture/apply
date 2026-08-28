@@ -154,7 +154,11 @@ export function LeadSheet({
       leadStatus={row.lead_status}
       statusReason={row.status_reason}
       schoolYearId={row.school_year_id}
-      extraFields={extraFields}
+      // Host-supplied fields win (source pages compute richer sets);
+      // otherwise fall back to the feed's, so surfaces that open a
+      // lead with no source row of their own (the dashboard, family
+      // pages) still show the family's form answers.
+      extraFields={extraFields ?? row.extra_fields}
       extraContent={extraContent}
       headerBadges={headerBadges}
       onChanged={() => {

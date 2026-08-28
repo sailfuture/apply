@@ -70,6 +70,7 @@ export function LeadRowSheet({
       }}
       leadStatus={row.lead_status}
       statusReason={row.status_reason}
+      extraFields={row.extra_fields}
       onChanged={onChanged}
     />
   );

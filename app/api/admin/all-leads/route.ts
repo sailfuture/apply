@@ -96,6 +96,13 @@ export type AllLeadRow = {
   converted_family_name: string;
   /** When the link was stamped; 0 when unlinked. */
   converted_at: number;
+  /** Read-only form answers the family typed, rendered by the triage
+   *  sheet under the Email row. Carried in the feed so surfaces that
+   *  open a lead WITHOUT their own source row (dashboard, All Leads,
+   *  the family pages) still show them; source pages that pass richer
+   *  page-computed sets override these. Today only inquiry rows carry
+   *  any ("How they heard about us" / "About the student"). */
+  extra_fields: Array<{ label: string; value: string }>;
   /** Funnel stage DERIVED live from the linked family's application
    *  data (never stored — same philosophy as `deriveApplicationStatus`):
    *  "" not converted · "linked" family exists but no application row
@@ -314,6 +321,16 @@ export async function GET(req: NextRequest) {
           school_year_name: yearNameById.get(yearIdOf(i)) ?? "",
           converted_family_id: leadConvertedFamilyId(i),
           converted_at: Number(i.converted_at) || 0,
+          extra_fields: [
+            {
+              label: "How they heard about us",
+              value: (i.hear_about_us ?? "").trim(),
+            },
+            {
+              label: "About the student",
+              value: (i.about_student ?? "").trim(),
+            },
+          ],
         };
       }),
       ...campRows.map(
@@ -350,6 +367,9 @@ export async function GET(req: NextRequest) {
           school_year_name: yearNameById.get(yearIdOf(c)) ?? "",
           converted_family_id: leadConvertedFamilyId(c),
           converted_at: Number(c.converted_at) || 0,
+          // Camp's form answers are page-computed (year names etc.) —
+          // the Summer Camp page passes its own set to the sheet.
+          extra_fields: [],
         })
       ),
       ...waivers.map(
@@ -376,6 +396,7 @@ export async function GET(req: NextRequest) {
           school_year_name: yearNameById.get(yearIdOf(w)) ?? "",
           converted_family_id: leadConvertedFamilyId(w),
           converted_at: Number(w.converted_at) || 0,
+          extra_fields: [],
         })
       ),
       ...tascoRows.map(
@@ -402,6 +423,7 @@ export async function GET(req: NextRequest) {
           school_year_name: yearNameById.get(yearIdOf(t)) ?? "",
           converted_family_id: leadConvertedFamilyId(t),
           converted_at: Number(t.converted_at) || 0,
+          extra_fields: [],
         })
       ),
     ];
