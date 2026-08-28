@@ -31,6 +31,9 @@ export interface EnrolledExportRow {
   // ── Student ──
   first_name: string;
   last_name: string;
+  /** Student's school Google account (`registration_students.school_email`),
+   *  e.g. first.last26@sailfuture.org; "" until admin assigns one. */
+  school_email: string;
   date_of_birth: string;
   gender: string;
   ethnicity: string;
@@ -145,6 +148,7 @@ export const EXPORT_COLUMNS: ExportColumn[] = [
   // Student
   { key: "first_name", label: "First Name", group: "Student", defaultSelected: true },
   { key: "last_name", label: "Last Name", group: "Student", defaultSelected: true },
+  { key: "school_email", label: "School Email", group: "Student", defaultSelected: true },
   { key: "date_of_birth", label: "Date of Birth", group: "Student", defaultSelected: true },
   { key: "gender", label: "Gender", group: "Student", defaultSelected: false },
   { key: "ethnicity", label: "Ethnicity", group: "Student", defaultSelected: false },

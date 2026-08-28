@@ -146,6 +146,7 @@ export async function GET(req: NextRequest) {
 
         first_name: student.first_name ?? "",
         last_name: student.last_name ?? "",
+        school_email: student.school_email ?? "",
         date_of_birth: student.date_of_birth ?? "",
         gender: student.gender ?? "",
         ethnicity: student.ethnicity ?? "",
