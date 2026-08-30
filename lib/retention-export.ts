@@ -20,8 +20,14 @@ export interface RetentionExportInput {
    *  community-only file can't be misread as school-wide. */
   segmentLabel: string;
   enrolledCount: number;
-  /** Departures that count against retention, in page order. */
-  counted: RetentionUnenrolledRow[];
+  /** Counted departures, split the way the page splits them —
+   *  residential/foster placements churn by design, so they're
+   *  reported separately from community departures. */
+  communityCounted: RetentionUnenrolledRow[];
+  residentialCounted: RetentionUnenrolledRow[];
+  /** Currently-enrolled counts per group, for the per-group rates. */
+  communityEnrolled: number;
+  residentialEnrolled: number;
   /** Retention-exempt departures (never really enrolled), page order. */
   notCounted: RetentionUnenrolledRow[];
   /** Pre-formatted rate ("94.2%" / "—") — computed on the page so the
@@ -39,6 +45,13 @@ function fmtDate(iso: string | null): string {
     year: "numeric",
     timeZone: "UTC",
   });
+}
+
+/** Retention rate for a group — mirrors the page's `formatRate`. */
+function rate(enrolled: number, departures: number): string {
+  const total = enrolled + departures;
+  if (total <= 0) return "—";
+  return `${((enrolled / total) * 100).toFixed(1).replace(/\.0$/, "")}%`;
 }
 
 function fileStem(input: RetentionExportInput): string {
@@ -98,9 +111,26 @@ export async function exportRetentionXlsx(
     ["Generated", new Date().toLocaleDateString("en-US")],
     ["", ""],
     ["Enrolled", input.enrolledCount],
-    ["Unenrolled (counted)", input.counted.length],
+    [
+      "Unenrolled (counted)",
+      input.communityCounted.length + input.residentialCounted.length,
+    ],
     ["Not counted (never attended)", input.notCounted.length],
     ["Retention rate", input.ratePct],
+    ["", ""],
+    ["Community enrolled", input.communityEnrolled],
+    ["Community unenrolled", input.communityCounted.length],
+    [
+      "Community retention",
+      rate(input.communityEnrolled, input.communityCounted.length),
+    ],
+    ["", ""],
+    ["Residential enrolled", input.residentialEnrolled],
+    ["Residential unenrolled", input.residentialCounted.length],
+    [
+      "Residential retention",
+      rate(input.residentialEnrolled, input.residentialCounted.length),
+    ],
   ];
   for (const [label, value] of summaryRows) {
     const row = summary.addRow([label, value]);
@@ -113,7 +143,11 @@ export async function exportRetentionXlsx(
     key: c.label,
     width: c.width,
   }));
-  for (const r of [...input.counted, ...input.notCounted]) {
+  for (const r of [
+    ...input.communityCounted,
+    ...input.residentialCounted,
+    ...input.notCounted,
+  ]) {
     const row = sheet.addRow(
       Object.fromEntries(ROSTER_COLUMNS.map((c) => [c.label, c.value(r)]))
     );
@@ -191,7 +225,9 @@ export async function exportRetentionPdf(
     body: [
       [
         String(input.enrolledCount),
-        String(input.counted.length),
+        String(
+          input.communityCounted.length + input.residentialCounted.length
+        ),
         String(input.notCounted.length),
         input.ratePct,
       ],
@@ -227,37 +263,67 @@ export async function exportRetentionPdf(
   type DocWithAutoTable = typeof doc & { lastAutoTable?: { finalY: number } };
   const lastY = () => (doc as DocWithAutoTable).lastAutoTable?.finalY ?? y;
 
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(11);
-  doc.text(
-    `Unenrolled students (${input.counted.length})`,
-    margin,
-    lastY() + 26
-  );
-  autoTable(doc, {
-    startY: lastY() + 32,
-    head: rosterHead,
-    body: input.counted.length
-      ? input.counted.map(rosterRow)
-      : [["No counted departures.", "", "", "", "", ""]],
-    ...rosterStyles,
-  });
-
-  if (input.notCounted.length > 0) {
+  /** One titled roster section. Community and residential are
+   *  reported separately (residential placements churn by design), so
+   *  each carries its own count + retention rate in the heading. */
+  function section(
+    heading: string,
+    rows: RetentionUnenrolledRow[],
+    emptyText: string,
+    muted = false
+  ): void {
     doc.setFont("helvetica", "bold");
     doc.setFontSize(11);
-    doc.text(
-      `Not counted - never attended (${input.notCounted.length})`,
-      margin,
-      lastY() + 26
-    );
+    doc.text(heading, margin, lastY() + 26);
     autoTable(doc, {
       startY: lastY() + 32,
       head: rosterHead,
-      body: input.notCounted.map(rosterRow),
+      body: rows.length
+        ? rows.map(rosterRow)
+        : [[emptyText, "", "", "", "", ""]],
       ...rosterStyles,
-      styles: { ...rosterStyles.styles, textColor: [120, 120, 120] },
+      ...(muted
+        ? {
+            styles: {
+              ...rosterStyles.styles,
+              textColor: [120, 120, 120] as [number, number, number],
+            },
+          }
+        : {}),
     });
+  }
+
+  if (input.segmentLabel !== "Residential") {
+    section(
+      `Community students - ${input.communityCounted.length} unenrolled, ${rate(
+        input.communityEnrolled,
+        input.communityCounted.length
+      )} retained`,
+      input.communityCounted,
+      "No community departures."
+    );
+  }
+
+  if (input.segmentLabel !== "Community") {
+    section(
+      `Residential students - ${
+        input.residentialCounted.length
+      } unenrolled, ${rate(
+        input.residentialEnrolled,
+        input.residentialCounted.length
+      )} retained`,
+      input.residentialCounted,
+      "No residential departures."
+    );
+  }
+
+  if (input.notCounted.length > 0) {
+    section(
+      `Not counted - never attended (${input.notCounted.length})`,
+      input.notCounted,
+      "",
+      true
+    );
   }
 
   doc.save(`${fileStem(input)}.pdf`);

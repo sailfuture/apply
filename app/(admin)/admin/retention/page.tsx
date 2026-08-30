@@ -72,12 +72,14 @@ export default function RetentionPage() {
     (u) => !u.retention_exempt
   );
   const notCounted = filteredUnenrolled.filter((u) => u.retention_exempt);
+  // Community and residential departures get their OWN cards —
+  // residential/foster placements churn by design (a placement ending
+  // isn't a family choosing to leave), so reading them in one list
+  // with community departures misrepresents both.
+  const communityCounted = countedUnenrolled.filter((u) => !u.residential);
+  const residentialCounted = countedUnenrolled.filter((u) => u.residential);
   const enrolledCount = data?.enrolled[segment] ?? 0;
-  const total = enrolledCount + countedUnenrolled.length;
-  const ratePct =
-    total > 0
-      ? `${((enrolledCount / total) * 100).toFixed(1).replace(/\.0$/, "")}%`
-      : "—";
+  const ratePct = formatRate(enrolledCount, countedUnenrolled.length);
 
   /**
    * Toggle a departure's retention exemption. Optimistic — the
@@ -120,6 +122,13 @@ export default function RetentionPage() {
     }
   }
 
+  /** Row click target — the family OVERVIEW surface (see
+   *  UnenrolledTable's docblock for why not the registration page). */
+  const openFamily = (row: RetentionUnenrolledRow) =>
+    router.push(
+      `/admin/families/${row.family_id}/overview?yearId=${yearId}`
+    );
+
   // XLSX / PDF export of exactly what the page currently shows for
   // the selected segment. Libraries load on demand (dynamic import)
   // so the page bundle stays lean.
@@ -134,7 +143,10 @@ export default function RetentionPage() {
         segmentLabel:
           SEGMENTS.find((s) => s.value === segment)?.label ?? "All",
         enrolledCount,
-        counted: countedUnenrolled,
+        communityCounted,
+        residentialCounted,
+        communityEnrolled: data.enrolled.community,
+        residentialEnrolled: data.enrolled.residential,
         notCounted,
         ratePct,
       };
@@ -265,40 +277,42 @@ export default function RetentionPage() {
             </CardContent>
           </Card>
 
-          {/* Departures that count against retention */}
-          <Card className="overflow-hidden gap-0 py-0 bg-white">
-            <CardHeader className="py-3 !pb-3 border-b">
-              <div className="flex items-baseline gap-3">
-                <CardTitle className="text-base">
-                  Unenrolled students
-                </CardTitle>
-                <span className="text-xs tabular-nums text-muted-foreground">
-                  ({countedUnenrolled.length})
-                </span>
-              </div>
-            </CardHeader>
-            <CardContent className="px-3 pb-3 bg-white">
-              {countedUnenrolled.length === 0 ? (
-                <div className="px-3 py-10 text-center text-sm text-muted-foreground">
-                  <UserMinus className="mx-auto mb-2 size-6 text-muted-foreground/50" />
-                  {segment === "all"
-                    ? "No students have been unenrolled this year."
-                    : `No ${segment} students have been unenrolled this year.`}
-                </div>
-              ) : (
-                <UnenrolledTable
-                  rows={countedUnenrolled}
-                  segment={segment}
-                  onOpenFamily={(u) =>
-                    router.push(
-                      `/admin/families/${u.family_id}/overview?yearId=${yearId}`
-                    )
-                  }
-                  onToggle={toggleExempt}
-                />
-              )}
-            </CardContent>
-          </Card>
+          {/* Community departures — the headline retention story. */}
+          {segment !== "residential" ? (
+            <DepartureCard
+              title="Community students"
+              count={communityCounted.length}
+              caption={`${data.enrolled.community} enrolled · ${formatRate(
+                data.enrolled.community,
+                communityCounted.length
+              )} retained`}
+              emptyText="No community students have been unenrolled this year."
+              rows={communityCounted}
+              onOpenFamily={openFamily}
+              onToggle={toggleExempt}
+            />
+          ) : null}
+
+          {/* Residential/foster placements — separated because a
+              placement ending is a case-management outcome, not a
+              family choosing to leave the school. Hidden entirely when
+              there are none (and the segment isn't asking for them) so
+              a community-only year doesn't carry an empty card. */}
+          {segment !== "community" &&
+          (residentialCounted.length > 0 || segment === "residential") ? (
+            <DepartureCard
+              title="Residential students"
+              count={residentialCounted.length}
+              caption={`${data.enrolled.residential} enrolled · ${formatRate(
+                data.enrolled.residential,
+                residentialCounted.length
+              )} retained`}
+              emptyText="No residential students have been unenrolled this year."
+              rows={residentialCounted}
+              onOpenFamily={openFamily}
+              onToggle={toggleExempt}
+            />
+          ) : null}
 
           {/* Retention-exempt departures — their own card so the main
               table (and its count) is exactly what the rate is built
@@ -322,13 +336,9 @@ export default function RetentionPage() {
               <CardContent className="px-3 pb-3 bg-white">
                 <UnenrolledTable
                   rows={notCounted}
-                  segment={segment}
                   muted
-                  onOpenFamily={(u) =>
-                    router.push(
-                      `/admin/families/${u.family_id}/overview?yearId=${yearId}`
-                    )
-                  }
+                  showResidentialBadge={segment === "all"}
+                  onOpenFamily={openFamily}
                   onToggle={toggleExempt}
                 />
               </CardContent>
@@ -348,6 +358,72 @@ const SEGMENTS: Array<{ value: Segment; label: string }> = [
   { value: "residential", label: "Residential" },
 ];
 
+/**
+ * Retention rate for a group: kept ÷ (kept + lost), to one decimal
+ * with a trailing ".0" trimmed. "—" when the group has nobody in it,
+ * so an empty residential program reads as blank rather than 0%.
+ */
+function formatRate(enrolled: number, departures: number): string {
+  const total = enrolled + departures;
+  if (total <= 0) return "—";
+  return `${((enrolled / total) * 100).toFixed(1).replace(/\.0$/, "")}%`;
+}
+
+/**
+ * One card of counted departures (community or residential). Wraps
+ * the shared table with a titled header, its own count + retention
+ * caption, and an empty state, so the two groups render identically
+ * apart from their data.
+ */
+function DepartureCard({
+  title,
+  count,
+  caption,
+  emptyText,
+  rows,
+  onOpenFamily,
+  onToggle,
+}: {
+  title: string;
+  count: number;
+  /** "12 enrolled · 92% retained" for THIS group. */
+  caption: string;
+  emptyText: string;
+  rows: RetentionUnenrolledRow[];
+  onOpenFamily: (row: RetentionUnenrolledRow) => void;
+  onToggle: (row: RetentionUnenrolledRow, next: boolean) => void;
+}) {
+  return (
+    <Card className="overflow-hidden gap-0 py-0 bg-white">
+      <CardHeader className="py-3 !pb-3 border-b">
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <CardTitle className="text-base">{title}</CardTitle>
+          <span className="text-xs tabular-nums text-muted-foreground">
+            {count} unenrolled
+          </span>
+          <span className="text-xs tabular-nums text-muted-foreground">
+            {caption}
+          </span>
+        </div>
+      </CardHeader>
+      <CardContent className="px-3 pb-3 bg-white">
+        {rows.length === 0 ? (
+          <div className="px-3 py-10 text-center text-sm text-muted-foreground">
+            <UserMinus className="mx-auto mb-2 size-6 text-muted-foreground/50" />
+            {emptyText}
+          </div>
+        ) : (
+          <UnenrolledTable
+            rows={rows}
+            onOpenFamily={onOpenFamily}
+            onToggle={onToggle}
+          />
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 /** Pill-style export button — matches the segment chips' vocabulary
  *  so the toolbar row reads as one unit. */
 const EXPORT_BUTTON =
@@ -364,15 +440,18 @@ const EXPORT_BUTTON =
  */
 function UnenrolledTable({
   rows,
-  segment,
   muted = false,
+  showResidentialBadge = false,
   onOpenFamily,
   onToggle,
 }: {
   rows: RetentionUnenrolledRow[];
-  segment: Segment;
   /** "Not counted" card styling — rows render dimmed. */
   muted?: boolean;
+  /** Tag residential rows inline. Only the mixed "Not counted" card
+   *  needs it — the community/residential cards are homogeneous, so
+   *  the badge would just repeat their titles on every row. */
+  showResidentialBadge?: boolean;
   onOpenFamily: (row: RetentionUnenrolledRow) => void;
   onToggle: (row: RetentionUnenrolledRow, next: boolean) => void;
 }) {
@@ -423,9 +502,7 @@ function UnenrolledTable({
             <TableCell className="text-sm">
               <span className="flex min-w-0 items-center gap-1.5">
                 <span className="truncate">{u.family_name}</span>
-                {/* Only useful in the mixed view — the segmented
-                    views are already homogeneous. */}
-                {u.residential && segment === "all" ? (
+                {u.residential && showResidentialBadge ? (
                   <span className="shrink-0 rounded-full border border-border bg-muted px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                     Residential
                   </span>
