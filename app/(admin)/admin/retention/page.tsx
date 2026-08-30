@@ -280,8 +280,28 @@ export default function RetentionPage() {
                   label="Unenrolled"
                   value={String(countedUnenrolled.length)}
                   tone={countedUnenrolled.length > 0 ? "negative" : "muted"}
+                  detail={
+                    segment === "all"
+                      ? `${communityCounted.length} community · ${residentialCounted.length} residential`
+                      : undefined
+                  }
                 />
-                <Stat label="Retention rate" value={ratePct} tone="muted" />
+                <Stat
+                  label="Retention rate"
+                  value={ratePct}
+                  tone="muted"
+                  detail={
+                    segment === "all"
+                      ? `${formatRate(
+                          data.enrolled.community,
+                          communityCounted.length
+                        )} community · ${formatRate(
+                          data.enrolled.residential,
+                          residentialCounted.length
+                        )} residential`
+                      : undefined
+                  }
+                />
               </dl>
             </CardContent>
           </Card>
