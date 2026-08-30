@@ -1,6 +1,7 @@
 import { auth, clerkClient, currentUser } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
 import { xano, ensureParentRecord } from "@/lib/xano";
+import { smsConsentParentFields } from "@/lib/sms/consent";
 
 async function resolveParents(family: ReturnType<typeof xano.families.getById> extends Promise<infer T> ? T : never) {
   const embedded = xano.families.getEmbeddedParents(family);
@@ -65,6 +66,8 @@ export async function POST(req: NextRequest) {
     city,
     state,
     zip: zipcode,
+    phone: phoneRaw,
+    sms_consent: smsConsentRaw,
   } = body ?? {};
 
   const firstName =
@@ -87,6 +90,19 @@ export async function POST(req: NextRequest) {
 
   const parent = await ensureParentRecord(userId, user);
 
+  const phone = typeof phoneRaw === "string" ? phoneRaw.trim() : "";
+
+  // SMS consent from the welcome page's compliance checkbox. Only act
+  // when the client actually sent the field (older clients / direct
+  // POSTs omit it — leave whatever is on file untouched). The field
+  // mapping (checked → provenance + clear opt-out; unchecked →
+  // decline provenance + opt-out stamp) lives in lib/sms/consent.ts,
+  // shared with the apply-flow parent card's consent toggle.
+  const smsConsentFields =
+    typeof smsConsentRaw === "boolean"
+      ? smsConsentParentFields(smsConsentRaw)
+      : {};
+
   // Persist the (possibly corrected) primary parent name back onto the
   // parent record alongside the address. Falling back to the existing
   // value when a field is empty so we never erase data the Clerk webhook
@@ -99,6 +115,8 @@ export async function POST(req: NextRequest) {
     city: city || parent.city,
     state: state || parent.state,
     zipcode: zipcode || parent.zipcode,
+    phone: phone || parent.phone,
+    ...smsConsentFields,
   });
 
   // Mirror the typed name into Clerk so the user's profile (avatar

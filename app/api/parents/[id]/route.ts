@@ -1,6 +1,7 @@
 import { auth, clerkClient, currentUser } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
 import { xano } from "@/lib/xano";
+import { smsConsentParentFields } from "@/lib/sms/consent";
 
 export async function PATCH(
   req: NextRequest,
@@ -33,7 +34,25 @@ export async function PATCH(
   }
 
   const body = await req.json();
-  const updated = await xano.parents.update(parentId, body);
+
+  // `sms_consent` is a VIRTUAL field from the apply-flow consent
+  // checkbox — never written to Xano as-is. It maps to the real
+  // consent columns via the shared helper, and only for the caller's
+  // OWN parent row: express SMS consent is personal, so one parent
+  // can't consent (or decline) on another adult's behalf. For any
+  // other row the field is dropped silently — the UI only renders the
+  // checkbox on the signed-in parent's card, so a mismatch here is a
+  // stale/hand-crafted request, not a user action.
+  const { sms_consent: smsConsentRaw, ...fields } = body ?? {};
+  let patch: Record<string, unknown> = fields;
+  if (typeof smsConsentRaw === "boolean") {
+    const target = await xano.parents.getById(parentId);
+    if (target?.clerk_user_id === userId) {
+      patch = { ...fields, ...smsConsentParentFields(smsConsentRaw) };
+    }
+  }
+
+  const updated = await xano.parents.update(parentId, patch);
 
   // Mirror name / email / phone into Clerk so the user's Clerk profile
   // (avatar initials, sign-out menu, sign-in identifier) matches what

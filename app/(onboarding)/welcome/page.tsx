@@ -19,6 +19,7 @@ import {
   FieldDescription,
 } from "@/components/ui/field";
 import { LoadingScreen } from "@/components/loading-screen";
+import { SmsConsentFields } from "@/components/sms-consent-fields";
 import { StateSelect } from "@/components/state-select";
 
 /**
@@ -44,6 +45,10 @@ export default function WelcomePage() {
   const [city, setCity] = useState("");
   const [state, setState] = useState("");
   const [zip, setZip] = useState("");
+  // SMS opt-in — the checkbox starts UNCHECKED (A2P compliance: express
+  // consent must be actively given, never pre-selected).
+  const [phone, setPhone] = useState("");
+  const [smsConsent, setSmsConsent] = useState(false);
 
   // If a family already exists, bounce back to the home redirect (which
   // routes through admin / apply / dashboard depending on lifecycle).
@@ -68,6 +73,7 @@ export default function WelcomePage() {
             const parent = await me.json();
             if (parent?.first_name) setFirstName(parent.first_name);
             if (parent?.last_name) setLastName(parent.last_name);
+            if (parent?.phone) setPhone(parent.phone);
           }
         } catch {
           /* no-op */
@@ -100,6 +106,10 @@ export default function WelcomePage() {
           city,
           state,
           zip,
+          phone: phone.trim(),
+          // Express SMS opt-in from the compliance checkbox — the API
+          // stamps consent provenance (or the decline) on the parent row.
+          sms_consent: smsConsent,
         }),
       });
 
@@ -239,6 +249,20 @@ export default function WelcomePage() {
                   onChange={(e) => setZip(e.target.value)}
                 />
               </Field>
+
+              {/* SMS opt-in — express-consent capture (phone + checkbox
+                  + carrier disclosures). Shared component with the
+                  public /sms-opt-in evidence page so the language the
+                  Twilio campaign was vetted against can't drift from
+                  what parents actually see. */}
+              <div className="border-t pt-4">
+                <SmsConsentFields
+                  phone={phone}
+                  onPhoneChange={setPhone}
+                  consented={smsConsent}
+                  onConsentChange={setSmsConsent}
+                />
+              </div>
 
               {error && (
                 <p className="text-sm text-red-600 dark:text-red-400">

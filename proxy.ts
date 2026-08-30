@@ -20,6 +20,13 @@ const isPublicRoute = createRouteMatcher([
   // page) is unauthenticated by design. Keyed by unguessable Stripe
   // invoice ids; unknown ids bounce to the sign-in-gated tuition page.
   "/pay(.*)",
+  // Legal + SMS-compliance pages. Linked from the SMS opt-in block and
+  // referenced by the Twilio A2P campaign registration, whose reviewers
+  // (and parents reading a text's fine print) have no Clerk session —
+  // these must resolve publicly or campaign vetting fails.
+  "/terms",
+  "/privacy",
+  "/sms-opt-in",
 ]);
 
 /**

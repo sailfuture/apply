@@ -43,7 +43,9 @@ import { Trash2, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { useSWRConfig } from "swr";
 import { GlobalSaveStatusPill } from "@/components/save-status-pill";
+import { SmsConsentFields } from "@/components/sms-consent-fields";
 import { useFamilyProgress } from "@/hooks/use-family-progress";
+import { hasAffirmativeSmsConsent } from "@/lib/sms/consent";
 import { US_STATES } from "@/lib/us-states";
 
 interface Parent {
@@ -59,6 +61,11 @@ interface Parent {
   city: string;
   state: string;
   zipcode: string;
+  /** SMS consent bookkeeping — see lib/sms/consent.ts. Optional
+   *  because Xano's embedded relation expansion can return partial
+   *  rows; absent just renders the consent box unchecked. */
+  sms_consent_source?: string | null;
+  sms_opted_out_at?: number | null;
 }
 
 interface SchoolYear {
@@ -166,6 +173,47 @@ export default function FamilyStepPage() {
       );
     } catch (err) {
       console.error("Failed to save parent field:", err);
+    }
+  }
+
+  /**
+   * Consent-checkbox toggle on the signed-in parent's own card. Saves
+   * through the same autosave channel as the other fields (SaveStatusPill
+   * feedback); the API maps the virtual `sms_consent` boolean onto the
+   * real consent columns and refuses it for anyone else's row. Local
+   * state updates optimistically with the same mapping so the checkbox
+   * doesn't lag the click.
+   */
+  async function saveSmsConsent(parentId: number, consented: boolean) {
+    setParents((prev) =>
+      prev.map((p) =>
+        p.id === parentId
+          ? {
+              ...p,
+              sms_consent_source: consented
+                ? "registration_checkbox"
+                : "declined_registration_checkbox",
+              sms_opted_out_at: consented ? 0 : Date.now(),
+            }
+          : p
+      )
+    );
+    try {
+      await trackAutosave(
+        fetch(`/api/parents/${parentId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sms_consent: consented }),
+        }).then(async (res) => {
+          if (!res.ok) {
+            const body = await res.text().catch(() => "");
+            throw new Error(`Save failed (${res.status}) ${body}`);
+          }
+          return res;
+        })
+      );
+    } catch (err) {
+      console.error("Failed to save SMS consent:", err);
     }
   }
 
@@ -604,6 +652,27 @@ export default function FamilyStepPage() {
                         />
                       </Field>
                     </div>
+
+                    {/* SMS opt-in — rendered ONLY on the signed-in
+                        parent's own card, directly under the phone
+                        field it applies to: express consent is
+                        personal, so one parent can't check the box
+                        for another adult's number. Checkbox reflects
+                        the stored decision (checked = affirmative
+                        consent on file, incl. from the welcome page)
+                        and toggling auto-saves like every other field
+                        on this card. */}
+                    {parent.email === currentUserEmail ? (
+                      <div className="mt-4 rounded-lg border bg-muted/30 p-4">
+                        <SmsConsentFields
+                          showPhone={false}
+                          consented={hasAffirmativeSmsConsent(parent)}
+                          onConsentChange={(v) =>
+                            saveSmsConsent(parent.id, v)
+                          }
+                        />
+                      </div>
+                    ) : null}
                   </section>
 
                   <Separator />
