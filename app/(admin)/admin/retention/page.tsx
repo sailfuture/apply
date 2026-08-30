@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
+import { toast } from "sonner";
 import { ChevronRight, UserMinus } from "lucide-react";
 import {
   Card,
@@ -10,6 +11,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -21,7 +23,10 @@ import {
 } from "@/components/ui/table";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { cn } from "@/lib/utils";
-import type { RetentionResponse } from "@/app/api/admin/retention/route";
+import type {
+  RetentionResponse,
+  RetentionUnenrolledRow,
+} from "@/app/api/admin/retention/route";
 
 /**
  * Enrollment → Retention — how many students the year kept vs lost,
@@ -37,7 +42,7 @@ export default function RetentionPage() {
   const searchParams = useSearchParams();
   const yearId = searchParams.get("yearId");
 
-  const { data, isLoading, error } = useSWR<RetentionResponse>(
+  const { data, isLoading, error, mutate } = useSWR<RetentionResponse>(
     yearId ? `/api/admin/retention?yearId=${yearId}` : null,
     adminFetcher
   );
@@ -53,12 +58,60 @@ export default function RetentionPage() {
       segment === "residential" ? u.residential : !u.residential
     );
   }, [data, segment]);
+  // Exempt rows (student never actually attended, etc.) stay VISIBLE
+  // in the table but drop out of every number — they weren't real
+  // enrollments, so they're neither a keep nor a loss.
+  const countedUnenrolled = filteredUnenrolled.filter(
+    (u) => !u.retention_exempt
+  );
+  const exemptCount = filteredUnenrolled.length - countedUnenrolled.length;
   const enrolledCount = data?.enrolled[segment] ?? 0;
-  const total = enrolledCount + filteredUnenrolled.length;
+  const total = enrolledCount + countedUnenrolled.length;
   const ratePct =
     total > 0
       ? `${((enrolledCount / total) * 100).toFixed(1).replace(/\.0$/, "")}%`
       : "—";
+
+  /**
+   * Toggle a departure's retention exemption. Optimistic — the
+   * checkbox and the headline numbers move immediately, then a
+   * revalidation confirms against the server (and reverts the box if
+   * the write didn't stick, e.g. the Xano column is missing).
+   */
+  async function toggleExempt(row: RetentionUnenrolledRow, next: boolean) {
+    await mutate(
+      (prev) =>
+        prev && {
+          ...prev,
+          unenrolled: prev.unenrolled.map((u) =>
+            u.student_id === row.student_id
+              ? { ...u, retention_exempt: next }
+              : u
+          ),
+        },
+      { revalidate: false }
+    );
+    try {
+      const res = await fetch(`/api/admin/students/${row.student_id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isRetentionExempt: next }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error ?? `Save failed (${res.status})`);
+      }
+    } catch (err) {
+      toast.error(
+        err instanceof Error
+          ? err.message
+          : "Couldn't update the retention exemption"
+      );
+    } finally {
+      // Converge on server truth either way.
+      void mutate();
+    }
+  }
 
   if (!yearId) {
     return (
@@ -87,7 +140,9 @@ export default function RetentionPage() {
           with each departure&rsquo;s reason. Students count as unenrolled
           only when taken out through the official Unenroll flow —
           archived applicants who never enrolled aren&rsquo;t retention
-          losses.
+          losses. Use the &ldquo;Don&rsquo;t count&rdquo; checkbox to
+          leave a departure out of the numbers entirely (e.g. a student
+          who never actually attended).
         </p>
       </div>
 
@@ -135,8 +190,8 @@ export default function RetentionPage() {
                 />
                 <Stat
                   label="Unenrolled"
-                  value={String(filteredUnenrolled.length)}
-                  tone={filteredUnenrolled.length > 0 ? "negative" : "muted"}
+                  value={String(countedUnenrolled.length)}
+                  tone={countedUnenrolled.length > 0 ? "negative" : "muted"}
                 />
                 <Stat label="Retention rate" value={ratePct} tone="muted" />
               </dl>
@@ -152,6 +207,9 @@ export default function RetentionPage() {
                 </CardTitle>
                 <span className="text-xs tabular-nums text-muted-foreground">
                   ({filteredUnenrolled.length})
+                  {exemptCount > 0
+                    ? ` · ${exemptCount} not counted`
+                    : ""}
                 </span>
               </div>
             </CardHeader>
@@ -167,23 +225,29 @@ export default function RetentionPage() {
                 <Table className="table-fixed">
                   <TableHeader>
                     <TableRow className="hover:bg-transparent">
-                      <TableHead className="text-[10px] text-muted-foreground w-[18%]">
+                      <TableHead className="text-[10px] text-muted-foreground w-[17%]">
                         Student
                       </TableHead>
-                      <TableHead className="text-[10px] text-muted-foreground w-[8%]">
+                      <TableHead className="text-[10px] text-muted-foreground w-[7%]">
                         Grade
                       </TableHead>
-                      <TableHead className="text-[10px] text-muted-foreground w-[16%]">
+                      <TableHead className="text-[10px] text-muted-foreground w-[15%]">
                         Family
                       </TableHead>
-                      <TableHead className="text-[10px] text-muted-foreground w-[12%]">
+                      <TableHead className="text-[10px] text-muted-foreground w-[11%]">
                         Unenrolled
                       </TableHead>
                       <TableHead className="text-[10px] text-muted-foreground w-[20%]">
                         Reason
                       </TableHead>
-                      <TableHead className="text-[10px] text-muted-foreground w-[22%]">
+                      <TableHead className="text-[10px] text-muted-foreground w-[20%]">
                         Notes
+                      </TableHead>
+                      <TableHead
+                        className="text-[10px] text-muted-foreground w-[6%] text-center"
+                        title="Check to leave a departure out of the retention numbers — for students who never actually attended."
+                      >
+                        Don&rsquo;t count
                       </TableHead>
                       <TableHead className="w-[4%]" />
                     </TableRow>
@@ -205,7 +269,12 @@ export default function RetentionPage() {
                             `/admin/families/${u.family_id}/overview?yearId=${yearId}`
                           )
                         }
-                        className="cursor-pointer"
+                        className={cn(
+                          "cursor-pointer",
+                          // Exempt departures stay listed but read as
+                          // out-of-the-math.
+                          u.retention_exempt && "opacity-60"
+                        )}
                       >
                         <TableCell className="text-sm font-medium">
                           <span className="block truncate">
@@ -239,12 +308,28 @@ export default function RetentionPage() {
                           </span>
                         </TableCell>
                         <TableCell
-                          className="text-xs text-muted-foreground"
+                          className="text-sm text-muted-foreground"
                           title={u.notes || undefined}
                         >
                           <span className="block truncate">
                             {u.notes || "—"}
                           </span>
+                        </TableCell>
+                        {/* stopPropagation on the CELL so a click that
+                            lands near (not on) the checkbox doesn't
+                            navigate to the family page. */}
+                        <TableCell
+                          className="text-center"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <Checkbox
+                            checked={u.retention_exempt}
+                            onCheckedChange={(v) =>
+                              toggleExempt(u, v === true)
+                            }
+                            aria-label={`Don't count ${u.student_name} toward retention`}
+                            title="Check to leave this departure out of the retention numbers — for students who never actually attended."
+                          />
                         </TableCell>
                         <TableCell className="text-right">
                           <ChevronRight className="size-4 text-muted-foreground inline" />

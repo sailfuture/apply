@@ -186,6 +186,7 @@ export async function GET(req: NextRequest) {
           date: s.unenrollment_date ?? null,
           reason: (s.unenrollment_reason ?? "").trim(),
           notes: (s.unenrollment_notes ?? "").trim(),
+          retention_exempt: s.isRetentionExempt === true,
         });
       } else if (
         yearApp &&
@@ -228,6 +229,10 @@ export interface RetentionUnenrolledRow {
   date: string | null;
   reason: string;
   notes: string;
+  /** True when admin marked the departure as not-a-real-enrollment
+   *  (student never attended) — the row still lists but is excluded
+   *  from the unenrolled count and the retention rate. */
+  retention_exempt: boolean;
 }
 
 export interface RetentionResponse {

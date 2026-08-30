@@ -176,6 +176,12 @@ export async function PATCH(
       "unenrollment_reason",
       "unenrollment_date",
       "unenrollment_notes",
+      // Retention-math exemption — the Retention page's per-row
+      // checkbox for departures that were never real enrollments
+      // (student never attended). Doesn't touch isArchived or the
+      // unenrollment audit; it only changes how the retention rate
+      // counts the row.
+      "isRetentionExempt",
       // Enrollment gate for the Enrolled Students list. Cascaded
       // true from the registration-progress route when admin
       // confirms the family's registration; cleared back to false
@@ -221,6 +227,7 @@ export async function PATCH(
       "unenrollment_reason" in patch ||
       "unenrollment_date" in patch ||
       "unenrollment_notes" in patch ||
+      "isRetentionExempt" in patch ||
       "isEnrolled" in patch ||
       // School-account columns are admin-added like the toddle_*
       // pair — they live on the `2GcBXyoA` admin query, not the

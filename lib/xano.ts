@@ -316,6 +316,16 @@ export interface XanoStudent {
    *  belong in the headline reason string. Optional; saved
    *  empty-string when admin leaves it blank. */
   unenrollment_notes?: string;
+  /** Excluded from retention math — for departures that were never
+   *  really enrollments (student never showed up, enrolled at another
+   *  school before day one, etc.). Toggled by the checkbox on the
+   *  Retention page's unenrolled table; the student still lists as
+   *  unenrolled but doesn't count against the retention rate.
+   *  Column exists on `registration_students` (bool, default false);
+   *  the `2GcBXyoA` CRUD endpoints derive inputs from the table
+   *  schema (dblink), so the PATCH accepts it with no endpoint
+   *  changes. Optional because legacy reads may omit it. */
+  isRetentionExempt?: boolean;
 
   /** Toddle (LMS) student id, persisted after the admin "Sync to
    *  Toddle" action so later syncs update the same Toddle record
