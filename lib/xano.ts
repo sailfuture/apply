@@ -670,8 +670,12 @@ export interface XanoPaymentTransaction {
   amount_due_cents: number;
   amount_paid_cents: number;
   /** Stripe invoice status: `draft`, `open`, `paid`, `void`,
-   *  `uncollectible`. UI maps these to the friendlier
-   *  Complete/Pending/Failed labels. */
+   *  `uncollectible` — plus our own terminal `refunded` (Stripe
+   *  keeps a refunded invoice `paid` forever; the webhook's
+   *  `charge.refunded` handler, the backfill, and the in-app refund
+   *  action stamp this when the payment has been fully returned).
+   *  UI maps these to the friendlier Complete/Pending/Failed/
+   *  Refunded labels. */
   status: string;
   hosted_invoice_url: string | null;
   invoice_pdf_url: string | null;

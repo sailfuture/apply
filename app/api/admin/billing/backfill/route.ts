@@ -72,6 +72,7 @@ export async function POST(req: NextRequest) {
         for (const invoice of invoices) {
           if (!invoice.id) continue;
           await upsertInvoiceRow({
+            stripe,
             invoice,
             familyId: Number(payment.registration_families_id),
             yearId: Number(payment.registration_school_years_id),
@@ -132,12 +133,14 @@ async function listAllInvoicesForSubscription(
 }
 
 async function upsertInvoiceRow({
+  stripe,
   invoice,
   familyId,
   yearId,
   paymentRowId,
   subscriptionId,
 }: {
+  stripe: Stripe;
   invoice: Stripe.Invoice;
   familyId: number;
   yearId: number;
@@ -199,6 +202,39 @@ async function upsertInvoiceRow({
     reportedPaidCents = invoice.amount_due ?? 0;
   }
 
+  // Refund awareness — Stripe leaves a refunded invoice `paid` with
+  // its full `amount_paid` forever, so a plain re-sync would
+  // resurrect refunded money as "collected" and flip a webhook-
+  // stamped `refunded` row back to Complete. For Stripe-collected
+  // paid invoices, list the refunds on each succeeded payment intent
+  // and net them out; fully refunded mirrors as our own `refunded`
+  // status. Out-of-band (check/cash `payment_record`) payments have
+  // no payment intent and can't be refunded through Stripe, so they
+  // skip this naturally.
+  let refundedCents = 0;
+  if (status === "paid") {
+    const paymentIntentIds = (invoice.payments?.data ?? [])
+      .filter((p) => p.status === "paid")
+      .map((p) =>
+        typeof p.payment?.payment_intent === "string"
+          ? p.payment.payment_intent
+          : (p.payment?.payment_intent?.id ?? null)
+      )
+      .filter((id): id is string => !!id);
+    for (const paymentIntentId of paymentIntentIds) {
+      const refunds = await stripe.refunds.list({
+        payment_intent: paymentIntentId,
+        limit: 100,
+      });
+      refundedCents += refunds.data
+        .filter((r) => r.status === "succeeded" || r.status === "pending")
+        .reduce((acc, r) => acc + (r.amount ?? 0), 0);
+    }
+  }
+  const netPaidCents = Math.max(reportedPaidCents - refundedCents, 0);
+  const fullyRefunded =
+    status === "paid" && refundedCents > 0 && netPaidCents === 0;
+
   // Omits `payment_method` — owned by the admin mark-paid route; a
   // re-sync must not clear it (PATCH leaves absent keys untouched).
   const payload: Omit<XanoPaymentTransaction, "id" | "created_at"> = {
@@ -210,11 +246,17 @@ async function upsertInvoiceRow({
     period_start: periodStart,
     period_end: periodEnd,
     amount_due_cents: invoice.amount_due ?? 0,
+    // With refunds in play the freshly computed net is the truth and
+    // the floor guard must NOT apply — it exists to protect recorded
+    // check payments from a $0 re-sync, not to resurrect refunded
+    // money.
     amount_paid_cents:
-      status === "paid"
-        ? Math.max(reportedPaidCents, existing?.amount_paid_cents ?? 0)
-        : reportedPaidCents,
-    status,
+      refundedCents > 0
+        ? netPaidCents
+        : status === "paid"
+          ? Math.max(reportedPaidCents, existing?.amount_paid_cents ?? 0)
+          : reportedPaidCents,
+    status: fullyRefunded ? "refunded" : status,
     hosted_invoice_url: invoice.hosted_invoice_url ?? null,
     invoice_pdf_url: invoice.invoice_pdf ?? null,
     due_date: dueDate,

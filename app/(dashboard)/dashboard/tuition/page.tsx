@@ -36,6 +36,7 @@ import {
   FileText,
   HelpCircle,
   Loader2,
+  Undo2,
   XCircle,
 } from "lucide-react";
 import { DashboardPageHeader } from "@/components/dashboard-page-header";
@@ -941,6 +942,12 @@ function ScheduleStatusPill({ status }: { status: ParentScheduleSlot["status"] }
           label: "Paid",
           tone: "bg-emerald-50 text-emerald-700 ring-emerald-200",
           Icon: CheckCircle2,
+        };
+      case "refunded":
+        return {
+          label: "Refunded",
+          tone: "bg-purple-50 text-purple-700 ring-purple-200",
+          Icon: Undo2,
         };
       case "open":
         return {

@@ -125,6 +125,10 @@ export function indexTransactionsByMonth(
 /**
  * Map Stripe's invoice status to the friendlier UI label.
  *   - `paid` → `paid`
+ *   - `refunded` → `refunded` (OUR status, not Stripe's — Stripe
+ *     leaves a refunded invoice `paid` forever; the webhook's
+ *     `charge.refunded` handler and the backfill stamp this into the
+ *     mirror when the payment has been fully refunded)
  *   - `uncollectible` → `failed` (Stripe's terminal failure state;
  *     in-flight payment failures keep the invoice `open`)
  *   - `void` → `void`
@@ -132,10 +136,12 @@ export function indexTransactionsByMonth(
  */
 export function stripeStatusToUi(
   status: string
-): "open" | "paid" | "failed" | "void" {
+): "open" | "paid" | "refunded" | "failed" | "void" {
   switch (status) {
     case "paid":
       return "paid";
+    case "refunded":
+      return "refunded";
     case "void":
       return "void";
     case "uncollectible":

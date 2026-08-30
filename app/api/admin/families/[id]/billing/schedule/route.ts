@@ -44,7 +44,7 @@ import { getNextInvoiceTiming } from "@/lib/stripe";
  *       periodStart: number,          // unix ms (UTC midnight)
  *       periodEndExclusive: number,
  *       monthLabel: "Aug 2026",
- *       status: "not_started" | "open" | "paid" | "failed" | "void",
+ *       status: "not_started" | "open" | "paid" | "refunded" | "failed" | "void",
  *       invoice: { ... } | null,      // hydrated when status !== "not_started"
  *     }>
  *   }
@@ -255,7 +255,14 @@ export interface ScheduleSlot {
   periodEndExclusive: number;
   /** Human label ("Aug 2026") for the row. */
   monthLabel: string;
-  status: "not_started" | "scheduled" | "open" | "paid" | "failed" | "void";
+  status:
+    | "not_started"
+    | "scheduled"
+    | "open"
+    | "paid"
+    | "refunded"
+    | "failed"
+    | "void";
   /** For the "scheduled" slot only: unix ms when Stripe will email the
    *  month's invoice (drafted-first-invoice finalization, trial end,
    *  future anchor, or the running cycle's period end). Null when

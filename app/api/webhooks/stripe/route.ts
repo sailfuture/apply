@@ -55,6 +55,12 @@ import { buildFamilyByParentEmail } from "@/lib/store-server";
  *   - `invoice.finalized` / `invoice.paid` / `invoice.payment_failed`
  *     / `invoice.voided` / `invoice.marked_uncollectible` — mirror
  *     upsert. `payment_failed` also alerts staff.
+ *   - `charge.refunded` — reflect Dashboard (or in-app) refunds in
+ *     the mirror: Stripe keeps the invoice `paid` after a refund, so
+ *     this is the only signal. Fully refunded → status `refunded`;
+ *     either way the collected amount drops by the refund. NOTE:
+ *     the Dashboard webhook endpoint must be subscribed to this
+ *     event for the handler to ever fire.
  */
 
 export const dynamic = "force-dynamic";
@@ -91,6 +97,9 @@ export async function POST(req: NextRequest) {
       case "invoice.voided":
       case "invoice.marked_uncollectible":
         await upsertInvoiceFromEvent(event.type, event.data.object);
+        break;
+      case "charge.refunded":
+        await handleChargeRefunded(event.data.object);
         break;
       case "checkout.session.completed":
       case "checkout.session.async_payment_succeeded":
@@ -275,6 +284,12 @@ const STATUS_RANK: Record<string, number> = {
   uncollectible: 2,
   paid: 3,
   void: 3,
+  // OUR terminal status, not Stripe's — Stripe leaves a refunded
+  // invoice `paid` forever, so `charge.refunded` stamps this and no
+  // invoice event may ever regress it (a redelivered `invoice.paid`
+  // would otherwise flip the row back to Complete and resurrect the
+  // pre-refund paid amount).
+  refunded: 4,
 };
 
 async function upsertInvoiceFromEvent(
@@ -437,6 +452,74 @@ async function upsertInvoiceFromEvent(
       ].filter(Boolean)
     );
   }
+}
+
+/**
+ * `charge.refunded` — fires on every refund, full or partial,
+ * including refunds issued directly in the Stripe Dashboard. That
+ * Dashboard path is exactly the one no invoice event covers: Stripe
+ * leaves a refunded invoice `paid` forever, so without this handler
+ * the mirror shows Complete and "paid to date" overstates until
+ * someone notices.
+ *
+ * Charge → invoice resolution goes through the Invoice Payments API
+ * — on this API version the Charge object no longer carries an
+ * `invoice` field, so the payment intent is the only link back.
+ *
+ * Retry contract: Stripe/Xano transport failures THROW (→ 500 →
+ * Stripe redelivers). Permanent no-ops: a charge with no payment
+ * intent or no invoice payment isn't an invoice payment at all
+ * (store Payment Link, one-off), and a missing mirror row means the
+ * invoice was never ours.
+ */
+async function handleChargeRefunded(charge: Stripe.Charge): Promise<void> {
+  const paymentIntentId = idOrString(charge.payment_intent);
+  if (!paymentIntentId) {
+    console.log(
+      `[/api/webhooks/stripe] charge.refunded for ${charge.id} has no payment intent — skipping.`
+    );
+    return;
+  }
+
+  const invoicePayments = await getStripeClient().invoicePayments.list({
+    payment: { type: "payment_intent", payment_intent: paymentIntentId },
+    limit: 1,
+  });
+  const invoiceRef = invoicePayments.data[0]?.invoice;
+  const invoiceId =
+    typeof invoiceRef === "string" ? invoiceRef : (invoiceRef?.id ?? null);
+  if (!invoiceId) {
+    console.log(
+      `[/api/webhooks/stripe] charge.refunded for ${charge.id}: payment intent ${paymentIntentId} has no invoice — skipping.`
+    );
+    return;
+  }
+
+  // Strict lookup — transient failure throws (→ retry); a genuine
+  // null means the invoice was never mirrored (not a tuition
+  // invoice), a permanent skip.
+  const existing = await xano.paymentTransactions.findByStripeIdStrict(
+    invoiceId
+  );
+  if (!existing) {
+    console.log(
+      `[/api/webhooks/stripe] charge.refunded for ${charge.id}: invoice ${invoiceId} isn't in the mirror — skipping.`
+    );
+    return;
+  }
+
+  // The charge is the authority on money actually kept: captured
+  // minus refunded. `charge.refunded` (the boolean) is true only
+  // when the FULL amount has been returned — a partial refund keeps
+  // the row's lifecycle status and just lowers the collected figure.
+  const refundedCents = charge.amount_refunded ?? 0;
+  const capturedCents = charge.amount_captured ?? charge.amount ?? 0;
+  const netPaidCents = Math.max(capturedCents - refundedCents, 0);
+  await xano.paymentTransactions.update(existing.id, {
+    amount_paid_cents: netPaidCents,
+    ...(charge.refunded ? { status: "refunded" } : {}),
+    last_synced_at: Date.now(),
+  });
 }
 
 /**

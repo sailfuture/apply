@@ -151,7 +151,7 @@ export interface ParentScheduleSlot {
   periodStart: number;
   periodEndExclusive: number;
   monthLabel: string;
-  status: "not_started" | "open" | "paid" | "failed" | "void";
+  status: "not_started" | "open" | "paid" | "refunded" | "failed" | "void";
   invoice: {
     stripeInvoiceId: string;
     amountDueCents: number;

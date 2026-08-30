@@ -164,11 +164,16 @@ export async function POST(
         const refund = await refundInvoice(body.invoiceId, {
           expectedSubscriptionId: subscriptionId,
         });
-        // Reflect the refund in the payment-transactions mirror so
-        // paid/outstanding totals don't overstate forever (Stripe
+        // Reflect the refund in the payment-transactions mirror
+        // immediately so the schedule flips without waiting on the
+        // `charge.refunded` webhook (which converges the row to the
+        // charge's actual captured-minus-refunded truth). Stripe
         // doesn't change the invoice's `paid` status on refund, so
-        // no webhook event corrects the row). Best-effort with an
-        // alert — the refund itself already succeeded.
+        // this + the webhook are the only correctors. Best-effort
+        // with an alert — the refund itself already succeeded.
+        // `refundInvoice` always returns the FULL remaining balance
+        // of the payment, so post-refund the invoice is fully
+        // refunded — status flips to our `refunded` terminal state.
         try {
           const row = await xano.paymentTransactions.findByStripeIdStrict(
             body.invoiceId
@@ -179,6 +184,7 @@ export async function POST(
                 (row.amount_paid_cents ?? 0) - (refund.amount ?? 0),
                 0
               ),
+              status: "refunded",
               last_synced_at: Date.now(),
             });
           }

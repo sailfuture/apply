@@ -11,6 +11,8 @@ import {
   ExternalLink,
   FileText,
   Loader2,
+  RefreshCw,
+  Undo2,
   XCircle,
 } from "lucide-react";
 import {
@@ -96,6 +98,35 @@ export default function FamilyBillingPage() {
   const [markPaidSlot, setMarkPaidSlot] = useState<ScheduleSlot | null>(
     null
   );
+
+  // "Re-sync from Stripe" — runs the year-wide mirror backfill, which
+  // also picks up Dashboard-side refunds the webhook may have missed
+  // (e.g. issued before the `charge.refunded` handler existed).
+  const [resyncing, setResyncing] = useState(false);
+  async function resync() {
+    if (resyncing || !yearId) return;
+    setResyncing(true);
+    try {
+      const res = await fetch(`/api/admin/billing/backfill?yearId=${yearId}`, {
+        method: "POST",
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(body?.error ?? `Re-sync failed (${res.status})`);
+      }
+      // Spinner holds until the refreshed schedule actually renders.
+      await mutate();
+      toast.success(
+        `Re-synced ${body?.upsertedInvoices ?? 0} invoice${body?.upsertedInvoices === 1 ? "" : "s"} from Stripe.`
+      );
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't re-sync from Stripe"
+      );
+    } finally {
+      setResyncing(false);
+    }
+  }
 
   // Same payload the registration detail page renders from — reused
   // here for the per-student tuition breakdown receipt. Loaded
@@ -254,7 +285,12 @@ export default function FamilyBillingPage() {
         </Card>
       ) : null}
 
-      <ScheduleCard slots={data.slots} onMarkPaid={setMarkPaidSlot} />
+      <ScheduleCard
+        slots={data.slots}
+        onMarkPaid={setMarkPaidSlot}
+        onResync={resync}
+        resyncing={resyncing}
+      />
 
       {/* Keyed by invoice so reopening for a different month starts
           with fresh form state instead of the previous entry's. */}
@@ -361,16 +397,38 @@ function SummaryStat({
 function ScheduleCard({
   slots,
   onMarkPaid,
+  onResync,
+  resyncing,
 }: {
   slots: ScheduleSlot[];
   /** "Mark paid" click on an open/failed row — opens the
    *  outside-payment dialog for that slot's invoice. */
   onMarkPaid: (slot: ScheduleSlot) => void;
+  /** Year-wide mirror backfill from Stripe — corrects drift the
+   *  webhook missed (historical Dashboard refunds especially). */
+  onResync: () => void;
+  resyncing: boolean;
 }) {
   return (
     <Card className="overflow-hidden gap-0 py-0 bg-white">
       <CardHeader className="py-3 !pb-3 border-b">
-        <CardTitle className="text-base">Monthly invoices</CardTitle>
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle className="text-base">Monthly invoices</CardTitle>
+          <button
+            type="button"
+            onClick={onResync}
+            disabled={resyncing}
+            className={cn(ACTION_BADGE, resyncing && "opacity-60")}
+            title="Pull every invoice for this year fresh from Stripe — fixes drift, including refunds issued in the Stripe Dashboard"
+          >
+            {resyncing ? (
+              <Loader2 className="size-3 animate-spin" aria-hidden="true" />
+            ) : (
+              <RefreshCw className="size-3" aria-hidden="true" />
+            )}
+            {resyncing ? "Re-syncing…" : "Re-sync from Stripe"}
+          </button>
+        </div>
       </CardHeader>
       <CardContent className="px-3 pb-3 bg-white">
         <Table>
@@ -547,6 +605,14 @@ function StatusPill({
           label: "Complete",
           tone: "bg-emerald-50 text-emerald-700 ring-emerald-200",
           Icon: CheckCircle2,
+        };
+      case "refunded":
+        // Payment was collected, then returned (Dashboard or in-app
+        // refund) — money-wise the month contributed $0.
+        return {
+          label: "Refunded",
+          tone: "bg-purple-50 text-purple-700 ring-purple-200",
+          Icon: Undo2,
         };
       case "open":
         return {
