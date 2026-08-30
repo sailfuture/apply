@@ -262,10 +262,19 @@ export default function RetentionPage() {
           <Card className="overflow-hidden gap-0 py-0 bg-white">
             <CardContent className="px-4 py-4 bg-white">
               <dl className="grid grid-cols-3 gap-4 text-sm">
+                {/* The community/residential breakdown only means
+                    something in the mixed view — the segmented views
+                    are already one group, so the caption would just
+                    restate the headline number. */}
                 <Stat
                   label="Enrolled"
                   value={String(enrolledCount)}
                   tone="positive"
+                  detail={
+                    segment === "all"
+                      ? `${data.enrolled.community} community · ${data.enrolled.residential} residential`
+                      : undefined
+                  }
                 />
                 <Stat
                   label="Unenrolled"
@@ -548,10 +557,15 @@ function Stat({
   label,
   value,
   tone,
+  detail,
 }: {
   label: string;
   value: string;
   tone: "muted" | "positive" | "negative";
+  /** Optional breakdown under the headline figure ("12 community ·
+   *  3 residential"). Nested inside the <dd> rather than added as a
+   *  sibling so the <dl> keeps a valid dt/dd structure. */
+  detail?: string;
 }) {
   return (
     <div>
@@ -566,6 +580,11 @@ function Stat({
         )}
       >
         {value}
+        {detail ? (
+          <span className="mt-0.5 block text-xs font-normal text-muted-foreground">
+            {detail}
+          </span>
+        ) : null}
       </dd>
     </div>
   );
