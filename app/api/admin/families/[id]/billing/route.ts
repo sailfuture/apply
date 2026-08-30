@@ -4,11 +4,9 @@ import { xano, activeStripeSubscriptionId } from "@/lib/xano";
 import {
   cancelSubscriptionAtPeriodEnd,
   getBillingSnapshot,
-  refundInvoice,
   uncancelSubscription,
 } from "@/lib/stripe";
 import { startMonthlyBilling, BillingPreconditionError } from "@/lib/billing";
-import { sendBillingAlert } from "@/lib/billing-alerts";
 
 /**
  * Admin billing endpoint — one route, action-dispatched.
@@ -21,10 +19,14 @@ import { sendBillingAlert } from "@/lib/billing-alerts";
  *     Stripe each call — no Xano cache.
  *
  *   POST /api/admin/families/:id/billing?yearId=Y
- *     Body: `{ action: "start" | "cancel" | "uncancel" | "refund", ...payload }`
+ *     Body: `{ action: "start" | "cancel" | "uncancel" }`
  *     Runs the action and returns a refreshed snapshot. Errors
  *     surface as 4xx for caller-fixable issues, 502 for Stripe
  *     transport.
+ *
+ * The in-app `"refund"` action was removed (2026-08-30) — refunds are
+ * issued directly in the Stripe Dashboard, and the `charge.refunded`
+ * webhook mirrors them back (status "refunded" + net collected).
  *
  * The legacy `"update-amount"` action is gone — per-student
  * `monthly_amount` is the source of truth now, and changes to it
@@ -39,12 +41,10 @@ import { sendBillingAlert } from "@/lib/billing-alerts";
  */
 
 interface BillingActionBody {
-  action: "start" | "cancel" | "uncancel" | "refund";
+  action: "start" | "cancel" | "uncancel";
   /** Legacy field kept on the type to tolerate older clients sending
    *  it; the route ignores the value now. */
   monthlyTuition?: number;
-  /** Required when `action === "refund"`. Invoice id to refund. */
-  invoiceId?: string;
 }
 
 export async function GET(
@@ -78,7 +78,6 @@ export async function GET(
       return NextResponse.json({
         subscription: null,
         invoices: [],
-        lastPaidInvoice: null,
         statusLabel: "Not Started" as const,
         customerId,
       });
@@ -150,60 +149,6 @@ export async function POST(
         // Start Monthly Billing button instead.
         await uncancelSubscription(subscriptionId);
         break;
-      case "refund": {
-        if (!body.invoiceId) {
-          return NextResponse.json(
-            { error: "`invoiceId` is required for refunds." },
-            { status: 400 }
-          );
-        }
-        // Ownership guard rides along: refundInvoice refuses any
-        // invoice that doesn't belong to THIS family's subscription,
-        // so a stale/mistyped id can't refund another family's
-        // payment.
-        const refund = await refundInvoice(body.invoiceId, {
-          expectedSubscriptionId: subscriptionId,
-        });
-        // Reflect the refund in the payment-transactions mirror
-        // immediately so the schedule flips without waiting on the
-        // `charge.refunded` webhook (which converges the row to the
-        // charge's actual captured-minus-refunded truth). Stripe
-        // doesn't change the invoice's `paid` status on refund, so
-        // this + the webhook are the only correctors. Best-effort
-        // with an alert — the refund itself already succeeded.
-        // `refundInvoice` always returns the FULL remaining balance
-        // of the payment, so post-refund the invoice is fully
-        // refunded — status flips to our `refunded` terminal state.
-        try {
-          const row = await xano.paymentTransactions.findByStripeIdStrict(
-            body.invoiceId
-          );
-          if (row) {
-            await xano.paymentTransactions.update(row.id, {
-              amount_paid_cents: Math.max(
-                (row.amount_paid_cents ?? 0) - (refund.amount ?? 0),
-                0
-              ),
-              status: "refunded",
-              last_synced_at: Date.now(),
-            });
-          }
-        } catch (err) {
-          console.error(
-            `[/api/admin/families/${familyId}/billing] refund succeeded but mirror update failed for invoice ${body.invoiceId}:`,
-            err
-          );
-          await sendBillingAlert(
-            `Refund not reflected in billing mirror (family #${familyId})`,
-            [
-              `Invoice ${body.invoiceId} was refunded ($${((refund.amount ?? 0) / 100).toFixed(2)}) but the local mirror update failed — the family's "paid to date" will overstate until corrected.`,
-              `Adjust the transaction row's amount_paid_cents in Xano directly. (Do NOT rely on the backfill here — Stripe's invoice amount_paid doesn't subtract refunds, so a re-sync re-overstates it.)`,
-              `Error: ${err instanceof Error ? err.message : String(err)}`,
-            ]
-          );
-        }
-        break;
-      }
       default:
         return NextResponse.json(
           { error: `Unknown action: ${body.action}` },

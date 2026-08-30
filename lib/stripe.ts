@@ -258,15 +258,6 @@ export async function createInvoiceSubscription(
 export interface BillingSnapshot {
   subscription: Stripe.Subscription;
   invoices: Stripe.Invoice[];
-  /** Most recent invoice with money actually collected THROUGH STRIPE
-   *  — the only thing the admin "Refund last payment" action can act
-   *  on, and the gate that shows/hides the button. Deliberately
-   *  stricter than `status === "paid"`: $0 invoices (Stripe auto-pays
-   *  them instantly, e.g. the creation invoice of a deferred-start
-   *  subscription) and out-of-band payments (admin-recorded check/
-   *  cash) are both `paid` with nothing refundable, and matching them
-   *  offered a Refund button to families who never paid a cent. */
-  lastPaidInvoice: Stripe.Invoice | null;
   /** Quick-status pill: derived from subscription.status plus
    *  collection_paused so the admin UI doesn't have to know about
    *  every Stripe substatus. */
@@ -353,34 +344,8 @@ export async function getBillingSnapshot(
     stripe.invoices.list({
       subscription: subscriptionId,
       limit: 12,
-      // `payments` is expandable-only — needed below to tell a real
-      // Stripe charge from an out-of-band payment record.
-      expand: ["data.payments"],
     }),
   ]);
-
-  // Refundable = money that moved THROUGH Stripe: a succeeded payment
-  // backed by a PaymentIntent or Charge (the exact objects
-  // `refundInvoice` refunds). Out-of-band check/cash payments appear
-  // as a `payment_record` with neither, and $0 invoices (auto-paid at
-  // creation for deferred-start subscriptions) carry no payment at
-  // all — both are `status: "paid"`, which is how status alone put a
-  // Refund button on families who never paid a cent. NOTE: the
-  // `paid_out_of_band` invoice field is NOT usable here — Basil
-  // removed it from the Invoice resource (it survives only as an
-  // `invoices.pay` request param), so the payments list is the only
-  // reliable discriminator on our pinned dahlia version.
-  const lastPaidInvoice =
-    invoiceList.data.find(
-      (inv) =>
-        inv.status === "paid" &&
-        (inv.amount_paid ?? 0) > 0 &&
-        (inv.payments?.data ?? []).some(
-          (p) =>
-            p.status === "paid" &&
-            (p.payment?.payment_intent || p.payment?.charge)
-        )
-    ) ?? null;
 
   let statusLabel: BillingSnapshot["statusLabel"] = "Unknown";
   if (subscription.pause_collection) {
@@ -415,7 +380,6 @@ export async function getBillingSnapshot(
   return {
     subscription,
     invoices: invoiceList.data,
-    lastPaidInvoice,
     statusLabel,
   };
 }
@@ -470,64 +434,10 @@ export async function uncancelSubscription(
   });
 }
 
-/**
- * Refund a paid invoice in full. Partial refunds are out of scope for
- * the standard admin flow (admin can issue those via the Stripe
- * Dashboard directly).
- *
- * Payment resolution: on current API versions the invoice's payment
- * lives in the `payments` list (`invoice.payments.data[].payment`),
- * NOT the removed top-level `payment_intent` field — we expand the
- * list and refund the successful payment's PaymentIntent (or bare
- * Charge for out-of-band payments).
- *
- * `expectedSubscriptionId` is the ownership guard: the admin route
- * passes the family's own subscription id, and we refuse to refund an
- * invoice that belongs to any other subscription — otherwise a stale
- * or mistyped invoice id would silently refund ANOTHER family's
- * payment in full.
- */
-export async function refundInvoice(
-  invoiceId: string,
-  opts?: { expectedSubscriptionId?: string }
-): Promise<Stripe.Refund> {
-  const stripe = getStripeClient();
-  const invoice = await stripe.invoices.retrieve(invoiceId, {
-    expand: ["payments"],
-  });
-
-  if (opts?.expectedSubscriptionId) {
-    const owner = extractInvoiceSubscriptionId(invoice);
-    if (owner !== opts.expectedSubscriptionId) {
-      throw new Error(
-        `Invoice ${invoiceId} belongs to subscription ${owner ?? "none"}, not this family's subscription — refusing to refund.`
-      );
-    }
-  }
-
-  const payments = invoice.payments?.data ?? [];
-  // Only a SUCCEEDED payment is refundable — falling back to an
-  // arbitrary first payment could target a canceled/failed attempt
-  // and either error confusingly or refund the wrong object.
-  const successful = payments.find((p) => p.status === "paid");
-  const paymentIntentId = idOrObjectId(successful?.payment?.payment_intent);
-  if (paymentIntentId) {
-    return stripe.refunds.create({
-      payment_intent: paymentIntentId,
-      reason: "requested_by_customer",
-    });
-  }
-  const chargeId = idOrObjectId(successful?.payment?.charge);
-  if (chargeId) {
-    return stripe.refunds.create({
-      charge: chargeId,
-      reason: "requested_by_customer",
-    });
-  }
-  throw new Error(
-    `Invoice ${invoiceId} has no refundable payment on record — nothing to refund.`
-  );
-}
+// NOTE: the in-app `refundInvoice` helper was removed (2026-08-30) —
+// admin issues refunds directly in the Stripe Dashboard, and the
+// `charge.refunded` webhook handler mirrors them back into the
+// payment-transactions table (status "refunded" + net collected).
 
 /* ─────────────────────── Per-student subscription items ───────── */
 

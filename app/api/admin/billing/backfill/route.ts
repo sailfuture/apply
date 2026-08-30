@@ -11,7 +11,14 @@ import { getStripeClient } from "@/lib/stripe";
  * drifted) to pull every invoice for every family-subscription for
  * the year and upsert it.
  *
- *   POST /api/admin/billing/backfill?yearId=Y
+ *   POST /api/admin/billing/backfill?yearId=Y[&familyId=F]
+ *
+ * `familyId` scopes the run to ONE family's subscription — the
+ * per-family schedule page's "Re-sync from Stripe" button passes it,
+ * because a full-year sweep (every subscription × every invoice ×
+ * a refunds lookup per paid invoice) takes minutes while the admin
+ * watches a spinner for a single family's drift. Omitting it keeps
+ * the original whole-year sweep for true backfills.
  *
  * Strategy:
  *   1. Read every `registration_families_payment` row for the year
@@ -41,7 +48,22 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const payments = await xano.familyPayments.getAllByYear(yearId);
+    // Optional single-family scope (see route docblock).
+    const familyIdParam = req.nextUrl.searchParams.get("familyId");
+    const familyId = familyIdParam ? Number(familyIdParam) : null;
+    if (familyIdParam && (!Number.isFinite(familyId) || familyId! <= 0)) {
+      return NextResponse.json(
+        { error: "familyId must be a positive number" },
+        { status: 400 }
+      );
+    }
+
+    const allPayments = await xano.familyPayments.getAllByYear(yearId);
+    const payments = familyId
+      ? allPayments.filter(
+          (p) => Number(p.registration_families_id) === familyId
+        )
+      : allPayments;
     // Include canceled (`canceled:<id>` sentinel) subscriptions too —
     // their historical invoices are exactly what a backfill exists to
     // recover — by unwrapping the sentinel back to the raw Stripe id.

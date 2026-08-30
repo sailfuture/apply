@@ -63,9 +63,10 @@ import { cn } from "@/lib/utils";
  *   - Start Monthly Billing (only shown when no subscription yet)
  *   - Cancel at period end (preserves access through the
  *     paid-for period; confirmation dialog)
- *   - Refund Last Invoice (confirmation dialog, full refund of the
- *     most recent paid invoice; partial refunds via the Stripe
- *     Dashboard if needed)
+ *
+ * Refunds are NOT issued from here (removed 2026-08-30) — admin
+ * refunds directly in the Stripe Dashboard, and the `charge.refunded`
+ * webhook mirrors the refund back onto the payment schedule.
  *
  * Monthly amount edits no longer live here — per-student
  * `monthly_amount` is the source of truth, edited on the
@@ -109,16 +110,6 @@ interface BillingSnapshot {
     hosted_invoice_url: string | null;
     invoice_pdf: string | null;
   }>;
-  /** Only present when money was actually collected through Stripe
-   *  (the server excludes $0 auto-paid invoices and out-of-band
-   *  check/cash payments) — its absence hides the Refund button. */
-  lastPaidInvoice: {
-    id: string;
-    /** Cents actually collected — shown in the refund confirm. */
-    amount_paid?: number | null;
-    /** Invoice creation (unix seconds) — dates the refund confirm. */
-    created?: number | null;
-  } | null;
   statusLabel:
     | "Not Started"
     | "Active"
@@ -162,7 +153,7 @@ interface Props {
   showScheduleLink?: boolean;
 }
 
-type BillingAction = "start" | "cancel" | "uncancel" | "refund";
+type BillingAction = "start" | "cancel" | "uncancel";
 
 export function BillingCard({
   familyId,
@@ -191,7 +182,6 @@ export function BillingCard({
   const [pending, setPending] = useState<BillingAction | null>(null);
   const [openingPortal, setOpeningPortal] = useState(false);
   const [confirmCancel, setConfirmCancel] = useState(false);
-  const [confirmRefund, setConfirmRefund] = useState(false);
 
   // Per-family payment schedule deep link — shown alongside the
   // Stripe-side action buttons so admin can pivot to the historical
@@ -435,22 +425,6 @@ export function BillingCard({
       })
     : "—";
 
-  // Refund confirm specifics — say exactly how much money moves and
-  // which invoice it came from, so admin confirms a concrete action
-  // rather than a vague "refund something".
-  const refundAmountLabel = data.lastPaidInvoice?.amount_paid
-    ? `$${(data.lastPaidInvoice.amount_paid / 100).toLocaleString("en-US", {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      })}`
-    : null;
-  const refundDateLabel = data.lastPaidInvoice?.created
-    ? new Date(data.lastPaidInvoice.created * 1000).toLocaleDateString(
-        "en-US",
-        { month: "long", day: "numeric", year: "numeric" }
-      )
-    : null;
-
   return (
     <div className="rounded-md border bg-white p-4 space-y-5">
       {/* Header — status pill + amount + next invoice */}
@@ -480,11 +454,12 @@ export function BillingCard({
 
       {/* Actions — every button on one row, inline with Cancel at period
           end. The View links always render (still useful after the
-          subscription is canceled); the refund / undo / cancel actions
-          only apply while it's live, so they stay gated on !isCanceled.
+          subscription is canceled); the undo / cancel actions only
+          apply while it's live, so they stay gated on !isCanceled.
           (The legacy "Update amount" button is gone — per-student
           `monthly_amount` is edited on the Scholarship Determination
-          card; see the file docblock.) */}
+          card; and Refund was removed — refunds happen in the Stripe
+          Dashboard, mirrored back by the charge.refunded webhook.) */}
       <div className="flex flex-wrap items-center gap-2">
         {showScheduleLink ? (
           <Button asChild variant="outline" size="sm" className="bg-white">
@@ -520,18 +495,6 @@ export function BillingCard({
         </Button>
         {!isCanceled ? (
           <>
-            {data.lastPaidInvoice ? (
-              <Button
-                variant="outline"
-                size="sm"
-                className="bg-white"
-                disabled={pending !== null}
-                onClick={() => setConfirmRefund(true)}
-              >
-                <RefreshCw className="size-3.5 mr-1.5" aria-hidden="true" />
-                Refund last payment
-              </Button>
-            ) : null}
             {cancelingAtPeriodEnd ? (
               // Undo the pending cancellation. Only valid while the
               // subscription is still alive (we're inside the grace
@@ -601,56 +564,6 @@ export function BillingCard({
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Refund confirmation */}
-      <AlertDialog open={confirmRefund} onOpenChange={(o) => !pending && setConfirmRefund(o)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Refund last payment?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Refunds the family&rsquo;s most recent Stripe payment
-              {refundAmountLabel ? (
-                <>
-                  {" "}
-                  —{" "}
-                  <span className="font-semibold text-foreground">
-                    {refundAmountLabel}
-                  </span>
-                </>
-              ) : null}
-              {refundDateLabel ? `, collected ${refundDateLabel}` : ""}. If
-              part of it was already refunded via the Stripe Dashboard,
-              only the remainder is returned. The family sees the refund
-              on their original payment method in 5-10 business days.{" "}
-              <span className="font-medium text-red-700">
-                Refunds can&rsquo;t be reversed once issued.
-              </span>{" "}
-              Partial refunds can be issued via the Stripe Dashboard.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={pending !== null}>Keep payment</AlertDialogCancel>
-            <AlertDialogAction
-              disabled={pending !== null || !data.lastPaidInvoice}
-              className="bg-red-600 hover:bg-red-700"
-              onClick={(e) => {
-                e.preventDefault();
-                if (!data.lastPaidInvoice) return;
-                void runAction("refund", {
-                  invoiceId: data.lastPaidInvoice.id,
-                }).then(() => setConfirmRefund(false));
-              }}
-            >
-              {/* No amount in the button — after a Dashboard partial
-                  refund, Stripe returns only the remainder, and a
-                  button asserting the full figure would confirm a
-                  number that isn't what moves. The description above
-                  carries the amount with that caveat spelled out. */}
-              {pending === "refund" ? "Refunding…" : "Issue refund"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
     </div>
   );
 }
@@ -715,7 +628,5 @@ function actionSuccessMessage(action: BillingAction): string {
       return "Subscription will cancel at the end of the current billing period.";
     case "uncancel":
       return "Cancellation reversed. Monthly billing continues as scheduled.";
-    case "refund":
-      return "Refund issued. The family will see it on their original payment method in 5-10 business days.";
   }
 }

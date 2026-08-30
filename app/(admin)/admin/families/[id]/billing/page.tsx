@@ -99,17 +99,20 @@ export default function FamilyBillingPage() {
     null
   );
 
-  // "Re-sync from Stripe" — runs the year-wide mirror backfill, which
-  // also picks up Dashboard-side refunds the webhook may have missed
-  // (e.g. issued before the `charge.refunded` handler existed).
+  // "Re-sync from Stripe" — mirror backfill scoped to THIS family
+  // only (familyId param), so the click takes seconds, not the
+  // minutes a whole-year sweep costs. Picks up Dashboard-side refunds
+  // the webhook may have missed (e.g. issued before the
+  // `charge.refunded` handler existed).
   const [resyncing, setResyncing] = useState(false);
   async function resync() {
     if (resyncing || !yearId) return;
     setResyncing(true);
     try {
-      const res = await fetch(`/api/admin/billing/backfill?yearId=${yearId}`, {
-        method: "POST",
-      });
+      const res = await fetch(
+        `/api/admin/billing/backfill?yearId=${yearId}&familyId=${familyId}`,
+        { method: "POST" }
+      );
       const body = await res.json().catch(() => null);
       if (!res.ok) {
         throw new Error(body?.error ?? `Re-sync failed (${res.status})`);
@@ -244,11 +247,11 @@ export default function FamilyBillingPage() {
 
       {/* Subscription state + lifecycle actions — the same BillingCard
           the registration detail page renders, so Start Monthly
-          Billing (no subscription yet) or Cancel / Undo-cancel /
-          Refund (live subscription) are available right here without
-          bouncing back to the registration page. The card fetches its
-          own live-Stripe snapshot; `showScheduleLink=false` because
-          its schedule deep-link would point at this very page. */}
+          Billing (no subscription yet) or Cancel / Undo-cancel (live
+          subscription) are available right here without bouncing back
+          to the registration page. The card fetches its own
+          live-Stripe snapshot; `showScheduleLink=false` because its
+          schedule deep-link would point at this very page. */}
       <BillingCard
         familyId={familyId}
         yearId={yearId}
