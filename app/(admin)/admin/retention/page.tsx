@@ -4,7 +4,13 @@ import { useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { toast } from "sonner";
-import { ChevronRight, UserMinus } from "lucide-react";
+import {
+  ChevronRight,
+  FileSpreadsheet,
+  FileText,
+  Loader2,
+  UserMinus,
+} from "lucide-react";
 import {
   Card,
   CardContent,
@@ -59,12 +65,13 @@ export default function RetentionPage() {
     );
   }, [data, segment]);
   // Exempt rows (student never actually attended, etc.) stay VISIBLE
-  // in the table but drop out of every number — they weren't real
-  // enrollments, so they're neither a keep nor a loss.
+  // — in their own "Not counted" card below the main table — but drop
+  // out of every number: they weren't real enrollments, so they're
+  // neither a keep nor a loss.
   const countedUnenrolled = filteredUnenrolled.filter(
     (u) => !u.retention_exempt
   );
-  const exemptCount = filteredUnenrolled.length - countedUnenrolled.length;
+  const notCounted = filteredUnenrolled.filter((u) => u.retention_exempt);
   const enrolledCount = data?.enrolled[segment] ?? 0;
   const total = enrolledCount + countedUnenrolled.length;
   const ratePct =
@@ -110,6 +117,34 @@ export default function RetentionPage() {
     } finally {
       // Converge on server truth either way.
       void mutate();
+    }
+  }
+
+  // XLSX / PDF export of exactly what the page currently shows for
+  // the selected segment. Libraries load on demand (dynamic import)
+  // so the page bundle stays lean.
+  const [exporting, setExporting] = useState<"xlsx" | "pdf" | null>(null);
+  async function runExport(kind: "xlsx" | "pdf") {
+    if (exporting || !data) return;
+    setExporting(kind);
+    try {
+      const mod = await import("@/lib/retention-export");
+      const input = {
+        yearName: data.year.year_name,
+        segmentLabel:
+          SEGMENTS.find((s) => s.value === segment)?.label ?? "All",
+        enrolledCount,
+        counted: countedUnenrolled,
+        notCounted,
+        ratePct,
+      };
+      if (kind === "xlsx") await mod.exportRetentionXlsx(input);
+      else await mod.exportRetentionPdf(input);
+    } catch (err) {
+      console.error("Retention export failed:", err);
+      toast.error("Export failed — please try again.");
+    } finally {
+      setExporting(null);
     }
   }
 
@@ -159,24 +194,56 @@ export default function RetentionPage() {
         </div>
       ) : (
         <>
-          {/* Segment filter — chips, single-select. */}
-          <div className="flex flex-wrap items-center gap-1.5">
-            {SEGMENTS.map((s) => (
+          {/* Segment filter chips (left) + report exports (right). */}
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-1.5">
+              {SEGMENTS.map((s) => (
+                <button
+                  key={s.value}
+                  type="button"
+                  aria-pressed={segment === s.value}
+                  onClick={() => setSegment(s.value)}
+                  className={cn(
+                    "rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors",
+                    segment === s.value
+                      ? "border-foreground bg-foreground text-background"
+                      : "border-border bg-white text-muted-foreground hover:border-foreground/40 hover:text-foreground"
+                  )}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center gap-1.5">
               <button
-                key={s.value}
                 type="button"
-                aria-pressed={segment === s.value}
-                onClick={() => setSegment(s.value)}
-                className={cn(
-                  "rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors",
-                  segment === s.value
-                    ? "border-foreground bg-foreground text-background"
-                    : "border-border bg-white text-muted-foreground hover:border-foreground/40 hover:text-foreground"
-                )}
+                onClick={() => runExport("xlsx")}
+                disabled={exporting !== null}
+                className={EXPORT_BUTTON}
+                title="Download the report as an Excel spreadsheet"
               >
-                {s.label}
+                {exporting === "xlsx" ? (
+                  <Loader2 className="size-3 animate-spin" aria-hidden="true" />
+                ) : (
+                  <FileSpreadsheet className="size-3" aria-hidden="true" />
+                )}
+                Export XLSX
               </button>
-            ))}
+              <button
+                type="button"
+                onClick={() => runExport("pdf")}
+                disabled={exporting !== null}
+                className={EXPORT_BUTTON}
+                title="Download the report as a printable PDF"
+              >
+                {exporting === "pdf" ? (
+                  <Loader2 className="size-3 animate-spin" aria-hidden="true" />
+                ) : (
+                  <FileText className="size-3" aria-hidden="true" />
+                )}
+                Export PDF
+              </button>
+            </div>
           </div>
 
           {/* Headline numbers — derived from the selected segment. */}
@@ -198,7 +265,7 @@ export default function RetentionPage() {
             </CardContent>
           </Card>
 
-          {/* The departures themselves */}
+          {/* Departures that count against retention */}
           <Card className="overflow-hidden gap-0 py-0 bg-white">
             <CardHeader className="py-3 !pb-3 border-b">
               <div className="flex items-baseline gap-3">
@@ -206,15 +273,12 @@ export default function RetentionPage() {
                   Unenrolled students
                 </CardTitle>
                 <span className="text-xs tabular-nums text-muted-foreground">
-                  ({filteredUnenrolled.length})
-                  {exemptCount > 0
-                    ? ` · ${exemptCount} not counted`
-                    : ""}
+                  ({countedUnenrolled.length})
                 </span>
               </div>
             </CardHeader>
             <CardContent className="px-3 pb-3 bg-white">
-              {filteredUnenrolled.length === 0 ? (
+              {countedUnenrolled.length === 0 ? (
                 <div className="px-3 py-10 text-center text-sm text-muted-foreground">
                   <UserMinus className="mx-auto mb-2 size-6 text-muted-foreground/50" />
                   {segment === "all"
@@ -222,125 +286,54 @@ export default function RetentionPage() {
                     : `No ${segment} students have been unenrolled this year.`}
                 </div>
               ) : (
-                <Table className="table-fixed">
-                  <TableHeader>
-                    <TableRow className="hover:bg-transparent">
-                      <TableHead className="text-[10px] text-muted-foreground w-[17%]">
-                        Student
-                      </TableHead>
-                      <TableHead className="text-[10px] text-muted-foreground w-[7%]">
-                        Grade
-                      </TableHead>
-                      <TableHead className="text-[10px] text-muted-foreground w-[15%]">
-                        Family
-                      </TableHead>
-                      <TableHead className="text-[10px] text-muted-foreground w-[11%]">
-                        Unenrolled
-                      </TableHead>
-                      <TableHead className="text-[10px] text-muted-foreground w-[20%]">
-                        Reason
-                      </TableHead>
-                      <TableHead className="text-[10px] text-muted-foreground w-[20%]">
-                        Notes
-                      </TableHead>
-                      <TableHead
-                        className="text-[10px] text-muted-foreground w-[6%] text-center"
-                        title="Check to leave a departure out of the retention numbers — for students who never actually attended."
-                      >
-                        Don&rsquo;t count
-                      </TableHead>
-                      <TableHead className="w-[4%]" />
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {filteredUnenrolled.map((u) => (
-                      <TableRow
-                        key={u.student_id}
-                        // The OVERVIEW surface, not the per-year
-                        // registration page — that page only renders
-                        // students with an active application for the
-                        // selected year, so a departed student whose
-                        // paperwork sits under another year is invisible
-                        // there. The overview lists unenrolled students
-                        // in their own table, each clickable through to
-                        // the student detail.
-                        onClick={() =>
-                          router.push(
-                            `/admin/families/${u.family_id}/overview?yearId=${yearId}`
-                          )
-                        }
-                        className={cn(
-                          "cursor-pointer",
-                          // Exempt departures stay listed but read as
-                          // out-of-the-math.
-                          u.retention_exempt && "opacity-60"
-                        )}
-                      >
-                        <TableCell className="text-sm font-medium">
-                          <span className="block truncate">
-                            {u.student_name}
-                          </span>
-                        </TableCell>
-                        <TableCell className="text-sm text-muted-foreground">
-                          {u.grade || "—"}
-                        </TableCell>
-                        <TableCell className="text-sm">
-                          <span className="flex min-w-0 items-center gap-1.5">
-                            <span className="truncate">{u.family_name}</span>
-                            {/* Only useful in the mixed view — the
-                                segmented views are already homogeneous. */}
-                            {u.residential && segment === "all" ? (
-                              <span className="shrink-0 rounded-full border border-border bg-muted px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                                Residential
-                              </span>
-                            ) : null}
-                          </span>
-                        </TableCell>
-                        <TableCell className="text-sm tabular-nums text-muted-foreground">
-                          {formatDate(u.date)}
-                        </TableCell>
-                        <TableCell
-                          className="text-sm"
-                          title={u.reason || undefined}
-                        >
-                          <span className="block truncate">
-                            {u.reason || "—"}
-                          </span>
-                        </TableCell>
-                        <TableCell
-                          className="text-sm text-muted-foreground"
-                          title={u.notes || undefined}
-                        >
-                          <span className="block truncate">
-                            {u.notes || "—"}
-                          </span>
-                        </TableCell>
-                        {/* stopPropagation on the CELL so a click that
-                            lands near (not on) the checkbox doesn't
-                            navigate to the family page. */}
-                        <TableCell
-                          className="text-center"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <Checkbox
-                            checked={u.retention_exempt}
-                            onCheckedChange={(v) =>
-                              toggleExempt(u, v === true)
-                            }
-                            aria-label={`Don't count ${u.student_name} toward retention`}
-                            title="Check to leave this departure out of the retention numbers — for students who never actually attended."
-                          />
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <ChevronRight className="size-4 text-muted-foreground inline" />
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                <UnenrolledTable
+                  rows={countedUnenrolled}
+                  segment={segment}
+                  onOpenFamily={(u) =>
+                    router.push(
+                      `/admin/families/${u.family_id}/overview?yearId=${yearId}`
+                    )
+                  }
+                  onToggle={toggleExempt}
+                />
               )}
             </CardContent>
           </Card>
+
+          {/* Retention-exempt departures — their own card so the main
+              table (and its count) is exactly what the rate is built
+              from. Unchecking a row here moves it back up. */}
+          {notCounted.length > 0 ? (
+            <Card className="overflow-hidden gap-0 py-0 bg-white">
+              <CardHeader className="py-3 !pb-3 border-b">
+                <div className="flex items-baseline gap-3">
+                  <CardTitle className="text-base text-muted-foreground">
+                    Not counted
+                  </CardTitle>
+                  <span className="text-xs tabular-nums text-muted-foreground">
+                    ({notCounted.length})
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    Never really enrolled — excluded from the retention
+                    numbers.
+                  </span>
+                </div>
+              </CardHeader>
+              <CardContent className="px-3 pb-3 bg-white">
+                <UnenrolledTable
+                  rows={notCounted}
+                  segment={segment}
+                  muted
+                  onOpenFamily={(u) =>
+                    router.push(
+                      `/admin/families/${u.family_id}/overview?yearId=${yearId}`
+                    )
+                  }
+                  onToggle={toggleExempt}
+                />
+              </CardContent>
+            </Card>
+          ) : null}
         </>
       )}
     </div>
@@ -354,6 +347,125 @@ const SEGMENTS: Array<{ value: Segment; label: string }> = [
   { value: "community", label: "Community" },
   { value: "residential", label: "Residential" },
 ];
+
+/** Pill-style export button — matches the segment chips' vocabulary
+ *  so the toolbar row reads as one unit. */
+const EXPORT_BUTTON =
+  "inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-border bg-white px-2.5 py-0.5 text-xs font-medium text-muted-foreground transition-colors hover:border-foreground/40 hover:text-foreground disabled:cursor-default disabled:opacity-60";
+
+/**
+ * The unenrolled-students table, shared by the counted card and the
+ * "Not counted" card so their columns can never drift. Row click
+ * opens the family OVERVIEW surface (not the per-year registration
+ * page — that page only renders students with an active application
+ * for the selected year, so a departed student whose paperwork sits
+ * under another year is invisible there); the checkbox toggles the
+ * retention exemption, which moves the row between the two cards.
+ */
+function UnenrolledTable({
+  rows,
+  segment,
+  muted = false,
+  onOpenFamily,
+  onToggle,
+}: {
+  rows: RetentionUnenrolledRow[];
+  segment: Segment;
+  /** "Not counted" card styling — rows render dimmed. */
+  muted?: boolean;
+  onOpenFamily: (row: RetentionUnenrolledRow) => void;
+  onToggle: (row: RetentionUnenrolledRow, next: boolean) => void;
+}) {
+  return (
+    <Table className="table-fixed">
+      <TableHeader>
+        <TableRow className="hover:bg-transparent">
+          <TableHead className="text-[10px] text-muted-foreground w-[17%]">
+            Student
+          </TableHead>
+          <TableHead className="text-[10px] text-muted-foreground w-[7%]">
+            Grade
+          </TableHead>
+          <TableHead className="text-[10px] text-muted-foreground w-[15%]">
+            Family
+          </TableHead>
+          <TableHead className="text-[10px] text-muted-foreground w-[11%]">
+            Unenrolled
+          </TableHead>
+          <TableHead className="text-[10px] text-muted-foreground w-[20%]">
+            Reason
+          </TableHead>
+          <TableHead className="text-[10px] text-muted-foreground w-[20%]">
+            Notes
+          </TableHead>
+          <TableHead
+            className="text-[10px] text-muted-foreground w-[6%] text-center"
+            title="Check to leave a departure out of the retention numbers — for students who never actually attended."
+          >
+            Don&rsquo;t count
+          </TableHead>
+          <TableHead className="w-[4%]" />
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {rows.map((u) => (
+          <TableRow
+            key={u.student_id}
+            onClick={() => onOpenFamily(u)}
+            className={cn("cursor-pointer", muted && "opacity-60")}
+          >
+            <TableCell className="text-sm font-medium">
+              <span className="block truncate">{u.student_name}</span>
+            </TableCell>
+            <TableCell className="text-sm text-muted-foreground">
+              {u.grade || "—"}
+            </TableCell>
+            <TableCell className="text-sm">
+              <span className="flex min-w-0 items-center gap-1.5">
+                <span className="truncate">{u.family_name}</span>
+                {/* Only useful in the mixed view — the segmented
+                    views are already homogeneous. */}
+                {u.residential && segment === "all" ? (
+                  <span className="shrink-0 rounded-full border border-border bg-muted px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Residential
+                  </span>
+                ) : null}
+              </span>
+            </TableCell>
+            <TableCell className="text-sm tabular-nums text-muted-foreground">
+              {formatDate(u.date)}
+            </TableCell>
+            <TableCell className="text-sm" title={u.reason || undefined}>
+              <span className="block truncate">{u.reason || "—"}</span>
+            </TableCell>
+            <TableCell
+              className="text-sm text-muted-foreground"
+              title={u.notes || undefined}
+            >
+              <span className="block truncate">{u.notes || "—"}</span>
+            </TableCell>
+            {/* stopPropagation on the CELL so a click that lands near
+                (not on) the checkbox doesn't navigate away. */}
+            <TableCell
+              className="text-center"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <Checkbox
+                checked={u.retention_exempt}
+                onCheckedChange={(v) => onToggle(u, v === true)}
+                aria-label={`Don't count ${u.student_name} toward retention`}
+                title="Check to leave this departure out of the retention numbers — for students who never actually attended."
+              />
+            </TableCell>
+            <TableCell className="text-right">
+              <ChevronRight className="size-4 text-muted-foreground inline" />
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  );
+}
 
 function Stat({
   label,
