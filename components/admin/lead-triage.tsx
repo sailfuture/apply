@@ -1566,7 +1566,22 @@ function LeadDetailsCollapsible({
 }) {
   const [open, setOpen] = useState(false);
   return (
-    <div className="flex min-h-0 shrink-0 flex-col border-b bg-muted/10">
+    // `min-h-0` WITHOUT `shrink-0` — both halves are load-bearing.
+    // `shrink-0` was the bug: an expanded details block grew to its
+    // full content height and refused to give any of it back, so the
+    // activity log and composer were pushed past the bottom of the
+    // sheet, and SheetContent has no scroller of its own, so that
+    // overflow was simply unreachable.
+    //
+    // Dropping `shrink-0` alone does NOT fix it: min-height then
+    // resolves to `auto`, and this wrapper's automatic minimum is its
+    // min-content height — which INCLUDES the panel's full content,
+    // because min-height:0 on the panel is a floor, not a cap on its
+    // min-content contribution. So the wrapper still refuses to
+    // shrink. `min-h-0` is what actually lets flex compress it, and
+    // the compression lands on the panel below (default shrink +
+    // overflow-y-auto), which then scrolls internally.
+    <div className="flex min-h-0 flex-col border-b bg-muted/10">
       <button
         type="button"
         aria-expanded={open}
