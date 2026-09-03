@@ -1,4 +1,4 @@
-import { auth, currentUser } from "@clerk/nextjs/server";
+import { auth } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
 import { xano } from "@/lib/xano";
 
@@ -12,8 +12,6 @@ import { xano } from "@/lib/xano";
 export async function GET() {
   const { userId } = await auth();
   if (!userId) return NextResponse.json(null, { status: 200 });
-  const user = await currentUser();
-  if (!user) return NextResponse.json(null, { status: 200 });
   const parent = await xano.parents.findByClerkId(userId);
   return NextResponse.json(parent ?? null);
 }

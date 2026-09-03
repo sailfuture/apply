@@ -1,16 +1,12 @@
-import { auth, currentUser } from "@clerk/nextjs/server";
+import { getFamilyAuth } from "@/lib/family-auth";
 import { NextRequest, NextResponse } from "next/server";
 import { xano } from "@/lib/xano";
 import { redactAdminSufs } from "@/lib/student-registration-redact";
 
 export async function GET(req: NextRequest) {
-  const { userId } = await auth();
-  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const user = await currentUser();
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const familyId = user.publicMetadata.registration_families_id as number | undefined;
+  const session = await getFamilyAuth();
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const { familyId } = session;
   if (!familyId) return NextResponse.json([], { status: 200 });
 
   const url = new URL(req.url);
@@ -58,13 +54,9 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const { userId } = await auth();
-  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const user = await currentUser();
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const familyId = user.publicMetadata.registration_families_id as number | undefined;
+  const session = await getFamilyAuth();
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const { familyId } = session;
   if (!familyId) return NextResponse.json({ error: "No family found" }, { status: 400 });
 
   const body = await req.json();

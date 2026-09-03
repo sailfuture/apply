@@ -1,6 +1,7 @@
 import { auth, currentUser } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
 import { getCurrentAdmin } from "@/lib/admin-auth";
+import { familyIdFromClaims } from "@/lib/family-auth";
 import { xano } from "@/lib/xano";
 
 /**
@@ -27,10 +28,13 @@ import { xano } from "@/lib/xano";
 export async function denyScholarshipMutation(
   scholarshipId: number | null | undefined
 ): Promise<NextResponse | null> {
-  const { userId } = await auth();
+  const { userId, sessionClaims } = await auth();
   if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  // Family id from the session-token claim when present (no Clerk
+  // round trip); `currentUser()` below is only consulted as a fallback.
+  const claimFamilyId = familyIdFromClaims(sessionClaims);
   if (typeof scholarshipId !== "number" || !Number.isFinite(scholarshipId)) {
     // No resolvable parent scholarship — 404 rather than leaking whether
     // the id exists.
@@ -46,7 +50,9 @@ export async function denyScholarshipMutation(
   const [scholarship, parent, user] = await Promise.all([
     xano.scholarship.getById(scholarshipId).catch(() => null),
     xano.parents.findByClerkId(userId).catch(() => null),
-    currentUser().catch(() => null),
+    claimFamilyId !== undefined
+      ? Promise.resolve(null)
+      : currentUser().catch(() => null),
   ]);
   if (!scholarship) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -61,7 +67,8 @@ export async function denyScholarshipMutation(
   // for admin-created families and test accounts) could VIEW the scholarship
   // but got a 403 on every save.
   const scholarshipFamilyId = toId(scholarship.registration_families_id);
-  const metaFamilyId = toId(user?.publicMetadata?.registration_families_id);
+  const metaFamilyId =
+    claimFamilyId ?? toId(user?.publicMetadata?.registration_families_id);
   if (
     metaFamilyId != null &&
     scholarshipFamilyId != null &&

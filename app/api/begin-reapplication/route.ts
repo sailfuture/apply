@@ -1,4 +1,4 @@
-import { auth, currentUser } from "@clerk/nextjs/server";
+import { getFamilyAuth } from "@/lib/family-auth";
 import { NextRequest, NextResponse } from "next/server";
 import { xano } from "@/lib/xano";
 
@@ -27,13 +27,9 @@ import { xano } from "@/lib/xano";
  * progress row + a target redirect path the client can navigate to.
  */
 export async function POST(req: NextRequest) {
-  const { userId } = await auth();
-  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const user = await currentUser();
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const familyId = user.publicMetadata.registration_families_id as number | undefined;
+  const session = await getFamilyAuth();
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const { familyId } = session;
   if (!familyId) return NextResponse.json({ error: "No family" }, { status: 400 });
 
   const body = await req.json().catch(() => ({}));

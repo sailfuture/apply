@@ -2,6 +2,11 @@ import { auth, clerkClient, currentUser } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
 import { xano, ensureParentRecord } from "@/lib/xano";
 import { getAdminForEmail } from "@/lib/admin-auth";
+import {
+  emailFromClaims,
+  familyIdFromClaims,
+  toFamilyId,
+} from "@/lib/family-auth";
 
 /**
  * Root landing page. Single decision-and-redirect — collapses what
@@ -32,35 +37,48 @@ import { getAdminForEmail } from "@/lib/admin-auth";
  * sent them straight to the right URL.
  */
 export default async function Page() {
-  const { userId } = await auth();
+  const { userId, sessionClaims } = await auth();
   if (!userId) redirect("/sign-in");
 
-  const user = await currentUser();
-  if (!user) redirect("/sign-in");
+  // Fast path — the session token carries the primary email and the
+  // family id as custom claims (see `lib/family-auth.ts`), so a
+  // returning parent resolves without the `currentUser()` round trip
+  // to Clerk's Backend API. Anyone missing either claim (first sign-in
+  // before the family id is stamped, or a token minted before the
+  // claims template was configured) takes the full path below.
+  const claimEmail = emailFromClaims(sessionClaims);
+  const claimFamilyId = familyIdFromClaims(sessionClaims);
+  let familyId: number | undefined;
 
-  // Step 1 — admin short-circuit. MUST run before `ensureParentRecord`
-  // so we never create a junk `registration_parents` row for a staff
-  // member signing in for the first time.
-  for (const e of user.emailAddresses ?? []) {
-    if (!e.emailAddress) continue;
-    const matched = await getAdminForEmail(e.emailAddress);
-    if (matched) redirect("/admin");
-  }
+  if (claimEmail && claimFamilyId) {
+    if (await getAdminForEmail(claimEmail)) redirect("/admin");
+    familyId = claimFamilyId;
+  } else {
+    const user = await currentUser();
+    if (!user) redirect("/sign-in");
 
-  // Step 2 — make sure the family record is resolved + cached on Clerk
-  // metadata. New users hit `/welcome` to create their family.
-  let familyId = user.publicMetadata.registration_families_id as
-    | number
-    | undefined;
-  if (!familyId) {
-    const parent = await ensureParentRecord(userId, user);
-    const family = await xano.families.findByParentId(parent.id);
-    if (!family) redirect("/welcome");
-    const clerk = await clerkClient();
-    await clerk.users.updateUserMetadata(userId, {
-      publicMetadata: { registration_families_id: family.id },
-    });
-    familyId = family.id;
+    // Step 1 — admin short-circuit. MUST run before `ensureParentRecord`
+    // so we never create a junk `registration_parents` row for a staff
+    // member signing in for the first time.
+    for (const e of user.emailAddresses ?? []) {
+      if (!e.emailAddress) continue;
+      const matched = await getAdminForEmail(e.emailAddress);
+      if (matched) redirect("/admin");
+    }
+
+    // Step 2 — make sure the family record is resolved + cached on Clerk
+    // metadata. New users hit `/welcome` to create their family.
+    familyId = toFamilyId(user.publicMetadata.registration_families_id);
+    if (!familyId) {
+      const parent = await ensureParentRecord(userId, user);
+      const family = await xano.families.findByParentId(parent.id);
+      if (!family) redirect("/welcome");
+      const clerk = await clerkClient();
+      await clerk.users.updateUserMetadata(userId, {
+        publicMetadata: { registration_families_id: family.id },
+      });
+      familyId = family.id;
+    }
   }
 
   // Step 3 — pick the target school year. Upcoming year wins (it's the

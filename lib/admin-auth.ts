@@ -1,5 +1,6 @@
 import { auth, currentUser } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
+import { emailFromClaims } from "@/lib/family-auth";
 
 /**
  * Admin authorization for `/admin/*` pages and `/api/admin/*` routes.
@@ -149,7 +150,19 @@ export async function getAdminForEmail(
  *  first one that matches an admin record. Some staff sign in with a
  *  personal email but have their org email as a secondary — this catches
  *  both. */
-async function resolveAdminFromClerk(): Promise<AdminUser | null> {
+async function resolveAdminFromClerk(
+  sessionClaims?: unknown
+): Promise<AdminUser | null> {
+  // Fast path: the session token carries the primary email as a custom
+  // claim (see `lib/family-auth.ts`), so the common case — an admin
+  // whose primary email is on the admin list — resolves with no Clerk
+  // Backend API round trip. A miss still falls through to the full
+  // `currentUser()` check so secondary-email admins keep working.
+  const claimEmail = emailFromClaims(sessionClaims);
+  if (claimEmail) {
+    const match = await getAdminForEmail(claimEmail);
+    if (match) return match;
+  }
   const user = await currentUser();
   if (!user) return null;
   const candidates: string[] = [];
@@ -175,9 +188,9 @@ async function resolveAdminFromClerk(): Promise<AdminUser | null> {
  * an admin grants access but not-being-one isn't itself an error.
  */
 export async function getCurrentAdmin(): Promise<AdminUser | null> {
-  const { userId } = await auth();
+  const { userId, sessionClaims } = await auth();
   if (!userId) return null;
-  return resolveAdminFromClerk();
+  return resolveAdminFromClerk(sessionClaims);
 }
 
 /**
@@ -189,11 +202,11 @@ export async function requireAdmin(): Promise<{
   userId: string;
   admin: AdminUser;
 }> {
-  const { userId } = await auth();
+  const { userId, sessionClaims } = await auth();
   if (!userId) {
     throw new AdminAuthError("Unauthorized", 401);
   }
-  const admin = await resolveAdminFromClerk();
+  const admin = await resolveAdminFromClerk(sessionClaims);
   if (!admin) {
     throw new AdminAuthError("Forbidden — not an admin", 403);
   }

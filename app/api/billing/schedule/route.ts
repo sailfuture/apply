@@ -1,4 +1,4 @@
-import { auth, currentUser } from "@clerk/nextjs/server";
+import { getFamilyAuth } from "@/lib/family-auth";
 import { NextRequest, NextResponse } from "next/server";
 import { xano, activeStripeSubscriptionId } from "@/lib/xano";
 import {
@@ -29,19 +29,11 @@ import {
  * Reads exclusively from Xano — no Stripe calls per request.
  */
 export async function GET(req: NextRequest) {
-  const { userId } = await auth();
-  if (!userId) {
+  const session = await getFamilyAuth();
+  if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-
-  const user = await currentUser();
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const familyId = user.publicMetadata.registration_families_id as
-    | number
-    | undefined;
+  const { familyId } = session;
   if (!familyId) {
     return NextResponse.json({ error: "No family on file" }, { status: 400 });
   }

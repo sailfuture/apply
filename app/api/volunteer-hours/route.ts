@@ -1,4 +1,4 @@
-import { auth, currentUser } from "@clerk/nextjs/server";
+import { getFamilyAuth } from "@/lib/family-auth";
 import { NextResponse } from "next/server";
 import { xano } from "@/lib/xano";
 
@@ -13,19 +13,11 @@ import { xano } from "@/lib/xano";
  * Entries are admin-created on the staff side; this route is read-only.
  */
 export async function GET() {
-  const { userId } = await auth();
-  if (!userId) {
+  const session = await getFamilyAuth();
+  if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-
-  const user = await currentUser();
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const familyId = user.publicMetadata.registration_families_id as
-    | number
-    | undefined;
+  const { familyId } = session;
   if (!familyId) {
     return NextResponse.json([], { status: 200 });
   }

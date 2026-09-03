@@ -1,17 +1,14 @@
-import { auth, clerkClient, currentUser } from "@clerk/nextjs/server";
+import { clerkClient } from "@clerk/nextjs/server";
+import { getFamilyAuth } from "@/lib/family-auth";
 import { NextRequest, NextResponse } from "next/server";
 import { xano } from "@/lib/xano";
 
 export async function POST(req: NextRequest) {
-  const { userId } = await auth();
-  if (!userId) {
+  const session = await getFamilyAuth();
+  if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-
-  const user = await currentUser();
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const { userId } = session;
 
   const { email, first_name, last_name, relationship } =
     await req.json();
@@ -36,9 +33,7 @@ export async function POST(req: NextRequest) {
   // even though the metadata pointer was correct. Fall back to the
   // parent-lookup only if metadata is missing, so users created before
   // the metadata stamping was added still work.
-  let familyId = user.publicMetadata.registration_families_id as
-    | number
-    | undefined;
+  let familyId = session.familyId;
 
   if (!familyId) {
     const currentParent = await xano.parents.findByClerkId(userId);

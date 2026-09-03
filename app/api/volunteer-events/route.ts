@@ -1,4 +1,4 @@
-import { auth, currentUser } from "@clerk/nextjs/server";
+import { getFamilyAuth } from "@/lib/family-auth";
 import { NextRequest, NextResponse } from "next/server";
 import { xano } from "@/lib/xano";
 import {
@@ -26,16 +26,11 @@ import {
  * meaningless and only `spots_taken` is worth showing.
  */
 export async function GET(req: NextRequest) {
-  const { userId } = await auth();
-  if (!userId) {
+  const session = await getFamilyAuth();
+  if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  const user = await currentUser();
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-  const familyId =
-    (user.publicMetadata.registration_families_id as number | undefined) ?? 0;
+  const familyId = session.familyId ?? 0;
 
   const yearId = Number(req.nextUrl.searchParams.get("yearId"));
   if (!Number.isFinite(yearId) || yearId <= 0) {

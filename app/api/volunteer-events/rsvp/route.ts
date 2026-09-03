@@ -1,4 +1,4 @@
-import { auth, currentUser } from "@clerk/nextjs/server";
+import { getFamilyAuth } from "@/lib/family-auth";
 import { NextRequest, NextResponse } from "next/server";
 import { xano } from "@/lib/xano";
 import { isSignUpEvent, isUnlimitedSpots } from "@/lib/school-calendar";
@@ -240,21 +240,13 @@ export async function DELETE(req: NextRequest) {
 async function requireFamily(): Promise<
   { familyId: number } | { response: NextResponse }
 > {
-  const { userId } = await auth();
-  if (!userId) {
+  const session = await getFamilyAuth();
+  if (!session) {
     return {
       response: NextResponse.json({ error: "Unauthorized" }, { status: 401 }),
     };
   }
-  const user = await currentUser();
-  if (!user) {
-    return {
-      response: NextResponse.json({ error: "Unauthorized" }, { status: 401 }),
-    };
-  }
-  const familyId = user.publicMetadata.registration_families_id as
-    | number
-    | undefined;
+  const { familyId } = session;
   if (!familyId) {
     return {
       response: NextResponse.json(

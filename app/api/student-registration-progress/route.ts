@@ -1,4 +1,4 @@
-import { auth, currentUser } from "@clerk/nextjs/server";
+import { getFamilyAuth } from "@/lib/family-auth";
 import { NextRequest, NextResponse } from "next/server";
 import { xano } from "@/lib/xano";
 import type { XanoStudentRegistrationProgress } from "@/lib/xano";
@@ -33,13 +33,9 @@ async function resolveProgress(familyId: number, yearId: number) {
 }
 
 export async function GET(req: NextRequest) {
-  const { userId } = await auth();
-  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const user = await currentUser();
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const familyId = user.publicMetadata.registration_families_id as number | undefined;
+  const session = await getFamilyAuth();
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const { familyId } = session;
   if (!familyId) return NextResponse.json(null, { status: 200 });
 
   const yearIdParam = req.nextUrl.searchParams.get("yearId");
@@ -56,13 +52,9 @@ export async function GET(req: NextRequest) {
 }
 
 export async function PATCH(req: NextRequest) {
-  const { userId } = await auth();
-  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const user = await currentUser();
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const familyId = user.publicMetadata.registration_families_id as number | undefined;
+  const session = await getFamilyAuth();
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const { familyId } = session;
   if (!familyId) return NextResponse.json({ error: "No family" }, { status: 400 });
 
   const yearIdParam = req.nextUrl.searchParams.get("yearId");
