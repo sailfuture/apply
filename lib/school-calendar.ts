@@ -12,6 +12,106 @@ export function parseDate(iso: string): Date {
 }
 
 /**
+ * The school's timezone. Every event time is a WALL-CLOCK time at the
+ * school — "the social starts at 6:30" means 6:30 in St. Petersburg,
+ * not 6:30 wherever the reader happens to be standing.
+ *
+ * `start_time` / `end_time` are stored as absolute unix-ms, so without
+ * pinning a zone both writing and reading an event drift by the
+ * machine's own clock. That shipped a real bug: a reminder text
+ * composed on a laptop set to Central time told families the
+ * Back-to-School Social was at 5:30 PM when the record said 22:30Z —
+ * 6:30 PM Eastern. Every parent who read it would have arrived an hour
+ * early.
+ *
+ * IANA zone, not a fixed -5 offset: "Eastern" is EST for part of the
+ * year and EDT for the rest, and a hardcoded offset would print every
+ * summer event an hour early — that same September social included.
+ */
+export const SCHOOL_TIME_ZONE = "America/New_York";
+
+/** UTC offset (ms) that `tz` was observing at the instant `ms`. Derived
+ *  by asking Intl what wall-clock time that instant shows in the zone
+ *  and diffing — the standard trick for doing zone math without a
+ *  date library. */
+function zoneOffsetMs(ms: number, tz: string): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).formatToParts(new Date(ms));
+  const get = (type: string) =>
+    Number(parts.find((p) => p.type === type)?.value ?? 0);
+  const asUtc = Date.UTC(
+    get("year"),
+    get("month") - 1,
+    get("day"),
+    // Some engines render midnight as hour "24" under hour12:false.
+    get("hour") % 24,
+    get("minute"),
+    get("second")
+  );
+  return asUtc - ms;
+}
+
+/**
+ * An event's start/end time as families read it — always the school's
+ * clock, e.g. "6:30 PM", whoever is looking and from wherever.
+ *
+ * Returns "" for 0 / null, which is how an all-day event is stored.
+ */
+export function formatSchoolTime(ms: number | null | undefined): string {
+  if (!ms || !Number.isFinite(ms)) return "";
+  return new Date(ms).toLocaleTimeString("en-US", {
+    timeZone: SCHOOL_TIME_ZONE,
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+/** Stored unix-ms → "HH:MM" (24h) for a `<input type="time">`, read on
+ *  the school's clock so the editor shows what was actually scheduled
+ *  rather than the author's local translation of it. */
+export function msToSchoolTimeInput(ms: number | null | undefined): string {
+  if (!ms || !Number.isFinite(ms)) return "";
+  return new Date(ms).toLocaleTimeString("en-GB", {
+    timeZone: SCHOOL_TIME_ZONE,
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+/**
+ * Day ("YYYY-MM-DD") + "HH:MM" typed by an admin → the unix-ms for that
+ * wall-clock time AT THE SCHOOL. Typing 6:30 PM stores 6:30 PM Eastern
+ * whether the admin is in Florida, Chicago or on a plane.
+ *
+ * Returns 0 when the time is blank (the all-day sentinel).
+ *
+ * Two passes: guess the instant by treating the input as UTC, correct
+ * by the offset in force there, then re-check — the second pass only
+ * matters on the two days a year a DST shift moves the offset between
+ * the guess and the answer.
+ */
+export function schoolTimeToMs(dateIso: string, hhmm: string): number {
+  if (!hhmm) return 0;
+  const [y, m, d] = dateIso.split("-").map(Number);
+  const [hh, mm] = hhmm.split(":").map(Number);
+  if (!y || !m || !d) return 0;
+  const utcGuess = Date.UTC(y, m - 1, d, hh ?? 0, mm ?? 0, 0, 0);
+  const firstOffset = zoneOffsetMs(utcGuess, SCHOOL_TIME_ZONE);
+  const firstPass = utcGuess - firstOffset;
+  const secondOffset = zoneOffsetMs(firstPass, SCHOOL_TIME_ZONE);
+  return secondOffset === firstOffset ? firstPass : utcGuess - secondOffset;
+}
+
+/**
  * Event categories and their colors — the brand etiquette palette.
  * The slug is what `school_calendar_events.color` stores; empty (or
  * the " " clear-sentinel) renders the neutral gray chip.

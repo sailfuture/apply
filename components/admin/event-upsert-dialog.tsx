@@ -28,7 +28,9 @@ import {
   EVENT_COLORS,
   eventColor,
   isUnlimitedSpots,
+  msToSchoolTimeInput,
   parseDate,
+  schoolTimeToMs,
   UNLIMITED_PARENT_SPOTS,
 } from "@/lib/school-calendar";
 
@@ -61,23 +63,6 @@ export interface EventItemDraft {
 export { EVENT_COLORS, eventColor, parseDate };
 
 /** ms → "HH:MM" for a time input ("" when unset). */
-export function msToTimeInput(ms: number | null | undefined): string {
-  if (!ms || !Number.isFinite(ms)) return "";
-  const d = new Date(ms);
-  return `${String(d.getHours()).padStart(2, "0")}:${String(
-    d.getMinutes()
-  ).padStart(2, "0")}`;
-}
-
-/** Day date + "HH:MM" → local unix-ms (0 when the time is blank). */
-export function timeInputToMs(dateIso: string, hhmm: string): number {
-  if (!hhmm) return 0;
-  const [hh, mm] = hhmm.split(":").map(Number);
-  const d = parseDate(dateIso);
-  d.setHours(hh ?? 0, mm ?? 0, 0, 0);
-  return d.getTime();
-}
-
 /* ── Segmented time picker (after time.openstatus.dev) ────────────── */
 
 type TimePeriod = "AM" | "PM";
@@ -573,8 +558,8 @@ export function EventUpsertDialog({
   const [allDay, setAllDay] = useState(
     ev ? !ev.start_time && !ev.end_time : false
   );
-  const [start, setStart] = useState(msToTimeInput(ev?.start_time));
-  const [end, setEnd] = useState(msToTimeInput(ev?.end_time));
+  const [start, setStart] = useState(msToSchoolTimeInput(ev?.start_time));
+  const [end, setEnd] = useState(msToSchoolTimeInput(ev?.end_time));
   const [color, setColor] = useState((ev?.color ?? "").trim());
   const [mandatory, setMandatory] = useState(ev?.mandatory === true);
   const [volunteer, setVolunteer] = useState(
@@ -682,8 +667,8 @@ export function EventUpsertDialog({
         title: trimmed,
         location: location.trim(),
         description: description.trim(),
-        start_time: allDay ? 0 : timeInputToMs(timeDate, start),
-        end_time: allDay ? 0 : timeInputToMs(timeDate, end),
+        start_time: allDay ? 0 : schoolTimeToMs(timeDate, start),
+        end_time: allDay ? 0 : schoolTimeToMs(timeDate, end),
         color,
         mandatory,
         parent_volunteer_hours: volunteer,

@@ -27,6 +27,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { adminFetcher } from "@/lib/admin-fetcher";
+import { formatSchoolTime } from "@/lib/school-calendar";
 import { cn } from "@/lib/utils";
 import type { GroupContact } from "@/app/api/admin/messages/group/audience/route";
 import type { XanoSchoolCalendarEvent } from "@/lib/xano";
@@ -45,14 +46,6 @@ function fmtDate(iso: string): string {
   });
 }
 
-function fmtTimeMs(ms: number | null | undefined): string {
-  if (!ms || !Number.isFinite(ms)) return "";
-  return new Date(ms).toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
 function formatHours(value: number): string {
   if (!Number.isFinite(value)) return "0";
   if (Number.isInteger(value)) return String(value);
@@ -65,7 +58,7 @@ function formatHours(value: number): string {
  *  hour credit. */
 function defaultReminder(ev: ReminderEvent): string {
   const when = `${fmtDate(ev.date)}${
-    ev.start_time ? ` at ${fmtTimeMs(ev.start_time)}` : ""
+    ev.start_time ? ` at ${formatSchoolTime(ev.start_time)}` : ""
   }`;
   const where = ev.location ? ` at ${ev.location}` : "";
   const vol =

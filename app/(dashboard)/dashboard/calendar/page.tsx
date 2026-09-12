@@ -33,6 +33,7 @@ import { DashboardPageHeader } from "@/components/dashboard-page-header";
 import { cn } from "@/lib/utils";
 import {
   eventColor,
+  formatSchoolTime,
   parseDate,
   type EventItemAvailability,
 } from "@/lib/school-calendar";
@@ -95,14 +96,6 @@ function monthLabel(key: string): string {
   return new Date(y, (m ?? 1) - 1, 1).toLocaleDateString("en-US", {
     month: "long",
     year: "numeric",
-  });
-}
-
-function fmtTime(ms: number | null | undefined): string {
-  if (!ms || !Number.isFinite(ms)) return "";
-  return new Date(ms).toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
   });
 }
 
@@ -533,9 +526,9 @@ export default function ParentCalendarPage() {
                               />
                               <span className="w-32 shrink-0 whitespace-nowrap text-xs tabular-nums text-muted-foreground sm:w-40">
                                 {e.start_time
-                                  ? `${fmtTime(e.start_time)}${
+                                  ? `${formatSchoolTime(e.start_time)}${
                                       e.end_time
-                                        ? ` – ${fmtTime(e.end_time)}`
+                                        ? ` – ${formatSchoolTime(e.end_time)}`
                                         : ""
                                     }`
                                   : "All day"}
@@ -723,7 +716,7 @@ function DayCell({
         day.holiday ? "Holiday" : "",
         ...boundaries,
         ...events.map((e) =>
-          e.start_time ? `${fmtTime(e.start_time)} ${e.title}` : e.title
+          e.start_time ? `${formatSchoolTime(e.start_time)} ${e.title}` : e.title
         ),
       ]
         .filter(Boolean)
@@ -910,8 +903,8 @@ function DayDetailsSheet({
                   <dl className="mt-3 space-y-2.5 text-sm">
                     <DetailLine label="Time">
                       {e.start_time
-                        ? `${fmtTime(e.start_time)}${
-                            e.end_time ? ` – ${fmtTime(e.end_time)}` : ""
+                        ? `${formatSchoolTime(e.start_time)}${
+                            e.end_time ? ` – ${formatSchoolTime(e.end_time)}` : ""
                           }`
                         : "All day"}
                     </DetailLine>

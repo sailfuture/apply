@@ -52,11 +52,11 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { TimeSelect } from "@/components/admin/event-upsert-dialog";
 import {
-  TimeSelect,
-  msToTimeInput,
-  timeInputToMs,
-} from "@/components/admin/event-upsert-dialog";
+  msToSchoolTimeInput,
+  schoolTimeToMs,
+} from "@/lib/school-calendar";
 import { tourStatusBadgeClass } from "@/components/admin/tour-section";
 import { LEAD_FUNNEL_META } from "@/components/admin/lead-triage";
 import { LeadSheet } from "@/components/admin/lead-sheet";
@@ -1080,11 +1080,11 @@ function TourRescheduleDialog({
           d.getDate()
         ).padStart(2, "0")}`
       );
-      setTime(msToTimeInput(row.scheduled_at) || "10:00");
+      setTime(msToSchoolTimeInput(row.scheduled_at) || "10:00");
     }
   }
 
-  const scheduledAt = date ? timeInputToMs(date, time) : 0;
+  const scheduledAt = date ? schoolTimeToMs(date, time) : 0;
 
   return (
     <Dialog open={row !== null} onOpenChange={onOpenChange}>

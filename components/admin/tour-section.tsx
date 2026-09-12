@@ -25,10 +25,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  TimeSelect,
-  timeInputToMs,
-} from "@/components/admin/event-upsert-dialog";
+import { TimeSelect } from "@/components/admin/event-upsert-dialog";
+import { schoolTimeToMs } from "@/lib/school-calendar";
 import type { LeadNoteScope } from "@/components/admin/inquiry-notes";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import {
@@ -415,7 +413,7 @@ export function TourScheduleDialog({
     setNotes("");
   }
 
-  const scheduledAt = date ? timeInputToMs(date, time) : 0;
+  const scheduledAt = date ? schoolTimeToMs(date, time) : 0;
   const canSubmit = scheduledAt > 0 && !saving;
 
   async function submit() {

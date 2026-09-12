@@ -26,6 +26,7 @@ import {
   parseDate,
 } from "@/components/admin/event-upsert-dialog";
 import { EventReminderDialog } from "@/components/admin/event-reminder-dialog";
+import { formatSchoolTime } from "@/lib/school-calendar";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -143,14 +144,6 @@ function monthLabel(key: string): string {
   return new Date(y, (m ?? 1) - 1, 1).toLocaleDateString("en-US", {
     month: "long",
     year: "numeric",
-  });
-}
-
-function fmtTime(ms: number | null | undefined): string {
-  if (!ms || !Number.isFinite(ms)) return "";
-  return new Date(ms).toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
   });
 }
 
@@ -919,9 +912,9 @@ function EventsSheet({
                               carries it without spending a column. */}
                           <span className="w-40 shrink-0 whitespace-nowrap text-right text-xs tabular-nums text-muted-foreground">
                             {e.start_time
-                              ? `${fmtTime(e.start_time)}${
+                              ? `${formatSchoolTime(e.start_time)}${
                                   e.end_time
-                                    ? ` – ${fmtTime(e.end_time)}`
+                                    ? ` – ${formatSchoolTime(e.end_time)}`
                                     : ""
                                 }`
                               : "All day"}
@@ -985,9 +978,9 @@ function EventsSheet({
             <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
               <Clock className="size-3.5 shrink-0" />
               {detail.e.start_time
-                ? `${fmtTime(detail.e.start_time)}${
+                ? `${formatSchoolTime(detail.e.start_time)}${
                     detail.e.end_time
-                      ? ` – ${fmtTime(detail.e.end_time)}`
+                      ? ` – ${formatSchoolTime(detail.e.end_time)}`
                       : ""
                   }`
                 : "All day"}
@@ -1170,7 +1163,7 @@ function DayCell({
         day.holiday ? "Holiday" : "",
         ...boundaries,
         ...events.map((e) =>
-          e.start_time ? `${fmtTime(e.start_time)} ${e.title}` : e.title
+          e.start_time ? `${formatSchoolTime(e.start_time)} ${e.title}` : e.title
         ),
       ]
         .filter(Boolean)
@@ -1247,7 +1240,7 @@ function DayCell({
               >
                 {e.start_time ? (
                   <span className="tabular-nums">
-                    {fmtTime(e.start_time)}{" "}
+                    {formatSchoolTime(e.start_time)}{" "}
                   </span>
                 ) : null}
                 {e.title}
@@ -1616,9 +1609,9 @@ function DaySheet({
                         <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
                           <Clock className="size-3.5 shrink-0" />
                           {e.start_time
-                            ? `${fmtTime(e.start_time)}${
+                            ? `${formatSchoolTime(e.start_time)}${
                                 e.end_time
-                                  ? ` – ${fmtTime(e.end_time)}`
+                                  ? ` – ${formatSchoolTime(e.end_time)}`
                                   : ""
                               }`
                             : "All day"}

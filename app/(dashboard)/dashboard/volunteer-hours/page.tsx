@@ -39,6 +39,7 @@ import { useApplications, useSchoolYears, apiFetcher } from "@/hooks/use-api";
 import { cn } from "@/lib/utils";
 import {
   eventColor,
+  formatSchoolTime,
   itemHeadroom,
   parseDate,
   type EventItemAvailability,
@@ -349,14 +350,6 @@ export default function VolunteerHoursPage() {
 
 /* ─────────────────── Upcoming events + RSVP ─────────────────── */
 
-function fmtEventTime(ms: number): string {
-  if (!ms) return "";
-  return new Date(ms).toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
 /**
  * Upcoming events with parent sign-up spots. Each row shows the live
  * spot count and the family's own reservation; Sign up / Edit opens
@@ -456,9 +449,9 @@ function UpcomingEventsSection({ yearId }: { yearId: number | null }) {
                     <span className="inline-flex items-center gap-1">
                       <Clock className="size-3" />
                       {ev.start_time
-                        ? `${fmtEventTime(ev.start_time)}${
+                        ? `${formatSchoolTime(ev.start_time)}${
                             ev.end_time
-                              ? ` – ${fmtEventTime(ev.end_time)}`
+                              ? ` – ${formatSchoolTime(ev.end_time)}`
                               : ""
                           }`
                         : "All day"}
@@ -863,7 +856,7 @@ function RsvpDialog({
           </DialogTitle>
           <DialogDescription>
             {dateLabel}
-            {event.start_time ? ` · ${fmtEventTime(event.start_time)}` : ""}
+            {event.start_time ? ` · ${formatSchoolTime(event.start_time)}` : ""}
             {event.location ? ` · ${event.location}` : ""}
           </DialogDescription>
         </DialogHeader>

@@ -1,3 +1,4 @@
+import { SCHOOL_TIME_ZONE } from "@/lib/school-calendar";
 import type { XanoTour } from "@/lib/xano";
 
 /**
@@ -185,8 +186,11 @@ export function tourRsvpBadge(rsvp: string): {
  *  is pinned to Eastern — critically for NOTE BODIES, which are
  *  formatted on the SERVER (UTC in production) and were coming out
  *  hours off the actual slot ("5:00 PM" for a 1:00 PM tour). Pinning
- *  the client renders too keeps every surface saying the same time. */
-export const TOUR_TIME_ZONE = "America/New_York";
+ *  the client renders too keeps every surface saying the same time.
+ *
+ *  Aliases the calendar's `SCHOOL_TIME_ZONE` — one campus, one clock,
+ *  one literal to change if that ever stops being true. */
+export const TOUR_TIME_ZONE = SCHOOL_TIME_ZONE;
 
 /** "Mon, Aug 10 · 10:00 AM–11:00 AM" — the one way a tour's time is
  *  written everywhere (notes, invite description, UI rows). Always
