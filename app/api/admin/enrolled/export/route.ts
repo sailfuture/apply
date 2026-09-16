@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
-import { xano } from "@/lib/xano";
+import { xano, type XanoScholarship } from "@/lib/xano";
 import type { EnrolledExportRow } from "@/lib/enrolled-export-columns";
 
 /**
@@ -18,8 +18,10 @@ import type { EnrolledExportRow } from "@/lib/enrolled-export-columns";
  *
  * Joins mirror `/api/admin/enrolled` exactly (student is the pivot;
  * packet supplies placement + medical; family supplies the program
- * flag + label; parent supplies the primary contact), but the row is
- * the comprehensive export projection rather than the lean list shape.
+ * flag + label; parent supplies the primary contact), plus the family's
+ * scholarship row for the year (SNAP path + award-letter verification),
+ * but the row is the comprehensive export projection rather than the
+ * lean list shape.
  */
 export async function GET(req: NextRequest) {
   try {
@@ -40,6 +42,7 @@ export async function GET(req: NextRequest) {
       familiesResult,
       parentsResult,
       contactsResult,
+      scholarshipsResult,
     ] = await Promise.allSettled([
       xano.studentRegistration.getByYear(yearId),
       xano.applications.getAll(),
@@ -47,6 +50,7 @@ export async function GET(req: NextRequest) {
       xano.families.getAll(),
       xano.parents.getAll(),
       xano.emergencyContacts.getAll(),
+      xano.scholarship.getAll(),
     ]);
 
     const packets =
@@ -60,6 +64,8 @@ export async function GET(req: NextRequest) {
       parentsResult.status === "fulfilled" ? parentsResult.value : [];
     const contacts =
       contactsResult.status === "fulfilled" ? contactsResult.value : [];
+    const scholarships =
+      scholarshipsResult.status === "fulfilled" ? scholarshipsResult.value : [];
 
     if (studentsResult.status === "rejected") {
       console.error(
@@ -78,6 +84,16 @@ export async function GET(req: NextRequest) {
     const packetByStudent = new Map<number, (typeof packets)[number]>();
     for (const p of packets) {
       packetByStudent.set(Number(p.registration_students_id), p);
+    }
+    // One scholarship row per family for the year — the SNAP path and
+    // award-letter verification live there, not on the packet. Lowest
+    // id wins if a family somehow has duplicates, matching the
+    // first-match read in `scholarship.getByFamilyAndYear`.
+    const scholarshipByFamily = new Map<number, XanoScholarship>();
+    for (const s of [...scholarships].sort((a, b) => a.id - b.id)) {
+      if (Number(s.registration_school_years_id) !== yearId) continue;
+      const fid = Number(s.registration_families_id);
+      if (!scholarshipByFamily.has(fid)) scholarshipByFamily.set(fid, s);
     }
     // Primary + secondary parents per family — lowest id is primary,
     // matching the other admin list endpoints.
@@ -164,6 +180,7 @@ export async function GET(req: NextRequest) {
         unenrollment_date: student.unenrollment_date ?? "",
         unenrollment_reason: student.unenrollment_reason ?? "",
         liability_waiver_status: packet?.liability_waiver_status ?? "",
+        snap_status: snapState(scholarshipByFamily.get(familyId) ?? null),
 
         bus_transportation: app.is_bus_transportation === true ? "Yes" : "No",
         bus_stop: app.bus_stop ?? "",
@@ -251,6 +268,23 @@ function docState(
     );
   if (approved === true) return "Approved";
   return uploaded ? "Uploaded" : "Missing";
+}
+
+/** SNAP cell from the family's scholarship row for the year. Admin
+ *  confirmation beats a merely-uploaded letter, mirroring `docState`;
+ *  a family that isn't on the SNAP path reads "No", and a family with
+ *  no scholarship row at all (e.g. residential, or the parent never
+ *  opened Financial Aid) reads "". */
+function snapState(s: XanoScholarship | null): string {
+  if (!s) return "";
+  if (s.isSNAPBenefits !== true) return "No";
+  if (s.is_snap_confirmed === true) return "Confirmed";
+  const uploaded =
+    Array.isArray(s.snap_benefits) &&
+    s.snap_benefits.some(
+      (f) => f && typeof f === "object" && (f as { path?: unknown }).path
+    );
+  return uploaded ? "Awaiting review" : "Missing letter";
 }
 
 /** Unix-ms timestamp → "YYYY-MM-DD", or "" for missing/zero. */

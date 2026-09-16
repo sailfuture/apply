@@ -53,6 +53,12 @@ export interface EnrolledExportRow {
   unenrollment_date: string;
   unenrollment_reason: string;
   liability_waiver_status: string;
+  /** Family's SNAP path for the year, read off the scholarship row —
+   *  "Confirmed" (admin verified the award letter) | "Awaiting review"
+   *  (letter uploaded, not yet confirmed) | "Missing letter" (SNAP path
+   *  declared, nothing uploaded) | "No" (scholarship on file but not
+   *  the SNAP path) | "" (no scholarship row for the year). */
+  snap_status: string;
 
   // ── Transportation (per-year application) ──
   bus_transportation: string;
@@ -166,6 +172,7 @@ export const EXPORT_COLUMNS: ExportColumn[] = [
   { key: "unenrollment_date", label: "Unenrollment Date", group: "Status & program", defaultSelected: false },
   { key: "unenrollment_reason", label: "Unenrollment Reason", group: "Status & program", defaultSelected: false },
   { key: "liability_waiver_status", label: "Liability Waiver", group: "Status & program", defaultSelected: false },
+  { key: "snap_status", label: "SNAP Status", group: "Status & program", defaultSelected: false },
   // Transportation
   { key: "bus_transportation", label: "Bus Transportation", group: "Transportation", defaultSelected: true },
   { key: "bus_stop", label: "Bus Stop", group: "Transportation", defaultSelected: true },
