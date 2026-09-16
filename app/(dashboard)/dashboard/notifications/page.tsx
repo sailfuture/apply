@@ -15,7 +15,6 @@ import {
 } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetcher } from "@/hooks/use-api";
-import { getLocalReadAt, setLocalReadAt } from "@/lib/notifications";
 import { formatUSPhone } from "@/lib/phone";
 import { cn } from "@/lib/utils";
 import type {
@@ -90,20 +89,31 @@ export default function NotificationsPage() {
   // once, when `data` first resolves.
   const [watermark, setWatermark] = useState<number | null>(null);
   if (data && watermark === null) {
-    setWatermark(Math.max(data.read_at || 0, getLocalReadAt()));
+    setWatermark(data.read_at || 0);
   }
 
   const stampedRef = useRef(false);
   useEffect(() => {
     if (!data || stampedRef.current) return;
     stampedRef.current = true;
-    // Mark everything read: local mirror immediately (clears the
-    // dashboard badge on this device), server stamp best-effort
-    // (clears it everywhere once the Xano column is wired).
-    setLocalReadAt(Date.now());
-    void fetch("/api/notifications/read", { method: "POST" })
-      .then(() => mutate())
-      .catch(() => {});
+    // Mark everything read. The optimistic cache write clears the
+    // dashboard's badge on this device immediately (same SWR key);
+    // the POST makes it stick on every OTHER device this parent signs
+    // in from, which a localStorage mirror never could.
+    const now = Date.now();
+    const stamped = { ...data, read_at: now };
+    void mutate(
+      async (prev) => {
+        await fetch("/api/notifications/read", { method: "POST" });
+        return { ...(prev ?? stamped), read_at: now };
+      },
+      {
+        optimisticData: stamped,
+        revalidate: false,
+        rollbackOnError: false,
+        throwOnError: false,
+      }
+    );
   }, [data, mutate]);
 
   const counts = useMemo(() => {

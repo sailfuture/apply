@@ -1,6 +1,7 @@
 import { getFamilyAuth } from "@/lib/family-auth";
 import { NextResponse } from "next/server";
 import { xano } from "@/lib/xano";
+import { getUserNotificationsReadAt } from "@/lib/notification-read-state";
 
 /**
  * The authenticated family's communications log — every email the
@@ -38,10 +39,13 @@ export async function GET() {
   // Google Calendar appointments are deliberately NOT in this feed:
   // families book tours before they have portal accounts, so the
   // mirror only surfaces on the ADMIN side (family activity log).
-  const [emails, texts, family] = await Promise.all([
+  const [emails, texts, family, userReadAt] = await Promise.all([
     xano.emailNotifications.getByFamily(familyId),
     xano.smsMessages.getByFamilyId(familyId),
     xano.families.getById(familyId).catch(() => null),
+    // Per-parent watermark from Clerk — see `lib/notification-read-state`
+    // for why there are two.
+    getUserNotificationsReadAt(),
   ]);
 
   const entries: ParentNotificationEntry[] = [
@@ -85,7 +89,10 @@ export async function GET() {
 
   return NextResponse.json({
     entries,
-    read_at: family?.notifications_read_at ?? 0,
+    read_at: Math.max(
+      Number(family?.notifications_read_at) || 0,
+      userReadAt
+    ),
     sms_number: smsNumber,
   } satisfies ParentNotificationsResponse);
 }
@@ -109,7 +116,9 @@ export interface ParentNotificationEntry {
 
 export interface ParentNotificationsResponse {
   entries: ParentNotificationEntry[];
-  /** Family-level read watermark (unix ms; 0 = never marked). */
+  /** Effective read watermark (unix ms; 0 = never marked) — the later
+   *  of the family-level stamp and this parent's own. Entries newer
+   *  than this are what the dashboard badge counts. */
   read_at: number;
   /** E.164 number the school texts this family from — what they
    *  reply to. "" when unknown (no texts yet and no env fallback). */

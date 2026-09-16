@@ -7,12 +7,13 @@ import {
   useSyncExternalStore,
 } from "react";
 import { useRouter } from "next/navigation";
-import useSWR from "swr";
 import { Bell, BellOff, BellRing } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { adminFetcher } from "@/lib/admin-fetcher";
+import {
+  useSmsReadStateWriter,
+  useUnreadMessagesFeed,
+} from "@/components/admin/messages-unread-badge";
 import { cn } from "@/lib/utils";
-import type { UnreadMessagesResponse } from "@/app/api/admin/messages/unread/route";
 
 /**
  * Desktop notifications for inbound parent texts.
@@ -29,37 +30,21 @@ import type { UnreadMessagesResponse } from "@/app/api/admin/messages/unread/rou
  * and a stored subscription per browser; the email alert the Twilio
  * webhook already sends covers the tabs-closed case meanwhile.
  *
- * Announced messages are remembered in localStorage keyed by
- * conversation + timestamp, so a page reload (or a second tab) never
- * re-announces the same text. On first mount we SEED that record from
- * whatever is currently unread without notifying — otherwise opening
- * the app would fire a burst for every outstanding thread.
+ * Announced messages are remembered on the admin's CLERK USER (the
+ * `announced` map in `lib/sms/read-state.ts`), keyed by conversation +
+ * timestamp, so a reload, a second tab, or the same admin's phone
+ * never re-announces a text one of them already popped. On first mount
+ * we SEED that record from whatever is currently unread without
+ * notifying — otherwise a brand-new admin would get a burst for every
+ * outstanding thread.
  */
 
-/** `${conversationKey}` → newest `lastAt` already announced. */
-const ANNOUNCED_KEY = "sms-notified-v1";
-/** Notifications older than this are never announced on a cold start
- *  — a stale thread shouldn't pop days later just because this
- *  browser hasn't seen it before. */
+/** Notifications older than this are never announced — a stale thread
+ *  shouldn't pop days later just because it hasn't been seen here
+ *  before. */
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 type Permission = "default" | "granted" | "denied" | "unsupported";
-
-function readAnnounced(): Record<string, number> {
-  try {
-    return JSON.parse(localStorage.getItem(ANNOUNCED_KEY) ?? "{}");
-  } catch {
-    return {};
-  }
-}
-
-function writeAnnounced(map: Record<string, number>) {
-  try {
-    localStorage.setItem(ANNOUNCED_KEY, JSON.stringify(map));
-  } catch {
-    // Storage full/blocked — we'll just re-announce after a reload.
-  }
-}
 
 /**
  * Shared permission store. An external store (rather than per-component
@@ -114,47 +99,51 @@ export function SmsNotificationWatcher() {
   const router = useRouter();
   const permission = usePermission();
 
-  const { data } = useSWR<UnreadMessagesResponse>(
-    "/api/admin/messages/unread",
-    adminFetcher,
-    {
-      refreshInterval: 60_000,
-      revalidateOnFocus: true,
-      shouldRetryOnError: false,
-    }
-  );
+  // Same SWR key the nav badge uses, so this costs no extra request —
+  // and `announced` comes back in the payload already scoped to this
+  // admin.
+  const { data } = useUnreadMessagesFeed();
+  const { markAnnounced } = useSmsReadStateWriter();
 
   // Seeded on the first payload so a cold start never fires a burst
   // for threads that were already waiting.
   const seededRef = useRef(false);
+  // Keys announced in THIS tab, as a guard against the effect running
+  // again before the stamp round-trips (a permission change, a poll
+  // landing mid-flight) and popping the same text twice.
+  const localRef = useRef<Map<string, number>>(new Map());
 
   useEffect(() => {
     const conversations = data?.conversations;
     if (!conversations) return;
     if (permission !== "granted") return;
 
-    const announced = readAnnounced();
-    let changed = false;
+    const announced = data.announced;
+    const local = localRef.current;
+    const seen = (key: string) =>
+      Math.max(announced[key] ?? 0, local.get(key) ?? 0);
+    const stamps: Array<{ key: string; at: number }> = [];
 
     if (!seededRef.current) {
       // First payload this session: record everything as already
-      // announced, notify for none of it.
+      // announced, notify for none of it. On a device this admin has
+      // used before the server map already covers these, so the stamp
+      // is a no-op and nothing is written.
       seededRef.current = true;
       for (const c of conversations) {
-        if ((announced[c.key] ?? 0) < c.lastAt) {
-          announced[c.key] = c.lastAt;
-          changed = true;
-        }
+        if (seen(c.key) >= c.lastAt) continue;
+        local.set(c.key, c.lastAt);
+        stamps.push({ key: c.key, at: c.lastAt });
       }
-      if (changed) writeAnnounced(announced);
+      markAnnounced(stamps);
       return;
     }
 
     const now = Date.now();
     for (const c of conversations) {
-      if ((announced[c.key] ?? 0) >= c.lastAt) continue;
-      announced[c.key] = c.lastAt;
-      changed = true;
+      if (seen(c.key) >= c.lastAt) continue;
+      local.set(c.key, c.lastAt);
+      stamps.push({ key: c.key, at: c.lastAt });
       if (now - c.lastAt > MAX_AGE_MS) continue;
       try {
         const n = new Notification(`New text from ${c.name}`, {
@@ -178,8 +167,8 @@ export function SmsNotificationWatcher() {
         console.error("[sms-notifications] failed to notify:", err);
       }
     }
-    if (changed) writeAnnounced(announced);
-  }, [data, permission, router]);
+    markAnnounced(stamps);
+  }, [data, permission, router, markAnnounced]);
 
   return null;
 }

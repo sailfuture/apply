@@ -27,7 +27,10 @@ import { FamilyMessageThread } from "@/components/admin/family-message-thread";
 import { GroupMessageDialog } from "@/components/admin/group-message-dialog";
 import { NewMessageDialog } from "@/components/admin/new-message-dialog";
 import { SmsNotificationToggle } from "@/components/admin/sms-notifications";
-import { SMS_VIEWED_EVENT } from "@/components/admin/messages-unread-badge";
+import {
+  useSmsReadStateWriter,
+  useSmsViewedMap,
+} from "@/components/admin/messages-unread-badge";
 import type {
   ConversationStage,
   SmsConversation,
@@ -286,68 +289,34 @@ export function MessagesInbox({ mode }: { mode: InboxMode }) {
   } | null>(null);
 
   // Viewed tracking — opening a conversation grays its needs-reply
-  // dot until a NEWER inbound text arrives. Persisted per browser in
-  // localStorage (one key shared by both pages); loaded after mount
-  // (deferred a tick) so SSR and hydration render identically.
-  const [viewedMap, setViewedMap] = useState<Record<string, number>>({});
-  useEffect(() => {
-    const t = setTimeout(() => {
-      try {
-        setViewedMap(
-          JSON.parse(localStorage.getItem("sms-viewed-v1") ?? "{}")
-        );
-      } catch {
-        // Corrupt storage — start fresh.
-      }
-    }, 0);
-    return () => clearTimeout(t);
-  }, []);
+  // dot until a NEWER inbound text arrives. The stamps live on the
+  // admin's Clerk user and ride in the same payload as the feed (see
+  // `messages-unread-badge`), so these dots, the nav badge and the
+  // dashboard card can't disagree, and reading a thread here clears
+  // it on every other device this admin signs in from.
+  const viewedMap = useSmsViewedMap();
+  const { markViewed: stampViewed } = useSmsReadStateWriter();
   function markViewed(type: string, id: number, lastAt: number) {
-    setViewedMap((prev) => {
-      const key = `${type}:${id}`;
-      if ((prev[key] ?? 0) >= lastAt) return prev;
-      const next = { ...prev, [key]: lastAt };
-      try {
-        localStorage.setItem("sms-viewed-v1", JSON.stringify(next));
-        // Same-tab nudge for the nav's unread badge — `storage` only
-        // fires in other tabs, so without this the badge would keep
-        // counting a thread the admin is currently reading.
-        window.dispatchEvent(new Event(SMS_VIEWED_EVENT));
-      } catch {
-        // Storage full/blocked — the dot still grays for this session.
-      }
-      return next;
-    });
+    stampViewed([{ key: `${type}:${id}`, at: lastAt }]);
   }
   const isUnread = (c: SmsConversation) =>
     c.needsReply &&
     (viewedMap[`${c.contactType}:${c.contactId}`] ?? 0) < c.lastAt;
   // Stamp EVERY needs-reply thread viewed in one write — the escape
-  // hatch for a browser whose viewed map has fallen behind (new
-  // device, cleared storage, threads a colleague already handled).
-  // Marks the FULL feed, not just this page's slice: the nav badge
-  // counts both inboxes, so clearing only one page's threads would
-  // leave a bubble this page can't show the reason for.
+  // hatch for a backlog this admin has decided needs no answer (a
+  // wall of "Thanks!", or threads a colleague already handled by
+  // phone). Marks the FULL feed, not just this page's slice: the nav
+  // badge counts both inboxes, so clearing only one page's threads
+  // would leave a bubble this page can't show the reason for.
   function markAllViewed() {
-    setViewedMap((prev) => {
-      let changed = false;
-      const next = { ...prev };
-      for (const c of conversations) {
-        if (!c.needsReply) continue;
-        const key = `${c.contactType}:${c.contactId}`;
-        if ((next[key] ?? 0) >= c.lastAt) continue;
-        next[key] = c.lastAt;
-        changed = true;
-      }
-      if (!changed) return prev;
-      try {
-        localStorage.setItem("sms-viewed-v1", JSON.stringify(next));
-        window.dispatchEvent(new Event(SMS_VIEWED_EVENT));
-      } catch {
-        // Storage full/blocked — dots still gray for this session.
-      }
-      return next;
-    });
+    stampViewed(
+      conversations
+        .filter((c) => c.needsReply)
+        .map((c) => ({
+          key: `${c.contactType}:${c.contactId}`,
+          at: c.lastAt,
+        }))
+    );
   }
   const anyUnread = conversations.some(isUnread);
 

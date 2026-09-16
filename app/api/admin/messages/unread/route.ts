@@ -7,38 +7,24 @@ import {
   phoneFromAdhocId,
 } from "@/lib/sms/contacts";
 import { formatUSPhone } from "@/lib/phone";
+import { getSmsReadState } from "@/lib/sms/read-state";
+import { countUnread } from "@/lib/sms/unread";
 
-/** One conversation whose newest message is inbound — i.e. a contact
- *  texted us and nobody has replied. The nav badge subtracts the ones
- *  the admin has already opened (tracked per browser in localStorage
- *  by the inbox), so the timestamp travels with the key. */
-export interface UnreadConversation {
-  /** `${contactType}:${contactId}` — the same key the inbox writes to
-   *  its `sms-viewed-v1` localStorage map. */
-  key: string;
-  /** `created_at` of the newest message on the thread (unix ms). */
-  lastAt: number;
-  /** Who texted — a record name where we can resolve one cheaply,
-   *  otherwise the formatted phone. Powers the desktop notification;
-   *  the badge ignores it. */
-  name: string;
-  /** First line of the inbound text, truncated — the notification
-   *  body. */
-  preview: string;
-  /** True when the message is newer than `BADGE_WINDOW_MS`. The nav
-   *  badge only counts recent threads — a needs-reply thread flagged
-   *  months ago (a "Thanks!" nobody replied to, or one this browser's
-   *  viewed map never saw) is backlog for the dashboard card, not a
-   *  notification. Computed here so clients never call the clock
-   *  during render. */
-  recent: boolean;
-}
+// Re-exported so the existing `import type { UnreadMessagesResponse }
+// from ".../messages/unread/route"` call sites keep resolving; the
+// definitions themselves live in lib so the client can import the
+// counting RULE alongside them.
+export type {
+  UnreadConversation,
+  UnreadMessagesResponse,
+  ReadStateMap,
+} from "@/lib/sms/unread";
+import type { UnreadConversation, UnreadMessagesResponse } from "@/lib/sms/unread";
 
-/** Nav-badge recency window. The server flags a thread as needing a
- *  reply for as long as its newest message is inbound — forever, for
- *  a text that needs no answer — and the client's viewed map is
- *  per-browser. Without a cutoff every new device/browser bubbles
- *  the nav with months-old texts. */
+/** Nav-badge recency window. A thread needs a reply for as long as
+ *  its newest message is inbound — forever, for a text that needs no
+ *  answer. Without a cutoff, every such thread an admin never
+ *  explicitly opened would bubble the nav indefinitely. */
 const BADGE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Cap on name resolution. Unread counts are small in practice; this
@@ -46,10 +32,6 @@ const BADGE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
  *  an endpoint that polls from every admin page. */
 const NAME_LOOKUP_CAP = 10;
 const PREVIEW_CHARS = 120;
-
-export interface UnreadMessagesResponse {
-  conversations: UnreadConversation[];
-}
 
 /**
  * Needs-reply conversations for the nav badge.
@@ -61,17 +43,24 @@ export interface UnreadMessagesResponse {
  * whole application/progress set just to label conversations. This one
  * touches `sms_messages` only — no names, no stages.
  *
- * "Unread" here is only the server half: the latest message on the
- * thread is inbound. The client half (has this admin already opened
- * the thread?) lives in localStorage, matching the inbox's own dots —
- * see `isUnread` in /admin/messages.
+ * Returns BOTH halves of "unread" in one payload: the threads whose
+ * latest message is inbound, and this admin's own read state (which
+ * of those they've already opened, and which they've already been
+ * notified about) from their Clerk user. One request, one answer —
+ * the client never has to combine a server list with a separately
+ * loaded local map, which is what used to make the badge flash a
+ * too-high count on every page load.
  */
 export async function GET() {
   try {
     await requireAdmin();
     // Newest-first from Xano, so the FIRST row seen per contact is
-    // that thread's latest message.
-    const messages = await xano.smsMessages.getAll();
+    // that thread's latest message. The read state rides along in
+    // the same payload — see `UnreadMessagesResponse.viewed`.
+    const [messages, readState] = await Promise.all([
+      xano.smsMessages.getAll(),
+      getSmsReadState(),
+    ]);
     const seen = new Set<string>();
     const pending: Array<{
       key: string;
@@ -167,6 +156,9 @@ export async function GET() {
 
     return NextResponse.json({
       conversations,
+      viewed: readState.viewed,
+      announced: readState.announced,
+      unreadCount: countUnread(conversations, readState.viewed),
     } satisfies UnreadMessagesResponse);
   } catch (err) {
     return handleAdminError(err);

@@ -37,7 +37,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { adminFetcher as fetcher } from "@/lib/admin-fetcher";
 import type { DashboardTrendsResponse } from "@/app/api/admin/dashboard-trends/route";
-import type { UnreadMessagesResponse } from "@/app/api/admin/messages/unread/route";
+import { useUnreadMessagesFeed } from "@/components/admin/messages-unread-badge";
 import type { LeadActivityResponse } from "@/app/api/admin/lead-activity/route";
 
 /** Chart window options — mirrors TREND_WINDOW_OPTIONS on the trends
@@ -137,12 +137,10 @@ export default function AdminDashboardPage() {
     );
 
   // Threads whose newest message is inbound — what needs a reply.
-  const { data: unread, isLoading: unreadLoading } =
-    useSWR<UnreadMessagesResponse>(
-      "/api/admin/messages/unread",
-      fetcher,
-      { refreshInterval: 60_000 }
-    );
+  // Shared hook, not a local useSWR: the card's "already viewed"
+  // grouping reads this admin's view stamps out of the SAME payload,
+  // so the card, the nav badge and the inbox can't disagree.
+  const { data: unread, isLoading: unreadLoading } = useUnreadMessagesFeed();
 
   // Newest notes + texts across every recruitment lead.
   const { data: activity, isLoading: activityLoading, mutate: mutateActivity } =
