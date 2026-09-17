@@ -13,7 +13,6 @@ import {
   CheckCircle2,
   Circle,
   ExternalLink,
-  FileText,
   HelpCircle,
   Loader2,
   Pencil,
@@ -64,6 +63,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { StatusBadge } from "@/components/admin/status-badge";
 import { StageNav } from "@/components/admin/stage-nav";
 import { ActivityLogSheet } from "@/components/admin/activity-log-sheet";
+import { ExportScholarshipPdfButton } from "@/components/admin/export-scholarship-pdf-button";
 import { FamilyMessagesSheet } from "@/components/admin/family-messages-sheet";
 import { EmailParentButton } from "@/components/admin/email-parent-button";
 import { DocumentsToReviewBlock } from "@/components/admin/documents-to-review-block";
@@ -677,7 +677,7 @@ export default function FamilyDetailPage() {
                 Renders only when a year is selected since the PDF
                 is per-(family, year). */}
             {yearId ? (
-              <ExportPdfButton
+              <ExportScholarshipPdfButton
                 familyId={Number(familyId)}
                 yearId={Number(yearId)}
               />
@@ -7213,61 +7213,6 @@ function FamilyDecisionActions({
   void apps;
 
   return null;
-}
-
-/**
- * Export PDF button — generates a multi-page acceptance summary PDF
- * via `exportFamilyPDF` and triggers a real download (not a print
- * dialog). The generator lives in `lib/family-pdf.ts` and is
- * imported dynamically inside the click handler so the jsPDF +
- * autotable bundles only load when admin actually clicks Export —
- * keeps the main admin chunk lean.
- */
-function ExportPdfButton({
-  familyId,
-  yearId,
-}: {
-  familyId: number;
-  yearId: number;
-}) {
-  const [exporting, setExporting] = useState(false);
-  async function handleExport() {
-    if (exporting) return;
-    setExporting(true);
-    try {
-      // Dynamic import — `lib/family-pdf.ts` pulls in `jspdf` +
-      // `jspdf-autotable` (~150KB combined), so we only load it
-      // on first click. Subsequent clicks resolve from the
-      // module cache.
-      const { exportFamilyPDF } = await import("@/lib/family-pdf");
-      await exportFamilyPDF({ familyId, yearId });
-    } catch (err) {
-      console.error("[ExportPdfButton] export failed:", err);
-      toast.error(
-        err instanceof Error ? err.message : "Couldn't generate PDF."
-      );
-    } finally {
-      setExporting(false);
-    }
-  }
-  return (
-    <Button
-      type="button"
-      variant="outline"
-      size="sm"
-      onClick={handleExport}
-      disabled={exporting}
-      className="bg-white"
-      title="Download a printable PDF of this family's full scholarship application — financial aid details, document links, and award determination"
-    >
-      {exporting ? (
-        <Loader2 className="size-3.5 mr-1.5 animate-spin" />
-      ) : (
-        <FileText className="size-3.5 mr-1.5" />
-      )}
-      {exporting ? "Generating…" : "Export PDF"}
-    </Button>
-  );
 }
 
 /**

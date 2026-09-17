@@ -47,6 +47,7 @@ import { adminFetcher } from "@/lib/admin-fetcher";
 import { formatRelativeShort } from "@/lib/format-note-time";
 import { formatUSPhone } from "@/lib/phone";
 import { EnrolledExportDialog } from "@/components/admin/enrolled-export-dialog";
+import { ExportScholarshipPdfButton } from "@/components/admin/export-scholarship-pdf-button";
 import { SchoolAccountBackfillDialog } from "@/components/admin/school-account-backfill-dialog";
 import { SyncToddleButton } from "@/components/admin/sync-toddle-button";
 import { ToddleSyncAllDialog } from "@/components/admin/toddle-sync-all-dialog";
@@ -1401,6 +1402,17 @@ function StudentDetailSheet({
               lastSyncedAt={row.toddle_synced_at}
               className="w-full"
             />
+            {/* The family's whole Opportunity Scholarship for this
+                roster's year, as the Award Summary PDF. Hidden for
+                residential families, who skip financial aid. */}
+            {Number(row.family_id) > 0 && !row.is_residential ? (
+              <ExportScholarshipPdfButton
+                familyId={Number(row.family_id)}
+                yearId={Number(row.year_id)}
+                label="Export Opportunity Scholarship"
+                className="w-full"
+              />
+            ) : null}
           </div>
         </div>
       </SheetContent>

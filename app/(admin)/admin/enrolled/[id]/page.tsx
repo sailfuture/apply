@@ -74,6 +74,7 @@ import { RequestRecordsDialog } from "@/components/admin/request-records-dialog"
 import { SyncToddleButton } from "@/components/admin/sync-toddle-button";
 import { SufsAwardCard } from "@/components/admin/sufs-award-card";
 import { ActivityLogSheet } from "@/components/admin/activity-log-sheet";
+import { ExportScholarshipPdfButton } from "@/components/admin/export-scholarship-pdf-button";
 import { FamilyStudentsNav, StageNav } from "@/components/admin/stage-nav";
 import { DashboardBreadcrumb } from "@/components/dashboard-breadcrumb";
 import { InviteStatusBadge, ResendInviteButton } from "@/components/invite-status";
@@ -360,6 +361,18 @@ export default function EnrolledStudentDetailPage() {
             familyId={family ? Number(family.id) : undefined}
             yearId={yearId ? Number(yearId) : undefined}
           />
+          {/* The family's whole Opportunity Scholarship for this year
+              as the Award Summary PDF — same export as the family
+              page, so admin doesn't have to leave the student to get
+              it. Residential families never fill out financial aid,
+              so there's nothing to export for them. */}
+          {family && yearId && family.is_residential !== true ? (
+            <ExportScholarshipPdfButton
+              familyId={Number(family.id)}
+              yearId={Number(yearId)}
+              label="Scholarship PDF"
+            />
+          ) : null}
           {/* Push this student into Toddle (LMS) — updates the
               matching Toddle record or creates one. Grade comes from
               the packet's admin placement (falling back to the
