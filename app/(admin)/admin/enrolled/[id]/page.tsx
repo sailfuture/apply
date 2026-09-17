@@ -5531,8 +5531,11 @@ function UnenrollStudentButton({
               unenrollment takes effect. The packet stays in Xano
               — uploaded documents, signatures, and audit columns
               are preserved — but the student drops off the active
-              enrolled list. You can undo from this same button if
-              needed.
+              enrolled list. If this is the family&rsquo;s last
+              enrolled student, their sign-ups for upcoming events
+              are cancelled as well, and undo won&rsquo;t bring those
+              back. You can undo the unenrollment from this same
+              button if needed.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">

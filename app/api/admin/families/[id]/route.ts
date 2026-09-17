@@ -8,6 +8,7 @@ import {
   LEAD_NOTE_SOURCES,
   type LeadNoteSource,
 } from "@/lib/xano";
+import { cancelFamilyEventSignups } from "@/lib/event-signups";
 import { getStripeClient } from "@/lib/stripe";
 import { setToddleArchiveState } from "@/lib/toddle-sync";
 import {
@@ -60,7 +61,7 @@ export async function PATCH(
  *      is archived in Toddle best-effort, off the response path).
  *   3. Family-level rows: application/registration progress,
  *      scholarship + children, emergency contacts, volunteer hours,
- *      payment snapshots.
+ *      event sign-ups (RSVPs + item claims), payment snapshots.
  *   4. Parent rows + their Clerk accounts (skipped with a warning when
  *      the Clerk user is shared with a parent row outside this family).
  *   5. The family row itself.
@@ -244,6 +245,22 @@ export async function DELETE(
     (
       await Promise.allSettled(hours.map((h) => xano.volunteerHours.delete(h.id)))
     ).forEach(failed("delete volunteer-hours entry"));
+
+    // Event sign-ups — RSVPs and the item claims behind them. Past
+    // ones included: nothing about the family survives this.
+    try {
+      const signups = await cancelFamilyEventSignups(familyId, {
+        upcomingOnly: false,
+      });
+      for (const f of signups.failures) {
+        warnings.push(`delete event sign-up (${f})`);
+      }
+    } catch (err) {
+      failed("delete event sign-ups")({
+        status: "rejected",
+        reason: err,
+      } as PromiseRejectedResult);
+    }
 
     (
       await Promise.allSettled(

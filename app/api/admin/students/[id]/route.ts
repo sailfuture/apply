@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse, after } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
+import { cancelFamilyEventSignups } from "@/lib/event-signups";
 import type { XanoStudent } from "@/lib/xano";
 import { removeStripeItemsForArchivedStudent } from "@/lib/per-student-billing";
 import { reconcileFamilySubscriptionItems } from "@/lib/billing";
@@ -344,6 +345,38 @@ export async function PATCH(
         } catch (err) {
           console.error(
             `[/api/admin/students/${id}] Toddle archive failed:`,
+            err
+          );
+        }
+      });
+      // When this was the family's LAST enrolled student, cancel the
+      // family's sign-ups for upcoming events — the spots and items
+      // they'd committed to go back to families who are still here.
+      // A sibling still enrolled keeps the family's RSVPs intact, and
+      // past sign-ups stay as history either way. Best-effort, off the
+      // response path like the cascades above.
+      after(async () => {
+        try {
+          const familyId = Number(updated.registration_families_id);
+          if (!familyId) return;
+          const siblings = await xano.students.getByFamilyId(familyId);
+          const stillEnrolled = siblings.some(
+            (s) =>
+              s.id !== id && s.isEnrolled === true && s.isArchived !== true
+          );
+          if (stillEnrolled) return;
+          const result = await cancelFamilyEventSignups(familyId, {
+            upcomingOnly: true,
+          });
+          console.log(
+            `[/api/admin/students/${id}] family #${familyId} has no enrolled students left — cancelled ${result.rsvpsRemoved} upcoming RSVP(s) + ${result.claimsRemoved} item claim(s)`
+          );
+          for (const f of result.failures) {
+            console.error(`[/api/admin/students/${id}] sign-up cleanup: ${f}`);
+          }
+        } catch (err) {
+          console.error(
+            `[/api/admin/students/${id}] event sign-up cleanup failed:`,
             err
           );
         }
