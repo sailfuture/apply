@@ -861,6 +861,7 @@ export default function FamilyDetailPage() {
                       app={app}
                       yearId={yearId ? Number(yearId) : undefined}
                       isResidential={family?.is_residential === true}
+                      accepted={progress ? progress.isAccepted === true : undefined}
                       onChanged={() => {
                         refreshFamily();
                         refreshDetail();
@@ -2354,6 +2355,7 @@ function StudentApplicationBlock({
   app,
   yearId,
   isResidential,
+  accepted,
   onChanged,
 }: {
   student: Student;
@@ -2365,9 +2367,18 @@ function StudentApplicationBlock({
    *  block in family-overview mode (no year selected), where the
    *  enrolled link doesn't make sense and gets omitted. */
   yearId?: number;
-  /** Residential families get a Delete affordance on the application
-   *  card title (hard-deletes the application row). */
+  /** Residential families keep the Remove-student affordance even
+   *  after acceptance — they skip admissions review and manage
+   *  mid-year placements from this card. */
   isResidential?: boolean;
+  /** Family-level acceptance flag off the progress row. Once a
+   *  community family is accepted, a student leaving is an unenroll
+   *  (packet + billing exist by then), which lives on the Enrolled
+   *  page — so the Remove-student button hides here. `undefined`
+   *  means the progress row hasn't loaded yet, and the button stays
+   *  hidden rather than flashing a destructive control that may
+   *  vanish a moment later. */
+  accepted?: boolean;
   onChanged: () => void;
 }) {
   // Edit state lives on the block itself so the sub-header (name)
@@ -2445,9 +2456,11 @@ function StudentApplicationBlock({
     }
   }
 
-  /** Hard-delete this student's application for the year. Residential-
-   *  only affordance — drops the application row; the student record +
-   *  any registration packet are left intact. */
+  /** Remove this student from the year's application: hard-deletes
+   *  the application row, which every admin surface (this card, the
+   *  acceptance table, counts, exports) derives from. The student
+   *  record — documents, test scores — stays on the family so they
+   *  can be added back another year. */
   async function runDelete() {
     if (!app) return;
     setDeleting(true);
@@ -2460,14 +2473,14 @@ function StudentApplicationBlock({
         throw new Error(errBody?.error ?? `Delete failed (${res.status})`);
       }
       toast.success(
-        `${student.first_name} ${student.last_name}'s application deleted.`
+        `${student.first_name} ${student.last_name} removed from this year's application.`
       );
       setDeleteOpen(false);
       onChanged();
     } catch (err) {
       console.error("[StudentApplicationBlock.runDelete]", err);
       toast.error(
-        err instanceof Error ? err.message : "Couldn't delete application."
+        err instanceof Error ? err.message : "Couldn't remove student."
       );
     } finally {
       setDeleting(false);
@@ -2580,11 +2593,16 @@ function StudentApplicationBlock({
                   <Pencil className="size-3.5 mr-1.5" />
                   Edit
                 </Button>
-                {/* Residential-only hard delete for this student's
-                    application — behind a warning modal. The student
-                    record stays on the family; only the application
-                    (and the year's registration for them) is dropped. */}
-                {isResidential && app ? (
+                {/* Remove this student from the year's application —
+                    behind a warning modal. Shown while the family is
+                    still in review (after acceptance the student has
+                    a packet + billing, and leaving is an unenroll on
+                    the Enrolled page), and always for residential
+                    families, who manage placements from here. The
+                    student record stays on the family; only the
+                    application (and the year's registration for
+                    them) is dropped. */}
+                {app && (isResidential || accepted === false) ? (
                   <>
                     <Button
                       type="button"
@@ -2594,19 +2612,23 @@ function StudentApplicationBlock({
                       className="bg-white text-red-600 hover:bg-red-50 hover:text-red-700"
                     >
                       <Trash2 className="size-3.5 mr-1.5" />
-                      Delete
+                      Remove student
                     </Button>
                     <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
                       <AlertDialogContent>
                         <AlertDialogHeader>
                           <AlertDialogTitle>
-                            Delete {student.first_name} {student.last_name}
-                            &rsquo;s application?
+                            Remove {student.first_name} {student.last_name}{" "}
+                            from this application?
                           </AlertDialogTitle>
                           <AlertDialogDescription>
-                            This permanently deletes this student&rsquo;s
-                            application for this year. The student record stays
-                            on the family. This can&rsquo;t be undone.
+                            This takes {student.first_name} off the
+                            family&rsquo;s application for this year — their
+                            student card, their line in the acceptance table,
+                            and every count that includes them. Their student
+                            record (documents, test scores) stays on the
+                            family, so they can be added back another year.
+                            This can&rsquo;t be undone.
                           </AlertDialogDescription>
                         </AlertDialogHeader>
                         <AlertDialogFooter>
@@ -2626,7 +2648,7 @@ function StudentApplicationBlock({
                             ) : (
                               <Trash2 className="size-3.5 mr-1.5" />
                             )}
-                            Delete application
+                            Remove student
                           </AlertDialogAction>
                         </AlertDialogFooter>
                       </AlertDialogContent>

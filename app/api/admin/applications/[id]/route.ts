@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse, after } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
-import { xano } from "@/lib/xano";
+import { xano, type XanoApplication } from "@/lib/xano";
 import {
   findPacketForApplication,
   removeStripeItemForApplication,
@@ -251,11 +251,14 @@ export async function PATCH(
 
 /**
  * Admin-only DELETE for one `registration_application` row. Hard-removes
- * the application — used by the residential-family flow to delete a
- * specific student's mid-year registration from the application card.
+ * the application — the "Remove student" button on the family page's
+ * student card (any family still in review; residential families at
+ * any time, since they manage mid-year placements from that card).
  * The student record + any registration packet are left intact (the
  * registration detail page only surfaces packets for active apps, so a
- * deleted app's packet drops out of view).
+ * deleted app's packet drops out of view). Every admin surface derives
+ * from active application rows, so the student falls out of the
+ * acceptance table, counts, exports and pipeline on their own.
  */
 export async function DELETE(
   _req: NextRequest,
@@ -300,8 +303,62 @@ export async function DELETE(
     }
 
     await xano.applications.delete(id);
+    if (app) await forgetApplication(app);
     return NextResponse.json({ ok: true });
   } catch (err) {
     return handleAdminError(err);
+  }
+}
+
+/**
+ * Drop a deleted application from the two bookkeeping lists that
+ * mirror it: the family progress row's `registration_application_id`
+ * and the student's `registration_school_years_id` (which drives the
+ * year switcher on the enrolled page and the overview's member years).
+ * Both are appended when a student joins a year (see /api/applications).
+ * Each step logs on failure and the delete still counts as done.
+ *
+ * NB: Xano's edit endpoints drop empty inputs, so pulling the LAST id
+ * out of a list leaves the stale value behind. Nothing admin sees is
+ * decided by a lone stale id, so that's tolerated rather than worked
+ * around.
+ */
+async function forgetApplication(app: XanoApplication): Promise<void> {
+  const familyId = Number(app.registration_families_id);
+  const yearId = Number(app.registration_school_years_id);
+  const studentId = Number(app.registration_students_id);
+
+  try {
+    const progress = await xano.familyApplicationProgress.getByFamilyAndYear(
+      familyId,
+      yearId
+    );
+    const ids = progress?.registration_application_id;
+    if (progress && Array.isArray(ids) && ids.includes(app.id)) {
+      await xano.familyApplicationProgress.update(progress.id, {
+        registration_application_id: ids.filter((x) => x !== app.id),
+        last_edited: Date.now(),
+      });
+    }
+  } catch (err) {
+    console.error(
+      `[/api/admin/applications/${app.id}] couldn't drop id from family progress row:`,
+      err
+    );
+  }
+
+  try {
+    const student = await xano.students.getById(studentId);
+    const years = student.registration_school_years_id ?? [];
+    if (years.includes(yearId)) {
+      await xano.students.update(studentId, {
+        registration_school_years_id: years.filter((y) => y !== yearId),
+      });
+    }
+  } catch (err) {
+    console.error(
+      `[/api/admin/applications/${app.id}] couldn't drop year from student #${studentId}:`,
+      err
+    );
   }
 }
