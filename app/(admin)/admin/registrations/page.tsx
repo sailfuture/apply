@@ -701,6 +701,9 @@ function RegistrationsEmptyState() {
   );
 }
 
+/** Families per group before the table pages. */
+const REGISTRATIONS_PAGE_SIZE = 100;
+
 function RegistrationsGroup({
   title,
   description,
@@ -755,6 +758,9 @@ function RegistrationsGroup({
           columns={columns}
           data={rows}
           isLoading={isLoading}
+          // Show up to 100 families per group before paging (the table
+          // defaults to 20), so a whole cohort reads on one screen.
+          pageSize={REGISTRATIONS_PAGE_SIZE}
           externalSearch={search}
           onRowClick={onRowClick}
         />
