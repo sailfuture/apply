@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withServerTiming } from "@/lib/server-timing";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import {
   xano,
@@ -100,7 +101,7 @@ function parseContactParams(req: NextRequest): {
  *  - `POST { contactType?, contactId?, familyId?, body }` — send a
  *    manual text to the contact's phone and log it on their thread.
  */
-export async function GET(req: NextRequest) {
+async function handleGET(req: NextRequest) {
   try {
     await requireAdmin();
     const contact = parseContactParams(req);
@@ -501,3 +502,5 @@ export async function PATCH(req: NextRequest) {
     return handleAdminError(err);
   }
 }
+
+export const GET = withServerTiming(handleGET);

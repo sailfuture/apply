@@ -1,4 +1,5 @@
 import { auth, currentUser } from "@clerk/nextjs/server";
+import { noteAuthMode } from "@/lib/xano-runtime";
 import { NextResponse } from "next/server";
 import { emailFromClaims } from "@/lib/family-auth";
 
@@ -161,8 +162,12 @@ async function resolveAdminFromClerk(
   const claimEmail = emailFromClaims(sessionClaims);
   if (claimEmail) {
     const match = await getAdminForEmail(claimEmail);
-    if (match) return match;
+    if (match) {
+      noteAuthMode("claims");
+      return match;
+    }
   }
+  noteAuthMode("clerk");
   const user = await currentUser();
   if (!user) return null;
   const candidates: string[] = [];

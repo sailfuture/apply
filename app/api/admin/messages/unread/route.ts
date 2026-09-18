@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { withServerTiming } from "@/lib/server-timing";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
 import {
@@ -27,6 +28,14 @@ import type { UnreadConversation, UnreadMessagesResponse } from "@/lib/sms/unrea
  *  explicitly opened would bubble the nav indefinitely. */
 const BADGE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
+/** How far back the feed reads. The badge only counts the last 7
+ *  days, and the dashboard's Needs-a-Reply card lists the rest as
+ *  backlog — a thread whose newest message is older than this has
+ *  gone unanswered for two months and is no longer a useful prompt.
+ *  Reading only this window is what turned the badge's poll from the
+ *  whole 700 KB table into a few KB. */
+const FEED_LOOKBACK_MS = 60 * 24 * 60 * 60 * 1000;
+
 /** Cap on name resolution. Unread counts are small in practice; this
  *  keeps a pathological backlog from fanning out dozens of lookups on
  *  an endpoint that polls from every admin page. */
@@ -51,14 +60,15 @@ const PREVIEW_CHARS = 120;
  * loaded local map, which is what used to make the badge flash a
  * too-high count on every page load.
  */
-export async function GET() {
+async function handleGET() {
   try {
     await requireAdmin();
-    // Newest-first from Xano, so the FIRST row seen per contact is
-    // that thread's latest message. The read state rides along in
-    // the same payload — see `UnreadMessagesResponse.viewed`.
+    // Newest-first, so the FIRST row seen per contact is that
+    // thread's latest message. Only the recent window is read — see
+    // `FEED_LOOKBACK_MS`. The read state rides along in the same
+    // payload — see `UnreadMessagesResponse.viewed`.
     const [messages, readState] = await Promise.all([
-      xano.smsMessages.getAll(),
+      xano.smsMessages.getSince(Date.now() - FEED_LOOKBACK_MS),
       getSmsReadState(),
     ]);
     const seen = new Set<string>();
@@ -164,3 +174,5 @@ export async function GET() {
     return handleAdminError(err);
   }
 }
+
+export const GET = withServerTiming(handleGET);

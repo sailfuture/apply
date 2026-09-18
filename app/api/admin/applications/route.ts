@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withServerTiming } from "@/lib/server-timing";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
 
@@ -24,7 +25,7 @@ import { xano } from "@/lib/xano";
  * route — failures fall back to placeholder labels and zero counts
  * with the underlying error logged.
  */
-export async function GET(req: NextRequest) {
+async function handleGET(req: NextRequest) {
   try {
     await requireAdmin();
     const yearIdParam = req.nextUrl.searchParams.get("yearId");
@@ -52,7 +53,7 @@ export async function GET(req: NextRequest) {
       xano.familyApplicationProgress.getByYear(yearId),
       xano.families.getAll(),
       xano.parents.getAll(),
-      xano.applications.getAll(),
+      xano.applications.getByYear(yearId),
       // Pulled here so we can surface a per-family student-names
       // string ("Maxual Thompson, Thomas Haugh") on every row.
       // The registrations list does the same thing — keeps the two
@@ -257,3 +258,5 @@ export interface UnifiedAppRow {
   is_archived: boolean;
   reason_for_archive: string | null;
 }
+
+export const GET = withServerTiming(handleGET);

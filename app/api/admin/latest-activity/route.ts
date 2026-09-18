@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { withServerTiming } from "@/lib/server-timing";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
 
@@ -20,7 +21,7 @@ export type RecordsRequestMap = Record<string, number>;
  * column). Notes and texts are the two composer modes, so this is
  * the same universe the activity stream leads with.
  */
-export async function GET() {
+async function handleGET() {
   try {
     await requireAdmin();
     const [notes, sms, emails] = await Promise.all([
@@ -74,3 +75,5 @@ export async function GET() {
     return handleAdminError(err);
   }
 }
+
+export const GET = withServerTiming(handleGET);

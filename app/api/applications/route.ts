@@ -1,8 +1,9 @@
 import { getFamilyAuth } from "@/lib/family-auth";
+import { withServerTiming } from "@/lib/server-timing";
 import { NextRequest, NextResponse } from "next/server";
 import { xano } from "@/lib/xano";
 
-export async function GET(req: NextRequest) {
+async function handleGET(req: NextRequest) {
   const session = await getFamilyAuth();
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -148,3 +149,5 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json(application, { status: 201 });
 }
+
+export const GET = withServerTiming(handleGET);

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
 import { Analytics } from "@vercel/analytics/next";
+import { SpeedInsights } from "@vercel/speed-insights/next";
 import { Toaster } from "@/components/ui/sonner";
 import { AppChrome } from "@/components/app-chrome";
 import { SWRProvider } from "./swr-provider";
@@ -55,6 +56,7 @@ export default function RootLayout({
               toasts clear the right-hand sheets. */}
           <Toaster />
           <Analytics />
+          <SpeedInsights />
         </body>
       </html>
     </ClerkProvider>

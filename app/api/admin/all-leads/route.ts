@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withServerTiming } from "@/lib/server-timing";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import {
   xano,
@@ -127,7 +128,7 @@ export type LeadFunnelStage =
  * entire lead table to render one row — and without a second
  * projection of the same data drifting out of sync with this one.
  */
-export async function GET(req: NextRequest) {
+async function handleGET(req: NextRequest) {
   try {
     await requireAdmin();
     const [
@@ -459,3 +460,5 @@ export async function GET(req: NextRequest) {
     return handleAdminError(err);
   }
 }
+
+export const GET = withServerTiming(handleGET);

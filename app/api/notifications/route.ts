@@ -1,4 +1,5 @@
 import { getFamilyAuth } from "@/lib/family-auth";
+import { withServerTiming } from "@/lib/server-timing";
 import { NextResponse } from "next/server";
 import { xano } from "@/lib/xano";
 import { getUserNotificationsReadAt } from "@/lib/notification-read-state";
@@ -14,7 +15,7 @@ import { getUserNotificationsReadAt } from "@/lib/notification-read-state";
  * not exposed; texts include both directions since it's the
  * family's own conversation.
  */
-export async function GET() {
+async function handleGET() {
   const session = await getFamilyAuth();
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -124,3 +125,5 @@ export interface ParentNotificationsResponse {
    *  reply to. "" when unknown (no texts yet and no env fallback). */
   sms_number: string;
 }
+
+export const GET = withServerTiming(handleGET);

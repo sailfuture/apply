@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withServerTiming } from "@/lib/server-timing";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
 import type { XanoSchoolYear } from "@/lib/xano";
@@ -66,7 +67,7 @@ function yearSortKey(year: XanoSchoolYear | null | undefined): number {
   }
   return Number.MAX_SAFE_INTEGER;
 }
-export async function GET(req: NextRequest) {
+async function handleGET(req: NextRequest) {
   try {
     await requireAdmin();
     const yearIdParam = req.nextUrl.searchParams.get("yearId");
@@ -568,3 +569,5 @@ function hasFiles(v: unknown): boolean {
   if (typeof v === "object") return Object.keys(v).length > 0;
   return false;
 }
+
+export const GET = withServerTiming(handleGET);

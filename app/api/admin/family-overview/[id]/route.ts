@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withServerTiming } from "@/lib/server-timing";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
 import type {
@@ -45,7 +46,7 @@ import type {
  * Each lookup is wrapped in `Promise.allSettled` so a single Xano
  * hiccup degrades gracefully rather than 500'ing the whole route.
  */
-export async function GET(
+async function handleGET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
@@ -291,3 +292,5 @@ export interface AdminFamilyOverviewResponse {
    *  if the school-years fetch fell over. */
   school_years: Record<string, string>;
 }
+
+export const GET = withServerTiming(handleGET);

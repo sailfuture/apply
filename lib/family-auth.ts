@@ -1,4 +1,5 @@
 import { auth, currentUser } from "@clerk/nextjs/server";
+import { noteAuthMode } from "@/lib/xano-runtime";
 
 /**
  * Parent-side request identity: the Clerk user id plus the Xano
@@ -72,9 +73,11 @@ export async function getFamilyAuth(): Promise<FamilyAuth | null> {
 
   const fromClaims = familyIdFromClaims(sessionClaims);
   if (fromClaims !== undefined) {
+    noteAuthMode("claims");
     return { userId, familyId: fromClaims };
   }
 
+  noteAuthMode("clerk");
   const user = await currentUser();
   if (!user) return null;
   return {

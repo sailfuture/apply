@@ -1,9 +1,10 @@
 import { getFamilyAuth } from "@/lib/family-auth";
+import { withServerTiming } from "@/lib/server-timing";
 import { NextRequest, NextResponse } from "next/server";
 import { xano } from "@/lib/xano";
 import { redactAdminSufs } from "@/lib/student-registration-redact";
 
-export async function GET(req: NextRequest) {
+async function handleGET(req: NextRequest) {
   const session = await getFamilyAuth();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const { familyId } = session;
@@ -171,3 +172,5 @@ export async function POST(req: NextRequest) {
   // path ever carries the admin-only fields.
   return NextResponse.json(redactAdminSufs(registration), { status: 201 });
 }
+
+export const GET = withServerTiming(handleGET);

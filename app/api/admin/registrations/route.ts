@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withServerTiming } from "@/lib/server-timing";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
 
@@ -38,7 +39,7 @@ import { xano } from "@/lib/xano";
  * Each join is wrapped in `Promise.allSettled` so a single Xano hiccup
  * doesn't 500 the whole route.
  */
-export async function GET(req: NextRequest) {
+async function handleGET(req: NextRequest) {
   try {
     await requireAdmin();
     const yearIdParam = req.nextUrl.searchParams.get("yearId");
@@ -64,7 +65,7 @@ export async function GET(req: NextRequest) {
       progressResult,
       familyProgressResult,
     ] = await Promise.allSettled([
-      xano.applications.getAll(),
+      xano.applications.getByYear(yearId),
       xano.students.getAll(),
       xano.families.getAll(),
       xano.parents.getAll(),
@@ -342,3 +343,5 @@ export interface RegistrationStudentRow {
   doc_transcripts_submitted: boolean;
   doc_transcripts_approved: boolean;
 }
+
+export const GET = withServerTiming(handleGET);

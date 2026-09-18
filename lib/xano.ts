@@ -1,4 +1,5 @@
 import { getDocumentDownloadUrl as pandaDocDownloadUrl } from "@/lib/pandadoc";
+import { xanoFetch } from "@/lib/xano-fetch";
 
 const BASE_URL = process.env.XANO_API_BASE_URL;
 
@@ -22,7 +23,7 @@ async function fetchRetry(url: string): Promise<Response> {
       await new Promise((r) => setTimeout(r, 250 * attempt));
     }
     try {
-      const res = await fetch(url, { cache: "no-store" });
+      const res = await xanoFetch(url, { cache: "no-store" });
       if (res.ok) return res;
       last = res;
       // 4xx other than 429 won't get better on retry.
@@ -34,7 +35,7 @@ async function fetchRetry(url: string): Promise<Response> {
   if (last) return last;
   // All attempts threw — surface one real error for the caller's
   // existing catch handling.
-  return fetch(url, { cache: "no-store" });
+  return xanoFetch(url, { cache: "no-store" });
 }
 
 /** Host root for Xano — strips the `/api:<group>` suffix from
@@ -2869,7 +2870,7 @@ export function tourLeadFk(
 export const xano = {
   parents: {
     async create(data: Omit<XanoParent, "id" | "created_at">) {
-      const res = await fetch(`${getBaseUrl()}/registration_parents`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_parents`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -2915,7 +2916,7 @@ export const xano = {
     },
 
     async update(id: number, data: Partial<Omit<XanoParent, "id" | "created_at">>) {
-      const res = await fetch(`${getBaseUrl()}/registration_parents/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_parents/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -2939,7 +2940,7 @@ export const xano = {
         return matches.reduce((a, b) => (a.id <= b.id ? a : b));
       };
       try {
-        const res = await fetch(
+        const res = await xanoFetch(
           `${getBaseUrl()}/registration_parents?clerk_user_id=${encodeURIComponent(clerkUserId)}`,
           { cache: "no-store" }
         );
@@ -2956,7 +2957,7 @@ export const xano = {
 
     async findByEmail(email: string): Promise<XanoParent | null> {
       try {
-        const res = await fetch(
+        const res = await xanoFetch(
           `${getBaseUrl()}/registration_parents?email=${encodeURIComponent(email)}`,
           { cache: "no-store" }
         );
@@ -2974,7 +2975,7 @@ export const xano = {
     },
 
     async delete(id: number): Promise<void> {
-      const res = await fetch(`${getBaseUrl()}/registration_parents/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_parents/${id}`, {
         method: "DELETE",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -2983,7 +2984,7 @@ export const xano = {
 
   families: {
     async create(data: Omit<XanoFamily, "id" | "created_at">) {
-      const res = await fetch(`${getBaseUrl()}/registration_families`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_families`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -3061,7 +3062,7 @@ export const xano = {
     },
 
     async update(id: number, data: Partial<Omit<XanoFamily, "id" | "created_at">>) {
-      const res = await fetch(`${getBaseUrl()}/registration_families/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_families/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -3076,7 +3077,7 @@ export const xano = {
      *  scholarship, parents) must already be gone or it strands
      *  orphans that no surface can reach. */
     async delete(id: number): Promise<void> {
-      const res = await fetch(`${getBaseUrl()}/registration_families/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_families/${id}`, {
         method: "DELETE",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -3084,7 +3085,7 @@ export const xano = {
 
     async findByParentId(parentId: number): Promise<XanoFamily | null> {
       try {
-        const res = await fetch(
+        const res = await xanoFetch(
           `${getBaseUrl()}/registration_families?registration_parents_id=${parentId}`,
           { cache: "no-store" }
         );
@@ -3116,7 +3117,7 @@ export const xano = {
 
   students: {
     async create(data: Omit<XanoStudent, "id" | "created_at">) {
-      const res = await fetch(`${getBaseUrl()}/registration_students`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_students`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -3132,7 +3133,7 @@ export const xano = {
     },
 
     async getById(id: number): Promise<XanoStudent> {
-      const res = await fetch(`${getBaseUrl()}/registration_students/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_students/${id}`, {
         cache: "no-store",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -3140,7 +3141,7 @@ export const xano = {
     },
 
     async update(id: number, data: Partial<Omit<XanoStudent, "id" | "created_at">>) {
-      const res = await fetch(`${getBaseUrl()}/registration_students/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_students/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -3156,7 +3157,7 @@ export const xano = {
      *  Unenroll flow (`isArchived`) when the student is leaving but
      *  history matters. */
     async delete(id: number): Promise<void> {
-      const res = await fetch(`${getBaseUrl()}/registration_students/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_students/${id}`, {
         method: "DELETE",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -3179,7 +3180,7 @@ export const xano = {
       id: number,
       data: Partial<Omit<XanoStudent, "id" | "created_at">>
     ): Promise<XanoStudent> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getXanoHost()}/api:2GcBXyoA/registration_students/${id}`,
         {
           method: "PATCH",
@@ -3203,7 +3204,7 @@ export const xano = {
       // their orders need to agree for the rendered list to look
       // right.
       try {
-        const res = await fetch(
+        const res = await xanoFetch(
           `${getBaseUrl()}/registration_students?registration_families_id=${familyId}`,
           { cache: "no-store" }
         );
@@ -3229,7 +3230,7 @@ export const xano = {
 
   applications: {
     async create(data: Omit<XanoApplication, "id" | "created_at">) {
-      const res = await fetch(`${getBaseUrl()}/registration_application`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_application`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -3282,7 +3283,7 @@ export const xano = {
     },
 
     async getById(id: number): Promise<XanoApplication> {
-      const res = await fetch(`${getBaseUrl()}/registration_application/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_application/${id}`, {
         cache: "no-store",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -3290,7 +3291,7 @@ export const xano = {
     },
 
     async update(id: number, data: Partial<Omit<XanoApplication, "id" | "created_at">>) {
-      const res = await fetch(`${getBaseUrl()}/registration_application/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_application/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -3325,7 +3326,7 @@ export const xano = {
       // where Xano returns `registration_families_id` as an expanded
       // relation object (e.g. `{ id: 60, ... }`) rather than a scalar.
       try {
-        const res = await fetch(
+        const res = await xanoFetch(
           `${getBaseUrl()}/registration_application?registration_families_id=${familyId}`,
           { cache: "no-store" }
         );
@@ -3382,7 +3383,7 @@ export const xano = {
           "registration_school_years_id",
           String(yearId)
         );
-        const res = await fetch(url.toString(), { cache: "no-store" });
+        const res = await xanoFetch(url.toString(), { cache: "no-store" });
         if (!res.ok) return [];
         const body = (await res.json()) as XanoApplicationByFamily[];
         return Array.isArray(body) ? body : [];
@@ -3407,6 +3408,41 @@ export const xano = {
      * here MUST fall back to `getByFamilyId` — `findOwnedApp` does
      * exactly that.
      */
+    /**
+     * Every application row for one school year, via the list
+     * endpoint's server-side `registration_school_years_id` filter —
+     * so year-scoped admin lists stop downloading every year's rows
+     * (the whole table measured 196 KB / 0.8 s on 2026-09-17). The
+     * client-side filter is belt-and-braces against the endpoint
+     * ignoring the input. Degrades to [] like the other year readers.
+     */
+    async getByYear(yearId: number): Promise<XanoApplication[]> {
+      try {
+        const res = await fetchRetry(
+          `${getBaseUrl()}/registration_application?registration_school_years_id=${yearId}`
+        );
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          console.error(
+            `[xano.applications.getByYear] ${res.status} for yearId=${yearId}: ${body}`
+          );
+          return [];
+        }
+        const items: XanoApplication[] = await res.json();
+        return Array.isArray(items)
+          ? items.filter(
+              (a) => Number(a.registration_school_years_id) === yearId
+            )
+          : [];
+      } catch (err) {
+        console.error(
+          `[xano.applications.getByYear] threw for yearId=${yearId}:`,
+          err
+        );
+        return [];
+      }
+    },
+
     async getByFamilyAndYear(
       familyId: number,
       yearId: number
@@ -3442,7 +3478,7 @@ export const xano = {
 
     async getByStudentAndYear(studentId: number, schoolYearId: number): Promise<XanoApplication | null> {
       try {
-        const res = await fetch(
+        const res = await xanoFetch(
           `${getBaseUrl()}/registration_application?registration_students_id=${studentId}&registration_school_years_id=${schoolYearId}`,
           { cache: "no-store" }
         );
@@ -3466,7 +3502,7 @@ export const xano = {
     },
 
     async delete(id: number): Promise<void> {
-      const res = await fetch(`${getBaseUrl()}/registration_application/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_application/${id}`, {
         method: "DELETE",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -3475,7 +3511,7 @@ export const xano = {
 
   applicationStatuses: {
     async getAll(): Promise<XanoApplicationStatus[]> {
-      const res = await fetch(`${getBaseUrl()}/registration_application_status`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_application_status`, {
         cache: "no-store",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -3483,7 +3519,7 @@ export const xano = {
     },
 
     async getById(id: number): Promise<XanoApplicationStatus> {
-      const res = await fetch(`${getBaseUrl()}/registration_application_status/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_application_status/${id}`, {
         cache: "no-store",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -3492,7 +3528,7 @@ export const xano = {
 
     async findByName(name: string): Promise<XanoApplicationStatus | null> {
       try {
-        const res = await fetch(
+        const res = await xanoFetch(
           `${getBaseUrl()}/registration_application_status?status_name=${encodeURIComponent(name)}`,
           { cache: "no-store" }
         );
@@ -3518,7 +3554,7 @@ export const xano = {
     },
 
     async getById(id: number): Promise<XanoSchoolYear> {
-      const res = await fetch(`${getBaseUrl()}/registration_school_years/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_school_years/${id}`, {
         cache: "no-store",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -3528,7 +3564,7 @@ export const xano = {
     async create(
       data: Omit<XanoSchoolYear, "id" | "created_at">
     ): Promise<XanoSchoolYear> {
-      const res = await fetch(`${getBaseUrl()}/registration_school_years`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_school_years`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -3541,7 +3577,7 @@ export const xano = {
       id: number,
       data: Partial<Omit<XanoSchoolYear, "id" | "created_at">>
     ): Promise<XanoSchoolYear> {
-      const res = await fetch(`${getBaseUrl()}/registration_school_years/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_school_years/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -3551,7 +3587,7 @@ export const xano = {
     },
 
     async delete(id: number): Promise<void> {
-      const res = await fetch(`${getBaseUrl()}/registration_school_years/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_school_years/${id}`, {
         method: "DELETE",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -3593,7 +3629,7 @@ export const xano = {
     async create(
       data: Omit<XanoSchoolYearAwardBracket, "id" | "created_at">
     ): Promise<XanoSchoolYearAwardBracket> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_school_year_award_brackets`,
         {
           method: "POST",
@@ -3612,7 +3648,7 @@ export const xano = {
         Omit<XanoSchoolYearAwardBracket, "id" | "created_at">
       >
     ): Promise<XanoSchoolYearAwardBracket> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_school_year_award_brackets/${id}`,
         {
           method: "PATCH",
@@ -3626,7 +3662,7 @@ export const xano = {
     },
 
     async delete(id: number): Promise<void> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_school_year_award_brackets/${id}`,
         { method: "DELETE" }
       );
@@ -3665,7 +3701,7 @@ export const xano = {
     async create(
       data: Omit<XanoSchoolYearNetAssetsBracket, "id" | "created_at">
     ): Promise<XanoSchoolYearNetAssetsBracket> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_school_year_net_assets_bracket`,
         {
           method: "POST",
@@ -3684,7 +3720,7 @@ export const xano = {
         Omit<XanoSchoolYearNetAssetsBracket, "id" | "created_at">
       >
     ): Promise<XanoSchoolYearNetAssetsBracket> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_school_year_net_assets_bracket/${id}`,
         {
           method: "PATCH",
@@ -3698,7 +3734,7 @@ export const xano = {
     },
 
     async delete(id: number): Promise<void> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_school_year_net_assets_bracket/${id}`,
         { method: "DELETE" }
       );
@@ -3709,7 +3745,7 @@ export const xano = {
 
   scholarship: {
     async create(data: Omit<XanoScholarship, "id" | "created_at">) {
-      const res = await fetch(`${getBaseUrl()}/registration_opportunity_scholarship`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_opportunity_scholarship`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -3719,7 +3755,7 @@ export const xano = {
     },
 
     async getAll(): Promise<XanoScholarship[]> {
-      const res = await fetch(`${getBaseUrl()}/registration_opportunity_scholarship`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_opportunity_scholarship`, {
         cache: "no-store",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -3727,7 +3763,7 @@ export const xano = {
     },
 
     async getById(id: number): Promise<XanoScholarship> {
-      const res = await fetch(`${getBaseUrl()}/registration_opportunity_scholarship/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_opportunity_scholarship/${id}`, {
         cache: "no-store",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -3771,7 +3807,7 @@ export const xano = {
       contributing_members: XanoScholarshipContributingMember[];
       benefits: XanoScholarshipBenefit[];
     }> {
-      const res = await fetch(`${getBaseUrl()}/registration_opportunity_scholarship/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_opportunity_scholarship/${id}`, {
         cache: "no-store",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -3814,7 +3850,7 @@ export const xano = {
     },
 
     async update(id: number, data: Partial<Omit<XanoScholarship, "id" | "created_at">>) {
-      const res = await fetch(`${getBaseUrl()}/registration_opportunity_scholarship/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_opportunity_scholarship/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -3825,7 +3861,7 @@ export const xano = {
 
     async getByFamilyAndYear(familyId: number, yearId: number): Promise<XanoScholarship | null> {
       try {
-        const res = await fetch(
+        const res = await xanoFetch(
           `${getBaseUrl()}/registration_opportunity_scholarship?registration_families_id=${familyId}&registration_school_years_id=${yearId}`,
           { cache: "no-store" }
         );
@@ -3855,7 +3891,7 @@ export const xano = {
      * constraint.
      */
     async delete(id: number): Promise<void> {
-      const res = await fetch(`${getBaseUrl()}/registration_opportunity_scholarship/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_opportunity_scholarship/${id}`, {
         method: "DELETE",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -3864,7 +3900,7 @@ export const xano = {
 
   scholarshipBenefits: {
     async create(data: Omit<XanoScholarshipBenefit, "id" | "created_at">) {
-      const res = await fetch(`${getBaseUrl()}/registration_opportunity_scholarship_benefits`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_opportunity_scholarship_benefits`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -3874,7 +3910,7 @@ export const xano = {
     },
 
     async getAll(): Promise<XanoScholarshipBenefit[]> {
-      const res = await fetch(`${getBaseUrl()}/registration_opportunity_scholarship_benefits`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_opportunity_scholarship_benefits`, {
         cache: "no-store",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -3882,7 +3918,7 @@ export const xano = {
     },
 
     async update(id: number, data: Partial<Omit<XanoScholarshipBenefit, "id" | "created_at">>) {
-      const res = await fetch(`${getBaseUrl()}/registration_opportunity_scholarship_benefits/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_opportunity_scholarship_benefits/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -3892,7 +3928,7 @@ export const xano = {
     },
 
     async delete(id: number): Promise<void> {
-      const res = await fetch(`${getBaseUrl()}/registration_opportunity_scholarship_benefits/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_opportunity_scholarship_benefits/${id}`, {
         method: "DELETE",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -3900,7 +3936,7 @@ export const xano = {
 
     /** Single row by id — used by the scholarship-item ownership guard. */
     async getById(id: number): Promise<XanoScholarshipBenefit | null> {
-      const res = await fetch(`${getBaseUrl()}/registration_opportunity_scholarship_benefits/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_opportunity_scholarship_benefits/${id}`, {
         cache: "no-store",
       });
       if (!res.ok) return null;
@@ -3909,7 +3945,7 @@ export const xano = {
 
     async getByScholarshipId(scholarshipId: number): Promise<XanoScholarshipBenefit[]> {
       try {
-        const res = await fetch(
+        const res = await xanoFetch(
           `${getBaseUrl()}/registration_opportunity_scholarship_benefits?registration_opportunity_scholarship_id=${scholarshipId}`,
           { cache: "no-store" }
         );
@@ -3937,7 +3973,7 @@ export const xano = {
 
   scholarshipContributingMembers: {
     async create(data: Omit<XanoScholarshipContributingMember, "id" | "created_at">) {
-      const res = await fetch(`${getBaseUrl()}/registration_opportunity_scholarship_contributing_members`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_opportunity_scholarship_contributing_members`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -3956,7 +3992,7 @@ export const xano = {
     },
 
     async getAll(): Promise<XanoScholarshipContributingMember[]> {
-      const res = await fetch(`${getBaseUrl()}/registration_opportunity_scholarship_contributing_members`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_opportunity_scholarship_contributing_members`, {
         cache: "no-store",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -3965,7 +4001,7 @@ export const xano = {
     },
 
     async update(id: number, data: Partial<Omit<XanoScholarshipContributingMember, "id" | "created_at">>) {
-      const res = await fetch(`${getBaseUrl()}/registration_opportunity_scholarship_contributing_members/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_opportunity_scholarship_contributing_members/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -3976,7 +4012,7 @@ export const xano = {
     },
 
     async delete(id: number): Promise<void> {
-      const res = await fetch(`${getBaseUrl()}/registration_opportunity_scholarship_contributing_members/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_opportunity_scholarship_contributing_members/${id}`, {
         method: "DELETE",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -3986,7 +4022,7 @@ export const xano = {
      *  admin mutate routes to resolve the row's parent scholarship.
      *  Returns null on 404 so callers can 404 cleanly. */
     async getById(id: number): Promise<XanoScholarshipContributingMember | null> {
-      const res = await fetch(`${getBaseUrl()}/registration_opportunity_scholarship_contributing_members/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_opportunity_scholarship_contributing_members/${id}`, {
         cache: "no-store",
       });
       if (!res.ok) return null;
@@ -3996,7 +4032,7 @@ export const xano = {
 
     async getByScholarshipId(scholarshipId: number): Promise<XanoScholarshipContributingMember[]> {
       try {
-        const res = await fetch(
+        const res = await xanoFetch(
           `${getBaseUrl()}/registration_opportunity_scholarship_contributing_members?registration_opportunity_scholarship_id=${scholarshipId}`,
           { cache: "no-store" }
         );
@@ -4029,7 +4065,7 @@ export const xano = {
 
   scholarshipHomes: {
     async create(data: Omit<XanoScholarshipHome, "id" | "created_at">) {
-      const res = await fetch(`${getBaseUrl()}/registration_opportunity_scholarship_home`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_opportunity_scholarship_home`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -4039,7 +4075,7 @@ export const xano = {
     },
 
     async getAll(): Promise<XanoScholarshipHome[]> {
-      const res = await fetch(`${getBaseUrl()}/registration_opportunity_scholarship_home`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_opportunity_scholarship_home`, {
         cache: "no-store",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -4047,7 +4083,7 @@ export const xano = {
     },
 
     async update(id: number, data: Partial<Omit<XanoScholarshipHome, "id" | "created_at">>) {
-      const res = await fetch(`${getBaseUrl()}/registration_opportunity_scholarship_home/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_opportunity_scholarship_home/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -4057,7 +4093,7 @@ export const xano = {
     },
 
     async delete(id: number): Promise<void> {
-      const res = await fetch(`${getBaseUrl()}/registration_opportunity_scholarship_home/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_opportunity_scholarship_home/${id}`, {
         method: "DELETE",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -4065,7 +4101,7 @@ export const xano = {
 
     /** Single row by id — used by the scholarship-item ownership guard. */
     async getById(id: number): Promise<XanoScholarshipHome | null> {
-      const res = await fetch(`${getBaseUrl()}/registration_opportunity_scholarship_home/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_opportunity_scholarship_home/${id}`, {
         cache: "no-store",
       });
       if (!res.ok) return null;
@@ -4074,7 +4110,7 @@ export const xano = {
 
     async getByScholarshipId(scholarshipId: number): Promise<XanoScholarshipHome[]> {
       try {
-        const res = await fetch(
+        const res = await xanoFetch(
           `${getBaseUrl()}/registration_opportunity_scholarship_home?registration_opportunity_scholarship_id=${scholarshipId}`,
           { cache: "no-store" }
         );
@@ -4110,7 +4146,7 @@ export const xano = {
 
   scholarshipVehicles: {
     async create(data: Omit<XanoScholarshipVehicle, "id" | "created_at">) {
-      const res = await fetch(`${getBaseUrl()}/registration_opportunity_scholarship_vehicles`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_opportunity_scholarship_vehicles`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -4120,7 +4156,7 @@ export const xano = {
     },
 
     async getAll(): Promise<XanoScholarshipVehicle[]> {
-      const res = await fetch(`${getBaseUrl()}/registration_opportunity_scholarship_vehicles`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_opportunity_scholarship_vehicles`, {
         cache: "no-store",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -4128,7 +4164,7 @@ export const xano = {
     },
 
     async update(id: number, data: Partial<Omit<XanoScholarshipVehicle, "id" | "created_at">>) {
-      const res = await fetch(`${getBaseUrl()}/registration_opportunity_scholarship_vehicles/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_opportunity_scholarship_vehicles/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -4138,7 +4174,7 @@ export const xano = {
     },
 
     async delete(id: number): Promise<void> {
-      const res = await fetch(`${getBaseUrl()}/registration_opportunity_scholarship_vehicles/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_opportunity_scholarship_vehicles/${id}`, {
         method: "DELETE",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -4146,7 +4182,7 @@ export const xano = {
 
     /** Single row by id — used by the scholarship-item ownership guard. */
     async getById(id: number): Promise<XanoScholarshipVehicle | null> {
-      const res = await fetch(`${getBaseUrl()}/registration_opportunity_scholarship_vehicles/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_opportunity_scholarship_vehicles/${id}`, {
         cache: "no-store",
       });
       if (!res.ok) return null;
@@ -4155,7 +4191,7 @@ export const xano = {
 
     async getByScholarshipId(scholarshipId: number): Promise<XanoScholarshipVehicle[]> {
       try {
-        const res = await fetch(
+        const res = await xanoFetch(
           `${getBaseUrl()}/registration_opportunity_scholarship_vehicles?registration_opportunity_scholarship_id=${scholarshipId}`,
           { cache: "no-store" }
         );
@@ -4185,7 +4221,7 @@ export const xano = {
 
   busStops: {
     async getAll(): Promise<XanoBusStop[]> {
-      const res = await fetch(`${getBaseUrl()}/registration_bus`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_bus`, {
         cache: "no-store",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -4195,7 +4231,7 @@ export const xano = {
     async create(
       data: Omit<XanoBusStop, "id" | "created_at">
     ): Promise<XanoBusStop> {
-      const res = await fetch(`${getBaseUrl()}/registration_bus`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_bus`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -4208,7 +4244,7 @@ export const xano = {
       id: number,
       data: Partial<Omit<XanoBusStop, "id" | "created_at">>
     ): Promise<XanoBusStop> {
-      const res = await fetch(`${getBaseUrl()}/registration_bus/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_bus/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -4248,7 +4284,7 @@ export const xano = {
           "registration_school_years_id",
           String(yearId)
         );
-        const res = await fetch(url.toString(), { cache: "no-store" });
+        const res = await xanoFetch(url.toString(), { cache: "no-store" });
         if (!res.ok) return null;
         const body = await res.json();
         // Endpoint returns an array even when filtered to a single
@@ -4275,7 +4311,7 @@ export const xano = {
      */
     async getAllByYear(yearId: number): Promise<XanoFamilyPayment[]> {
       try {
-        const res = await fetch(
+        const res = await xanoFetch(
           `${getBaseUrl()}/registration_families_payment?registration_school_years_id=${yearId}`,
           { cache: "no-store" }
         );
@@ -4306,7 +4342,7 @@ export const xano = {
      * its family.
      */
     async getAllByFamily(familyId: number): Promise<XanoFamilyPayment[]> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_families_payment?registration_families_id=${familyId}`,
         { cache: "no-store" }
       );
@@ -4345,7 +4381,7 @@ export const xano = {
       familyId: number,
       yearId: number
     ): Promise<XanoFamilyPayment | null> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_families_payment?registration_families_id=${familyId}&registration_school_years_id=${yearId}`,
         { cache: "no-store" }
       );
@@ -4365,7 +4401,7 @@ export const xano = {
     },
 
     async create(data: Omit<XanoFamilyPayment, "id" | "created_at">): Promise<XanoFamilyPayment> {
-      const res = await fetch(`${getBaseUrl()}/registration_families_payment`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_families_payment`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -4376,7 +4412,7 @@ export const xano = {
     },
 
     async update(id: number, data: Partial<Omit<XanoFamilyPayment, "id" | "created_at">>): Promise<XanoFamilyPayment> {
-      const res = await fetch(`${getBaseUrl()}/registration_families_payment/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_families_payment/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -4393,7 +4429,7 @@ export const xano = {
      * is being removed end-to-end.
      */
     async delete(id: number): Promise<void> {
-      const res = await fetch(`${getBaseUrl()}/registration_families_payment/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_families_payment/${id}`, {
         method: "DELETE",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -4437,7 +4473,7 @@ export const xano = {
     async findByStripeIdStrict(
       stripeInvoiceId: string
     ): Promise<XanoPaymentTransaction | null> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_payment_transactions?stripe_invoice_id=${encodeURIComponent(stripeInvoiceId)}`,
         { cache: "no-store" }
       );
@@ -4465,7 +4501,7 @@ export const xano = {
       yearId: number
     ): Promise<XanoPaymentTransaction[]> {
       try {
-        const res = await fetch(
+        const res = await xanoFetch(
           `${getBaseUrl()}/registration_payment_transactions?registration_families_id=${familyId}&registration_school_years_id=${yearId}`,
           { cache: "no-store" }
         );
@@ -4496,7 +4532,7 @@ export const xano = {
       yearId: number
     ): Promise<XanoPaymentTransaction[]> {
       try {
-        const res = await fetch(
+        const res = await xanoFetch(
           `${getBaseUrl()}/registration_payment_transactions?registration_school_years_id=${yearId}`,
           { cache: "no-store" }
         );
@@ -4518,7 +4554,7 @@ export const xano = {
     async create(
       data: Omit<XanoPaymentTransaction, "id" | "created_at">
     ): Promise<XanoPaymentTransaction> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_payment_transactions`,
         {
           method: "POST",
@@ -4535,7 +4571,7 @@ export const xano = {
       id: number,
       data: Partial<Omit<XanoPaymentTransaction, "id" | "created_at">>
     ): Promise<XanoPaymentTransaction> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_payment_transactions/${id}`,
         {
           method: "PATCH",
@@ -4565,7 +4601,7 @@ export const xano = {
       id: number,
       patch: Partial<XanoEmailNotification>
     ): Promise<XanoEmailNotification> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_email_notifications/${id}`,
         {
           method: "PATCH",
@@ -4587,7 +4623,7 @@ export const xano = {
      *  body) just to render one message. */
     async getById(id: number): Promise<XanoEmailNotification | null> {
       try {
-        const res = await fetch(
+        const res = await xanoFetch(
           `${getBaseUrl()}/registration_email_notifications/${id}`,
           { cache: "no-store" }
         );
@@ -4605,7 +4641,7 @@ export const xano = {
     /** Every audit row — bulk consumers (records-request tags on the
      *  registrations list) filter by template in code. */
     async getAll(): Promise<XanoEmailNotification[]> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_email_notifications`,
         { cache: "no-store" }
       );
@@ -4619,7 +4655,7 @@ export const xano = {
     async create(
       data: Omit<XanoEmailNotification, "id" | "created_at">
     ): Promise<XanoEmailNotification> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_email_notifications`,
         {
           method: "POST",
@@ -4648,7 +4684,7 @@ export const xano = {
         if (yearId) {
           params.set("registration_school_years_id", String(yearId));
         }
-        const res = await fetch(
+        const res = await xanoFetch(
           `${getBaseUrl()}/registration_email_notifications?${params.toString()}`,
           { cache: "no-store" }
         );
@@ -4677,7 +4713,7 @@ export const xano = {
 
   emergencyContacts: {
     async create(data: Omit<XanoEmergencyContact, "id" | "created_at">): Promise<XanoEmergencyContact> {
-      const res = await fetch(`${getBaseUrl()}/registration_emergency_contacts`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_emergency_contacts`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -4689,7 +4725,7 @@ export const xano = {
     /** Every contact across all families — bulk consumers (the
      *  enrolled export) group by `registration_families_id` in code. */
     async getAll(): Promise<XanoEmergencyContact[]> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_emergency_contacts`,
         { cache: "no-store" }
       );
@@ -4700,7 +4736,7 @@ export const xano = {
 
     async getByFamilyId(familyId: number): Promise<XanoEmergencyContact[]> {
       try {
-        const res = await fetch(
+        const res = await xanoFetch(
           `${getBaseUrl()}/registration_emergency_contacts?registration_families_id=${familyId}`,
           { cache: "no-store" }
         );
@@ -4713,7 +4749,7 @@ export const xano = {
     },
 
     async update(id: number, data: Partial<Omit<XanoEmergencyContact, "id" | "created_at">>): Promise<XanoEmergencyContact> {
-      const res = await fetch(`${getBaseUrl()}/registration_emergency_contacts/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_emergency_contacts/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -4723,7 +4759,7 @@ export const xano = {
     },
 
     async delete(id: number): Promise<void> {
-      const res = await fetch(`${getBaseUrl()}/registration_emergency_contacts/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_emergency_contacts/${id}`, {
         method: "DELETE",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -4751,7 +4787,7 @@ export const xano = {
           "registration_families_id",
           String(familyId)
         );
-        const res = await fetch(url.toString(), { cache: "no-store" });
+        const res = await xanoFetch(url.toString(), { cache: "no-store" });
         if (!res.ok) return [];
         const body = await res.json();
         return Array.isArray(body) ? (body as XanoVolunteerHours[]) : [];
@@ -4763,7 +4799,7 @@ export const xano = {
     /** Every entry across all families/years — the admin review page
      *  filters by year in code (plain CRUD endpoint, bare array). */
     async getAll(): Promise<XanoVolunteerHours[]> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_families_volunteer_hours`,
         { cache: "no-store" }
       );
@@ -4778,7 +4814,7 @@ export const xano = {
         "id" | "created_at" | "activity_description" | "activity_category"
       >
     ): Promise<XanoVolunteerHours> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_families_volunteer_hours`,
         {
           method: "POST",
@@ -4794,7 +4830,7 @@ export const xano = {
       id: number,
       patch: Partial<XanoVolunteerHours>
     ): Promise<XanoVolunteerHours> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_families_volunteer_hours/${id}`,
         {
           method: "PATCH",
@@ -4807,7 +4843,7 @@ export const xano = {
     },
 
     async delete(id: number): Promise<void> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_families_volunteer_hours/${id}`,
         { method: "DELETE" }
       );
@@ -4819,7 +4855,7 @@ export const xano = {
    *  `registration_store_items`. */
   storeItems: {
     async getAll(): Promise<XanoStoreItem[]> {
-      const res = await fetch(`${getBaseUrl()}/registration_store_items`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_store_items`, {
         cache: "no-store",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -4830,7 +4866,7 @@ export const xano = {
     async create(
       data: Omit<XanoStoreItem, "id" | "created_at">
     ): Promise<XanoStoreItem> {
-      const res = await fetch(`${getBaseUrl()}/registration_store_items`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_store_items`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -4843,7 +4879,7 @@ export const xano = {
       id: number,
       patch: Partial<XanoStoreItem>
     ): Promise<XanoStoreItem> {
-      const res = await fetch(`${getBaseUrl()}/registration_store_items/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_store_items/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
@@ -4853,7 +4889,7 @@ export const xano = {
     },
 
     async delete(id: number): Promise<void> {
-      const res = await fetch(`${getBaseUrl()}/registration_store_items/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_store_items/${id}`, {
         method: "DELETE",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -4865,7 +4901,7 @@ export const xano = {
    *  (order volume is small). */
   storeOrders: {
     async getAll(): Promise<XanoStoreOrder[]> {
-      const res = await fetch(`${getBaseUrl()}/registration_store_orders`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_store_orders`, {
         cache: "no-store",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -4891,7 +4927,7 @@ export const xano = {
     async create(
       data: Omit<XanoStoreOrder, "id" | "created_at">
     ): Promise<XanoStoreOrder> {
-      const res = await fetch(`${getBaseUrl()}/registration_store_orders`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_store_orders`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -4904,7 +4940,7 @@ export const xano = {
       id: number,
       patch: Partial<XanoStoreOrder>
     ): Promise<XanoStoreOrder> {
-      const res = await fetch(`${getBaseUrl()}/registration_store_orders/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_store_orders/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
@@ -4919,7 +4955,7 @@ export const xano = {
    *  callers filter by family / event id in code. */
   googleAppointments: {
     async getAll(): Promise<XanoGoogleAppointment[]> {
-      const res = await fetch(`${getBaseUrl()}/google_appointments`, {
+      const res = await xanoFetch(`${getBaseUrl()}/google_appointments`, {
         cache: "no-store",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -4930,7 +4966,7 @@ export const xano = {
     async create(
       data: Omit<XanoGoogleAppointment, "id" | "created_at">
     ): Promise<XanoGoogleAppointment> {
-      const res = await fetch(`${getBaseUrl()}/google_appointments`, {
+      const res = await xanoFetch(`${getBaseUrl()}/google_appointments`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -4943,7 +4979,7 @@ export const xano = {
       id: number,
       patch: Partial<XanoGoogleAppointment>
     ): Promise<XanoGoogleAppointment> {
-      const res = await fetch(`${getBaseUrl()}/google_appointments/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/google_appointments/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
@@ -4960,7 +4996,7 @@ export const xano = {
    *  flow); the staff RFID check-in system reads the same tables. */
   laptops: {
     async getAll(): Promise<XanoLaptop[]> {
-      const res = await fetch(`${getOpsBaseUrl()}/laptops`, {
+      const res = await xanoFetch(`${getOpsBaseUrl()}/laptops`, {
         cache: "no-store",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -4969,7 +5005,7 @@ export const xano = {
     },
 
     async getById(id: number): Promise<XanoLaptop> {
-      const res = await fetch(`${getOpsBaseUrl()}/laptops/${id}`, {
+      const res = await xanoFetch(`${getOpsBaseUrl()}/laptops/${id}`, {
         cache: "no-store",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -4979,7 +5015,7 @@ export const xano = {
     async create(
       data: Partial<Omit<XanoLaptop, "id" | "created_at">>
     ): Promise<XanoLaptop> {
-      const res = await fetch(`${getOpsBaseUrl()}/laptops`, {
+      const res = await xanoFetch(`${getOpsBaseUrl()}/laptops`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -4994,7 +5030,7 @@ export const xano = {
       id: number,
       patch: Partial<Omit<XanoLaptop, "id" | "created_at">>
     ): Promise<XanoLaptop> {
-      const res = await fetch(`${getOpsBaseUrl()}/laptops/${id}`, {
+      const res = await xanoFetch(`${getOpsBaseUrl()}/laptops/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
@@ -5004,7 +5040,7 @@ export const xano = {
     },
 
     async remove(id: number): Promise<void> {
-      const res = await fetch(`${getOpsBaseUrl()}/laptops/${id}`, {
+      const res = await xanoFetch(`${getOpsBaseUrl()}/laptops/${id}`, {
         method: "DELETE",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -5017,7 +5053,7 @@ export const xano = {
    *  UUID on a laptop row to an enrolled student. */
   opsStudents: {
     async getAll(): Promise<XanoOpsStudent[]> {
-      const res = await fetch(`${getToddleBaseUrl()}/students`, {
+      const res = await xanoFetch(`${getToddleBaseUrl()}/students`, {
         cache: "no-store",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -5028,7 +5064,7 @@ export const xano = {
 
   laptopAssignments: {
     async getAll(): Promise<XanoLaptopAssignment[]> {
-      const res = await fetch(`${getOpsBaseUrl()}/laptop_assignments`, {
+      const res = await xanoFetch(`${getOpsBaseUrl()}/laptop_assignments`, {
         cache: "no-store",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -5037,7 +5073,7 @@ export const xano = {
     },
 
     async getById(id: number): Promise<XanoLaptopAssignment> {
-      const res = await fetch(`${getOpsBaseUrl()}/laptop_assignments/${id}`, {
+      const res = await xanoFetch(`${getOpsBaseUrl()}/laptop_assignments/${id}`, {
         cache: "no-store",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -5049,7 +5085,7 @@ export const xano = {
     async create(
       data: Partial<Omit<XanoLaptopAssignment, "id" | "created_at">>
     ): Promise<XanoLaptopAssignment> {
-      const res = await fetch(`${getOpsBaseUrl()}/laptop_assignments`, {
+      const res = await xanoFetch(`${getOpsBaseUrl()}/laptop_assignments`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -5065,7 +5101,7 @@ export const xano = {
       id: number,
       patch: Partial<Omit<XanoLaptopAssignment, "id" | "created_at">>
     ): Promise<XanoLaptopAssignment> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getOpsBaseUrl()}/laptop_assignments/${id}`,
         {
           method: "PATCH",
@@ -5078,7 +5114,7 @@ export const xano = {
     },
 
     async remove(id: number): Promise<void> {
-      const res = await fetch(`${getOpsBaseUrl()}/laptop_assignments/${id}`, {
+      const res = await xanoFetch(`${getOpsBaseUrl()}/laptop_assignments/${id}`, {
         method: "DELETE",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -5104,7 +5140,7 @@ export const xano = {
     },
 
     async create(data: Omit<XanoStudentRegistration, "id" | "created_at">): Promise<XanoStudentRegistration> {
-      const res = await fetch(`${getBaseUrl()}/registration_student_registration`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_student_registration`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -5122,7 +5158,7 @@ export const xano = {
      */
     async getById(id: number): Promise<XanoStudentRegistration | null> {
       try {
-        const res = await fetch(
+        const res = await xanoFetch(
           `${getBaseUrl()}/registration_student_registration/${id}`,
           { cache: "no-store" }
         );
@@ -5135,7 +5171,7 @@ export const xano = {
 
     async getByStudentId(studentId: number): Promise<XanoStudentRegistration | null> {
       try {
-        const res = await fetch(
+        const res = await xanoFetch(
           `${getBaseUrl()}/registration_student_registration?registration_students_id=${studentId}`,
           { cache: "no-store" }
         );
@@ -5169,7 +5205,7 @@ export const xano = {
       studentId: number
     ): Promise<XanoStudentRegistration[]> {
       try {
-        const res = await fetch(
+        const res = await xanoFetch(
           `${getBaseUrl()}/registration_student_registration?registration_students_id=${studentId}`,
           { cache: "no-store" }
         );
@@ -5223,7 +5259,7 @@ export const xano = {
       yearId: number
     ): Promise<XanoStudentRegistration[]> {
       try {
-        const res = await fetch(
+        const res = await xanoFetch(
           `${getBaseUrl()}/registration_student_registration?registration_students_id=${studentId}`,
           { cache: "no-store" }
         );
@@ -5355,7 +5391,7 @@ export const xano = {
      */
     async getByYear(yearId: number): Promise<XanoStudentRegistration[]> {
       try {
-        const res = await fetch(
+        const res = await xanoFetch(
           `${getBaseUrl()}/registration_student_registration`,
           { cache: "no-store" }
         );
@@ -5429,7 +5465,7 @@ export const xano = {
         }
       }
 
-      const res = await fetch(`${getBaseUrl()}/registration_student_registration/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_student_registration/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -5439,7 +5475,7 @@ export const xano = {
     },
 
     async delete(id: number): Promise<void> {
-      const res = await fetch(`${getBaseUrl()}/registration_student_registration/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_student_registration/${id}`, {
         method: "DELETE",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -5453,7 +5489,7 @@ export const xano = {
      */
     async getDetailsById(packetId: number): Promise<XanoRegistrationDetails | null> {
       try {
-        const res = await fetch(
+        const res = await xanoFetch(
           `${getBaseUrl()}/registration_student_registration_details`,
           {
             method: "POST",
@@ -5476,7 +5512,7 @@ export const xano = {
     /** Every note across all families — the latest-activity column on
      *  the list pages bulk-joins these client-of-route side. */
     async getAll(): Promise<XanoAdminNote[]> {
-      const res = await fetch(`${getBaseUrl()}/registration_admin_notes`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_admin_notes`, {
         cache: "no-store",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -5488,7 +5524,7 @@ export const xano = {
      *  the same list — sorting/grouping happens in the UI. */
     async getByFamilyId(familyId: number): Promise<XanoAdminNote[]> {
       try {
-        const res = await fetch(
+        const res = await xanoFetch(
           `${getBaseUrl()}/registration_admin_notes?registration_families_id=${familyId}`,
           { cache: "no-store" }
         );
@@ -5552,7 +5588,7 @@ export const xano = {
         );
         url.searchParams.set("registration_families_id", String(familyId));
         url.searchParams.set("registration_school_years_id", String(yearId));
-        const res = await fetch(url.toString(), { cache: "no-store" });
+        const res = await xanoFetch(url.toString(), { cache: "no-store" });
         if (!res.ok) {
           const body = await res.text().catch(() => "");
           console.error(
@@ -5605,7 +5641,7 @@ export const xano = {
     ): Promise<XanoAdminNote[]> {
       const column = LEAD_NOTE_COLUMN[source];
       try {
-        const res = await fetch(
+        const res = await xanoFetch(
           `${getBaseUrl()}/registration_admin_notes?${column}=${id}`,
           { cache: "no-store" }
         );
@@ -5641,7 +5677,7 @@ export const xano = {
      *  `parents.getAll`): Xano's "Get all records" returns everything. */
     async getAllLeadNotes(): Promise<XanoAdminNote[]> {
       try {
-        const res = await fetch(
+        const res = await xanoFetch(
           `${getBaseUrl()}/registration_admin_notes`,
           { cache: "no-store" }
         );
@@ -5665,7 +5701,7 @@ export const xano = {
         last_edited?: number | null;
       }
     ): Promise<XanoAdminNote> {
-      const res = await fetch(`${getBaseUrl()}/registration_admin_notes`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_admin_notes`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ last_edited: null, ...data }),
@@ -5678,7 +5714,7 @@ export const xano = {
       id: number,
       data: Partial<Omit<XanoAdminNote, "id" | "created_at">>
     ): Promise<XanoAdminNote> {
-      const res = await fetch(`${getBaseUrl()}/registration_admin_notes/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_admin_notes/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -5688,7 +5724,7 @@ export const xano = {
     },
 
     async delete(id: number): Promise<void> {
-      const res = await fetch(`${getBaseUrl()}/registration_admin_notes/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_admin_notes/${id}`, {
         method: "DELETE",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -5696,6 +5732,33 @@ export const xano = {
   },
 
   smsMessages: {
+    /**
+     * Every message created at or after `sinceMs`, newest-first with
+     * the same id tie-break as `getAll`, via the list endpoint's
+     * `created_at_from` input (added to Xano 2026-09-17). The unread
+     * badge polls this instead of the whole table — 7 days measured
+     * 27 rows / 18 KB against 996 rows / 711 KB. Client-side filter is
+     * belt-and-braces; degrades to [] like the other readers.
+     */
+    async getSince(sinceMs: number): Promise<XanoSmsMessage[]> {
+      const since = Math.max(0, Math.floor(sinceMs));
+      try {
+        const res = await fetchRetry(
+          `${getBaseUrl()}/sms_messages?created_at_from=${since}`
+        );
+        if (!res.ok) return [];
+        const items: XanoSmsMessage[] = await res.json();
+        return Array.isArray(items)
+          ? items
+              .filter((m) => Number(m.created_at) >= since)
+              .sort((a, b) => b.created_at - a.created_at || b.id - a.id)
+          : [];
+      } catch (err) {
+        console.error("[xano.smsMessages.getSince] threw:", err);
+        return [];
+      }
+    },
+
     /** A family's full text thread, oldest-first (chat order). */
     async getByFamilyId(familyId: number): Promise<XanoSmsMessage[]> {
       return this.getByContact("family", familyId);
@@ -5723,7 +5786,7 @@ export const xano = {
                 ? "tasco_summer_visit_id"
                 : "website_liability_waiver_id";
       try {
-        const res = await fetch(
+        const res = await xanoFetch(
           `${getBaseUrl()}/sms_messages?${column}=${id}`,
           { cache: "no-store" }
         );
@@ -5752,7 +5815,7 @@ export const xano = {
      *  inbox's conversation list (Phase 3). */
     async getAll(): Promise<XanoSmsMessage[]> {
       try {
-        const res = await fetch(`${getBaseUrl()}/sms_messages`, {
+        const res = await xanoFetch(`${getBaseUrl()}/sms_messages`, {
           cache: "no-store",
         });
         if (!res.ok) return [];
@@ -5777,7 +5840,7 @@ export const xano = {
      *  webhook uses this to update delivery state on the right row. */
     async findByMessageSid(sid: string): Promise<XanoSmsMessage | null> {
       try {
-        const res = await fetch(
+        const res = await xanoFetch(
           `${getBaseUrl()}/sms_messages?twilio_message_sid=${encodeURIComponent(sid)}`,
           { cache: "no-store" }
         );
@@ -5802,7 +5865,7 @@ export const xano = {
         created_at?: number;
       }
     ): Promise<XanoSmsMessage> {
-      const res = await fetch(`${getBaseUrl()}/sms_messages`, {
+      const res = await xanoFetch(`${getBaseUrl()}/sms_messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -5849,7 +5912,7 @@ export const xano = {
     /** Hard-delete one row — used by the create() echo-guard above and
      *  by cleanup tooling. */
     async delete(id: number): Promise<void> {
-      const res = await fetch(`${getBaseUrl()}/sms_messages/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/sms_messages/${id}`, {
         method: "DELETE",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -5865,7 +5928,7 @@ export const xano = {
         created_at?: number;
       }
     ): Promise<XanoSmsMessage> {
-      const res = await fetch(`${getBaseUrl()}/sms_messages/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/sms_messages/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -5877,7 +5940,7 @@ export const xano = {
 
   registrationTypes: {
     async getAll(): Promise<XanoRegistrationType[]> {
-      const res = await fetch(`${getBaseUrl()}/registration_type`, { cache: "no-store" });
+      const res = await xanoFetch(`${getBaseUrl()}/registration_type`, { cache: "no-store" });
       if (!res.ok) return [];
       return res.json();
     },
@@ -6008,7 +6071,7 @@ export const xano = {
       yearId: number
     ): Promise<XanoFamilyApplicationProgress[]> {
       try {
-        const res = await fetch(
+        const res = await xanoFetch(
           `${getBaseUrl()}/registration_family_application_progress?registration_families_id=${familyId}&registration_school_years_id=${yearId}`,
           { cache: "no-store" }
         );
@@ -6094,7 +6157,7 @@ export const xano = {
       yearId: number
     ): Promise<XanoFamilyApplicationProgress | null> {
       try {
-        const res = await fetch(
+        const res = await xanoFetch(
           `${getBaseUrl()}/registration_family_application_progress?registration_families_id=${familyId}&registration_school_years_id=${yearId}`,
           { cache: "no-store" }
         );
@@ -6134,7 +6197,7 @@ export const xano = {
     async create(
       data: Omit<XanoFamilyApplicationProgress, "id" | "created_at">
     ): Promise<XanoFamilyApplicationProgress> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_family_application_progress`,
         {
           method: "POST",
@@ -6150,7 +6213,7 @@ export const xano = {
       id: number,
       data: Partial<Omit<XanoFamilyApplicationProgress, "id" | "created_at">>
     ): Promise<XanoFamilyApplicationProgress> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_family_application_progress/${id}`,
         {
           method: "PATCH",
@@ -6169,7 +6232,7 @@ export const xano = {
      * row per (family, year) is to remove the strays.
      */
     async delete(id: number): Promise<void> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_family_application_progress/${id}`,
         { method: "DELETE" }
       );
@@ -6336,7 +6399,7 @@ export const xano = {
       yearId: number
     ): Promise<XanoStudentRegistrationProgress[]> {
       try {
-        const res = await fetch(
+        const res = await xanoFetch(
           `${getBaseUrl()}/registration_student_registration_progress?registration_families_id=${familyId}&registration_school_years_id=${yearId}`,
           { cache: "no-store" }
         );
@@ -6427,7 +6490,7 @@ export const xano = {
       yearId: number
     ): Promise<XanoStudentRegistrationProgress | null> {
       try {
-        const res = await fetch(
+        const res = await xanoFetch(
           `${getBaseUrl()}/registration_student_registration_progress?registration_families_id=${familyId}&registration_school_years_id=${yearId}`,
           { cache: "no-store" }
         );
@@ -6469,7 +6532,7 @@ export const xano = {
     async create(
       data: Omit<XanoStudentRegistrationProgress, "id" | "created_at">
     ): Promise<XanoStudentRegistrationProgress> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_student_registration_progress`,
         {
           method: "POST",
@@ -6485,7 +6548,7 @@ export const xano = {
       id: number,
       data: Partial<Omit<XanoStudentRegistrationProgress, "id" | "created_at">>
     ): Promise<XanoStudentRegistrationProgress> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_student_registration_progress/${id}`,
         {
           method: "PATCH",
@@ -6504,7 +6567,7 @@ export const xano = {
      * row per (family, year) is to remove the strays.
      */
     async delete(id: number): Promise<void> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_student_registration_progress/${id}`,
         { method: "DELETE" }
       );
@@ -6538,7 +6601,7 @@ export const xano = {
       id: number,
       patch: Partial<XanoWebsiteLiabilityWaiver>
     ): Promise<XanoWebsiteLiabilityWaiver> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/website_liability_waiver/${id}`,
         {
           method: "PATCH",
@@ -6580,7 +6643,7 @@ export const xano = {
       id: number,
       patch: Partial<XanoTascoSummerVisit>
     ): Promise<XanoTascoSummerVisit> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getXanoHost()}/api:2GcBXyoA/tasco_summer_visit/${id}`,
         {
           method: "PATCH",
@@ -6604,7 +6667,7 @@ export const xano = {
       id: number,
       patch: Partial<XanoSummerCampInquiry>
     ): Promise<XanoSummerCampInquiry> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_summer_camp/${id}`,
         {
           method: "PATCH",
@@ -6625,13 +6688,13 @@ export const xano = {
     },
 
     async getById(id: number): Promise<XanoInquiry> {
-      const res = await fetch(`${getBaseUrl()}/registration_inquiry/${id}`, { cache: "no-store" });
+      const res = await xanoFetch(`${getBaseUrl()}/registration_inquiry/${id}`, { cache: "no-store" });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
       return res.json();
     },
 
     async update(id: number, patch: Partial<XanoInquiry>): Promise<XanoInquiry> {
-      const res = await fetch(`${getBaseUrl()}/registration_inquiry/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_inquiry/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
@@ -6641,7 +6704,7 @@ export const xano = {
     },
 
     async delete(id: number): Promise<void> {
-      const res = await fetch(`${getBaseUrl()}/registration_inquiry/${id}`, { method: "DELETE" });
+      const res = await xanoFetch(`${getBaseUrl()}/registration_inquiry/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
     },
   },
@@ -6652,7 +6715,7 @@ export const xano = {
      *  can't know the year (e.g. clearing a deleted season's day
      *  assignments). */
     async getAll(): Promise<XanoSchoolCalendarDay[]> {
-      const res = await fetch(`${getBaseUrl()}/school_calendar`, {
+      const res = await xanoFetch(`${getBaseUrl()}/school_calendar`, {
         cache: "no-store",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -6664,7 +6727,7 @@ export const xano = {
      *  year filter, so we scan and filter in code — ~365 rows per
      *  year keeps this cheap. */
     async getByYear(yearId: number): Promise<XanoSchoolCalendarDay[]> {
-      const res = await fetch(`${getBaseUrl()}/school_calendar`, {
+      const res = await xanoFetch(`${getBaseUrl()}/school_calendar`, {
         cache: "no-store",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -6678,7 +6741,7 @@ export const xano = {
       id: number,
       patch: Partial<XanoSchoolCalendarDay>
     ): Promise<XanoSchoolCalendarDay> {
-      const res = await fetch(`${getBaseUrl()}/school_calendar/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/school_calendar/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
@@ -6691,7 +6754,7 @@ export const xano = {
   /** Events pinned to calendar days — see `XanoSchoolCalendarEvent`. */
   schoolCalendarEvents: {
     async getAll(): Promise<XanoSchoolCalendarEvent[]> {
-      const res = await fetch(`${getBaseUrl()}/school_calendar_events`, {
+      const res = await xanoFetch(`${getBaseUrl()}/school_calendar_events`, {
         cache: "no-store",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -6702,7 +6765,7 @@ export const xano = {
     async create(
       data: Omit<XanoSchoolCalendarEvent, "id" | "created_at">
     ): Promise<XanoSchoolCalendarEvent> {
-      const res = await fetch(`${getBaseUrl()}/school_calendar_events`, {
+      const res = await xanoFetch(`${getBaseUrl()}/school_calendar_events`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -6715,7 +6778,7 @@ export const xano = {
       id: number,
       patch: Partial<XanoSchoolCalendarEvent>
     ): Promise<XanoSchoolCalendarEvent> {
-      const res = await fetch(`${getBaseUrl()}/school_calendar_events/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/school_calendar_events/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
@@ -6725,7 +6788,7 @@ export const xano = {
     },
 
     async delete(id: number): Promise<void> {
-      const res = await fetch(`${getBaseUrl()}/school_calendar_events/${id}`, {
+      const res = await xanoFetch(`${getBaseUrl()}/school_calendar_events/${id}`, {
         method: "DELETE",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -6737,7 +6800,7 @@ export const xano = {
    *  family in code. */
   eventRsvps: {
     async getAll(): Promise<XanoEventRsvp[]> {
-      const res = await fetch(`${getBaseUrl()}/school_event_rsvps`, {
+      const res = await xanoFetch(`${getBaseUrl()}/school_event_rsvps`, {
         cache: "no-store",
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
@@ -6748,7 +6811,7 @@ export const xano = {
     async create(
       data: Omit<XanoEventRsvp, "id" | "created_at">
     ): Promise<XanoEventRsvp> {
-      const res = await fetch(`${getBaseUrl()}/school_event_rsvps`, {
+      const res = await xanoFetch(`${getBaseUrl()}/school_event_rsvps`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -6761,7 +6824,7 @@ export const xano = {
       id: number,
       patch: Partial<XanoEventRsvp>
     ): Promise<XanoEventRsvp> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/school_event_rsvps/${id}`,
         {
           method: "PATCH",
@@ -6774,7 +6837,7 @@ export const xano = {
     },
 
     async delete(id: number): Promise<void> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/school_event_rsvps/${id}`,
         { method: "DELETE" }
       );
@@ -6786,7 +6849,7 @@ export const xano = {
    *  `XanoSchoolEventItem`. */
   eventItems: {
     async getAll(): Promise<XanoSchoolEventItem[]> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_school_event_items`,
         { cache: "no-store" }
       );
@@ -6798,7 +6861,7 @@ export const xano = {
     async create(
       data: Omit<XanoSchoolEventItem, "id" | "created_at">
     ): Promise<XanoSchoolEventItem> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_school_event_items`,
         {
           method: "POST",
@@ -6814,7 +6877,7 @@ export const xano = {
       id: number,
       patch: Partial<XanoSchoolEventItem>
     ): Promise<XanoSchoolEventItem> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_school_event_items/${id}`,
         {
           method: "PATCH",
@@ -6827,7 +6890,7 @@ export const xano = {
     },
 
     async delete(id: number): Promise<void> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_school_event_items/${id}`,
         { method: "DELETE" }
       );
@@ -6839,7 +6902,7 @@ export const xano = {
    *  `XanoSchoolEventItemClaim`. */
   eventItemClaims: {
     async getAll(): Promise<XanoSchoolEventItemClaim[]> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_school_event_item_claims`,
         { cache: "no-store" }
       );
@@ -6851,7 +6914,7 @@ export const xano = {
     async create(
       data: Omit<XanoSchoolEventItemClaim, "id" | "created_at">
     ): Promise<XanoSchoolEventItemClaim> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_school_event_item_claims`,
         {
           method: "POST",
@@ -6867,7 +6930,7 @@ export const xano = {
       id: number,
       patch: Partial<XanoSchoolEventItemClaim>
     ): Promise<XanoSchoolEventItemClaim> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_school_event_item_claims/${id}`,
         {
           method: "PATCH",
@@ -6880,7 +6943,7 @@ export const xano = {
     },
 
     async delete(id: number): Promise<void> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_school_event_item_claims/${id}`,
         { method: "DELETE" }
       );
@@ -6893,7 +6956,7 @@ export const xano = {
    *  — the accessor unwraps either shape. */
   academicTerms: {
     async getByYear(yearId: number): Promise<XanoAcademicTerm[]> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_academic_terms`,
         { cache: "no-store" }
       );
@@ -6912,7 +6975,7 @@ export const xano = {
     async create(
       data: Omit<XanoAcademicTerm, "id" | "created_at">
     ): Promise<XanoAcademicTerm> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_academic_terms`,
         {
           method: "POST",
@@ -6928,7 +6991,7 @@ export const xano = {
       id: number,
       patch: Partial<XanoAcademicTerm>
     ): Promise<XanoAcademicTerm> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_academic_terms/${id}`,
         {
           method: "PATCH",
@@ -6941,7 +7004,7 @@ export const xano = {
     },
 
     async delete(id: number): Promise<void> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_academic_terms/${id}`,
         { method: "DELETE" }
       );
@@ -6953,7 +7016,7 @@ export const xano = {
    *  shape as `academicTerms`. */
   academicSeasons: {
     async getByYear(yearId: number): Promise<XanoAcademicSeason[]> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_academic_seasons`,
         { cache: "no-store" }
       );
@@ -6972,7 +7035,7 @@ export const xano = {
     async create(
       data: Omit<XanoAcademicSeason, "id" | "created_at">
     ): Promise<XanoAcademicSeason> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_academic_seasons`,
         {
           method: "POST",
@@ -6988,7 +7051,7 @@ export const xano = {
       id: number,
       patch: Partial<XanoAcademicSeason>
     ): Promise<XanoAcademicSeason> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_academic_seasons/${id}`,
         {
           method: "PATCH",
@@ -7001,7 +7064,7 @@ export const xano = {
     },
 
     async delete(id: number): Promise<void> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getBaseUrl()}/registration_academic_seasons/${id}`,
         { method: "DELETE" }
       );
@@ -7031,7 +7094,7 @@ export const xano = {
     },
 
     async getById(id: number): Promise<XanoTour> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getXanoHost()}/api:2GcBXyoA/registration_tours/${id}`,
         { cache: "no-store" }
       );
@@ -7042,7 +7105,7 @@ export const xano = {
     async create(
       data: Omit<XanoTour, "id" | "created_at">
     ): Promise<XanoTour> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getXanoHost()}/api:2GcBXyoA/registration_tours`,
         {
           method: "POST",
@@ -7055,7 +7118,7 @@ export const xano = {
     },
 
     async update(id: number, patch: Partial<XanoTour>): Promise<XanoTour> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getXanoHost()}/api:2GcBXyoA/registration_tours/${id}`,
         {
           method: "PATCH",
@@ -7068,7 +7131,7 @@ export const xano = {
     },
 
     async delete(id: number): Promise<void> {
-      const res = await fetch(
+      const res = await xanoFetch(
         `${getXanoHost()}/api:2GcBXyoA/registration_tours/${id}`,
         { method: "DELETE" }
       );

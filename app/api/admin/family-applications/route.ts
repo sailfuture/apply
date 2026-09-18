@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withServerTiming } from "@/lib/server-timing";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
 
@@ -15,7 +16,7 @@ import { xano } from "@/lib/xano";
  * school_year }`. Student names aren't included by the Xano endpoint —
  * the page joins them in client-side from the existing students cache.
  */
-export async function GET(req: NextRequest) {
+async function handleGET(req: NextRequest) {
   try {
     await requireAdmin();
     const familyIdParam = req.nextUrl.searchParams.get("familyId");
@@ -59,3 +60,5 @@ export async function GET(req: NextRequest) {
     return handleAdminError(err);
   }
 }
+
+export const GET = withServerTiming(handleGET);

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { withServerTiming } from "@/lib/server-timing";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
 import { leadConvertedFamilyId } from "@/lib/lead-conversion";
@@ -17,7 +18,7 @@ const BASE = process.env.XANO_API_BASE_URL;
  * expanded data, so the totals here match what the Applications table
  * shows by definition.
  */
-export async function GET(req: NextRequest) {
+async function handleGET(req: NextRequest) {
   try {
     await requireAdmin();
     const { searchParams } = new URL(req.url);
@@ -254,3 +255,5 @@ export async function GET(req: NextRequest) {
     return handleAdminError(err);
   }
 }
+
+export const GET = withServerTiming(handleGET);
