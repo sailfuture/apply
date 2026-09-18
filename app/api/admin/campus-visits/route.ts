@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano, type XanoSchoolYear } from "@/lib/xano";
 
@@ -31,7 +31,9 @@ export type CampusVisitRow = {
   student_school: string;
   marketing_opt_in: boolean;
   academic_year: string;
-  /** Absolute URL of the signature image, when one was captured. */
+  /** Absolute URL that serves this visit's signature image
+   *  (`/api/admin/campus-visits/[id]/signature`, admin-gated). The list
+   *  itself no longer carries the image — see that route. */
   signature_url: string | null;
   /** Admin's 1–5 conversion stars; 0 = unrated. */
   rating: number;
@@ -69,7 +71,7 @@ function deriveAcademicYear(ts: number, years: XanoSchoolYear[]): string {
   return `${y}-${y + 1}`;
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
     await requireAdmin();
     const [waivers, years] = await Promise.all([
@@ -77,10 +79,9 @@ export async function GET() {
       xano.schoolYears.getAll().catch(() => [] as XanoSchoolYear[]),
     ]);
 
-    const xanoHost = (process.env.XANO_API_BASE_URL ?? "").replace(
-      /\/api:[^/]+\/?$/,
-      ""
-    );
+    // Signatures are served per row by the app (the Xano list stopped
+    // returning them); absolute so the CSV export's link works too.
+    const origin = req.nextUrl.origin;
 
     const rows: CampusVisitRow[] = waivers
       .map((w) => {
@@ -92,10 +93,6 @@ export async function GET() {
           (w.signed_date
             ? Date.parse(`${w.signed_date}T12:00:00Z`)
             : w.created_at);
-        const sig = w.signature_image;
-        const signatureUrl =
-          sig?.url ??
-          (sig?.path && xanoHost ? `${xanoHost}${sig.path}` : null);
         return {
           id: w.id,
           signed_ts: signedTs,
@@ -107,7 +104,7 @@ export async function GET() {
           student_school: w.student_school ?? "",
           marketing_opt_in: w.marketing_opt_in === true,
           academic_year: deriveAcademicYear(signedTs, years),
-          signature_url: signatureUrl,
+          signature_url: `${origin}/api/admin/campus-visits/${w.id}/signature`,
           rating: Number(w.interest_level) || 0,
           followed_up: w.isFollowedUp === true,
           last_reach_out: Number(w.last_reach_out) || 0,

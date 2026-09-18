@@ -11,8 +11,8 @@
  *      against the tables below now go through the Next Data Cache
  *      with a short TTL and a per-table tag; every write to a table
  *      made through this door expires that tag immediately
- *      (`updateTag` = read-your-own-writes), so an admin who edits a
- *      row and refetches the list sees the change. The residual
+ *      (`revalidateTag` with `expire: 0` — read-your-own-writes), so
+ *      an admin who edits a row and refetches the list sees the change. The residual
  *      staleness is edits made OUTSIDE this app (directly in the Xano
  *      UI), which show up within `XANO_CACHE_TTL_SECONDS`.
  *
@@ -64,6 +64,13 @@ const CACHED_TABLES = new Set<string>([
   "registration_academic_seasons",
   "registration_bus",
   "registration_families_volunteer_hours",
+  // Lead sources — read whole by every messaging + leads route for
+  // contact-name resolution. The waiver list is only cacheable
+  // because its endpoint stopped returning signature images
+  // (3.1 MB → ~50 KB); the per-row read still carries them.
+  "registration_summer_camp",
+  "tasco_summer_visit",
+  "website_liability_waiver",
 ]);
 
 export interface XanoCall {

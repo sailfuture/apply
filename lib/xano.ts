@@ -1689,7 +1689,11 @@ export interface XanoWebsiteLiabilityWaiver {
   student_name: string;
   student_grade: string;
   student_school: string;
-  signature_image: { url?: string; path?: string } | null;
+  /** Either a data URL (what the marketing-site form submits) or a
+   *  Xano file object on older rows. NOT returned by the list endpoint
+   *  since 2026-09-18 — it was 98% of a 3.1 MB payload — so it is only
+   *  present on `getById` reads. */
+  signature_image?: string | { url?: string; path?: string } | null;
   /** ISO date (`YYYY-MM-DD`) the signer picked, when the form captured
    *  one. `signed_at` (epoch ms) is the authoritative timestamp. */
   signed_date: string | null;
@@ -6592,6 +6596,18 @@ export const xano = {
       } catch {
         return [];
       }
+    },
+
+    /** One waiver with every column, including the signature image
+     *  the list omits. Null when the row doesn't exist. */
+    async getById(id: number): Promise<XanoWebsiteLiabilityWaiver | null> {
+      const res = await xanoFetch(
+        `${getBaseUrl()}/website_liability_waiver/${id}`,
+        { cache: "no-store" }
+      );
+      if (res.status === 404) return null;
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
     },
 
     /** Admin writes (All Leads star rating). Requires the standard
