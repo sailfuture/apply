@@ -148,17 +148,20 @@ export default function VolunteerHoursPage() {
     return found?.year_name ?? null;
   }, [yearId, yearsData]);
 
-  // Volunteer-hours entries (all years; filter below).
+  // Volunteer-hours entries for the year on screen. The route is
+  // year-scoped — the Xano query behind it filters on family AND
+  // year — so there's nothing to ask for until `yearId` resolves.
   const { data: entriesData, isLoading: entriesLoading } = useSWR<
     VolunteerHoursEntry[]
-  >("/api/volunteer-hours", fetcher, {
+  >(yearId ? `/api/volunteer-hours?yearId=${yearId}` : null, fetcher, {
     revalidateOnFocus: false,
     dedupingInterval: 10000,
   });
 
-  // Filter to the year being viewed, then split by approval status so we
-  // can show the canonical total (approved only) alongside any
-  // pending-review entries.
+  // Re-filter to the year being viewed (the server already scoped the
+  // fetch; this just keeps a stale cache entry from a previous year
+  // out of the math), then split by approval status so we can show the
+  // canonical total (approved only) alongside any pending entries.
   const { yearEntries, approvedHours, pendingHours } = useMemo(() => {
     const entries = (entriesData ?? []).filter(
       (e) => e.registration_school_years_id === yearId
@@ -185,7 +188,13 @@ export default function VolunteerHoursPage() {
   );
   const remaining = Math.max(0, VOLUNTEER_HOURS_GOAL - approvedHours);
 
-  const loading = entriesLoading || !yearsData;
+  // `yearId` can still be resolving: without `?yearId=` in the URL it's
+  // derived from the family's applications, and until those arrive
+  // there's no fetch in flight for `entriesLoading` to report. Count
+  // that window as loading, or the page flashes "no hours logged yet"
+  // at a family that has plenty.
+  const yearResolving = !yearIdParam && applications === undefined;
+  const loading = yearResolving || entriesLoading || !yearsData;
 
   return (
     <div className="flex flex-1 flex-col gap-6 p-4 sm:p-6 mx-auto w-full max-w-4xl">
@@ -568,8 +577,12 @@ function UpcomingEventsSection({ yearId }: { yearId: number | null }) {
         </div>
       ) : null}
 
-      {/* Past events — the family's record of what they signed up
-          for. A table rather than the card list above: there's
+      {/* Past events — the family's record of what they turned up to.
+          Attendance comes from the hours admin credited them for the
+          event, not from their RSVP: signing up is optional and plenty
+          of events get credited with no reservation on file, so an
+          RSVP-only view showed families a dash next to events they had
+          worked. A table rather than the card list above: there's
           nothing to act on here, so the rows only need to be
           scannable, and a year's worth of cards would bury the
           upcoming ones. */}
@@ -578,7 +591,7 @@ function UpcomingEventsSection({ yearId }: { yearId: number | null }) {
           <div className="flex items-baseline justify-between mb-3">
             <h2 className="text-sm font-semibold">Past events</h2>
             <p className="text-xs text-muted-foreground">
-              Events that have already happened.
+              What you attended, and the hours credited for it.
             </p>
           </div>
           <div className="rounded-xl bg-background p-1.5 shadow-sm border">
@@ -593,10 +606,10 @@ function UpcomingEventsSection({ yearId }: { yearId: number | null }) {
                       Event
                     </th>
                     <th className="hidden px-4 py-2 text-left text-xs font-medium text-muted-foreground sm:table-cell">
-                      You signed up
+                      Your record
                     </th>
                     <th className="px-4 py-2 text-left text-xs font-medium text-muted-foreground">
-                      Hours
+                      Hours credited
                     </th>
                   </tr>
                 </thead>
@@ -604,6 +617,9 @@ function UpcomingEventsSection({ yearId }: { yearId: number | null }) {
                   {past.map((ev) => {
                     const c = eventColor(ev.color);
                     const dateObj = parseDate(ev.date);
+                    // Approved hours admin logged against this event
+                    // for this family — the proof they were there.
+                    const myHours = Number(ev.my_hours) || 0;
                     return (
                       <tr key={ev.id} className="hover:bg-muted/20">
                         <td className="whitespace-nowrap px-4 py-2 text-xs tabular-nums text-muted-foreground">
@@ -630,10 +646,15 @@ function UpcomingEventsSection({ yearId }: { yearId: number | null }) {
                               {ev.location}
                             </span>
                           ) : null}
-                          {/* Mobile stand-in for the hidden "You signed
-                              up" column. */}
-                          {ev.my_rsvp ? (
+                          {/* Mobile stand-in for the hidden "Your
+                              record" column. */}
+                          {myHours > 0 ? (
                             <span className="mt-0.5 flex items-center gap-1 text-xs text-emerald-700 sm:hidden">
+                              <CheckCircle2 className="size-3 shrink-0" />
+                              You attended
+                            </span>
+                          ) : ev.my_rsvp ? (
+                            <span className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground sm:hidden">
                               <CheckCircle2 className="size-3 shrink-0" />
                               You signed up · {ev.my_rsvp.spots}{" "}
                               {ev.my_rsvp.spots === 1 ? "spot" : "spots"}
@@ -641,21 +662,37 @@ function UpcomingEventsSection({ yearId }: { yearId: number | null }) {
                           ) : null}
                         </td>
                         <td className="hidden whitespace-nowrap px-4 py-2 text-xs sm:table-cell">
-                          {ev.my_rsvp ? (
+                          {myHours > 0 ? (
                             <span className="inline-flex items-center gap-1.5 text-emerald-700">
                               <CheckCircle2 className="size-3.5 shrink-0" />
-                              {ev.my_rsvp.spots}{" "}
+                              Attended
+                            </span>
+                          ) : ev.my_rsvp ? (
+                            <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+                              <CheckCircle2 className="size-3.5 shrink-0" />
+                              Signed up · {ev.my_rsvp.spots}{" "}
                               {ev.my_rsvp.spots === 1 ? "spot" : "spots"}
                             </span>
                           ) : (
                             <span className="text-muted-foreground">—</span>
                           )}
                         </td>
-                        <td className="whitespace-nowrap px-4 py-2 text-xs text-muted-foreground">
-                          {ev.parent_volunteer_hours &&
-                          ev.volunteer_hour_total > 0
-                            ? `${formatHours(ev.volunteer_hour_total)} hrs`
-                            : "—"}
+                        <td className="whitespace-nowrap px-4 py-2 text-xs">
+                          {myHours > 0 ? (
+                            <span className="font-medium text-emerald-700">
+                              {formatHours(myHours)} hrs
+                            </span>
+                          ) : ev.parent_volunteer_hours &&
+                            ev.volunteer_hour_total > 0 ? (
+                            // Nothing credited to this family — show
+                            // what the event was worth so the row
+                            // reads as "missed", not as "broken".
+                            <span className="text-muted-foreground">
+                              {formatHours(ev.volunteer_hour_total)} hrs offered
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
                         </td>
                       </tr>
                     );

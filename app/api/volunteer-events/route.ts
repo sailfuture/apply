@@ -17,9 +17,11 @@ import {
  * with a capacity or with no limit at all (see `isSignUpEvent`).
  * `events` is everything from today forward, soonest first; `past` is
  * everything before today, most recent first, so the page can show a
- * family what they've already signed up for. Each row carries the live spot math
- * (total / taken) plus the family's own RSVP so the page can render
- * Sign up vs Edit states without a second fetch.
+ * family what they've already attended. Each row carries the live spot
+ * math (total / taken), the family's own RSVP so the page can render
+ * Sign up vs Edit states without a second fetch, and `my_hours` — the
+ * hours that family was actually credited for the event, which is what
+ * makes the past list a record of attendance rather than of intent.
  *
  * `unlimited` is surfaced explicitly so the client never has to know
  * about the `-1` sentinel; when it's true, `spots_total` is
@@ -37,13 +39,15 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "yearId is required" }, { status: 400 });
   }
 
-  const [daysR, eventsR, rsvpsR, itemsR, claimsR] = await Promise.allSettled([
-    xano.schoolCalendar.getByYear(yearId),
-    xano.schoolCalendarEvents.getAll(),
-    xano.eventRsvps.getAll(),
-    xano.eventItems.getAll(),
-    xano.eventItemClaims.getAll(),
-  ]);
+  const [daysR, eventsR, rsvpsR, itemsR, claimsR, hoursR] =
+    await Promise.allSettled([
+      xano.schoolCalendar.getByYear(yearId),
+      xano.schoolCalendarEvents.getAll(),
+      xano.eventRsvps.getAll(),
+      xano.eventItems.getAll(),
+      xano.eventItemClaims.getAll(),
+      xano.volunteerHours.getByFamily(familyId, yearId),
+    ]);
   if (daysR.status === "rejected" || eventsR.status === "rejected") {
     const reason =
       daysR.status === "rejected"
@@ -80,6 +84,27 @@ export async function GET(req: NextRequest) {
     const list = itemsByEvent.get(eid) ?? [];
     list.push(it);
     itemsByEvent.set(eid, list);
+  }
+
+  // What this family was actually credited, per event. Admin logs an
+  // hour entry against the event they ran, which is the only record
+  // that a family turned up: RSVPs are optional (plenty of events get
+  // credited with no sign-up at all), so attendance can't be read off
+  // them. Only approved rows count, matching the goal math on the
+  // volunteer-hours page.
+  const myHoursByEvent = new Map<number, number>();
+  if (hoursR.status === "fulfilled") {
+    for (const h of hoursR.value) {
+      if (!h.is_approved) continue;
+      const eid = Number(h.school_calendar_events_id);
+      if (!eid) continue; // manual entry, not tied to an event
+      myHoursByEvent.set(
+        eid,
+        (myHoursByEvent.get(eid) ?? 0) + (Number(h.hours) || 0)
+      );
+    }
+  } else {
+    console.error("[/api/volunteer-events] hours load failed:", hoursR.reason);
   }
 
   const dateByDay = new Map(daysR.value.map((d) => [d.id, d.date]));
@@ -136,6 +161,7 @@ export async function GET(req: NextRequest) {
         claims,
         familyId
       ),
+      my_hours: myHoursByEvent.get(e.id) ?? 0,
       spots_total: e.parent_spots ?? 0,
       spots_taken: takenByEvent.get(e.id) ?? 0,
       unlimited: isUnlimitedSpots(e.parent_spots),
@@ -158,7 +184,7 @@ export async function GET(req: NextRequest) {
     .map(shape);
 
   // Past sign-up events, most recent first — the family's record of
-  // what they signed up for. Same filter as upcoming so the two halves
+  // what they turned up to. Same filter as upcoming so the two halves
   // describe the same set of events, just on either side of today.
   const past = dated
     .filter((x) => x.date < todayIso)
@@ -196,6 +222,10 @@ export interface ParentVolunteerEvent {
    *  family's claims: how many are wanted, how many are spoken for,
    *  how many are this family's. Empty when admin listed nothing. */
   items: EventItemAvailability[];
+  /** Approved volunteer hours this family was credited for this
+   *  event, 0 when none. Optional so an SWR response cached before
+   *  this field existed still type-checks on the client. */
+  my_hours?: number;
   /** Capacity as stored. Meaningless when `unlimited` — read that
    *  first. */
   spots_total: number;

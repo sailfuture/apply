@@ -241,7 +241,9 @@ export async function DELETE(
       )
     ).forEach(failed("delete emergency contact"));
 
-    const hours = await xano.volunteerHours.getByFamily(familyId);
+    // Every year's entries — `getByFamily` is year-scoped and would
+    // leave the rest of the family's hours orphaned in the table.
+    const hours = await xano.volunteerHours.getAllByFamily(familyId);
     (
       await Promise.allSettled(hours.map((h) => xano.volunteerHours.delete(h.id)))
     ).forEach(failed("delete volunteer-hours entry"));

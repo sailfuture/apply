@@ -4772,17 +4772,26 @@ export const xano = {
 
   volunteerHours: {
     /**
-     * Every volunteer-hour entry on file for a family across every
-     * school year. Hits the admin-group
-     * `registration_families_volunteer_hours_by_family` endpoint so
-     * the parent dashboard can render a single fetch and bucket the
-     * rows by year client-side.
+     * One family's volunteer-hour entries for one school year, from
+     * the admin-group
+     * `registration_families_volunteer_hours_by_family` endpoint.
+     *
+     * BOTH inputs are required. The Xano query filters on family AND
+     * year; pass only the family and the year input defaults to null,
+     * the filter matches nothing, and the endpoint answers `[]` with
+     * a 200 — a silent empty result indistinguishable from "this
+     * family has never volunteered". That bug shipped: every parent's
+     * progress bar read 0/40 while their hours sat in the table.
      *
      * Returns `[]` on any network or auth error rather than throwing
      * — the dashboard tolerates missing data and falls back to a
      * "no hours logged yet" empty state.
      */
-    async getByFamily(familyId: number): Promise<XanoVolunteerHours[]> {
+    async getByFamily(
+      familyId: number,
+      yearId: number
+    ): Promise<XanoVolunteerHours[]> {
+      if (!familyId || !yearId) return [];
       try {
         const url = new URL(
           `${getXanoHost()}/api:2GcBXyoA/registration_families_volunteer_hours_by_family`
@@ -4791,13 +4800,44 @@ export const xano = {
           "registration_families_id",
           String(familyId)
         );
+        url.searchParams.set(
+          "registration_school_years_id",
+          String(yearId)
+        );
         const res = await xanoFetch(url.toString(), { cache: "no-store" });
         if (!res.ok) return [];
         const body = await res.json();
-        return Array.isArray(body) ? (body as XanoVolunteerHours[]) : [];
+        if (!Array.isArray(body)) return [];
+        // The server-side filter is the real one; this is the same
+        // defensive re-filter the other family-scoped wrappers keep,
+        // so a stray row can never inflate a family's total.
+        return (body as XanoVolunteerHours[]).filter(
+          (r) =>
+            Number(r.registration_families_id) === familyId &&
+            Number(r.registration_school_years_id) === yearId
+        );
       } catch {
         return [];
       }
+    },
+
+    /**
+     * Every entry a family has, across every school year — what the
+     * hard-delete cascade needs so no hour rows are orphaned behind a
+     * deleted family.
+     *
+     * Reads the plain CRUD table and filters here rather than using
+     * `getByFamily`, which is year-scoped, or the table endpoint's
+     * `?registration_families_id=` input, which Xano ignores on this
+     * table (it returns the whole thing regardless). Callers that want
+     * one year should use `getByFamily` — it filters server-side.
+     */
+    async getAllByFamily(familyId: number): Promise<XanoVolunteerHours[]> {
+      if (!familyId) return [];
+      const rows = await this.getAll();
+      return rows.filter(
+        (r) => Number(r.registration_families_id) === familyId
+      );
     },
 
     /** Every entry across all families/years — the admin review page
