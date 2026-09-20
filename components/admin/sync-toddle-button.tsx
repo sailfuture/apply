@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -18,6 +19,7 @@ import { cn } from "@/lib/utils";
 import { formatNoteTimestamp } from "@/lib/format-note-time";
 import { formatToddleFieldList } from "@/lib/toddle-fields";
 import type { ToddleReadiness } from "@/lib/toddle-readiness";
+import type { ToddleOrphanContact } from "@/lib/toddle";
 import type { ToddleSyncPreview } from "@/lib/toddle-sync";
 
 /**
@@ -70,8 +72,18 @@ export function SyncToddleButton({
   // admin see WHY a student would fail before pushing, instead of
   // reading it off an error toast afterwards.
   const [readiness, setReadiness] = useState<
-    (ToddleReadiness & { preview?: ToddleSyncPreview }) | null
+    | (ToddleReadiness & {
+        preview?: ToddleSyncPreview;
+        orphanContacts?: ToddleOrphanContact[];
+      })
+    | null
   >(null);
+  // Delete Toddle cards that match nobody here. Off every time the
+  // dialog opens — never a remembered preference, because the cards
+  // it deletes differ per student and an admin who ticked it once for
+  // a known-stale card shouldn't silently delete a real guardian on
+  // the next student.
+  const [prune, setPrune] = useState(false);
   // Whether that check has landed yet. Sync stays disabled until it
   // settles, because a dialog whose whole job is "review this first"
   // shouldn't be confirmable before the thing to review has arrived —
@@ -113,7 +125,10 @@ export function SyncToddleButton({
       const res = await fetch(`/api/admin/students/${studentId}/toddle-sync`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ gradeLevel: gradeLevel ?? "" }),
+        body: JSON.stringify({
+          gradeLevel: gradeLevel ?? "",
+          pruneContacts: prune,
+        }),
       });
       const data = await res.json().catch(() => null);
       if (!res.ok) {
@@ -143,6 +158,7 @@ export function SyncToddleButton({
         parts.push("Photo upload failed — check server logs.");
       const members: Array<{
         name: string;
+        kind?: "parent" | "emergency";
         account: string;
         contact: string;
       }> = Array.isArray(data?.familyMembers) ? data.familyMembers : [];
@@ -150,16 +166,56 @@ export function SyncToddleButton({
         const failed = members.filter(
           (m) => m.account === "failed" || m.contact === "failed"
         );
-        const okCount = members.length - failed.length;
-        if (okCount > 0)
-          parts.push(
-            `${okCount} family member${okCount === 1 ? "" : "s"} synced.`
-          );
+        const ok = members.filter((m) => !failed.includes(m));
+        // Counted apart because they land differently in Toddle: a
+        // family member gets an account AND a card, an emergency
+        // contact only ever gets the card.
+        const parentCount = ok.filter((m) => m.kind !== "emergency").length;
+        const emergencyCount = ok.length - parentCount;
+        const synced = [
+          parentCount > 0
+            ? `${parentCount} family member${parentCount === 1 ? "" : "s"}`
+            : "",
+          emergencyCount > 0
+            ? `${emergencyCount} emergency contact${emergencyCount === 1 ? "" : "s"}`
+            : "",
+        ].filter(Boolean);
+        if (synced.length > 0) parts.push(`${synced.join(" and ")} synced.`);
         if (failed.length > 0)
           parts.push(
             `${failed.map((m) => m.name).join(", ")} failed — see server logs.`
           );
       }
+      // Deletions are named, never just counted: a removal the admin
+      // didn't expect is the one thing here they'd want to catch
+      // immediately.
+      const removed: Array<{ name: string; status: string }> = Array.isArray(
+        data?.removedContacts
+      )
+        ? data.removedContacts
+        : [];
+      const gone = removed.filter((c) => c.status === "removed");
+      if (gone.length > 0)
+        parts.push(
+          `Deleted ${gone.length} Toddle contact card${gone.length === 1 ? "" : "s"} (${gone
+            .map((c) => c.name)
+            .join(", ")}).`
+        );
+      if (removed.length > gone.length)
+        parts.push("Some cards couldn't be deleted — see server logs.");
+      // Left in place: say so, so an unmatched card isn't mistaken for
+      // one that synced.
+      const orphans: Array<{ name: string }> = Array.isArray(
+        data?.orphanContacts
+      )
+        ? data.orphanContacts
+        : [];
+      if (gone.length === 0 && orphans.length > 0)
+        parts.push(
+          `${orphans.length} Toddle card${orphans.length === 1 ? "" : "s"} still match nobody here (${orphans
+            .map((c) => c.name)
+            .join(", ")}) — left in place.`
+        );
       if (typeof data?.crew === "string" && data.crew)
         parts.push(`Crew: ${data.crew}.`);
       toast.success(parts.join(" "));
@@ -217,7 +273,9 @@ export function SyncToddleButton({
       <AlertDialog
         open={open}
         onOpenChange={(next) => {
-          if (!saving) setOpen(next);
+          if (saving) return;
+          if (next) setPrune(false);
+          setOpen(next);
         }}
       >
         <AlertDialogContent>
@@ -334,6 +392,55 @@ export function SyncToddleButton({
                   </li>
                 ))}
               </ul>
+            </div>
+          ) : null}
+          {readiness?.orphanContacts && readiness.orphanContacts.length > 0 ? (
+            <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm">
+              <p className="font-medium text-amber-900">
+                Toddle has{" "}
+                {readiness.orphanContacts.length === 1
+                  ? "a contact card"
+                  : `${readiness.orphanContacts.length} contact cards`}{" "}
+                that nobody here matches
+              </p>
+              <ul className="mt-1 space-y-1">
+                {readiness.orphanContacts.map((c) => (
+                  <li key={String(c.id)} className="text-xs text-amber-900/90">
+                    <span className="font-medium">{c.name}</span>
+                    {c.relationship ? ` · ${c.relationship}` : ""}
+                    {c.email ? ` · ${c.email}` : ""}
+                    {c.phoneNumber ? ` · ${c.phoneNumber}` : ""}
+                    {/* The two kinds want opposite actions, so each
+                        card says which it is rather than leaving the
+                        admin to work it out from the email. */}
+                    <span className="block text-amber-900/70">
+                      {c.likelyDuplicateOf
+                        ? `Looks like an old duplicate of ${c.likelyDuplicateOf} — same name, different email. Safe to delete.`
+                        : "Nobody here goes by this name — more likely missing from the family record than stale in Toddle. Consider adding them instead."}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-1.5 text-xs text-amber-900/80">
+                Deleting is permanent, and a card that isn&rsquo;t a
+                duplicate is usually a contact worth adding here
+                instead.
+              </p>
+              <label className="mt-2 flex items-start gap-2 text-xs text-amber-900">
+                <Checkbox
+                  checked={prune}
+                  onCheckedChange={(v) => setPrune(v === true)}
+                  disabled={saving}
+                  className="mt-0.5 border-amber-400 data-[state=checked]:bg-amber-600 data-[state=checked]:border-amber-600"
+                />
+                <span>
+                  Delete{" "}
+                  {readiness.orphanContacts.length === 1
+                    ? "this card"
+                    : `these ${readiness.orphanContacts.length} cards`}{" "}
+                  from Toddle. This can&rsquo;t be undone.
+                </span>
+              </label>
             </div>
           ) : null}
           <AlertDialogFooter>

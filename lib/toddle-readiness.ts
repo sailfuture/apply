@@ -18,7 +18,12 @@
  * nobody was going to clear. Don't add it back without asking.
  */
 
-import type { XanoParent, XanoSchoolYear, XanoStudent } from "@/lib/xano";
+import type {
+  XanoEmergencyContact,
+  XanoParent,
+  XanoSchoolYear,
+  XanoStudent,
+} from "@/lib/xano";
 
 /* ── Field-level rules, shared with the sync ─────────────────────── */
 
@@ -44,6 +49,19 @@ export function toddlePhone(
 ): string | undefined {
   const value = (raw ?? "").trim();
   return /^\d{10}$/.test(value) ? value : undefined;
+}
+
+/** Family members' phones go to Toddle in E.164 — a different shape
+ *  from the student's own `toddlePhone`, which Toddle wants bare.
+ *  Anything we can't confidently read as a US number is passed
+ *  through as digits, and an empty one is omitted entirely. */
+export function toddleMemberPhone(
+  raw: string | null | undefined
+): string | undefined {
+  const digits = (raw ?? "").replace(/\D/g, "");
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+  return digits || undefined;
 }
 
 /** Any string carrying an "@". Used for the student's school email
@@ -105,6 +123,8 @@ export interface ToddleReadinessInput {
   /** The family's contacts, primary first (lowest id), as the sync
    *  orders them. */
   parents?: XanoParent[];
+  /** The family's emergency contacts — pushed as contact cards. */
+  emergencyContacts?: XanoEmergencyContact[];
   /** School years, for resolving the enrollment date. */
   years?: XanoSchoolYear[];
 }
@@ -124,7 +144,14 @@ export interface ToddleReadinessInput {
 export function evaluateToddleReadiness(
   input: ToddleReadinessInput
 ): ToddleReadiness {
-  const { student, packet, applicationGrade, parents = [], years = [] } = input;
+  const {
+    student,
+    packet,
+    applicationGrade,
+    parents = [],
+    emergencyContacts = [],
+    years = [],
+  } = input;
   const fields: ToddleReadinessField[] = [];
 
   const firstName = (student.first_name ?? "").trim();
@@ -241,19 +268,60 @@ export function evaluateToddleReadiness(
     fixedOn: "Family contact record",
   });
 
-  const contactCount = parents.filter(
+  const namedParents = parents.filter(
     (p) => (p.first_name ?? "").trim() && (p.last_name ?? "").trim()
-  ).length;
+  );
+  const contactCount = namedParents.length;
+  // An account needs an email — Toddle can't create one without it —
+  // so a contact with no email quietly gets a card and no login. That
+  // is exactly the kind of silent shortfall this report exists to
+  // surface, so it's named here rather than left to the sync's toast.
+  const accountless = namedParents.filter((p) => !toddleEmail(p.email));
   fields.push({
     key: "family_contacts",
     label: "Family contacts",
-    status: contactCount > 0 ? "ok" : "missing",
+    status:
+      contactCount === 0
+        ? "missing"
+        : accountless.length > 0
+          ? "not_pushed"
+          : "ok",
     severity: "profile",
     detail:
-      contactCount > 0
-        ? `${contactCount} contact${contactCount === 1 ? "" : "s"} become Toddle family members.`
-        : "No contact has both a first and last name, so none can be pushed.",
+      contactCount === 0
+        ? "No contact has both a first and last name, so none can be pushed."
+        : accountless.length > 0
+          ? `${contactCount} contact${contactCount === 1 ? "" : "s"} become Toddle family members, but ${accountless
+              .map((p) => `${(p.first_name ?? "").trim()} ${(p.last_name ?? "").trim()}`.trim())
+              .join(", ")} ${accountless.length === 1 ? "has" : "have"} no email, so ${accountless.length === 1 ? "that contact gets" : "those contacts get"} a contact card and no Toddle login.`
+          : `${contactCount} contact${contactCount === 1 ? "" : "s"} become Toddle family members, each with a login.`,
     fixedOn: "Family contact records",
+  });
+
+  // Emergency contacts are cards only, never accounts — so the only
+  // thing that can go wrong is a half-filled name, which Toddle
+  // rejects and the sync therefore drops before sending.
+  const namedEmergency = emergencyContacts.filter(
+    (c) => (c.first_name ?? "").trim() && (c.last_name ?? "").trim()
+  ).length;
+  const droppedEmergency = emergencyContacts.length - namedEmergency;
+  fields.push({
+    key: "emergency_contacts",
+    label: "Emergency contacts",
+    status:
+      emergencyContacts.length === 0
+        ? "missing"
+        : droppedEmergency > 0
+          ? "not_pushed"
+          : "ok",
+    severity: "profile",
+    detail:
+      emergencyContacts.length === 0
+        ? "None on file, so none are pushed."
+        : droppedEmergency > 0
+          ? `${namedEmergency} pushed as contact card${namedEmergency === 1 ? "" : "s"}; ${droppedEmergency} skipped for a missing first or last name.`
+          : `${namedEmergency} pushed as contact card${namedEmergency === 1 ? "" : "s"} (no Toddle login).`,
+    fixedOn: "Emergency contact records",
   });
 
   const crew = (packet?.crew_assignment ?? "").trim();

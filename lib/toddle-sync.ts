@@ -1,6 +1,7 @@
 import { stripNameSuffix } from "@/lib/name-suffix";
 import { xano } from "@/lib/xano";
 import type {
+  XanoEmergencyContact,
   XanoFamily,
   XanoParent,
   XanoSchoolYear,
@@ -30,6 +31,7 @@ import {
   toddleEmail,
   toddleEnrollmentDate,
   toddleGender,
+  toddleMemberPhone,
   toddlePhone,
 } from "@/lib/toddle-readiness";
 import type {
@@ -37,6 +39,7 @@ import type {
   ToddleDuplicateCandidate,
   ToddleFamilyMemberInput,
   ToddleFamilyMemberResult,
+  ToddleOrphanContact,
   ToddleParentRecord,
   ToddleStudent,
   ToddleSyncFields,
@@ -70,6 +73,12 @@ export interface ToddleSyncShared {
   /** Lazy per-family caches — siblings share family + parent rows. */
   familyById: Map<number, XanoFamily | null>;
   parentById: Map<number, XanoParent | null>;
+  /** Emergency contacts per family. Lazy for a single sync; the bulk
+   *  run fills every family from one `getAll()` and sets
+   *  `emergencyPreloaded`, so a MISS there means "this family has
+   *  none" rather than "not fetched yet". */
+  emergencyByFamily: Map<number, XanoEmergencyContact[]>;
+  emergencyPreloaded?: boolean;
   /** Bulk preloads (optional): org-wide Toddle lists fetched once. */
   toddleParents?: ToddleParentRecord[];
   courses?: ToddleCourse[];
@@ -95,8 +104,24 @@ export async function buildToddleSyncShared(opts?: {
     activeYear: years.find((y) => y.isActive) ?? null,
     familyById: new Map(),
     parentById: new Map(),
+    emergencyByFamily: new Map(),
   };
   if (opts?.preloadToddle) {
+    // Emergency contacts are family-level, so a 77-student run would
+    // otherwise re-read the same families over and over. One read,
+    // grouped here.
+    const allEmergency = await xano.emergencyContacts
+      .getAll()
+      .catch(() => [] as XanoEmergencyContact[]);
+    for (const c of allEmergency) {
+      const famId = Number(c.registration_families_id) || 0;
+      if (!famId) continue;
+      const list = shared.emergencyByFamily.get(famId);
+      if (list) list.push(c);
+      else shared.emergencyByFamily.set(famId, [c]);
+    }
+    shared.emergencyPreloaded = true;
+
     const [toddleParents, courses, roster] = await Promise.all([
       getParents(),
       getCourses(),
@@ -305,10 +330,88 @@ export function previewToddleStudent({
   };
 }
 
+/**
+ * Every contact this family sends to Toddle, in push order: parents
+ * (account + card) first, then emergency contacts (card only).
+ *
+ * Pure, and exported for the same reason `buildToddleSyncFields` is —
+ * the confirm dialog previews which Toddle cards match nobody here,
+ * and a preview built from a parallel copy of this list would
+ * eventually offer to delete a card the run would have kept.
+ */
+export function buildFamilyMemberInputs(
+  familyParents: XanoParent[],
+  emergencyContacts: XanoEmergencyContact[]
+): ToddleFamilyMemberInput[] {
+  // Parents become a Toddle parent account AND a contact card,
+  // primary and secondary alike.
+  const memberInputs: ToddleFamilyMemberInput[] = familyParents
+    .filter((p) => (p.first_name ?? "").trim() && (p.last_name ?? "").trim())
+    .map((p) => ({
+      firstName: p.first_name.trim(),
+      lastName: p.last_name.trim(),
+      email: toddleEmail(p.email),
+      phoneNumber: toddleMemberPhone(p.phone),
+      relationship: (p.relationship ?? "").trim() || undefined,
+      kind: "parent" as const,
+    }));
+
+  // Emergency contacts ride along as contact CARDS only — never
+  // accounts. They're reachable adults, not guardians.
+  //
+  // Anyone already pushed as a parent is skipped rather than pushed
+  // twice: the card matcher keys on email, then name, so a second
+  // push would land on the parent's own card and overwrite the
+  // relationship we just set there.
+  const pushedKeys = new Set<string>();
+  for (const m of memberInputs) {
+    const email = (m.email ?? "").trim().toLowerCase();
+    if (email) pushedKeys.add(`e:${email}`);
+    pushedKeys.add(
+      `n:${m.firstName.toLowerCase()} ${m.lastName.toLowerCase()}`
+    );
+  }
+  for (const c of emergencyContacts) {
+    const first = (c.first_name ?? "").trim();
+    const last = (c.last_name ?? "").trim();
+    // Toddle requires both names on a contact card; a half-filled row
+    // would be rejected, so it never leaves here.
+    if (!first || !last) continue;
+    const email = toddleEmail(c.email);
+    const emailKey = email ? `e:${email.trim().toLowerCase()}` : "";
+    const nameKey = `n:${first.toLowerCase()} ${last.toLowerCase()}`;
+    if ((emailKey && pushedKeys.has(emailKey)) || pushedKeys.has(nameKey)) {
+      continue;
+    }
+    if (emailKey) pushedKeys.add(emailKey);
+    pushedKeys.add(nameKey);
+    memberInputs.push({
+      firstName: first,
+      lastName: last,
+      email,
+      phoneNumber: toddleMemberPhone(c.phone),
+      // Toddle requires a relationship; "Emergency contact" is the
+      // honest default when the family left the field blank.
+      relationship: (c.relationship ?? "").trim() || "Emergency contact",
+      contactOnly: true,
+      kind: "emergency",
+    });
+  }
+  return memberInputs;
+}
+
 export interface ToddleStudentSyncOutcome extends ToddleUpsertResult {
   persisted: boolean;
   photo: "synced" | "none" | "failed";
   familyMembers: ToddleFamilyMemberResult[];
+  /** Cards on the Toddle student that match nobody in the portal.
+   *  Reported on every sync; deleted only when `pruneContacts` was
+   *  set for the run. */
+  orphanContacts: ToddleOrphanContact[];
+  /** The subset actually deleted this run. */
+  removedContacts: ToddleOrphanContact[];
+  /** Set when leftovers couldn't be judged safely. */
+  pruneSkipped?: string;
   crew: string | null;
 }
 
@@ -322,6 +425,11 @@ export async function syncStudentToToddle(
     /** The admin looked at the near-matches for this student and said
      *  it really is a new child — create rather than stopping. */
     allowCreate?: boolean;
+    /** Delete leftover Toddle contact cards. Omitted = delete none,
+     *  which is the default: an admin opts in per run after seeing
+     *  what would go. "duplicates" is the safe scope for a bulk run;
+     *  "all" needs someone to have read the individual cards. */
+    pruneContacts?: "duplicates" | "all";
   }
 ): Promise<ToddleStudentSyncOutcome> {
   const id = student.id;
@@ -355,6 +463,22 @@ export async function syncStudentToToddle(
   }
   familyParents.sort((a, b) => a.id - b.id);
   const primaryParent = familyParents[0] ?? null;
+
+  // Emergency contacts hang off the FAMILY, not the student, so
+  // siblings share them (and share the cache entry). A bulk run has
+  // already loaded every family's, so a miss there is an answer.
+  let emergencyContacts: XanoEmergencyContact[] = [];
+  if (familyId) {
+    const cached = shared.emergencyByFamily.get(familyId);
+    if (cached) {
+      emergencyContacts = cached;
+    } else if (!shared.emergencyPreloaded) {
+      emergencyContacts = await xano.emergencyContacts
+        .getByFamilyId(familyId)
+        .catch(() => []);
+      shared.emergencyByFamily.set(familyId, emergencyContacts);
+    }
+  }
 
   // Per-year packet — crew + server-side grade fallback.
   const packet = shared.activeYear
@@ -418,32 +542,29 @@ export async function syncStudentToToddle(
     }
   }
 
-  // Family members → Toddle parent accounts + contact-details cards
-  // on the student, primary and secondary contacts alike. Per-member
-  // outcomes come back for reporting; failures never fail the sync.
-  const memberInputs: ToddleFamilyMemberInput[] = familyParents
-    .filter((p) => (p.first_name ?? "").trim() && (p.last_name ?? "").trim())
-    .map((p) => {
-      const digits = (p.phone ?? "").replace(/\D/g, "");
-      const memberPhone =
-        digits.length === 10
-          ? `+1${digits}`
-          : digits.length === 11 && digits.startsWith("1")
-            ? `+${digits}`
-            : digits || undefined;
-      return {
-        firstName: p.first_name.trim(),
-        lastName: p.last_name.trim(),
-        email: toddleEmail(p.email),
-        phoneNumber: memberPhone,
-        relationship: (p.relationship ?? "").trim() || undefined,
-      };
-    });
+  // Per-member outcomes come back for reporting; a failure on any one
+  // of them never fails the student's own sync.
+  const memberInputs = buildFamilyMemberInputs(
+    familyParents,
+    emergencyContacts
+  );
+
   let familyMembers: ToddleFamilyMemberResult[] = [];
+  let orphanContacts: ToddleOrphanContact[] = [];
+  let removedContacts: ToddleOrphanContact[] = [];
+  let pruneSkipped: string | undefined;
   try {
-    familyMembers = await syncFamilyMembers(result.toddleId, memberInputs, {
+    // Leftover cards are always reported and only deleted on request
+    // — they are as often a contact the PORTAL is missing as one
+    // Toddle is holding stale. See `ToddleOrphanContact`.
+    const family = await syncFamilyMembers(result.toddleId, memberInputs, {
       parents: shared.toddleParents,
+      prune: opts?.pruneContacts,
     });
+    familyMembers = family.members;
+    orphanContacts = family.orphans;
+    removedContacts = family.removed;
+    pruneSkipped = family.pruneSkipped;
   } catch (err) {
     console.error(
       `[toddle-sync] family member sync failed for student ${id}:`,
@@ -479,7 +600,16 @@ export async function syncStudentToToddle(
     );
   }
 
-  return { ...result, persisted, photo, familyMembers, crew };
+  return {
+    ...result,
+    persisted,
+    photo,
+    familyMembers,
+    orphanContacts,
+    removedContacts,
+    ...(pruneSkipped ? { pruneSkipped } : {}),
+    crew,
+  };
 }
 
 /**

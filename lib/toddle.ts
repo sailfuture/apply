@@ -382,6 +382,18 @@ export async function updateContactDetail(
   );
 }
 
+/** DELETE /public/v2/contact-details/:id — takes the CONTACT id (not
+ *  the student's). Used only by the prune step, which is deliberately
+ *  narrow about what it will hand over: see `syncFamilyMembers`. */
+export async function deleteContactDetail(
+  id: number | string
+): Promise<void> {
+  await toddleFetch(
+    `/public/v2/contact-details/${encodeURIComponent(String(id))}`,
+    { method: "DELETE" }
+  );
+}
+
 export async function getCourses(): Promise<ToddleCourse[]> {
   const data = await toddleFetch<{ response: { courses: ToddleCourse[] } }>(
     `/public/v2/courses`
@@ -422,9 +434,11 @@ export async function removeStudentsFromCourse(
 // Family member + contact sync
 // ---------------------------------------------------------------------------
 
-/** One family member (a registration_parents row) as pushed to
- *  Toddle — becomes both a parent ACCOUNT (login, linked to the
- *  student) and a contact-details CARD (phone/email on the student). */
+/** One family member as pushed to Toddle. A parent
+ *  (`registration_parents`) becomes both a parent ACCOUNT (login,
+ *  linked to the student) and a contact-details CARD (phone/email on
+ *  the student); an emergency contact sets `contactOnly` and becomes
+ *  the card alone — see the field's note for why. */
 export interface ToddleFamilyMemberInput {
   firstName: string;
   lastName: string;
@@ -434,14 +448,69 @@ export interface ToddleFamilyMemberInput {
   phoneNumber?: string;
   /** e.g. "Mother" — defaults to "Guardian" on contact creation. */
   relationship?: string;
+  /** Card only, never an account. Emergency contacts are reachable
+   *  adults, not guardians: an account would hand a grandparent or
+   *  neighbour a Toddle login and a view into the student's record.
+   *  (User rule, 2026-09-20.) */
+  contactOnly?: boolean;
+  /** Reporting only — which table this contact came from. */
+  kind?: "parent" | "emergency";
+}
+
+/** A Toddle contact card with no counterpart in the portal.
+ *
+ *  Emphatically NOT the same thing as "stale". A live audit of the
+ *  roster (2026-09-20) found four of these, and they were a legal
+ *  guardian, a parent, and two relatives the portal simply doesn't
+ *  have on file — deleting them would have destroyed the only record
+ *  of those people. So an orphan is REPORTED by default and only
+ *  deleted when an admin explicitly asks for this run. */
+export interface ToddleOrphanContact {
+  id: number | string;
+  name: string;
+  relationship: string | null;
+  email: string | null;
+  phoneNumber: string | null;
+  /** Name of a contact we DID push that this card shares a name with.
+   *  Set means the card is almost certainly an out-of-date duplicate
+   *  of that person (Toddle holds an old email, so the email-first
+   *  matcher couldn't claim it) — safe to delete. Unset means nobody
+   *  here goes by this name at all, which on this roster has meant a
+   *  guardian the portal never captured. The two want opposite
+   *  actions, so they are never reported as one list. */
+  likelyDuplicateOf?: string;
+  /** Set once a delete has been attempted for this card. */
+  status?: "removed" | "failed";
+  error?: string;
+}
+
+export interface ToddleFamilyMemberSyncResult {
+  members: ToddleFamilyMemberResult[];
+  /** Cards on the student that no contact in this push matched. */
+  orphans: ToddleOrphanContact[];
+  /** The subset actually deleted — only ever non-empty when the
+   *  caller passed `prune`. */
+  removed: ToddleOrphanContact[];
+  /** Why orphans weren't computed or removed. Reported rather than
+   *  swallowed — "nothing was orphaned" and "we couldn't safely tell"
+   *  are different answers. */
+  pruneSkipped?: string;
 }
 
 export interface ToddleFamilyMemberResult {
   name: string;
+  kind: "parent" | "emergency";
   /** created = new Toddle parent; linked = existing parent newly
    *  attached to this student; updated = already attached (name
-   *  refreshed); skipped = no email to create an account with. */
-  account: "created" | "linked" | "updated" | "skipped (no email)" | "failed";
+   *  refreshed); skipped = no email to create an account with;
+   *  not needed = `contactOnly`, so no account was ever attempted. */
+  account:
+    | "created"
+    | "linked"
+    | "updated"
+    | "skipped (no email)"
+    | "not needed"
+    | "failed";
   contact: "created" | "updated" | "failed";
   error?: string;
 }
@@ -450,6 +519,8 @@ export interface ToddleFamilyMemberResult {
  * Push the family's contacts onto a Toddle student: upsert each as a
  * parent account (matched org-wide by email) AND as a contact-details
  * card on the student (matched by email, falling back to name).
+ * Members flagged `contactOnly` — emergency contacts — get the card
+ * and no account at all.
  * Per-member failures are reported, never thrown — one bad row
  * shouldn't undo the rest of the sync.
  *
@@ -457,30 +528,132 @@ export interface ToddleFamilyMemberResult {
  * once and share it across students; parents created here are pushed
  * back onto that array so a sibling synced later in the same run
  * matches them instead of double-creating.
+ *
+ * Cards on the student that no member matched come back as
+ * `orphans`. They are NOT deleted unless the caller passes
+ * `opts.prune`, which an admin opts into per run: see
+ * `ToddleOrphanContact` for the audit that made that the default.
+ * Even then, deletion is fenced by the two conditions that make an
+ * empty or partial push look like a deletion — see `pruneSkipped`.
  */
+/**
+ * The one rule for "is this card this person?" — email when both
+ * sides carry one, otherwise name. Exported so the preview that asks
+ * an admin "delete these?" and the run that deletes them can never
+ * disagree about which cards are spoken for.
+ */
+export function matchContactCard(
+  contacts: ToddleContactDetail[],
+  member: { firstName: string; lastName: string; email?: string }
+): ToddleContactDetail | undefined {
+  const email = (member.email ?? "").trim().toLowerCase();
+  return contacts.find((c) => {
+    const cEmail = (c.email ?? "").trim().toLowerCase();
+    if (email && cEmail) return cEmail === email;
+    return (
+      (c.firstName ?? "").trim().toLowerCase() ===
+        member.firstName.trim().toLowerCase() &&
+      (c.lastName ?? "").trim().toLowerCase() ===
+        member.lastName.trim().toLowerCase()
+    );
+  });
+}
+
+/** Describe already-identified leftover cards. Takes the cards AS
+ *  GIVEN — it never re-matches, because a second matching pass over a
+ *  filtered list would let an exact-duplicate card (same name, same
+ *  email as one already claimed) match the member whose real card was
+ *  just removed from the list, and silently vanish from the report.
+ *  That duplicate is precisely what this is for. */
+function describeOrphanContacts(
+  leftovers: ToddleContactDetail[],
+  members: ToddleFamilyMemberInput[]
+): ToddleOrphanContact[] {
+  const pushedByName = new Map<string, string>();
+  for (const m of members) {
+    pushedByName.set(
+      `${m.firstName.trim().toLowerCase()} ${m.lastName.trim().toLowerCase()}`,
+      `${m.firstName.trim()} ${m.lastName.trim()}`
+    );
+  }
+  return leftovers.map((c) => {
+    const first = (c.firstName ?? "").trim();
+    const last = (c.lastName ?? "").trim();
+    const twin = pushedByName.get(`${first.toLowerCase()} ${last.toLowerCase()}`);
+    return {
+      id: c.id,
+      name: `${first} ${last}`.trim(),
+      relationship: c.relationship ?? null,
+      email: c.email ?? null,
+      phoneNumber: c.phoneNumber ?? null,
+      ...(twin ? { likelyDuplicateOf: twin } : {}),
+    };
+  });
+}
+
+/** Cards no member in `members` claims. Pure — the preview path uses
+ *  it against a contact list it fetched itself. */
+export function findOrphanContacts(
+  contacts: ToddleContactDetail[],
+  members: ToddleFamilyMemberInput[]
+): ToddleOrphanContact[] {
+  const claimed = new Set<string>();
+  for (const m of members) {
+    const match = matchContactCard(contacts, m);
+    if (match) claimed.add(String(match.id));
+  }
+  return describeOrphanContacts(
+    contacts.filter((c) => !claimed.has(String(c.id))),
+    members
+  );
+}
+
 export async function syncFamilyMembers(
   studentToddleId: string,
   members: ToddleFamilyMemberInput[],
-  preloaded?: { parents?: ToddleParentRecord[] }
-): Promise<ToddleFamilyMemberResult[]> {
-  if (members.length === 0) return [];
+  preloaded?: {
+    parents?: ToddleParentRecord[];
+    /** "duplicates" deletes only leftover cards that share a name
+     *  with a contact we pushed; "all" also deletes cards naming
+     *  someone the portal doesn't have. Bulk runs pass "duplicates"
+     *  because nobody reviews them card by card. */
+    prune?: "duplicates" | "all";
+  }
+): Promise<ToddleFamilyMemberSyncResult> {
+  if (members.length === 0) {
+    return {
+      members: [],
+      orphans: [],
+      removed: [],
+      // No inputs can equally mean "the family rows failed to load",
+      // on which reading EVERY card would look orphaned. Never judge
+      // an empty push.
+      pruneSkipped: "no contacts came through from the portal",
+    };
+  }
   const [allParents, existingContacts] = await Promise.all([
     preloaded?.parents ?? getParents(),
     getContactDetails(studentToddleId),
   ]);
   const results: ToddleFamilyMemberResult[] = [];
+  /** Cards this run claimed. Anything left over is a prune candidate,
+   *  and recording them AS MATCHED (rather than re-deriving the match
+   *  afterwards) keeps the prune from ever disagreeing with the
+   *  update about which card belongs to whom. */
+  const matchedContactIds = new Set<string>();
 
   for (const m of members) {
     const name = `${m.firstName} ${m.lastName}`.trim();
     const email = (m.email ?? "").trim().toLowerCase();
     const result: ToddleFamilyMemberResult = {
       name,
-      account: "skipped (no email)",
+      kind: m.kind ?? (m.contactOnly ? "emergency" : "parent"),
+      account: m.contactOnly ? "not needed" : "skipped (no email)",
       contact: "failed",
     };
 
     // 1. Parent account (Toddle requires an email to create one).
-    if (email) {
+    if (email && !m.contactOnly) {
       try {
         const existing = allParents.find(
           (p) => (p.email ?? "").trim().toLowerCase() === email
@@ -535,17 +708,9 @@ export async function syncFamilyMembers(
 
     // 2. Contact-details card on the student.
     try {
-      const match = existingContacts.find((c) => {
-        const cEmail = (c.email ?? "").trim().toLowerCase();
-        if (email && cEmail) return cEmail === email;
-        return (
-          (c.firstName ?? "").trim().toLowerCase() ===
-            m.firstName.trim().toLowerCase() &&
-          (c.lastName ?? "").trim().toLowerCase() ===
-            m.lastName.trim().toLowerCase()
-        );
-      });
+      const match = matchContactCard(existingContacts, m);
       if (match) {
+        matchedContactIds.add(String(match.id));
         await updateContactDetail(match.id, {
           firstName: m.firstName,
           lastName: m.lastName,
@@ -574,7 +739,47 @@ export async function syncFamilyMembers(
 
     results.push(result);
   }
-  return results;
+
+  // A card that failed to sync is one we'd otherwise read as
+  // unmatched — calling it an orphan on a partial push is how a
+  // transient error turns into a delete prompt (or a delete).
+  if (results.some((r) => r.contact === "failed")) {
+    return {
+      members: results,
+      orphans: [],
+      removed: [],
+      pruneSkipped: "a contact card failed to sync, so leftovers weren't judged",
+    };
+  }
+
+  // Same derivation as the preview, minus the re-matching: cards this
+  // run already claimed are known exactly.
+  const orphans: ToddleOrphanContact[] = describeOrphanContacts(
+    existingContacts.filter((c) => !matchedContactIds.has(String(c.id))),
+    members
+  );
+
+  const doomed =
+    preloaded?.prune === "all"
+      ? orphans
+      : preloaded?.prune === "duplicates"
+        ? orphans.filter((o) => o.likelyDuplicateOf)
+        : [];
+  if (doomed.length === 0) return { members: results, orphans, removed: [] };
+
+  const removed: ToddleOrphanContact[] = [];
+  for (const orphan of doomed) {
+    try {
+      await deleteContactDetail(orphan.id);
+      orphan.status = "removed";
+    } catch (err) {
+      orphan.status = "failed";
+      orphan.error =
+        err instanceof Error ? err.message.slice(0, 300) : String(err);
+    }
+    removed.push(orphan);
+  }
+  return { members: results, orphans, removed };
 }
 
 /**

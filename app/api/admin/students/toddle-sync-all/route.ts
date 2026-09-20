@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
+import type { XanoEmergencyContact } from "@/lib/xano";
 import {
   getAllStudents,
   getYearGroups,
@@ -64,7 +65,7 @@ const CONCURRENCY = 3;
 export async function GET() {
   try {
     await requireAdmin();
-    const [students, parents, families, years, packets, apps] =
+    const [students, parents, families, years, packets, apps, emergency] =
       await Promise.all([
         xano.students.getAll(),
         xano.parents.getAll().catch(() => []),
@@ -72,6 +73,7 @@ export async function GET() {
         xano.schoolYears.getAll().catch(() => []),
         xano.studentRegistration.getAll().catch(() => []),
         xano.applications.getAll().catch(() => []),
+        xano.emergencyContacts.getAll().catch(() => []),
       ]);
 
     const activeYear = years.find((y) => y.isActive) ?? null;
@@ -87,6 +89,16 @@ export async function GET() {
         .filter((p): p is NonNullable<typeof p> => Boolean(p))
         .sort((a, b) => a.id - b.id);
       familyParents.set(f.id, contacts);
+    }
+    // Emergency contacts hang off the family too — grouped once here
+    // rather than re-read per student.
+    const familyEmergency = new Map<number, XanoEmergencyContact[]>();
+    for (const c of emergency) {
+      const famId = Number(c.registration_families_id) || 0;
+      if (!famId) continue;
+      const list = familyEmergency.get(famId);
+      if (list) list.push(c);
+      else familyEmergency.set(famId, [c]);
     }
     // Packet per student — the active year's when there is one, else
     // whatever packet exists, mirroring the sync's own fallback.
@@ -160,6 +172,7 @@ export async function GET() {
         packet,
         applicationGrade,
         parents: contacts,
+        emergencyContacts: familyEmergency.get(famId) ?? [],
         years,
       });
       const fields = buildToddleSyncFields({
@@ -218,6 +231,12 @@ export async function POST(req: Request) {
             .filter((v: number) => Number.isFinite(v))
         : []
     );
+    // Off unless asked for, and even then only the cards that share a
+    // name with a contact we pushed. A roster-wide run has no one
+    // reading card by card, and the leftovers that AREN'T duplicates
+    // have been real guardians missing from the portal.
+    const pruneContacts: "duplicates" | undefined =
+      body?.pruneContacts === true ? "duplicates" : undefined;
 
     const students = await xano.students.getAll();
     const enrolled = students
@@ -242,6 +261,7 @@ export async function POST(req: Request) {
         try {
           const outcome = await syncStudentToToddle(s, undefined, shared, {
             allowCreate: allowCreate.has(s.id),
+            ...(pruneContacts ? { pruneContacts } : {}),
           });
           rows[index] = {
             student_id: s.id,
@@ -257,6 +277,17 @@ export async function POST(req: Request) {
             family_failed: outcome.familyMembers.filter(
               (m) => m.account === "failed" || m.contact === "failed"
             ).length,
+            contacts_removed: outcome.removedContacts.filter(
+              (c) => c.status === "removed"
+            ).length,
+            orphan_contacts: outcome.orphanContacts.map((c) => ({
+              name: c.name,
+              relationship: c.relationship,
+              email: c.email,
+              phone: c.phoneNumber,
+              likelyDuplicateOf: c.likelyDuplicateOf ?? null,
+              removed: c.status === "removed",
+            })),
             crew: outcome.crew,
           };
         } catch (err) {
@@ -275,6 +306,8 @@ export async function POST(req: Request) {
             photo: "none",
             family_synced: 0,
             family_failed: 0,
+            contacts_removed: 0,
+            orphan_contacts: [],
             crew: null,
             candidates: duplicate ? err.candidates : undefined,
             error:
@@ -331,9 +364,25 @@ export interface BulkToddleSyncRow {
    *  ghost record wants deleting in Toddle. */
   source_id_blocked: boolean;
   photo: "synced" | "none" | "failed";
-  /** Family contacts fully synced (account + contact card). */
+  /** Family contacts fully synced (account + contact card), plus any
+   *  emergency contacts, which sync as a card alone. */
   family_synced: number;
   family_failed: number;
+  /** Toddle cards deleted because the portal no longer holds that
+   *  person. Only ever non-zero when the run asked to prune. */
+  contacts_removed: number;
+  /** Cards on the Toddle student matching nobody in the portal. Shown
+   *  for review whether or not this run deleted them. */
+  orphan_contacts: Array<{
+    name: string;
+    relationship: string | null;
+    email: string | null;
+    phone: string | null;
+    /** Name of a pushed contact this card duplicates (old email), or
+     *  null when nobody here goes by this name at all. */
+    likelyDuplicateOf: string | null;
+    removed: boolean;
+  }>;
   /** Crew-class result ("added to Crew C", …) or null when the
    *  student has no crew assignment. */
   crew: string | null;

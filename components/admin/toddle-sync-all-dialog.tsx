@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { ChevronRight, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -69,6 +70,10 @@ export function ToddleSyncAllDialog({
   // run needs the "create anyway" set and the panel needs to stop
   // asking about the ones already answered.
   const [decisions, setDecisions] = useState<Map<number, Decision>>(new Map());
+  // Delete Toddle contact cards matching nobody in the portal. Off by
+  // default and reset per dialog: a roster-wide delete is the one
+  // action here nothing can undo.
+  const [prune, setPrune] = useState(false);
   const [linkingId, setLinkingId] = useState<number | null>(null);
 
   useEffect(() => {
@@ -140,7 +145,7 @@ export function ToddleSyncAllDialog({
       const res = await fetch("/api/admin/students/toddle-sync-all", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ allowCreateStudentIds }),
+        body: JSON.stringify({ allowCreateStudentIds, pruneContacts: prune }),
       });
       const data = await res.json().catch(() => null);
       if (!res.ok) {
@@ -186,6 +191,7 @@ export function ToddleSyncAllDialog({
         setOpen(next);
         if (!next) {
           setResult(null);
+          setPrune(false);
           // Decisions are answers about a specific preview. Reopening
           // re-reads Toddle, so carrying stale ones over would let a
           // "create anyway" outlive the situation that justified it.
@@ -229,9 +235,12 @@ export function ToddleSyncAllDialog({
           <DialogDescription>
             Runs the full Toddle sync for every enrolled student — profile
             fields, school email, enrollment date, home address, photo,
-            family members with their contact info, and crew class
+            family members with their contact info, emergency contacts
+            (contact cards only, no Toddle logins), and crew class
             placement. Existing Toddle students are matched and updated,
-            never duplicated, so this is safe to re-run.
+            never duplicated, so this is safe to re-run. Contact cards
+            in Toddle that match nobody here are listed in the results
+            and left alone unless you ask for them to be deleted.
           </DialogDescription>
         </DialogHeader>
 
@@ -355,7 +364,45 @@ export function ToddleSyncAllDialog({
         </div>
       ) : null}
 
-      {/* Loose matches: the Toddle record didn't carry our
+      {result.rows.some((r) => r.orphan_contacts.length > 0) ? (
+                <div className="rounded-md border border-amber-200 bg-amber-50/60 p-3">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-amber-700">
+                    In Toddle, not in the portal
+                  </p>
+                  <p className="mt-1 text-xs text-amber-800">
+                    Contact cards on these students match nobody on the
+                    family record here. Ones marked{" "}
+                    <span className="font-medium">duplicate</span> share a
+                    name with a contact we pushed and are safe to delete;
+                    the rest are people the portal doesn&rsquo;t have, and
+                    are usually worth adding on the family record rather
+                    than deleting.
+                    {prune
+                      ? " Cards marked deleted were removed this run."
+                      : " Nothing was deleted."}
+                  </p>
+                  <ul className="mt-1.5 space-y-1 text-sm">
+                    {result.rows
+                      .filter((r) => r.orphan_contacts.length > 0)
+                      .map((r) => (
+                        <li key={r.student_id}>
+                          <span className="font-medium">{r.student_name}</span>
+                          <span className="text-muted-foreground">
+                            {" — "}
+                            {r.orphan_contacts
+                              .map(
+                                (c) =>
+                                  `${c.name}${c.relationship ? ` (${c.relationship})` : ""}${c.likelyDuplicateOf ? " — duplicate" : " — not in portal"}${c.removed ? ", deleted" : ""}`
+                              )
+                              .join(", ")}
+                          </span>
+                        </li>
+                      ))}
+                  </ul>
+                </div>
+              ) : null}
+
+              {/* Loose matches: the Toddle record didn't carry our
                   sourceId, so it was identified by name alone. Worth
                   eyeballing once — a wrong match writes one student's
                   details onto another's profile. */}
@@ -392,7 +439,7 @@ export function ToddleSyncAllDialog({
                       <th className="px-3 py-2 font-medium">Student</th>
                       <th className="px-3 py-2 font-medium">Result</th>
                       <th className="px-3 py-2 font-medium">Photo</th>
-                      <th className="px-3 py-2 font-medium">Family</th>
+                      <th className="px-3 py-2 font-medium">Contacts</th>
                       <th className="px-3 py-2 font-medium">
                         What changed / notes
                       </th>
@@ -421,15 +468,38 @@ export function ToddleSyncAllDialog({
         </div>
 
         <DialogFooter className="flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-t pt-4">
-          <p className="text-xs text-muted-foreground">
-            {result
-              ? `Done — ${result.totals.created + result.totals.updated} of ${
-                  result.rows.length
-                } student${result.rows.length === 1 ? "" : "s"} moved; each student's Toddle link is saved on their record.`
-              : loadingReadiness
-                ? "Comparing only — nothing has been pushed to Toddle yet."
-                : ""}
-          </p>
+          <div className="space-y-1.5">
+            {/* Unlike the single-student dialog, a roster-wide preview
+                of these cards would cost one Toddle read per student
+                and trip the rate limit — so the honest framing is "run
+                once to see the list, then decide". */}
+            {!result ? (
+              <label className="flex items-start gap-2 text-xs text-muted-foreground">
+                <Checkbox
+                  checked={prune}
+                  onCheckedChange={(v) => setPrune(v === true)}
+                  disabled={running || loadingReadiness}
+                  className="mt-0.5"
+                />
+                <span>
+                  Also delete leftover cards that duplicate a contact we
+                  push (same name, old email). Cards naming someone the
+                  portal doesn&rsquo;t have are never deleted here —
+                  they&rsquo;re listed for you to add on the family
+                  record instead.
+                </span>
+              </label>
+            ) : null}
+            <p className="text-xs text-muted-foreground">
+              {result
+                ? `Done — ${result.totals.created + result.totals.updated} of ${
+                    result.rows.length
+                  } student${result.rows.length === 1 ? "" : "s"} moved; each student's Toddle link is saved on their record.`
+                : loadingReadiness
+                  ? "Comparing only — nothing has been pushed to Toddle yet."
+                  : ""}
+            </p>
+          </div>
           <div className="flex items-center gap-2">
             <Button
               variant="outline"
@@ -940,12 +1010,19 @@ function ResultRow({ row }: { row: BulkToddleSyncRow }) {
               label: "Changed",
               className: "bg-emerald-50 text-emerald-700 border-emerald-200",
             };
+  const removed =
+    row.contacts_removed > 0 ? `${row.contacts_removed} removed` : "";
   const family =
-    row.family_synced + row.family_failed === 0
+    row.family_synced + row.family_failed + row.contacts_removed === 0
       ? "—"
-      : row.family_failed > 0
-        ? `${row.family_synced} ok · ${row.family_failed} failed`
-        : `${row.family_synced} synced`;
+      : [
+          row.family_failed > 0
+            ? `${row.family_synced} ok · ${row.family_failed} failed`
+            : `${row.family_synced} synced`,
+          removed,
+        ]
+          .filter(Boolean)
+          .join(" · ");
   // What actually moved, most specific first: the failure reason, the
   // named field changes, then the crew placement. A "Changed" row with
   // no field list means the prior record couldn't be read to compare,

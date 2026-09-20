@@ -3,15 +3,19 @@ import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
 import { evaluateToddleReadiness } from "@/lib/toddle-readiness";
 import {
+  buildFamilyMemberInputs,
   buildToddleSyncFields,
   previewToddleStudent,
 } from "@/lib/toddle-sync";
 import {
+  findOrphanContacts,
+  getContactDetails,
   getStudentsBySourceIds,
   isToddleConfigured,
   resolveYearGroupId,
   ToddleSyncError,
 } from "@/lib/toddle";
+import type { ToddleOrphanContact } from "@/lib/toddle";
 import {
   buildToddleSyncShared,
   syncStudentToToddle,
@@ -91,10 +95,17 @@ export async function GET(
       parents.sort((a, b) => a.id - b.id);
     }
 
+    // Emergency contacts are family-level and go to Toddle as contact
+    // cards, so the checklist has to see them too.
+    const emergencyContacts = familyId
+      ? await xano.emergencyContacts.getByFamilyId(familyId).catch(() => [])
+      : [];
+
     const readiness = evaluateToddleReadiness({
       student,
       packet,
       parents,
+      emergencyContacts,
       years,
     });
 
@@ -104,6 +115,7 @@ export async function GET(
     // reached (it rate-limits), which the dialog states plainly rather
     // than implying nothing would change.
     let preview = undefined;
+    let orphanContacts: ToddleOrphanContact[] = [];
     if (isToddleConfigured()) {
       const fields = buildToddleSyncFields({
         student,
@@ -133,9 +145,30 @@ export async function GET(
         roster: roster ?? null,
         yearGroupId,
       });
+
+      // Which Toddle cards match nobody in the portal. Shown so the
+      // admin can decide — they are as often a contact we never
+      // captured (a legal guardian, a second parent) as a stale one,
+      // so the sync never deletes them unasked. One extra read, and
+      // only while the dialog is open for a single student.
+      const toddleId =
+        (student.toddle_student_id ?? "").trim() ||
+        (roster?.find((r) => !r.isArchived) ?? roster?.[0]
+          ? String((roster.find((r) => !r.isArchived) ?? roster[0]).id)
+          : "");
+      if (toddleId) {
+        orphanContacts = await getContactDetails(toddleId)
+          .then((cards) =>
+            findOrphanContacts(
+              cards,
+              buildFamilyMemberInputs(parents, emergencyContacts)
+            )
+          )
+          .catch(() => []);
+      }
     }
 
-    return NextResponse.json({ ...readiness, preview });
+    return NextResponse.json({ ...readiness, preview, orphanContacts });
   } catch (err) {
     return handleAdminError(err);
   }
@@ -171,7 +204,11 @@ export async function POST(
     const outcome = await syncStudentToToddle(
       student,
       gradeLevel || undefined,
-      shared
+      shared,
+      // Opt-in per run. "all" is allowed here and not in the bulk
+      // route because this dialog lists the cards individually, with
+      // each one labelled duplicate or not-in-portal, before asking.
+      body?.pruneContacts === true ? { pruneContacts: "all" } : undefined
     );
 
     return NextResponse.json(outcome);
