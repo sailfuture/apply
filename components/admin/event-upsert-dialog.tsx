@@ -42,12 +42,20 @@ import type {
 /** One row of the event's needs list, as edited here. `id` is the
  *  `registration_school_event_items` row for existing needs and
  *  undefined for ones added in this session — the save route uses it
- *  to tell an edit from an insert. */
+ *  to tell an edit from an insert.
+ *
+ *  `uid` is a client-only React key. The label is edited in place, so
+ *  keying the row on the label itself would remount its input on every
+ *  keystroke and throw away the cursor. */
 export interface EventItemDraft {
+  uid: string;
   id?: number;
   label: string;
   quantity: number;
 }
+
+let needUidSeq = 0;
+const nextNeedUid = () => `need-${++needUidSeq}`;
 
 /**
  * Shared school-calendar event machinery — the create/edit dialog plus
@@ -610,7 +618,12 @@ export function EventUpsertDialog({
           claimed: number;
         }> = data?.items ?? [];
         setNeedsList(
-          rows.map((r) => ({ id: r.id, label: r.label, quantity: r.quantity }))
+          rows.map((r) => ({
+            uid: nextNeedUid(),
+            id: r.id,
+            label: r.label,
+            quantity: r.quantity,
+          }))
         );
         setClaimedByItem(
           Object.fromEntries(rows.map((r) => [r.id, r.claimed]))
@@ -638,15 +651,43 @@ export function EventUpsertDialog({
   function addNeed() {
     const label = needDraft.trim();
     if (!label) return;
+    // Say so rather than swallowing the Add — an input that clears
+    // itself and adds nothing reads as a bug.
+    if (
+      needsList.some(
+        (n) => n.label.trim().toLowerCase() === label.toLowerCase()
+      )
+    ) {
+      toast.error(`"${label}" is already on the list.`);
+      return;
+    }
     const quantity = Math.max(1, Math.round(Number(needQtyDraft) || 1));
-    setNeedsList((prev) =>
-      prev.some((n) => n.label.toLowerCase() === label.toLowerCase())
-        ? prev
-        : [...prev, { label, quantity }]
-    );
+    setNeedsList((prev) => [...prev, { uid: nextNeedUid(), label, quantity }]);
     setNeedDraft("");
     setNeedQtyDraft("1");
   }
+
+  /** Labels are edited in place, so a rename can blank a row out or
+   *  collide with another one. Both are quietly destructive on save:
+   *  the route drops blank and duplicate labels, and a dropped row's
+   *  id is then missing from the submitted set — which reads as
+   *  "delete it", taking any family claims with it. Flag the rows here
+   *  and hold the save instead. */
+  const needIssues = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const n of needsList) {
+      const key = n.label.trim().toLowerCase();
+      if (key) counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    const blank = new Set<number>();
+    const dupe = new Set<number>();
+    needsList.forEach((n, i) => {
+      const key = n.label.trim().toLowerCase();
+      if (!key) blank.add(i);
+      else if ((counts.get(key) ?? 0) > 1) dupe.add(i);
+    });
+    return { blank, dupe, ok: blank.size === 0 && dupe.size === 0 };
+  }, [needsList]);
 
   const dayByDate = useMemo(
     () => new Map(days.map((d) => [d.date, d])),
@@ -691,11 +732,17 @@ export function EventUpsertDialog({
         ...(itemsLoadOk
           ? {
               items: [
-                ...needsList,
+                // `uid` is local bookkeeping; send only what the row is.
+                ...needsList.map((n) => ({
+                  id: n.id,
+                  label: n.label.trim(),
+                  quantity: n.quantity,
+                })),
                 ...(needDraft.trim() &&
                 !needsList.some(
                   (n) =>
-                    n.label.toLowerCase() === needDraft.trim().toLowerCase()
+                    n.label.trim().toLowerCase() ===
+                    needDraft.trim().toLowerCase()
                 )
                   ? [
                       {
@@ -905,59 +952,98 @@ export function EventUpsertDialog({
             <Label className="text-xs">Event needs</Label>
             {needsList.length > 0 ? (
               <ul className="space-y-1">
-                {needsList.map((n, i) => (
-                  <li
-                    key={`${n.label}-${i}`}
-                    className="flex items-center gap-2 rounded-md border bg-muted/30 px-2.5 py-1.5 text-sm"
-                  >
-                    <span className="min-w-0 flex-1 truncate">
-                      {n.label}
-                      {/* Families have already committed to this many.
-                          Shown so removing a need isn't done blind —
-                          deleting the row drops their claims with it. */}
-                      {n.id && (claimedByItem[n.id] ?? 0) > 0 ? (
-                        <span className="ml-1.5 text-[11px] text-muted-foreground">
-                          {claimedByItem[n.id]} claimed
-                        </span>
-                      ) : null}
-                    </span>
-                    {/* Quantity stays editable in place — the count is
-                        the thing most likely to change after the fact
-                        ("make it 6 chaperones"), and retyping the
-                        label to fix a number is busywork. */}
-                    <Input
-                      type="number"
-                      min="1"
-                      step="1"
-                      value={String(n.quantity)}
-                      aria-label={`How many ${n.label}`}
-                      onChange={(e) => {
-                        const quantity = Math.max(
-                          1,
-                          Math.round(Number(e.target.value) || 1)
-                        );
-                        setNeedsList((prev) =>
-                          prev.map((item, idx) =>
-                            idx === i ? { ...item, quantity } : item
-                          )
-                        );
-                      }}
-                      className="h-7 w-16 shrink-0 bg-white px-2 text-center tabular-nums"
-                    />
-                    <button
-                      type="button"
-                      className="shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:text-red-600"
-                      aria-label={`Remove "${n.label}"`}
-                      onClick={() =>
-                        setNeedsList((prev) =>
-                          prev.filter((_, idx) => idx !== i)
-                        )
-                      }
+                {needsList.map((n, i) => {
+                  const claimed = n.id ? (claimedByItem[n.id] ?? 0) : 0;
+                  const isBlank = needIssues.blank.has(i);
+                  const isDupe = needIssues.dupe.has(i);
+                  return (
+                    <li
+                      key={n.uid}
+                      className="rounded-md border bg-muted/30 px-2.5 py-1.5 text-sm"
                     >
-                      <X className="size-3.5" />
-                    </button>
-                  </li>
-                ))}
+                      <div className="flex items-center gap-2">
+                        {/* Label and quantity are both editable in
+                            place. Fixing a typo used to mean deleting
+                            the row and retyping it, which threw away
+                            every claim families had already made
+                            against it — the save route matches rows by
+                            id, so a rename keeps them. */}
+                        <Input
+                          value={n.label}
+                          aria-label={`Need ${i + 1}`}
+                          aria-invalid={isBlank || isDupe || undefined}
+                          onChange={(e) => {
+                            const label = e.target.value;
+                            setNeedsList((prev) =>
+                              prev.map((item, idx) =>
+                                idx === i ? { ...item, label } : item
+                              )
+                            );
+                          }}
+                          className="h-7 min-w-0 flex-1 bg-white px-2"
+                        />
+                        <Input
+                          type="number"
+                          min="1"
+                          step="1"
+                          value={String(n.quantity)}
+                          aria-label={`How many ${n.label || `need ${i + 1}`}`}
+                          onChange={(e) => {
+                            const quantity = Math.max(
+                              1,
+                              Math.round(Number(e.target.value) || 1)
+                            );
+                            setNeedsList((prev) =>
+                              prev.map((item, idx) =>
+                                idx === i ? { ...item, quantity } : item
+                              )
+                            );
+                          }}
+                          className="h-7 w-16 shrink-0 bg-white px-2 text-center tabular-nums"
+                        />
+                        <button
+                          type="button"
+                          className="shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:text-red-600"
+                          aria-label={`Remove "${n.label || `need ${i + 1}`}"`}
+                          onClick={() =>
+                            setNeedsList((prev) =>
+                              prev.filter((_, idx) => idx !== i)
+                            )
+                          }
+                        >
+                          <X className="size-3.5" />
+                        </button>
+                      </div>
+                      {/* Claims are shown so neither a rename nor a
+                          removal is done blind — renaming re-labels
+                          what these families signed up for, deleting
+                          drops it. */}
+                      {isBlank || isDupe || claimed > 0 ? (
+                        <p className="px-2 pt-1 text-[11px]">
+                          {isBlank ? (
+                            <span className="text-destructive">
+                              Give this need a name, or remove it.
+                            </span>
+                          ) : isDupe ? (
+                            <span className="text-destructive">
+                              Another need already has this name.
+                            </span>
+                          ) : null}
+                          {claimed > 0 ? (
+                            <span
+                              className={cn(
+                                "text-muted-foreground",
+                                (isBlank || isDupe) && "ml-1.5"
+                              )}
+                            >
+                              {claimed} claimed
+                            </span>
+                          ) : null}
+                        </p>
+                      ) : null}
+                    </li>
+                  );
+                })}
               </ul>
             ) : null}
             <div className="flex gap-2">
@@ -1002,7 +1088,9 @@ export function EventUpsertDialog({
               One item at a time, with how many you need of it —
               &ldquo;Chaperones&rdquo; × 4 rather than &ldquo;4
               chaperones&rdquo;. Families see the list and claim
-              against those counts.
+              against those counts. Edit a name or count any time;
+              renaming keeps the families who already claimed it,
+              removing the row lets them go.
             </p>
           </div>
         </div>
@@ -1020,9 +1108,14 @@ export function EventUpsertDialog({
             size="sm"
             onClick={() => void save()}
             // `!itemsReady` — saving mid-load would submit an empty
-            // needs list and delete every one of them.
+            // needs list and delete every one of them. `!needIssues.ok`
+            // — a blank or duplicated label saves as a deletion.
             disabled={
-              saving || !itemsReady || !title.trim() || (!existing && !day)
+              saving ||
+              !itemsReady ||
+              !needIssues.ok ||
+              !title.trim() ||
+              (!existing && !day)
             }
           >
             {saving ? (

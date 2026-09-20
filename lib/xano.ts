@@ -2754,6 +2754,27 @@ export interface XanoAcademicSeason {
 }
 
 /**
+ * What the school-operations workspace reports back after republishing
+ * its `seasons` table from this calendar — see
+ * `xano.academicSeasons.publish()`.
+ *
+ * `season_rows` maps the stamp on our day rows (a
+ * `registration_academic_seasons` id) to the row it wrote over there,
+ * which is the only place the two workspaces' season ids are ever seen
+ * side by side.
+ */
+export interface SeasonPublishResult {
+  days_fetched: number;
+  /** Spans found on the calendar — the number of published seasons. */
+  seasons_found: number;
+  /** Published seasons whose dates were cleared (span deleted here). */
+  seasons_cleared: number;
+  terms_touched: number[];
+  mirror_upserts: number;
+  season_rows: Record<string, number>;
+}
+
+/**
  * A scheduled campus tour (`registration_tours`) for a recruitment
  * lead. Deliberately NOT a `school_calendar_events` row — those are
  * school-wide and pinned to seeded day rows; a tour belongs to one
@@ -7125,6 +7146,45 @@ export const xano = {
         { method: "DELETE" }
       );
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+    },
+
+    /**
+     * Publish the calendar's seasons to the school-operations Xano
+     * workspace, where the assembly app reads them.
+     *
+     * That workspace keeps its own `seasons` table — the one crew
+     * points and the season leaderboard hang off — with real start/end
+     * timestamps, and derives it from THIS calendar: it reads the day
+     * rows, groups them by their `seasons_id` stamp, orders the spans
+     * by first day and writes Season 1..N per term. A scheduled task
+     * does the same every six hours, so this is about immediacy, not
+     * about being the only path: without it an admin's edit sits
+     * unpublished until the next run.
+     *
+     * `mirror` is left off. The seasons pass is a handful of writes;
+     * copying all ~330 day rows across is three more each and belongs
+     * to the scheduled run, not to somebody saving a date range.
+     *
+     * The key is a soft guard on an API group that is otherwise open
+     * CRUD — it exists so the endpoint isn't trivially triggerable, not
+     * as a secret. `XANO_SEASON_SYNC_KEY` overrides it if it is ever
+     * rotated in Xano.
+     */
+    async publish(): Promise<SeasonPublishResult> {
+      const res = await fetch(
+        `${getToddleBaseUrl()}/sync_seasons_from_calendar`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            key: process.env.XANO_SEASON_SYNC_KEY || "ssc_9r4vt2kmq7xd",
+            mirror: false,
+          }),
+          cache: "no-store",
+        }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
     },
   },
 

@@ -84,6 +84,7 @@ import {
 } from "@/lib/season-days";
 import { cn } from "@/lib/utils";
 import type { SchoolCalendarResponse } from "@/app/api/admin/school-calendar/route";
+import type { SeasonSyncResponse } from "@/app/api/admin/academic-seasons/sync/route";
 import type {
   XanoAcademicSeason,
   XanoAcademicTerm,
@@ -671,7 +672,10 @@ export default function SchoolCalendarPage() {
           seasons={seasons}
           days={days}
           onClose={() => setTermsOpen(false)}
-          onChanged={() => void mutate()}
+          // Awaited by the dialog's save paths; a refetch that fails
+          // already surfaces through the page's own error state, so it
+          // mustn't reject into them.
+          onChanged={() => mutate().catch(() => undefined)}
         />
       ) : null}
     </div>
@@ -1095,6 +1099,18 @@ function EventsSheet({
   );
 }
 
+/**
+ * The grid's own markers — season, work rotation, term boundaries.
+ *
+ * Deliberately colourless: in a day cell colour means an event, and
+ * when the chrome was coloured too (teal seasons, indigo externships,
+ * orange internships, emerald boundaries) a month of school days read
+ * as noise with the actual events lost inside it. A white chip on a
+ * ring stays legible on every cell background the grid uses.
+ */
+const DAY_MARKER =
+  "rounded-full bg-white px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-neutral-600 ring-1 ring-inset ring-neutral-300";
+
 function DayCell({
   date,
   day,
@@ -1171,10 +1187,16 @@ function DayCell({
       className={cn(
         "flex h-full min-h-0 flex-col gap-1 overflow-hidden p-1.5 text-left text-xs transition-colors",
         isBreak
-          ? "bg-sky-100/60 hover:bg-sky-100"
+          ? "bg-muted hover:bg-muted/80"
           : isWeekend
             ? "bg-muted/50 text-muted-foreground hover:bg-muted/70"
             : "bg-white hover:bg-muted/40",
+        // Today is the one cell that has to find you across a whole
+        // month, so the square fills rather than ringing the date
+        // alone — and takes its text back from the weekend styling
+        // when today happens to be a Saturday.
+        isToday &&
+          "bg-neutral-300 text-foreground ring-1 ring-inset ring-neutral-500 hover:bg-neutral-300/80",
         dimmed && "opacity-40 hover:opacity-70",
         className
       )}
@@ -1192,21 +1214,16 @@ function DayCell({
         <span className="flex items-center gap-1">
           {day.holiday ? (
             <span
-              className="size-2 rounded-full bg-rose-500"
+              className="size-2 rounded-full bg-neutral-500"
               aria-label="Holiday"
             />
           ) : null}
           {season ? (
             <span
               title={seasonSummary(season)}
-              className={cn(
-                "rounded-full px-1 py-px text-[9px] font-semibold",
-                // A changeover date carries both seasons — amber so it
-                // reads as a boundary, not just another assigned day.
-                season.pm
-                  ? "bg-amber-100 text-amber-800"
-                  : "bg-teal-100 text-teal-700"
-              )}
+              // A changeover date carries both seasons; the arrow in
+              // the label says so, so it needs no colour of its own.
+              className={cn(DAY_MARKER, "px-1")}
             >
               {season.pm
                 ? `${season.am?.code ?? "—"}→${season.pm.code}`
@@ -1214,13 +1231,9 @@ function DayCell({
             </span>
           ) : null}
           {workType === "Externship" ? (
-            <span className="rounded-full bg-indigo-100 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-indigo-700">
-              Extern
-            </span>
+            <span className={DAY_MARKER}>Extern</span>
           ) : workType === "Internship" ? (
-            <span className="rounded-full bg-orange-100 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-orange-700">
-              Intern
-            </span>
+            <span className={DAY_MARKER}>Intern</span>
           ) : null}
         </span>
       </span>
@@ -1262,7 +1275,7 @@ function DayCell({
           {boundaries.slice(0, 2).map((b) => (
             <span
               key={b}
-              className="block shrink-0 truncate whitespace-nowrap rounded-md bg-emerald-100 px-2 py-1 text-xs font-medium leading-4 text-emerald-800"
+              className="block shrink-0 truncate whitespace-nowrap rounded-md bg-white px-2 py-1 text-xs font-medium leading-4 text-neutral-600 ring-1 ring-inset ring-neutral-300"
             >
               {b}
             </span>
@@ -1766,6 +1779,36 @@ function FlagSwitch({
 
 /* ── Terms & seasons management ───────────────────────────────────── */
 
+/** What a sync actually did, for the toast.
+ *
+ *  Worth spelling out rather than a bare "Synced": the interesting
+ *  runs are the ones that found something — days still stamped with a
+ *  deleted season, names out of order, a season the school apps were
+ *  still showing dates for. */
+function describeSeasonSync(result: SeasonSyncResponse): string {
+  const plural = (n: number, one: string) =>
+    `${n} ${one}${n === 1 ? "" : "s"}`;
+  const found = result.published?.seasons_found ?? 0;
+  const head = result.published
+    ? `${plural(found, "season")} sent to the school apps`
+    : "Seasons sent to the school apps";
+  const also: string[] = [];
+  if (result.released) {
+    also.push(
+      `released ${plural(result.released, "day")} from a deleted season`
+    );
+  }
+  if (result.renames.length) {
+    also.push(`renumbered ${plural(result.renames.length, "season")}`);
+  }
+  if (result.published?.seasons_cleared) {
+    also.push(
+      `cleared dates on ${plural(result.published.seasons_cleared, "season")} over there`
+    );
+  }
+  return also.length ? `${head} — ${also.join(", ")}.` : `${head}.`;
+}
+
 /** "Aug 24, 2026" — school years span two calendar years, so the
  *  tables always show the year. */
 function fmtMedDate(iso: string): string {
@@ -1798,7 +1841,9 @@ function TermsSeasonsDialog({
   seasons: XanoAcademicSeason[];
   days: XanoSchoolCalendarDay[];
   onClose: () => void;
-  onChanged: () => void;
+  /** Awaited, so a save's spinner lasts until the new data is on
+   *  screen — renumbering renames rows in this very table. */
+  onChanged: () => void | Promise<unknown>;
 }) {
   // null = closed; { existing: null } = add-new.
   const [termEdit, setTermEdit] = useState<{
@@ -1813,6 +1858,7 @@ function TermsSeasonsDialog({
   const [deleteSeasonTarget, setDeleteSeasonTarget] =
     useState<XanoAcademicSeason | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [syncing, setSyncing] = useState(false);
 
   /** In-session school days per term (terms_id on day rows). */
   const termSchoolDays = useMemo(() => {
@@ -1894,7 +1940,60 @@ function TermsSeasonsDialog({
     );
   }, [days, seasons]);
 
-  async function runDelete(url: string, label: string, after: () => void) {
+  /**
+   * Put the year's seasons back in order and publish them.
+   *
+   * Runs after every season change, not only on the button: the
+   * assembly app keeps its own season table and shows whatever the
+   * last publish left there, so an edit that isn't pushed is an edit
+   * the school doesn't see until the six-hourly task catches up.
+   * Refreshing afterwards is part of it — a renumber renames rows in
+   * the table the caller is looking at.
+   */
+  async function syncSeasons({
+    wait = false,
+  }: { wait?: boolean } = {}): Promise<SeasonSyncResponse | null> {
+    try {
+      const res = await fetch("/api/admin/academic-seasons/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ yearId, wait }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        throw new Error(err?.error ?? `Sync failed (${res.status})`);
+      }
+      return (await res.json()) as SeasonSyncResponse;
+    } catch (err) {
+      console.error("Failed to sync seasons:", err);
+      toast.error(
+        err instanceof Error
+          ? err.message
+          : "Couldn't send the seasons to the school apps."
+      );
+      return null;
+    } finally {
+      await onChanged();
+    }
+  }
+
+  async function runSync() {
+    if (syncing) return;
+    setSyncing(true);
+    try {
+      const result = await syncSeasons({ wait: true });
+      if (result) toast.success(describeSeasonSync(result));
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  async function runDelete(
+    url: string,
+    label: string,
+    after: () => void,
+    { resync = false }: { resync?: boolean } = {}
+  ) {
     if (deleting) return;
     setDeleting(true);
     try {
@@ -1903,7 +2002,8 @@ function TermsSeasonsDialog({
         const err = await res.json().catch(() => null);
         throw new Error(err?.error ?? `Delete failed (${res.status})`);
       }
-      onChanged();
+      if (resync) await syncSeasons();
+      else await onChanged();
       toast.success(`${label} deleted.`);
       after();
     } catch (err) {
@@ -2030,15 +2130,31 @@ function TermsSeasonsDialog({
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                   Seasons ({seasons.length})
                 </h3>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="bg-white"
-                  onClick={() => setSeasonEdit({ existing: null })}
-                >
-                  <Plus className="size-3.5 mr-1" />
-                  Add season
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="bg-white"
+                    disabled={syncing}
+                    onClick={() => void runSync()}
+                  >
+                    {syncing ? (
+                      <Loader2 className="size-3.5 mr-1 animate-spin" />
+                    ) : (
+                      <RefreshCw className="size-3.5 mr-1" />
+                    )}
+                    {syncing ? "Syncing…" : "Sync to school apps"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="bg-white"
+                    onClick={() => setSeasonEdit({ existing: null })}
+                  >
+                    <Plus className="size-3.5 mr-1" />
+                    Add season
+                  </Button>
+                </div>
               </div>
               <div className="overflow-hidden rounded-md border">
                 <Table>
@@ -2156,7 +2272,10 @@ function TermsSeasonsDialog({
                 Season dates come from the calendar days assigned to the
                 season — pick the range in the season editor. Two
                 seasons can share a changeover date, one holding the
-                morning and the other the rest of the day.
+                morning and the other the rest of the day. Seasons are
+                numbered in calendar order and sent to the school apps
+                (assembly, crew points) on every save; Sync re-sends
+                them now.
               </p>
             </section>
           </div>
@@ -2171,7 +2290,7 @@ function TermsSeasonsDialog({
           existing={termEdit.existing}
           onDone={(saved) => {
             setTermEdit(null);
-            if (saved) onChanged();
+            if (saved) void onChanged();
           }}
         />
       ) : null}
@@ -2183,9 +2302,11 @@ function TermsSeasonsDialog({
           seasons={seasons}
           days={days}
           existing={seasonEdit.existing}
-          onDone={(saved) => {
+          onDone={async (saved) => {
+            // Sync before closing, so the editor's spinner covers the
+            // renumber and the table behind it is already up to date.
+            if (saved) await syncSeasons();
             setSeasonEdit(null);
-            if (saved) onChanged();
           }}
         />
       ) : null}
@@ -2273,7 +2394,10 @@ function TermsSeasonsDialog({
                 void runDelete(
                   `/api/admin/academic-seasons/${deleteSeasonTarget.id}`,
                   "Season",
-                  () => setDeleteSeasonTarget(null)
+                  () => setDeleteSeasonTarget(null),
+                  // Deleting the middle season renumbers the rest and
+                  // changes what the school apps publish.
+                  { resync: true }
                 );
               }}
             >
@@ -2465,7 +2589,10 @@ function SeasonEditDialog({
   days: XanoSchoolCalendarDay[];
   /** Null = creating a new season. */
   existing: XanoAcademicSeason | null;
-  onDone: (saved: boolean) => void;
+  /** Awaited on a save: the parent renumbers and publishes the
+   *  seasons, and the button should still say "Saving…" while it
+   *  does. */
+  onDone: (saved: boolean) => void | Promise<unknown>;
 }) {
   // Days currently assigned to this season, either slot (days arrive
   // date-sorted), seeding the range inputs with its present span.
@@ -2629,12 +2756,12 @@ function SeasonEditDialog({
             err?.error ??
               "Season saved, but assigning its days failed — reopen it and try again."
           );
-          onDone(true);
+          await onDone(true);
           return;
         }
       }
       toast.success(existing ? "Season updated." : "Season added.");
-      onDone(true);
+      await onDone(true);
     } catch (err) {
       console.error("Failed to save season:", err);
       toast.error(

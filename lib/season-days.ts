@@ -598,3 +598,127 @@ export function previewSeasonSave({
     blocked: errors.length > 0,
   };
 }
+
+/* ── Seasons that aren't there any more ───────────────────────────── */
+
+/**
+ * Day rows stamped with a season row that no longer exists, and the
+ * patch that releases each one.
+ *
+ * Nothing in the app shows these: the calendar page looks every
+ * `seasons_id` up in the year's season list and skips the misses, so a
+ * stamp left behind by a deleted season is invisible here. It is not
+ * invisible downstream — the school-operations workspace derives the
+ * published season list from the DISTINCT stamps on these rows, so one
+ * leftover becomes a phantom season and pushes every season after it up
+ * a number. That is worth clearing on sight rather than only when the
+ * delete that caused it happens to succeed.
+ *
+ * The release mirrors the season-delete cleanup: losing the morning
+ * promotes the afternoon's season to sole owner, rather than leaving an
+ * afternoon with nobody before it.
+ */
+export function orphanSeasonDays(
+  days: XanoSchoolCalendarDay[],
+  knownSeasonIds: Iterable<number>
+): { id: number; date: string; patch: SeasonDayPatch }[] {
+  const known = new Set(knownSeasonIds);
+  const writes: { id: number; date: string; patch: SeasonDayPatch }[] = [];
+  for (const d of days) {
+    const am = seasonAmOf(d);
+    const pm = seasonPmOf(d);
+    const amGone = am > 0 && !known.has(am);
+    const pmGone = pm > 0 && !known.has(pm);
+    if (!amGone && !pmGone) continue;
+    writes.push({
+      id: d.id,
+      date: d.date,
+      patch: amGone
+        ? {
+            seasons_id: pmGone ? 0 : pm,
+            seasons_id_pm: 0,
+            season_handoff: 0,
+          }
+        : { seasons_id_pm: 0, season_handoff: 0 },
+    });
+  }
+  return writes;
+}
+
+/* ── Numbering ────────────────────────────────────────────────────── */
+
+/** A season's first assigned day (either slot), for ordering. */
+export function seasonStartDates(
+  days: XanoSchoolCalendarDay[]
+): Map<number, string> {
+  const starts = new Map<number, string>();
+  for (const d of days) {
+    for (const sid of [seasonAmOf(d), seasonPmOf(d)]) {
+      if (!sid) continue;
+      const cur = starts.get(sid);
+      if (!cur || d.date < cur) starts.set(sid, d.date);
+    }
+  }
+  return starts;
+}
+
+/** A season row as the numbering needs to see it. */
+export interface NumberedSeason {
+  id: number;
+  name: string;
+  /** Linked term (0 = not linked) — numbering restarts per term, the
+   *  way the assembly app counts them. */
+  registration_academic_terms_id: number;
+}
+
+/** Names that are just a number, and so are ours to rewrite — a season
+ *  someone deliberately called "Winter Sprint" keeps its name. */
+const AUTO_NAME = /^season\s+\d+$/i;
+
+/** The year's seasons in the order they actually run: dated ones by
+ *  first day, then the dateless in a stable order behind them. */
+export function seasonsInCalendarOrder<T extends NumberedSeason>(
+  seasons: T[],
+  days: XanoSchoolCalendarDay[]
+): T[] {
+  const starts = seasonStartDates(days);
+  return [...seasons].sort(
+    (a, b) =>
+      (starts.get(a.id) ?? "9999-99-99").localeCompare(
+        starts.get(b.id) ?? "9999-99-99"
+      ) || a.id - b.id
+  );
+}
+
+/**
+ * The renames that put "Season N" back in calendar order.
+ *
+ * Deleting the second of four seasons used to leave 1, 3, 4 on screen
+ * and — worse — published a set numbered differently again, because the
+ * school-operations workspace numbers the spans it finds by date. This
+ * counts the same way it does: within each term, seasons in calendar
+ * order, every row taking a number whether or not its own name is one
+ * (so a custom name doesn't shift the rows after it out of step with
+ * what the assembly app shows).
+ */
+export function planSeasonRenumber<T extends NumberedSeason>({
+  seasons,
+  days,
+}: {
+  seasons: T[];
+  days: XanoSchoolCalendarDay[];
+}): { id: number; from: string; to: string }[] {
+  const ordered = seasonsInCalendarOrder(seasons, days);
+  const nextNumber = new Map<number, number>();
+  const renames: { id: number; from: string; to: string }[] = [];
+  for (const s of ordered) {
+    const term = Number(s.registration_academic_terms_id) || 0;
+    const n = (nextNumber.get(term) ?? 0) + 1;
+    nextNumber.set(term, n);
+    const want = `Season ${n}`;
+    if (AUTO_NAME.test(s.name.trim()) && s.name.trim() !== want) {
+      renames.push({ id: s.id, from: s.name, to: want });
+    }
+  }
+  return renames;
+}

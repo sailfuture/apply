@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
+import { seasonsInCalendarOrder } from "@/lib/season-days";
 import type {
   XanoAcademicSeason,
   XanoAcademicTerm,
@@ -69,13 +70,16 @@ export async function GET(req: NextRequest) {
           b.start_date ?? "9999-99-99"
         ) || a.term_name.localeCompare(b.term_name)
     );
-    seasons.sort((a, b) => a.id - b.id);
+    // Seasons read in the order they run, not the order they were
+    // created — numbering follows the calendar, and so do the season
+    // badges the month grid draws from this list.
+    const orderedSeasons = seasonsInCalendarOrder(seasons, days);
 
     return NextResponse.json({
       days,
       events,
       terms,
-      seasons,
+      seasons: orderedSeasons,
     } satisfies SchoolCalendarResponse);
   } catch (err) {
     return handleAdminError(err);
