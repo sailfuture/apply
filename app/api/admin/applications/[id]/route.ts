@@ -186,12 +186,18 @@ export async function PATCH(
           err
         );
         await sendBillingAlert(
-          `Stripe item NOT removed after application deactivate (family #${familyIdNum})`,
+          "Stripe item NOT removed after application deactivate",
           [
-            `Application #${id} (student #${updated.registration_students_id}, family #${familyIdNum}, year #${yearIdNum}) was deactivated, but removing the student's Stripe subscription item failed.`,
-            `Stripe is still billing this student. Remove the item from the family's subscription in the Stripe Dashboard, or re-toggle the application to retry.`,
+            `This student's application was deactivated, but removing their Stripe subscription item failed — the family is still being billed for them.`,
+            `Remove the item from the family's subscription in the Stripe Dashboard, or re-toggle the application to retry.`,
             `Error: ${err instanceof Error ? err.message : String(err)}`,
-          ]
+          ],
+          {
+            familyId: familyIdNum,
+            yearId: yearIdNum,
+            studentIds: [Number(updated.registration_students_id)],
+            extra: { Application: `#${id}` },
+          }
         );
       }
     }
@@ -209,12 +215,18 @@ export async function PATCH(
             err
           );
           await sendBillingAlert(
-            `Student NOT re-added to billing after reactivate (family #${familyIdNum})`,
+            "Student NOT re-added to billing after reactivate",
             [
-              `Application #${id} was reactivated but the billing reconcile failed — the student may not be billed.`,
+              `This student's application was reactivated but the billing reconcile failed — they may not be billed.`,
               `Open the family's admin billing card and click "Start Monthly Billing" to reconcile.`,
               `Error: ${err instanceof Error ? err.message : String(err)}`,
-            ]
+            ],
+            {
+              familyId: familyIdNum,
+              yearId: yearIdNum,
+              studentIds: [Number(updated.registration_students_id)],
+              extra: { Application: `#${id}` },
+            }
           );
         }
       });
@@ -233,12 +245,21 @@ export async function PATCH(
           err
         );
         await sendBillingAlert(
-          `Stripe re-price failed for family #${familyIdNum}`,
+          "Stripe re-price failed",
           [
-            `Application #${id} (student #${updated.registration_students_id}) had monthly_amount changed to ${String(updated.monthly_amount)}, but the Stripe re-price failed — the family is still being invoiced at the OLD amount.`,
+            `This student's monthly tuition was changed in the app, but the Stripe re-price failed — the family is still being invoiced at the OLD amount.`,
             `Retry by re-saving the amount, or update the subscription item in the Stripe Dashboard.`,
             `Error: ${err instanceof Error ? err.message : String(err)}`,
-          ]
+          ],
+          {
+            familyId: familyIdNum,
+            yearId: yearIdNum,
+            studentIds: [Number(updated.registration_students_id)],
+            extra: {
+              Application: `#${id}`,
+              "New monthly amount": `$${String(updated.monthly_amount)}/mo`,
+            },
+          }
         );
       }
     }

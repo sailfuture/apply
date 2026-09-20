@@ -616,14 +616,16 @@ async function reconcileFamilySubscriptionItemsInner(
   });
   if (unbillable.length > 0) {
     await sendBillingAlert(
-      `Active student(s) missing tuition amount for family #${familyId}`,
+      "Active student(s) missing tuition amount",
       [
-        `Family #${familyId} (year #${yearId}) has a live subscription, but ${unbillable.length} active student(s) have no monthly_amount set and are NOT being billed:`,
-        ...unbillable.map(
-          (a) => `  - student #${a.registration_students_id}`
-        ),
+        `This family has a live subscription, but the ${unbillable.length} student(s) named above are active with no monthly tuition set — they are NOT being billed.`,
         `Set their tuition on the Scholarship Determination card, then click "Start Monthly Billing" to add them to the subscription.`,
-      ]
+      ],
+      {
+        familyId,
+        yearId,
+        studentIds: unbillable.map((a) => Number(a.registration_students_id)),
+      }
     );
   }
 

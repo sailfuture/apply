@@ -259,12 +259,20 @@ async function handleSubscriptionDeleted(
   // when Stripe's dunning gave up on a delinquent family. Either way
   // a human should see it.
   await sendBillingAlert(
-    `Subscription ended for family #${familyId}`,
+    "Monthly tuition subscription ended",
     [
-      `Stripe subscription ${subscription.id} (family #${familyId}, year #${yearId}) was canceled/ended.`,
-      `Cancellation source: ${subscription.cancellation_details?.reason ?? "unknown"}.`,
+      `This family's Stripe subscription was canceled/ended — they will not be invoiced again for this academic year.`,
       `If this family should still be billed, use "Start Monthly Billing" on their admin billing card to create a fresh subscription.`,
-    ]
+    ],
+    {
+      familyId,
+      yearId,
+      subscriptionId: subscription.id,
+      extra: {
+        "Cancellation reason":
+          subscription.cancellation_details?.reason ?? "unknown",
+      },
+    }
   );
 }
 
@@ -441,15 +449,26 @@ async function upsertInvoiceFromEvent(
   // rather than discovering it weeks later on the billing list.
   if (eventType === "invoice.payment_failed") {
     await sendBillingAlert(
-      `Tuition payment failed for family #${familyId}`,
+      "Tuition payment failed",
       [
-        `Invoice ${invoice.id} (family #${familyId}, year #${yearId}) failed to collect.`,
-        `Amount due: $${((invoice.amount_due ?? 0) / 100).toFixed(2)}.`,
-        invoice.hosted_invoice_url
-          ? `Hosted invoice: ${invoice.hosted_invoice_url}`
-          : "",
+        `Stripe could not collect this family's monthly tuition invoice — the payment method on file was declined, expired, or is missing.`,
         `Stripe will keep retrying per the dunning settings; check the family's billing card for status.`,
-      ].filter(Boolean)
+      ],
+      {
+        familyId,
+        yearId,
+        subscriptionId,
+        invoice: {
+          id: invoice.id,
+          status,
+          amountDueCents: invoice.amount_due ?? 0,
+          amountPaidCents: invoice.amount_paid ?? 0,
+          periodStart,
+          periodEnd,
+          dueDate,
+          hostedUrl: invoice.hosted_invoice_url ?? null,
+        },
+      }
     );
   }
 }
@@ -689,12 +708,19 @@ async function recordStoreOrderFromSession(
     const sent = await sendBillingAlert(
       "Recurring Payment Link was paid — will not reconcile",
       [
-        `Someone completed checkout on a subscription-mode Stripe Payment Link (${paymentLinkId}), checkout session ${session.id}.`,
-        lineItemSummary ? `Line items: ${lineItemSummary}.` : "",
-        `Amount: $${((session.amount_total ?? 0) / 100).toFixed(2)}. Purchaser email: ${purchaserEmail || "unknown"}.`,
+        `Someone completed checkout on a subscription-mode Stripe Payment Link.`,
         `This created a NEW Stripe subscription under the purchaser's identity. It is NOT connected to any family's tuition subscription and keeps billing on the link's schedule until canceled.`,
         `Action: open the checkout session in the Stripe Dashboard, cancel the subscription it created, and refund if needed. To pay a family's actual tuition invoice, use the invoice's hosted payment link on their admin billing schedule page — it works for anyone, no login required.`,
-      ].filter(Boolean)
+      ],
+      {
+        extra: {
+          Purchaser: purchaserEmail || "unknown",
+          Amount: `$${((session.amount_total ?? 0) / 100).toFixed(2)}`,
+          "Line items": lineItemSummary,
+          "Payment link": paymentLinkId,
+          "Checkout session": session.id,
+        },
+      }
     );
     // The alert is this branch's ONLY durable outcome — no row is
     // written anywhere, and every follow-up event from the stray

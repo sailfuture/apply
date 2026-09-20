@@ -166,12 +166,20 @@ export async function POST(req: NextRequest) {
         err
       );
       await sendBillingAlert(
-        `Stripe re-price failed for student #${studentId}`,
+        "Stripe re-price failed",
         [
-          `Tuition for student #${studentId} (year #${yearId}) was updated to $${billingValues.monthly_amount}/mo in the app, but the Stripe re-price failed — the family is still being invoiced at the OLD amount.`,
+          `This student's tuition was updated in the app, but the Stripe re-price failed — the family is still being invoiced at the OLD amount.`,
           `Re-save the amount on the Scholarship Determination card to retry, or update the subscription item in the Stripe Dashboard.`,
           `Error: ${err instanceof Error ? err.message : String(err)}`,
-        ]
+        ],
+        {
+          familyId: Number(updatedApp.registration_families_id),
+          yearId,
+          studentIds: [studentId],
+          extra: {
+            "New monthly amount": `$${billingValues.monthly_amount}/mo`,
+          },
+        }
       );
     }
 

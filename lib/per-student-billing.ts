@@ -299,12 +299,18 @@ export async function removeStripeItemsForArchivedStudent(
         // silent over-billing until a human intervenes — alert, don't
         // just log.
         await sendBillingAlert(
-          `Archived student's Stripe line NOT removed (student #${studentId})`,
+          "Archived student's Stripe line NOT removed",
           [
-            `Student #${studentId} was archived, but removing their subscription item ${itemId} (year #${yearId}) failed — Stripe is still billing the family for them.`,
+            `This student was archived, but removing their subscription item failed — Stripe is still billing the family for them.`,
             `Re-archive to retry, or remove the item from the family's subscription in the Stripe Dashboard.`,
             `Error: ${err instanceof Error ? err.message : String(err)}`,
-          ]
+          ],
+          {
+            familyId,
+            yearId,
+            studentIds: [studentId],
+            extra: { "Subscription item": itemId },
+          }
         );
       }
     })

@@ -11,7 +11,7 @@ import {
   sendOutstandingTuitionSms,
 } from "@/lib/sms/triggers";
 import { activeStripeSubscriptionId } from "@/lib/xano";
-import { sendBillingAlert } from "@/lib/billing-alerts";
+import { sendBillingAlert, familyAlertLabel } from "@/lib/billing-alerts";
 import { getStripeClient } from "@/lib/stripe";
 
 /**
@@ -308,18 +308,28 @@ export async function GET(req: NextRequest) {
             }
           }
           if (silent.length > 0) {
+            // Names, not ids — this alert lists several families at
+            // once, so it can't lean on `sendBillingAlert`'s
+            // single-family detail block.
+            const named = await Promise.all(
+              silent.map(async (s) => ({
+                ...s,
+                label: await familyAlertLabel(s.familyId),
+              }))
+            );
             await sendBillingAlert(
-              `${silent.length} live subscription(s) with no mirrored invoices (${year.year_name})`,
+              `${silent.length} live subscription(s) with no mirrored invoices`,
               [
-                `These families have a Stripe subscription for ${year.year_name} that is more than a week old, but ZERO invoices in the billing mirror:`,
-                ...silent.map(
+                `These families have a Stripe subscription for the ${year.year_name} school year that is more than a week old, but ZERO invoices in the billing mirror:`,
+                ...named.map(
                   (s) =>
-                    `  - family #${s.familyId} (subscription ${s.subId}, ${s.age})`
+                    `  - ${s.label} — subscription ${s.subId}, ${s.age}`
                 ),
                 ``,
                 `Most likely cause: the Stripe webhook isn't reaching /api/webhooks/stripe (check the endpoint + STRIPE_WEBHOOK_SECRET in the Stripe Dashboard), or the subscription isn't generating invoices.`,
                 `Run POST /api/admin/billing/backfill?yearId=${year.id} after fixing the webhook to recover missed invoices.`,
-              ]
+              ],
+              { yearId: year.id }
             );
           }
         }

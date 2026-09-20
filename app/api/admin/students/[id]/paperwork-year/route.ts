@@ -245,12 +245,21 @@ export async function POST(
             err
           );
           await sendBillingAlert(
-            `Student NOT re-added to billing after paperwork-year move (family #${familyId})`,
+            "Student NOT re-added to billing after paperwork-year move",
             [
-              `Student #${studentId}'s paperwork moved from ${yearName(fromYearId)} to ${yearName(toYearId)}, but the billing reconcile for the target year failed — the student may not be billed.`,
+              `This student's paperwork moved to a different registration year, but the billing reconcile for the target year failed — they may not be billed.`,
               `Open the family's admin billing card and click "Start Monthly Billing" to reconcile.`,
               `Error: ${err instanceof Error ? err.message : String(err)}`,
-            ]
+            ],
+            {
+              familyId,
+              yearId: toYearId,
+              studentIds: [studentId],
+              extra: {
+                "Moved from": yearName(fromYearId),
+                "Moved to": yearName(toYearId),
+              },
+            }
           );
         }
       });

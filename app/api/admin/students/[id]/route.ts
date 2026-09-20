@@ -428,12 +428,16 @@ export async function PATCH(
             err
           );
           await sendBillingAlert(
-            `Un-archived student may be missing from billing (student #${id})`,
+            "Un-archived student may be missing from billing",
             [
-              `Student #${id} was un-archived but the billing reconcile failed — they may not have been re-added to the family's subscription.`,
+              `This student was un-archived but the billing reconcile failed — they may not have been re-added to the family's subscription.`,
               `Open the family's admin billing card and click "Start Monthly Billing" to reconcile.`,
               `Error: ${err instanceof Error ? err.message : String(err)}`,
-            ]
+            ],
+            {
+              familyId: Number(updated.registration_families_id),
+              studentIds: [id],
+            }
           );
         }
       });

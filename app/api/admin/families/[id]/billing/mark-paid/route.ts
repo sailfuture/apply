@@ -148,13 +148,28 @@ export async function POST(
         err
       );
       await sendBillingAlert(
-        `Check/cash payment not mirrored (family #${familyId})`,
+        "Check/cash payment not mirrored",
         [
-          `Invoice ${invoiceId} was marked paid out-of-band in Stripe (${paymentMethod}), but the local payment-transactions update failed.`,
+          `This family's invoice was marked paid out-of-band in Stripe, but the local payment-transactions update failed.`,
           `The webhook will flip the row to paid, but the collected amount may mirror as $0 and the payment-method label is lost.`,
           `Fix the transaction row in Xano: amount_paid_cents = ${row.amount_due_cents}, payment_method = "${paymentMethod}".`,
           `Error: ${err instanceof Error ? err.message : String(err)}`,
-        ]
+        ],
+        {
+          familyId,
+          yearId: Number(row.registration_school_years_id),
+          subscriptionId: row.stripe_subscription_id,
+          invoice: {
+            id: invoiceId,
+            status: row.status,
+            amountDueCents: row.amount_due_cents,
+            periodStart: row.period_start,
+            periodEnd: row.period_end,
+            dueDate: row.due_date,
+            hostedUrl: row.hosted_invoice_url,
+          },
+          extra: { "Payment method": paymentMethod },
+        }
       );
       return NextResponse.json({
         ok: true,
