@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { formatNoteTimestamp } from "@/lib/format-note-time";
+import { formatDob } from "@/lib/dob";
 import { formatToddleFieldList } from "@/lib/toddle-fields";
 import type { ToddleReadiness } from "@/lib/toddle-readiness";
 import type { ToddleSyncPreview } from "@/lib/toddle-sync";
@@ -913,7 +914,7 @@ function ReviewRow({
               <span className="text-xs text-muted-foreground">
                 <span className="font-medium text-foreground">{c.name}</span>
                 {c.email ? ` · ${c.email}` : ""}
-                {c.dob ? ` · born ${c.dob}` : ""}
+                {c.dob ? ` · born ${formatDob(c.dob)}` : ""}
                 {c.createdAt
                   ? ` · added ${new Date(c.createdAt).toLocaleDateString(
                       "en-US",

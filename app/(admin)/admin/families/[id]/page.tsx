@@ -71,6 +71,7 @@ import { LinkedLeadsButton } from "@/components/admin/linked-leads-button";
 import { InviteStatusBadge, ResendInviteButton } from "@/components/invite-status";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { cn } from "@/lib/utils";
+import { formatDob } from "@/lib/dob";
 import { formatNoteTimestamp } from "@/lib/format-note-time";
 import {
   resolveStudentReceiptAmounts,
@@ -2739,11 +2740,7 @@ function StudentApplicationBlock({
           <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
             <DisabledField
               label="Date of birth"
-              value={
-                student.date_of_birth
-                  ? new Date(`${student.date_of_birth}T00:00:00`).toLocaleDateString()
-                  : ""
-              }
+              value={formatDob(student.date_of_birth)}
               required
             />
             <DisabledField label="Gender" value={student.gender} required />

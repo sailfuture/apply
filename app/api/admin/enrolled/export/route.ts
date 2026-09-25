@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano, type XanoScholarship } from "@/lib/xano";
 import type { EnrolledExportRow } from "@/lib/enrolled-export-columns";
+import { formatDob } from "@/lib/dob";
 
 /**
  * Data source for the Enrolled Students XLSX export.
@@ -163,7 +164,7 @@ export async function GET(req: NextRequest) {
         first_name: student.first_name ?? "",
         last_name: student.last_name ?? "",
         school_email: student.school_email ?? "",
-        date_of_birth: student.date_of_birth ?? "",
+        date_of_birth: formatDob(student.date_of_birth),
         gender: student.gender ?? "",
         ethnicity: student.ethnicity ?? "",
 

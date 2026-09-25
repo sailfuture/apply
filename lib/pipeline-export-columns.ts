@@ -3,12 +3,14 @@ import type {
   PipelineStudentDetail,
   PipelineStage,
 } from "@/app/api/admin/pipeline/route";
+import { formatDob } from "@/lib/dob";
 
 /**
  * Column metadata + row formatting for the Admissions Pipeline export.
  * Mirrors the enrolled-export contract: every exported value is a
  * pre-formatted string (booleans → "Yes"/"No", timestamps →
- * "YYYY-MM-DD"); the `stage` field is a filter, never a column —
+ * "YYYY-MM-DD", date of birth → "MM/DD/YYYY"); the `stage` field is a
+ * filter, never a column —
  * the visible stage column is `stage_label`.
  *
  * The export has two row shapes, picked in the dialog:
@@ -148,7 +150,7 @@ function studentFields(s: PipelineStudentDetail) {
   return {
     student_name: s.name,
     student_grade: s.grade,
-    student_dob: s.date_of_birth,
+    student_dob: formatDob(s.date_of_birth),
     student_gender: s.gender,
     bus_transportation: yesNo(s.is_bus_transportation),
     bus_stop: s.bus_stop,

@@ -10,7 +10,8 @@
  *
  * Every exportable value is a pre-formatted string so the spreadsheet
  * writer can drop it straight into a cell (booleans become "Yes"/"No",
- * timestamps become "YYYY-MM-DD", etc.). The three `is_*` booleans are
+ * timestamps become "YYYY-MM-DD", date of birth reads "MM/DD/YYYY"
+ * via `formatDob`, etc.). The three `is_*` booleans are
  * NOT columns — they back the status/program filters in the modal.
  */
 

@@ -45,6 +45,7 @@ import {
 import { cn } from "@/lib/utils";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { formatRelativeShort } from "@/lib/format-note-time";
+import { formatDob } from "@/lib/dob";
 import { formatUSPhone } from "@/lib/phone";
 import { EnrolledExportDialog } from "@/components/admin/enrolled-export-dialog";
 import { ExportScholarshipPdfButton } from "@/components/admin/export-scholarship-pdf-button";
@@ -1342,7 +1343,7 @@ function StudentDetailSheet({
             />
             <SheetDetailRow
               label="Date of birth"
-              value={row.student_dob}
+              value={formatDob(row.student_dob)}
             />
           </section>
 

@@ -26,6 +26,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { adminFetcher } from "@/lib/admin-fetcher";
+import { formatDob } from "@/lib/dob";
 import { StateSelect } from "@/components/state-select";
 import type { XanoBusStop } from "@/lib/xano";
 import type {
@@ -532,7 +533,7 @@ function StudentAppCard({
             </CardTitle>
             <p className="text-xs text-muted-foreground mt-0.5">
               {student.date_of_birth
-                ? `DOB ${new Date(`${student.date_of_birth}T00:00:00`).toLocaleDateString()}`
+                ? `DOB ${formatDob(student.date_of_birth)}`
                 : ""}
               {student.gender ? ` · ${student.gender}` : ""}
             </p>

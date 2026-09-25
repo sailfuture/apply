@@ -43,6 +43,7 @@ import { EmailNotificationsCard } from "@/components/admin/email-notifications-c
 import { FamilyStudentsNav, StageNav } from "@/components/admin/stage-nav";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { toast } from "sonner";
+import { formatDob } from "@/lib/dob";
 import { formatUSPhone } from "@/lib/phone";
 import { cn } from "@/lib/utils";
 import {
@@ -1051,9 +1052,7 @@ function StudentsTable({
           const name =
             `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim() ||
             `Student #${s.id}`;
-          const dob = s.date_of_birth
-            ? new Date(`${s.date_of_birth}T00:00:00`).toLocaleDateString()
-            : "—";
+          const dob = formatDob(s.date_of_birth) || "—";
           const latestYear = latestYearByStudent.get(s.id);
           // `from=overview` points the student page's back button
           // here instead of the enrolled roster.

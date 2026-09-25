@@ -79,6 +79,7 @@ import { RequestRecordsDialog } from "@/components/admin/request-records-dialog"
 import { EmailParentButton } from "@/components/admin/email-parent-button";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { cn } from "@/lib/utils";
+import { formatDob } from "@/lib/dob";
 import {
   formatNoteTimestamp,
   formatRelativeShort,
@@ -2560,7 +2561,7 @@ function StudentPacketBlock({
           <p className="text-xs text-muted-foreground">
             {row.student_grade ? `Grade ${row.student_grade}` : "—"}
             {row.student_date_of_birth
-              ? ` · DOB ${row.student_date_of_birth}`
+              ? ` · DOB ${formatDob(row.student_date_of_birth)}`
               : ""}
           </p>
         </div>
@@ -2575,7 +2576,7 @@ function StudentPacketBlock({
           <RequestRecordsDialog
             defaults={{
               studentName: row.student_full_name,
-              dateOfBirth: row.student_date_of_birth,
+              dateOfBirth: formatDob(row.student_date_of_birth),
               previousSchool: row.student_previous_school,
               academicYear: yearName,
             }}
@@ -5560,7 +5561,7 @@ function FamilyRegistrationConfirmationCard({
                         {s.student_grade || "—"}
                       </td>
                       <td className="py-2 pr-3 align-middle truncate text-muted-foreground">
-                        {s.student_date_of_birth || "—"}
+                        {formatDob(s.student_date_of_birth) || "—"}
                       </td>
                       <td className="py-2 pr-3 align-middle">
                         {packetVerified ? (

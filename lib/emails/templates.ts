@@ -23,6 +23,8 @@
  * Resend `send` API.
  */
 
+import { formatDob } from "@/lib/dob";
+
 export interface EmailContent {
   subject: string;
   html: string;
@@ -610,7 +612,8 @@ export function recordsRequest(ctx: RecordsRequestContext): EmailContent {
 export interface ResidentialStudentAddedContext {
   /** New student's full name. */
   student_name: string;
-  /** Date of birth as entered, or null when the family skipped it. */
+  /** Date of birth as stored ("YYYY-MM-DD"), or null when the family
+   *  skipped it. Rendered MM/DD/YYYY by the template. */
   student_dob: string | null;
   /** The residential family that added them. */
   family_name: string;
@@ -649,7 +652,7 @@ export function residentialStudentAdded(
   const houseLabel = ctx.residential_house ?? "Not assigned yet";
   const detailRows = [
     row("Student", ctx.student_name),
-    ctx.student_dob ? row("Date of birth", ctx.student_dob) : "",
+    ctx.student_dob ? row("Date of birth", formatDob(ctx.student_dob)) : "",
     row("Family", ctx.family_name),
     row("Residential home", houseLabel, !ctx.residential_house),
     row("School year", ctx.year_name),
@@ -676,7 +679,7 @@ export function residentialStudentAdded(
     `New residential placement added`,
     "",
     `Student: ${ctx.student_name}`,
-    ctx.student_dob ? `Date of birth: ${ctx.student_dob}` : "",
+    ctx.student_dob ? `Date of birth: ${formatDob(ctx.student_dob)}` : "",
     `Family: ${ctx.family_name}`,
     `Residential home: ${houseLabel}`,
     `School year: ${ctx.year_name}`,

@@ -85,6 +85,7 @@ import {
   formatNoteTimestamp,
   formatRelativeShort,
 } from "@/lib/format-note-time";
+import { formatDob } from "@/lib/dob";
 import { formatUSPhone } from "@/lib/phone";
 import {
   generateSchoolEmail,
@@ -354,7 +355,7 @@ export default function EnrolledStudentDetailPage() {
           <RequestRecordsDialog
             defaults={{
               studentName: `${student.first_name ?? ""} ${student.last_name ?? ""}`.trim(),
-              dateOfBirth: student.date_of_birth ?? "",
+              dateOfBirth: formatDob(student.date_of_birth),
               previousSchool: app?.current_previous_school ?? "",
               academicYear: school_year?.year_name ?? "",
             }}
@@ -1967,7 +1968,10 @@ function StudentBioCard({
             <>
               <ReadField label="First name" value={student.first_name} />
               <ReadField label="Last name" value={student.last_name} />
-              <ReadField label="Date of birth" value={student.date_of_birth} />
+              <ReadField
+                label="Date of birth"
+                value={formatDob(student.date_of_birth)}
+              />
               <ReadField label="Gender" value={student.gender} />
               <ReadField label="Ethnicity" value={student.ethnicity} />
               <ReadField
