@@ -163,6 +163,12 @@ export async function GET(req: NextRequest) {
     // a bigger number. Count them so the Not-started list can say
     // "2 of 3 priced" instead of quietly under-reporting.
     const unpricedByFamily = new Map<number, number>();
+    // Families with at least one billable student this year (active
+    // application, student not archived) — exactly the set
+    // `startMonthlyBilling` will bill. A family whose every student
+    // was unenrolled has nobody left to bill, so the Not-started queue
+    // below must skip it.
+    const billableFamilies = new Set<number>();
     for (const app of yearApps) {
       if (app.isActive === false) continue;
       if (archivedStudentIds.has(Number(app.registration_students_id))) {
@@ -170,6 +176,7 @@ export async function GET(req: NextRequest) {
       }
       const fid = Number(app.registration_families_id);
       if (!fid) continue;
+      billableFamilies.add(fid);
       const amount =
         typeof app.monthly_amount === "number" ? app.monthly_amount : 0;
       if (amount <= 0) {
@@ -355,12 +362,19 @@ export async function GET(req: NextRequest) {
     // who have NO live subscription for the year. These are the
     // pending setups that were previously invisible on every billing
     // surface: the list above only shows subscriptions that exist.
+    //
+    // A family whose students have ALL been unenrolled is not pending
+    // work: its registration stays confirmed as history, but unenrolling
+    // the last student canceled the subscription and Start would refuse
+    // it ("No active students"). Without the billable check those
+    // families piled up here as permanent "Tuition not set" rows.
     const liveSubFamilies = new Set(rows.map((r) => r.family_id));
     const notStarted: NotStartedRow[] = progresses
       .filter(
         (p) =>
           p.isRegistrationConfirmed === true &&
           p.isArchived !== true &&
+          billableFamilies.has(Number(p.registration_families_id)) &&
           !liveSubFamilies.has(Number(p.registration_families_id)) &&
           !isResidentialFamily(Number(p.registration_families_id))
       )
