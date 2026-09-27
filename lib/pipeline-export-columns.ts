@@ -4,14 +4,15 @@ import type {
   PipelineStage,
 } from "@/app/api/admin/pipeline/route";
 import { formatDob } from "@/lib/dob";
+import { formatTimestampUs } from "@/lib/us-date";
 
 /**
  * Column metadata + row formatting for the Admissions Pipeline export.
  * Mirrors the enrolled-export contract: every exported value is a
- * pre-formatted string (booleans → "Yes"/"No", timestamps →
- * "YYYY-MM-DD", date of birth → "MM/DD/YYYY"); the `stage` field is a
- * filter, never a column —
- * the visible stage column is `stage_label`.
+ * pre-formatted string (booleans → "Yes"/"No", dates → "MM/DD/YYYY"
+ * via lib/us-date.ts, which the writer stores as real Excel dates in
+ * `date`-flagged columns); the `stage` field is a filter, never a
+ * column — the visible stage column is `stage_label`.
  *
  * The export has two row shapes, picked in the dialog:
  *   - "family"  — one row per family (the original shape). Per-student
@@ -73,6 +74,10 @@ export interface PipelineExportColumn {
   label: string;
   group: PipelineExportColumnGroup;
   defaultSelected?: boolean;
+  /** Holds "MM/DD/YYYY" text that the writer stores as a real Excel
+   *  date so the column sorts by date. A family-mode cell joining
+   *  several students' values isn't one date and stays text. */
+  date?: true;
 }
 
 export const PIPELINE_EXPORT_COLUMN_GROUPS: PipelineExportColumnGroup[] = [
@@ -91,7 +96,7 @@ export const PIPELINE_EXPORT_COLUMNS: PipelineExportColumn[] = [
   { key: "student_count", label: "Student Count", group: "Family" },
   { key: "student_name", label: "Student Name", group: "Students" },
   { key: "student_grade", label: "Grade", group: "Students" },
-  { key: "student_dob", label: "Date of Birth", group: "Students" },
+  { key: "student_dob", label: "Date of Birth", group: "Students", date: true },
   { key: "student_gender", label: "Gender", group: "Students" },
   { key: "bus_transportation", label: "Bus Transportation", group: "Students" },
   { key: "bus_stop", label: "Bus Stop", group: "Students" },
@@ -101,17 +106,17 @@ export const PIPELINE_EXPORT_COLUMNS: PipelineExportColumn[] = [
   { key: "application_type", label: "Application Type", group: "Application", defaultSelected: true },
   { key: "application_status", label: "Application Status", group: "Application", defaultSelected: true },
   { key: "app_sections", label: "Application Sections", group: "Application" },
-  { key: "submitted_date", label: "Submitted Date", group: "Application", defaultSelected: true },
-  { key: "accepted_date", label: "Accepted Date", group: "Application", defaultSelected: true },
+  { key: "submitted_date", label: "Submitted Date", group: "Application", defaultSelected: true, date: true },
+  { key: "accepted_date", label: "Accepted Date", group: "Application", defaultSelected: true, date: true },
   { key: "reg_sections", label: "Registration Sections", group: "Registration" },
   { key: "tuition_done", label: "Tuition Done", group: "Registration" },
   { key: "enrollment_agreement_done", label: "Enrollment Agreement Done", group: "Registration" },
   { key: "registration_packet_done", label: "Registration Packet Done", group: "Registration" },
   { key: "volunteer_hours_done", label: "Volunteer Hours Done", group: "Registration" },
   { key: "registration_submitted", label: "Registration Submitted", group: "Registration", defaultSelected: true },
-  { key: "registration_submitted_date", label: "Registration Submitted Date", group: "Registration" },
+  { key: "registration_submitted_date", label: "Registration Submitted Date", group: "Registration", date: true },
   { key: "registration_confirmed", label: "Registration Confirmed", group: "Registration", defaultSelected: true },
-  { key: "registration_confirmed_date", label: "Registration Confirmed Date", group: "Registration" },
+  { key: "registration_confirmed_date", label: "Registration Confirmed Date", group: "Registration", date: true },
 ];
 
 export const PIPELINE_STAGE_LABELS: Record<PipelineStage, string> = {
@@ -119,16 +124,6 @@ export const PIPELINE_STAGE_LABELS: Record<PipelineStage, string> = {
   registration: "Registration",
   enrollment: "Enrollment",
 };
-
-function fmtDate(ms: number | null | undefined): string {
-  if (!ms) return "";
-  const d = new Date(ms);
-  if (Number.isNaN(d.getTime())) return "";
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
 
 function yesNo(v: boolean): string {
   return v ? "Yes" : "No";
@@ -216,17 +211,19 @@ export function buildPipelineExportRows(
       r.flow_type === "reapply" ? "Re-Enrollment" : "New Application",
     application_status: applicationStatusLabel(r),
     app_sections: `${r.app_sections_complete}/${r.app_sections_total}`,
-    submitted_date: fmtDate(r.submitted_at),
-    accepted_date: fmtDate(r.accepted_at),
+    submitted_date: formatTimestampUs(r.submitted_at),
+    accepted_date: formatTimestampUs(r.accepted_at),
     reg_sections: `${r.reg_sections_complete}/${r.reg_sections_total}`,
     tuition_done: yesNo(r.reg_tuition_done),
     enrollment_agreement_done: yesNo(r.reg_enrollment_done),
     registration_packet_done: yesNo(r.reg_packet_done),
     volunteer_hours_done: yesNo(r.reg_volunteer_done),
     registration_submitted: yesNo(r.reg_submitted),
-    registration_submitted_date: fmtDate(r.reg_submitted_date),
+    registration_submitted_date: formatTimestampUs(r.reg_submitted_date),
     registration_confirmed: yesNo(r.is_registration_confirmed),
-    registration_confirmed_date: fmtDate(r.registration_confirmed_time),
+    registration_confirmed_date: formatTimestampUs(
+      r.registration_confirmed_time
+    ),
   });
 
   if (rowPer === "student") {

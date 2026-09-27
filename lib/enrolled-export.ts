@@ -2,6 +2,7 @@ import type {
   EnrolledExportRow,
   ExportColumn,
 } from "./enrolled-export-columns";
+import { parseDateUs } from "./us-date";
 
 /**
  * Build and download an .xlsx of enrolled students. Browser-only —
@@ -31,13 +32,20 @@ export async function exportEnrolledXlsx({
   }));
 
   for (const row of rows) {
-    const record: Record<string, string> = {};
+    const record: Record<string, string | Date> = {};
     for (const c of columns) {
       const value = row[c.key];
-      record[c.key] = typeof value === "string" ? value : String(value ?? "");
+      const text = typeof value === "string" ? value : String(value ?? "");
+      // Date columns go in as real Excel dates so they sort and filter
+      // by date; a blank stays blank text.
+      record[c.key] = (c.date && parseDateUs(text)) || text;
     }
     sheet.addRow(record);
   }
+  // Shown month-first, like every date in the app.
+  columns.forEach((c, i) => {
+    if (c.date) sheet.getColumn(i + 1).numFmt = "mm/dd/yyyy";
+  });
 
   // Bold + frozen header row, with an autofilter across the columns so
   // the recipient can sort/filter the roster in Excel immediately.

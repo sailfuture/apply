@@ -68,7 +68,7 @@ const COLUMNS: Array<{
   {
     label: "Submitted",
     value: (r) =>
-      r.created_at ? new Date(r.created_at).toLocaleString() : "",
+      r.created_at ? new Date(r.created_at).toLocaleString("en-US") : "",
   },
 ];
 

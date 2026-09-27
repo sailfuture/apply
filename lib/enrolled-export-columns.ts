@@ -10,9 +10,10 @@
  *
  * Every exportable value is a pre-formatted string so the spreadsheet
  * writer can drop it straight into a cell (booleans become "Yes"/"No",
- * timestamps become "YYYY-MM-DD", date of birth reads "MM/DD/YYYY"
- * via `formatDob`, etc.). The three `is_*` booleans are
- * NOT columns — they back the status/program filters in the modal.
+ * dates read "MM/DD/YYYY" via lib/us-date.ts, etc.); the writer then
+ * stores `date`-flagged columns as real Excel dates so they sort. The
+ * three `is_*` booleans are NOT columns — they back the status/program
+ * filters in the modal.
  */
 
 /** One row of the export — a flat, display-ready projection of a
@@ -135,6 +136,11 @@ export interface ExportColumn {
   /** Checked by default in the modal so a one-click export yields a
    *  sensible roster without ticking every box. */
   defaultSelected: boolean;
+  /** Holds "MM/DD/YYYY" text that the writer stores as a real Excel
+   *  date, so the column sorts and filters by date instead of
+   *  alphabetically (text month-first would sort January of every
+   *  year together). */
+  date?: true;
 }
 
 /** Group render order in the modal. */
@@ -156,7 +162,7 @@ export const EXPORT_COLUMNS: ExportColumn[] = [
   { key: "first_name", label: "First Name", group: "Student", defaultSelected: true },
   { key: "last_name", label: "Last Name", group: "Student", defaultSelected: true },
   { key: "school_email", label: "School Email", group: "Student", defaultSelected: true },
-  { key: "date_of_birth", label: "Date of Birth", group: "Student", defaultSelected: true },
+  { key: "date_of_birth", label: "Date of Birth", group: "Student", defaultSelected: true, date: true },
   { key: "gender", label: "Gender", group: "Student", defaultSelected: false },
   { key: "ethnicity", label: "Ethnicity", group: "Student", defaultSelected: false },
   // Placement
@@ -169,8 +175,8 @@ export const EXPORT_COLUMNS: ExportColumn[] = [
   // Status & program
   { key: "enrollment_status", label: "Enrollment Status", group: "Status & program", defaultSelected: true },
   { key: "program", label: "Program", group: "Status & program", defaultSelected: true },
-  { key: "enrolled_date", label: "Enrolled Date", group: "Status & program", defaultSelected: false },
-  { key: "unenrollment_date", label: "Unenrollment Date", group: "Status & program", defaultSelected: false },
+  { key: "enrolled_date", label: "Enrolled Date", group: "Status & program", defaultSelected: false, date: true },
+  { key: "unenrollment_date", label: "Unenrollment Date", group: "Status & program", defaultSelected: false, date: true },
   { key: "unenrollment_reason", label: "Unenrollment Reason", group: "Status & program", defaultSelected: false },
   { key: "liability_waiver_status", label: "Liability Waiver", group: "Status & program", defaultSelected: false },
   { key: "snap_status", label: "SNAP Status", group: "Status & program", defaultSelected: false },
@@ -212,6 +218,6 @@ export const EXPORT_COLUMNS: ExportColumn[] = [
   // Testing
   { key: "nwea_math", label: "NWEA Math", group: "Testing", defaultSelected: false },
   { key: "nwea_reading", label: "NWEA Reading", group: "Testing", defaultSelected: false },
-  { key: "nwea_math_date", label: "NWEA Math Date", group: "Testing", defaultSelected: false },
-  { key: "nwea_reading_date", label: "NWEA Reading Date", group: "Testing", defaultSelected: false },
+  { key: "nwea_math_date", label: "NWEA Math Date", group: "Testing", defaultSelected: false, date: true },
+  { key: "nwea_reading_date", label: "NWEA Reading Date", group: "Testing", defaultSelected: false, date: true },
 ];

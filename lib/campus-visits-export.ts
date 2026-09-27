@@ -20,7 +20,8 @@ import {
 const COLUMNS: ExportColumn<CampusVisitRow>[] = [
   {
     label: "Signed",
-    value: (r) => (r.signed_ts ? new Date(r.signed_ts).toLocaleString() : ""),
+    value: (r) =>
+      r.signed_ts ? new Date(r.signed_ts).toLocaleString("en-US") : "",
   },
   { label: "Academic Year", value: (r) => r.academic_year ?? "" },
   { label: "Parent Name", value: (r) => r.parent_name ?? "" },

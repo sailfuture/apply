@@ -20,7 +20,7 @@ const COLUMNS: ExportColumn<TascoSummerVisitRow>[] = [
   {
     label: "Submitted",
     value: (r) =>
-      r.submitted_ts ? new Date(r.submitted_ts).toLocaleString() : "",
+      r.submitted_ts ? new Date(r.submitted_ts).toLocaleString("en-US") : "",
   },
   { label: "Student Name", value: (r) => r.student_name ?? "" },
   { label: "Current Grade", value: (r) => r.current_grade ?? "" },

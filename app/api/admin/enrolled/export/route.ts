@@ -3,6 +3,7 @@ import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano, type XanoScholarship } from "@/lib/xano";
 import type { EnrolledExportRow } from "@/lib/enrolled-export-columns";
 import { formatDob } from "@/lib/dob";
+import { formatDateUs, formatTimestampUs } from "@/lib/us-date";
 
 /**
  * Data source for the Enrolled Students XLSX export.
@@ -177,8 +178,8 @@ export async function GET(req: NextRequest) {
 
         enrollment_status: isEnrolled ? "Enrolled" : "Unenrolled",
         program: family?.is_residential === true ? "Residential" : "Community",
-        enrolled_date: tsToDate(enrolledAt),
-        unenrollment_date: student.unenrollment_date ?? "",
+        enrolled_date: formatTimestampUs(enrolledAt),
+        unenrollment_date: formatDateUs(student.unenrollment_date),
         unenrollment_reason: student.unenrollment_reason ?? "",
         liability_waiver_status: packet?.liability_waiver_status ?? "",
         snap_status: snapState(scholarshipByFamily.get(familyId) ?? null),
@@ -238,8 +239,10 @@ export async function GET(req: NextRequest) {
 
         nwea_math: numToStr(student.initial_screening_nwea_math),
         nwea_reading: numToStr(student.initial_screening_nwea_reading),
-        nwea_math_date: student.initial_screening_nwea_math_date ?? "",
-        nwea_reading_date: student.initial_screening_nwea_reading_date ?? "",
+        nwea_math_date: formatDateUs(student.initial_screening_nwea_math_date),
+        nwea_reading_date: formatDateUs(
+          student.initial_screening_nwea_reading_date
+        ),
       });
     }
 
@@ -286,12 +289,6 @@ function snapState(s: XanoScholarship | null): string {
       (f) => f && typeof f === "object" && (f as { path?: unknown }).path
     );
   return uploaded ? "Awaiting review" : "Missing letter";
-}
-
-/** Unix-ms timestamp → "YYYY-MM-DD", or "" for missing/zero. */
-function tsToDate(ms: number | null | undefined): string {
-  if (!ms || !Number.isFinite(ms)) return "";
-  return new Date(ms).toISOString().slice(0, 10);
 }
 
 /** Numeric score → string, or "" when null/undefined. */
