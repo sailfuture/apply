@@ -554,7 +554,9 @@ export function EventUpsertDialog({
   defaultDate?: string;
   /** Create-mode initial state for the volunteer-hours switch. */
   defaultVolunteer?: boolean;
-  onDone: (saved: boolean) => void;
+  /** Called with `true` after a save. Return the host's refetch
+   *  promise and Save keeps spinning until the change is on screen. */
+  onDone: (saved: boolean) => void | Promise<unknown>;
 }) {
   const ev = existing?.event ?? null;
   const [title, setTitle] = useState(ev?.title ?? "");
@@ -596,9 +598,17 @@ export function EventUpsertDialog({
   // route treats an absent key as "don't touch", so a failed read can
   // never turn into a delete-everything write.
   const [itemsLoadOk, setItemsLoadOk] = useState(true);
-  const [claimedByItem, setClaimedByItem] = useState<Record<number, number>>(
-    {}
-  );
+  /** item id → how many are claimed and by which families, so a rename
+   *  or a removal is never done blind to who signed up. */
+  const [claimsByItem, setClaimsByItem] = useState<
+    Record<
+      number,
+      {
+        claimed: number;
+        claims: Array<{ family_name: string; quantity: number }>;
+      }
+    >
+  >({});
   const existingEventId = existing?.event.id;
   useEffect(() => {
     if (!existingEventId) return;
@@ -616,6 +626,7 @@ export function EventUpsertDialog({
           label: string;
           quantity: number;
           claimed: number;
+          claims?: Array<{ family_name: string; quantity: number }>;
         }> = data?.items ?? [];
         setNeedsList(
           rows.map((r) => ({
@@ -625,8 +636,13 @@ export function EventUpsertDialog({
             quantity: r.quantity,
           }))
         );
-        setClaimedByItem(
-          Object.fromEntries(rows.map((r) => [r.id, r.claimed]))
+        setClaimsByItem(
+          Object.fromEntries(
+            rows.map((r) => [
+              r.id,
+              { claimed: r.claimed, claims: r.claims ?? [] },
+            ])
+          )
         );
       } catch (err) {
         console.error("[EventUpsertDialog] item load failed:", err);
@@ -776,11 +792,18 @@ export function EventUpsertDialog({
       if (!res.ok) {
         throw new Error(data?.error ?? `Save failed (${res.status})`);
       }
+      // Hosts that return their refetch keep the spinner up until the
+      // change is visible. A failed refetch isn't a failed save, so it
+      // must not fall through to the error toast below.
+      try {
+        await onDone(true);
+      } catch (refreshErr) {
+        console.error("Event saved, but the refresh failed:", refreshErr);
+      }
       // The event routes report Google Calendar push hiccups as a
       // `warning` on an otherwise successful save.
       if (data?.warning) toast.warning(data.warning);
       else toast.success(existing ? "Event updated." : "Event added.");
-      onDone(true);
     } catch (err) {
       console.error("Failed to save event:", err);
       toast.error(
@@ -953,7 +976,9 @@ export function EventUpsertDialog({
             {needsList.length > 0 ? (
               <ul className="space-y-1">
                 {needsList.map((n, i) => {
-                  const claimed = n.id ? (claimedByItem[n.id] ?? 0) : 0;
+                  const held = n.id ? claimsByItem[n.id] : undefined;
+                  const claimed = held?.claimed ?? 0;
+                  const claimants = held?.claims ?? [];
                   const isBlank = needIssues.blank.has(i);
                   const isDupe = needIssues.dupe.has(i);
                   return (
@@ -1014,10 +1039,10 @@ export function EventUpsertDialog({
                           <X className="size-3.5" />
                         </button>
                       </div>
-                      {/* Claims are shown so neither a rename nor a
-                          removal is done blind — renaming re-labels
-                          what these families signed up for, deleting
-                          drops it. */}
+                      {/* Claims are shown — by family — so neither a
+                          rename nor a removal is done blind: renaming
+                          re-labels what these families signed up for,
+                          deleting drops it. */}
                       {isBlank || isDupe || claimed > 0 ? (
                         <p className="px-2 pt-1 text-[11px]">
                           {isBlank ? (
@@ -1037,6 +1062,20 @@ export function EventUpsertDialog({
                               )}
                             >
                               {claimed} claimed
+                              {claimants.length > 0 ? (
+                                <>
+                                  {" by "}
+                                  {claimants.map((c, ci) => (
+                                    <span key={`${c.family_name}-${ci}`}>
+                                      {ci > 0 ? ", " : null}
+                                      <span className="font-medium text-foreground">
+                                        {c.family_name}
+                                      </span>
+                                      {c.quantity > 1 ? ` ×${c.quantity}` : null}
+                                    </span>
+                                  ))}
+                                </>
+                              ) : null}
                             </span>
                           ) : null}
                         </p>

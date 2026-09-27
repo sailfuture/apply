@@ -117,15 +117,16 @@ const NAV_ITEMS: NavItem[] = [
       { title: "Store", href: "/admin/store" },
     ],
   },
-  // Parents — the enrolled-family surfaces staff touch daily: the
-  // volunteer-hours program and the two-way SMS inbox. Unread texts
-  // badge on the group label as well as on Messages itself: the group
-  // is collapsed by default, so a badge only inside the dropdown
-  // would never be seen.
+  // Parents — the enrolled-family surfaces staff touch daily: event
+  // RSVPs, the volunteer-hours program and the two-way SMS inbox.
+  // Unread texts badge on the group label as well as on Messages
+  // itself: the group is collapsed by default, so a badge only inside
+  // the dropdown would never be seen.
   {
     title: "Parents",
     badge: "messages",
     children: [
+      { title: "Events", href: "/admin/events" },
       { title: "Volunteer Hours", href: "/admin/volunteer-hours" },
       // matchExact: without it this leaf also lights up on
       // /admin/messages/recruitment (the Recruitment → Messages page),
