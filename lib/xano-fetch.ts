@@ -125,13 +125,24 @@ export function isCachedTable(table: string | null): table is string {
   return table !== null && CACHED_TABLES.has(table);
 }
 
+export interface XanoFetchOptions {
+  /** Read straight from Xano even when the table is cached. For the
+   *  reads that decide a WRITE — "is this SID already logged?" — where
+   *  a copy that is seconds old is simply a wrong answer: a cached
+   *  list can predate rows a group blast wrote a moment ago, and the
+   *  tag expiry can't help a fetch that was already in flight when
+   *  the write landed. List views should never need this. */
+  fresh?: boolean;
+}
+
 /**
  * Drop-in for `fetch` inside lib/xano.ts. Same signature, same
  * Response; only the caching + accounting differ.
  */
 export async function xanoFetch(
   input: string | URL | Request,
-  init?: RequestInit
+  init?: RequestInit,
+  options?: XanoFetchOptions
 ): Promise<Response> {
   const url =
     typeof input === "string"
@@ -144,7 +155,8 @@ export async function xanoFetch(
     (input instanceof Request ? input.method : "GET")
   ).toUpperCase();
   const { table } = classifyXanoUrl(url);
-  const cacheable = method === "GET" && isCachedTable(table);
+  const cacheable =
+    method === "GET" && isCachedTable(table) && !options?.fresh;
 
   let finalInit = init;
   if (cacheable) {

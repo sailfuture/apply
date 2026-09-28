@@ -38,6 +38,44 @@ async function fetchRetry(url: string): Promise<Response> {
   return xanoFetch(url, { cache: "no-store" });
 }
 
+/**
+ * A list read that FAILS CLOSED, for callers that write based on what
+ * they read. Every other list accessor in this file degrades to []
+ * when Xano misbehaves — right for a page that should still render,
+ * wrong for a dedupe check, where "no rows" reads as "nothing is
+ * logged yet, go ahead". This throws instead: on a non-2xx, a network
+ * error, or a body that isn't a list. Same retry schedule as
+ * `fetchRetry` so one blip doesn't cost the caller its whole run, and
+ * always read straight from Xano (see `XanoFetchOptions.fresh`).
+ */
+async function fetchListStrict<T>(url: string, what: string): Promise<T[]> {
+  let failure = "no response";
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) {
+      await new Promise((r) => setTimeout(r, 250 * attempt));
+    }
+    try {
+      const res = await xanoFetch(url, { cache: "no-store" }, { fresh: true });
+      if (!res.ok) {
+        failure = `Xano answered ${res.status}`;
+        // 4xx other than 429 won't get better on retry.
+        if (res.status < 500 && res.status !== 429) break;
+        continue;
+      }
+      const items: unknown = await res.json();
+      if (Array.isArray(items)) return items as T[];
+      // A 200 that isn't a list (a paginated envelope, an error
+      // object) is an endpoint change, not a blip — don't retry.
+      failure = "the response was not a list";
+      break;
+    } catch (err) {
+      // Network failure or a cut-off body — retry.
+      failure = err instanceof Error ? err.message : String(err);
+    }
+  }
+  throw new Error(`Could not read ${what} (${failure})`);
+}
+
 /** Host root for Xano — strips the `/api:<group>` suffix from
  *  `XANO_API_BASE_URL`. Useful when a query lives on a different API
  *  group than the one the base is pointed at; the caller can append
@@ -5899,6 +5937,44 @@ export const xano = {
       } catch {
         return [];
       }
+    },
+
+    /**
+     * The whole log, for a caller about to WRITE against it — the
+     * Twilio sync's "which SIDs do we already have" set. Read straight
+     * from Xano and fail-closed (`fetchListStrict`): `getAll` answering
+     * [] for a failed read is what let one sweep re-import its entire
+     * 30-day window as `external` copies of rows the app had already
+     * logged (341 duplicates, 2026-09-11). Unsorted — nothing that
+     * needs this renders a thread.
+     */
+    async getAllStrict(): Promise<XanoSmsMessage[]> {
+      return fetchListStrict<XanoSmsMessage>(
+        `${getBaseUrl()}/sms_messages`,
+        "sms_messages"
+      );
+    },
+
+    /**
+     * Every row carrying this Twilio SID, lowest id first — the sync's
+     * last look before an insert, and its read-back after one. Same
+     * contract as `getAllStrict`, for the same reason:
+     * `findByMessageSid` below answers "no such row" when the read
+     * FAILS, which would turn a Xano blip into a duplicate. Returns
+     * the list rather than one row because seeing two is how the sync
+     * learns it lost a race.
+     */
+    async findAllByMessageSidStrict(sid: string): Promise<XanoSmsMessage[]> {
+      const items = await fetchListStrict<XanoSmsMessage>(
+        `${getBaseUrl()}/sms_messages?twilio_message_sid=${encodeURIComponent(sid)}`,
+        "sms_messages by SID"
+      );
+      // Client-side filter stays load-bearing, as everywhere else: if
+      // the endpoint ever stops honoring the input it returns the
+      // whole table.
+      return items
+        .filter((m) => m.twilio_message_sid === sid)
+        .sort((a, b) => a.id - b.id);
     },
 
     /** Look up a logged message by its Twilio SID — the status-callback

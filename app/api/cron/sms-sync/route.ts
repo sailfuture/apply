@@ -7,6 +7,9 @@ import { syncMessagesFromTwilio } from "@/lib/sms/sync";
  * page also syncs on load; this cron keeps the log complete on days
  * nobody opens the inbox, so trigger texts, console replies, and
  * inbound messages all land in the portal within a day regardless.
+ * A sweep that can't verify what is already logged imports nothing
+ * and fails the run (502) — see the dedupe guards in
+ * `lib/sms/sync.ts`.
  *
  * Authorization: shared `requireCronAuth` — fails closed in
  * production when `CRON_SECRET` is unset (this route mutates data
