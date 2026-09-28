@@ -435,9 +435,10 @@ function EventDetailBody({
               <Table className="text-sm">
                 <TableHeader className="bg-muted/40">
                   <TableRow className="hover:bg-transparent">
-                    <TableHead className="w-[42%] pl-3">Item</TableHead>
-                    <TableHead>Family</TableHead>
-                    <TableHead className="w-14 pr-3 text-right">Qty</TableHead>
+                    <TableHead className="w-[45%] pl-3">Item</TableHead>
+                    <TableHead className="pr-3">
+                      Who&rsquo;s bringing it
+                    </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -548,6 +549,10 @@ function removalSummary(s: AdminEventSignup): string {
  * covering it, then a closing row for whatever is still open. An item
  * nobody has claimed is a single "Nobody yet" row, so gaps are as
  * visible as the claims.
+ *
+ * Each family's count sits right beside its name ("brings 2"). In a
+ * far-right Qty column it went unseen: one family bringing both of an
+ * item's 2 read as "2 of 2 claimed" with a family missing.
  */
 function ItemRows({
   item,
@@ -581,11 +586,8 @@ function ItemRows({
     return (
       <TableRow className="hover:bg-transparent">
         {itemCell}
-        <TableCell className="align-top text-muted-foreground">
+        <TableCell className="pr-3 align-top text-muted-foreground">
           Nobody yet
-        </TableCell>
-        <TableCell className="pr-3 text-right align-top tabular-nums text-muted-foreground">
-          —
         </TableCell>
       </TableRow>
     );
@@ -597,23 +599,22 @@ function ItemRows({
         return (
           <TableRow key={c.family_id} className="hover:bg-transparent">
             {i === 0 ? itemCell : null}
-            <TableCell className="align-top whitespace-normal">
-              <span className="block">{c.family_name}</span>
+            <TableCell className="pr-3 align-top whitespace-normal">
+              <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                <span>{c.family_name}</span>
+                <span className="rounded-full bg-muted px-2 py-px text-[11px] font-medium tabular-nums text-foreground">
+                  brings {c.quantity}
+                </span>
+              </span>
               <ParentNames names={parentsByFamily.get(c.family_id) ?? []} />
-            </TableCell>
-            <TableCell className="pr-3 text-right align-top tabular-nums">
-              {c.quantity}
             </TableCell>
           </TableRow>
         );
       })}
       {open > 0 ? (
         <TableRow className="hover:bg-transparent">
-          <TableCell className="align-top text-amber-700">
-            Still needed
-          </TableCell>
-          <TableCell className="pr-3 text-right align-top tabular-nums text-amber-700">
-            {open}
+          <TableCell className="pr-3 align-top tabular-nums text-amber-700">
+            {open} still needed
           </TableCell>
         </TableRow>
       ) : null}

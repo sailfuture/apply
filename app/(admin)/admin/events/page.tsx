@@ -14,6 +14,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import {
   Table,
   TableBody,
@@ -26,7 +28,6 @@ import { adminFetcher } from "@/lib/admin-fetcher";
 import {
   eventColor,
   isSignUpEvent,
-  isUnlimitedSpots,
   parseDate,
   SCHOOL_TIME_ZONE,
 } from "@/lib/school-calendar";
@@ -43,6 +44,13 @@ import type {
 } from "@/app/api/admin/events/route";
 
 type View = "all" | "upcoming" | "past";
+
+/** The time-window choices, in button order — the default first. */
+const VIEWS = [
+  ["upcoming", "Upcoming"],
+  ["past", "Past"],
+  ["all", "All"],
+] as const;
 
 /** Today on the school's clock — an event is "past" once its day is
  *  over in St. Petersburg, not wherever the admin's laptop is. */
@@ -97,7 +105,8 @@ export default function AdminEventsPage() {
   const days = useMemo(() => data?.days ?? [], [data]);
   const todayIso = schoolTodayIso();
 
-  const [view, setView] = useState<View>("all");
+  // Upcoming by default — what staff are usually preparing for.
+  const [view, setView] = useState<View>("upcoming");
   const [signupsOnly, setSignupsOnly] = useState(false);
   const [query, setQuery] = useState("");
   const [openId, setOpenId] = useState<number | null>(null);
@@ -230,7 +239,7 @@ export default function AdminEventsPage() {
         </Card>
       ) : data ? (
         <>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-3">
             <div className="relative min-w-56 flex-1">
               <Search
                 className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
@@ -245,46 +254,54 @@ export default function AdminEventsPage() {
                 className="w-full bg-white pl-8"
               />
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              {(
-                [
-                  ["all", "All"],
-                  ["upcoming", "Upcoming"],
-                  ["past", "Past"],
-                ] as const
-              ).map(([value, label]) => (
-                <Button
-                  key={value}
-                  type="button"
-                  size="sm"
-                  variant={view === value ? "default" : "outline"}
-                  aria-pressed={view === value}
-                  className={cn(view !== value && "bg-white")}
-                  onClick={() => setView(value)}
-                >
-                  {label}
-                  <span
-                    className={cn(
-                      "tabular-nums",
-                      view === value
-                        ? "text-primary-foreground/70"
-                        : "text-muted-foreground"
-                    )}
-                  >
-                    {counts[value]}
-                  </span>
-                </Button>
-              ))}
-              <Button
-                type="button"
-                size="sm"
-                variant={signupsOnly ? "default" : "outline"}
-                aria-pressed={signupsOnly}
-                className={cn(!signupsOnly && "bg-white")}
-                onClick={() => setSignupsOnly((v) => !v)}
+            {/* Two different kinds of control, kept visibly apart: a
+                segmented pick of ONE time window, then a divider, then
+                an on/off filter that applies on top of it. As a row of
+                identical buttons they read as four choices of the same
+                thing. */}
+            <div className="flex flex-wrap items-center gap-3">
+              <div
+                role="group"
+                aria-label="Which events"
+                className="inline-flex h-9 items-center rounded-lg bg-muted p-[3px]"
               >
-                Sign-up events only
-              </Button>
+                {VIEWS.map(([value, label]) => {
+                  const on = view === value;
+                  return (
+                    <button
+                      key={value}
+                      type="button"
+                      aria-pressed={on}
+                      onClick={() => setView(value)}
+                      className={cn(
+                        "inline-flex h-full items-center gap-1.5 rounded-md px-3 text-sm font-medium transition-colors",
+                        on
+                          ? "bg-background text-foreground shadow-sm"
+                          : "text-muted-foreground hover:text-foreground"
+                      )}
+                    >
+                      {label}
+                      <span className="text-xs tabular-nums text-muted-foreground">
+                        {counts[value]}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+              <span className="h-6 w-px bg-border" aria-hidden />
+              <div className="flex items-center gap-2">
+                <Switch
+                  id="events-signups-only"
+                  checked={signupsOnly}
+                  onCheckedChange={setSignupsOnly}
+                />
+                <Label
+                  htmlFor="events-signups-only"
+                  className="cursor-pointer text-sm font-normal"
+                >
+                  Sign-up events only
+                </Label>
+              </div>
             </div>
           </div>
 
@@ -296,7 +313,7 @@ export default function AdminEventsPage() {
                 refreshing && "opacity-50 animate-pulse"
               )}
             >
-              <Table className="min-w-[760px] table-fixed text-sm">
+              <Table className="min-w-[640px] table-fixed text-sm">
                 <TableHeader className="bg-muted/40">
                   <TableRow className="hover:bg-transparent">
                     <TableHead className="w-[112px] pl-4 text-xs font-semibold text-muted-foreground">
@@ -308,11 +325,8 @@ export default function AdminEventsPage() {
                     <TableHead className="w-[168px] text-xs font-semibold text-muted-foreground">
                       Time
                     </TableHead>
-                    <TableHead className="w-[132px] text-xs font-semibold text-muted-foreground">
+                    <TableHead className="w-[120px] text-xs font-semibold text-muted-foreground">
                       RSVPs
-                    </TableHead>
-                    <TableHead className="w-[132px] text-xs font-semibold text-muted-foreground">
-                      Needs
                     </TableHead>
                     <TableHead className="w-10 pr-4">
                       <span className="sr-only">Open</span>
@@ -323,7 +337,7 @@ export default function AdminEventsPage() {
                   {months.length === 0 ? (
                     <TableRow className="hover:bg-transparent">
                       <TableCell
-                        colSpan={6}
+                        colSpan={5}
                         className="py-10 text-center text-sm text-muted-foreground"
                       >
                         {query.trim()
@@ -340,7 +354,7 @@ export default function AdminEventsPage() {
                       <Fragment key={m.key}>
                         <TableRow className="border-y bg-muted/30 hover:bg-muted/30">
                           <TableCell
-                            colSpan={6}
+                            colSpan={5}
                             className="py-1.5 pl-4 text-xs font-semibold"
                           >
                             {monthHeading(m.key)}
@@ -424,11 +438,6 @@ function EventRow({
   const color = eventColor(e.color);
   const isPast = e.date < todayIso;
   const isToday = e.date === todayIso;
-  const needed = e.items.reduce((s, i) => s + i.quantity, 0);
-  const covered = e.items.reduce(
-    (s, i) => s + Math.min(i.claimed, i.quantity),
-    0
-  );
   const location = (e.location ?? "").trim();
 
   return (
@@ -490,31 +499,6 @@ function EventRow({
       <TableCell>
         <RsvpCell event={e} />
       </TableCell>
-      <TableCell>
-        {needed > 0 ? (
-          <span className="block">
-            <span
-              className={cn(
-                "tabular-nums",
-                covered >= needed && "font-medium text-emerald-700"
-              )}
-            >
-              {covered} / {needed} claimed
-            </span>
-            <span className="mt-1 block h-1 w-20 overflow-hidden rounded-full bg-muted">
-              <span
-                className={cn(
-                  "block h-full rounded-full",
-                  covered >= needed ? "bg-emerald-500" : "bg-foreground/60"
-                )}
-                style={{ width: `${Math.min(100, (covered / needed) * 100)}%` }}
-              />
-            </span>
-          </span>
-        ) : (
-          <span className="text-muted-foreground">—</span>
-        )}
-      </TableCell>
       <TableCell className="pr-4">
         <ChevronRight className="size-4 text-muted-foreground" aria-hidden />
       </TableCell>
@@ -522,32 +506,21 @@ function EventRow({
   );
 }
 
+/** How many families signed up — just the count; spots and limits
+ *  live in the event's sheet. */
 function RsvpCell({ event: e }: { event: AdminEvent }) {
   const families = e.signups.length;
-  const open = isSignUpEvent(e.parent_spots);
-  if (!open && families === 0) {
+  if (!isSignUpEvent(e.parent_spots) && families === 0) {
     return <span className="text-xs text-muted-foreground">Sign-ups off</span>;
   }
-  const spots = isUnlimitedSpots(e.parent_spots)
-    ? `${e.spots_taken} spot${e.spots_taken === 1 ? "" : "s"} · no limit`
-    : open
-      ? `${e.spots_taken} / ${e.parent_spots} spots`
-      : `${e.spots_taken} spot${e.spots_taken === 1 ? "" : "s"}`;
   return (
-    <span className="block">
-      <span
-        className={cn(
-          "block tabular-nums",
-          families > 0 ? "font-medium" : "text-muted-foreground"
-        )}
-      >
-        {families > 0
-          ? `${families} famil${families === 1 ? "y" : "ies"}`
-          : "None yet"}
-      </span>
-      <span className="block truncate text-xs tabular-nums text-muted-foreground">
-        {spots}
-      </span>
+    <span
+      className={cn(
+        "tabular-nums",
+        families > 0 ? "font-medium" : "text-muted-foreground"
+      )}
+    >
+      {families} {families === 1 ? "family" : "families"}
     </span>
   );
 }
