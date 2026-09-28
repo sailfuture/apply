@@ -43,6 +43,10 @@ next-env.d.ts
 # clerk configuration (can include secrets)
 /.clerk/
 
+# pre-write backups from one-off scripts (hold family phone numbers
+# and message text)
+/scripts/.backups/
+
 # Claude Code — local-only working state. The `worktrees/` directory
 # holds checked-out git worktrees that Claude spawns for isolated
 # branches (and any in-flight worktree); `settings.local.json`
