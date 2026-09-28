@@ -1,4 +1,4 @@
-import { xano, type XanoParent } from "@/lib/xano";
+import { xano, type XanoParent, type XanoSmsMessage } from "@/lib/xano";
 import {
   getMessagingServiceSid,
   getTwilioClient,
@@ -70,6 +70,16 @@ export interface SendSmsInput {
   /** Explicit recipient override (E.164 or 10-digit). Rare — normally
    *  the contact's own phone is the target. */
   to?: string | null;
+  /**
+   * Write the log row BEFORE sending and treat it as a claim on
+   * (contact, template). For automated sends whose only dedupe record
+   * is this log (lib/nurture): if the row can't be written, nothing is
+   * sent — otherwise a Xano write outage would re-send the same text
+   * on every run — and if an older row for the same template is
+   * already on the thread (an overlapping run), this one backs off.
+   * Contacts with a thread only (not ad-hoc numbers).
+   */
+  claim?: boolean;
 }
 
 export interface SendSmsResult {
@@ -78,6 +88,9 @@ export interface SendSmsResult {
   messageSid?: string;
   logId?: number;
   error?: string;
+  /** Claimed sends only: another run had already claimed this
+   *  template for this contact, so nothing was sent. */
+  deduped?: boolean;
 }
 
 function buildStatusCallbackUrl(): string | undefined {
@@ -158,6 +171,27 @@ export async function sendSms(input: SendSmsInput): Promise<SendSmsResult> {
   // Exactly one of the three contact FKs set on every logged row.
   const contactKeys = contactMessageKeys(contact);
 
+  if (input.claim) {
+    if (contact.type === "adhoc") {
+      return { ok: false, error: "Claimed sends need a contact thread" };
+    }
+    return sendClaimed({
+      contact: { type: contact.type, id: contact.id },
+      row: {
+        ...contactKeys,
+        registration_students_id: studentId,
+        registration_school_years_id: yearId,
+        direction: "outbound",
+        to_number: to,
+        from_number: "",
+        body,
+        template: template ?? "manual",
+        author_email: author?.email ?? null,
+        author_name: author?.name ?? null,
+      },
+    });
+  }
+
   const from = getMessagingServiceSid();
   try {
     const client = getTwilioClient();
@@ -228,6 +262,107 @@ export async function sendSms(input: SendSmsInput): Promise<SendSmsResult> {
     } catch {
       // already logged the send error above
     }
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : "SMS send failed",
+    };
+  }
+}
+
+/**
+ * The `claim` path of `sendSms`: log row first, then the text.
+ *
+ *  1. Claim — write the row as "sending". No row, no send.
+ *  2. Lowest id wins — re-read the thread; an OLDER row with this
+ *     template means another run claimed it first, so this claim is
+ *     withdrawn. (If the thread can't be read, withdraw too: the next
+ *     run retries, which beats guessing.)
+ *  3. Send, then stamp the row with Twilio's SID and status. A Twilio
+ *     refusal marks the row failed — it stays as the dedupe record, so
+ *     a dead number isn't retried every half hour.
+ */
+async function sendClaimed({
+  contact,
+  row,
+}: {
+  contact: { type: Exclude<SmsContactType, "adhoc">; id: number };
+  row: Omit<
+    XanoSmsMessage,
+    "id" | "created_at" | "status" | "twilio_message_sid" | "error_code" | "segments"
+  > & { to_number: string; body: string; template: string };
+}): Promise<SendSmsResult> {
+  let claim: XanoSmsMessage;
+  try {
+    claim = await xano.smsMessages.create({
+      ...row,
+      status: "sending",
+      twilio_message_sid: null,
+      error_code: null,
+      segments: null,
+    });
+  } catch (err) {
+    console.error("[sendSms] couldn't write the claim row — not sending:", err);
+    return { ok: false, error: "Couldn't log the text first, so it wasn't sent" };
+  }
+
+  const withdraw = () =>
+    xano.smsMessages.delete(claim.id).catch((err) => {
+      console.error(`[sendSms] couldn't withdraw claim row ${claim.id}:`, err);
+    });
+  try {
+    const thread = await xano.smsMessages.getByContactStrict(
+      contact.type,
+      contact.id
+    );
+    const earlier = thread.some(
+      (m) =>
+        m.direction === "outbound" &&
+        m.template === row.template &&
+        m.id < claim.id
+    );
+    if (earlier) {
+      await withdraw();
+      return { ok: true, deduped: true };
+    }
+  } catch (err) {
+    console.error("[sendSms] couldn't confirm the claim — not sending:", err);
+    await withdraw();
+    return { ok: false, error: "Couldn't confirm the text wasn't already sent" };
+  }
+
+  try {
+    const statusCallback = buildStatusCallbackUrl();
+    const msg = await getTwilioClient().messages.create({
+      to: row.to_number,
+      messagingServiceSid: getMessagingServiceSid(),
+      body: row.body,
+      ...(statusCallback ? { statusCallback } : {}),
+    });
+    const stamp = {
+      status: msg.status ?? "queued",
+      twilio_message_sid: msg.sid,
+      from_number: msg.from ?? "",
+      error_code: msg.errorCode != null ? String(msg.errorCode) : null,
+      segments: msg.numSegments != null ? Number(msg.numSegments) : null,
+    };
+    // The claim already dedupes, so a failed stamp can't cause a
+    // re-send — it only leaves the row reading "Sending…".
+    await xano.smsMessages.update(claim.id, stamp).catch(async (err) => {
+      console.error("[sendSms] sent but couldn't stamp the claim, retrying:", err);
+      await xano.smsMessages.update(claim.id, stamp).catch((err2) => {
+        console.error("[sendSms] sent but couldn't stamp the claim (retry):", err2);
+      });
+    });
+    return { ok: true, messageSid: msg.sid, logId: claim.id };
+  } catch (err) {
+    console.error("[sendSms] Twilio send failed (claimed):", err);
+    await xano.smsMessages
+      .update(claim.id, {
+        status: "failed",
+        error_code:
+          err instanceof Error ? err.message.slice(0, 120) : "send_error",
+      })
+      .catch(() => {});
     return {
       ok: false,
       error: err instanceof Error ? err.message : "SMS send failed",

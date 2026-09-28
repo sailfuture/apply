@@ -1,7 +1,5 @@
-import { NextRequest, NextResponse } from "next/server";
-import { validateRequest } from "twilio";
+import { NextRequest } from "next/server";
 import { xano } from "@/lib/xano";
-import { getTwilioAuthToken } from "@/lib/twilio";
 import { sendEmail } from "@/lib/emails/send";
 import { smsReplyReceived } from "@/lib/emails/templates";
 import {
@@ -9,6 +7,9 @@ import {
   contactMessageKeys,
   findSmsContactByPhone,
 } from "@/lib/sms/contacts";
+import { answerStaffText, forwardReplyToMainLine } from "@/lib/sms/forward";
+import { isSchoolNumber } from "@/lib/school-phones";
+import { readTwilioWebhook, twiml } from "@/lib/twilio-webhook";
 
 /**
  * Twilio inbound webhook — one endpoint for two POST shapes Twilio
@@ -23,58 +24,41 @@ import {
  *     already logged — we update that row's delivery status.
  *
  * Every request is signature-verified against the Twilio auth token so
- * a third party can't forge inbound texts or opt-outs.
+ * a third party can't forge inbound texts or opt-outs (fails closed in
+ * production — see `readTwilioWebhook`).
+ *
+ * Each inbound parent text is also copied to the office Main Line
+ * (`lib/sms/forward.ts`); texts FROM a school number are staff
+ * plumbing and never become inbox threads.
  */
 export async function POST(req: NextRequest) {
-  const authToken = getTwilioAuthToken();
-
-  // Twilio always sends form-encoded bodies; anything else is not
-  // Twilio. Parse defensively so a malformed probe gets a 400 instead
-  // of an unhandled 500 (which Twilio-side would read as retryable).
-  let form: FormData;
-  try {
-    form = await req.formData();
-  } catch {
-    return new NextResponse("Expected form-encoded body", { status: 400 });
-  }
-  const params: Record<string, string> = {};
-  for (const [k, v] of form.entries()) {
-    params[k] = typeof v === "string" ? v : "";
-  }
-
-  // Reject anything not actually signed by Twilio. Fails CLOSED
-  // outside local dev: with the token unset this endpoint would accept
-  // forged inbound texts, forged STOP opt-outs, and forged delivery
-  // statuses from anyone — so a missing/rotated-away token must be a
-  // loud 503 (Twilio's error webhook alerting picks it up), never a
-  // silent unverified webhook. Local dev stays open so the endpoint
-  // can be exercised without real Twilio credentials.
-  if (authToken) {
-    const signature = req.headers.get("x-twilio-signature") ?? "";
-    const url = webhookUrl(req);
-    const valid = validateRequest(authToken, signature, url, params);
-    if (!valid) {
-      return new NextResponse("Invalid Twilio signature", { status: 403 });
-    }
-  } else if (process.env.NODE_ENV === "production") {
-    console.error(
-      "[twilio webhook] TWILIO_AUTH_TOKEN is not set — rejecting unverifiable webhook."
-    );
-    return new NextResponse("Webhook auth is not configured", {
-      status: 503,
-    });
-  }
+  const parsed = await readTwilioWebhook(req, "/api/webhooks/twilio");
+  if (!parsed.ok) return parsed.response;
+  const params = parsed.params;
 
   const messageSid = params.MessageSid || params.SmsSid || "";
   const messageStatus = params.MessageStatus || params.SmsStatus || "";
-  const body = params.Body ?? "";
   const from = params.From ?? "";
+  // A photo with no words arrives with an empty Body — give it one, so
+  // the log, the staff email and the Main Line copy all show something.
+  const body =
+    (params.Body ?? "").trim() ||
+    (Number(params.NumMedia || 0) > 0 ? "(sent a photo or file)" : "");
 
   // --- Status callback -----------------------------------------------
   // No inbound body, but a delivery status for a SID we sent. Update the
   // matching log row so the thread reflects sent → delivered / failed.
-  const isStatusCallback = !params.Body && !!messageStatus && !!messageSid;
+  // Inbound texts carry `SmsStatus=received` too, so "received" never
+  // makes a callback — that's what used to swallow photo-only texts.
+  const isStatusCallback =
+    !params.Body &&
+    !!messageStatus &&
+    messageStatus !== "received" &&
+    !!messageSid;
   if (isStatusCallback) {
+    // Forwards to the Main Line are never logged (lib/sms/forward.ts),
+    // so there's no row to update — skip the retrying lookup.
+    if (isSchoolNumber(params.To)) return twiml();
     try {
       // Retry the lookup: `sendSms` writes the log row AFTER Twilio
       // accepts the message, so a fast delivery can fire this callback
@@ -102,7 +86,17 @@ export async function POST(req: NextRequest) {
     } catch (err) {
       console.error("[twilio webhook] status update failed:", err);
     }
-    return twimlOk();
+    return twiml();
+  }
+
+  // --- Staff plumbing ------------------------------------------------
+  // A school number texting us is a staffer answering a forwarded
+  // parent text inside Quo (or a Quo auto-reply). It reaches no family
+  // and isn't a conversation: no inbox row, no staff email, and never
+  // forwarded back (that would loop) — just a pointer to Apply.
+  if (isSchoolNumber(from)) {
+    await answerStaffText(from, body);
+    return twiml();
   }
 
   // --- Inbound message -----------------------------------------------
@@ -221,11 +215,25 @@ export async function POST(req: NextRequest) {
       tag: "sms-reply-received",
       familyId: contact?.type === "family" ? contact.id : undefined,
     });
+
+    // And a copy to the office Main Line in Quo. "YES" also counts as
+    // START above, but in a conversation it's usually just an answer —
+    // only the explicit keywords are announced as opt-in changes.
+    await forwardReplyToMainLine({
+      contact,
+      from,
+      body,
+      keyword: isStop
+        ? "stop"
+        : keyword === "START" || keyword === "UNSTOP"
+          ? "start"
+          : null,
+    });
   } catch (err) {
     console.error("[twilio webhook] inbound handling failed:", err);
   }
 
-  return twimlOk();
+  return twiml();
 }
 
 /** "A" / "A and B" / "A, B, and C"; null for an empty list. */
@@ -235,21 +243,4 @@ function joinNames(names: string[]): string | null {
   if (list.length === 1) return list[0];
   if (list.length === 2) return `${list[0]} and ${list[1]}`;
   return `${list.slice(0, -1).join(", ")}, and ${list[list.length - 1]}`;
-}
-
-/** The public URL Twilio signed against. Prefer the configured app URL
- *  (proxies rewrite host/proto, which would break signature checks). */
-function webhookUrl(req: NextRequest): string {
-  const base = process.env.NEXT_PUBLIC_APP_URL;
-  if (base) return `${base.replace(/\/$/, "")}/api/webhooks/twilio`;
-  return req.nextUrl.href;
-}
-
-/** Empty TwiML, 200 — we don't auto-reply (Twilio Advanced Opt-Out
- *  sends STOP/HELP confirmations); 200 stops Twilio from retrying. */
-function twimlOk(): NextResponse {
-  return new NextResponse(
-    '<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
-    { status: 200, headers: { "Content-Type": "text/xml" } }
-  );
 }

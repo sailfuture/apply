@@ -5640,6 +5640,16 @@ export const xano = {
       return Array.isArray(rows) ? rows : [];
     },
 
+    /** `getAll` that also refuses a 200 that isn't a list — for the
+     *  follow-up texts, where the notes carry each lead's pause switch
+     *  and "no notes" would silently un-pause everyone. */
+    async getAllStrict(): Promise<XanoAdminNote[]> {
+      return fetchListStrict<XanoAdminNote>(
+        `${getBaseUrl()}/registration_admin_notes`,
+        "registration_admin_notes"
+      );
+    },
+
     /** All notes for a family, newest first. Pinned notes still appear in
      *  the same list — sorting/grouping happens in the UI. */
     async getByFamilyId(familyId: number): Promise<XanoAdminNote[]> {
@@ -7315,6 +7325,16 @@ export const xano = {
       }
     },
 
+    /** `getAll` for a caller deciding whether to SEND — the follow-up
+     *  texts. A failed read must not look like "nobody has a tour":
+     *  that would text booked families "pick a tour time". Throws. */
+    async getAllStrict(): Promise<XanoTour[]> {
+      return fetchListStrict<XanoTour>(
+        `${getXanoHost()}/api:2GcBXyoA/registration_tours`,
+        "registration_tours"
+      );
+    },
+
     async getById(id: number): Promise<XanoTour> {
       const res = await xanoFetch(
         `${getXanoHost()}/api:2GcBXyoA/registration_tours/${id}`,
@@ -7360,7 +7380,61 @@ export const xano = {
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
     },
   },
+
+  /**
+   * `registration_app_settings` — app-wide switches, one row per
+   * `name` (created 2026-09-28). Reads are strict and uncached: these
+   * rows gate automated sends, so a flipped switch must take effect on
+   * the very next run, and a failed read must never look like "no
+   * settings" (callers fall back to their safe default instead).
+   */
+  appSettings: {
+    async getAllStrict(): Promise<XanoAppSetting[]> {
+      return fetchListStrict<XanoAppSetting>(
+        `${getBaseUrl()}/registration_app_settings`,
+        "registration_app_settings"
+      );
+    },
+
+    async create(
+      data: Pick<XanoAppSetting, "name" | "value" | "updated_by">
+    ): Promise<XanoAppSetting> {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_app_settings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async update(
+      id: number,
+      data: Pick<XanoAppSetting, "value" | "updated_by">
+    ): Promise<XanoAppSetting> {
+      const res = await xanoFetch(
+        `${getBaseUrl()}/registration_app_settings/${id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+  },
 };
+
+/** One app-wide setting row. `value` is the setting's JSON payload,
+ *  shaped per `name` (see `lib/app-settings.ts`). */
+export interface XanoAppSetting {
+  id: number;
+  created_at: number;
+  name: string;
+  value: unknown;
+  updated_by: string;
+}
 
 /**
  * Prefix sentinel for a canceled subscription id on

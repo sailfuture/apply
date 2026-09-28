@@ -106,6 +106,8 @@ const CATEGORY_OPTIONS: { value: string; label: string; short: string }[] = [
   // Written by the tours API (schedule / reschedule / cancel /
   // outcome), never by the composer.
   { value: "tour", label: "Campus tour", short: "Tour" },
+  // Written by the Follow-ups pause switch (api/admin/nurture/pause).
+  { value: "automation", label: "Automated texts", short: "Auto" },
   { value: "other", label: "Note", short: "Note" },
 ];
 

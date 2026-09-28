@@ -72,6 +72,8 @@ const NAV_ITEMS: NavItem[] = [
         href: "/admin/messages/recruitment",
         badge: "messages",
       },
+      // Automated follow-up texts: switch, preview, and history.
+      { title: "Follow-ups", href: "/admin/follow-ups" },
       { title: "Campus Tours", href: "/admin/campus-tours" },
       { title: "Inquiries", href: "/admin/inquiries" },
       { title: "Summer Camp", href: "/admin/summer-camp" },

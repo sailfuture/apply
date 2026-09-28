@@ -467,6 +467,40 @@ const CONTACT_TYPE_LABEL: Record<string, string> = {
   adhoc: "Unmatched number",
 };
 
+/**
+ * The office Main Line texted STOP (or START) to the school's texting
+ * number — almost always someone answering a forwarded parent text in
+ * Quo. Twilio then blocks (or restores) every text from the texting
+ * number to the Main Line, which silently stops the parent-reply
+ * copies, so staff hear about it right away.
+ */
+export function mainLineTextingChanged(ctx: {
+  blocked: boolean;
+  appUrl: string;
+}): EmailContent {
+  const subject = ctx.blocked
+    ? "Parent reply copies to the Main Line are blocked"
+    : "Parent reply copies to the Main Line are back on";
+  const lines = ctx.blocked
+    ? [
+        "The Main Line, (727) 209-7846, just texted STOP to the school texting number, (727) 604-8321. Twilio now blocks every text from the texting number to the Main Line, so copies of parents' replies will stop arriving in Quo.",
+        "To turn them back on, text START from the Main Line (in Quo) to (727) 604-8321.",
+        "Parents' replies still land in Apply's messages inbox either way.",
+      ]
+    : [
+        "The Main Line texted START to (727) 604-8321, so copies of parents' replies will arrive in Quo again.",
+      ];
+  const html = layout({
+    preheader: lines[0].slice(0, 120),
+    body:
+      `<h2 style="margin:0 0 16px;font-size:18px;">${escapeHtml(subject)}</h2>` +
+      lines.map((l) => p(l)).join(""),
+    buttonHref: `${ctx.appUrl}/admin/follow-ups`,
+    buttonLabel: "Open Follow-ups",
+  });
+  return { subject, html, text: [subject, "", ...lines].join("\n") };
+}
+
 export function smsReplyReceived(ctx: SmsReplyReceivedContext): EmailContent {
   // Subject context: the family name for families ("Steven Petros
   // (Petros Family)"), the record type for inquiry/camp contacts

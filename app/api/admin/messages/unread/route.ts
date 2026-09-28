@@ -10,6 +10,7 @@ import {
 import { formatUSPhone } from "@/lib/phone";
 import { getSmsReadState } from "@/lib/sms/read-state";
 import { countUnread } from "@/lib/sms/unread";
+import { isFollowUpTemplate } from "@/lib/nurture/templates";
 
 // Re-exported so the existing `import type { UnreadMessagesResponse }
 // from ".../messages/unread/route"` call sites keep resolving; the
@@ -81,6 +82,11 @@ async function handleGET() {
       phone: string;
     }> = [];
     for (const m of messages) {
+      // An automated follow-up isn't an answer: look past it to the
+      // newest real message, so a reminder can't hide a question.
+      if (m.direction === "outbound" && isFollowUpTemplate(m.template)) {
+        continue;
+      }
       const contact = messageContactRef(m);
       if (!contact) continue;
       const key = `${contact.type}:${contact.id}`;

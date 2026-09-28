@@ -18,6 +18,7 @@ import {
 } from "@/lib/sms/contacts";
 import { computeFamilyStageSets } from "@/lib/sms/stages";
 import { bumpLeadReachOut } from "@/lib/leads";
+import { isFollowUpTemplate } from "@/lib/nurture/templates";
 
 /** Where a conversation's contact sits in the pipeline — the inbox's
  *  filter chips. Family stages come from the shared bucketing in
@@ -266,6 +267,10 @@ async function handleGET(req: NextRequest) {
           type: SmsContactType;
           id: number;
           last: XanoSmsMessage;
+          /** Newest message that isn't an automated follow-up — what
+           *  "needs a reply" is judged on, so a tour reminder going
+           *  out can't hide a parent's unanswered question. */
+          lastForReply: XanoSmsMessage | null;
           count: number;
         }
       >();
@@ -273,16 +278,31 @@ async function handleGET(req: NextRequest) {
         const c = messageContact(m);
         if (!c) continue;
         const key = `${c.type}:${c.id}`;
+        const counts = !(
+          m.direction === "outbound" && isFollowUpTemplate(m.template)
+        );
         const existing = byContact.get(key);
         if (!existing) {
-          byContact.set(key, { ...c, last: m, count: 1 });
+          byContact.set(key, {
+            ...c,
+            last: m,
+            lastForReply: counts ? m : null,
+            count: 1,
+          });
         } else {
           existing.count += 1;
           if (m.created_at > existing.last.created_at) existing.last = m;
+          if (
+            counts &&
+            (!existing.lastForReply ||
+              m.created_at > existing.lastForReply.created_at)
+          ) {
+            existing.lastForReply = m;
+          }
         }
       }
       const conversations: SmsConversation[] = [...byContact.values()]
-        .map(({ type, id, last, count }) => ({
+        .map(({ type, id, last, lastForReply, count }) => ({
           contactType: type,
           contactId: id,
           name: nameFor(type, id),
@@ -306,7 +326,7 @@ async function handleGET(req: NextRequest) {
             typeof last.template === "string" &&
             last.template.startsWith("group"),
           messageCount: count,
-          needsReply: last.direction === "inbound",
+          needsReply: lastForReply?.direction === "inbound",
           searchText: searchFor(type, id),
         }))
         .sort((a, b) => b.lastAt - a.lastAt);

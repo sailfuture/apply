@@ -1,5 +1,6 @@
 import { xano } from "@/lib/xano";
 import { getTwilioClient, isTwilioConfigured } from "@/lib/twilio";
+import { isSchoolNumber } from "@/lib/school-phones";
 import {
   adhocIdFromPhone,
   buildSmsDirectory,
@@ -84,6 +85,10 @@ export interface SmsSyncResult {
    *  (shortcodes, alphanumeric senders) — record-less US numbers
    *  import as ad-hoc rows and are NOT counted here. */
   unmatched: number;
+  /** Texts between two school numbers — parent-reply forwards to the
+   *  Main Line and the "answer in Apply" bounces. Staff plumbing, not
+   *  conversations, so never imported. */
+  internal: number;
   /** Previously FK-less (ad-hoc) rows whose number now matches a
    *  contact — re-attributed so the thread lands on the named record
    *  (lead created after the text, or the directory was unavailable
@@ -161,6 +166,7 @@ async function runSweep({
     alreadyLogged: 0,
     deferred: 0,
     unmatched: 0,
+    internal: 0,
     unmatchedNumbers: [],
     reattributed: 0,
     statusRepaired: 0,
@@ -233,6 +239,10 @@ async function runSweep({
       }
       const inbound = msg.direction === "inbound";
       const counterparty = inbound ? msg.from : msg.to;
+      if (isSchoolNumber(counterparty)) {
+        base.internal += 1;
+        continue;
+      }
       const contact = directory.get(normPhone(counterparty)) ?? null;
       // No record match → import as an ad-hoc row (all FKs null; the
       // inbox threads it by the number). Only a counterparty that
@@ -364,6 +374,7 @@ async function runSweep({
       const phone = normPhone(
         row.direction === "inbound" ? row.from_number : row.to_number
       );
+      if (isSchoolNumber(phone)) continue;
       const contact = directory.get(phone);
       if (!contact) continue;
       try {

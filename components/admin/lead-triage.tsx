@@ -60,6 +60,7 @@ import {
   type LeadNoteScope,
 } from "@/components/admin/inquiry-notes";
 import { LeadTourButton } from "@/components/admin/tour-section";
+import { NurturePauseButton } from "@/components/admin/nurture-pause-button";
 import { StarRating } from "@/components/admin/star-rating";
 import { cn } from "@/lib/utils";
 
@@ -227,6 +228,7 @@ export function LeadTriageControls({
           Followed up
         </Button>
         {actions}
+        <NurturePauseButton scope={scope} onChanged={onChanged} />
       </div>
       <p
         className="text-xs text-muted-foreground"

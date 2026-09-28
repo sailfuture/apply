@@ -196,6 +196,8 @@ async function handleGET(req: NextRequest) {
     // one round-trip per row.
     const newestNoteAt = new Map<string, number>();
     for (const n of leadNotes) {
+      // Pausing the automated texts isn't reaching out.
+      if (n.category === "automation") continue;
       for (const source of LEAD_NOTE_SOURCES) {
         const id = n[LEAD_NOTE_COLUMN[source]];
         if (id == null || id === 0) continue;
