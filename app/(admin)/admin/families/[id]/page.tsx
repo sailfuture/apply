@@ -77,6 +77,7 @@ import {
   resolveStudentReceiptAmounts,
   sumStudentMonthly,
 } from "@/lib/student-receipt";
+import type { PerStudentBillingPreview } from "@/app/api/admin/student-registration/by-student/route";
 import type {
   XanoApplication,
   XanoAdminFamilyDetail,
@@ -735,10 +736,11 @@ export default function FamilyDetailPage() {
               scholarship={scholarship}
               progress={progress ?? null}
               loading={detailLoading && !detail}
-              onChanged={() => {
-                refreshDetail();
-                refreshProgress();
-              }}
+              // Returns the refresh promise so a save can hold its
+              // spinner until the new data is on screen.
+              onChanged={() =>
+                Promise.all([refreshDetail(), refreshProgress()])
+              }
             />
           </section>
         ) : null}
@@ -4387,7 +4389,7 @@ function DecisionCard({
     scholarship_admin_complete_admin?: string;
   } | null;
   loading: boolean;
-  onChanged: () => void;
+  onChanged: () => void | Promise<unknown>;
 }) {
   const accepted = progress?.isAccepted === true;
   const familySubmitted = progress?.isSubmitted === true;
@@ -6336,7 +6338,9 @@ function DecisionStudentRow({
   student: Student;
   app: XanoApplication | undefined;
   schoolYear: XanoSchoolYear | null;
-  onSaved: () => void;
+  /** May return the refresh promise — the amount override awaits it
+   *  so its spinner runs until the new amounts are on screen. */
+  onSaved: () => void | Promise<unknown>;
   /** Slimmed approve-context — only the bits the per-student row's
    *  Confirm button cares about now that Reject + Approve moved to
    *  the family-level footer at the bottom of the Scholarship
@@ -6396,6 +6400,39 @@ function DecisionStudentRow({
     app ?? {}
   ).hasSavedDetermination;
   const amountsLocked = sufsConfirmed && savedDetermination;
+  // In-session override of `amountsLocked` — the "Edit amounts"
+  // button. For the family whose circumstances change after they're
+  // confirmed (became SNAP-eligible mid-year, etc.): without it the
+  // only way to reach a locked amount is to unwind the registration
+  // confirmation, the acceptance and both scholarship verifies, which
+  // re-sends the acceptance + enrolled emails and bounces the family
+  // out of their enrolled dashboard. Never persisted, same as the
+  // Financial Aid path picker's Edit — the row re-locks on reload
+  // and after every save.
+  const [amountsUnlocked, setAmountsUnlocked] = useState(false);
+  // Effective lock: the policy minus the admin's override.
+  const amountsReadOnly = amountsLocked && !amountsUnlocked;
+  // While overriding, the dollar inputs STAGE their values instead of
+  // autosaving on blur: the change re-prices a live Stripe
+  // subscription, so it goes through a review dialog first.
+  const overriding = amountsLocked && amountsUnlocked;
+  // Drop a stale override when the lock lifts on its own (admin undid
+  // the confirmation), so the next confirm starts locked again.
+  useEffect(() => {
+    if (!amountsLocked) setAmountsUnlocked(false);
+  }, [amountsLocked]);
+  // The server's before/after figures for the staged change; non-null
+  // while the review dialog is open.
+  const [overridePreview, setOverridePreview] =
+    useState<PerStudentBillingPreview | null>(null);
+  const [overrideReason, setOverrideReason] = useState("");
+  const [overrideBusy, setOverrideBusy] = useState<
+    "preview" | "save" | null
+  >(null);
+  // The amounts saved but the Stripe re-price didn't. Keeps the
+  // review dialog up as a retry surface — once the row re-locks there
+  // is no other way to re-send an unchanged amount to Stripe.
+  const [overrideStripeFailed, setOverrideStripeFailed] = useState(false);
 
   // The "Remaining Amount Family Pays" input reads from the
   // `remaining_opportunity_amount` column on the app row. There's
@@ -6527,6 +6564,183 @@ function DecisionStudentRow({
     }
   }
 
+  // ─── Amount override (staged) ─── What the dollar inputs would
+  // write if admin confirmed right now. `null` = blank or unusable,
+  // i.e. "no change" — the same convention the autosave path uses.
+  function stagedAmount(raw: string): number | null {
+    if (raw === "" || raw == null) return null;
+    const n = Number(raw);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  }
+  const stagedRemaining = stagedAmount(
+    draft.opportunity_scholarship_award_amount
+  );
+  // The SUFS amount is only typed on the "custom" tier — every other
+  // tier's amount is read-only, override or not.
+  const stagedSufs =
+    sufsType === "custom" ? stagedAmount(draft.custom_sufs_amount) : null;
+  const remainingStaged =
+    stagedRemaining != null &&
+    stagedRemaining !== (app?.remaining_opportunity_amount ?? null);
+  const sufsStaged =
+    stagedSufs != null && stagedSufs !== (app?.sufs_amount ?? null);
+  const hasStagedChange = overriding && (remainingStaged || sufsStaged);
+  // Typed something the override can't use (negative, not a number).
+  // Said out loud, because otherwise Review just sits there disabled.
+  const stagedInvalid =
+    overriding &&
+    ((draft.opportunity_scholarship_award_amount !== "" &&
+      stagedRemaining == null) ||
+      (sufsType === "custom" &&
+        draft.custom_sufs_amount !== "" &&
+        stagedSufs == null));
+
+  function cancelOverride() {
+    // Put the inputs back on the saved values — a staged number left
+    // behind in a re-locked input would read as if it had been saved.
+    setDraft((d) => ({
+      ...d,
+      opportunity_scholarship_award_amount:
+        persistedAward == null ? "" : String(persistedAward),
+      custom_sufs_amount:
+        app?.sufs_amount == null ? "" : String(app.sufs_amount),
+    }));
+    setAmountsUnlocked(false);
+    setOverridePreview(null);
+    setOverrideReason("");
+    setOverrideStripeFailed(false);
+  }
+
+  /** Dismiss the review dialog. Normally that leaves the staged
+   *  amounts and the unlock in place so admin can adjust and review
+   *  again — but after a Stripe failure the amounts are already
+   *  saved, so there's nothing staged to come back to. */
+  function closeOverrideReview() {
+    setOverridePreview(null);
+    if (overrideStripeFailed) {
+      setOverrideStripeFailed(false);
+      setOverrideReason("");
+      setAmountsUnlocked(false);
+    }
+  }
+
+  function overrideBody() {
+    return {
+      studentId: student.id,
+      yearId: Number(app?.registration_school_years_id),
+      ...(remainingStaged
+        ? { remainingOpportunityAmount: stagedRemaining }
+        : {}),
+      ...(sufsStaged ? { sufsAwardAmount: stagedSufs } : {}),
+    };
+  }
+
+  /** Ask the server what the staged change would do, then open the
+   *  review dialog on its answer. The figures come from the same code
+   *  the save runs, so the dialog can't promise one monthly amount
+   *  while the route writes another. */
+  async function reviewOverride() {
+    if (!app || !hasStagedChange) return;
+    setOverrideBusy("preview");
+    try {
+      const res = await fetch(`/api/admin/student-registration/by-student`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...overrideBody(), dryRun: true }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Preview failed (${res.status})`);
+      }
+      setOverridePreview((await res.json()) as PerStudentBillingPreview);
+    } catch (err) {
+      console.error("[DecisionStudentRow.reviewOverride] failed:", err);
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't preview the change."
+      );
+    } finally {
+      setOverrideBusy(null);
+    }
+  }
+
+  async function saveOverride() {
+    if (!app || !overridePreview) return;
+    setOverrideBusy("save");
+    try {
+      const res = await fetch(`/api/admin/student-registration/by-student`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...overrideBody(),
+          reason: overrideReason.trim(),
+          // The amounts landed on the first attempt — this pass is
+          // only there to get them into Stripe.
+          ...(overrideStripeFailed ? { stripeRetry: true } : {}),
+        }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => null);
+        throw new Error(errBody?.error ?? `Save failed (${res.status})`);
+      }
+      const saved = (await res.json()) as {
+        monthly_amount?: number | null;
+        meta?: {
+          stripeSync?: "updated" | "not_started" | "failed";
+          auditNoteSaved?: boolean | null;
+          unsavedColumns?: string[];
+        };
+      };
+      // Hold the busy state until the refreshed row is on screen —
+      // closing the dialog over stale amounts reads as "it didn't
+      // save". A refresh that fails is not a save that failed, so it
+      // doesn't get to land in the catch below and say so.
+      try {
+        await onSaved();
+      } catch (err) {
+        console.error("[DecisionStudentRow.saveOverride] refresh failed:", err);
+      }
+
+      const unsaved = saved.meta?.unsavedColumns ?? [];
+      if (unsaved.length > 0) {
+        toast.error(
+          `Xano didn't store every amount (${unsaved.join(", ")}) — check ${student.first_name}'s row before relying on it. Staff were alerted by email.`
+        );
+      }
+      if (saved.meta?.auditNoteSaved === false) {
+        toast.error(
+          "The change was saved, but the note recording it couldn't be written — add one to the family's activity log."
+        );
+      }
+      if (saved.meta?.stripeSync === "failed") {
+        // Stay in the dialog: it becomes the retry surface.
+        setOverrideStripeFailed(true);
+        return;
+      }
+
+      const monthly =
+        typeof saved.monthly_amount === "number"
+          ? ` — now $${formatCurrency2(saved.monthly_amount)}/mo`
+          : "";
+      toast.success(
+        overrideStripeFailed
+          ? `Stripe updated — ${student.first_name} is billed $${formatCurrency2(saved.monthly_amount ?? 0)}/mo from the next invoice.`
+          : `${student.first_name}'s amounts updated${monthly}.`
+      );
+      // Re-lock after a successful save, same as the path picker.
+      setOverridePreview(null);
+      setOverrideReason("");
+      setOverrideStripeFailed(false);
+      setAmountsUnlocked(false);
+    } catch (err) {
+      // A failed save deliberately stays unlocked, dialog open, so
+      // admin can retry without re-typing.
+      console.error("[DecisionStudentRow.saveOverride] failed:", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't save.");
+    } finally {
+      setOverrideBusy(null);
+    }
+  }
+
   /**
    * Open the confirm-flow modal. The actual flip happens after the
    * admin confirms in the dialog — `runToggleConfirmed` below.
@@ -6599,13 +6813,51 @@ function DecisionStudentRow({
             </p>
           ) : null}
         </div>
-        {savingField ? (
-          <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
-            <Loader2 className="size-3 animate-spin" />
-            Saving…
-          </span>
-        ) : null}
+        <div className="flex items-center gap-2 shrink-0">
+          {savingField ? (
+            <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+              <Loader2 className="size-3 animate-spin" />
+              Saving…
+            </span>
+          ) : null}
+          {/* Lifts the amount lock for this visit. Only exists while
+              the lock is actually on — an unlocked row has nothing to
+              edit into. Same affordance as the Financial Aid path
+              picker's Edit; once lifted, Cancel lives next to Review
+              change at the foot of the row. */}
+          {app && amountsReadOnly ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 bg-white text-xs"
+              onClick={() => setAmountsUnlocked(true)}
+            >
+              <Pencil className="size-3.5 mr-1" />
+              Edit amounts
+            </Button>
+          ) : null}
+        </div>
       </div>
+
+      {/* Override banner — only while the lock is actually lifted.
+          Amber (not red) because this is a sanctioned correction
+          path, not a destructive one; the copy's job is to tell
+          admin what survives the edit and when it takes effect. */}
+      {overriding ? (
+        <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          <AlertCircle className="size-3.5 shrink-0 mt-0.5" />
+          <span>
+            Editing {student.first_name}&rsquo;s confirmed amounts.{" "}
+            {approveCtx.accepted
+              ? "This undoes neither the scholarship confirmation nor the acceptance."
+              : "The scholarship confirmation stays as-is."}{" "}
+            Nothing is saved until you review the change below — and if
+            monthly billing has started, that&rsquo;s when the
+            family&rsquo;s Stripe subscription is updated.
+          </span>
+        </div>
+      ) : null}
 
       {app ? (
         <div className="space-y-4">
@@ -6617,7 +6869,7 @@ function DecisionStudentRow({
             {sufsConfirmed ? (
               <p className="text-[11px] text-muted-foreground">
                 {amountsLocked
-                  ? "Scholarship confirmed — tier, status, and award ID stay editable; award amounts are locked."
+                  ? "Scholarship confirmed — tier, status, and award ID stay editable; award amounts are locked (Edit amounts above lifts the lock)."
                   : "Scholarship confirmed, but no award amounts were ever saved — this student is billed $0. Set the tier (or the amounts below) to write them; they lock once saved."}
               </p>
             ) : null}
@@ -6731,7 +6983,7 @@ function DecisionStudentRow({
                       inputMode="decimal"
                       min={0}
                       placeholder="0"
-                      disabled={amountsLocked}
+                      disabled={amountsReadOnly}
                       onChange={(e) =>
                         setDraft((d) => ({
                           ...d,
@@ -6739,6 +6991,9 @@ function DecisionStudentRow({
                         }))
                       }
                       onBlur={() => {
+                        // Override edits are staged — they save from
+                        // the review dialog, not on blur.
+                        if (overriding) return;
                         const raw = draft.custom_sufs_amount;
                         // Blank input = "no change" rather than an
                         // implicit $0 — tabbing through shouldn't
@@ -6869,8 +7124,9 @@ function DecisionStudentRow({
                   value={draft.opportunity_scholarship_award_amount}
                   type="number"
                   inputMode="decimal"
+                  min={0}
                   placeholder="0"
-                  disabled={amountsLocked}
+                  disabled={amountsReadOnly}
                   onChange={(e) =>
                     setDraft((d) => ({
                       ...d,
@@ -6878,6 +7134,9 @@ function DecisionStudentRow({
                     }))
                   }
                   onBlur={() => {
+                    // Override edits are staged — they save from the
+                    // review dialog, not on blur.
+                    if (overriding) return;
                     const raw = draft.opportunity_scholarship_award_amount;
                     // Blank input = "no change" rather than an
                     // implicit $0. Admin who tabs through without
@@ -6903,6 +7162,46 @@ function DecisionStudentRow({
               </div>
             </Field>
           </div>
+
+          {/* ─── Amount override actions ─── Only while the lock is
+              lifted. Review is the one way a staged amount gets
+              saved: it opens the dialog that spells out the new
+              monthly bill and asks for a reason. */}
+          {overriding ? (
+            <div className="flex items-center justify-end gap-3">
+              <span className="text-[11px] text-muted-foreground text-right">
+                {stagedInvalid
+                  ? "Enter an amount of $0 or more."
+                  : hasStagedChange
+                    ? "Not saved yet."
+                    : "Change an amount above to review it."}
+              </span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="bg-white"
+                disabled={overrideBusy !== null}
+                onClick={cancelOverride}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                disabled={
+                  !hasStagedChange || stagedInvalid || overrideBusy !== null
+                }
+                onClick={() => void reviewOverride()}
+                className="bg-amber-600 hover:bg-amber-700 text-white"
+              >
+                {overrideBusy === "preview" ? (
+                  <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                ) : null}
+                Review change
+              </Button>
+            </div>
+          ) : null}
 
           {/* ─── Confirm Scholarship Award Amount ─── Per-student
               terminal action — flips `confirmed_scholarship` for
@@ -7140,7 +7439,201 @@ function DecisionStudentRow({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Amount override review — `<Dialog>` rather than
+          `<AlertDialog>` for the same reason as the Archive modal:
+          it carries a Textarea. Every figure comes from the server's
+          dry run, so what admin reads here is what the save writes. */}
+      <Dialog
+        open={overridePreview !== null}
+        onOpenChange={(o) => {
+          if (overrideBusy !== null) return;
+          if (!o) closeOverrideReview();
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {overrideStripeFailed
+                ? "Amounts saved — Stripe not updated"
+                : `Change ${student.first_name}’s tuition amounts?`}
+            </DialogTitle>
+            <DialogDescription>
+              {student.first_name} {student.last_name}&rsquo;s
+              scholarship award is already confirmed
+              {approveCtx.accepted ? " and the family is accepted" : ""}.
+              This changes the amounts on file without undoing{" "}
+              {approveCtx.accepted ? "either" : "the confirmation"}.
+            </DialogDescription>
+          </DialogHeader>
+          {overridePreview ? (
+            <div className="space-y-3">
+              {overrideStripeFailed ? (
+                <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
+                  <AlertCircle className="size-3.5 shrink-0 mt-0.5" />
+                  <span>
+                    The new amounts are saved here, but the Stripe
+                    subscription wasn&rsquo;t updated — the family is
+                    still invoiced at the old amount. Retry below, or
+                    change the subscription in the Stripe Dashboard.
+                    Staff were alerted by email.
+                  </span>
+                </div>
+              ) : null}
+              <div className="rounded-md border overflow-hidden">
+                <table className="w-full text-sm">
+                  <tbody className="divide-y">
+                    <AmountChangeRow
+                      label="Remaining amount family pays"
+                      before={
+                        overridePreview.current.remaining_opportunity_amount
+                      }
+                      after={
+                        overridePreview.next.remaining_opportunity_amount
+                      }
+                    />
+                    <AmountChangeRow
+                      label="SUFS award"
+                      before={overridePreview.current.sufs_amount}
+                      after={overridePreview.next.sufs_amount}
+                    />
+                    <AmountChangeRow
+                      label="Annual fee"
+                      before={overridePreview.current.annual_fee}
+                      after={overridePreview.next.annual_fee}
+                    />
+                    <AmountChangeRow
+                      label="Monthly bill"
+                      suffix="/mo"
+                      emphasized
+                      before={overridePreview.current.monthly_amount}
+                      after={overridePreview.next.monthly_amount}
+                    />
+                  </tbody>
+                </table>
+              </div>
+              <ul className="space-y-1.5 text-xs text-muted-foreground list-disc pl-4">
+                <li>
+                  {overridePreview.billingLive === true
+                    ? "Monthly billing is active: the Stripe subscription is updated as soon as you confirm, and the new amount applies from the next invoice."
+                    : overridePreview.billingLive === false
+                      ? "Monthly billing hasn't started for this student, so nothing is sent to Stripe."
+                      : "Couldn't check whether monthly billing has started. If it has, the Stripe subscription is updated as soon as you confirm."}
+                </li>
+                {overridePreview.billingLive !== false ? (
+                  <li>
+                    Invoices already issued don&rsquo;t change — void,
+                    credit or refund those in the Stripe Dashboard.
+                  </li>
+                ) : null}
+                <li>
+                  The family&rsquo;s tuition page will show the new
+                  amounts under their existing signature. A note
+                  recording the old and new amounts is added to the
+                  activity log.
+                </li>
+              </ul>
+              <div className="space-y-2">
+                <Label
+                  htmlFor={`override-reason-${student.id}`}
+                  className="text-xs font-medium"
+                >
+                  Reason for the change
+                </Label>
+                <Textarea
+                  id={`override-reason-${student.id}`}
+                  value={overrideReason}
+                  onChange={(e) => setOverrideReason(e.target.value)}
+                  placeholder="e.g. Family became SNAP-eligible — award letter dated Sep 20 is on file"
+                  rows={3}
+                  // Already on the note from the first attempt.
+                  disabled={overrideBusy !== null || overrideStripeFailed}
+                />
+              </div>
+            </div>
+          ) : null}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={overrideBusy !== null}
+              onClick={closeOverrideReview}
+            >
+              {overrideStripeFailed ? "Close" : "Cancel"}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              disabled={
+                overrideBusy !== null || overrideReason.trim().length === 0
+              }
+              onClick={() => void saveOverride()}
+              className="bg-amber-600 hover:bg-amber-700 text-white"
+            >
+              {overrideBusy === "save" ? (
+                <Loader2 className="size-4 mr-1.5 animate-spin" />
+              ) : null}
+              {overrideStripeFailed
+                ? "Retry Stripe update"
+                : "Yes, change amounts"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
+  );
+}
+
+/**
+ * One before → after line in the amount-override review. A figure
+ * that isn't moving renders once, muted, so the rows that ARE
+ * changing stand out.
+ */
+function AmountChangeRow({
+  label,
+  before,
+  after,
+  suffix = "",
+  emphasized = false,
+}: {
+  label: string;
+  before: number;
+  after: number;
+  suffix?: string;
+  emphasized?: boolean;
+}) {
+  const changed = before !== after;
+  const money = (v: number) => `$${formatCurrency2(v)}${suffix}`;
+  return (
+    <tr className={emphasized ? "bg-muted/40" : "bg-white"}>
+      <td
+        className={cn(
+          "px-3 py-2",
+          emphasized ? "font-semibold" : "font-medium",
+          !changed && "text-muted-foreground font-normal"
+        )}
+      >
+        {label}
+      </td>
+      <td className="px-3 py-2 text-right tabular-nums whitespace-nowrap">
+        {changed ? (
+          <>
+            <span className="text-muted-foreground line-through">
+              {money(before)}
+            </span>
+            <span className="mx-1.5 text-muted-foreground">→</span>
+            <span className={emphasized ? "font-semibold" : "font-medium"}>
+              {money(after)}
+            </span>
+          </>
+        ) : (
+          <span className="text-muted-foreground">
+            {money(after)} · no change
+          </span>
+        )}
+      </td>
+    </tr>
   );
 }
 

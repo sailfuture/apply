@@ -1,11 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
-import { xano } from "@/lib/xano";
+import type { AdminUser } from "@/lib/admin-auth";
+import {
+  xano,
+  liveStripeSubscriptionItemId,
+  type XanoApplication,
+} from "@/lib/xano";
 import { sendBillingAlert } from "@/lib/billing-alerts";
 import {
   derivePacketBillingValues,
   syncStripeForApplication,
+  type PacketBillingValues,
 } from "@/lib/per-student-billing";
+import { resolveStudentReceiptAmounts } from "@/lib/student-receipt";
 
 /**
  * Per-student billing PATCH keyed on `(studentId, yearId)` rather
@@ -21,6 +28,8 @@ import {
  *     yearId: number,
  *     sufsAwardAmount?: number,
  *     remainingOpportunityAmount?: number,
+ *     dryRun?: boolean,
+ *     reason?: string,
  *   }
  *
  * The route reads the application row's existing values for any
@@ -34,12 +43,37 @@ import {
  * billing is live we still re-price the Stripe item to match the
  * new amount.
  *
- * Returns the updated application row. 404 when no application
- * exists for the (student, year) pair.
+ * Amount overrides. Once a student's award is confirmed and amounts
+ * are on file, the Determination card locks the dollar inputs — the
+ * family signed against those numbers. Its "Edit amounts" override
+ * still writes through here, and an edit to such a row is treated
+ * differently in three ways:
+ *   - the row's stored `annual_fee` is kept, so the override moves
+ *     only what admin changed;
+ *   - an audit note lands on the family's timeline (nothing else
+ *     records what the signed amount used to be);
+ *   - `dryRun: true` returns the before / after figures without
+ *     writing, so the card's confirm dialog shows exactly what this
+ *     route is about to do.
+ *
+ * Returns the updated application row plus a `meta` block
+ * (`stripeSync`, `auditNoteSaved`). 404 when no application exists
+ * for the (student, year) pair.
  */
+
+/** What happened on the Stripe side of a save. */
+type StripeSync = "updated" | "not_started" | "failed";
+
+const ECHO_CHECKED_COLUMNS = [
+  "remaining_opportunity_amount",
+  "sufs_amount",
+  "annual_fee",
+  "monthly_amount",
+] as const satisfies ReadonlyArray<keyof PacketBillingValues>;
+
 export async function POST(req: NextRequest) {
   try {
-    await requireAdmin();
+    const { admin } = await requireAdmin();
     const body = await req.json();
 
     const studentId = Number(body?.studentId);
@@ -79,34 +113,42 @@ export async function POST(req: NextRequest) {
         ? null
         : Number(body.remainingOpportunityAmount)
       : undefined;
+    // A negative amount would push `monthly_amount` below the fee (or
+    // below zero, which the Stripe re-price silently skips) — never a
+    // real determination.
     if (
       hasSufs &&
       sufsInput !== null &&
-      !Number.isFinite(sufsInput as number)
+      (!Number.isFinite(sufsInput as number) || (sufsInput as number) < 0)
     ) {
       return NextResponse.json(
-        { error: "sufsAwardAmount must be a number or null" },
+        { error: "sufsAwardAmount must be a non-negative number or null" },
         { status: 400 }
       );
     }
     if (
       hasRemaining &&
       remainingInput !== null &&
-      !Number.isFinite(remainingInput as number)
+      (!Number.isFinite(remainingInput as number) ||
+        (remainingInput as number) < 0)
     ) {
       return NextResponse.json(
         {
           error:
-            "remainingOpportunityAmount must be a number or null",
+            "remainingOpportunityAmount must be a non-negative number or null",
         },
         { status: 400 }
       );
     }
 
+    const dryRun = body?.dryRun === true;
+    const reason =
+      typeof body?.reason === "string" ? body.reason.trim() : "";
+    // The card re-sends an override (no new amounts) when the Stripe
+    // half of the previous save failed.
+    const stripeRetry = body?.stripeRetry === true;
+
     // Resolve the application row and the school year in parallel.
-    // The packet is only needed when billing is live (for the
-    // Stripe item id), so we fetch it inside the stripe-sync block
-    // below rather than always.
     const [app, schoolYear] = await Promise.all([
       xano.applications.getByStudentAndYear(studentId, yearId),
       xano.schoolYears.getById(yearId),
@@ -131,19 +173,102 @@ export async function POST(req: NextRequest) {
         ? app.remaining_opportunity_amount ?? 0
         : (remainingInput ?? 0);
 
+    // An edit to a confirmed row with amounts on file is an override
+    // of numbers the family signed against — same test the
+    // Determination card uses to lock its dollar inputs.
+    const before = resolveStudentReceiptAmounts(app);
+    const isOverride =
+      app.confirmed_scholarship === true && before.hasSavedDetermination;
+    const storedAnnualFee =
+      typeof app.annual_fee === "number" && Number.isFinite(app.annual_fee)
+        ? app.annual_fee
+        : null;
+
     const billingValues = derivePacketBillingValues({
       schoolYearTuition: schoolYear?.tuition ?? 0,
       schoolYearAnnualFees: schoolYear?.annual_fees ?? null,
       sufsAwardAmount,
       remainingOpportunityAmount,
-      // Don't pass the existing per-row annual_fee as an override
-      // — that would lock the row to its prior value and ignore
-      // year-level policy updates. Falls through to school year's
-      // `annual_fees` inside `derivePacketBillingValues`.
-      annualFee: null,
+      // Pre-confirmation, don't pass the existing per-row annual_fee
+      // as an override — that would lock the row to its prior value
+      // and ignore year-level policy updates. Falls through to school
+      // year's `annual_fees` inside `derivePacketBillingValues`.
+      // An override keeps the fee the family signed against, so a
+      // year-level fee change can't ride along with an unrelated edit.
+      annualFee: isOverride ? storedAnnualFee : null,
     });
 
+    if (dryRun) {
+      // `null` = couldn't tell (packet read failed). The dialog says
+      // so rather than guessing either way.
+      let billingLive: boolean | null = null;
+      try {
+        const packet = await findPacket(studentId, yearId);
+        billingLive = Boolean(
+          liveStripeSubscriptionItemId(packet?.stripe_subscription_item_id)
+        );
+      } catch (err) {
+        console.error(
+          "[/api/admin/student-registration/by-student] dry-run packet read failed:",
+          err
+        );
+      }
+      return NextResponse.json({
+        dryRun: true,
+        isOverride,
+        billingLive,
+        current: {
+          sufs_amount: before.sufsAmount,
+          remaining_opportunity_amount: before.remainingTuition,
+          annual_fee: before.annualFee,
+          monthly_amount: before.monthly,
+        },
+        next: {
+          sufs_amount: billingValues.sufs_amount,
+          remaining_opportunity_amount:
+            billingValues.remaining_opportunity_amount,
+          annual_fee: billingValues.annual_fee,
+          monthly_amount: billingValues.monthly_amount,
+        },
+      } satisfies PerStudentBillingPreview);
+    }
+
     const updatedApp = await xano.applications.update(app.id, billingValues);
+
+    // Echo check on the four figures every receipt and Stripe read.
+    // Xano drops inputs it treats as empty rather than erroring, and
+    // a save that half-lands is worse than one that fails: the row
+    // would show one amount while Stripe (priced off the echoed
+    // `monthly_amount` below) bills another. Numeric compare, so a
+    // `0` stored as null still counts as saved; a column the echo
+    // leaves out entirely can't be judged and isn't flagged.
+    const unsavedColumns = ECHO_CHECKED_COLUMNS.filter((column) => {
+      const echoed = updatedApp[column];
+      if (echoed === undefined) return false;
+      const stored = Number(echoed ?? 0);
+      return (
+        !Number.isFinite(stored) ||
+        Math.abs(stored - billingValues[column]) > 0.005
+      );
+    });
+    if (unsavedColumns.length > 0) {
+      console.error(
+        `[/api/admin/student-registration/by-student] Xano did not store: ${unsavedColumns.join(", ")} (application ${app.id})`
+      );
+      await sendBillingAlert(
+        "Tuition amounts not fully saved",
+        [
+          `A tuition change was sent to Xano, but these columns came back with a different value: ${unsavedColumns.join(", ")}.`,
+          `The student's row may now disagree with itself — check it on the Scholarship Determination card before relying on it.`,
+        ],
+        {
+          familyId: Number(updatedApp.registration_families_id),
+          yearId,
+          studentIds: [studentId],
+          extra: { Application: `#${app.id}` },
+        }
+      );
+    }
 
     // Re-price the Stripe SubscriptionItem when billing is live.
     // The packet carries `stripe_subscription_item_id`; we fetch it
@@ -153,14 +278,16 @@ export async function POST(req: NextRequest) {
     // silently either: until the re-price lands, every admin/parent
     // surface shows the new amount while Stripe keeps invoicing the
     // old one. Alert staff so the drift gets fixed.
+    let stripeSync: StripeSync = "not_started";
     try {
-      const yearPackets = await xano.studentRegistration.getByYear(yearId);
-      const packet =
-        yearPackets.find(
-          (p) => Number(p.registration_students_id) === studentId
-        ) ?? null;
+      const packet = await findPacket(studentId, yearId);
+      const live = Boolean(
+        liveStripeSubscriptionItemId(packet?.stripe_subscription_item_id)
+      );
       await syncStripeForApplication(updatedApp, packet);
+      if (live) stripeSync = "updated";
     } catch (err) {
+      stripeSync = "failed";
       console.error(
         "[/api/admin/student-registration/by-student] Stripe re-price failed:",
         err
@@ -183,8 +310,180 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    return NextResponse.json(updatedApp);
+    // `null` = no note was due (not an override, or nothing moved).
+    let auditNoteSaved: boolean | null = null;
+    if (isOverride) {
+      auditNoteSaved = await writeOverrideNote({
+        admin,
+        app: updatedApp,
+        studentId,
+        yearId,
+        yearName: schoolYear?.year_name?.trim() || `Year #${yearId}`,
+        before,
+        after: billingValues,
+        stripeSync,
+        stripeRetry,
+        reason,
+      });
+    }
+
+    return NextResponse.json({
+      ...updatedApp,
+      meta: { stripeSync, auditNoteSaved, unsavedColumns },
+    });
   } catch (err) {
     return handleAdminError(err);
+  }
+}
+
+/** Dry-run response — the figures the confirm dialog renders. */
+export interface PerStudentBillingPreview {
+  dryRun: true;
+  /** The row is confirmed with amounts on file, so a save is an
+   *  override of signed numbers (and will write an audit note). */
+  isOverride: boolean;
+  /** Student has a live Stripe subscription item, so a save re-prices
+   *  it. `null` when the packet couldn't be read. */
+  billingLive: boolean | null;
+  current: PerStudentBillingFigures;
+  next: PerStudentBillingFigures;
+}
+
+export interface PerStudentBillingFigures {
+  sufs_amount: number;
+  remaining_opportunity_amount: number;
+  annual_fee: number;
+  monthly_amount: number;
+}
+
+async function findPacket(studentId: number, yearId: number) {
+  const yearPackets = await xano.studentRegistration.getByYear(yearId);
+  return (
+    yearPackets.find(
+      (p) => Number(p.registration_students_id) === studentId
+    ) ?? null
+  );
+}
+
+function usd(value: number): string {
+  return value.toLocaleString("en-US", {
+    style: "currency",
+    currency: "USD",
+  });
+}
+
+/**
+ * Record an amount override on the family's timeline. The tuition
+ * signature stores no dollar amount and every receipt re-reads the
+ * live application row, so after an override this note is the only
+ * record of what the family originally signed against.
+ *
+ * Tagged `section: "billing"` so the activity stream files it under
+ * Billing. Best-effort — the amounts are already saved, so a failed
+ * write is reported back (`false`) rather than thrown. Returns `null`
+ * when nothing moved and no note was due.
+ *
+ * A Stripe retry moves no amounts, but when it lands it still gets a
+ * line: the note from the first attempt says the Stripe update
+ * FAILED, and the timeline shouldn't end there.
+ */
+async function writeOverrideNote({
+  admin,
+  app,
+  studentId,
+  yearId,
+  yearName,
+  before,
+  after,
+  stripeSync,
+  stripeRetry,
+  reason,
+}: {
+  admin: AdminUser;
+  app: XanoApplication;
+  studentId: number;
+  yearId: number;
+  yearName: string;
+  before: ReturnType<typeof resolveStudentReceiptAmounts>;
+  after: PacketBillingValues;
+  stripeSync: StripeSync;
+  stripeRetry: boolean;
+  reason: string;
+}): Promise<boolean | null> {
+  const changes: string[] = [];
+  if (before.remainingTuition !== after.remaining_opportunity_amount) {
+    changes.push(
+      `Remaining amount family pays: ${usd(before.remainingTuition)} → ${usd(after.remaining_opportunity_amount)}`
+    );
+  }
+  if (before.sufsAmount !== after.sufs_amount) {
+    changes.push(
+      `SUFS award: ${usd(before.sufsAmount)} → ${usd(after.sufs_amount)}`
+    );
+  }
+  if (before.annualFee !== after.annual_fee) {
+    changes.push(
+      `Annual fee: ${usd(before.annualFee)} → ${usd(after.annual_fee)}`
+    );
+  }
+  const monthlyChanged = before.monthly !== after.monthly_amount;
+  const amountsMoved = changes.length > 0 || monthlyChanged;
+  const retryLanded = stripeRetry && stripeSync === "updated";
+  if (!amountsMoved && !retryLanded) return null;
+
+  const familyId = Number(app.registration_families_id);
+  if (!Number.isFinite(familyId) || familyId <= 0) return false;
+
+  try {
+    const student = await xano.students.getById(studentId).catch(() => null);
+    const studentName =
+      `${student?.first_name ?? ""} ${student?.last_name ?? ""}`.trim() ||
+      `Student #${studentId}`;
+
+    const stripeLine: Record<StripeSync, string> = {
+      updated:
+        "Stripe subscription updated — the new amount applies from the next invoice. Invoices already issued were not changed.",
+      not_started:
+        "Monthly billing hasn't started for this student, so nothing was sent to Stripe.",
+      failed:
+        "Stripe update FAILED — the family is still invoiced at the old amount until this is re-saved.",
+    };
+
+    const lines = amountsMoved
+      ? [
+          `Confirmed tuition amounts changed for ${studentName} (${yearName}).`,
+          ...changes,
+          monthlyChanged
+            ? `Monthly billing: ${usd(before.monthly)} → ${usd(after.monthly_amount)}`
+            : `Monthly billing: unchanged at ${usd(after.monthly_amount)}`,
+          stripeLine[stripeSync],
+          reason ? `Reason: ${reason}` : "No reason given.",
+        ]
+      : [
+          `Stripe subscription updated for ${studentName} (${yearName}) on retry, after an earlier update failed.`,
+          `Monthly billing: ${usd(after.monthly_amount)}, from the next invoice.`,
+        ];
+
+    await xano.adminNotes.create({
+      registration_families_id: familyId,
+      registration_students_id: studentId,
+      registration_school_years_id: yearId,
+      registration_student_registration_progress_id: null,
+      registration_family_application_progress_id: null,
+      author_email: admin.email,
+      author_name: admin.name,
+      body: lines.join("\n"),
+      category: "other",
+      is_pinned: false,
+      section: "billing",
+      is_shared_with_parent: false,
+    });
+    return true;
+  } catch (err) {
+    console.error(
+      "[/api/admin/student-registration/by-student] override audit note failed:",
+      err
+    );
+    return false;
   }
 }
