@@ -6,21 +6,12 @@ import type {
   XanoSchoolCalendarEvent,
   XanoVolunteerHours,
 } from "@/lib/xano";
-import { computeFamilyStageSets } from "@/lib/sms/stages";
+import { buildYearFamilies, type YearFamily } from "@/lib/year-families";
 
 /** One family row for the volunteer-hours page — every family the
  *  admin could credit, flagged with whether they're enrolled for the
  *  year (the 40-hour tracker lists enrolled families). */
-export interface VolunteerFamily {
-  id: number;
-  name: string;
-  enrolled: boolean;
-  /** The family's students for the year, FULL names dot-joined
-   *  ("Jorden Smith · Mia Smith") — shown in the family pickers and
-   *  matched by their search boxes, so searching a student's first
-   *  OR last name finds the family. */
-  students: string;
-}
+export type VolunteerFamily = YearFamily;
 
 /** Calendar event joined with its day's date (events pin to a
  *  `school_calendar` day row, which owns the date). */
@@ -117,43 +108,14 @@ export async function GET(req: NextRequest) {
       (a.entry_date ?? "").localeCompare(b.entry_date ?? "")
     );
 
-    const stageSets = computeFamilyStageSets({
+    const families: VolunteerFamily[] = buildYearFamilies({
+      yearId,
+      families: val(familiesR),
       fap: val(fapR),
       srp: val(srpR),
+      applications: val(appsR),
+      students: val(studentsR),
     });
-
-    // Per-family student FULL names for the year — same application
-    // join the group-audience route uses (year-scoped, inactive apps
-    // skipped, deduped per student). Full names (not just first) so
-    // the pickers' search matches a student's last name too.
-    const studentName = new Map(
-      val(studentsR).map((s) => [
-        s.id,
-        `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim(),
-      ])
-    );
-    const familyStudents = new Map<number, string[]>();
-    for (const a of val(appsR)) {
-      if (Number(a.registration_school_years_id) !== yearId) continue;
-      if (a.isActive === false) continue;
-      const fid = Number(a.registration_families_id);
-      const sid = Number(a.registration_students_id);
-      if (!fid || !sid) continue;
-      const name = studentName.get(sid) || "";
-      if (!name) continue;
-      const list = familyStudents.get(fid) ?? [];
-      if (!list.includes(name)) list.push(name);
-      familyStudents.set(fid, list);
-    }
-
-    const families: VolunteerFamily[] = val(familiesR)
-      .map((f) => ({
-        id: f.id,
-        name: f.family_name?.trim() || `Family #${f.id}`,
-        enrolled: stageSets.enrolled.has(f.id),
-        students: (familyStudents.get(f.id) ?? []).join(" · "),
-      }))
-      .sort((a, b) => a.name.localeCompare(b.name));
 
     const days = val(daysR);
     const dateByDay = new Map(days.map((d) => [d.id, d.date]));

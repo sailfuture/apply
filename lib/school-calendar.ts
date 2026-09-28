@@ -218,10 +218,18 @@ export function eventItemAvailability(
 
 /** How many more of an item one family may take: everything not
  *  already held by OTHER families. Editing your own claim down
- *  releases it rather than counting against you twice. */
+ *  releases it rather than counting against you twice.
+ *
+ *  Never below what the family already holds — admin can lower an
+ *  item's count or assign it past full after a family claimed it, and
+ *  that mustn't strand the family's own claim above its limit. */
 export function itemHeadroom(item: EventItemAvailability): number {
-  return Math.max(item.quantity - (item.claimed - item.mine), 0);
+  return Math.max(item.quantity - (item.claimed - item.mine), item.mine, 0);
 }
+
+/** Most parent spots admin can record for one family. Parents are held
+ *  to 20 per sign-up; admin gets room for the odd big group. */
+export const ADMIN_MAX_RSVP_SPOTS = 50;
 
 /**
  * `school_calendar_events.parent_spots` encodes three states in one

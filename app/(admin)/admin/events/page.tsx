@@ -180,8 +180,8 @@ export default function AdminEventsPage() {
         <div>
           <h1 className="text-2xl font-bold">Events</h1>
           <p className="text-sm text-muted-foreground">
-            Every event on this year&rsquo;s calendar. Open one to see its
-            RSVPs and who&rsquo;s bringing what.
+            Every event on this year&rsquo;s calendar. Open one to review
+            or edit its RSVPs and see who&rsquo;s bringing what.
           </p>
         </div>
         <Button
@@ -369,6 +369,7 @@ export default function AdminEventsPage() {
 
       <EventDetailSheet
         event={openEvent}
+        yearId={yearId}
         isPast={openEvent ? openEvent.date < todayIso : false}
         refreshing={refreshing}
         onOpenChange={(open) => {
@@ -376,6 +377,7 @@ export default function AdminEventsPage() {
         }}
         onEdit={(e) => setEditTarget(e)}
         onRemind={(e) => setRemindTarget(e)}
+        onChanged={() => mutate()}
       />
 
       {/* Create / edit — the calendar's shared dialog. It waits on the

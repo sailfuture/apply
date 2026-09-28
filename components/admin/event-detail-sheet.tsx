@@ -1,6 +1,18 @@
 "use client";
 
-import { Bell, Pencil } from "lucide-react";
+import { useState } from "react";
+import { toast } from "sonner";
+import { Bell, Loader2, Pencil, Plus, Trash2 } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
@@ -25,9 +37,11 @@ import {
   parseDate,
 } from "@/lib/school-calendar";
 import { cn } from "@/lib/utils";
+import { EventRsvpDialog } from "@/components/admin/event-rsvp-dialog";
 import type {
   AdminEvent,
   AdminEventItem,
+  AdminEventSignup,
 } from "@/app/api/admin/events/route";
 
 /** "6:30 PM – 8:30 PM", or "All day" for an event stored without a
@@ -44,41 +58,55 @@ export function eventTimeLabel(e: {
 /**
  * One event's details and sign-ups: when and where, then every RSVP
  * with what that family is bringing, then each need with the families
- * covering it. Read-only — families make and change sign-ups on their
- * volunteer page; admin edits the event itself through `onEdit`.
+ * covering it. Admin can add, edit and remove RSVPs here (for a family
+ * who called in, or cancelled); the event itself is edited through
+ * `onEdit`.
  *
  * Takes the live SWR row (null = closed), so an edit re-renders it with
  * fresh data rather than a snapshot.
  */
 export function EventDetailSheet({
   event,
+  yearId,
   isPast,
   refreshing,
   onOpenChange,
   onEdit,
   onRemind,
+  onChanged,
 }: {
   event: AdminEvent | null;
+  yearId: number;
   isPast: boolean;
   /** Dims the body while the page revalidates after an edit. */
   refreshing?: boolean;
   onOpenChange: (open: boolean) => void;
   onEdit: (event: AdminEvent) => void;
   onRemind: (event: AdminEvent) => void;
+  /** The page's refetch — RSVP saves wait on it before their spinners
+   *  stop, so a change is on screen when they do. */
+  onChanged: () => Promise<unknown>;
 }) {
   return (
     <Sheet open={event !== null} onOpenChange={onOpenChange}>
       <SheetContent
         side="right"
-        className="flex w-full flex-col gap-0 p-0 sm:max-w-2xl lg:max-w-3xl"
+        // A step wider than the other admin sheets: the RSVP table carries
+        // five columns, and "Bringing" wraps badly below this.
+        className="flex w-full flex-col gap-0 p-0 sm:max-w-3xl lg:max-w-4xl"
       >
         {event ? (
           <EventDetailBody
+            // Keyed so an RSVP dialog left open can't carry over to a
+            // different event.
+            key={event.id}
             event={event}
+            yearId={yearId}
             isPast={isPast}
             refreshing={refreshing}
             onEdit={onEdit}
             onRemind={onRemind}
+            onChanged={onChanged}
             onClose={() => onOpenChange(false)}
           />
         ) : null}
@@ -89,19 +117,57 @@ export function EventDetailSheet({
 
 function EventDetailBody({
   event,
+  yearId,
   isPast,
   refreshing,
   onEdit,
   onRemind,
+  onChanged,
   onClose,
 }: {
   event: AdminEvent;
+  yearId: number;
   isPast: boolean;
   refreshing?: boolean;
   onEdit: (event: AdminEvent) => void;
   onRemind: (event: AdminEvent) => void;
+  onChanged: () => Promise<unknown>;
   onClose: () => void;
 }) {
+  const [rsvpEdit, setRsvpEdit] = useState<AdminEventSignup | "new" | null>(
+    null
+  );
+  const [removeTarget, setRemoveTarget] = useState<AdminEventSignup | null>(
+    null
+  );
+  const [removing, setRemoving] = useState(false);
+
+  async function removeSignup() {
+    if (!removeTarget || removing) return;
+    setRemoving(true);
+    try {
+      const res = await fetch(
+        `/api/admin/events/${event.id}/rsvps/${removeTarget.family_id}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        throw new Error(err?.error ?? `Remove failed (${res.status})`);
+      }
+      // Hold the spinner until the row is gone from the table.
+      await onChanged().catch(() => undefined);
+      toast.success(`${removeTarget.family_name} removed.`);
+      setRemoveTarget(null);
+    } catch (err) {
+      console.error("Failed to remove RSVP:", err);
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't remove the RSVP."
+      );
+    } finally {
+      setRemoving(false);
+    }
+  }
+
   const color = eventColor(event.color);
   const signUpsOpen = isSignUpEvent(event.parent_spots);
   const longDate = event.date
@@ -235,22 +301,33 @@ function EventDetailBody({
 
         {/* RSVPs — one row per family */}
         <section className="space-y-2">
-          <div className="flex items-baseline justify-between gap-3">
+          <div className="flex items-center justify-between gap-3">
             <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               RSVPs ({event.signups.length})
             </h3>
-            {event.signups.length > 0 ? (
-              <span className="text-xs text-muted-foreground">
-                {event.spots_taken} parent spot
-                {event.spots_taken === 1 ? "" : "s"} reserved
-              </span>
-            ) : null}
+            <div className="flex items-center gap-3">
+              {event.signups.length > 0 ? (
+                <span className="text-xs text-muted-foreground">
+                  {event.spots_taken} parent spot
+                  {event.spots_taken === 1 ? "" : "s"} reserved
+                </span>
+              ) : null}
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 bg-white px-2"
+                onClick={() => setRsvpEdit("new")}
+              >
+                <Plus className="size-3.5" />
+                Add RSVP
+              </Button>
+            </div>
           </div>
           {event.signups.length === 0 ? (
             <p className="rounded-md border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
               {signUpsOpen
                 ? "No families have signed up yet."
-                : "Sign-ups are off for this event. Set parent sign-up spots under Edit to open RSVPs."}
+                : "Parent sign-up is off for this event. Open it under Edit event, or add a family here with Add RSVP."}
             </p>
           ) : (
             <div className="overflow-x-auto rounded-md border">
@@ -260,7 +337,10 @@ function EventDetailBody({
                     <TableHead className="pl-3">Family</TableHead>
                     <TableHead className="w-16 text-right">Spots</TableHead>
                     <TableHead>Bringing</TableHead>
-                    <TableHead className="pr-3">Who&rsquo;s coming</TableHead>
+                    <TableHead className="w-[24%]">Who&rsquo;s coming</TableHead>
+                    <TableHead className="w-[72px] pr-3">
+                      <span className="sr-only">Actions</span>
+                    </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -301,8 +381,30 @@ function EventDetailBody({
                           </ul>
                         )}
                       </TableCell>
-                      <TableCell className="pr-3 whitespace-pre-wrap text-muted-foreground">
+                      <TableCell className="whitespace-pre-wrap text-muted-foreground">
                         {s.comment || "—"}
+                      </TableCell>
+                      <TableCell className="pr-3">
+                        <div className="flex items-center justify-end gap-0.5">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="size-7 p-0"
+                            onClick={() => setRsvpEdit(s)}
+                            aria-label={`Edit ${s.family_name} RSVP`}
+                          >
+                            <Pencil className="size-3.5" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="size-7 p-0 text-red-600 hover:text-red-700"
+                            onClick={() => setRemoveTarget(s)}
+                            aria-label={`Remove ${s.family_name} RSVP`}
+                          >
+                            <Trash2 className="size-3.5" />
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -372,8 +474,73 @@ function EventDetailBody({
           </Button>
         </div>
       </div>
+
+      {rsvpEdit ? (
+        <EventRsvpDialog
+          event={event}
+          yearId={yearId}
+          signup={rsvpEdit === "new" ? null : rsvpEdit}
+          onSaved={onChanged}
+          onClose={() => setRsvpEdit(null)}
+        />
+      ) : null}
+
+      <AlertDialog
+        open={removeTarget !== null}
+        onOpenChange={(o) => !o && !removing && setRemoveTarget(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Remove {removeTarget?.family_name ?? "this family"}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {removeTarget ? removalSummary(removeTarget) : ""} They
+              won&rsquo;t be told; the RSVP just disappears from their
+              volunteer page.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={removing}>Keep RSVP</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={removing}
+              className="bg-red-600 hover:bg-red-700"
+              onClick={(e) => {
+                e.preventDefault();
+                void removeSignup();
+              }}
+            >
+              {removing ? (
+                <>
+                  <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                  Removing
+                </>
+              ) : (
+                "Remove RSVP"
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
+}
+
+/** What removing a family's sign-up gives back, as one sentence:
+ *  "Frees 2 parent spots and releases Brownies ×1, Punch ×1." */
+function removalSummary(s: AdminEventSignup): string {
+  const parts: string[] = [];
+  if (s.has_rsvp && s.spots > 0) {
+    parts.push(`frees ${s.spots} parent spot${s.spots === 1 ? "" : "s"}`);
+  }
+  if (s.bringing.length > 0) {
+    parts.push(
+      `releases ${s.bringing.map((b) => `${b.label} ×${b.quantity}`).join(", ")}`
+    );
+  }
+  if (parts.length === 0) return "This removes their RSVP.";
+  const sentence = parts.join(" and ");
+  return `This ${sentence}.`;
 }
 
 /**
