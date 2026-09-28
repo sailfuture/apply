@@ -29,6 +29,8 @@ import {
  * batch logs with template `group:<yearId>:<blastId>` and any contact
  * already carrying a non-failed message under that template is
  * skipped — a retry after a timeout resumes instead of double-texting.
+ * If the log can't be read to make that check, the blast is refused
+ * (503) before any text goes out.
  */
 export const maxDuration = 300;
 
@@ -299,38 +301,57 @@ export async function POST(req: NextRequest) {
     const template = `group:${yearId}:${blastId}`;
 
     // Resume support across ALL contact types — skip anyone this
-    // exact blast already texted. Best-effort: on a failed log read
-    // we proceed; failed sends were logged "failed" so they retry.
+    // exact blast already texted; failed sends were logged "failed"
+    // so they retry.
+    //
+    // Fails CLOSED. The dialogs tell staff to press Send again after
+    // a partial failure, so a retry is the ordinary case — and on a
+    // retry, sending without knowing who was already reached texts
+    // every one of them twice. So the log is read straight from Xano
+    // (not the cached list), and if it can't be read nothing goes
+    // out: the dialog keeps its draft and its blast id, and the next
+    // press picks up where this one would have. An EMPTY log counts
+    // as unreadable — this table is never empty in production, so
+    // that is a bad read, not a clean slate.
+    const prior = await xano.smsMessages.getAllStrict().catch((err) => {
+      console.error("[admin/messages/group] couldn't read the log:", err);
+      return null;
+    });
+    if (!prior || prior.length === 0) {
+      return NextResponse.json(
+        {
+          error:
+            "Couldn't check who this message has already reached, so " +
+            "nothing was sent. Try again in a moment.",
+        },
+        { status: 503 }
+      );
+    }
     const alreadySent = new Set<string>();
-    try {
-      const prior = await xano.smsMessages.getAll();
-      for (const m of prior) {
-        if (m.template !== template || m.status === "failed") continue;
-        if (m.registration_families_id)
-          alreadySent.add(`family-${m.registration_families_id}`);
-        if (m.registration_inquiry_id)
-          alreadySent.add(`inquiry-${m.registration_inquiry_id}`);
-        if (m.registration_summer_camp_id)
-          alreadySent.add(`camp-${m.registration_summer_camp_id}`);
-        if (m.website_liability_waiver_id)
-          alreadySent.add(`visit-${m.website_liability_waiver_id}`);
-        if (m.tasco_summer_visit_id)
-          alreadySent.add(`tasco-${m.tasco_summer_visit_id}`);
-        // Ad-hoc rows carry no FK — resume-match them on the number
-        // the blast texted.
-        if (
-          !m.registration_families_id &&
-          !m.registration_inquiry_id &&
-          !m.registration_summer_camp_id &&
-          !m.website_liability_waiver_id &&
-          !m.tasco_summer_visit_id
-        ) {
-          const key = normPhone(m.to_number);
-          if (key.length === 10) alreadySent.add(`adhoc-${Number(key)}`);
-        }
+    for (const m of prior) {
+      if (m.template !== template || m.status === "failed") continue;
+      if (m.registration_families_id)
+        alreadySent.add(`family-${m.registration_families_id}`);
+      if (m.registration_inquiry_id)
+        alreadySent.add(`inquiry-${m.registration_inquiry_id}`);
+      if (m.registration_summer_camp_id)
+        alreadySent.add(`camp-${m.registration_summer_camp_id}`);
+      if (m.website_liability_waiver_id)
+        alreadySent.add(`visit-${m.website_liability_waiver_id}`);
+      if (m.tasco_summer_visit_id)
+        alreadySent.add(`tasco-${m.tasco_summer_visit_id}`);
+      // Ad-hoc rows carry no FK — resume-match them on the number
+      // the blast texted.
+      if (
+        !m.registration_families_id &&
+        !m.registration_inquiry_id &&
+        !m.registration_summer_camp_id &&
+        !m.website_liability_waiver_id &&
+        !m.tasco_summer_visit_id
+      ) {
+        const key = normPhone(m.to_number);
+        if (key.length === 10) alreadySent.add(`adhoc-${Number(key)}`);
       }
-    } catch {
-      // proceed without resume data
     }
 
     const toSend = targets.filter(

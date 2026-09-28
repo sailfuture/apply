@@ -6,10 +6,23 @@
  * email layer's `resolveFamilyContext` for the student name + login
  * URL. The recipient phone + opt-out check live in `sendSms`.
  *
- * Dedupe is log-based: `hasSentSms` scans the `sms_messages` thread for
+ * Dedupe is log-based: `priorSend` scans the `sms_messages` thread for
  * a prior non-failed send with the same `template` — so a re-toggled
  * status (or a daily cron) can't re-text. No extra Xano dedupe columns
  * are needed (unlike the email cron's `*_sent_at` stamps).
+ *
+ * The thread is read straight from Xano, three attempts, and a read
+ * that still fails is reported as "unknown" rather than passed off as
+ * "never sent" (which is what the list accessors' [] used to mean
+ * here). What happens next depends on whether the text gets another
+ * chance:
+ *
+ *   - Lifecycle texts SEND anyway. They fire once, on a status change,
+ *     and nothing retries them — a skipped one is a text the family
+ *     never gets, while the worst a send can do is repeat itself.
+ *   - Billing texts WAIT. The cron runs again tomorrow and the invoice
+ *     will still qualify, so holding costs a day; guessing costs a
+ *     family a second "you owe" text.
  */
 
 import { xano } from "@/lib/xano";
@@ -21,24 +34,35 @@ import * as tpl from "@/lib/sms/templates";
  *  (nothing to do), matching the email layer's deduped return. */
 const DEDUPED: SendSmsResult = { ok: true };
 
-async function hasSentSms(
+/** Returned when a billing text is held because the log couldn't say
+ *  whether it already went out. Not a success: the cron counts it
+ *  apart from both sends and failures. */
+const UNVERIFIED: SendSmsResult = { ok: false, skipped: "unverified" };
+
+type PriorSend = "sent" | "not_sent" | "unknown";
+
+async function priorSend(
   familyId: number,
   template: string,
   yearId?: number | null
-): Promise<boolean> {
+): Promise<PriorSend> {
   try {
-    const rows = await xano.smsMessages.getByFamilyId(familyId);
+    const rows = await xano.smsMessages.getByContactStrict("family", familyId);
     return rows.some(
       (m) =>
         m.direction === "outbound" &&
         m.template === template &&
         m.status !== "failed" &&
         (yearId == null || m.registration_school_years_id === yearId)
+    )
+      ? "sent"
+      : "not_sent";
+  } catch (err) {
+    console.error(
+      `[sms/triggers] couldn't read family ${familyId}'s thread to dedupe "${template}":`,
+      err
     );
-  } catch {
-    // Better a rare duplicate than swallowing a real send because the
-    // dedupe read failed.
-    return false;
+    return "unknown";
   }
 }
 
@@ -50,7 +74,9 @@ export async function sendApplicationReceivedSms(
   familyId: number,
   yearId: number
 ): Promise<SendSmsResult> {
-  if (await hasSentSms(familyId, "application_received", yearId)) return DEDUPED;
+  if ((await priorSend(familyId, "application_received", yearId)) === "sent") {
+    return DEDUPED;
+  }
   const ctx = await resolveFamilyContext(familyId, yearId);
   if (!ctx) return { ok: false, error: "context-failed" };
   return sendSms({
@@ -67,7 +93,9 @@ export async function sendAcceptanceSms(
   familyId: number,
   yearId: number
 ): Promise<SendSmsResult> {
-  if (await hasSentSms(familyId, "accepted", yearId)) return DEDUPED;
+  if ((await priorSend(familyId, "accepted", yearId)) === "sent") {
+    return DEDUPED;
+  }
   const ctx = await resolveFamilyContext(familyId, yearId);
   if (!ctx) return { ok: false, error: "context-failed" };
   return sendSms({
@@ -88,7 +116,9 @@ export async function sendRegistrationReceivedSms(
   familyId: number,
   yearId: number
 ): Promise<SendSmsResult> {
-  if (await hasSentSms(familyId, "registration_received", yearId)) {
+  if (
+    (await priorSend(familyId, "registration_received", yearId)) === "sent"
+  ) {
     return DEDUPED;
   }
   const ctx = await resolveFamilyContext(familyId, yearId);
@@ -107,7 +137,9 @@ export async function sendEnrolledSms(
   familyId: number,
   yearId: number
 ): Promise<SendSmsResult> {
-  if (await hasSentSms(familyId, "enrolled", yearId)) return DEDUPED;
+  if ((await priorSend(familyId, "enrolled", yearId)) === "sent") {
+    return DEDUPED;
+  }
   const ctx = await resolveFamilyContext(familyId, yearId);
   if (!ctx) return { ok: false, error: "context-failed" };
   return sendSms({
@@ -143,7 +175,9 @@ export async function sendBillingUpcomingSms(
   input: BillingSmsInput
 ): Promise<SendSmsResult> {
   const template = `billing_upcoming:${input.invoiceId}`;
-  if (await hasSentSms(input.familyId, template)) return DEDUPED;
+  const prior = await priorSend(input.familyId, template);
+  if (prior === "sent") return DEDUPED;
+  if (prior === "unknown") return UNVERIFIED;
   return sendSms({
     familyId: input.familyId,
     yearId: input.yearId,
@@ -162,7 +196,9 @@ export async function sendOutstandingTuitionSms(
   input: BillingSmsInput
 ): Promise<SendSmsResult> {
   const template = `outstanding:${input.invoiceId}`;
-  if (await hasSentSms(input.familyId, template)) return DEDUPED;
+  const prior = await priorSend(input.familyId, template);
+  if (prior === "sent") return DEDUPED;
+  if (prior === "unknown") return UNVERIFIED;
   return sendSms({
     familyId: input.familyId,
     yearId: input.yearId,

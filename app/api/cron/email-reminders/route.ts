@@ -94,8 +94,10 @@ export async function GET(req: NextRequest) {
     draft: { eligible: 0, sent: 0, failed: 0 },
     enrollment: { eligible: 0, sent: 0, failed: 0 },
     backToSchool: { eligible: 0, sent: 0, failed: 0 },
-    billingUpcoming: { eligible: 0, sent: 0, failed: 0 },
-    outstanding: { eligible: 0, sent: 0, failed: 0 },
+    // `unverified`: held because the SMS log couldn't be read to tell
+    // whether the text already went out. Tomorrow's run tries again.
+    billingUpcoming: { eligible: 0, sent: 0, failed: 0, unverified: 0 },
+    outstanding: { eligible: 0, sent: 0, failed: 0, unverified: 0 },
   };
 
   try {
@@ -194,8 +196,9 @@ export async function GET(req: NextRequest) {
       // invoice with a balance: fire "upcoming" when the due date is
       // within the lead window, or "outstanding" once it's past due.
       // Both dedupe per-invoice via the SMS log (see lib/sms/triggers),
-      // so a daily run only texts each invoice once per state. No-ops
-      // safely when Twilio isn't configured.
+      // so a daily run only texts each invoice once per state — and
+      // hold the text for the next run when the log can't be read.
+      // No-ops safely when Twilio isn't configured.
       const appBaseUrl = (
         process.env.NEXT_PUBLIC_APP_URL ??
         "https://apply.sailfutureacademy.org"
@@ -229,7 +232,9 @@ export async function GET(req: NextRequest) {
           result.outstanding.eligible += 1;
           const res = await sendOutstandingTuitionSms(input);
           if (res.ok) result.outstanding.sent += 1;
-          else result.outstanding.failed += 1;
+          else if (res.skipped === "unverified") {
+            result.outstanding.unverified += 1;
+          } else result.outstanding.failed += 1;
         } else if (
           tx.due_date != null &&
           tx.due_date <= Date.now() + BILLING_UPCOMING_LEAD_DAYS * ONE_DAY_MS
@@ -237,7 +242,9 @@ export async function GET(req: NextRequest) {
           result.billingUpcoming.eligible += 1;
           const res = await sendBillingUpcomingSms(input);
           if (res.ok) result.billingUpcoming.sent += 1;
-          else result.billingUpcoming.failed += 1;
+          else if (res.skipped === "unverified") {
+            result.billingUpcoming.unverified += 1;
+          } else result.billingUpcoming.failed += 1;
         }
       }
 

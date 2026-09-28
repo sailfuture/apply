@@ -76,6 +76,23 @@ async function fetchListStrict<T>(url: string, what: string): Promise<T[]> {
   throw new Error(`Could not read ${what} (${failure})`);
 }
 
+/** The contact types whose texts thread on a record (ad-hoc numbers
+ *  have no row — they thread by phone). */
+type SmsThreadContactType = "family" | "inquiry" | "camp" | "visit" | "tasco";
+
+/** Which `sms_messages` FK column holds each contact type's id. */
+function smsContactColumn(type: SmsThreadContactType) {
+  return type === "family"
+    ? "registration_families_id"
+    : type === "inquiry"
+      ? "registration_inquiry_id"
+      : type === "camp"
+        ? "registration_summer_camp_id"
+        : type === "tasco"
+          ? "tasco_summer_visit_id"
+          : "website_liability_waiver_id";
+}
+
 /** Host root for Xano — strips the `/api:<group>` suffix from
  *  `XANO_API_BASE_URL`. Useful when a query lives on a different API
  *  group than the one the base is pointed at; the caller can append
@@ -5875,19 +5892,10 @@ export const xano = {
      * history per contact across academic years.
      */
     async getByContact(
-      type: "family" | "inquiry" | "camp" | "visit" | "tasco",
+      type: SmsThreadContactType,
       id: number
     ): Promise<XanoSmsMessage[]> {
-      const column =
-        type === "family"
-          ? "registration_families_id"
-          : type === "inquiry"
-            ? "registration_inquiry_id"
-            : type === "camp"
-              ? "registration_summer_camp_id"
-              : type === "tasco"
-                ? "tasco_summer_visit_id"
-                : "website_liability_waiver_id";
+      const column = smsContactColumn(type);
       try {
         const res = await xanoFetch(
           `${getBaseUrl()}/sms_messages?${column}=${id}`,
@@ -5912,6 +5920,28 @@ export const xano = {
       } catch {
         return [];
       }
+    },
+
+    /**
+     * `getByContact` for a caller deciding whether to SEND — the
+     * trigger dedupe in `lib/sms/triggers.ts`. Read straight from Xano
+     * and fail-closed (`fetchListStrict`): `getByContact` answers []
+     * for a failed read, which a dedupe check hears as "never texted
+     * them". What to do when the thread can't be read is the caller's
+     * decision; this only refuses to guess.
+     */
+    async getByContactStrict(
+      type: SmsThreadContactType,
+      id: number
+    ): Promise<XanoSmsMessage[]> {
+      const column = smsContactColumn(type);
+      const items = await fetchListStrict<XanoSmsMessage>(
+        `${getBaseUrl()}/sms_messages?${column}=${id}`,
+        `sms_messages for ${type} ${id}`
+      );
+      return items
+        .filter((m) => m[column] === id)
+        .sort((a, b) => a.created_at - b.created_at || a.id - b.id);
     },
 
     /** Every SMS across all families, newest-first — powers the global

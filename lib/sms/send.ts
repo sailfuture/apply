@@ -36,7 +36,14 @@ export {
  * what happened so they can surface a toast.
  */
 
-export type SendSmsSkipReason = "opted_out" | "no_phone" | "not_configured";
+export type SendSmsSkipReason =
+  | "opted_out"
+  | "no_phone"
+  | "not_configured"
+  // Never from `sendSms` itself: a billing trigger that couldn't read
+  // the log to tell whether this text already went out, and held it
+  // for the next cron run (see `lib/sms/triggers.ts`).
+  | "unverified";
 
 export interface SendSmsInput {
   /** Family recipient — the classic path. Equivalent to
