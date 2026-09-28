@@ -1,25 +1,44 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { xano } from "@/lib/xano";
+import {
+  denyScholarshipFamilyAccess,
+  scholarshipFamilyId,
+} from "@/lib/scholarship-access";
 
 export async function GET(req: NextRequest) {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const yearId = req.nextUrl.searchParams.get("yearId");
-  const familyId = req.nextUrl.searchParams.get("familyId");
+  const familyIdParam = req.nextUrl.searchParams.get("familyId");
 
-  if (!familyId) {
+  if (!familyIdParam) {
     return NextResponse.json({ error: "familyId is required" }, { status: 400 });
   }
 
+  // Ownership guard — admin or the family itself only. The family id
+  // comes off the query string, so without this any signed-in user
+  // could read any family's financial record (IDOR). Everything below
+  // uses the validated number, never the raw param.
+  const familyId = Number(familyIdParam);
+  const denied = await denyScholarshipFamilyAccess(familyId);
+  if (denied) return denied;
+
   if (yearId) {
     const scholarship = await xano.scholarship.getByFamilyAndYear(
-      Number(familyId),
+      familyId,
       Number(yearId)
     );
     return NextResponse.json(scholarship);
   }
+
+  // Always filter to the family here — a Xano list endpoint that
+  // ignores the query param answers 200 with every family's rows.
+  const onlyThisFamily = (rows: unknown) =>
+    (Array.isArray(rows) ? rows : []).filter(
+      (s) => scholarshipFamilyId(s) === familyId
+    );
 
   try {
     const res = await fetch(
@@ -28,20 +47,11 @@ export async function GET(req: NextRequest) {
     );
     if (!res.ok) {
       // Fallback to full scan
-      const all = await xano.scholarship.getAll();
-      const filtered = all.filter(
-        (s) => s.registration_families_id === Number(familyId)
-      );
-      return NextResponse.json(filtered);
+      return NextResponse.json(onlyThisFamily(await xano.scholarship.getAll()));
     }
-    const results = await res.json();
-    return NextResponse.json(Array.isArray(results) ? results : []);
+    return NextResponse.json(onlyThisFamily(await res.json()));
   } catch {
-    const all = await xano.scholarship.getAll();
-    const filtered = all.filter(
-      (s) => s.registration_families_id === Number(familyId)
-    );
-    return NextResponse.json(filtered);
+    return NextResponse.json(onlyThisFamily(await xano.scholarship.getAll()));
   }
 }
 
@@ -49,8 +59,11 @@ export async function POST(req: NextRequest) {
   const { userId } = await auth();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const body = await req.json();
-  const { registration_families_id, registration_school_years_id } = body;
+  const body = await req.json().catch(() => null);
+  const registration_families_id = Number(body?.registration_families_id);
+  const registration_school_years_id = Number(
+    body?.registration_school_years_id
+  );
 
   if (!registration_families_id || !registration_school_years_id) {
     return NextResponse.json(
@@ -58,6 +71,12 @@ export async function POST(req: NextRequest) {
       { status: 400 }
     );
   }
+
+  // Ownership guard — admin or the family itself only. This route
+  // returns the family's existing record when there is one, so an
+  // unchecked family id in the body leaked it (IDOR).
+  const denied = await denyScholarshipFamilyAccess(registration_families_id);
+  if (denied) return denied;
 
   const existing = await xano.scholarship.getByFamilyAndYear(
     registration_families_id,

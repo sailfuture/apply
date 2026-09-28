@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { xano } from "@/lib/xano";
+import { denyScholarshipAccess } from "@/lib/scholarship-access";
 
 export async function GET(
   _req: NextRequest,
@@ -10,6 +11,10 @@ export async function GET(
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { id } = await params;
+  // Ownership guard — admin or owning family only (prevents IDOR).
+  const denied = await denyScholarshipAccess(Number(id));
+  if (denied) return denied;
+
   const members = await xano.scholarshipContributingMembers.getByScholarshipId(Number(id));
   return NextResponse.json(members);
 }
@@ -34,6 +39,9 @@ export async function POST(
       { status: 400 }
     );
   }
+  // Ownership guard — admin or owning family only (prevents IDOR).
+  const denied = await denyScholarshipAccess(scholarshipId);
+  if (denied) return denied;
 
   const body = await req.json().catch(() => ({}));
 

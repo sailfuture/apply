@@ -1,7 +1,33 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { xano } from "@/lib/xano";
-import { denyScholarshipMutation } from "@/lib/scholarship-access";
+import {
+  denyScholarshipAccess,
+  pickAllowedFields,
+} from "@/lib/scholarship-access";
+import type { XanoScholarshipContributingMember } from "@/lib/xano";
+
+// Fields the parent Financial Aid page is allowed to PATCH. The
+// per-document confirm flags (`w2_confirm`, `paystub_N_confirm`), their
+// audit stamps, `is_verified`, and the parent-scholarship foreign key
+// are writable only through `/api/admin/contributing-members/[id]`.
+const PARENT_FIELD_ALLOWLIST = [
+  "first_name",
+  "last_name",
+  "address_1",
+  "address_2",
+  "city",
+  "state",
+  "zipcode",
+  "estimated_annual_income",
+  "isW2",
+  "isPayStubs",
+  "w2",
+  "paystub_1",
+  "paystub_2",
+  "paystub_3",
+  "paystub_4",
+] as const satisfies ReadonlyArray<keyof XanoScholarshipContributingMember>;
 
 export async function PATCH(
   req: NextRequest,
@@ -17,13 +43,20 @@ export async function PATCH(
   // via a guessed item id).
   const item = await xano.scholarshipContributingMembers.getById(id);
   if (!item) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  const denied = await denyScholarshipMutation(
+  const denied = await denyScholarshipAccess(
     item.registration_opportunity_scholarship_id
   );
   if (denied) return denied;
 
-  const body = await req.json();
-  const updated = await xano.scholarshipContributingMembers.update(id, body);
+  const body = await req.json().catch(() => null);
+  const patch = pickAllowedFields(body, PARENT_FIELD_ALLOWLIST);
+  if (Object.keys(patch).length === 0) {
+    return NextResponse.json(
+      { error: "No editable fields in body" },
+      { status: 400 }
+    );
+  }
+  const updated = await xano.scholarshipContributingMembers.update(id, patch);
   return NextResponse.json(updated);
 }
 
@@ -38,7 +71,7 @@ export async function DELETE(
   const id = Number(itemId);
   const item = await xano.scholarshipContributingMembers.getById(id);
   if (!item) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  const denied = await denyScholarshipMutation(
+  const denied = await denyScholarshipAccess(
     item.registration_opportunity_scholarship_id
   );
   if (denied) return denied;

@@ -1,18 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { xano } from "@/lib/xano";
+import {
+  denyScholarshipAccess,
+  denyScholarshipFamilyAccess,
+} from "@/lib/scholarship-access";
 
 export async function POST(req: NextRequest) {
   const { userId } = await auth();
   if (!userId)
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const body = await req.json();
-  const {
-    source_scholarship_id,
-    registration_families_id,
-    registration_school_years_id,
-  } = body;
+  const body = await req.json().catch(() => null);
+  const source_scholarship_id = Number(body?.source_scholarship_id);
+  const registration_families_id = Number(body?.registration_families_id);
+  const registration_school_years_id = Number(
+    body?.registration_school_years_id
+  );
 
   if (!source_scholarship_id || !registration_families_id || !registration_school_years_id) {
     return NextResponse.json(
@@ -20,6 +24,17 @@ export async function POST(req: NextRequest) {
       { status: 400 }
     );
   }
+
+  // Ownership guard on BOTH ends — admin, or a family copying its own
+  // record into its own year. All three ids come off the body, so
+  // unchecked this cloned any family's financial record (and uploaded
+  // documents) into a row the caller could then read (IDOR).
+  const deniedTarget = await denyScholarshipFamilyAccess(
+    registration_families_id
+  );
+  if (deniedTarget) return deniedTarget;
+  const deniedSource = await denyScholarshipAccess(source_scholarship_id);
+  if (deniedSource) return deniedSource;
 
   const existing = await xano.scholarship.getByFamilyAndYear(
     registration_families_id,
