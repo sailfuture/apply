@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import useSWR from "swr";
 import { toast } from "sonner";
-import { Bell, Check, Loader2 } from "lucide-react";
+import { Bell, Check, Clock, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -28,6 +28,13 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { formatSchoolTime } from "@/lib/school-calendar";
+import {
+  SendLaterField,
+  defaultSendAt,
+  sendAtLabel,
+  sendAtMs,
+  toLocalInput,
+} from "@/components/admin/send-later-field";
 import { cn } from "@/lib/utils";
 import type { GroupContact } from "@/app/api/admin/messages/group/audience/route";
 import type { XanoSchoolCalendarEvent } from "@/lib/xano";
@@ -77,6 +84,19 @@ function defaultReminder(ev: ReminderEvent): string {
  * idempotent per dialog session, and lands on each family's thread.
  * Shared by the Volunteer Hours page and the calendar surfaces.
  */
+/** First pick for "Send later": 9 AM the day before the event, when
+ *  that's still ahead; otherwise 9 AM tomorrow. */
+function defaultReminderTime(event: ReminderEvent): string {
+  // `date` is the event's day as "YYYY-MM-DD"; parsed by parts so it
+  // lands on that calendar day in the browser's zone, not the UTC day.
+  const [y, m, d] = (event.date ?? "").split("-").map(Number);
+  if (y && m && d) {
+    const dayBefore = new Date(y, m - 1, d - 1, 9, 0, 0, 0);
+    if (dayBefore.getTime() > Date.now() + 60_000) return toLocalInput(dayBefore.getTime());
+  }
+  return defaultSendAt();
+}
+
 export function EventReminderDialog({
   yearId,
   event,
@@ -165,12 +185,49 @@ export function EventReminderDialog({
 
   const text = message.trim();
   const segments = text.length === 0 ? 0 : Math.ceil(text.length / 160);
-  const canSend = selected.size > 0 && text.length > 0;
+  // "Send later": write the reminder now, have it go out the day
+  // before (Parents → Scheduled texts lists it until then).
+  const [sendLater, setSendLater] = useState(false);
+  const [sendAt, setSendAt] = useState("");
+  const sendAtInstant = sendLater ? sendAtMs(sendAt) : null;
+  const scheduleReady =
+    !sendLater || (sendAtInstant !== null && sendAtInstant >= Date.now() + 60_000);
+  const canSend = selected.size > 0 && text.length > 0 && scheduleReady;
 
   async function send() {
     if (!canSend || sending) return;
     setSending(true);
     try {
+      if (sendLater && sendAtInstant !== null) {
+        const nameById = new Map(eligible.map((c) => [c.id, c.name]));
+        const res = await fetch("/api/admin/messages/scheduled", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            yearId,
+            contacts: [...selected].map((id) => ({
+              type: "family",
+              id,
+              name: nameById.get(id) ?? "",
+            })),
+            body: text,
+            sendAt: new Date(sendAtInstant).toISOString(),
+            label: "Event reminder: " + event.title,
+            scope: "enrolled",
+            eventId: event.id,
+          }),
+        });
+        const result = await res.json().catch(() => null);
+        if (!res.ok) {
+          throw new Error(result?.error ?? "Couldn't schedule (" + res.status + ")");
+        }
+        toast.success(
+          "Reminder scheduled for " + sendAtLabel(sendAtInstant) + " \u2014 " +
+            selected.size + " famil" + (selected.size === 1 ? "y" : "ies") + "."
+        );
+        onDone();
+        return;
+      }
       const res = await fetch("/api/admin/messages/group", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -362,24 +419,41 @@ export function EventReminderDialog({
             </div>
           </div>
 
-          <DialogFooter className="border-t px-5 py-3">
-            <Button
-              variant="outline"
-              size="sm"
-              className="bg-white"
+          <DialogFooter className="border-t px-5 py-3 sm:justify-between">
+            <SendLaterField
+              enabled={sendLater}
+              onEnabledChange={(v) => {
+                setSendLater(v);
+                if (v && !sendAt) setSendAt(defaultReminderTime(event));
+              }}
+              value={sendAt}
+              onValueChange={setSendAt}
               disabled={sending}
-              onClick={() => onDone()}
-            >
-              Cancel
-            </Button>
-            <Button
-              size="sm"
-              disabled={sending || !canSend}
-              onClick={() => setConfirmOpen(true)}
-            >
-              <Bell className="size-3.5 mr-1.5" />
-              Send reminder
-            </Button>
+              id="reminder-send-later"
+            />
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="bg-white"
+                disabled={sending}
+                onClick={() => onDone()}
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                disabled={sending || !canSend}
+                onClick={() => setConfirmOpen(true)}
+              >
+                {sendLater ? (
+                  <Clock className="size-3.5 mr-1.5" />
+                ) : (
+                  <Bell className="size-3.5 mr-1.5" />
+                )}
+                {sendLater ? "Schedule reminder" : "Send reminder"}
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -392,12 +466,22 @@ export function EventReminderDialog({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              Text {selected.size} famil
+              {sendLater ? "Schedule the reminder for" : "Text"} {selected.size} famil
               {selected.size === 1 ? "y" : "ies"}?
             </AlertDialogTitle>
             <AlertDialogDescription>
-              Sends the reminder about &ldquo;{event.title}&rdquo; as a
-              group text. Messages can&rsquo;t be unsent.
+              {sendLater && sendAtInstant !== null ? (
+                <>
+                  The reminder about &ldquo;{event.title}&rdquo; goes out{" "}
+                  {sendAtLabel(sendAtInstant)}. Until then it can be changed or
+                  canceled under Scheduled texts.
+                </>
+              ) : (
+                <>
+                  Sends the reminder about &ldquo;{event.title}&rdquo; as a
+                  group text. Messages can&rsquo;t be unsent.
+                </>
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -414,8 +498,10 @@ export function EventReminderDialog({
               {sending ? (
                 <>
                   <Loader2 className="size-3.5 mr-1.5 animate-spin" />
-                  Sending
+                  {sendLater ? "Scheduling" : "Sending"}
                 </>
+              ) : sendLater ? (
+                "Schedule"
               ) : (
                 "Send"
               )}

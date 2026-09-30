@@ -4,6 +4,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
 import { toast } from "sonner";
 import {
+  Clock,
   Link2,
   Loader2,
   Phone,
@@ -54,6 +55,12 @@ import { cn } from "@/lib/utils";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { sortYearsOldestFirst } from "@/lib/school-years";
 import { formatUSPhone, validateUSPhone } from "@/lib/phone";
+import {
+  SendLaterField,
+  defaultSendAt,
+  sendAtLabel,
+  sendAtMs,
+} from "@/components/admin/send-later-field";
 import type {
   GroupAudienceResponse,
   GroupContact,
@@ -436,8 +443,20 @@ export function GroupMessageDialog({
 
   const segments = body.length === 0 ? 0 : Math.ceil(body.length / 160);
   const sendCount = selectedContacts.length + adhocNumbers.length;
+  // "Send later": the text is stored and goes out at the chosen time
+  // (Parents → Scheduled texts lists it, where it can be edited or
+  // canceled until then).
+  const [sendLater, setSendLater] = useState(false);
+  const [sendAt, setSendAt] = useState("");
+  const sendAtInstant = sendLater ? sendAtMs(sendAt) : null;
+  const scheduleReady =
+    !sendLater || (sendAtInstant !== null && sendAtInstant >= Date.now() + 60_000);
   const canSend =
-    Boolean(yearId) && body.trim().length > 0 && sendCount > 0 && !sending;
+    Boolean(yearId) &&
+    body.trim().length > 0 &&
+    sendCount > 0 &&
+    !sending &&
+    scheduleReady;
 
   // "9 Enrolled · 3 Applying · 2 Camp" — restated in the confirm so a
   // mis-built audience is visible before anything sends.
@@ -475,34 +494,59 @@ export function GroupMessageDialog({
     if (!canSend) return;
     setSending(true);
     try {
-      const res = await fetch("/api/admin/messages/group", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          yearId: Number(yearId),
-          contacts: [
-            ...selectedContacts.map((c) => ({ type: c.type, id: c.id })),
-            // Manually-typed numbers ride along as ad-hoc contacts —
-            // the 10-digit number doubles as the contact id.
-            ...adhocNumbers.map((d) => ({
-              type: "adhoc" as const,
-              id: Number(d),
-            })),
-          ],
-          body: body.trim(),
-          blastId,
-        }),
-      });
-      const d = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(d?.error ?? `Send failed (${res.status})`);
-      toast.success(
-        `Group text sent to ${d.sent} ${
-          d.sent === 1 ? "contact" : "contacts"
-        }${d.failed ? ` (${d.failed} failed)` : ""}.`
-      );
+      const recipients = [
+        ...selectedContacts.map((c) => ({ type: c.type, id: c.id, name: c.name })),
+        // Manually-typed numbers ride along as ad-hoc contacts —
+        // the 10-digit number doubles as the contact id.
+        ...adhocNumbers.map((d) => ({
+          type: "adhoc" as const,
+          id: Number(d),
+          name: formatUSPhone(d),
+        })),
+      ];
+      if (sendLater && sendAtInstant !== null) {
+        const res = await fetch("/api/admin/messages/scheduled", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            yearId: Number(yearId),
+            contacts: recipients,
+            body: body.trim(),
+            sendAt: new Date(sendAtInstant).toISOString(),
+            scope,
+          }),
+        });
+        const d = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(d?.error ?? `Couldn't schedule (${res.status})`);
+        toast.success(
+          `Scheduled for ${sendAtLabel(sendAtInstant)} — ${sendCount} ${
+            sendCount === 1 ? "contact" : "contacts"
+          }. Change or cancel it under Scheduled texts.`
+        );
+      } else {
+        const res = await fetch("/api/admin/messages/group", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            yearId: Number(yearId),
+            contacts: recipients.map(({ type, id }) => ({ type, id })),
+            body: body.trim(),
+            blastId,
+          }),
+        });
+        const d = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(d?.error ?? `Send failed (${res.status})`);
+        toast.success(
+          `Group text sent to ${d.sent} ${
+            d.sent === 1 ? "contact" : "contacts"
+          }${d.failed ? ` (${d.failed} failed)` : ""}.`
+        );
+      }
       setBody("");
       setSelected(new Set());
       setAdhocNumbers([]);
+      setSendLater(false);
+      setSendAt("");
       setOpen(false);
       onSent?.();
     } catch (err) {
@@ -1070,30 +1114,48 @@ export function GroupMessageDialog({
             </div>
           </div>
 
-          <DialogFooter className="shrink-0">
-            <Button variant="outline" onClick={() => setOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              onClick={() => setConfirmOpen(true)}
-              disabled={!canSend}
-              title="Shift+Enter in the message box also opens this"
-            >
-              {sending ? (
-                <>
-                  <Loader2 className="size-3.5 mr-1.5 animate-spin" />
-                  Sending
-                </>
-              ) : (
-                <>
-                  <Send className="size-3.5 mr-1.5" />
-                  {sendCount > 0 ? `Send to ${sendCount}` : "Send"}
-                  <kbd className="ml-2 rounded border border-current/30 px-1 py-px font-sans text-[10px] font-normal opacity-70">
-                    Shift ⏎
-                  </kbd>
-                </>
-              )}
-            </Button>
+          <DialogFooter className="shrink-0 sm:justify-between">
+            <SendLaterField
+              enabled={sendLater}
+              onEnabledChange={(v) => {
+                setSendLater(v);
+                if (v && !sendAt) setSendAt(defaultSendAt());
+              }}
+              value={sendAt}
+              onValueChange={setSendAt}
+              disabled={sending}
+              id="group-send-later"
+            />
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => setOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                onClick={() => setConfirmOpen(true)}
+                disabled={!canSend}
+                title="Shift+Enter in the message box also opens this"
+              >
+                {sending ? (
+                  <>
+                    <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                    {sendLater ? "Scheduling" : "Sending"}
+                  </>
+                ) : sendLater ? (
+                  <>
+                    <Clock className="size-3.5 mr-1.5" />
+                    {sendCount > 0 ? `Schedule for ${sendCount}` : "Schedule"}
+                  </>
+                ) : (
+                  <>
+                    <Send className="size-3.5 mr-1.5" />
+                    {sendCount > 0 ? `Send to ${sendCount}` : "Send"}
+                    <kbd className="ml-2 rounded border border-current/30 px-1 py-px font-sans text-[10px] font-normal opacity-70">
+                      Shift ⏎
+                    </kbd>
+                  </>
+                )}
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -1108,8 +1170,9 @@ export function GroupMessageDialog({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              Send this text to {sendCount}{" "}
-              {sendCount === 1 ? "contact" : "contacts"}?
+              {sendLater && sendAtInstant !== null
+                ? `Schedule this text for ${sendCount} ${sendCount === 1 ? "contact" : "contacts"}?`
+                : `Send this text to ${sendCount} ${sendCount === 1 ? "contact" : "contacts"}?`}
             </AlertDialogTitle>
             {/* Deliberately lean — the audience and message are right
                 behind this modal in the composer; the confirm just
@@ -1119,7 +1182,9 @@ export function GroupMessageDialog({
               {hasNameToken
                 ? ` · ${FIRST_NAME_TOKEN} fills in per recipient`
                 : ""}
-              . This can&rsquo;t be unsent.
+              {sendLater && sendAtInstant !== null
+                ? `. Goes out ${sendAtLabel(sendAtInstant)}; until then it can be changed or canceled under Scheduled texts.`
+                : ". This can’t be unsent."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -1136,8 +1201,10 @@ export function GroupMessageDialog({
               {sending ? (
                 <>
                   <Loader2 className="size-3.5 mr-1.5 animate-spin" />
-                  Sending
+                  {sendLater ? "Scheduling" : "Sending"}
                 </>
+              ) : sendLater ? (
+                `Schedule for ${sendCount}`
               ) : (
                 `Send to ${sendCount}`
               )}

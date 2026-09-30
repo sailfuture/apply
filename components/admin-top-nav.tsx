@@ -74,6 +74,8 @@ const NAV_ITEMS: NavItem[] = [
       },
       // Automated follow-up texts: switch, preview, and history.
       { title: "Follow-ups", href: "/admin/follow-ups" },
+      // Texts set to go out later (group texts, event reminders).
+      { title: "Scheduled texts", href: "/admin/messages/scheduled" },
       { title: "Campus Tours", href: "/admin/campus-tours" },
       { title: "Inquiries", href: "/admin/inquiries" },
       { title: "Summer Camp", href: "/admin/summer-camp" },
@@ -139,6 +141,8 @@ const NAV_ITEMS: NavItem[] = [
         badge: "messages",
         matchExact: true,
       },
+      // Same page as under Recruitment — scheduling is one list.
+      { title: "Scheduled texts", href: "/admin/messages/scheduled" },
     ],
   },
 ];

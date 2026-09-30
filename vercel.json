@@ -20,6 +20,10 @@
     {
       "path": "/api/cron/quo-sync",
       "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/cron/scheduled-sends",
+      "schedule": "*/5 * * * *"
     }
   ]
 }

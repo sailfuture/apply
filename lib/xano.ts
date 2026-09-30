@@ -7553,6 +7553,68 @@ export const xano = {
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
     },
   },
+
+  /** `sms_scheduled_sends` — texts staff scheduled to go out later
+   *  (created 2026-09-29). Reads that decide whether to SEND are
+   *  strict: a failed read is an error, never "nothing is due". */
+  scheduledSends: {
+    async getAll(): Promise<XanoScheduledSend[]> {
+      try {
+        const res = await xanoFetch(`${getBaseUrl()}/sms_scheduled_sends`, {
+          cache: "no-store",
+        });
+        if (!res.ok) return [];
+        const rows: XanoScheduledSend[] = await res.json();
+        return Array.isArray(rows) ? rows : [];
+      } catch {
+        return [];
+      }
+    },
+
+    /** Rows still waiting to go out. Client-side filter stays
+     *  load-bearing (an unwired input returns the whole table). */
+    async getScheduledStrict(): Promise<XanoScheduledSend[]> {
+      const rows = await fetchListStrict<XanoScheduledSend>(
+        `${getBaseUrl()}/sms_scheduled_sends?status=scheduled`,
+        "sms_scheduled_sends"
+      );
+      return rows.filter((r) => r.status === "scheduled");
+    },
+
+    async getById(id: number): Promise<XanoScheduledSend | null> {
+      const res = await xanoFetch(`${getBaseUrl()}/sms_scheduled_sends/${id}`, {
+        cache: "no-store",
+      });
+      if (res.status === 404) return null;
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async create(
+      data: Omit<XanoScheduledSend, "id" | "created_at">
+    ): Promise<XanoScheduledSend> {
+      const res = await xanoFetch(`${getBaseUrl()}/sms_scheduled_sends`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async update(
+      id: number,
+      patch: Partial<XanoScheduledSend>
+    ): Promise<XanoScheduledSend> {
+      const res = await xanoFetch(`${getBaseUrl()}/sms_scheduled_sends/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+  },
 };
 
 /** One app-wide setting row. `value` is the setting's JSON payload,
@@ -7563,6 +7625,41 @@ export interface XanoAppSetting {
   name: string;
   value: unknown;
   updated_by: string;
+}
+
+/** One text staff scheduled to go out later (`sms_scheduled_sends`). */
+export interface XanoScheduledSend {
+  id: number;
+  created_at: number;
+  /** Unix ms. */
+  send_at: number;
+  /** "scheduled" | "sending" | "sent" | "canceled" | "failed". */
+  status: string;
+  /** Short name for lists ("Event reminder: Fall Festival"). */
+  label: string;
+  body: string;
+  /** Recipients as picked, with a name snapshot for display. */
+  contacts: Array<{ type: string; id: number; name: string }>;
+  registration_school_years_id: number | null;
+  school_calendar_events_id: number | null;
+  scope: string;
+  /** The group engine's idempotency key — minted when scheduled, so a
+   *  send that runs twice resumes instead of repeating. */
+  blast_id: string;
+  /** Random token the cron writes when it claims the row; only the
+   *  claimer that reads its own token back proceeds. */
+  claim_token: string;
+  created_by_email: string;
+  created_by_name: string;
+  updated_by: string;
+  sent_at: number;
+  canceled_at: number;
+  canceled_by: string;
+  recipients_count: number;
+  sent_count: number;
+  failed_count: number;
+  skipped_count: number;
+  error: string;
 }
 
 /** Readers see one row per Quo call even if a race left two: the
