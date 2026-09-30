@@ -504,7 +504,9 @@ function MessageRow({
                 {error?.message ?? "The carrier rejected it."}
               </span>
             </p>
-            {onRetry && error?.retryable !== false ? (
+            {/* Retry re-sends through Twilio; a text that went out on
+                the Main Line (Quo) can't be re-sent from here. */}
+            {onRetry && error?.retryable !== false && msg.provider !== "quo" ? (
               <button
                 type="button"
                 disabled={retrying}

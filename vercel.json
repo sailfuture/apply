@@ -16,6 +16,10 @@
     {
       "path": "/api/cron/nurture",
       "schedule": "*/30 * * * *"
+    },
+    {
+      "path": "/api/cron/quo-sync",
+      "schedule": "*/15 * * * *"
     }
   ]
 }

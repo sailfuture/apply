@@ -65,12 +65,15 @@ import {
   tourWhenLabel,
 } from "@/lib/tours";
 import type { ToursResponse } from "@/app/api/admin/tours/route";
+import type { CallsResponse } from "@/app/api/admin/calls/route";
+import { CallMarker } from "@/components/admin/call-marker";
 import { liveTourEventId } from "@/lib/xano";
 import type {
   LeadNoteSource,
   XanoAdminNote,
   XanoSmsMessage,
   XanoTour,
+  XanoCall,
 } from "@/lib/xano";
 
 const fetcher = async (url: string): Promise<XanoAdminNote[]> => {
@@ -303,6 +306,14 @@ export function InquiryNotes({
   );
   const tours = toursData?.tours ?? [];
 
+  // Phone calls with this lead on the Main Line (mirrored from Quo).
+  const { data: callsData } = useSWR<CallsResponse>(
+    `/api/admin/calls?contactType=${leadScope.source}&contactId=${leadScope.id}`,
+    adminFetcher,
+    { revalidateOnFocus: false }
+  );
+  const calls = callsData?.calls ?? [];
+
   const notes = data ?? [];
   const pinned = notes.filter((n) => n.is_pinned);
   // Chronological chat stream (oldest → newest, same shape as the
@@ -320,6 +331,7 @@ export function InquiryNotes({
       .map((note) => ({ kind: "note" as const, note })),
     ...smsMessages.map((msg) => ({ kind: "sms" as const, msg })),
     ...tours.map((tour) => ({ kind: "tour" as const, tour })),
+    ...calls.map((call) => ({ kind: "call" as const, call })),
   ].sort((a, b) => entryTs(a) - entryTs(b));
 
   const [body, setBody] = useState("");
@@ -507,12 +519,19 @@ export function InquiryNotes({
         ? `note|${e.note.author_name}|${e.note.category ?? ""}|${e.note.is_pinned}`
         : e.kind === "sms"
           ? `sms|${e.msg.direction}|${e.msg.from_number}`
-          : // A tour marker breaks any run — the next bubble re-names
-            // its sender.
-            `tour|${e.tour.id}`;
+          : e.kind === "call"
+            ? `call|${e.call.id}`
+            : // A tour marker breaks any run — the next bubble re-names
+              // its sender.
+              `tour|${e.tour.id}`;
     const showHeader = sig !== prevSig;
     prevSig = sig;
-    if (e.kind === "tour") {
+    if (e.kind === "call") {
+      rows.push({
+        id: `call-${e.call.id}`,
+        node: <CallMarker call={e.call} />,
+      });
+    } else if (e.kind === "tour") {
       rows.push({
         id: `tour-${e.tour.id}`,
         node: <TourMarker tour={e.tour} />,
@@ -990,11 +1009,13 @@ function formatCategory(c: string): string {
 type TimelineEntry =
   | { kind: "note"; note: XanoAdminNote }
   | { kind: "sms"; msg: XanoSmsMessage }
-  | { kind: "tour"; tour: XanoTour };
+  | { kind: "tour"; tour: XanoTour }
+  | { kind: "call"; call: XanoCall };
 
 function entryTs(e: TimelineEntry): number {
   if (e.kind === "note") return e.note.created_at;
   if (e.kind === "sms") return e.msg.created_at;
+  if (e.kind === "call") return e.call.started_at || e.call.created_at;
   // Placed at BOOKING time, which is when it entered this lead's
   // story; the tour's own date is in the label.
   return e.tour.created_at || e.tour.scheduled_at;
@@ -1279,7 +1300,9 @@ function SmsBubble({
                 {error?.message ?? "The carrier rejected it."}
               </span>
             </p>
-            {onRetry && error?.retryable !== false ? (
+            {/* Retry re-sends through Twilio; a text that went out on
+                the Main Line (Quo) can't be re-sent from here. */}
+            {onRetry && error?.retryable !== false && msg.provider !== "quo" ? (
               <button
                 type="button"
                 disabled={retrying}

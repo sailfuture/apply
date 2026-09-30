@@ -42,6 +42,8 @@ import type {
   NurturePreviewItem,
 } from "@/app/api/admin/nurture/route";
 import type { LeadSource } from "@/app/api/admin/all-leads/route";
+import type { QuoStatus } from "@/app/api/admin/quo/status/route";
+import { formatUSPhone } from "@/lib/phone";
 
 const KEY = "/api/admin/nurture";
 
@@ -110,6 +112,7 @@ export default function FollowUpsPage() {
       ) : (
         <>
           <SettingsCard data={data} revalidate={() => mutate()} />
+          <PhoneSystemCard />
 
           <PreviewTable
             title="Due on the next run"
@@ -311,6 +314,85 @@ function SettingsCard({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+    </Card>
+  );
+}
+
+/**
+ * Is Apply hearing from Quo? One line per fact, so a connection that
+ * quietly stopped reads as "Off" or an old time instead of nothing.
+ */
+function PhoneSystemCard() {
+  const { data, error, isLoading } = useSWR<QuoStatus>(
+    "/api/admin/quo/status",
+    adminFetcher,
+    { revalidateOnFocus: false }
+  );
+  const rows: Array<{ label: string; value: string; bad?: boolean }> = [];
+  if (data) {
+    rows.push({
+      label: "Main Line",
+      value: data.mainLine ? formatUSPhone(data.mainLine.number) : "Not found in Quo",
+      bad: !data.mainLine,
+    });
+    const live =
+      data.webhook?.enabled && data.webhookSecretSet
+        ? "On"
+        : !data.configured
+          ? "Off (QUO_API_KEY isn't set)"
+          : !data.webhook
+            ? "Off (not registered with Quo yet)"
+            : !data.webhookSecretSet
+              ? "Off (QUO_WEBHOOK_SECRET isn't set)"
+              : "Off (paused in Quo)";
+    rows.push({ label: "Live updates", value: live, bad: live !== "On" });
+    rows.push({
+      label: "Last text received or sent",
+      value: data.lastTextAt ? formatNoteTimestamp(data.lastTextAt) : "None yet",
+    });
+    rows.push({
+      label: "Last call",
+      value: data.lastCallAt ? formatNoteTimestamp(data.lastCallAt) : "None yet",
+    });
+  }
+  return (
+    <Card className="bg-white">
+      <CardHeader>
+        <CardTitle className="text-base">Phone system</CardTitle>
+        <CardDescription>
+          Texts and calls on the Main Line are copied from Quo into each
+          family&rsquo;s timeline. A check every 15 minutes picks up anything
+          live updates missed.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {error ? (
+          <p className="text-sm text-destructive">
+            Couldn&rsquo;t check the phone system: {error.message}
+          </p>
+        ) : isLoading || !data ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="size-4 animate-spin" /> Checking…
+          </div>
+        ) : (
+          <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-[14rem_1fr]">
+            {rows.map((r) => (
+              <div key={r.label} className="contents">
+                <dt className="text-muted-foreground">{r.label}</dt>
+                <dd className={r.bad ? "font-medium text-destructive" : "font-medium"}>
+                  {r.value}
+                </dd>
+              </div>
+            ))}
+            {data.error ? (
+              <div className="contents">
+                <dt className="text-muted-foreground">Quo</dt>
+                <dd className="font-medium text-destructive">{data.error}</dd>
+              </div>
+            ) : null}
+          </dl>
+        )}
+      </CardContent>
     </Card>
   );
 }

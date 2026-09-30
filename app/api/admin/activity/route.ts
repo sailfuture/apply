@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
-import { xano } from "@/lib/xano";
+import { xano, type XanoCall } from "@/lib/xano";
+import { callGist, callLabel } from "@/lib/calls";
 
 /**
  * Unified per-family activity stream for the admin Activity sheet.
@@ -69,6 +70,7 @@ export async function GET(req: NextRequest) {
       transactionsResult,
       familyResult,
       appointmentsResult,
+      callsResult,
     ] = await Promise.allSettled([
       xano.adminNotes.getByFamilyId(familyId),
       xano.smsMessages.getByFamilyId(familyId),
@@ -84,6 +86,8 @@ export async function GET(req: NextRequest) {
       // Google Calendar appointments mirrored by the calendar-sync
       // cron — [] until the table exists.
       xano.googleAppointments.getAll().catch(() => []),
+      // Phone calls on the Quo Main Line (registration_calls).
+      xano.calls.getByFamilyId(familyId),
     ]);
 
     const val = <T,>(r: PromiseSettledResult<T>, fallback: T): T =>
@@ -98,6 +102,7 @@ export async function GET(req: NextRequest) {
     const students = val(studentsResult, []);
     const transactions = val(transactionsResult, []);
     const family = val(familyResult, null);
+    const calls = val(callsResult, []);
     const appointments = val(appointmentsResult, []).filter(
       (a) => Number(a.registration_families_id) === familyId
     );
@@ -179,6 +184,25 @@ export async function GET(req: NextRequest) {
         direction: m.direction === "outbound" ? "outbound" : "inbound",
         status: m.status,
         isGroup,
+      });
+    }
+
+    // ── Phone calls (Quo Main Line) ──────────────────────────────────
+    for (const c of calls) {
+      push({
+        id: `call-${c.id}`,
+        ts: c.started_at || c.created_at,
+        kind: "call",
+        scope: "general",
+        title: callLabel(c),
+        body: callGist(c),
+        author:
+          c.direction === "outgoing"
+            ? c.staff_name || "Main Line"
+            : family?.family_name?.trim() || "Family",
+        direction: c.direction === "outgoing" ? "outbound" : "inbound",
+        status: c.status,
+        call: c,
       });
     }
 
@@ -652,7 +676,7 @@ export interface ActivityEvent {
   id: string;
   /** Unix ms. */
   ts: number;
-  kind: "note" | "sms" | "email" | "system";
+  kind: "note" | "sms" | "email" | "system" | "call";
   scope: ActivityScope;
   /** System events: the milestone label. Notes: the category label.
    *  Emails: "Email sent" / "Email failed to send". */
@@ -681,6 +705,8 @@ export interface ActivityEvent {
   openedAt?: number;
   /** Set when the event is about one student. */
   studentName?: string;
+  /** Calls only — the full row, rendered by `CallMarker`. */
+  call?: XanoCall;
   /** Notes only — raw category bucket. */
   category?: string;
   /** Notes only. */

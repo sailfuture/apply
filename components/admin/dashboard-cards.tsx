@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Inbox, MessageSquareText, NotebookPen } from "lucide-react";
+import { Inbox, MessageSquareText, NotebookPen, Phone } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -162,6 +162,9 @@ export function UnreadMessagesCard({
 function activityIcon(kind: ActivityRow["kind"]) {
   if (kind === "note") {
     return <NotebookPen className="size-3.5 text-muted-foreground" />;
+  }
+  if (kind === "call") {
+    return <Phone className="size-3.5 text-muted-foreground" />;
   }
   return (
     <MessageSquareText

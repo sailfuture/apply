@@ -1592,6 +1592,15 @@ export interface XanoSmsMessage {
   author_name?: string | null;
   /** Billed SMS segment count (160 GSM-7 chars each), from Twilio. */
   segments?: number | null;
+  /** Which system carried the text: "twilio" (default for rows
+   *  written before 2026-09-29, where the column is empty) or "quo"
+   *  (the Main Line, mirrored from Quo's webhooks / the quo-sync
+   *  cron). */
+  provider?: string | null;
+  /** Quo message id (`AC…`) — the natural key for Quo rows, what the
+   *  webhook and the sync dedupe on. Null for Twilio rows. */
+  quo_message_id?: string | null;
+  quo_conversation_id?: string | null;
 }
 
 export interface XanoInquiry {
@@ -6017,6 +6026,19 @@ export const xano = {
         .sort((a, b) => a.id - b.id);
     },
 
+    /** Every row carrying this Quo message id, lowest id first — the
+     *  Quo webhook's and sync's last look before an insert. Strict
+     *  for the same reason as `findAllByMessageSidStrict`. */
+    async findAllByQuoMessageIdStrict(id: string): Promise<XanoSmsMessage[]> {
+      const items = await fetchListStrict<XanoSmsMessage>(
+        `${getBaseUrl()}/sms_messages?quo_message_id=${encodeURIComponent(id)}`,
+        "sms_messages by Quo id"
+      );
+      return items
+        .filter((m) => m.quo_message_id === id)
+        .sort((a, b) => a.id - b.id);
+    },
+
     /** Look up a logged message by its Twilio SID — the status-callback
      *  webhook uses this to update delivery state on the right row. */
     async findByMessageSid(sid: string): Promise<XanoSmsMessage | null> {
@@ -7424,6 +7446,113 @@ export const xano = {
       return res.json();
     },
   },
+
+  /**
+   * `registration_calls` — phone calls on the Quo Main Line, mirrored
+   * by the Quo webhook and the quo-sync cron (created 2026-09-29).
+   * Same five contact FK columns as `sms_messages`, so a call threads
+   * onto the same family or lead its texts do.
+   */
+  calls: {
+    async getAll(): Promise<XanoCall[]> {
+      try {
+        const res = await xanoFetch(`${getBaseUrl()}/registration_calls`, {
+          cache: "no-store",
+        });
+        if (!res.ok) return [];
+        const rows: XanoCall[] = await res.json();
+        return Array.isArray(rows) ? oneRowPerCall(rows) : [];
+      } catch {
+        return [];
+      }
+    },
+
+    /** One contact's calls, oldest first. Client-side filter stays
+     *  load-bearing (an unwired input returns the whole table). */
+    async getByContact(
+      type: SmsThreadContactType,
+      id: number
+    ): Promise<XanoCall[]> {
+      const column = smsContactColumn(type);
+      try {
+        const res = await xanoFetch(
+          `${getBaseUrl()}/registration_calls?${column}=${id}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) return [];
+        const rows: XanoCall[] = await res.json();
+        return Array.isArray(rows)
+          ? oneRowPerCall(rows.filter((c) => c[column] === id)).sort(
+              (a, b) => a.started_at - b.started_at || a.id - b.id
+            )
+          : [];
+      } catch {
+        return [];
+      }
+    },
+
+    async getByFamilyId(familyId: number): Promise<XanoCall[]> {
+      return this.getByContact("family", familyId);
+    },
+
+    async getById(id: number): Promise<XanoCall | null> {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_calls/${id}`, {
+        cache: "no-store",
+      });
+      if (res.status === 404) return null;
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    /** Rows for one Quo call id, lowest id first — the look before an
+     *  insert. Strict: a failed read must not read as "new call". */
+    async findAllByQuoCallIdStrict(id: string): Promise<XanoCall[]> {
+      const rows = await fetchListStrict<XanoCall>(
+        `${getBaseUrl()}/registration_calls?quo_call_id=${encodeURIComponent(id)}`,
+        "registration_calls by Quo id"
+      );
+      return rows.filter((c) => c.quo_call_id === id).sort((a, b) => a.id - b.id);
+    },
+
+    async create(data: Omit<XanoCall, "id" | "created_at">): Promise<XanoCall> {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_calls`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async update(id: number, patch: Partial<XanoCall>): Promise<XanoCall> {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_calls/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    /** Blank `staff_name` + `quo_user_id`. PATCH can't: this table's
+     *  text inputs trim, then drop empties, so "" and " " both vanish
+     *  — hence a dedicated endpoint. */
+    async clearStaff(id: number): Promise<XanoCall> {
+      const res = await xanoFetch(
+        `${getBaseUrl()}/registration_calls/${id}/clear_staff`,
+        { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async delete(id: number): Promise<void> {
+      const res = await xanoFetch(`${getBaseUrl()}/registration_calls/${id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+    },
+  },
 };
 
 /** One app-wide setting row. `value` is the setting's JSON payload,
@@ -7434,6 +7563,64 @@ export interface XanoAppSetting {
   name: string;
   value: unknown;
   updated_by: string;
+}
+
+/** Readers see one row per Quo call even if a race left two: the
+ *  lowest id is the one later events update (the ingest deletes the
+ *  other, but a failed delete must not show a call twice). */
+function oneRowPerCall(rows: XanoCall[]): XanoCall[] {
+  const byQuoId = new Map<string, XanoCall>();
+  const out: XanoCall[] = [];
+  for (const row of [...rows].sort((a, b) => a.id - b.id)) {
+    const key = row.quo_call_id;
+    if (key && byQuoId.has(key)) continue;
+    if (key) byQuoId.set(key, row);
+    out.push(row);
+  }
+  return out;
+}
+
+/** One phone call on the Quo Main Line (`registration_calls`). */
+export interface XanoCall {
+  id: number;
+  created_at: number;
+  /** Quo call id (`AC…`) — the natural key. */
+  quo_call_id: string;
+  quo_conversation_id: string;
+  /** The school number the call was on (E.164). */
+  phone_number: string;
+  /** The parent's number (E.164). */
+  counterparty: string;
+  /** "incoming" | "outgoing". */
+  direction: string;
+  /** Quo's final status: "completed" | "missed" | "no-answer" |
+   *  "voicemail" | "busy" | "canceled" | … */
+  status: string;
+  /** Unix ms. `answered_at`/`completed_at` are 0 when not applicable. */
+  started_at: number;
+  answered_at: number;
+  completed_at: number;
+  duration_seconds: number;
+  /** Quo staff user who answered or placed it, when known. */
+  quo_user_id: string;
+  staff_name: string;
+  has_voicemail: boolean;
+  voicemail_transcript: string;
+  /** Quo recording id (`CR…`) once Quo has one; the audio is fetched
+   *  on demand through the admin recording route (Quo's URLs expire). */
+  recording_id: string;
+  recording_seconds: number;
+  /** Quo's transcript dialogue lines, summary bullets and next steps. */
+  transcript: unknown;
+  summary: unknown;
+  next_steps: unknown;
+  /** Deep link into the Quo app. */
+  quo_link: string;
+  registration_families_id: number | null;
+  registration_inquiry_id: number | null;
+  registration_summer_camp_id: number | null;
+  website_liability_waiver_id: number | null;
+  tasco_summer_visit_id: number | null;
 }
 
 /**

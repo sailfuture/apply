@@ -57,6 +57,7 @@ import {
 } from "@/components/ui/message-scroller";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { cn } from "@/lib/utils";
+import { CallMarker } from "@/components/admin/call-marker";
 import {
   messagesFetcher,
   messagesKey,
@@ -428,6 +429,13 @@ export function ActivityLogSheet({
                             <Marker variant="separator">
                               <MarkerContent>{item.label}</MarkerContent>
                             </Marker>
+                          </MessageScrollerItem>
+                        ) : item.event.kind === "call" && item.event.call ? (
+                          <MessageScrollerItem
+                            key={item.id}
+                            messageId={item.id}
+                          >
+                            <CallMarker call={item.event.call} />
                           </MessageScrollerItem>
                         ) : item.event.kind === "system" ? (
                           <MessageScrollerItem
@@ -875,7 +883,9 @@ type StreamItem =
  *  grouping: two of your notes in a row shouldn't name you twice).
  *  Null for system events, which render as markers and break runs. */
 function headerSignature(e: ActivityEvent): string | null {
-  if (e.kind === "system") return null;
+  // Markers (system stamps, calls) break any run — the next bubble
+  // re-names its sender.
+  if (e.kind === "system" || e.kind === "call") return null;
   return [
     e.author || "Admin",
     e.kind,

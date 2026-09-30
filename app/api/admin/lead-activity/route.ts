@@ -8,6 +8,7 @@ import {
 } from "@/lib/xano";
 import { counterpartyPhone, messageContactRef } from "@/lib/sms/contacts";
 import { formatUSPhone } from "@/lib/phone";
+import { callGist, callLabel } from "@/lib/calls";
 
 /**
  * Recent activity across every recruitment lead — ONE row per lead,
@@ -26,7 +27,7 @@ import { formatUSPhone } from "@/lib/phone";
  * (`/admin/all-leads?open=<source>-<id>`).
  */
 
-export type LeadActivityKind = "note" | "sms_out" | "sms_in";
+export type LeadActivityKind = "note" | "sms_out" | "sms_in" | "call";
 
 export interface LeadActivityRow {
   /** Stable render key. */
@@ -80,7 +81,7 @@ export async function GET(req: NextRequest) {
         ? Math.min(limitParam, MAX_LIMIT)
         : DEFAULT_LIMIT;
 
-    const [notesRes, msgsRes, inqRes, campRes, visitRes, tascoRes] =
+    const [notesRes, msgsRes, inqRes, campRes, visitRes, tascoRes, callsRes] =
       await Promise.allSettled([
         xano.adminNotes.getAllLeadNotes(),
         xano.smsMessages.getAll(),
@@ -88,6 +89,8 @@ export async function GET(req: NextRequest) {
         xano.summerCamp.getAll(),
         xano.websiteWaivers.getAll(),
         xano.tascoSummerVisits.getAll(),
+        // Phone calls on the Quo Main Line.
+        xano.calls.getAll(),
       ]);
     const val = <T,>(r: PromiseSettledResult<T[]>, label: string): T[] => {
       if (r.status === "fulfilled") return r.value;
@@ -100,6 +103,7 @@ export async function GET(req: NextRequest) {
     const camps = val(campRes, "camp");
     const visits = val(visitRes, "visits");
     const tascos = val(tascoRes, "tasco");
+    const calls = val(callsRes, "calls");
 
     // Name lookup per source, built once.
     const names: Record<LeadNoteSource, Map<number, string>> = {
@@ -196,6 +200,28 @@ export async function GET(req: NextRequest) {
         ts: Number(m.created_at) || 0,
         rating: ratingFor(source, contact.id),
       });
+    }
+
+    // Calls — attributed the same way as texts, through the lead FK
+    // columns the call row carries.
+    for (const c of calls) {
+      for (const source of LEAD_NOTE_SOURCES) {
+        const leadId = Number(c[LEAD_NOTE_COLUMN[source]]);
+        if (!Number.isFinite(leadId) || leadId <= 0) continue;
+        rows.push({
+          key: `call-${c.id}`,
+          source,
+          leadId,
+          name: nameFor(source, leadId, formatUSPhone(c.counterparty) || ""),
+          kind: "call",
+          label: callLabel(c),
+          body: callGist(c).slice(0, BODY_CHARS),
+          author: (c.staff_name ?? "").trim(),
+          ts: Number(c.started_at) || Number(c.created_at) || 0,
+          rating: ratingFor(source, leadId),
+        });
+        break;
+      }
     }
 
     rows.sort((a, b) => b.ts - a.ts);

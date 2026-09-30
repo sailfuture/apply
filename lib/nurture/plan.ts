@@ -299,12 +299,20 @@ function addMessage(f: Facts, m: XanoSmsMessage): void {
     f.lastInboundAt = Math.max(f.lastInboundAt, at);
     return;
   }
-  f.hasOutbound = true;
+  // "Have we texted them before" is about the number the automated
+  // texts come from; a text from the Main Line doesn't carry that
+  // number's opt-out line.
+  if (m.provider !== "quo") f.hasOutbound = true;
   const template = m.template ?? "";
   if (template) f.templates.add(template);
   if (template.startsWith(NURTURE_TEMPLATE_PREFIX)) {
     f.lastNurtureAt = Math.max(f.lastNurtureAt, at);
-  } else if (!template || template === "manual" || template.startsWith("group")) {
+  } else if (
+    (!template || template === "manual" || template.startsWith("group")) &&
+    // A text that never arrived isn't contact.
+    m.status !== "failed" &&
+    m.status !== "undelivered"
+  ) {
     f.lastStaffTextAt = Math.max(f.lastStaffTextAt, at);
   }
 }
