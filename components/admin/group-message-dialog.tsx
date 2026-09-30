@@ -22,13 +22,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -195,10 +188,10 @@ export function GroupMessageDialog({
 }: {
   onSent?: () => void;
   scope?: GroupScope;
-  /** Year to preselect — the messages pages pass their URL year so
-   *  the composer's audience matches the page's slice (the dialog's
-   *  own fallback, the active year, can differ from the nav's
-   *  default, the upcoming year). Still changeable in the dialog. */
+  /** The audience's school year — the messages page passes the top
+   *  bar's year, so the composer shows the same slice as the page
+   *  and has no year picker of its own. A caller without one gets
+   *  the active year. */
   defaultYearId?: number;
 }) {
   const [open, setOpen] = useState(false);
@@ -211,7 +204,9 @@ export function GroupMessageDialog({
     [yearsData]
   );
 
-  const [yearId, setYearId] = useState<string>("");
+  const [fallbackYearId, setFallbackYearId] = useState<string>("");
+  const yearId =
+    defaultYearId != null ? String(defaultYearId) : fallbackYearId;
   const [search, setSearch] = useState("");
   const [stageFilter, setStageFilter] = useState<GroupStage[]>([]);
   const [gradeFilter, setGradeFilter] = useState<number[]>([]);
@@ -281,20 +276,24 @@ export function GroupMessageDialog({
     if (open) setBlastId(crypto.randomUUID());
   }, [open]);
 
-  // Default year once the list loads: the caller's year when given
-  // (keeps the composer aligned with the page it sits on), otherwise
-  // the active year.
+  // A caller without a year gets the active one once the list loads.
   useEffect(() => {
-    if (!yearId && years.length) {
-      const preferred =
-        defaultYearId != null
-          ? years.find((y) => y.id === defaultYearId)
-          : undefined;
-      const fallback = years.find((y) => y.isActive) ?? years[0];
-      const pick = preferred ?? fallback;
-      if (pick) setYearId(String(pick.id));
+    if (defaultYearId == null && !fallbackYearId && years.length) {
+      const pick = years.find((y) => y.isActive) ?? years[0];
+      if (pick) setFallbackYearId(String(pick.id));
     }
-  }, [years, yearId, defaultYearId]);
+  }, [years, fallbackYearId, defaultYearId]);
+
+  // A different year (the top bar changed while the dialog was closed)
+  // means a different audience — drop any selection made against the
+  // previous list, and the per-year crew/bus narrowing with it.
+  const [audienceYear, setAudienceYear] = useState(yearId);
+  if (audienceYear !== yearId) {
+    setAudienceYear(yearId);
+    setSelected(new Set());
+    setCrewFilter([]);
+    setBusStopFilter([]);
+  }
 
   const { data: audienceData, isLoading: loadingAudience } =
     useSWR<GroupAudienceResponse>(
@@ -325,15 +324,6 @@ export function GroupMessageDialog({
     [contacts]
   );
 
-  // Year switch invalidates the audience — drop any selection made
-  // against the previous year's list (and any crew/bus narrowing,
-  // since both are per-year assignments).
-  function changeYear(v: string) {
-    setYearId(v);
-    setSelected(new Set());
-    setCrewFilter([]);
-    setBusStopFilter([]);
-  }
 
   const crewOptions = useMemo(
     () =>
@@ -590,20 +580,8 @@ export function GroupMessageDialog({
           </DialogHeader>
 
           <div className="flex min-h-0 flex-1 flex-col gap-3">
-            {/* Year + search on one row */}
+            {/* Search (the school year is the top bar's) */}
             <div className="flex flex-wrap items-center gap-2">
-              <Select value={yearId} onValueChange={changeYear}>
-                <SelectTrigger className="w-[160px]">
-                  <SelectValue placeholder="School year" />
-                </SelectTrigger>
-                <SelectContent>
-                  {years.map((y) => (
-                    <SelectItem key={y.id} value={String(y.id)}>
-                      {y.year_name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
               <div className="relative min-w-0 flex-1">
                 <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
                 <Input
@@ -827,13 +805,9 @@ export function GroupMessageDialog({
             {/* Recipient list — flexes to fill the fixed dialog frame,
                 so filtering changes what scrolls, never the layout. */}
             <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain rounded-md border bg-white">
-              {loadingAudience ? (
+              {loadingAudience || !yearId ? (
                 <div className="flex h-full items-center justify-center">
                   <Loader2 className="size-4 animate-spin text-muted-foreground" />
-                </div>
-              ) : !yearId ? (
-                <div className="flex h-full items-center justify-center px-6 text-center text-sm text-muted-foreground">
-                  Pick a school year to load contacts.
                 </div>
               ) : filtered.length === 0 ? (
                 <div className="flex h-full items-center justify-center px-6 text-center text-sm text-muted-foreground">
