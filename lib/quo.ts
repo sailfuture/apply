@@ -468,6 +468,46 @@ export async function getCallVoicemail(id: string): Promise<QuoVoicemail | null>
   return res?.data ?? null;
 }
 
+/* ─────────────────────────────── Sending ─────────────────────────────── */
+
+/** The Quo user id for a staff email, so a text sent from Apply shows
+ *  in Quo as sent by that person. Null when they have no Quo account
+ *  (Quo then attributes it to the line's owner). */
+export async function quoUserIdByEmail(email: string | null | undefined): Promise<string | null> {
+  const wanted = (email ?? "").trim().toLowerCase();
+  if (!wanted) return null;
+  const users = await listUsers().catch(() => [] as QuoUser[]);
+  return users.find((u) => (u.email ?? "").toLowerCase() === wanted)?.id ?? null;
+}
+
+/**
+ * Send one text from the Main Line. One recipient per call — Quo's
+ * `to` with several numbers makes a group thread that shows every
+ * number to everyone. `markDone` keeps automated texts from opening a
+ * conversation in the office inbox; a reply from the parent reopens
+ * it. Quo answers with status "queued" or "sent"; the real outcome
+ * (delivered / failed / undelivered) arrives on the webhook.
+ */
+export async function sendQuoText(input: {
+  to: string;
+  content: string;
+  userId?: string | null;
+  markDone?: boolean;
+}): Promise<QuoMessage> {
+  const mainLine = await resolveMainLine();
+  const res = await quoFetch<{ data: QuoMessage }>("/messages", {
+    method: "POST",
+    body: {
+      from: mainLine.id,
+      to: [input.to],
+      content: input.content,
+      ...(input.userId ? { userId: input.userId } : {}),
+      ...(input.markDone ? { setInboxStatus: "done" } : {}),
+    },
+  });
+  return res.data;
+}
+
 /* ───────────────────────────── Webhooks ───────────────────────────── */
 
 export async function listWebhooks(): Promise<QuoWebhook[]> {

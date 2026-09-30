@@ -5898,6 +5898,17 @@ export const xano = {
       }
     },
 
+    /** Same window, but a failed read THROWS — for the Quo ingest's
+     *  "is this delivery receipt for a row Apply just wrote" look,
+     *  where an empty answer would insert a duplicate. */
+    async getSinceStrict(sinceMs: number): Promise<XanoSmsMessage[]> {
+      const since = Math.max(0, Math.floor(sinceMs));
+      const items = await fetchListStrict<XanoSmsMessage>(
+        `${getBaseUrl()}/sms_messages?created_at_from=${since}`,
+        "sms_messages since"
+      );
+      return items.filter((m) => Number(m.created_at) >= since);
+    },
     /** A family's full text thread, oldest-first (chat order). */
     async getByFamilyId(familyId: number): Promise<XanoSmsMessage[]> {
       return this.getByContact("family", familyId);
@@ -7465,6 +7476,16 @@ export const xano = {
       } catch {
         return [];
       }
+    },
+    /** Same list, but a failed read THROWS instead of answering []
+     *  — for the follow-up planner, where "nobody has called" must
+     *  never be a read error in disguise. */
+    async getAllStrict(): Promise<XanoCall[]> {
+      const rows = await fetchListStrict<XanoCall>(
+        `${getBaseUrl()}/registration_calls`,
+        "calls"
+      );
+      return oneRowPerCall(rows);
     },
 
     /** One contact's calls, oldest first. Client-side filter stays

@@ -22,7 +22,7 @@ import {
 export async function loadNurtureInput(
   now = Date.now()
 ): Promise<NurtureInput & { forwardReplies: boolean }> {
-  const [settings, messages, notes, inquiries, camps, visits, tascos, tours] =
+  const [settings, messages, notes, inquiries, camps, visits, tascos, tours, calls] =
     await Promise.all([
       readAppSettings(),
       xano.smsMessages.getAllStrict(),
@@ -32,6 +32,9 @@ export async function loadNurtureInput(
       xano.websiteWaivers.getAll().catch(() => []),
       xano.tascoSummerVisits.getAll().catch(() => []),
       xano.tours.getAllStrict(),
+      // Answered calls and voicemails count as contact; a failed read
+      // must not look like "nobody has called" (strict).
+      xano.calls.getAllStrict(),
     ]);
   return {
     now,
@@ -43,7 +46,9 @@ export async function loadNurtureInput(
     tascos,
     tours,
     messages,
+    calls,
     notes,
+    provider: settings.sms.provider,
   };
 }
 

@@ -90,15 +90,70 @@ function rowFor(rows: XanoAppSetting[], name: string) {
 }
 
 /** Both settings, strictly — throws when the table can't be read. */
+/** Which system carries the texts Apply sends (`lib/sms/send.ts`). */
+export type SmsProvider = "twilio" | "quo";
+
+export interface SmsSettings {
+  provider: SmsProvider;
+}
+
+/** Twilio until the switch is flipped — the number families have been
+ *  texting with, and the one whose registration is proven. */
+function parseSmsProvider(v: unknown): SmsSettings {
+  const r = asRecord(v);
+  return { provider: r.provider === "quo" ? "quo" : "twilio" };
+}
+
 export async function readAppSettings(): Promise<{
   nurture: NurtureSettings;
   forwarding: ReplyForwardingSettings;
+  sms: SmsSettings;
 }> {
   const rows = await xano.appSettings.getAllStrict();
   return {
     nurture: parseNurture(rowFor(rows, "nurture")?.value),
     forwarding: parseForwarding(rowFor(rows, "sms_forwarding")?.value),
+    sms: parseSmsProvider(rowFor(rows, "sms_provider")?.value),
   };
+}
+
+const PROVIDER_CACHE_MS = 30_000;
+let providerCache: { at: number; value: SmsProvider } | null = null;
+
+/**
+ * The provider every send consults. Cached for 30 seconds so a group
+ * text doesn't read the settings once per recipient; a flip of the
+ * switch takes effect within that. When the settings can't be read
+ * the last known value is used, and before any is known,
+ * `SMS_PROVIDER` from the environment, then Twilio — the switch never
+ * silently changes which number a family hears from.
+ */
+export async function currentSmsProvider(): Promise<SmsProvider> {
+  if (providerCache && Date.now() - providerCache.at < PROVIDER_CACHE_MS) {
+    return providerCache.value;
+  }
+  try {
+    const value = (await readAppSettings()).sms.provider;
+    providerCache = { at: Date.now(), value };
+    return value;
+  } catch (err) {
+    console.error("[app-settings] provider read failed:", err);
+    if (providerCache) return providerCache.value;
+    return process.env.SMS_PROVIDER === "quo" ? "quo" : "twilio";
+  }
+}
+
+export async function writeSmsProvider(
+  provider: SmsProvider,
+  updatedBy: string
+): Promise<SmsSettings> {
+  const row = await upsert("sms_provider", { provider }, updatedBy);
+  const saved = parseSmsProvider(row.value);
+  // What was just written is the freshest value this process can
+  // have — never fall back to the environment default right after a
+  // flip because the read-back blipped.
+  providerCache = { at: Date.now(), value: saved.provider };
+  return saved;
 }
 
 /** Reply forwarding, defaulting ON: it only ever texts the school's own

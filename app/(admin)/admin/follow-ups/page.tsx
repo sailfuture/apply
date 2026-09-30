@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import useSWR from "swr";
+import useSWR, { useSWRConfig } from "swr";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 import {
@@ -96,8 +96,9 @@ export default function FollowUpsPage() {
         <h1 className="text-2xl font-bold">Follow-ups</h1>
         <p className="text-sm text-muted-foreground">
           Automated texts that move leads toward a tour and an application,
-          sent from (727) 604-8321. Each one lands in the lead&rsquo;s
-          timeline, and a reply from the parent stops the nudges.
+          sent from the school&rsquo;s texting number (see Phone system below).
+          Each one lands in the lead&rsquo;s timeline, and a reply, or a call
+          either way, stops the nudges.
         </p>
       </div>
 
@@ -283,8 +284,10 @@ function SettingsCard({
               ) : null}
             </Label>
             <p className="text-sm text-muted-foreground">
-              Every text a parent sends to (727) 604-8321 is also texted to
-              (727) 209-7846 in Quo, with a link to answer in Apply.
+              While texts go out from (727) 604-8321, every reply a parent
+              sends there is also texted to the Main Line in Quo, with a link
+              to answer in Apply. Texts sent from the Main Line get their
+              replies in Quo directly.
             </p>
           </div>
         </div>
@@ -295,8 +298,7 @@ function SettingsCard({
           <AlertDialogHeader>
             <AlertDialogTitle>Turn on automated follow-ups?</AlertDialogTitle>
             <AlertDialogDescription>
-              Texts will start going out from (727) 604-8321 during sending
-              hours.{" "}
+              Texts will start going out during sending hours.{" "}
               {startedAt
                 ? `${data.due.length} ${data.due.length === 1 ? "text is" : "texts are"} due now.`
                 : "Inquiries and tours from before today are left alone. Only new ones get the inquiry and after-tour texts, while upcoming tours still get reminders."}
@@ -328,12 +330,42 @@ function PhoneSystemCard() {
     adminFetcher,
     { revalidateOnFocus: false }
   );
+  const [confirmProvider, setConfirmProvider] = useState<null | "quo" | "twilio">(null);
+  const [switching, setSwitching] = useState(false);
+  const { mutate: revalidateStatus } = useSWRConfig();
+
+  async function switchProvider(provider: "quo" | "twilio") {
+    setSwitching(true);
+    try {
+      await patchSettings({ smsProvider: provider });
+      // Spinner holds until the card shows the new number.
+      await revalidateStatus("/api/admin/quo/status");
+      toast.success(
+        provider === "quo"
+          ? "Texts now go out from the Main Line."
+          : "Texts now go out from (727) 604-8321."
+      );
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't switch");
+    } finally {
+      setSwitching(false);
+      setConfirmProvider(null);
+    }
+  }
+
   const rows: Array<{ label: string; value: string; bad?: boolean }> = [];
   if (data) {
     rows.push({
       label: "Main Line",
       value: data.mainLine ? formatUSPhone(data.mainLine.number) : "Not found in Quo",
       bad: !data.mainLine,
+    });
+    rows.push({
+      label: "Texts go out from",
+      value:
+        data.provider === "quo"
+          ? "Main Line (727) 209-7846 via Quo"
+          : "(727) 604-8321 via Twilio",
     });
     const live =
       data.webhook?.enabled && data.webhookSecretSet
@@ -392,7 +424,52 @@ function PhoneSystemCard() {
             ) : null}
           </dl>
         )}
+        {data ? (
+          <div className="mt-4">
+            <Button
+              type="button"
+              variant="outline"
+              className="bg-white"
+              disabled={switching || (data.provider !== "quo" && !data.configured)}
+              onClick={() => setConfirmProvider(data.provider === "quo" ? "twilio" : "quo")}
+            >
+              {switching ? <Loader2 className="size-3.5 animate-spin" /> : null}
+              {data.provider === "quo"
+                ? "Switch texts back to (727) 604-8321"
+                : "Send all texts from the Main Line"}
+            </Button>
+          </div>
+        ) : null}
       </CardContent>
+
+      <AlertDialog open={confirmProvider !== null} onOpenChange={(o) => !o && !switching && setConfirmProvider(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {confirmProvider === "quo"
+                ? "Send every text from the Main Line?"
+                : "Send every text from (727) 604-8321 again?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirmProvider === "quo"
+                ? "From now on every text Apply sends — automatic, scheduled, group, and replies from the inbox — goes out from (727) 209-7846 through Quo, and parents' replies land in the office inbox. Texts already sent stay where they are."
+                : "Every text Apply sends goes back to the Twilio number. Use this if delivery from the Main Line has a problem."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={switching}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={switching}
+              onClick={(e) => {
+                e.preventDefault();
+                if (confirmProvider) void switchProvider(confirmProvider);
+              }}
+            >
+              {switching ? <Loader2 className="size-3.5 animate-spin" /> : "Switch"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Card>
   );
 }

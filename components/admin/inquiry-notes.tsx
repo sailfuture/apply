@@ -1300,9 +1300,9 @@ function SmsBubble({
                 {error?.message ?? "The carrier rejected it."}
               </span>
             </p>
-            {/* Retry re-sends through Twilio; a text that went out on
-                the Main Line (Quo) can't be re-sent from here. */}
-            {onRetry && error?.retryable !== false && msg.provider !== "quo" ? (
+            {/* Retry sends the same words again from whichever number
+                Apply texts from now (Follow-ups → Phone system). */}
+            {onRetry && error?.retryable !== false ? (
               <button
                 type="button"
                 disabled={retrying}

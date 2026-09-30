@@ -4,6 +4,7 @@ import {
   InvalidSettingError,
   writeForwardingSettings,
   writeNurtureSettings,
+  writeSmsProvider,
 } from "@/lib/app-settings";
 import { loadNurtureInput } from "@/lib/nurture/run";
 import {
@@ -213,6 +214,17 @@ export async function PATCH(req: NextRequest) {
         );
       }
       await writeForwardingSettings({ enabled: body.forwardReplies }, by);
+    }
+    // Which number every text Apply sends goes out from — the phase 2
+    // cutover switch (Phone system card on this page).
+    if (body?.smsProvider !== undefined) {
+      if (body.smsProvider !== "quo" && body.smsProvider !== "twilio") {
+        return NextResponse.json(
+          { error: "smsProvider must be quo or twilio" },
+          { status: 400 }
+        );
+      }
+      await writeSmsProvider(body.smsProvider, by);
     }
     return NextResponse.json({ ok: true });
   } catch (err) {

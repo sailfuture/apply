@@ -153,8 +153,15 @@ export async function upsertQuoText(
       patch.quo_conversation_id = input.conversationId;
     }
     // A staff text logged before its sender resolved (the user list
-    // was unavailable) gets the name once it does.
-    if (!inbound && staff?.name && row.author_name !== staff.name) {
+    // was unavailable) gets the name once it does. Never renames a row
+    // Apply wrote itself: an automated text is "Automated follow-up",
+    // not the line owner Quo attributes API sends to.
+    if (
+      !inbound &&
+      staff?.name &&
+      (!row.author_name || row.author_name === "Main Line") &&
+      row.author_name !== staff.name
+    ) {
       patch.author_name = staff.name;
       if (staff.email) patch.author_email = staff.email;
     }
@@ -163,6 +170,14 @@ export async function upsertQuoText(
     return "updated";
   }
 
+  // A text Apply sent itself is logged BEFORE the send and stamped
+  // with Quo's id right after — a delivery receipt can beat that
+  // stamp by a beat. Match it to the waiting row instead of adding a
+  // second one (the stamp then writes the same id).
+  if (!inbound) {
+    const adopted = await adoptApplyRow(input);
+    if (adopted) return adopted;
+  }
   const contact = ctx.directory.get(normPhone(counterparty)) ?? null;
   const body =
     input.text.trim() ||
@@ -206,6 +221,50 @@ export async function upsertQuoText(
   return "created";
 }
 
+/** How long a row Apply wrote can wait for its Quo id: the stamp
+ *  normally lands within a second, and the 15-minute sync re-walks
+ *  the window after that. */
+const ADOPT_WINDOW_MS = 6 * 3_600_000;
+
+/**
+ * An outgoing Quo text with no row under its id: is it one Apply sent
+ * (`sendViaQuo`) whose row hasn't been stamped yet? Same number, same
+ * words, no Quo id, written recently. Strict read: a failed look must
+ * fail the ingest (Quo retries) rather than insert a duplicate. When
+ * two waiting rows match, the one written nearest the text's own
+ * time is it; the stamps are authoritative and repair a wrong guess.
+ */
+async function adoptApplyRow(input: QuoTextInput): Promise<IngestOutcome | null> {
+  const sentAt = Date.parse(input.createdAt) || Date.now();
+  const recent = await xano.smsMessages.getSinceStrict(sentAt - ADOPT_WINDOW_MS);
+  const to = normPhone(input.to);
+  const words = input.text.trim();
+  const waiting = recent
+    .filter(
+      (m) =>
+        m.provider === "quo" &&
+        m.direction === "outbound" &&
+        !m.quo_message_id &&
+        m.status !== "failed" &&
+        normPhone(m.to_number) === to &&
+        (m.body ?? "").trim() === words
+    )
+    .sort(
+      (a, b) =>
+        Math.abs(a.created_at - sentAt) - Math.abs(b.created_at - sentAt) || b.id - a.id
+    );
+  const row = waiting[0];
+  if (!row) return null;
+  const patch: Record<string, unknown> = {
+    quo_message_id: input.id,
+    status: input.status || "sent",
+  };
+  if (input.conversationId) patch.quo_conversation_id = input.conversationId;
+  if (input.errorCode) patch.error_code = input.errorCode;
+  if (input.from && input.from !== row.from_number) patch.from_number = input.from;
+  await xano.smsMessages.update(row.id, patch);
+  return "updated";
+}
 /* ─────────────────────────────── Calls ─────────────────────────────── */
 
 export interface QuoCallInput {

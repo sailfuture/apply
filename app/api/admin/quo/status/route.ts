@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
 import { isQuoConfigured, listWebhooks, resolveMainLine } from "@/lib/quo";
+import { currentSmsProvider, type SmsProvider } from "@/lib/app-settings";
 
 /**
  * Health of the Quo connection, for the status card on the Follow-ups
@@ -31,6 +32,8 @@ export interface QuoStatus {
   callsMirrored: number;
   /** Why the Quo side couldn't be checked, when it couldn't. */
   error: string | null;
+  /** Which number Apply's texts go out from right now. */
+  provider: SmsProvider;
 }
 
 const WEBHOOK_PATH = "/api/webhooks/quo";
@@ -49,6 +52,7 @@ export async function GET() {
       textsMirrored: 0,
       callsMirrored: 0,
       error: null,
+      provider: await currentSmsProvider(),
     };
 
     const [texts, calls] = await Promise.all([

@@ -2,6 +2,7 @@ import {
   tourLeadScope,
   type LeadNoteSource,
   type XanoAdminNote,
+  type XanoCall,
   type XanoInquiry,
   type XanoSmsMessage,
   type XanoSummerCampInquiry,
@@ -10,7 +11,7 @@ import {
   type XanoWebsiteLiabilityWaiver,
 } from "@/lib/xano";
 import { SCHOOL_TIME_ZONE } from "@/lib/school-calendar";
-import type { NurtureSettings } from "@/lib/app-settings";
+import type { NurtureSettings, SmsProvider } from "@/lib/app-settings";
 import { leadConvertedFamilyId } from "@/lib/lead-conversion";
 import * as tpl from "@/lib/nurture/templates";
 import { NURTURE_TEMPLATE_PREFIX } from "@/lib/nurture/templates";
@@ -133,7 +134,12 @@ export interface NurtureInput {
   tascos: XanoTascoSummerVisit[];
   tours: XanoTour[];
   messages: XanoSmsMessage[];
+  /** Main Line calls — an answered call or a voicemail is contact. */
+  calls: XanoCall[];
   notes: XanoAdminNote[];
+  /** Which number the texts go out from. "Have we texted them before"
+   *  (the opt-out line on a first text) is about that number. */
+  provider: SmsProvider;
 }
 
 export interface NurtureItem {
@@ -281,6 +287,10 @@ interface Facts {
   /** Newest staff-written text (manual or group). */
   lastStaffTextAt: number;
   lastNurtureAt: number;
+  /** Newest call where someone actually talked (answered, either
+   *  direction) or the parent left a voicemail. An unanswered call
+   *  isn't contact — nobody spoke. */
+  lastCallContactAt: number;
 }
 
 function emptyFacts(): Facts {
@@ -290,19 +300,36 @@ function emptyFacts(): Facts {
     lastInboundAt: 0,
     lastStaffTextAt: 0,
     lastNurtureAt: 0,
+    lastCallContactAt: 0,
   };
 }
 
-function addMessage(f: Facts, m: XanoSmsMessage): void {
+function callLeadKey(c: XanoCall): string | null {
+  if (num(c.registration_families_id)) return null; // family thread
+  if (num(c.registration_inquiry_id)) return `inquiry:${num(c.registration_inquiry_id)}`;
+  if (num(c.registration_summer_camp_id)) return `camp:${num(c.registration_summer_camp_id)}`;
+  if (num(c.website_liability_waiver_id)) return `visit:${num(c.website_liability_waiver_id)}`;
+  if (num(c.tasco_summer_visit_id)) return `tasco:${num(c.tasco_summer_visit_id)}`;
+  return null;
+}
+
+function addCall(f: Facts, c: XanoCall): void {
+  const spoke = num(c.answered_at) > 0 || num(c.duration_seconds) > 0 || Boolean(c.has_voicemail);
+  if (!spoke) return;
+  f.lastCallContactAt = Math.max(f.lastCallContactAt, num(c.started_at) || num(c.created_at));
+}
+
+function addMessage(f: Facts, m: XanoSmsMessage, provider: SmsProvider): void {
   const at = num(m.created_at);
   if (m.direction === "inbound") {
     f.lastInboundAt = Math.max(f.lastInboundAt, at);
     return;
   }
   // "Have we texted them before" is about the number the automated
-  // texts come from; a text from the Main Line doesn't carry that
-  // number's opt-out line.
-  if (m.provider !== "quo") f.hasOutbound = true;
+  // texts come from: a text from the other number doesn't carry this
+  // one's opt-out line.
+  const rowProvider: SmsProvider = m.provider === "quo" ? "quo" : "twilio";
+  if (rowProvider === provider) f.hasOutbound = true;
   const template = m.template ?? "";
   if (template) f.templates.add(template);
   if (template.startsWith(NURTURE_TEMPLATE_PREFIX)) {
@@ -329,7 +356,11 @@ function messageLeadKey(m: XanoSmsMessage): string | null {
 /** Facts per lead thread AND per counterparty phone — every thread,
  *  family and number-only ones included, since a parent's reply is
  *  filed under just one of the records that share their number. */
-function buildFacts(messages: XanoSmsMessage[]): {
+function buildFacts(
+  messages: XanoSmsMessage[],
+  calls: XanoCall[],
+  provider: SmsProvider
+): {
   byLead: Map<string, Facts>;
   byPhone: Map<string, Facts>;
 } {
@@ -342,9 +373,15 @@ function buildFacts(messages: XanoSmsMessage[]): {
   };
   for (const m of messages) {
     const lead = messageLeadKey(m);
-    if (lead) addMessage(into(byLead, lead), m);
+    if (lead) addMessage(into(byLead, lead), m, provider);
     const phone = phoneKeyOf(m.direction === "inbound" ? m.from_number : m.to_number);
-    if (phone) addMessage(into(byPhone, phone), m);
+    if (phone) addMessage(into(byPhone, phone), m, provider);
+  }
+  for (const c of calls) {
+    const lead = callLeadKey(c);
+    if (lead) addCall(into(byLead, lead), c);
+    const phone = phoneKeyOf(c.counterparty);
+    if (phone) addCall(into(byPhone, phone), c);
   }
   return { byLead, byPhone };
 }
@@ -358,6 +395,7 @@ function mergeFacts(a: Facts | undefined, b: Facts | undefined): Facts {
     f.lastInboundAt = Math.max(f.lastInboundAt, x.lastInboundAt);
     f.lastStaffTextAt = Math.max(f.lastStaffTextAt, x.lastStaffTextAt);
     f.lastNurtureAt = Math.max(f.lastNurtureAt, x.lastNurtureAt);
+    f.lastCallContactAt = Math.max(f.lastCallContactAt, x.lastCallContactAt);
   }
   return f;
 }
@@ -462,7 +500,9 @@ function candidatesFor(
     lead.createdAt >= startedAt &&
     !hasApplied(lead) &&
     tours.length === 0 &&
-    facts.lastInboundAt < lead.createdAt
+    facts.lastInboundAt < lead.createdAt &&
+    // …and nobody has spoken with them by phone since, either.
+    facts.lastCallContactAt < lead.createdAt
   ) {
     const age = now - lead.createdAt;
     const lastContact = Math.max(lead.lastReachOut, facts.lastStaffTextAt);
@@ -562,7 +602,7 @@ function candidatesFor(
 
 export function planNurture(input: NurtureInput): NurturePlan {
   const leads = buildLeads(input);
-  const { byLead, byPhone } = buildFacts(input.messages);
+  const { byLead, byPhone } = buildFacts(input.messages, input.calls, input.provider);
   const paused = pausedLeadKeys(input.notes);
   const tours = toursByLead(input.tours);
   const items: NurtureItem[] = [];

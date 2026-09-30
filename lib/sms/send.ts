@@ -5,6 +5,9 @@ import {
   isTwilioConfigured,
 } from "@/lib/twilio";
 import { toE164 } from "@/lib/phone";
+import { currentSmsProvider } from "@/lib/app-settings";
+import { isQuoConfigured, quoUserIdByEmail, sendQuoText } from "@/lib/quo";
+import { MAIN_LINE } from "@/lib/school-phones";
 import {
   contactMessageKeys,
   getContactRecipient,
@@ -159,6 +162,24 @@ export async function sendSms(input: SendSmsInput): Promise<SendSmsResult> {
 
   if (!to) {
     return { ok: false, skipped: "no_phone" };
+  }
+
+  // Which number this goes out from. Quo = the office Main Line;
+  // Twilio = (727) 604-8321. Every surface routes through here, so the
+  // switch (Follow-ups -> Phone system) moves them all at once.
+  const provider = await currentSmsProvider();
+  if (provider === "quo") {
+    if (!isQuoConfigured()) return { ok: false, skipped: "not_configured" };
+    return sendViaQuo({
+      contact,
+      to,
+      body,
+      template: template ?? "manual",
+      studentId,
+      yearId,
+      author,
+      claim: Boolean(input.claim),
+    });
   }
 
   // No Twilio creds (local / preview) → don't attempt a send, and
@@ -367,5 +388,109 @@ async function sendClaimed({
       ok: false,
       error: err instanceof Error ? err.message : "SMS send failed",
     };
+  }
+}
+
+/**
+ * The Quo path: every text from the Main Line, logged BEFORE it's
+ * sent. Writing the row first does two jobs: it is the claim that
+ * keeps an overlapping automated run from sending the same text twice
+ * (the same rule as the Twilio claim path), and it means the delivery
+ * webhook, which can arrive within a second, finds the row to update
+ * instead of creating a second one: by Quo id once the stamp below
+ * lands, and by number + words before that (`adoptApplyRow` in
+ * lib/quo/ingest.ts). If the receipt wins that race the stamp can put
+ * the status back a step; the 15-minute Quo sync sets it right.
+ *
+ * Staff sends carry the sender's Quo user when their email matches a
+ * Quo account, so the Quo app shows who wrote it. Every send is marked
+ * done in the office inbox (Apply is where it was handled); a reply
+ * from the parent reopens the conversation there.
+ */
+async function sendViaQuo(args: {
+  contact: { type: SmsContactType; id: number };
+  to: string;
+  body: string;
+  template: string;
+  studentId: number | null;
+  yearId: number | null;
+  author: { email: string; name: string } | null;
+  claim: boolean;
+}): Promise<SendSmsResult> {
+  const { contact, to, body, template, author } = args;
+  let row: XanoSmsMessage;
+  try {
+    row = await xano.smsMessages.create({
+      ...contactMessageKeys(contact),
+      registration_students_id: args.studentId,
+      registration_school_years_id: args.yearId,
+      direction: "outbound",
+      to_number: to,
+      from_number: MAIN_LINE,
+      body,
+      status: "sending",
+      twilio_message_sid: null,
+      template,
+      error_code: null,
+      author_email: author?.email ?? null,
+      author_name: author?.name ?? null,
+      segments: null,
+      provider: "quo",
+      quo_message_id: null,
+      quo_conversation_id: null,
+    } as Parameters<typeof xano.smsMessages.create>[0]);
+  } catch (err) {
+    console.error("[sendSms] couldn't log the text first, so it wasn't sent:", err);
+    return { ok: false, error: "Couldn't log the text first, so it wasn't sent" };
+  }
+
+  const withdraw = () =>
+    xano.smsMessages.delete(row.id).catch((err) => {
+      console.error(`[sendSms] couldn't withdraw row ${row.id}:`, err);
+    });
+  if (args.claim && contact.type !== "adhoc") {
+    try {
+      const thread = await xano.smsMessages.getByContactStrict(contact.type, contact.id);
+      const earlier = thread.some(
+        (m) => m.direction === "outbound" && m.template === template && m.id < row.id
+      );
+      if (earlier) {
+        await withdraw();
+        return { ok: true, deduped: true };
+      }
+    } catch (err) {
+      console.error("[sendSms] couldn't confirm the claim, so it wasn't sent:", err);
+      await withdraw();
+      return { ok: false, error: "Couldn't confirm the text wasn't already sent" };
+    }
+  }
+
+  try {
+    const userId = author?.email ? await quoUserIdByEmail(author.email) : null;
+    const msg = await sendQuoText({ to, content: body, userId, markDone: true });
+    const stamp = {
+      status: msg.status || "sent",
+      quo_message_id: msg.id,
+      quo_conversation_id: msg.conversationId ?? "",
+      from_number: msg.from || MAIN_LINE,
+    };
+    // The row already exists, so a failed stamp can't cause a re-send;
+    // the delivery webhook (keyed on the Quo id) also fills it in.
+    await xano.smsMessages.update(row.id, stamp).catch(async (err) => {
+      console.error("[sendSms] sent via Quo but couldn't stamp the row, retrying:", err);
+      await xano.smsMessages.update(row.id, stamp).catch((err2) => {
+        console.error("[sendSms] sent via Quo but couldn't stamp the row (retry):", err2);
+      });
+    });
+    return { ok: true, messageSid: msg.id, logId: row.id };
+  } catch (err) {
+    console.error("[sendSms] Quo send failed:", err);
+    await xano.smsMessages
+      .update(row.id, {
+        status: "failed",
+        error_code: err instanceof Error ? err.message.slice(0, 120) : "send_error",
+      })
+      .catch(() => {});
+    return { ok: false, error: err instanceof Error ? err.message : "SMS send failed" };
   }
 }

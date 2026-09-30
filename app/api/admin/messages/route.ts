@@ -421,7 +421,7 @@ export async function POST(req: NextRequest) {
           : result.skipped === "no_phone"
             ? "No valid phone number on file for this contact."
             : result.skipped === "not_configured"
-              ? "SMS isn't configured yet (missing Twilio credentials)."
+              ? "Texting isn't set up yet (the texting service's credentials are missing)."
               : (result.error ?? "Failed to send message.");
       return NextResponse.json(
         { error: message, skipped: result.skipped ?? null },
