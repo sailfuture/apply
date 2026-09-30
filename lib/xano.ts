@@ -6069,20 +6069,24 @@ export const xano = {
     },
 
     async create(
-      // `created_at` is accepted so the Twilio backfill sync can
-      // preserve each message's ORIGINAL send time instead of letting
-      // Xano stamp the import moment (which is what made every
-      // imported text share one clock time). Requires `created_at` as
-      // an input on the Xano `POST /sms_messages` endpoint — wired
-      // 2026-08-03. Omitted on live sends, where "now" is correct.
+      // `created_at` is accepted so the Twilio backfill sync and the Quo
+      // mirror can preserve each message's ORIGINAL send time instead
+      // of the import moment. The Xano `POST /sms_messages` endpoint
+      // writes `created_at` straight from its input, and since it was
+      // re-published on 2026-09-29 an OMITTED value is stored as 0, not
+      // "now": two live sends landed dated 12/31/1969, sorted to the
+      // top of their threads and fell outside every recent-rows window.
+      // So a send that doesn't name a time is stamped here.
       data: Omit<XanoSmsMessage, "id" | "created_at"> & {
         created_at?: number;
       }
     ): Promise<XanoSmsMessage> {
+      const createdAt =
+        Number(data.created_at) > 0 ? Number(data.created_at) : Date.now();
       const res = await xanoFetch(`${getBaseUrl()}/sms_messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
+        body: JSON.stringify({ ...data, created_at: createdAt }),
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
       const row: XanoSmsMessage = await res.json();
