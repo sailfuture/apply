@@ -6299,8 +6299,10 @@ function ScholarshipReviewBlock({
                   </span>
                 </td>
                 <td className="px-4 py-2 text-right tabular-nums font-semibold">
-                  {formatCurrency(monthlySnap)}
-                  /mo
+                  {/* Cents, not whole dollars — this is the figure
+                      Stripe bills ((owed) / 12), so it must match the
+                      Acceptance receipt and the subscription exactly. */}
+                  ${formatCurrency2(monthlySnap)}/mo
                 </td>
               </tr>
             </tbody>
