@@ -34,8 +34,9 @@ export const FILTERED_ERROR_CODE = "30007";
 export const DELIVERY_WINDOW_MS = 2 * 3_600_000;
 /** One alert per episode: no repeat inside this. */
 export const ALERT_COOLDOWN_MS = 12 * 3_600_000;
-/** At least this many filtered texts before it counts as an episode —
- *  one bad number is not a pattern. */
+/** A run of this many filtered texts in a row is an episode — one or
+ *  two can be a bad number or a one-off content block. The same count
+ *  of deliveries in a row ends it. */
 export const MIN_FILTERED = 3;
 
 export interface FilteredSample {
@@ -55,8 +56,18 @@ export interface DeliverySummary {
   pending: number;
   /** Newest first, at most 12. */
   filteredSample: FilteredSample[];
-  /** The verdict the alert hangs on: filtered texts are at least
-   *  MIN_FILTERED and at least as many as delivered ones. */
+  /** How many of the most recent decided sends were filtered, counting
+   *  back from the newest until a delivered one (other failures —
+   *  landlines, dead numbers — are skipped, not counted). */
+  tailFiltered: number;
+  /** The same run for delivered sends, ended by a filtered one. */
+  tailDelivered: number;
+  /** The verdict the alert hangs on: the newest MIN_FILTERED decided
+   *  sends were all filtered, or filtered sends in the window are at
+   *  least MIN_FILTERED and outnumber delivered ones. The run catches
+   *  an episode that starts right after a healthy blast (9/30: the
+   *  morning's deliveries kept the ratio quiet for an hour); the ratio
+   *  catches one where a few deliveries slip through. */
   filtering: boolean;
 }
 
@@ -77,29 +88,44 @@ export function summarizeDelivery(
     undeliveredOther: 0,
     pending: 0,
     filteredSample: [],
+    tailFiltered: 0,
+    tailDelivered: 0,
     filtering: false,
   };
   const sample: FilteredSample[] = [];
+  // Decided sends in send order (time, then id), for the runs below.
+  const decided: Array<{ at: number; id: number; kind: "delivered" | "filtered" | "other" }> = [];
   for (const m of rows) {
     const at = Number(m.created_at);
     if (m.direction !== "outbound" || !(at >= since) || at > now) continue;
     const status = m.status ?? "";
     if (FINAL_OK.has(status)) {
       summary.delivered++;
+      decided.push({ at, id: m.id, kind: "delivered" });
     } else if (FINAL_BAD.has(status)) {
       if (String(m.error_code ?? "") === FILTERED_ERROR_CODE) {
         summary.filtered++;
         sample.push({ to: m.to_number, at, template: m.template ?? null });
+        decided.push({ at, id: m.id, kind: "filtered" });
       } else {
         summary.undeliveredOther++;
+        decided.push({ at, id: m.id, kind: "other" });
       }
     } else {
       summary.pending++;
     }
   }
   summary.filteredSample = sample.sort((a, b) => b.at - a.at).slice(0, 12);
+  decided.sort((a, b) => b.at - a.at || b.id - a.id);
+  for (const d of decided) {
+    if (d.kind === "other") continue;
+    if (d.kind === "filtered" && summary.tailDelivered === 0) summary.tailFiltered++;
+    else if (d.kind === "delivered" && summary.tailFiltered === 0) summary.tailDelivered++;
+    else break;
+  }
   summary.filtering =
-    summary.filtered >= MIN_FILTERED && summary.filtered >= summary.delivered;
+    summary.tailFiltered >= MIN_FILTERED ||
+    (summary.filtered >= MIN_FILTERED && summary.filtered > summary.delivered);
   return summary;
 }
 
@@ -108,7 +134,7 @@ export type DeliveryVerdict = "alert" | "recovered" | "quiet";
 /**
  * Alert when filtering is on and no alert is open (or the last one is
  * older than the cooldown); recovered when an alert is open and the
- * window shows a few deliveries and no filtered text; quiet otherwise.
+ * newest MIN_FILTERED decided sends were all delivered; quiet otherwise.
  */
 export function decideDeliveryAlert(
   summary: DeliverySummary,
@@ -119,7 +145,7 @@ export function decideDeliveryAlert(
     if (state.alertedAt && now - state.alertedAt < ALERT_COOLDOWN_MS) return "quiet";
     return "alert";
   }
-  if (state.alertedAt && summary.delivered >= MIN_FILTERED && summary.filtered === 0) {
+  if (state.alertedAt && summary.tailDelivered >= MIN_FILTERED) {
     return "recovered";
   }
   return "quiet";
