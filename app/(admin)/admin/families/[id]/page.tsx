@@ -56,6 +56,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 // `StatusBadge` still mounts inside `StudentBio` for the small
 // "Accepted" pill — keep the import even though
@@ -143,6 +144,32 @@ interface FamilyResponse {
   // now read from there (via `detail.scholarship` / etc.); the flags
   // are intentionally absent from this interface.
 }
+
+/** The Opportunity Scholarship form's own figures — what the Household
+ *  / Income / Assets / Debts groups render. Used to tell whether a
+ *  SNAP or opted-out family has any of them on file from before they
+ *  switched paths. */
+const OPPORTUNITY_FORM_FIELDS = [
+  "household_adults",
+  "household_children",
+  "business_income_monthly",
+  "capital_gains_monthly",
+  "child_support_monthly",
+  "alimony_monthly",
+  "trusts_monthly",
+  "other_income_monthly",
+  "describe_other_income",
+  "assets_checking",
+  "assets_savings",
+  "assets_retirement_savings",
+  "assets_stocks_bonds_securities",
+  "assets_trusts_inheritance",
+  "assets_business",
+  "debts_credit_cards",
+  "debts_student_loans",
+  "debts_personal_loans",
+  "family_contribution_per_month",
+] as const satisfies ReadonlyArray<keyof XanoScholarship>;
 
 const xanoBase =
   process.env.NEXT_PUBLIC_XANO_BASE ?? "https://xsc3-mvx7-r86m.n7e.xano.io";
@@ -1575,7 +1602,8 @@ function SectionShell({
       <CardContent
         className={cn(
           "space-y-6 py-5 bg-white transition-opacity",
-          fullyDone && "opacity-60"
+          // Back to full opacity while an editor inside is open.
+          fullyDone && "opacity-60 has-[[data-editing]]:opacity-100"
         )}
       >
         {children}
@@ -3366,6 +3394,19 @@ function ScholarshipBlock({
   // Scholarship rows and rendering a wall of $0s would be misleading.
   const onFullForm =
     !scholarship.isNotParticipating && !scholarship.isSNAPBenefits;
+  // A family that filled in the Opportunity Scholarship form and then
+  // moved to SNAP / opted out keeps those figures on the row. Show
+  // them read-only for the record rather than hiding them; a row with
+  // nothing entered still skips the wall of $0s.
+  const hasFinancialsOnFile = OPPORTUNITY_FORM_FIELDS.some((key) => {
+    const v = scholarship[key];
+    return typeof v === "number"
+      ? v !== 0
+      : typeof v === "string"
+        ? v.trim() !== ""
+        : v === true;
+  });
+  const showFinancials = onFullForm || hasFinancialsOnFile;
 
   // ── Inline financial editing (admin can correct parent-entered data) ──
   const [editing, setEditing] = useState(false);
@@ -3521,6 +3562,9 @@ function ScholarshipBlock({
           <span>
             The family pre-qualifies via SNAP benefits. Confirm the SNAP
             award letter in the Documents to Review table below.
+            {hasFinancialsOnFile
+              ? " The Opportunity Scholarship details below were entered before the switch — kept for the record, not used for billing."
+              : null}
           </span>
         </div>
       ) : null}
@@ -3584,7 +3628,7 @@ function ScholarshipBlock({
           )}
         </div>
       ) : null}
-      {onFullForm ? (
+      {showFinancials ? (
         <SectionGroup title="Household">
         <div className="grid gap-4 grid-cols-2 sm:grid-cols-4">
           <ScholarshipEditableField
@@ -3623,7 +3667,7 @@ function ScholarshipBlock({
       </SectionGroup>
       ) : null}
 
-      {onFullForm ? (
+      {showFinancials ? (
       <SectionGroup title="Income (monthly)">
         <div className="grid gap-4 grid-cols-2 sm:grid-cols-3">
           <ScholarshipEditableField
@@ -3690,7 +3734,7 @@ function ScholarshipBlock({
       </SectionGroup>
       ) : null}
 
-      {onFullForm ? (
+      {showFinancials ? (
       <SectionGroup title="Assets">
         <div className="grid gap-4 grid-cols-2 sm:grid-cols-3">
           <ScholarshipEditableField
@@ -3968,7 +4012,7 @@ function ScholarshipBlock({
         )}
       </SectionGroup>
 
-      {onFullForm ? (
+      {showFinancials ? (
         <>
           <SectionGroup title="Debts">
             <div className="grid gap-4 grid-cols-3">
@@ -4887,7 +4931,8 @@ function DecisionCard({
       <CardContent
         className={cn(
           "space-y-6 py-5 bg-white transition-opacity",
-          progress?.scholarship_admin_complete === true && "opacity-60"
+          progress?.scholarship_admin_complete === true &&
+            "opacity-60 has-[[data-editing]]:opacity-100"
         )}
       >
         {loading ? (
@@ -6428,6 +6473,8 @@ function DecisionStudentRow({
   const [overridePreview, setOverridePreview] =
     useState<PerStudentBillingPreview | null>(null);
   const [overrideReason, setOverrideReason] = useState("");
+  // Email the parents the new monthly amount once Stripe has it.
+  const [overrideNotifyParents, setOverrideNotifyParents] = useState(true);
   const [overrideBusy, setOverrideBusy] = useState<
     "preview" | "save" | null
   >(null);
@@ -6675,9 +6722,16 @@ function DecisionStudentRow({
         body: JSON.stringify({
           ...overrideBody(),
           reason: overrideReason.trim(),
+          notifyParents: overrideNotifyParents,
           // The amounts landed on the first attempt — this pass is
-          // only there to get them into Stripe.
-          ...(overrideStripeFailed ? { stripeRetry: true } : {}),
+          // only there to get them into Stripe. The row already holds
+          // the new monthly, so the email needs the old one from here.
+          ...(overrideStripeFailed
+            ? {
+                stripeRetry: true,
+                previousMonthly: overridePreview.current.monthly_amount,
+              }
+            : {}),
         }),
       });
       if (!res.ok) {
@@ -6690,6 +6744,7 @@ function DecisionStudentRow({
           stripeSync?: "updated" | "not_started" | "failed";
           auditNoteSaved?: boolean | null;
           unsavedColumns?: string[];
+          parentEmailSent?: boolean | null;
         };
       };
       // Hold the busy state until the refreshed row is on screen —
@@ -6711,6 +6766,11 @@ function DecisionStudentRow({
       if (saved.meta?.auditNoteSaved === false) {
         toast.error(
           "The change was saved, but the note recording it couldn't be written — add one to the family's activity log."
+        );
+      }
+      if (saved.meta?.parentEmailSent === false) {
+        toast.error(
+          "Billing was updated, but the email to the parents didn't send — let them know about the new amount directly."
         );
       }
       if (saved.meta?.stripeSync === "failed") {
@@ -6803,7 +6863,11 @@ function DecisionStudentRow({
   }
 
   return (
-    <div className="rounded-md border bg-muted/10 p-4 space-y-4">
+    <div
+      className="rounded-md border bg-muted/10 p-4 space-y-4"
+      // Lifts the Determination card's verified fade while editing.
+      data-editing={amountsUnlocked ? "" : undefined}
+    >
       <div className="flex items-center justify-between gap-3">
         <div>
           <p className="text-sm font-semibold">
@@ -7552,6 +7616,22 @@ function DecisionStudentRow({
                   disabled={overrideBusy !== null || overrideStripeFailed}
                 />
               </div>
+              {overridePreview.billingLive !== false &&
+              overridePreview.current.monthly_amount !==
+                overridePreview.next.monthly_amount ? (
+                <label className="flex items-start gap-2 text-xs cursor-pointer">
+                  <Checkbox
+                    checked={overrideNotifyParents}
+                    onCheckedChange={(v) => setOverrideNotifyParents(v === true)}
+                    disabled={overrideBusy !== null}
+                    className="mt-0.5"
+                  />
+                  <span>
+                    Email the parents the new monthly amount and the
+                    invoice it starts with (sent once Stripe is updated)
+                  </span>
+                </label>
+              ) : null}
             </div>
           ) : null}
           <DialogFooter>
@@ -8146,7 +8226,7 @@ function ScholarshipPathSelector({
   ];
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-2" data-editing={unlocked ? "" : undefined}>
       {/* Label + the Edit affordance that lifts the verified lock.
           The button only exists when the picker is actually locked
           AND the caller opted into unlocking — an unlocked picker

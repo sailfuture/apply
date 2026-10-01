@@ -328,6 +328,32 @@ export async function getNextInvoiceTiming(
 }
 
 /**
+ * When the first invoice priced off the subscription's CURRENT items
+ * goes out — i.e. the first one a just-made re-price shows up on.
+ * Differs from `getNextInvoiceTiming` on a draft: a renewal draft
+ * snapshots its lines when it's created, so a re-price made while
+ * that draft is pending only lands on the invoice after it (the end
+ * of the period the draft opened). Null when Stripe can't say.
+ */
+export async function getFirstInvoiceAtCurrentPriceMs(
+  subscriptionId: string
+): Promise<number | null> {
+  const stripe = getStripeClient();
+  const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+  const nowUnix = Math.floor(Date.now() / 1000);
+  if (subscription.status === "trialing" && subscription.trial_end) {
+    return subscription.trial_end * 1000;
+  }
+  if (subscription.billing_cycle_anchor > nowUnix) {
+    return subscription.billing_cycle_anchor * 1000;
+  }
+  // Billing periods live on the items (flexible billing mode has no
+  // subscription-level current_period_end).
+  const cycleEnd = subscription.items.data[0]?.current_period_end;
+  return cycleEnd && cycleEnd > nowUnix ? cycleEnd * 1000 : null;
+}
+
+/**
  * Fetch subscription + last 12 invoices in two parallel calls. Used by
  * the admin Billing card on the family registration detail page. We
  * never cache this — the call only happens on admin page loads, and

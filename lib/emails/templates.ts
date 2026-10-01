@@ -821,3 +821,81 @@ export function residentialStudentAdded(
 
   return { subject, html, text };
 }
+
+export interface BillingAmountChangedContext extends BaseContext {
+  /** School year label, e.g. "2026-2027". */
+  year_name: string;
+  previous_monthly: number;
+  new_monthly: number;
+  /** When the first invoice at the new amount goes out, or null when
+   *  Stripe couldn't say — the copy falls back to "your next monthly
+   *  invoice". */
+  first_invoice_at: number | null;
+}
+
+/**
+ * Sent after admin changes a student's confirmed tuition amounts and
+ * the Stripe subscription was re-priced (the "Edit amounts" override
+ * on the Determination card). Says only what changed and when — the
+ * admin's reason for the change is internal and stays in the audit
+ * note.
+ */
+export function billingAmountChanged(
+  ctx: BillingAmountChangedContext
+): EmailContent {
+  const money = (v: number) =>
+    v.toLocaleString("en-US", { style: "currency", currency: "USD" });
+  const startsWith =
+    ctx.first_invoice_at === null
+      ? "your next monthly invoice"
+      : `your ${new Date(ctx.first_invoice_at).toLocaleDateString("en-US", {
+          month: "long",
+          day: "numeric",
+          timeZone: "America/New_York",
+        })} invoice`;
+
+  const subject = `${ctx.student_first_name}'s monthly tuition payment has changed`;
+  const preheader = `Your new monthly payment is ${money(ctx.new_monthly)}, starting with ${startsWith}.`;
+  const intro = `We've updated the monthly tuition and fees payment for ${ctx.student_first_name} for the ${ctx.year_name} school year.`;
+  const timing = `The new amount starts with ${startsWith}. Invoices already issued aren't affected, and there's nothing you need to do.`;
+
+  const row = (label: string, value: string, strong = false) =>
+    `<tr>
+      <td style="padding:6px 16px 6px 0;font-size:15px;color:#6b7280;">${escapeHtml(label)}</td>
+      <td style="padding:6px 0;font-size:15px;text-align:right;${strong ? "font-weight:600;color:#111827;" : "color:#6b7280;"}">${escapeHtml(value)}</td>
+    </tr>`;
+
+  const html = layout({
+    preheader,
+    body:
+      p(`Hi ${ctx.parent_first_name},`) +
+      p(intro) +
+      `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 16px;">${
+        row("Previous monthly payment", money(ctx.previous_monthly)) +
+        row("New monthly payment", money(ctx.new_monthly), true)
+      }</table>` +
+      p(timing) +
+      p(`The SailFuture Academy team`),
+    buttonHref: ctx.login_url,
+    buttonLabel: "View your account",
+  });
+
+  const text = [
+    `Hi ${ctx.parent_first_name},`,
+    "",
+    intro,
+    "",
+    `Previous monthly payment: ${money(ctx.previous_monthly)}`,
+    `New monthly payment: ${money(ctx.new_monthly)}`,
+    "",
+    timing,
+    "",
+    `View your account: ${ctx.login_url}`,
+    "",
+    `Questions? Email ${SUPPORT_EMAIL} or call ${SUPPORT_PHONE}.`,
+    "",
+    `The SailFuture Academy team`,
+  ].join("\n");
+
+  return { subject, html, text };
+}

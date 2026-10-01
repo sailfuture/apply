@@ -4,8 +4,11 @@ import type { AdminUser } from "@/lib/admin-auth";
 import {
   xano,
   liveStripeSubscriptionItemId,
+  activeStripeSubscriptionId,
   type XanoApplication,
 } from "@/lib/xano";
+import { getFirstInvoiceAtCurrentPriceMs } from "@/lib/stripe";
+import { sendBillingAmountChangedEmail } from "@/lib/emails/triggers";
 import { sendBillingAlert } from "@/lib/billing-alerts";
 import {
   derivePacketBillingValues,
@@ -30,6 +33,8 @@ import { resolveStudentReceiptAmounts } from "@/lib/student-receipt";
  *     remainingOpportunityAmount?: number,
  *     dryRun?: boolean,
  *     reason?: string,
+ *     notifyParents?: boolean,   // email the new monthly once Stripe has it
+ *     previousMonthly?: number,  // with stripeRetry: the pre-change monthly
  *   }
  *
  * The route reads the application row's existing values for any
@@ -147,6 +152,11 @@ export async function POST(req: NextRequest) {
     // The card re-sends an override (no new amounts) when the Stripe
     // half of the previous save failed.
     const stripeRetry = body?.stripeRetry === true;
+    // Email the parents about the new monthly amount once Stripe has
+    // it. On a retry the row already holds the new amount, so the
+    // card passes the pre-change monthly it showed in the review.
+    const notifyParents = body?.notifyParents === true;
+    const retryPreviousMonthly = Number(body?.previousMonthly);
 
     // Resolve the application row and the school year in parallel.
     const [app, schoolYear] = await Promise.all([
@@ -327,9 +337,31 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    // `null` = no email was asked for or due.
+    let parentEmailSent: boolean | null = null;
+    const previousMonthly = stripeRetry
+      ? retryPreviousMonthly
+      : before.monthly;
+    if (
+      notifyParents &&
+      isOverride &&
+      stripeSync === "updated" &&
+      Number.isFinite(previousMonthly) &&
+      Math.abs(previousMonthly - billingValues.monthly_amount) > 0.005
+    ) {
+      parentEmailSent = await emailParentsAboutNewMonthly({
+        app: updatedApp,
+        studentId,
+        yearId,
+        yearName: schoolYear?.year_name?.trim() || `Year #${yearId}`,
+        previousMonthly,
+        newMonthly: billingValues.monthly_amount,
+      });
+    }
+
     return NextResponse.json({
       ...updatedApp,
-      meta: { stripeSync, auditNoteSaved, unsavedColumns },
+      meta: { stripeSync, auditNoteSaved, unsavedColumns, parentEmailSent },
     });
   } catch (err) {
     return handleAdminError(err);
@@ -354,6 +386,59 @@ export interface PerStudentBillingFigures {
   remaining_opportunity_amount: number;
   annual_fee: number;
   monthly_amount: number;
+}
+
+/**
+ * Tell the parents a student's monthly payment changed, naming the
+ * first invoice at the new amount when Stripe can say. Best-effort:
+ * the re-price already landed, so a failure here only reports back.
+ */
+async function emailParentsAboutNewMonthly({
+  app,
+  studentId,
+  yearId,
+  yearName,
+  previousMonthly,
+  newMonthly,
+}: {
+  app: XanoApplication;
+  studentId: number;
+  yearId: number;
+  yearName: string;
+  previousMonthly: number;
+  newMonthly: number;
+}): Promise<boolean> {
+  const familyId = Number(app.registration_families_id);
+  if (!Number.isFinite(familyId) || familyId <= 0) return false;
+  let firstInvoiceAt: number | null = null;
+  try {
+    const payment = await xano.familyPayments.getByFamilyAndYearStrict(
+      familyId,
+      yearId
+    );
+    const subscriptionId = activeStripeSubscriptionId(
+      payment?.stripe_subscription_id
+    );
+    if (subscriptionId) {
+      firstInvoiceAt = await getFirstInvoiceAtCurrentPriceMs(subscriptionId);
+    }
+  } catch (err) {
+    // The email still goes out, saying "your next monthly invoice".
+    console.error(
+      "[/api/admin/student-registration/by-student] next invoice lookup failed:",
+      err
+    );
+  }
+  const result = await sendBillingAmountChangedEmail({
+    familyId,
+    yearId,
+    studentId,
+    yearName,
+    previousMonthly,
+    newMonthly,
+    firstInvoiceAt,
+  });
+  return result.ok;
 }
 
 async function findPacket(studentId: number, yearId: number) {

@@ -287,6 +287,41 @@ export async function sendEnrolledEmail(
   });
 }
 
+/** A student's monthly tuition changed after confirmation and Stripe
+ *  was re-priced. Fires from POST
+ *  /api/admin/student-registration/by-student when admin leaves
+ *  "Email the parents" checked in the Edit amounts review. */
+export async function sendBillingAmountChangedEmail(args: {
+  familyId: number;
+  yearId: number;
+  studentId: number;
+  yearName: string;
+  previousMonthly: number;
+  newMonthly: number;
+  firstInvoiceAt: number | null;
+}): Promise<SendResult> {
+  const ctx = await resolveFamilyContext(args.familyId, args.yearId);
+  if (!ctx) return { ok: false, error: "context-failed" };
+  const student =
+    ctx.students.find((s) => s.id === args.studentId) ??
+    (await xano.students.getById(args.studentId).catch(() => null));
+  return sendEmail({
+    to: ctx.parentEmails,
+    content: t.billingAmountChanged({
+      parent_first_name: ctx.primaryParentFirstName,
+      student_first_name: student?.first_name?.trim() || "your student",
+      login_url: ctx.loginUrl,
+      year_name: args.yearName,
+      previous_monthly: args.previousMonthly,
+      new_monthly: args.newMonthly,
+      first_invoice_at: args.firstInvoiceAt,
+    }),
+    tag: "billing-amount-changed",
+    familyId: ctx.familyId,
+    yearId: ctx.yearId,
+  });
+}
+
 // Email 8 (not-accepted) was removed 2026-08-11: its trigger fired on
 // a per-application isDenied transition, but that column never existed
 // in Xano and no Deny UI remains — declining a family is Archive /

@@ -1850,8 +1850,8 @@ export default function ScholarshipPage() {
             <AlertDialogHeader>
               <AlertDialogTitle>Switch your selection?</AlertDialogTitle>
               <AlertDialogDescription>
-                You&apos;ve already picked a different path. Switching will clear your
-                current selection and any data entered on that path. You can change back
+                You&apos;ve already picked a different path. Switching changes your
+                selection — anything you&apos;ve already entered stays saved. You can change back
                 later by clicking another row.
               </AlertDialogDescription>
             </AlertDialogHeader>
