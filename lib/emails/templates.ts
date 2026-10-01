@@ -501,6 +501,96 @@ export function mainLineTextingChanged(ctx: {
   return { subject, html, text: [subject, "", ...lines].join("\n") };
 }
 
+/**
+ * Carriers are filtering the texts Apply sends from the Main Line
+ * (code 30007 on most of the recent sends) — see
+ * lib/sms/delivery-alert.ts. One email per episode, to staff.
+ */
+export function smsDeliveryFiltered(ctx: {
+  delivered: number;
+  filtered: number;
+  undeliveredOther: number;
+  windowHours: number;
+  /** Unix ms of the first filtered text in this episode. */
+  filteredSince: number;
+  examples: Array<{ to: string; at: number; kind: string }>;
+  appUrl: string;
+}): EmailContent {
+  const subject = "Texts from the Main Line are being filtered by carriers";
+  const total = ctx.delivered + ctx.filtered + ctx.undeliveredOther;
+  const since = new Date(ctx.filteredSince).toLocaleString("en-US", {
+    timeZone: "America/New_York",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  const lines = [
+    `In the last ${ctx.windowHours} hours, ${ctx.filtered} of ${total} texts sent from the Main Line, (727) 209-7846, came back undelivered with carrier code 30007 ("message filtered"); ${ctx.delivered} were delivered. The first filtered one went out ${since}.`,
+    "Carriers do this to a number they see as new or as sending a burst of similar texts, especially ones with links. On September 30 it lasted from 11:14 AM until about 10 PM. Nothing in Apply has changed; each affected text shows as Not delivered in its thread.",
+    "What to do: hold group texts for a few hours. If it is still happening the next morning, ask Quo support to check the Main Line's carrier registration. Apply will email again when delivery recovers.",
+  ];
+  const fmt = (ms: number) =>
+    new Date(ms).toLocaleTimeString("en-US", {
+      timeZone: "America/New_York",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  const list = ctx.examples.length
+    ? `<p style="margin:16px 0 4px;font-size:14px;color:#6b7280;">Filtered texts, newest first:</p><ul style="margin:0 0 16px;padding-left:20px;font-size:14px;color:#111827;">` +
+      ctx.examples
+        .map((e) => `<li>${escapeHtml(fmt(e.at))} — ${escapeHtml(e.kind)} to ${escapeHtml(e.to)}</li>`)
+        .join("") +
+      "</ul>"
+    : "";
+  const html = layout({
+    preheader: lines[0].slice(0, 120),
+    body:
+      `<h2 style="margin:0 0 16px;font-size:18px;">${escapeHtml(subject)}</h2>` +
+      lines.map((l) => p(l)).join("") +
+      list,
+    buttonHref: `${ctx.appUrl}/admin/messages`,
+    buttonLabel: "Open Messages",
+  });
+  const text = [
+    subject,
+    "",
+    ...lines,
+    "",
+    ...ctx.examples.map((e) => `${fmt(e.at)} - ${e.kind} to ${e.to}`),
+  ].join("\n");
+  return { subject, html, text };
+}
+
+/** The follow-up to smsDeliveryFiltered: the window is clean again. */
+export function smsDeliveryRecovered(ctx: {
+  delivered: number;
+  alertedAt: number;
+  appUrl: string;
+}): EmailContent {
+  const subject = "Texts from the Main Line are delivering again";
+  const when = new Date(ctx.alertedAt).toLocaleString("en-US", {
+    timeZone: "America/New_York",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  const lines = [
+    `Since the filtering alert at ${when}, the most recent ${ctx.delivered} texts from the Main Line were delivered and none were filtered.`,
+    "Texts that were filtered during the episode were not re-sent; they still read Not delivered in their threads.",
+  ];
+  const html = layout({
+    preheader: lines[0].slice(0, 120),
+    body:
+      `<h2 style="margin:0 0 16px;font-size:18px;">${escapeHtml(subject)}</h2>` +
+      lines.map((l) => p(l)).join(""),
+    buttonHref: `${ctx.appUrl}/admin/messages`,
+    buttonLabel: "Open Messages",
+  });
+  return { subject, html, text: [subject, "", ...lines].join("\n") };
+}
+
 export function smsReplyReceived(ctx: SmsReplyReceivedContext): EmailContent {
   // Subject context: the family name for families ("Steven Petros
   // (Petros Family)"), the record type for inquiry/camp contacts

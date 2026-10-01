@@ -199,6 +199,39 @@ export async function writeNurtureSettings(
   return parseNurture(row.value);
 }
 
+/** The carrier-filtering watch (lib/sms/delivery-alert.ts): when the
+ *  open alert was sent, and when the episode's first filtered text
+ *  went out. Both null = no alert open. */
+export interface DeliveryAlertState {
+  alertedAt: number | null;
+  filteredSince: number | null;
+}
+
+function parseDeliveryAlert(v: unknown): DeliveryAlertState {
+  const r = asRecord(v);
+  const ms = (x: unknown) => (Number(x) > 0 ? Number(x) : null);
+  return { alertedAt: ms(r.alertedAt), filteredSince: ms(r.filteredSince) };
+}
+
+export async function readDeliveryAlertState(): Promise<DeliveryAlertState> {
+  const rows = await xano.appSettings.getAllStrict();
+  return parseDeliveryAlert(rowFor(rows, "sms_delivery_alert")?.value);
+}
+
+export async function writeDeliveryAlertState(
+  state: DeliveryAlertState,
+  updatedBy: string
+): Promise<DeliveryAlertState> {
+  // 0, not null: Xano's PATCH drops null inputs, so a closed alert
+  // is written as zeros (parsed back to null).
+  const row = await upsert(
+    "sms_delivery_alert",
+    { alertedAt: state.alertedAt ?? 0, filteredSince: state.filteredSince ?? 0 },
+    updatedBy
+  );
+  return parseDeliveryAlert(row.value);
+}
+
 export async function writeForwardingSettings(
   patch: ReplyForwardingSettings,
   updatedBy: string

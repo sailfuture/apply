@@ -378,6 +378,23 @@ function PhoneSystemCard() {
               ? "Off (QUO_WEBHOOK_SECRET isn't set)"
               : "Off (paused in Quo)";
     rows.push({ label: "Live updates", value: live, bad: live !== "On" });
+    const d = data.delivery;
+    const sentInWindow = d.delivered + d.filtered + d.undeliveredOther + d.pending;
+    rows.push({
+      label: `Delivery, last ${d.windowHours} hours`,
+      value:
+        sentInWindow === 0
+          ? "No texts sent"
+          : [
+              `${d.delivered} delivered`,
+              d.filtered ? `${d.filtered} filtered by carriers` : "",
+              d.undeliveredOther ? `${d.undeliveredOther} to bad numbers` : "",
+              d.pending ? `${d.pending} pending` : "",
+            ]
+              .filter(Boolean)
+              .join(", "),
+      bad: d.filtering,
+    });
     rows.push({
       label: "Last text received or sent",
       value: data.lastTextAt ? formatNoteTimestamp(data.lastTextAt) : "None yet",

@@ -3,6 +3,7 @@ import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
 import { isQuoConfigured, listWebhooks, resolveMainLine } from "@/lib/quo";
 import { currentSmsProvider, type SmsProvider } from "@/lib/app-settings";
+import { summarizeDelivery, DELIVERY_WINDOW_MS } from "@/lib/sms/delivery-alert";
 
 /**
  * Health of the Quo connection, for the status card on the Follow-ups
@@ -34,6 +35,16 @@ export interface QuoStatus {
   error: string | null;
   /** Which number Apply's texts go out from right now. */
   provider: SmsProvider;
+  /** Outcomes of the texts sent in the watch window (every
+   *  provider), as lib/sms/delivery-alert.ts counts them. */
+  delivery: {
+    windowHours: number;
+    delivered: number;
+    filtered: number;
+    undeliveredOther: number;
+    pending: number;
+    filtering: boolean;
+  };
 }
 
 const WEBHOOK_PATH = "/api/webhooks/quo";
@@ -53,12 +64,29 @@ export async function GET() {
       callsMirrored: 0,
       error: null,
       provider: await currentSmsProvider(),
+      delivery: {
+        windowHours: DELIVERY_WINDOW_MS / 3_600_000,
+        delivered: 0,
+        filtered: 0,
+        undeliveredOther: 0,
+        pending: 0,
+        filtering: false,
+      },
     };
 
     const [texts, calls] = await Promise.all([
       xano.smsMessages.getSince(Date.now() - LOOKBACK_MS),
       xano.calls.getAll(),
     ]);
+    const window = summarizeDelivery(texts, Date.now());
+    status.delivery = {
+      windowHours: DELIVERY_WINDOW_MS / 3_600_000,
+      delivered: window.delivered,
+      filtered: window.filtered,
+      undeliveredOther: window.undeliveredOther,
+      pending: window.pending,
+      filtering: window.filtering,
+    };
     const quoTexts = texts.filter((m) => m.provider === "quo");
     status.textsMirrored = quoTexts.length;
     status.lastTextAt = quoTexts.reduce<number | null>(
