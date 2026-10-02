@@ -9,6 +9,7 @@ import {
   extractInvoiceSubscriptionMetadata,
 } from "@/lib/stripe";
 import { sendBillingAlert } from "@/lib/billing-alerts";
+import { sendAutopayPaymentFailedEmail } from "@/lib/emails/triggers";
 import { extractOrderCustomFields, parseStoreReference } from "@/lib/store";
 import { buildFamilyByParentEmail } from "@/lib/store-server";
 
@@ -466,6 +467,26 @@ async function upsertInvoiceFromEvent(
         hostedUrl: invoice.hosted_invoice_url ?? null,
       },
     });
+
+    // An AUTOPAY charge failing needs the parent's attention as well.
+    // Nothing else tells them right away: autopay invoices carry no
+    // due date, so the billing texts never fire for them, and the
+    // past-due emails only start at 7 days. Emailed invoices skip
+    // this, since the parent was on the payment page and saw the
+    // decline. Once per invoice; never throws.
+    if (invoice.collection_method === "charge_automatically") {
+      const sent = await sendAutopayPaymentFailedEmail({
+        familyId,
+        yearId,
+        invoiceId: invoice.id,
+        amountCents: invoice.amount_remaining ?? invoice.amount_due ?? 0,
+      });
+      if (!sent.ok) {
+        console.error(
+          `[/api/webhooks/stripe] autopay failure email for ${invoice.id} didn't send: ${sent.error}`
+        );
+      }
+    }
   }
 }
 

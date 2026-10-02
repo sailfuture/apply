@@ -617,6 +617,7 @@ const EMAIL_TEMPLATE_SCOPE: Record<string, ActivityScope> = {
   enrolled: "enrollment",
   "back-to-school": "enrollment",
   "sms-reply-received": "general",
+  "autopay-on": "billing",
 };
 
 /** Templates added after this map was written (billing receipts,

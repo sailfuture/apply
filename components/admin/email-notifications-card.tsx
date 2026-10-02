@@ -397,7 +397,10 @@ function templateLabel(tag: string): string {
   // Past-due tags carry one token per invoice reminder they covered
   // (`tuition-past-due-7d-in_…`), so they match on the prefix.
   if (tag.startsWith(PAST_DUE_TEMPLATE_PREFIX)) return "Tuition past due";
+  if (tag.startsWith("autopay-payment-failed")) return "Autopay payment failed";
   switch (tag) {
+    case "autopay-on":
+      return "Autopay on";
     case "application-received":
       return "Application received";
     case "accepted":

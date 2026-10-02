@@ -7,6 +7,13 @@ import {
   uncancelSubscription,
 } from "@/lib/stripe";
 import { startMonthlyBilling, BillingPreconditionError } from "@/lib/billing";
+import {
+  disableAutopay,
+  enableAutopay,
+  getAutopayStatus,
+  type AutopayStatus,
+  type EnableAutopayResult,
+} from "@/lib/autopay";
 
 /**
  * Admin billing endpoint — one route, action-dispatched.
@@ -19,10 +26,15 @@ import { startMonthlyBilling, BillingPreconditionError } from "@/lib/billing";
  *     Stripe each call — no Xano cache.
  *
  *   POST /api/admin/families/:id/billing?yearId=Y
- *     Body: `{ action: "start" | "cancel" | "uncancel" }`
+ *     Body: `{ action: "start" | "cancel" | "uncancel" | "autopay_on"
+ *     | "autopay_off" }`
  *     Runs the action and returns a refreshed snapshot. Errors
  *     surface as 4xx for caller-fixable issues, 502 for Stripe
- *     transport.
+ *     transport. `autopay_on` charges the family's open invoices
+ *     (lib/autopay.ts) and returns what it charged as `autopayResult`.
+ *
+ * Both return `autopay` (lib/autopay.ts `AutopayStatus`) beside the
+ * snapshot.
  *
  * The in-app `"refund"` action was removed (2026-08-30) — refunds are
  * issued directly in the Stripe Dashboard, and the `charge.refunded`
@@ -33,15 +45,14 @@ import { startMonthlyBilling, BillingPreconditionError } from "@/lib/billing";
  * land via `/api/admin/student-registration/[id]` (which calls
  * `updateStudentItemAmount` on the relevant Stripe item).
  *
- * Billing mode: subscriptions run with `collection_method: send_invoice`
+ * Billing mode: subscriptions start on `collection_method: send_invoice`
  * — Stripe generates a hosted invoice each month and emails the link
- * to the family. No card on file required up front. So actions like
- * `pause`/`resume` (which control auto-charge behavior) are dropped
- * — the equivalent in invoice mode is just cancel.
+ * to the family — and switch to `charge_automatically` when autopay
+ * turns on. `pause`/`resume` stay dropped; the stop action is cancel.
  */
 
 interface BillingActionBody {
-  action: "start" | "cancel" | "uncancel";
+  action: "start" | "cancel" | "uncancel" | "autopay_on" | "autopay_off";
   /** Legacy field kept on the type to tolerate older clients sending
    *  it; the route ignores the value now. */
   monthlyTuition?: number;
@@ -82,8 +93,11 @@ export async function GET(
         customerId,
       });
     }
-    const snapshot = await getBillingSnapshot(subscriptionId);
-    return NextResponse.json({ ...snapshot, customerId });
+    const [snapshot, autopay] = await Promise.all([
+      getBillingSnapshot(subscriptionId),
+      readAutopay(familyId, yearId),
+    ]);
+    return NextResponse.json({ ...snapshot, customerId, autopay });
   } catch (err) {
     return handleAdminError(err);
   }
@@ -118,8 +132,11 @@ export async function POST(
     if (body.action === "start") {
       try {
         const result = await startMonthlyBilling({ familyId, yearId });
-        const snapshot = await getBillingSnapshot(result.subscription.id);
-        return NextResponse.json(snapshot);
+        const [snapshot, autopay] = await Promise.all([
+          getBillingSnapshot(result.subscription.id),
+          readAutopay(familyId, yearId),
+        ]);
+        return NextResponse.json({ ...snapshot, autopay });
       } catch (err) {
         if (err instanceof BillingPreconditionError) {
           return NextResponse.json({ error: err.message }, { status: 409 });
@@ -136,7 +153,32 @@ export async function POST(
       );
     }
 
+    let autopayResult: EnableAutopayResult | null = null;
     switch (body.action) {
+      case "autopay_on":
+        autopayResult = await enableAutopay({ familyId, yearId, source: "admin" });
+        if (!autopayResult.ok) {
+          return NextResponse.json(
+            {
+              error:
+                autopayResult.reason === "no-payment-method"
+                  ? "This family has no card or bank account saved. They can add one from their Tuition & Fees page, or you can add one in the customer portal."
+                  : "No live subscription to put on autopay.",
+            },
+            { status: 409 }
+          );
+        }
+        break;
+      case "autopay_off": {
+        const off = await disableAutopay({ familyId, yearId, source: "admin" });
+        if (!off.ok) {
+          return NextResponse.json(
+            { error: "No live subscription to take off autopay." },
+            { status: 409 }
+          );
+        }
+        break;
+      }
       case "cancel":
         await cancelSubscriptionAtPeriodEnd(subscriptionId);
         break;
@@ -158,10 +200,30 @@ export async function POST(
 
     // Always return a fresh snapshot so the admin card updates without
     // a follow-up GET.
-    const snapshot = await getBillingSnapshot(subscriptionId);
-    return NextResponse.json(snapshot);
+    const [snapshot, autopay] = await Promise.all([
+      getBillingSnapshot(subscriptionId),
+      readAutopay(familyId, yearId),
+    ]);
+    return NextResponse.json({ ...snapshot, autopay, autopayResult });
   } catch (err) {
     return handleAdminError(err);
+  }
+}
+
+/** Autopay status for the card, or null when Stripe can't say, so the
+ *  rest of the card still renders. */
+async function readAutopay(
+  familyId: number,
+  yearId: number
+): Promise<AutopayStatus | null> {
+  try {
+    return await getAutopayStatus(familyId, yearId);
+  } catch (err) {
+    console.error(
+      `[admin billing] autopay status failed for family ${familyId}:`,
+      err
+    );
+    return null;
   }
 }
 

@@ -12,6 +12,7 @@ import {
   uncancelSubscription,
 } from "@/lib/stripe";
 import { sendBillingAlert } from "@/lib/billing-alerts";
+import { enableAutopay } from "@/lib/autopay";
 
 /**
  * Server-side billing orchestration. Called from two places:
@@ -385,6 +386,19 @@ async function startMonthlyBillingInner({
       }
     })
   );
+
+  // Autopay is on by default: a returning family whose card is already
+  // on the customer starts on it (lib/autopay.ts; a no-op without a
+  // saved payment method or after the family turned it off). Never
+  // fails the billing start. The daily sweep retries.
+  try {
+    await enableAutopay({ familyId, yearId, source: "default" });
+  } catch (err) {
+    console.error(
+      `[startMonthlyBilling] autopay default failed for family ${familyId}, year ${yearId}:`,
+      err
+    );
+  }
 
   return { subscription: result.subscription, created: true };
 }

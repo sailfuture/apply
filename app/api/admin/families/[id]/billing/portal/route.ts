@@ -11,11 +11,12 @@ import { getStripeClient, getAppBaseUrl } from "@/lib/stripe";
  *
  * Same Stripe-hosted portal the parent reaches from
  * `/api/billing/portal`, so admin sees exactly what the family sees:
- * saved payment methods, autopay opt-in, past invoices, billing
- * email/address. The admin use case is the phone call — a parent
- * reading out a card, or asking why autopay didn't fire — where
- * "look at the same screen they're looking at" beats reconstructing
- * it from the Stripe Dashboard.
+ * saved payment methods, past invoices, billing email/address. The
+ * admin use case is the phone call — a parent reading out a card —
+ * where "look at the same screen they're looking at" beats
+ * reconstructing it from the Stripe Dashboard. A card added here turns
+ * autopay on by default (lib/autopay.ts), at the next daily sweep or
+ * immediately with the billing card's "Turn on autopay".
  *
  * Authorization note: this is not an escalation. Admin already has
  * full Stripe Dashboard access via the card's "View in Stripe" deep

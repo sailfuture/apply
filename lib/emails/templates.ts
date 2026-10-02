@@ -952,7 +952,7 @@ export function tuitionPastDue(ctx: TuitionPastDueContext): EmailContent {
   const already = single
     ? `If you've already sent this payment, thank you, and please disregard this reminder.`
     : `If you've already sent these payments, thank you, and please disregard this reminder.`;
-  const portal = `You can also see every invoice on the Tuition & Fees page of your family portal.`;
+  const portal = `You can see every invoice, and turn on autopay so future payments go through on their own, on the Tuition & Fees page of your family portal.`;
 
   const cell = "padding:10px 0;border-bottom:1px solid #e5e7eb;";
   const invoiceTable = single
@@ -983,7 +983,7 @@ export function tuitionPastDue(ctx: TuitionPastDueContext): EmailContent {
       p(intro) +
       invoiceTable +
       p(already) +
-      `<p style="margin:0 0 14px;">You can also see every invoice on the <a href="${escapeAttr(ctx.tuition_url)}" style="color:#0F2A4A;">Tuition &amp; Fees page</a> of your family portal.</p>` +
+      `<p style="margin:0 0 14px;">You can see every invoice, and turn on autopay so future payments go through on their own, on the <a href="${escapeAttr(ctx.tuition_url)}" style="color:#0F2A4A;">Tuition &amp; Fees page</a> of your family portal.</p>` +
       p(`The SailFuture Academy team`),
     // One invoice gets the big button; several get a Pay button per
     // row in the table above.
@@ -1009,6 +1009,193 @@ export function tuitionPastDue(ctx: TuitionPastDueContext): EmailContent {
     already,
     "",
     `${portal} ${ctx.tuition_url}`,
+    "",
+    `Questions? Email ${SUPPORT_EMAIL} or call ${SUPPORT_PHONE}.`,
+    "",
+    `The SailFuture Academy team`,
+  ].join("\n");
+
+  return { subject, html, text };
+}
+
+export interface AutopayOnContext extends BaseContext {
+  /** Who switched it on. Sets the opening line. "default" is the
+   *  automatic switch for a family with a payment method saved. */
+  source: "parent" | "admin" | "default";
+  /** e.g. "Visa ending in 4242". */
+  payment_method_label: string;
+  /** When the next monthly invoice is charged (unix ms), or null. */
+  next_charge_at: number | null;
+  /** Open invoices charged when autopay switched on. */
+  charges: Array<{
+    amount_cents: number;
+    /** Unix ms, printed as its UTC calendar date like Stripe does. */
+    due_date: number | null;
+    outcome: "paid" | "processing" | "failed";
+    pay_url: string;
+  }>;
+  tuition_url: string;
+}
+
+/**
+ * Autopay confirmation, sent every time a family's tuition switches to
+ * autopay (lib/autopay.ts): by the parent, by staff, or automatically
+ * because a payment method is on file. It names the payment method and
+ * the next charge, lists any open invoices the switch just charged, and
+ * says where to turn it off.
+ */
+export function autopayOn(ctx: AutopayOnContext): EmailContent {
+  const money = (cents: number) =>
+    (cents / 100).toLocaleString("en-US", {
+      style: "currency",
+      currency: "USD",
+    });
+  const dueDate = (ms: number) =>
+    new Date(ms).toLocaleDateString("en-US", {
+      month: "long",
+      day: "numeric",
+      timeZone: "UTC",
+    });
+  const chargeDate = (ms: number) =>
+    new Date(ms).toLocaleDateString("en-US", {
+      month: "long",
+      day: "numeric",
+      timeZone: "America/New_York",
+    });
+  const outcomeLabel = {
+    paid: "Paid",
+    processing: "Processing (bank payments take a few business days)",
+    failed: "Didn't go through",
+  } as const;
+
+  const opening = {
+    parent: "Thanks for turning on autopay.",
+    admin: "We've turned on autopay for your tuition.",
+    default:
+      "You have a payment method saved with us, so we've turned on autopay for your tuition.",
+  }[ctx.source];
+  const how =
+    `From now on, each monthly tuition and fees invoice for ${ctx.student_first_name} is charged to your ${ctx.payment_method_label} when it's issued.` +
+    (ctx.next_charge_at ? ` The next one is on ${chargeDate(ctx.next_charge_at)}.` : "");
+  const chargedIntro = `We also charged the invoices that were already open on your account:`;
+  const failed = ctx.charges.filter((c) => c.outcome === "failed");
+  const failedNote =
+    failed.length > 0
+      ? `${failed.length === 1 ? "One payment" : "Some payments"} didn't go through. Please pay ${failed.length === 1 ? "it" : "them"} with the link above, or update your payment method on the Tuition & Fees page.`
+      : "";
+  const control = `You can turn autopay off or change your payment method anytime on the Tuition & Fees page of your family portal.`;
+
+  const subject = `Autopay is on for your SailFuture Academy tuition`;
+  const preheader = `Each monthly invoice is now charged to your ${ctx.payment_method_label}.`;
+
+  const cell = "padding:8px 0;border-bottom:1px solid #e5e7eb;font-size:15px;";
+  const chargeTable =
+    ctx.charges.length === 0
+      ? ""
+      : p(chargedIntro) +
+        `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 16px;border-collapse:collapse;">${ctx.charges
+          .map(
+            (c) => `<tr>
+        <td style="${cell}">${escapeHtml(c.due_date ? `Due ${dueDate(c.due_date)}` : "Invoice")}</td>
+        <td style="${cell}padding:8px 12px;font-weight:600;text-align:right;white-space:nowrap;">${escapeHtml(money(c.amount_cents))}</td>
+        <td style="${cell}text-align:right;color:${c.outcome === "failed" ? "#b91c1c" : "#6b7280"};">${
+          c.outcome === "failed"
+            ? `${escapeHtml(outcomeLabel.failed)} · <a href="${escapeAttr(c.pay_url)}" style="color:#0F2A4A;">Pay</a>`
+            : escapeHtml(outcomeLabel[c.outcome])
+        }</td>
+      </tr>`
+          )
+          .join("")}</table>`;
+
+  const html = layout({
+    preheader,
+    body:
+      p(`Hi ${ctx.parent_first_name},`) +
+      p(opening) +
+      p(how) +
+      chargeTable +
+      (failedNote ? p(failedNote) : "") +
+      p(control) +
+      p(`The SailFuture Academy team`),
+    buttonHref: ctx.tuition_url,
+    buttonLabel: "View Tuition & Fees",
+  });
+
+  const text = [
+    `Hi ${ctx.parent_first_name},`,
+    "",
+    opening,
+    "",
+    how,
+    ...(ctx.charges.length > 0
+      ? [
+          "",
+          chargedIntro,
+          ...ctx.charges.map(
+            (c) =>
+              `- ${money(c.amount_cents)}${c.due_date ? `, due ${dueDate(c.due_date)}` : ""}: ${outcomeLabel[c.outcome]}${c.outcome === "failed" ? `. Pay: ${c.pay_url}` : ""}`
+          ),
+        ]
+      : []),
+    ...(failedNote ? ["", failedNote] : []),
+    "",
+    `${control} ${ctx.tuition_url}`,
+    "",
+    `Questions? Email ${SUPPORT_EMAIL} or call ${SUPPORT_PHONE}.`,
+    "",
+    `The SailFuture Academy team`,
+  ].join("\n");
+
+  return { subject, html, text };
+}
+
+export interface AutopayPaymentFailedContext extends BaseContext {
+  amount_cents: number;
+  /** Public pay link for the invoice. */
+  pay_url: string;
+  tuition_url: string;
+}
+
+/**
+ * An autopay charge was declined (Stripe webhook `invoice.payment_failed`
+ * on a `charge_automatically` invoice). Autopay invoices carry no due
+ * date, so the billing texts never fire for them, and this is the
+ * parent's notice until the 7-day past-due email. Once per invoice.
+ */
+export function autopayPaymentFailed(
+  ctx: AutopayPaymentFailedContext
+): EmailContent {
+  const money = (cents: number) =>
+    (cents / 100).toLocaleString("en-US", {
+      style: "currency",
+      currency: "USD",
+    });
+  const subject = `Your ${money(ctx.amount_cents)} tuition payment didn't go through`;
+  const preheader = `Autopay couldn't charge your saved payment method. You can pay online now.`;
+  const intro = `We tried to charge your saved payment method for the ${money(ctx.amount_cents)} tuition and fees payment for ${ctx.student_first_name}, but it didn't go through.`;
+  // Plain-text version only; the HTML says "button" and links the page.
+  const next = `You can pay it now at the link below. To keep autopay working, please update your payment method on the Tuition & Fees page of your family portal.`;
+
+  const html = layout({
+    preheader,
+    body:
+      p(`Hi ${ctx.parent_first_name},`) +
+      p(intro) +
+      `<p style="margin:0 0 14px;">You can pay it now with the button below. To keep autopay working, please update your payment method on the <a href="${escapeAttr(ctx.tuition_url)}" style="color:#0F2A4A;">Tuition &amp; Fees page</a> of your family portal.</p>` +
+      p(`The SailFuture Academy team`),
+    buttonHref: ctx.pay_url,
+    buttonLabel: `Pay ${money(ctx.amount_cents)}`,
+  });
+
+  const text = [
+    `Hi ${ctx.parent_first_name},`,
+    "",
+    intro,
+    "",
+    next,
+    "",
+    `Pay online: ${ctx.pay_url}`,
+    `Tuition & Fees: ${ctx.tuition_url}`,
     "",
     `Questions? Email ${SUPPORT_EMAIL} or call ${SUPPORT_PHONE}.`,
     "",

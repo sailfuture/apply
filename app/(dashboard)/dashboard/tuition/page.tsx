@@ -1,8 +1,8 @@
 "use client";
 
-import { Fragment, useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
-import useSWR from "swr";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import useSWR, { useSWRConfig } from "swr";
 import { toast } from "sonner";
 import {
   useStudents,
@@ -12,6 +12,16 @@ import {
   useScholarship,
 } from "@/hooks/use-api";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -45,6 +55,7 @@ import type {
   ParentScheduleResponse,
   ParentScheduleSlot,
 } from "@/app/api/billing/schedule/route";
+import type { AutopayCharge, AutopayStatus } from "@/lib/autopay";
 import {
   resolveStudentReceiptAmounts,
   sumStudentMonthly,
@@ -327,9 +338,9 @@ export default function DashboardTuitionPage() {
           pay it first, with the line-item breakdown below for reference.
           Mirrors the admin Billing schedule view; reads from
           /api/billing/schedule (gated to the authenticated parent's own
-          family). "Manage billing" opens the Stripe Customer Portal where
-          the parent can save a payment method, opt into autopay, and
-          download invoices. */}
+          family). "Manage billing" opens the Stripe Customer Portal
+          (payment methods, receipts, invoices); the Autopay panel inside
+          the card switches automatic payment on and off. */}
       {yearId ? <BillingScheduleSection yearId={yearId} /> : null}
 
       {loading ? (
@@ -738,9 +749,10 @@ function BillingSummaryCard({
 
   const [opening, setOpening] = useState(false);
 
-  /** Open the Stripe Customer Portal so the parent can save a
-   *  payment method, opt into autopay, and download past invoices.
-   *  Hard navigation — Stripe-hosted page is a different origin. */
+  /** Open the Stripe Customer Portal: saved payment methods, receipts
+   *  and past invoices. Autopay itself is the panel below; the portal
+   *  can't switch it on. Hard navigation, since the Stripe-hosted page
+   *  is a different origin. */
   async function openPortal() {
     if (opening) return;
     setOpening(true);
@@ -779,7 +791,7 @@ function BillingSummaryCard({
             ) : (
               <CreditCard className="size-3.5 mr-1.5" aria-hidden="true" />
             )}
-            Manage billing & autopay
+            Manage billing
           </Button>
         </div>
       </CardHeader>
@@ -804,17 +816,286 @@ function BillingSummaryCard({
             tone={outstandingDollars > 0 ? "negative" : "muted"}
           />
         </dl>
+        <AutopayPanel yearId={yearId} />
         <p className="text-xs text-muted-foreground mt-4">
           First invoice:{" "}
           <span className="font-medium text-foreground">{billingStartLabel}</span>
-          {" · "}
-          You&rsquo;ll receive each invoice by email from Stripe; click
-          <strong> Manage billing &amp; autopay</strong> to save a card and
-          turn on automatic payment.
         </p>
       </CardContent>
     </Card>
   );
+}
+
+const autopayFetcher = async (url: string): Promise<AutopayStatus> => {
+  const res = await fetch(url);
+  const body = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(body?.error ?? `Failed to load autopay (${res.status})`);
+  return body;
+};
+
+type AutopayAction = "on" | "off" | "setup";
+
+interface AutopayActionResponse {
+  changed?: boolean;
+  charges?: AutopayCharge[];
+  status?: AutopayStatus;
+  url?: string;
+  error?: string;
+}
+
+/**
+ * Autopay on/off for the family's subscription (lib/autopay.ts).
+ *   - On: names the payment method; change it or turn autopay off.
+ *   - Off with a payment method saved: one-click "Turn on autopay".
+ *   - Off with none saved: "Set up autopay" opens Stripe's add-a-card
+ *     page, which returns here with `?autopay=saved`, and that posts
+ *     "on".
+ * Turning on charges the open balance, and every dialog says so first.
+ */
+function AutopayPanel({ yearId }: { yearId: number }) {
+  const key = `/api/billing/autopay?yearId=${yearId}`;
+  const { data: status, error, mutate } = useSWR<AutopayStatus>(
+    key,
+    autopayFetcher,
+    { revalidateOnFocus: false }
+  );
+  const { mutate: mutateGlobal } = useSWRConfig();
+  const [busy, setBusy] = useState<AutopayAction | null>(null);
+  const [confirm, setConfirm] = useState<AutopayAction | null>(null);
+
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const handledReturn = useRef(false);
+
+  async function post(action: AutopayAction): Promise<AutopayActionResponse> {
+    const res = await fetch(key, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action }),
+    });
+    const body = (await res.json().catch(() => null)) as AutopayActionResponse | null;
+    if (!res.ok) throw new Error(body?.error ?? `Request failed (${res.status})`);
+    return body ?? {};
+  }
+
+  async function turnOn() {
+    setBusy("on");
+    try {
+      const body = await post("on");
+      await mutate(body.status, { revalidate: false });
+      const message = autopayOnMessage(body);
+      if (body.charges?.some((c) => c.outcome === "failed")) {
+        toast.warning(message);
+      } else {
+        toast.success(message);
+      }
+      // Charges reach the invoice list through Stripe's webhook a few
+      // seconds later: refresh now and once more after that.
+      const scheduleKey = `/api/billing/schedule?yearId=${yearId}`;
+      await mutateGlobal(scheduleKey);
+      if (body.charges?.length) {
+        setTimeout(() => void mutateGlobal(scheduleKey), 6000);
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't turn on autopay.");
+    } finally {
+      setBusy(null);
+      setConfirm(null);
+    }
+  }
+
+  async function turnOff() {
+    setBusy("off");
+    try {
+      const body = await post("off");
+      await mutate(body.status, { revalidate: false });
+      toast.success("Autopay is off. You'll get each invoice by email to pay online.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't turn off autopay.");
+    } finally {
+      setBusy(null);
+      setConfirm(null);
+    }
+  }
+
+  async function setup() {
+    setBusy("setup");
+    try {
+      const body = await post("setup");
+      if (!body.url) throw new Error("Stripe didn't return a page to open.");
+      // Stays busy: the browser is leaving for Stripe.
+      window.location.href = body.url;
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't open Stripe.");
+      setBusy(null);
+      setConfirm(null);
+    }
+  }
+
+  // Back from Stripe's add-a-payment-method page: turn autopay on with
+  // it. The flag comes off the URL first so a refresh can't repeat it.
+  useEffect(() => {
+    if (searchParams.get("autopay") !== "saved" || handledReturn.current) return;
+    handledReturn.current = true;
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("autopay");
+    router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+    void turnOn();
+    // Runs once per return; turnOn reads the latest state itself.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
+  if (error) {
+    return (
+      <p className="mt-4 text-xs text-muted-foreground">
+        Couldn&rsquo;t load your autopay settings.
+      </p>
+    );
+  }
+  if (!status) {
+    return <Skeleton className="mt-4 h-14 w-full rounded-lg" />;
+  }
+  if (!status.available) return null;
+
+  const label = status.paymentMethodLabel;
+  const openBalance =
+    status.openBalanceCents > 0 ? formatUsd(status.openBalanceCents / 100) : null;
+
+  return (
+    <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border px-3 py-3">
+      <div className="min-w-0">
+        <p className="flex items-center gap-1.5 text-sm font-medium">
+          {status.enabled ? (
+            <CheckCircle2 className="size-4 text-emerald-600" aria-hidden="true" />
+          ) : (
+            <Circle className="size-4 text-muted-foreground" aria-hidden="true" />
+          )}
+          {status.enabled ? "Autopay is on" : "Autopay is off"}
+        </p>
+        <p className="mt-0.5 text-xs text-muted-foreground">
+          {status.enabled
+            ? label
+              ? `Each monthly invoice is charged to your ${label} when it's issued.`
+              : "No payment method is saved, so invoices can't be charged. Add one to keep autopay working."
+            : label
+              ? `Turn it on and each monthly invoice is charged to your ${label} automatically.`
+              : "Add a card or bank account and each monthly invoice is paid automatically. Until then, you'll get each invoice by email."}
+        </p>
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        {status.enabled ? (
+          <>
+            <Button
+              size="sm"
+              variant="outline"
+              className="bg-white"
+              disabled={busy !== null}
+              onClick={() => void setup()}
+            >
+              {busy === "setup" ? (
+                <Loader2 className="size-3.5 mr-1.5 animate-spin" aria-hidden="true" />
+              ) : null}
+              {label ? "Change payment method" : "Add payment method"}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={busy !== null}
+              onClick={() => setConfirm("off")}
+            >
+              Turn off
+            </Button>
+          </>
+        ) : (
+          <Button
+            size="sm"
+            disabled={busy !== null}
+            onClick={() => setConfirm(label ? "on" : "setup")}
+          >
+            {busy === "on" ? (
+              <Loader2 className="size-3.5 mr-1.5 animate-spin" aria-hidden="true" />
+            ) : null}
+            {label ? "Turn on autopay" : "Set up autopay"}
+          </Button>
+        )}
+      </div>
+
+      <AlertDialog
+        open={confirm !== null}
+        onOpenChange={(open) => {
+          if (!open && busy === null) setConfirm(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {confirm === "off"
+                ? "Turn off autopay?"
+                : confirm === "setup"
+                  ? "Set up autopay"
+                  : "Turn on autopay?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirm === "off"
+                ? "You'll get each invoice by email and pay it online by its due date."
+                : confirm === "setup"
+                  ? `You'll add a card or bank account on Stripe's secure page. When you come back, autopay turns on: each monthly invoice is charged automatically${openBalance ? `, and your open balance of ${openBalance} is charged right away` : ""}.`
+                  : `Each monthly tuition invoice will be charged to your ${label} when it's issued.${openBalance ? ` Your open balance of ${openBalance} will also be charged now.` : ""} You can turn autopay off anytime.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busy !== null}>
+              {confirm === "off" ? "Keep autopay" : "Cancel"}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={busy !== null}
+              onClick={(e) => {
+                e.preventDefault();
+                if (confirm === "off") void turnOff();
+                else if (confirm === "setup") void setup();
+                else void turnOn();
+              }}
+            >
+              {busy !== null ? (
+                <Loader2 className="size-3.5 mr-1.5 animate-spin" aria-hidden="true" />
+              ) : null}
+              {confirm === "off"
+                ? "Turn off autopay"
+                : confirm === "setup"
+                  ? "Continue to Stripe"
+                  : "Turn on autopay"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}
+
+/** Toast after turning autopay on, saying what the switch charged. */
+function autopayOnMessage(body: AutopayActionResponse): string {
+  if (body.changed === false) {
+    return "Your payment method is saved. Autopay will use it.";
+  }
+  const charges = body.charges ?? [];
+  const sum = (outcome: AutopayCharge["outcome"]) =>
+    charges
+      .filter((c) => c.outcome === outcome)
+      .reduce((total, c) => total + c.amountCents, 0);
+  const parts = ["Autopay is on."];
+  if (sum("paid") > 0) parts.push(`We charged ${formatUsd(sum("paid") / 100)}.`);
+  if (sum("processing") > 0) {
+    parts.push(
+      `Your bank payment of ${formatUsd(sum("processing") / 100)} is processing.`
+    );
+  }
+  if (sum("failed") > 0) {
+    parts.push(
+      `${formatUsd(sum("failed") / 100)} didn't go through. You can pay it from the invoice list.`
+    );
+  }
+  return parts.join(" ");
 }
 
 function SummaryStat({

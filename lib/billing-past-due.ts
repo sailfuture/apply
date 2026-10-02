@@ -24,6 +24,9 @@
  *   - One email per family per run. Invoices that reach a stage on the
  *     same day share one email, which lists every past-due invoice on
  *     the account.
+ *   - An autopay invoice has no due date: it's charged when issued, so
+ *     one still open has failed, and the count runs from its
+ *     finalization (`finalized_at`).
  *
  * Type-only imports, so a local dry-run script can load this file
  * as-is.
@@ -110,8 +113,10 @@ export function planPastDueEmails({
     if (tx.status !== "open") continue;
     const owed = Number(tx.amount_due_cents) - Number(tx.amount_paid_cents);
     if (!(owed > 0)) continue;
-    const due = Number(tx.due_date);
-    if (!tx.due_date || !Number.isFinite(due)) continue;
+    // An autopay invoice has no due date. Stripe charges it when it's
+    // issued, so one still open has failed: count from then.
+    const due = Number(tx.due_date ?? tx.finalized_at);
+    if (!(due > 0) || !Number.isFinite(due)) continue;
     // A day past due at least. The due-date text already covers day 0.
     const daysPastDue = calendarDaysBetween(due, nowMs);
     if (daysPastDue < 1) continue;

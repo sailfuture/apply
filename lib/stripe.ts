@@ -21,9 +21,11 @@
  * Architecture choices baked in here:
  *   - One Stripe Customer per family, long-lived across academic
  *     years. Customer ID is stored on `registration_families`.
- *   - One Stripe Subscription per family per year, in `send_invoice`
- *     collection mode — Stripe generates a hosted invoice each month
- *     and emails the link to the family. No card on file required.
+ *   - One Stripe Subscription per family per year, created in
+ *     `send_invoice` collection mode — Stripe generates a hosted
+ *     invoice each month and emails the link to the family. No card on
+ *     file required. Autopay (lib/autopay.ts) switches it to
+ *     `charge_automatically` once the family has a payment method saved.
  *     Inline `price_data` carries the family's scholarship-adjusted
  *     monthly amount. Subscription ID lives on
  *     `registration_families_payment` (per-year billing row).
@@ -89,6 +91,11 @@ export function getTuitionProductId(): string {
   }
   return id;
 }
+
+/** Net-15: days a family has to pay an emailed (`send_invoice`)
+ *  tuition invoice. Also what turning autopay OFF restores, since
+ *  Stripe requires `days_until_due` when switching back. */
+export const TUITION_DAYS_UNTIL_DUE = 15;
 
 /** Base URL for success/cancel redirects after Stripe Checkout. Falls
  *  back to the request's origin when running locally so dev still
@@ -232,7 +239,7 @@ export async function createInvoiceSubscription(
     // generate-and-email-an-invoice. Required pairing with
     // `days_until_due`.
     collection_method: "send_invoice",
-    days_until_due: input.daysUntilDue ?? 15,
+    days_until_due: input.daysUntilDue ?? TUITION_DAYS_UNTIL_DUE,
     items: [
       {
         quantity: 1,
@@ -698,8 +705,11 @@ export async function createSubscriptionWithStudentItems(
   const subscription = await stripe.subscriptions.create(
     {
       customer: input.customerId,
+      // Every subscription starts on emailed invoices. Autopay
+      // (lib/autopay.ts) switches it to charge_automatically once the
+      // family has a payment method on file.
       collection_method: "send_invoice",
-      days_until_due: input.daysUntilDue ?? 15,
+      days_until_due: input.daysUntilDue ?? TUITION_DAYS_UNTIL_DUE,
       items: studentPrices.map((s) => ({
         price: s.priceId,
         quantity: 1,

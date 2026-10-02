@@ -8,11 +8,13 @@ import { getStripeClient, getAppBaseUrl } from "@/lib/stripe";
  * portal is Stripe-hosted — parents land on a Stripe page where they
  * can:
  *   - Save a payment method (card or bank account)
- *   - Opt into autopay (Stripe will auto-charge open invoices using
- *     the saved default payment method instead of waiting for the
- *     parent to click pay on each hosted invoice)
- *   - Download past invoices
+ *   - Download past invoices and receipts
  *   - Update billing email / address
+ *
+ * The portal can NOT turn on autopay: it can't change a `send_invoice`
+ * subscription, so a saved card alone was never charged (Heather
+ * Young, 2026-10-02). Autopay is /api/billing/autopay (lib/autopay.ts).
+ * A card saved here is still picked up by its on-by-default sweep.
  *
  *   POST /api/billing/portal
  *

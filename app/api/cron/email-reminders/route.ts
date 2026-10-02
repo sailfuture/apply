@@ -8,6 +8,7 @@ import {
   sendTuitionPastDueEmail,
 } from "@/lib/emails/triggers";
 import { planPastDueEmails } from "@/lib/billing-past-due";
+import { runAutopaySweep, type AutopaySweepResult } from "@/lib/autopay";
 import {
   sendBillingUpcomingSms,
   sendOutstandingTuitionSms,
@@ -115,6 +116,8 @@ export async function GET(req: NextRequest) {
       failed: 0,
       unverified: 0,
     },
+    // On-by-default autopay sweep (lib/autopay.ts).
+    autopay: { switchedOn: 0, invoicesCharged: 0, errors: 0 },
   };
 
   try {
@@ -208,6 +211,69 @@ export async function GET(req: NextRequest) {
         }
       }
 
+      const appBaseUrl = (
+        process.env.NEXT_PUBLIC_APP_URL ??
+        "https://apply.sailfutureacademy.org"
+      ).replace(/\/+$/, "");
+
+      // Read once, shared by autopay, the past-due emails and the
+      // drift check. `[]` on a Xano failure, so all three fall quiet
+      // rather than act on a partial picture.
+      const yearPayments = await xano.familyPayments.getAllByYear(year.id);
+
+      // The families the school is still billing this year, by their
+      // live subscription: not residential (never tuition-billed). A
+      // fully unenrolled family's leftover invoice is a staff call,
+      // made in Stripe. Null when the family list can't be read, which
+      // skips autopay and the past-due emails today rather than act on
+      // a residential family. Tomorrow's run catches up.
+      let billingSubscriptions: Map<number, string> | null = null;
+      try {
+        const families = await xano.families.getAll();
+        const residential = new Set(
+          families.filter((f) => f.is_residential === true).map((f) => f.id)
+        );
+        billingSubscriptions = new Map();
+        for (const p of yearPayments) {
+          const subId = activeStripeSubscriptionId(p.stripe_subscription_id);
+          const familyId = Number(p.registration_families_id);
+          if (subId && !residential.has(familyId)) {
+            billingSubscriptions.set(familyId, subId);
+          }
+        }
+      } catch (err) {
+        console.error(
+          `[cron/email-reminders] family list unreadable — skipping autopay and past-due emails for year ${year.id}:`,
+          err
+        );
+      }
+
+      // Autopay is on by default: switch every billed family with a
+      // payment method saved (and no "off" on file), which charges what
+      // they already owe. Runs BEFORE the reminders so nobody is texted
+      // or emailed about an invoice this run just charged.
+      const chargedToday = new Set<string>();
+      if (billingSubscriptions && billingSubscriptions.size > 0) {
+        try {
+          const sweep = await runAutopaySweep({
+            yearId: year.id,
+            subscriptionByFamily: billingSubscriptions,
+          });
+          for (const id of sweep.chargedInvoiceIds) chargedToday.add(id);
+          result.autopay.switchedOn += sweep.switchedOn.length;
+          result.autopay.invoicesCharged += sweep.chargedInvoiceIds.size;
+          result.autopay.errors += sweep.errors.length;
+          if (sweep.switchedOn.length > 0 || sweep.errors.length > 0) {
+            await alertAutopaySweep(year.year_name, year.id, sweep);
+          }
+        } catch (err) {
+          console.error(
+            `[cron/email-reminders] autopay sweep failed for year ${year.id}:`,
+            err
+          );
+        }
+      }
+
       // Billing SMS — reminders driven off the invoice mirror
       // (`registration_payment_transactions`). For each still-open
       // invoice with a balance: fire "upcoming" when the due date is
@@ -216,12 +282,13 @@ export async function GET(req: NextRequest) {
       // so a daily run only texts each invoice once per state — and
       // hold the text for the next run when the log can't be read.
       // No-ops safely when Twilio isn't configured.
-      const appBaseUrl = (
-        process.env.NEXT_PUBLIC_APP_URL ??
-        "https://apply.sailfutureacademy.org"
-      ).replace(/\/+$/, "");
       const txns = await xano.paymentTransactions.getAllByYear(year.id);
-      for (const tx of txns) {
+      // The mirror learns about the sweep's charges from the webhook a
+      // few seconds later, so leave those out of today's reminders.
+      const reminderTxns = txns.filter(
+        (t) => !chargedToday.has(t.stripe_invoice_id)
+      );
+      for (const tx of reminderTxns) {
         const outstanding =
           Number(tx.amount_due_cents) - Number(tx.amount_paid_cents);
         const isOpen =
@@ -265,33 +332,17 @@ export async function GET(req: NextRequest) {
         }
       }
 
-      // Read once, shared by the past-due emails and the drift check.
-      // `[]` on a Xano failure, so both fall quiet rather than act on a
-      // partial picture.
-      const yearPayments = await xano.familyPayments.getAllByYear(year.id);
-
       // Past-due tuition EMAILS: 7, 14 and 21 days after an open
       // invoice's due date, to every parent on the family (primary and
       // secondary), listing each past-due invoice with its pay link.
       // Planned per family (lib/billing-past-due.ts), so several
       // overdue invoices share one email, and deduped per (invoice,
-      // stage) against the email log. Only families the school is
-      // still billing: a live subscription for the year and not
-      // residential. A fully unenrolled family's leftover invoice is a
-      // staff call, made in Stripe.
-      try {
-        const families = await xano.families.getAll();
-        const residential = new Set(
-          families.filter((f) => f.is_residential === true).map((f) => f.id)
-        );
-        const billing = new Set(
-          yearPayments
-            .filter((p) => !!activeStripeSubscriptionId(p.stripe_subscription_id))
-            .map((p) => Number(p.registration_families_id))
-            .filter((id) => !residential.has(id))
-        );
+      // stage) against the email log. Only the families in
+      // `billingSubscriptions` above.
+      if (billingSubscriptions) {
+        const billing = billingSubscriptions;
         const plans = planPastDueEmails({
-          txns,
+          txns: reminderTxns,
           isBillableFamily: (id) => billing.has(id),
           payUrlFor: (tx) =>
             tx.hosted_invoice_url
@@ -313,13 +364,6 @@ export async function GET(req: NextRequest) {
             result.pastDueEmail.unverified += 1;
           } else result.pastDueEmail.failed += 1;
         }
-      } catch (err) {
-        // The family list couldn't be read: send nothing today rather
-        // than email a residential family. Tomorrow's run catches up.
-        console.error(
-          `[cron/email-reminders] past-due tuition emails skipped for year ${year.id}:`,
-          err
-        );
       }
 
       // Drift detection — a family with a LIVE subscription but ZERO
@@ -433,6 +477,57 @@ export async function GET(req: NextRequest) {
       { status: 500 }
     );
   }
+}
+
+/** Staff summary of an autopay sweep that switched families on (or
+ *  couldn't): whose card now charges automatically and what the
+ *  switch collected. One email per run, only when something happened. */
+async function alertAutopaySweep(
+  yearName: string,
+  yearId: number,
+  sweep: AutopaySweepResult
+): Promise<void> {
+  const money = (cents: number) => `$${(cents / 100).toFixed(2)}`;
+  const switched = await Promise.all(
+    sweep.switchedOn.map(async (s) => {
+      const charged =
+        s.charges.length === 0
+          ? "nothing was open"
+          : s.charges
+              .map(
+                (c) =>
+                  `${money(c.amountCents)} ${c.outcome === "failed" ? `FAILED (${c.error ?? "declined"})` : c.outcome}`
+              )
+              .join(", ");
+      return `  - ${await familyAlertLabel(s.familyId)} — ${s.paymentMethodLabel}; charged: ${charged}`;
+    })
+  );
+  const errors = await Promise.all(
+    sweep.errors.map(
+      async (e) =>
+        `  - ${e.familyId === null ? "Sweep" : await familyAlertLabel(e.familyId)}: ${e.error}`
+    )
+  );
+  const n = sweep.switchedOn.length;
+  await sendBillingAlert(
+    n > 0
+      ? `Autopay turned on for ${n} ${n === 1 ? "family" : "families"}`
+      : "Autopay sweep couldn't switch some families",
+    [
+      ...(n > 0
+        ? [
+            `These families have a payment method saved in Stripe, so their ${yearName} tuition switched to autopay (on by default). Each was emailed a confirmation, and their open invoices were charged:`,
+            ...switched,
+          ]
+        : []),
+      ...(errors.length > 0
+        ? ["", "Couldn't switch (tomorrow's run retries):", ...errors]
+        : []),
+      "",
+      "A family can turn autopay off on their Tuition & Fees page; staff can on the family's billing card.",
+    ],
+    { yearId }
+  );
 }
 
 /* ────────────────────────── Eligibility checks ────────────────────────── */

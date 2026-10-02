@@ -22,6 +22,8 @@ import {
   sentPastDueReminders,
   type FamilyPastDuePlan,
 } from "@/lib/billing-past-due";
+// Type-only: lib/autopay imports this module at runtime.
+import type { AutopayCharge, AutopaySource } from "@/lib/autopay";
 import { sendEmail, type SendResult } from "./send";
 import * as t from "./templates";
 
@@ -419,7 +421,7 @@ export async function sendTuitionPastDueEmail(
       parent_first_name: ctx.primaryParentFirstName,
       student_first_name: ctx.studentDisplayNames,
       login_url: ctx.loginUrl,
-      tuition_url: `${ctx.loginUrl.replace(/\/+$/, "")}/dashboard/tuition?yearId=${yearId}`,
+      tuition_url: tuitionUrl(ctx.loginUrl, yearId),
       invoices: plan.pastDue.map((inv) => ({
         amount_cents: inv.amountCents,
         due_date: inv.dueDate,
@@ -428,6 +430,95 @@ export async function sendTuitionPastDueEmail(
       })),
     }),
     tag: pastDueTemplateTag(pending),
+    familyId: ctx.familyId,
+    yearId: ctx.yearId,
+  });
+}
+
+/** Branded pay link (`/pay/<invoice>` → Stripe's hosted page), the
+ *  same one the billing texts use. */
+function payUrl(loginUrl: string, invoiceId: string): string {
+  return `${loginUrl.replace(/\/+$/, "")}/pay/${invoiceId}`;
+}
+
+function tuitionUrl(loginUrl: string, yearId: number): string {
+  return `${loginUrl.replace(/\/+$/, "")}/dashboard/tuition?yearId=${yearId}`;
+}
+
+/** Autopay is on (lib/autopay.ts). Sent on every switch on, whoever
+ *  made it, listing the open invoices the switch charged. */
+export async function sendAutopayOnEmail(args: {
+  familyId: number;
+  yearId: number;
+  source: AutopaySource;
+  paymentMethodLabel: string;
+  nextChargeAt: number | null;
+  charges: AutopayCharge[];
+}): Promise<SendResult> {
+  const ctx = await resolveFamilyContext(args.familyId, args.yearId);
+  if (!ctx) return { ok: false, error: "context-failed" };
+  return sendEmail({
+    to: ctx.parentEmails,
+    content: t.autopayOn({
+      parent_first_name: ctx.primaryParentFirstName,
+      student_first_name: ctx.studentDisplayNames,
+      login_url: ctx.loginUrl,
+      source: args.source,
+      payment_method_label: args.paymentMethodLabel,
+      next_charge_at: args.nextChargeAt,
+      charges: args.charges.map((c) => ({
+        amount_cents: c.amountCents,
+        due_date: c.dueDate,
+        outcome: c.outcome,
+        pay_url: payUrl(ctx.loginUrl, c.invoiceId),
+      })),
+      tuition_url: tuitionUrl(ctx.loginUrl, args.yearId),
+    }),
+    tag: "autopay-on",
+    familyId: ctx.familyId,
+    yearId: ctx.yearId,
+  });
+}
+
+/** An autopay charge was declined (Stripe webhook). Once per invoice,
+ *  however many times Stripe retries. The log read is strict: when it
+ *  fails, nothing is sent (`error: "unverified"`). The staff alert
+ *  for the same failure goes out regardless. */
+export async function sendAutopayPaymentFailedEmail(args: {
+  familyId: number;
+  yearId: number;
+  invoiceId: string;
+  amountCents: number;
+}): Promise<SendResult> {
+  const tag = `autopay-payment-failed-${args.invoiceId}`;
+  try {
+    const log = await xano.emailNotifications.getByFamilyStrict(
+      args.familyId,
+      args.yearId
+    );
+    if (log.some((r) => r.template === tag && r.status === "sent")) {
+      return { ok: true, id: "deduped" };
+    }
+  } catch (err) {
+    console.error(
+      `[email/autopay-payment-failed] couldn't read family ${args.familyId}'s email log — not sending:`,
+      err
+    );
+    return { ok: false, error: "unverified" };
+  }
+  const ctx = await resolveFamilyContext(args.familyId, args.yearId);
+  if (!ctx) return { ok: false, error: "context-failed" };
+  return sendEmail({
+    to: ctx.parentEmails,
+    content: t.autopayPaymentFailed({
+      parent_first_name: ctx.primaryParentFirstName,
+      student_first_name: ctx.studentDisplayNames,
+      login_url: ctx.loginUrl,
+      amount_cents: args.amountCents,
+      pay_url: payUrl(ctx.loginUrl, args.invoiceId),
+      tuition_url: tuitionUrl(ctx.loginUrl, args.yearId),
+    }),
+    tag,
     familyId: ctx.familyId,
     yearId: ctx.yearId,
   });

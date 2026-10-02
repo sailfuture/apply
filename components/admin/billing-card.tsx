@@ -32,6 +32,7 @@ import {
   stripeCustomerDashboardUrl,
 } from "@/lib/stripe-dashboard";
 import { cn } from "@/lib/utils";
+import type { AutopayCharge, AutopayStatus } from "@/lib/autopay";
 
 /**
  * Admin Billing card for the family registration detail page. Reads
@@ -40,9 +41,11 @@ import { cn } from "@/lib/utils";
  * a low-volume admin surface; trades a few hundred ms of latency for
  * always-fresh state.
  *
- * Billing model: subscriptions run with `collection_method: send_invoice`
- * — Stripe generates a hosted invoice each month and emails the link
- * to the family. No card-on-file required, no parent setup step.
+ * Billing model: subscriptions start with `collection_method:
+ * send_invoice` — Stripe generates a hosted invoice each month and
+ * emails the link to the family — and switch to autopay
+ * (`charge_automatically`, lib/autopay.ts) once a payment method is
+ * saved, on by default. The Autopay line shows which, with on/off.
  * Billing is triggered server-side when admin clicks Confirm Family
  * Registration (cascade in the registration-progress route), or
  * manually from the "Start Monthly Billing" button on this card if
@@ -125,6 +128,10 @@ interface BillingSnapshot {
    *  payments) instead of the global invoices view. Null when the
    *  family has never had a Stripe customer provisioned. */
   customerId?: string | null;
+  /** Null when Stripe couldn't say; absent before billing starts. */
+  autopay?: AutopayStatus | null;
+  /** On the `autopay_on` response: what switching on charged. */
+  autopayResult?: { ok: boolean; changed?: boolean; charges?: AutopayCharge[] } | null;
 }
 
 interface Props {
@@ -153,7 +160,12 @@ interface Props {
   showScheduleLink?: boolean;
 }
 
-type BillingAction = "start" | "cancel" | "uncancel";
+type BillingAction =
+  | "start"
+  | "cancel"
+  | "uncancel"
+  | "autopay_on"
+  | "autopay_off";
 
 export function BillingCard({
   familyId,
@@ -182,6 +194,9 @@ export function BillingCard({
   const [pending, setPending] = useState<BillingAction | null>(null);
   const [openingPortal, setOpeningPortal] = useState(false);
   const [confirmCancel, setConfirmCancel] = useState(false);
+  const [confirmAutopay, setConfirmAutopay] = useState<"on" | "off" | null>(
+    null
+  );
 
   // Per-family payment schedule deep link — shown alongside the
   // Stripe-side action buttons so admin can pivot to the historical
@@ -205,7 +220,12 @@ export function BillingCard({
         throw new Error(body?.error ?? `Action failed (${res.status})`);
       }
       await mutate(body, { revalidate: false });
-      toast.success(actionSuccessMessage(action));
+      const message = actionSuccessMessage(action, body);
+      if (body?.autopayResult?.charges?.some((c: AutopayCharge) => c.outcome === "failed")) {
+        toast.warning(message);
+      } else {
+        toast.success(message);
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Action failed");
     } finally {
@@ -394,6 +414,7 @@ export function BillingCard({
   }
 
   const sub = data.subscription;
+  const autopay = data.autopay ?? null;
   // The family's monthly total is the sum of every per-student
   // SubscriptionItem, not just the first. Reading only items.data[0]
   // showed a single student's amount on multi-student families.
@@ -450,6 +471,21 @@ export function BillingCard({
               ? "Subscription canceled"
               : `Next invoice ${nextInvoiceDate}`}
         </p>
+        {autopay?.available ? (
+          <p className="text-xs text-muted-foreground">
+            Autopay:{" "}
+            <span
+              className={cn(
+                "font-medium",
+                autopay.enabled ? "text-emerald-700" : "text-foreground"
+              )}
+            >
+              {autopay.enabled ? "On" : "Off"}
+            </span>
+            {" · "}
+            {autopayDetail(autopay)}
+          </p>
+        ) : null}
       </div>
 
       {/* Actions — every button on one row, inline with Cancel at period
@@ -481,7 +517,7 @@ export function BillingCard({
           className="bg-white"
           disabled={openingPortal || pending !== null}
           onClick={openPortal}
-          title="Open the family's Stripe billing portal — payment methods, autopay, past invoices"
+          title="Open the family's Stripe customer portal — saved payment methods, receipts, past invoices"
         >
           {openingPortal ? (
             <Loader2
@@ -491,8 +527,37 @@ export function BillingCard({
           ) : (
             <CreditCard className="size-3.5 mr-1.5" aria-hidden="true" />
           )}
-          Manage billing &amp; autopay
+          Customer portal
         </Button>
+        {!isCanceled && autopay?.available ? (
+          autopay.enabled ? (
+            <Button
+              variant="outline"
+              size="sm"
+              className="bg-white"
+              disabled={pending !== null}
+              onClick={() => setConfirmAutopay("off")}
+            >
+              {pending === "autopay_off" ? (
+                <Loader2 className="size-3.5 mr-1.5 animate-spin" aria-hidden="true" />
+              ) : null}
+              Turn off autopay
+            </Button>
+          ) : autopay.paymentMethodLabel ? (
+            <Button
+              variant="outline"
+              size="sm"
+              className="bg-white"
+              disabled={pending !== null}
+              onClick={() => setConfirmAutopay("on")}
+            >
+              {pending === "autopay_on" ? (
+                <Loader2 className="size-3.5 mr-1.5 animate-spin" aria-hidden="true" />
+              ) : null}
+              Turn on autopay
+            </Button>
+          ) : null
+        ) : null}
         {!isCanceled ? (
           <>
             {cancelingAtPeriodEnd ? (
@@ -536,6 +601,46 @@ export function BillingCard({
           the full invoice list. Keeps the billing card focused on
           subscription state + actions instead of duplicating the
           history table that has its own deep-link button above. */}
+
+      {/* Autopay on/off confirmation. On charges the open balance. */}
+      <AlertDialog
+        open={confirmAutopay !== null}
+        onOpenChange={(o) => !pending && !o && setConfirmAutopay(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {confirmAutopay === "off" ? "Turn off autopay?" : "Turn on autopay?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirmAutopay === "off"
+                ? "The family goes back to emailed invoices, due in 15 days. The choice is remembered, so autopay won't switch back on by itself."
+                : `Each monthly invoice will be charged to the family's ${autopay?.paymentMethodLabel ?? "saved payment method"} when it's issued.${
+                    autopay && autopay.openBalanceCents > 0
+                      ? ` Their open balance of $${(autopay.openBalanceCents / 100).toFixed(2)} is charged now.`
+                      : ""
+                  } The family gets a confirmation email.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={pending !== null}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={pending !== null}
+              onClick={(e) => {
+                e.preventDefault();
+                const action = confirmAutopay === "off" ? "autopay_off" : "autopay_on";
+                void runAction(action).then(() => setConfirmAutopay(null));
+              }}
+            >
+              {pending === "autopay_on" || pending === "autopay_off"
+                ? "Saving…"
+                : confirmAutopay === "off"
+                  ? "Turn off autopay"
+                  : "Turn on autopay"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Cancel-at-period-end confirmation */}
       <AlertDialog open={confirmCancel} onOpenChange={(o) => !pending && setConfirmCancel(o)}>
@@ -605,6 +710,18 @@ function StatusPill({ label }: { label: BillingSnapshot["statusLabel"] }) {
   );
 }
 
+/** The detail after "Autopay: On/Off" on the card header. */
+function autopayDetail(autopay: AutopayStatus): string {
+  const label = autopay.paymentMethodLabel;
+  if (autopay.enabled) {
+    return label ?? "no payment method saved, so charges will fail";
+  }
+  if (autopay.optedOut) {
+    return label ? `turned off · ${label} saved` : "turned off";
+  }
+  return label ? `${label} saved` : "no card or bank saved";
+}
+
 /** Format an ISO date (YYYY-MM-DD) as a long date for the empty
  *  state. Treats the input as UTC midnight to match the
  *  createInvoiceSubscription / Stripe trial_end convention so we
@@ -620,7 +737,10 @@ function formatStartDate(iso: string): string {
   });
 }
 
-function actionSuccessMessage(action: BillingAction): string {
+function actionSuccessMessage(
+  action: BillingAction,
+  body: BillingSnapshot | null
+): string {
   switch (action) {
     case "start":
       return "Monthly billing started. Stripe will email the first invoice on the billing start date.";
@@ -628,5 +748,17 @@ function actionSuccessMessage(action: BillingAction): string {
       return "Subscription will cancel at the end of the current billing period.";
     case "uncancel":
       return "Cancellation reversed. Monthly billing continues as scheduled.";
+    case "autopay_on": {
+      const result = body?.autopayResult;
+      if (result?.changed === false) return "Autopay was already on.";
+      const charges = result?.charges ?? [];
+      if (charges.length === 0) return "Autopay is on. Nothing was open to charge.";
+      const usd = (cents: number) => `$${(cents / 100).toFixed(2)}`;
+      return `Autopay is on. Open invoices: ${charges
+        .map((c) => `${usd(c.amountCents)} ${c.outcome === "failed" ? "didn't go through" : c.outcome}`)
+        .join(", ")}.`;
+    }
+    case "autopay_off":
+      return "Autopay is off. The family gets each invoice by email again.";
   }
 }
