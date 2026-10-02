@@ -1537,8 +1537,10 @@ export function LeadTriageSheet({
             (MessageScroller inside InquiryNotes); composer stays
             docked below it. `min-h-56` guarantees the log a usable
             window even when a long details block is competing for
-            room — the details scroll for the remainder. */}
-        <div className="flex min-h-56 flex-1 flex-col">
+            room. While the details are open it drops to `min-h-28`:
+            at laptop height the full reserve left the details panel
+            one row tall, hiding every field behind its own scroll. */}
+        <div className="flex min-h-56 flex-1 flex-col peer-data-open:min-h-28">
           <p className="shrink-0 border-b px-4 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
             Activity log
           </p>
@@ -1583,7 +1585,13 @@ function LeadDetailsCollapsible({
     // shrink. `min-h-0` is what actually lets flex compress it, and
     // the compression lands on the panel below (default shrink +
     // overflow-y-auto), which then scrolls internally.
-    <div className="flex min-h-0 flex-col border-b bg-muted/10">
+    <div
+      // `peer` + data-open: the activity log below (a sibling) gives
+      // up most of its reserved height while the details are open —
+      // see the log wrapper.
+      data-open={open ? "" : undefined}
+      className="peer flex min-h-0 flex-col border-b bg-muted/10"
+    >
       <button
         type="button"
         aria-expanded={open}
