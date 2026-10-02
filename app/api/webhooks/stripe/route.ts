@@ -447,29 +447,95 @@ async function upsertInvoiceFromEvent(
   // A failed payment needs a human — Stripe keeps dunning on its
   // own, but staff should know the family's tuition didn't clear
   // rather than discovering it weeks later on the billing list.
+  // Once per invoice: every retry (Smart Retries, or staff clicking
+  // "Retry" in the Dashboard) fires another payment_failed, and the
+  // inbox only needs to hear about the invoice once.
   if (eventType === "invoice.payment_failed") {
-    await sendBillingAlert(
-      "Tuition payment failed",
-      [
-        `Stripe could not collect this family's monthly tuition invoice — the payment method on file was declined, expired, or is missing.`,
-        `Stripe will keep retrying per the dunning settings; check the family's billing card for status.`,
-      ],
-      {
-        familyId,
-        yearId,
-        subscriptionId,
-        invoice: {
-          id: invoice.id,
-          status,
-          amountDueCents: invoice.amount_due ?? 0,
-          amountPaidCents: invoice.amount_paid ?? 0,
-          periodStart,
-          periodEnd,
-          dueDate,
-          hostedUrl: invoice.hosted_invoice_url ?? null,
-        },
-      }
+    await alertPaymentFailedOnce(invoice, {
+      familyId,
+      yearId,
+      subscriptionId,
+      invoice: {
+        id: invoice.id,
+        status,
+        amountDueCents: invoice.amount_due ?? 0,
+        amountPaidCents: invoice.amount_paid ?? 0,
+        periodStart,
+        periodEnd,
+        dueDate,
+        hostedUrl: invoice.hosted_invoice_url ?? null,
+      },
+    });
+  }
+}
+
+/** Invoice metadata key stamped when the payment-failed alert for
+ *  that invoice has gone out — the per-invoice dedupe marker. */
+const PAYMENT_FAILED_ALERT_KEY = "billing_alert_payment_failed_at";
+
+/**
+ * Send the "Tuition payment failed" alert at most once per invoice.
+ *
+ * The marker lives on the Stripe invoice's own metadata (updatable on
+ * open and paid invoices alike), so no Xano column is needed and it
+ * survives every redelivery. Claim-first: stamp, then send, and clear
+ * the stamp if the send fails so the next failure can try again.
+ *
+ * Never throws — the mirror write above already landed, and a Stripe
+ * hiccup here must not 500 the webhook into a redelivery loop. If the
+ * marker can't be read or written, fall through to sending: a
+ * duplicate alert beats a missing one.
+ */
+async function alertPaymentFailedOnce(
+  invoice: Stripe.Invoice,
+  context: Parameters<typeof sendBillingAlert>[2]
+): Promise<void> {
+  const invoiceId = invoice.id!;
+  const stripe = getStripeClient();
+
+  let claimed = false;
+  try {
+    // Fresh read, not the event payload: two failures seconds apart
+    // can each carry a snapshot taken before the other's stamp.
+    const fresh = await stripe.invoices.retrieve(invoiceId);
+    if (fresh.metadata?.[PAYMENT_FAILED_ALERT_KEY]) {
+      console.log(
+        `[/api/webhooks/stripe] payment_failed alert for ${invoiceId} already sent at ${fresh.metadata[PAYMENT_FAILED_ALERT_KEY]} — skipping.`
+      );
+      return;
+    }
+    await stripe.invoices.update(invoiceId, {
+      metadata: { [PAYMENT_FAILED_ALERT_KEY]: new Date().toISOString() },
+    });
+    claimed = true;
+  } catch (err) {
+    console.error(
+      `[/api/webhooks/stripe] could not check/stamp the alert marker on ${invoiceId} — sending anyway:`,
+      err
     );
+  }
+
+  const sent = await sendBillingAlert(
+    "Tuition payment failed",
+    [
+      `Stripe could not collect this family's monthly tuition invoice — the payment method on file was declined, expired, or is missing.`,
+      `Stripe will keep retrying per the dunning settings; check the family's billing card for status. Further failed retries on this invoice won't send another alert.`,
+    ],
+    context
+  );
+
+  if (!sent && claimed) {
+    try {
+      // Empty string deletes the key in Stripe metadata.
+      await stripe.invoices.update(invoiceId, {
+        metadata: { [PAYMENT_FAILED_ALERT_KEY]: "" },
+      });
+    } catch (err) {
+      console.error(
+        `[/api/webhooks/stripe] alert for ${invoiceId} failed to send AND the marker couldn't be cleared — later failures on this invoice won't alert:`,
+        err
+      );
+    }
   }
 }
 
