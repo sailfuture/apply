@@ -4,6 +4,7 @@ import { xano } from "@/lib/xano";
 import { formatUSPhone, toE164 } from "@/lib/phone";
 import { normPhone, pickAccountHolderParent } from "@/lib/sms/contacts";
 import { computeFamilyStageSets } from "@/lib/sms/stages";
+import { getActiveFaculty } from "@/lib/sms/faculty";
 
 /**
  * Group-message audience directory — every textable contact for the
@@ -390,6 +391,35 @@ export async function GET(req: NextRequest) {
       });
     }
 
+    // Active faculty with a phone on file. Texted as ad-hoc contacts
+    // (teacher ids are UUIDs, no FK on sms_messages) — the 10-digit
+    // number is the id. Not deduped against families: a teacher who
+    // is also a parent is two different reasons to text them. The
+    // composer only lists these under its Faculty chip.
+    try {
+      for (const f of await getActiveFaculty()) {
+        const e164 = toE164(f.phone);
+        contacts.push({
+          key: `adhoc-${Number(f.phone)}`,
+          type: "adhoc",
+          id: Number(f.phone),
+          name: f.name,
+          personName: f.name,
+          stage: "faculty",
+          students: [f.role, f.department].filter(Boolean).join(" · "),
+          grades: [],
+          phone: formatUSPhone(f.phone) || "",
+          hasPhone: Boolean(e164),
+          optedOut: false,
+          sendable: Boolean(e164),
+          outstanding: false,
+        });
+      }
+    } catch (err) {
+      // The rest of the audience still loads; the Faculty chip is empty.
+      console.error("[messages/group/audience] faculty read failed:", err);
+    }
+
     // Stage ladder first (furthest along at the top), then name — the
     // dialog's grade chips + search narrow from there.
     const rank: Record<GroupStage, number> = {
@@ -400,6 +430,7 @@ export async function GET(req: NextRequest) {
       camp: 4,
       visit: 5,
       tasco: 6,
+      faculty: 7,
     };
     contacts.sort(
       (a, b) => rank[a.stage] - rank[b.stage] || a.name.localeCompare(b.name)
@@ -432,12 +463,14 @@ export type GroupStage =
   | "inquiry"
   | "camp"
   | "visit"
-  | "tasco";
+  | "tasco"
+  | "faculty";
 
 export interface GroupContact {
   /** Stable selection key: `${type}-${id}`. */
   key: string;
-  type: "family" | "inquiry" | "camp" | "visit" | "tasco";
+  /** `adhoc` = faculty (keyed by phone, see `lib/sms/faculty.ts`). */
+  type: "family" | "inquiry" | "camp" | "visit" | "tasco" | "adhoc";
   id: number;
   /** Display name — family name, or the parent's name for
    *  inquiry/camp rows. */

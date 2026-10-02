@@ -94,6 +94,10 @@ const STAGE_BADGE: Record<GroupStage, { label: string; className: string }> = {
     label: "Liability Waiver Visit",
     className: "border-rose-200 bg-rose-50 text-rose-800",
   },
+  faculty: {
+    label: "Faculty",
+    className: "border-slate-300 bg-slate-100 text-slate-800",
+  },
   tasco: {
     label: "TASCO",
     className: "border-orange-200 bg-orange-50 text-orange-800",
@@ -109,6 +113,7 @@ const TYPE_HEADING: Record<GroupContact["type"], string> = {
   camp: "Summer camp",
   visit: "Liability waiver visits",
   tasco: "TASCO summer visits",
+  adhoc: "Faculty",
 };
 
 const GRADES = [8, 9, 10, 11, 12] as const;
@@ -123,6 +128,7 @@ const STAGE_FILTERS: Array<{ value: GroupStage; label: string }> = [
   { value: "camp", label: "Camp" },
   { value: "visit", label: "Liability Waiver Visit" },
   { value: "tasco", label: "TASCO" },
+  { value: "faculty", label: "Faculty" },
 ];
 
 /**
@@ -140,6 +146,7 @@ const STAGE_SEARCH_ALIASES: Record<GroupStage, string[]> = {
   camp: ["camp", "campers", "summer"],
   visit: ["visit", "visits", "visitors", "waiver", "waivers", "liability"],
   tasco: ["tasco", "recreation", "rec center"],
+  faculty: ["faculty", "teachers", "staff"],
 };
 
 function matchesStageAlias(stage: GroupStage, q: string): boolean {
@@ -309,7 +316,9 @@ export function GroupMessageDialog({
     // applying/registering). "all" keeps the original combined view.
     if (scope === "enrolled") {
       return all.filter(
-        (c) => c.type === "family" && c.stage === "enrolled"
+        (c) =>
+          (c.type === "family" && c.stage === "enrolled") ||
+          c.stage === "faculty"
       );
     }
     if (scope === "recruitment") {
@@ -343,6 +352,15 @@ export function GroupMessageDialog({
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return contacts.filter((c) => {
+      // Faculty only list when asked for (chip or a search) — a
+      // select-all on a parent blast must never sweep in staff.
+      if (
+        c.stage === "faculty" &&
+        !stageFilter.includes("faculty") &&
+        !q
+      ) {
+        return false;
+      }
       if (stageFilter.length > 0 && !stageFilter.includes(c.stage)) {
         return false;
       }
@@ -598,17 +616,19 @@ export function GroupMessageDialog({
             {/* Stage narrowing chips — camp / inquiries / applying /
                 registration / enrolled. Pair with "Select all shown"
                 for one-click "text everyone at this stage" blasts.
-                Empty = every stage. Hidden on the enrolled-scoped
-                composer (everyone there IS enrolled); the recruitment
-                scope drops the Enrolled chip (its audience can't
-                contain any). */}
-            {scope !== "enrolled" ? (
+                Empty = every stage. The enrolled-scoped composer
+                shows only Faculty (everyone else there IS enrolled);
+                the recruitment scope drops the Enrolled chip (its
+                audience can't contain any). */}
             <div className="flex flex-wrap items-center gap-1.5">
               <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
                 Stage
               </span>
               {STAGE_FILTERS.filter(
-                (s) => scope !== "recruitment" || s.value !== "enrolled"
+                (s) =>
+                  scope === "enrolled"
+                    ? s.value === "faculty"
+                    : scope !== "recruitment" || s.value !== "enrolled"
               ).map((s) => {
                 const on = stageFilter.includes(s.value);
                 return (
@@ -635,7 +655,6 @@ export function GroupMessageDialog({
                 );
               })}
             </div>
-            ) : null}
 
             {/* Grade + balance narrowing chips */}
             <div className="flex flex-wrap items-center gap-1.5">
@@ -856,7 +875,7 @@ export function GroupMessageDialog({
                                   visit / TASCO) — always rendered so
                                   warm leads pop; unrated rows show 5
                                   muted stars. */}
-                              {c.type !== "family" ? (
+                              {c.type !== "family" && c.type !== "adhoc" ? (
                                 <span
                                   className="flex shrink-0 items-center gap-px"
                                   aria-label={

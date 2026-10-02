@@ -1,6 +1,7 @@
 import { xano } from "@/lib/xano";
 import { sendSms, type SendSmsInput } from "@/lib/sms/send";
 import { toE164 } from "@/lib/phone";
+import { getFacultyByPhone, type FacultyMember } from "@/lib/sms/faculty";
 import {
   normPhone,
   phoneFromAdhocId,
@@ -124,7 +125,10 @@ export async function sendGroupText(input: GroupSendInput): Promise<GroupSendRes
   const wantCamp = contacts.some((c) => c.type === "camp");
   const wantVisits = contacts.some((c) => c.type === "visit");
   const wantTasco = contacts.some((c) => c.type === "tasco");
-  const [families, inquiries, campRows, waivers, tascoRows] =
+  // Faculty ride as ad-hoc numbers; the teachers list puts their first
+  // name back for `{{first_name}}`.
+  const wantFaculty = contacts.some((c) => c.type === "adhoc");
+  const [families, inquiries, campRows, waivers, tascoRows, facultyByPhone] =
     await Promise.all([
       wantFamilies
         ? xano.families.getAllDetails().catch(() => [])
@@ -141,6 +145,9 @@ export async function sendGroupText(input: GroupSendInput): Promise<GroupSendRes
       wantTasco
         ? xano.tascoSummerVisits.getAll().catch(() => [])
         : Promise.resolve([]),
+      wantFaculty
+        ? getFacultyByPhone()
+        : Promise.resolve(new Map<string, FacultyMember>()),
     ]);
   const familyById = new Map(families.map((f) => [f.id, f]));
   const inquiryById = new Map(inquiries.map((i) => [i.id, i]));
@@ -226,11 +233,12 @@ export async function sendGroupText(input: GroupSendInput): Promise<GroupSendRes
       };
     }
     if (ref.type === "adhoc") {
-      const e164 = toE164(phoneFromAdhocId(ref.id));
+      const phone = phoneFromAdhocId(ref.id);
+      const e164 = toE164(phone);
       return {
         ref,
         send: { contact: ref, yearId, body: text, author },
-        firstName: "",
+        firstName: facultyByPhone.get(phone)?.greetingName ?? "",
         sendable: Boolean(e164),
         optedOut: false,
         hasPhone: Boolean(e164),

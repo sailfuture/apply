@@ -17,6 +17,7 @@ import {
   type SmsContactType,
 } from "@/lib/sms/contacts";
 import { computeFamilyStageSets } from "@/lib/sms/stages";
+import { getFacultyByPhone } from "@/lib/sms/faculty";
 import { bumpLeadReachOut } from "@/lib/leads";
 import { isFollowUpTemplate } from "@/lib/nurture/templates";
 
@@ -127,6 +128,7 @@ async function handleGET(req: NextRequest) {
         students,
         fap,
         srp,
+        facultyByPhone,
       ] =
         await Promise.all([
           xano.smsMessages.getAll(),
@@ -145,6 +147,8 @@ async function handleGET(req: NextRequest) {
                 .getByYear(yearId)
                 .catch(() => [])
             : Promise.resolve([]),
+          // Faculty are texted as ad-hoc numbers — name their threads.
+          getFacultyByPhone(),
         ]);
       const stageSets = withStages
         ? computeFamilyStageSets({ fap, srp })
@@ -238,7 +242,10 @@ async function handleGET(req: NextRequest) {
       const nameFor = (type: SmsContactType, id: number): string => {
         // Ad-hoc threads have no record — the formatted number IS the
         // name (the inbox shows it verbatim).
-        if (type === "adhoc") return phoneFromAdhocId(id);
+        if (type === "adhoc") {
+          const phone = phoneFromAdhocId(id);
+          return facultyByPhone.get(phone)?.name || phone;
+        }
         const raw =
           type === "family"
             ? familyName.get(id)

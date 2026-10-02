@@ -100,7 +100,7 @@ function smsContactColumn(type: SmsThreadContactType) {
  *  reach the `2GcBXyoA` group (which hosts
  *  `registration_application_by_family`) without introducing a
  *  second env var. */
-function getXanoHost(): string {
+export function getXanoHost(): string {
   return getBaseUrl().replace(/\/api:[^/]+\/?$/, "");
 }
 

@@ -39,6 +39,7 @@ const STAGE_FILTERS: Array<{ value: GroupStage; label: string }> = [
   { value: "camp", label: "Camp" },
   { value: "visit", label: "Liability Waiver Visit" },
   { value: "tasco", label: "TASCO" },
+  { value: "faculty", label: "Faculty" },
 ];
 
 const STAGE_LABEL: Record<GroupStage, string> = {
@@ -49,6 +50,7 @@ const STAGE_LABEL: Record<GroupStage, string> = {
   camp: "Camp",
   visit: "Liability Waiver Visit",
   tasco: "TASCO",
+  faculty: "Faculty",
 };
 
 /** Section headings per contact TYPE — identical to the group list. */
@@ -58,6 +60,7 @@ const TYPE_HEADING: Record<GroupContact["type"], string> = {
   camp: "Summer camp",
   visit: "Liability waiver visits",
   tasco: "TASCO summer visits",
+  adhoc: "Faculty",
 };
 
 const GRADES = [8, 9, 10, 11, 12] as const;
@@ -97,6 +100,15 @@ export function NewMessageDialog({
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return contacts.filter((c) => {
+      // Faculty only list when asked for (chip or a search) — a
+      // select-all on a parent blast must never sweep in staff.
+      if (
+        c.stage === "faculty" &&
+        !stageFilter.includes("faculty") &&
+        !q
+      ) {
+        return false;
+      }
       if (stageFilter.length > 0 && !stageFilter.includes(c.stage)) {
         return false;
       }
@@ -304,7 +316,7 @@ export function NewMessageDialog({
                               <span className="truncate text-sm font-medium">
                                 {c.name}
                               </span>
-                              {c.type !== "family" ? (
+                              {c.type !== "family" && c.type !== "adhoc" ? (
                                 <span
                                   className="flex shrink-0 items-center gap-px"
                                   aria-label={
