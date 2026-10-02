@@ -16,6 +16,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { adminFetcher } from "@/lib/admin-fetcher";
+import { PAST_DUE_TEMPLATE_PREFIX } from "@/lib/billing-past-due";
 import { cn } from "@/lib/utils";
 import type { XanoEmailNotification } from "@/lib/xano";
 
@@ -393,6 +394,9 @@ function StatusPill({ status, title }: { status: string; title?: string }) {
  *  `lib/emails/templates.ts` should also get a label here so the
  *  table doesn't fall back to the raw kebab-case tag. */
 function templateLabel(tag: string): string {
+  // Past-due tags carry one token per invoice reminder they covered
+  // (`tuition-past-due-7d-in_…`), so they match on the prefix.
+  if (tag.startsWith(PAST_DUE_TEMPLATE_PREFIX)) return "Tuition past due";
   switch (tag) {
     case "application-received":
       return "Application received";

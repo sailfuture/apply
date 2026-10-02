@@ -4767,29 +4767,7 @@ export const xano = {
       yearId?: number
     ): Promise<XanoEmailNotification[]> {
       try {
-        const params = new URLSearchParams({
-          registration_families_id: String(familyId),
-        });
-        if (yearId) {
-          params.set("registration_school_years_id", String(yearId));
-        }
-        const res = await xanoFetch(
-          `${getBaseUrl()}/registration_email_notifications?${params.toString()}`,
-          { cache: "no-store" }
-        );
-        if (!res.ok) return [];
-        const results = await res.json();
-        if (!Array.isArray(results)) return [];
-        // Defensive filter in case Xano's query-param matching isn't
-        // wired on a fresh environment — same belt-and-suspenders
-        // pattern other groups use.
-        const filtered = (results as XanoEmailNotification[]).filter((r) => {
-          if (Number(r.registration_families_id) !== familyId) return false;
-          if (yearId && Number(r.registration_school_years_id) !== yearId)
-            return false;
-          return true;
-        });
-        return filtered.sort((a, b) => b.created_at - a.created_at);
+        return await this.getByFamilyStrict(familyId, yearId);
       } catch (err) {
         console.error(
           `[xano.emailNotifications.getByFamily] threw for familyId=${familyId} yearId=${yearId}:`,
@@ -4797,6 +4775,48 @@ export const xano = {
         );
         return [];
       }
+    },
+
+    /** Throwing variant of `getByFamily`: transport or Xano failures
+     *  THROW instead of coming back as `[]`. Dedupe reads must use
+     *  this. An empty log means "never sent", so a swallowed error
+     *  would re-send a reminder the family already got, on every run
+     *  of an outage. */
+    async getByFamilyStrict(
+      familyId: number,
+      yearId?: number
+    ): Promise<XanoEmailNotification[]> {
+      const params = new URLSearchParams({
+        registration_families_id: String(familyId),
+      });
+      if (yearId) {
+        params.set("registration_school_years_id", String(yearId));
+      }
+      const res = await xanoFetch(
+        `${getBaseUrl()}/registration_email_notifications?${params.toString()}`,
+        { cache: "no-store" }
+      );
+      if (!res.ok) {
+        throw new Error(
+          `Xano error ${res.status} reading the email log for family ${familyId}: ${await res.text()}`
+        );
+      }
+      const results = await res.json();
+      if (!Array.isArray(results)) {
+        throw new Error(
+          `Unexpected email log response for family ${familyId} (not a list)`
+        );
+      }
+      // Defensive filter in case Xano's query-param matching isn't
+      // wired on a fresh environment — same belt-and-suspenders
+      // pattern other groups use.
+      const filtered = (results as XanoEmailNotification[]).filter((r) => {
+        if (Number(r.registration_families_id) !== familyId) return false;
+        if (yearId && Number(r.registration_school_years_id) !== yearId)
+          return false;
+        return true;
+      });
+      return filtered.sort((a, b) => b.created_at - a.created_at);
     },
   },
 

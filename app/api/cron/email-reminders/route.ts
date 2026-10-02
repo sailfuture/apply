@@ -5,7 +5,9 @@ import {
   sendDraftReminderEmail,
   sendEnrollmentReminderEmail,
   sendBackToSchoolEmail,
+  sendTuitionPastDueEmail,
 } from "@/lib/emails/triggers";
+import { planPastDueEmails } from "@/lib/billing-past-due";
 import {
   sendBillingUpcomingSms,
   sendOutstandingTuitionSms,
@@ -24,6 +26,9 @@ import { getStripeClient } from "@/lib/stripe";
  *   - Email 11 — back-to-school welcome (1-2 weeks before August
  *     24th, to every officially-enrolled family for the current
  *     year).
+ *   - Past-due tuition — 7, 14 and 21 days after an open invoice's
+ *     due date, to every parent on the family, with pay links (see
+ *     lib/billing-past-due.ts).
  *
  * Authorization: Vercel Cron sends `Authorization: Bearer
  * $CRON_SECRET` when the `CRON_SECRET` env var is set. Other callers
@@ -53,7 +58,10 @@ import { getStripeClient } from "@/lib/stripe";
  */
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60; // seconds — generous for slow Xano days
+// Seconds. Each past-due email costs a few Xano reads plus a Resend
+// send, and a backlog day can email a couple dozen families on top of
+// the SMS pass. 60 was too tight for that.
+export const maxDuration = 300;
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -98,6 +106,15 @@ export async function GET(req: NextRequest) {
     // whether the text already went out. Tomorrow's run tries again.
     billingUpcoming: { eligible: 0, sent: 0, failed: 0, unverified: 0 },
     outstanding: { eligible: 0, sent: 0, failed: 0, unverified: 0 },
+    // Per family: `eligible` = had a 7/14/21-day reminder come due,
+    // `deduped` = the email log shows it already went out.
+    pastDueEmail: {
+      eligible: 0,
+      sent: 0,
+      deduped: 0,
+      failed: 0,
+      unverified: 0,
+    },
   };
 
   try {
@@ -248,6 +265,63 @@ export async function GET(req: NextRequest) {
         }
       }
 
+      // Read once, shared by the past-due emails and the drift check.
+      // `[]` on a Xano failure, so both fall quiet rather than act on a
+      // partial picture.
+      const yearPayments = await xano.familyPayments.getAllByYear(year.id);
+
+      // Past-due tuition EMAILS: 7, 14 and 21 days after an open
+      // invoice's due date, to every parent on the family (primary and
+      // secondary), listing each past-due invoice with its pay link.
+      // Planned per family (lib/billing-past-due.ts), so several
+      // overdue invoices share one email, and deduped per (invoice,
+      // stage) against the email log. Only families the school is
+      // still billing: a live subscription for the year and not
+      // residential. A fully unenrolled family's leftover invoice is a
+      // staff call, made in Stripe.
+      try {
+        const families = await xano.families.getAll();
+        const residential = new Set(
+          families.filter((f) => f.is_residential === true).map((f) => f.id)
+        );
+        const billing = new Set(
+          yearPayments
+            .filter((p) => !!activeStripeSubscriptionId(p.stripe_subscription_id))
+            .map((p) => Number(p.registration_families_id))
+            .filter((id) => !residential.has(id))
+        );
+        const plans = planPastDueEmails({
+          txns,
+          isBillableFamily: (id) => billing.has(id),
+          payUrlFor: (tx) =>
+            tx.hosted_invoice_url
+              ? `${appBaseUrl}/pay/${tx.stripe_invoice_id}`
+              : `${appBaseUrl}/dashboard/tuition?yearId=${year.id}`,
+          nowMs: Date.now(),
+        });
+        for (const plan of plans) {
+          if (plan.reminders.length === 0) continue;
+          result.pastDueEmail.eligible += 1;
+          const res = await sendTuitionPastDueEmail(
+            plan.familyId,
+            year.id,
+            plan
+          );
+          if (res.ok && res.id === "deduped") result.pastDueEmail.deduped += 1;
+          else if (res.ok) result.pastDueEmail.sent += 1;
+          else if (res.error === "unverified") {
+            result.pastDueEmail.unverified += 1;
+          } else result.pastDueEmail.failed += 1;
+        }
+      } catch (err) {
+        // The family list couldn't be read: send nothing today rather
+        // than email a residential family. Tomorrow's run catches up.
+        console.error(
+          `[cron/email-reminders] past-due tuition emails skipped for year ${year.id}:`,
+          err
+        );
+      }
+
       // Drift detection — a family with a LIVE subscription but ZERO
       // mirrored invoices well past billing start means either the
       // Stripe webhook is broken/misconfigured (mirror silently dead:
@@ -264,7 +338,7 @@ export async function GET(req: NextRequest) {
           Number.isFinite(billingStartMs) &&
           Date.now() > billingStartMs + graceMs
         ) {
-          const payments = await xano.familyPayments.getAllByYear(year.id);
+          const payments = yearPayments;
           const familiesWithInvoices = new Set(
             txns.map((t) => t.registration_families_id)
           );

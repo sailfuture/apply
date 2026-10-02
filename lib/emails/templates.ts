@@ -899,3 +899,121 @@ export function billingAmountChanged(
 
   return { subject, html, text };
 }
+
+export interface TuitionPastDueContext extends BaseContext {
+  /** Every past-due invoice on the account, oldest first. */
+  invoices: Array<{
+    amount_cents: number;
+    /** Unix ms. Printed as its UTC calendar date, the date Stripe puts
+     *  on the invoice and its hosted page. */
+    due_date: number;
+    days_past_due: number;
+    /** Public pay link for this one invoice. */
+    pay_url: string;
+  }>;
+  /** Parent Tuition & Fees page, which lists every invoice (sign-in
+   *  required). */
+  tuition_url: string;
+}
+
+/**
+ * Past-due tuition reminder. The daily cron sends it 7, 14 and 21 days
+ * after an invoice's due date (lib/billing-past-due.ts) to every parent
+ * on the family. It lists every past-due invoice on the account with
+ * its own pay link, so the family can clear the whole balance from one
+ * email.
+ */
+export function tuitionPastDue(ctx: TuitionPastDueContext): EmailContent {
+  const money = (cents: number) =>
+    (cents / 100).toLocaleString("en-US", {
+      style: "currency",
+      currency: "USD",
+    });
+  const date = (ms: number) =>
+    new Date(ms).toLocaleDateString("en-US", {
+      month: "long",
+      day: "numeric",
+      timeZone: "UTC",
+    });
+  const late = (days: number) =>
+    `${days} day${days === 1 ? "" : "s"} past due`;
+  const total = ctx.invoices.reduce((sum, inv) => sum + inv.amount_cents, 0);
+  const single = ctx.invoices.length === 1 ? ctx.invoices[0] : null;
+
+  const subject = single
+    ? `Past due: ${money(single.amount_cents)} tuition payment (due ${date(single.due_date)})`
+    : `Past due: ${ctx.invoices.length} tuition payments totaling ${money(total)}`;
+  const preheader = single
+    ? `Your ${money(single.amount_cents)} tuition payment was due ${date(single.due_date)}. You can pay it online now.`
+    : `${ctx.invoices.length} tuition payments totaling ${money(total)} are past due. You can pay each one online now.`;
+  const intro = single
+    ? `We haven't received the ${money(single.amount_cents)} tuition and fees payment for ${ctx.student_first_name} that was due ${date(single.due_date)}. It is now ${late(single.days_past_due)}.`
+    : `We haven't received these tuition and fees payments for ${ctx.student_first_name}:`;
+  const already = single
+    ? `If you've already sent this payment, thank you, and please disregard this reminder.`
+    : `If you've already sent these payments, thank you, and please disregard this reminder.`;
+  const portal = `You can also see every invoice on the Tuition & Fees page of your family portal.`;
+
+  const cell = "padding:10px 0;border-bottom:1px solid #e5e7eb;";
+  const invoiceTable = single
+    ? ""
+    : `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 16px;border-collapse:collapse;">${ctx.invoices
+        .map(
+          (inv) => `<tr>
+        <td style="${cell}font-size:15px;">
+          <div style="color:#111827;">Due ${escapeHtml(date(inv.due_date))}</div>
+          <div style="color:#6b7280;font-size:13px;">${escapeHtml(late(inv.days_past_due))}</div>
+        </td>
+        <td style="${cell}padding-right:12px;font-size:15px;font-weight:600;text-align:right;white-space:nowrap;">${escapeHtml(money(inv.amount_cents))}</td>
+        <td style="${cell}text-align:right;white-space:nowrap;">
+          <a href="${escapeAttr(inv.pay_url)}" style="display:inline-block;background:#0F2A4A;color:#ffffff;padding:8px 16px;border-radius:6px;text-decoration:none;font-weight:600;font-size:14px;">Pay</a>
+        </td>
+      </tr>`
+        )
+        .join("")}<tr>
+        <td style="padding:10px 0;font-size:15px;color:#6b7280;">Total past due</td>
+        <td style="padding:10px 12px 10px 0;font-size:15px;font-weight:600;text-align:right;white-space:nowrap;">${escapeHtml(money(total))}</td>
+        <td></td>
+      </tr></table>`;
+
+  const html = layout({
+    preheader,
+    body:
+      p(`Hi ${ctx.parent_first_name},`) +
+      p(intro) +
+      invoiceTable +
+      p(already) +
+      `<p style="margin:0 0 14px;">You can also see every invoice on the <a href="${escapeAttr(ctx.tuition_url)}" style="color:#0F2A4A;">Tuition &amp; Fees page</a> of your family portal.</p>` +
+      p(`The SailFuture Academy team`),
+    // One invoice gets the big button; several get a Pay button per
+    // row in the table above.
+    buttonHref: single?.pay_url,
+    buttonLabel: single ? `Pay ${money(single.amount_cents)}` : undefined,
+  });
+
+  const text = [
+    `Hi ${ctx.parent_first_name},`,
+    "",
+    intro,
+    "",
+    ...(single
+      ? [`Pay online: ${single.pay_url}`]
+      : [
+          ...ctx.invoices.map(
+            (inv) =>
+              `- ${money(inv.amount_cents)}, due ${date(inv.due_date)} (${late(inv.days_past_due)}). Pay: ${inv.pay_url}`
+          ),
+          `Total past due: ${money(total)}`,
+        ]),
+    "",
+    already,
+    "",
+    `${portal} ${ctx.tuition_url}`,
+    "",
+    `Questions? Email ${SUPPORT_EMAIL} or call ${SUPPORT_PHONE}.`,
+    "",
+    `The SailFuture Academy team`,
+  ].join("\n");
+
+  return { subject, html, text };
+}

@@ -16,6 +16,12 @@
 
 import { xano } from "@/lib/xano";
 import type { XanoFamily, XanoParent, XanoStudent } from "@/lib/xano";
+import {
+  pastDueTemplateTag,
+  pendingPastDueReminders,
+  sentPastDueReminders,
+  type FamilyPastDuePlan,
+} from "@/lib/billing-past-due";
 import { sendEmail, type SendResult } from "./send";
 import * as t from "./templates";
 
@@ -366,6 +372,62 @@ export async function sendEnrollmentReminderEmail(
       login_url: ctx.loginUrl,
     }),
     tag: "enrollment-reminder",
+    familyId: ctx.familyId,
+    yearId: ctx.yearId,
+  });
+}
+
+/** Past-due tuition reminder (cron): 7, 14 and 21 days after an
+ *  invoice's due date, to every parent on the family, primary and
+ *  secondary. The cron plans which reminders are due
+ *  (lib/billing-past-due.ts). This drops the ones the family's email
+ *  log shows already went out, then sends one email listing every
+ *  past-due invoice with its pay link.
+ *
+ *  The log read is STRICT. If it fails, the email is held for the
+ *  next run (`error: "unverified"`) rather than risk repeating one the
+ *  family already got. */
+export async function sendTuitionPastDueEmail(
+  familyId: number,
+  yearId: number,
+  plan: FamilyPastDuePlan
+): Promise<SendResult> {
+  let pending: ReturnType<typeof pendingPastDueReminders>;
+  try {
+    const log = await xano.emailNotifications.getByFamilyStrict(
+      familyId,
+      yearId
+    );
+    pending = pendingPastDueReminders(
+      plan.reminders,
+      sentPastDueReminders(log)
+    );
+  } catch (err) {
+    console.error(
+      `[email/tuition-past-due] couldn't read family ${familyId}'s email log to dedupe — holding until the next run:`,
+      err
+    );
+    return { ok: false, error: "unverified" };
+  }
+  if (pending.length === 0) return { ok: true, id: "deduped" };
+
+  const ctx = await resolveFamilyContext(familyId, yearId);
+  if (!ctx) return { ok: false, error: "context-failed" };
+  return sendEmail({
+    to: ctx.parentEmails,
+    content: t.tuitionPastDue({
+      parent_first_name: ctx.primaryParentFirstName,
+      student_first_name: ctx.studentDisplayNames,
+      login_url: ctx.loginUrl,
+      tuition_url: `${ctx.loginUrl.replace(/\/+$/, "")}/dashboard/tuition?yearId=${yearId}`,
+      invoices: plan.pastDue.map((inv) => ({
+        amount_cents: inv.amountCents,
+        due_date: inv.dueDate,
+        days_past_due: inv.daysPastDue,
+        pay_url: inv.payUrl,
+      })),
+    }),
+    tag: pastDueTemplateTag(pending),
     familyId: ctx.familyId,
     yearId: ctx.yearId,
   });
