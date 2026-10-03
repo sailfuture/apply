@@ -93,6 +93,12 @@ function formatHours(value: number): string {
   return value.toFixed(2).replace(/\.?0+$/, "");
 }
 
+/** A family counts as having hours once anything is logged for it —
+ *  approved, or submitted and still waiting on review. */
+function hasHours(row: { approved: number; pending: number }): boolean {
+  return row.approved > 0 || row.pending > 0;
+}
+
 /** "YYYY-MM-DD" → "Aug 26, 2026" without the UTC off-by-one. */
 function fmtDate(iso: string): string {
   if (!iso) return "—";
@@ -183,8 +189,9 @@ export default function AdminVolunteerHoursPage() {
   }, [entries]);
 
   /** Family progress rows: every enrolled family (even with zero
-   *  entries), plus any non-enrolled family that has entries. Least
-   *  progress first so at-risk families surface. */
+   *  entries), plus any non-enrolled family that has entries. Sorted
+   *  enrolled-first here for the stat row; the two tables below
+   *  re-sort their own halves. */
   const familyRows = useMemo(() => {
     const rows: Array<{
       family: VolunteerFamily;
@@ -249,6 +256,34 @@ export default function AdminVolunteerHoursPage() {
         family.students.toLowerCase().includes(q)
     );
   }, [familyRows, familyQuery]);
+
+  // The progress list is split in two so the ranking isn't buried
+  // under a wall of zeros: families with any logged hours (approved or
+  // still pending) ranked most → least, and the rest listed by name.
+  const withHoursCount = useMemo(
+    () => familyRows.filter(hasHours).length,
+    [familyRows]
+  );
+  const rankedFamilyRows = useMemo(
+    () =>
+      visibleFamilyRows
+        .filter(hasHours)
+        .sort(
+          (a, b) =>
+            b.approved - a.approved ||
+            b.pending - a.pending ||
+            a.family.name.localeCompare(b.family.name)
+        ),
+    [visibleFamilyRows]
+  );
+  const noHoursFamilyRows = useMemo(
+    () =>
+      visibleFamilyRows
+        .filter((r) => !hasHours(r))
+        .sort((a, b) => a.family.name.localeCompare(b.family.name)),
+    [visibleFamilyRows]
+  );
+  const noHoursCount = familyRows.length - withHoursCount;
 
   // ── UI state ──
   const [openFamilyId, setOpenFamilyId] = useState<number | null>(null);
@@ -653,8 +688,8 @@ export default function AdminVolunteerHoursPage() {
                 <CardTitle className="text-base">
                   Family progress (
                   {familyQuery.trim()
-                    ? `${visibleFamilyRows.length} of ${familyRows.length}`
-                    : familyRows.length}
+                    ? `${rankedFamilyRows.length} of ${withHoursCount}`
+                    : withHoursCount}
                   )
                 </CardTitle>
                 <div className="relative w-full sm:w-72">
@@ -680,34 +715,41 @@ export default function AdminVolunteerHoursPage() {
                 refreshing && "opacity-50 animate-pulse"
               )}
             >
-              <Table className="[&_th]:px-4 [&_td]:px-4 [&_td]:py-3">
+              {/* `table-fixed` + explicit widths on every column but
+                  Family: the name cell takes what's left and truncates,
+                  so a long student list can never widen the table into
+                  a horizontal scroll. Narrow screens drop Pending, then
+                  the bar, rather than squeezing the name to nothing. */}
+              <Table className="table-fixed [&_th]:px-4 [&_td]:px-4 [&_td]:py-3">
                 <TableHeader>
                   <TableRow>
                     <TableHead>Family</TableHead>
-                    <TableHead className="text-right">Approved</TableHead>
-                    <TableHead className="text-right">Pending</TableHead>
-                    <TableHead className="w-64">
+                    <TableHead className="w-24 text-right">Approved</TableHead>
+                    <TableHead className="hidden w-24 text-right sm:table-cell">
+                      Pending
+                    </TableHead>
+                    <TableHead className="hidden w-64 lg:table-cell">
                       Progress to {HOURS_GOAL} hrs
                     </TableHead>
-                    <TableHead className="w-10">
+                    <TableHead className="w-12">
                       <span className="sr-only">Open</span>
                     </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {visibleFamilyRows.length === 0 ? (
+                  {rankedFamilyRows.length === 0 ? (
                     <TableRow>
                       <TableCell
                         colSpan={5}
-                        className="py-6 text-center text-sm text-muted-foreground"
+                        className="py-6 text-center text-sm whitespace-normal text-muted-foreground"
                       >
                         {familyQuery.trim()
-                          ? `No family or student matches “${familyQuery.trim()}”.`
-                          : "No enrolled families for this school year yet."}
+                          ? `No family with hours matches “${familyQuery.trim()}”.`
+                          : "No family has logged hours this school year yet."}
                       </TableCell>
                     </TableRow>
                   ) : (
-                    visibleFamilyRows.map(({ family, approved, pending }) => {
+                    rankedFamilyRows.map(({ family, approved, pending }) => {
                       const pct = Math.min(
                         100,
                         (approved / HOURS_GOAL) * 100
@@ -719,26 +761,14 @@ export default function AdminVolunteerHoursPage() {
                           className="cursor-pointer"
                           onClick={() => setOpenFamilyId(family.id)}
                         >
-                          <TableCell className="font-medium">
-                            {family.name}
-                            {!family.enrolled ? (
-                              <span className="ml-1.5 rounded-full border px-1.5 py-px text-[10px] font-medium text-muted-foreground align-middle">
-                                Not enrolled
-                              </span>
-                            ) : null}
-                            {family.students ? (
-                              <span className="block text-xs font-normal text-muted-foreground">
-                                {family.students}
-                              </span>
-                            ) : null}
-                          </TableCell>
+                          <FamilyNameCell family={family} />
                           <TableCell className="text-right tabular-nums">
                             {formatHours(approved)}
                           </TableCell>
-                          <TableCell className="text-right tabular-nums text-muted-foreground">
+                          <TableCell className="hidden text-right tabular-nums text-muted-foreground sm:table-cell">
                             {pending ? formatHours(pending) : "—"}
                           </TableCell>
-                          <TableCell>
+                          <TableCell className="hidden lg:table-cell">
                             <div className="flex items-center gap-2">
                               <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted">
                                 <div
@@ -774,6 +804,53 @@ export default function AdminVolunteerHoursPage() {
               </Table>
             </CardContent>
           </Card>
+
+          {/* ── No hours yet ── */}
+          {noHoursFamilyRows.length > 0 ? (
+            <Card className="bg-white py-0 gap-0 overflow-hidden">
+              <CardHeader className="border-b py-4">
+                <CardTitle className="text-base">
+                  No hours yet (
+                  {familyQuery.trim()
+                    ? `${noHoursFamilyRows.length} of ${noHoursCount}`
+                    : noHoursCount}
+                  )
+                </CardTitle>
+              </CardHeader>
+              <CardContent
+                aria-busy={refreshing}
+                className={cn(
+                  "p-0 transition-opacity",
+                  refreshing && "opacity-50 animate-pulse"
+                )}
+              >
+                <Table className="table-fixed [&_th]:px-4 [&_td]:px-4 [&_td]:py-3">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Family</TableHead>
+                      <TableHead className="w-12">
+                        <span className="sr-only">Open</span>
+                      </TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {noHoursFamilyRows.map(({ family }) => (
+                      <TableRow
+                        key={family.id}
+                        className="cursor-pointer"
+                        onClick={() => setOpenFamilyId(family.id)}
+                      >
+                        <FamilyNameCell family={family} />
+                        <TableCell>
+                          <ChevronRight className="size-4 text-muted-foreground" />
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          ) : null}
 
         </>
       )}
@@ -946,6 +1023,35 @@ function StatCard({
         </p>
       </CardContent>
     </Card>
+  );
+}
+
+/** Family name with its students on the same line — "Powell Family •
+ *  Micah Powell · Matthias Powell" — truncated to the column. The
+ *  full text rides on `title` so a clipped list is still readable. */
+function FamilyNameCell({ family }: { family: VolunteerFamily }) {
+  return (
+    <TableCell
+      className="truncate font-medium"
+      title={
+        family.students ? `${family.name} • ${family.students}` : family.name
+      }
+    >
+      {family.name}
+      {!family.enrolled ? (
+        <span className="ml-1.5 rounded-full border px-1.5 py-px text-[10px] font-medium text-muted-foreground align-middle">
+          Not enrolled
+        </span>
+      ) : null}
+      {family.students ? (
+        <span className="font-normal text-muted-foreground">
+          <span aria-hidden="true" className="mx-1.5">
+            •
+          </span>
+          {family.students}
+        </span>
+      ) : null}
+    </TableCell>
   );
 }
 
