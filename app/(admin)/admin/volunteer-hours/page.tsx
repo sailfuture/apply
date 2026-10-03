@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { toast } from "sonner";
@@ -127,17 +127,28 @@ export default function AdminVolunteerHoursPage() {
   const yearIdParam = searchParams.get("yearId");
   const yearId = Number(yearIdParam) || 0;
 
-  const { data, error, isLoading, isValidating, mutate } =
+  const { data, error, isLoading, mutate } =
     useSWR<AdminVolunteerHoursResponse>(
       yearId ? `/api/admin/volunteer-hours?yearId=${yearId}` : null,
       adminFetcher
     );
-  // True while a revalidation is in flight AFTER a dialog save calls
-  // `mutate()` (first load renders skeletons via `isLoading` instead).
-  // Drives the dim-and-pulse on the tables below so an edit visibly
-  // "lands" — without it the page sits on stale rows for a second or
-  // two and the change appears to have been swallowed.
-  const refreshing = isValidating && !isLoading;
+  // True while the refresh that follows a SAVE is in flight (first load
+  // renders a spinner via `isLoading` instead). Drives the dim-and-pulse
+  // on the tables below so an edit visibly "lands" — without it the
+  // page sits on stale rows for a second or two and the change appears
+  // to have been swallowed. Deliberately not SWR's `isValidating`: that
+  // is also true for background refreshes (coming back to the page with
+  // rows already cached, or refocusing the window), which greyed the
+  // whole page for the few seconds this fetch takes on every visit.
+  const [refreshing, setRefreshing] = useState(false);
+  const refresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await mutate();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [mutate]);
   const entries = useMemo(() => data?.entries ?? [], [data]);
   const families = useMemo(() => data?.families ?? [], [data]);
   const events = useMemo(() => data?.events ?? [], [data]);
@@ -319,7 +330,7 @@ export default function AdminVolunteerHoursPage() {
         const err = await res.json().catch(() => null);
         throw new Error(err?.error ?? `Update failed (${res.status})`);
       }
-      await mutate();
+      await refresh();
       toast.success(approved ? "Entry approved." : "Approval removed.");
     } catch (err) {
       console.error("Failed to update approval:", err);
@@ -343,7 +354,7 @@ export default function AdminVolunteerHoursPage() {
         const err = await res.json().catch(() => null);
         throw new Error(err?.error ?? `Delete failed (${res.status})`);
       }
-      await mutate();
+      await refresh();
       toast.success("Entry deleted.");
       setDeleteTarget(null);
     } catch (err) {
@@ -889,7 +900,7 @@ export default function AdminVolunteerHoursPage() {
           existing={entryEdit.existing}
           onDone={(saved) => {
             setEntryEdit(null);
-            if (saved) void mutate();
+            if (saved) void refresh();
           }}
         />
       ) : null}
@@ -906,7 +917,7 @@ export default function AdminVolunteerHoursPage() {
           onDelete={(e) => setDeleteTarget(e)}
           onDone={(changed) => {
             setAttendeesEvent(null);
-            if (changed) void mutate();
+            if (changed) void refresh();
           }}
         />
       ) : null}
@@ -919,7 +930,7 @@ export default function AdminVolunteerHoursPage() {
           events={events}
           onDone={(saved) => {
             setBulkOpen(false);
-            if (saved) void mutate();
+            if (saved) void refresh();
           }}
         />
       ) : null}
@@ -956,7 +967,7 @@ export default function AdminVolunteerHoursPage() {
           defaultVolunteer
           onDone={(saved) => {
             setEventEdit(null);
-            if (saved) void mutate();
+            if (saved) void refresh();
           }}
         />
       ) : null}

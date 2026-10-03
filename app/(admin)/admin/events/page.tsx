@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useCallback, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import {
@@ -94,13 +94,23 @@ export default function AdminEventsPage() {
   const searchParams = useSearchParams();
   const yearId = Number(searchParams.get("yearId")) || 0;
 
-  const { data, error, isLoading, isValidating, mutate } =
-    useSWR<AdminEventsResponse>(
-      yearId ? `/api/admin/events?yearId=${yearId}` : null,
-      adminFetcher
-    );
-  // An edit's revalidation, not the first load (that shows a spinner).
-  const refreshing = isValidating && !isLoading;
+  const { data, error, isLoading, mutate } = useSWR<AdminEventsResponse>(
+    yearId ? `/api/admin/events?yearId=${yearId}` : null,
+    adminFetcher
+  );
+  // The refresh that follows an edit: not the first load (that shows a
+  // spinner), and not SWR's background refreshes on returning to the
+  // page or refocusing the window, which greyed the table for the few
+  // seconds the fetch takes on every visit.
+  const [refreshing, setRefreshing] = useState(false);
+  const refresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await mutate();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [mutate]);
   const events = useMemo(() => data?.events ?? [], [data]);
   const days = useMemo(() => data?.days ?? [], [data]);
   const todayIso = schoolTodayIso();
@@ -391,7 +401,7 @@ export default function AdminEventsPage() {
         }}
         onEdit={(e) => setEditTarget(e)}
         onRemind={(e) => setRemindTarget(e)}
-        onChanged={() => mutate()}
+        onChanged={() => refresh()}
       />
 
       {/* Create / edit — the calendar's shared dialog. It waits on the
@@ -408,7 +418,7 @@ export default function AdminEventsPage() {
           }
           defaultDate={newEventDate}
           onDone={async (saved) => {
-            if (saved) await mutate().catch(() => undefined);
+            if (saved) await refresh().catch(() => undefined);
             setEditTarget(null);
           }}
         />
