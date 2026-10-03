@@ -289,6 +289,22 @@ export function EventReminderDialog({
               </p>
             </div>
 
+            {/* When it goes out. It sits here rather than in the footer
+                because the footer is too narrow for the picker beside
+                the buttons: there it wrapped to a second line and
+                pushed everything up when the box was ticked. */}
+            <SendLaterField
+              enabled={sendLater}
+              onEnabledChange={(v) => {
+                setSendLater(v);
+                if (v && !sendAt) setSendAt(defaultReminderTime(event));
+              }}
+              value={sendAt}
+              onValueChange={setSendAt}
+              disabled={sending}
+              id="reminder-send-later"
+            />
+
             {/* Crew chips — narrow to the crew(s) this event is for.
                 One text per family regardless; the selection below
                 re-derives from the narrowed list. Hidden when no
@@ -419,41 +435,31 @@ export function EventReminderDialog({
             </div>
           </div>
 
-          <DialogFooter className="border-t px-5 py-3 sm:justify-between">
-            <SendLaterField
-              enabled={sendLater}
-              onEnabledChange={(v) => {
-                setSendLater(v);
-                if (v && !sendAt) setSendAt(defaultReminderTime(event));
-              }}
-              value={sendAt}
-              onValueChange={setSendAt}
+          <DialogFooter className="border-t px-5 py-3">
+            <Button
+              variant="outline"
+              size="sm"
+              className="bg-white"
               disabled={sending}
-              id="reminder-send-later"
-            />
-            <div className="flex gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                className="bg-white"
-                disabled={sending}
-                onClick={() => onDone()}
-              >
-                Cancel
-              </Button>
-              <Button
-                size="sm"
-                disabled={sending || !canSend}
-                onClick={() => setConfirmOpen(true)}
-              >
-                {sendLater ? (
-                  <Clock className="size-3.5 mr-1.5" />
-                ) : (
-                  <Bell className="size-3.5 mr-1.5" />
-                )}
-                {sendLater ? "Schedule reminder" : "Send reminder"}
-              </Button>
-            </div>
+              onClick={() => onDone()}
+            >
+              Cancel
+            </Button>
+            {/* Wide enough for the longer label, so switching between
+                "Send" and "Schedule" doesn't move Cancel. */}
+            <Button
+              size="sm"
+              className="sm:min-w-44"
+              disabled={sending || !canSend}
+              onClick={() => setConfirmOpen(true)}
+            >
+              {sendLater ? (
+                <Clock className="size-3.5 mr-1.5" />
+              ) : (
+                <Bell className="size-3.5 mr-1.5" />
+              )}
+              {sendLater ? "Schedule reminder" : "Send reminder"}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

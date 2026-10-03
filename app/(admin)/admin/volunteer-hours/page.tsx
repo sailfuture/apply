@@ -620,12 +620,12 @@ export default function AdminVolunteerHoursPage() {
                                 )}
                                 title="View sign-ups"
                               >
+                                {/* Just the count unless the event has a
+                                    limit; then "taken / limit". */}
                                 {spotsReserved}
-                                {isUnlimitedSpots(ev.parent_spots)
-                                  ? " / ∞"
-                                  : (ev.parent_spots ?? 0) > 0
-                                    ? ` / ${ev.parent_spots}`
-                                    : ""}
+                                {(ev.parent_spots ?? 0) > 0
+                                  ? ` / ${ev.parent_spots}`
+                                  : ""}
                               </button>
                             ) : (
                               // No capacity set → parents can't sign up.

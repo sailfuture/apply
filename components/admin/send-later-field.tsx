@@ -4,6 +4,7 @@ import { Clock } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { cn } from "@/lib/utils";
 
 /**
  * "Send later" for a text composer: a checkbox and, once ticked, a
@@ -11,6 +12,11 @@ import { Label } from "@/components/ui/label";
  * time as `datetime-local` gives it ("2026-09-30T09:00"); `sendAtMs`
  * turns it into an instant. Staff are in Florida, so local time is
  * school time.
+ *
+ * The picker holds its place while the box is unticked (hidden, not
+ * removed), so ticking it never moves what's around it. Give the field
+ * a row wide enough for both (about 22rem) or the picker wraps under
+ * the checkbox.
  */
 export function SendLaterField({
   enabled,
@@ -44,24 +50,21 @@ export function SendLaterField({
         <Clock className="size-3.5 text-muted-foreground" />
         Send later
       </label>
-      {enabled ? (
-        <>
-          <Label htmlFor={`${id}-at`} className="sr-only">
-            When to send
-          </Label>
-          <Input
-            id={`${id}-at`}
-            type="datetime-local"
-            value={value}
-            min={earliestPick()}
-            disabled={disabled}
-            onChange={(e) => onValueChange(e.target.value)}
-            className="h-8 w-auto bg-white text-sm"
-          />
-          {tooSoon ? (
-            <span className="text-xs text-destructive">Pick a time at least a minute from now</span>
-          ) : null}
-        </>
+      <Label htmlFor={`${id}-at`} className="sr-only" aria-hidden={!enabled}>
+        When to send
+      </Label>
+      <Input
+        id={`${id}-at`}
+        type="datetime-local"
+        value={value}
+        min={earliestPick()}
+        disabled={disabled || !enabled}
+        aria-hidden={!enabled}
+        onChange={(e) => onValueChange(e.target.value)}
+        className={cn("h-8 w-auto bg-white text-sm", !enabled && "invisible")}
+      />
+      {tooSoon ? (
+        <span className="text-xs text-destructive">Pick a later time</span>
       ) : null}
     </div>
   );
