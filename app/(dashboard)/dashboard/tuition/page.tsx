@@ -850,7 +850,8 @@ interface AutopayActionResponse {
  *   - Off with none saved: "Set up autopay" opens Stripe's add-a-card
  *     page, which returns here with `?autopay=saved`, and that posts
  *     "on".
- * Turning on charges the open balance, and every dialog says so first.
+ * Turning on charges what's past due right away and the rest on each
+ * invoice's due date. Every dialog says so first.
  */
 function AutopayPanel({ yearId }: { yearId: number }) {
   const key = `/api/billing/autopay?yearId=${yearId}`;
@@ -959,8 +960,14 @@ function AutopayPanel({ yearId }: { yearId: number }) {
   if (!status.available) return null;
 
   const label = status.paymentMethodLabel;
-  const openBalance =
-    status.openBalanceCents > 0 ? formatUsd(status.openBalanceCents / 100) : null;
+  // Turning on charges what's past due now; the rest waits for its due
+  // date. The dialogs say which.
+  const pastDue =
+    status.pastDueCents > 0 ? formatUsd(status.pastDueCents / 100) : null;
+  const notYetDueNote =
+    status.openBalanceCents > status.pastDueCents
+      ? " Invoices that aren't due yet are charged on their due dates."
+      : "";
 
   return (
     <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border px-3 py-3">
@@ -1040,8 +1047,8 @@ function AutopayPanel({ yearId }: { yearId: number }) {
               {confirm === "off"
                 ? "You'll get each invoice by email and pay it online by its due date."
                 : confirm === "setup"
-                  ? `You'll add a card or bank account on Stripe's secure page. When you come back, autopay turns on: each monthly invoice is charged automatically${openBalance ? `, and your open balance of ${openBalance} is charged right away` : ""}.`
-                  : `Each monthly tuition invoice will be charged to your ${label} when it's issued.${openBalance ? ` Your open balance of ${openBalance} will also be charged now.` : ""} You can turn autopay off anytime.`}
+                  ? `You'll add a card or bank account on Stripe's secure page. When you come back, autopay turns on: each monthly invoice is charged automatically${pastDue ? `, and what's past due (${pastDue}) is charged right away` : ""}.${notYetDueNote}`
+                  : `Each monthly tuition invoice will be charged to your ${label} when it's issued.${pastDue ? ` What's past due (${pastDue}) is charged now.` : ""}${notYetDueNote} You can turn autopay off anytime.`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -1093,6 +1100,12 @@ function autopayOnMessage(body: AutopayActionResponse): string {
   if (sum("failed") > 0) {
     parts.push(
       `${formatUsd(sum("failed") / 100)} didn't go through. You can pay it from the invoice list.`
+    );
+  }
+  const scheduled = charges.filter((c) => c.outcome === "scheduled").length;
+  if (scheduled > 0) {
+    parts.push(
+      `${formatUsd(sum("scheduled") / 100)} will be charged on ${scheduled === 1 ? "its due date" : "their due dates"}.`
     );
   }
   return parts.join(" ");

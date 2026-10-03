@@ -18,12 +18,16 @@ import { sendAutopayOnEmail } from "@/lib/emails/triggers";
  * Stripe then charges the customer's default payment method when each
  * invoice finalizes.
  *
- * ON BY DEFAULT (user decision, 2026-10-02). Any family whose Stripe
- * customer has a default payment method gets switched on unless a
- * parent or admin turned it off. That choice lives in the CUSTOMER's
- * metadata (`autopay: "off"`), not the subscription's: the customer
- * outlives each year's subscription, so the choice carries into next
- * year. The default is applied in three places:
+ * ON BY DEFAULT (user decision, 2026-10-02). Any family with a payment
+ * method saved in Stripe gets switched on unless a parent or admin
+ * turned it off. "Saved" includes the card a family used to pay an
+ * invoice on Stripe's page. Stripe keeps that card for subscription
+ * invoices (with "you allow SailFuture to charge you for ... future
+ * payments" consent) but doesn't make it the default, so paying the
+ * first invoice is itself the autopay sign-up. The off choice lives in
+ * the CUSTOMER's metadata (`autopay: "off"`), not the subscription's:
+ * the customer outlives each year's subscription, so the choice
+ * carries into next year. The default is applied in three places:
  *   - when a parent comes back from adding a payment method
  *     (/api/billing/autopay),
  *   - in the daily reminder cron (`runAutopaySweep`), which catches
@@ -32,11 +36,14 @@ import { sendAutopayOnEmail } from "@/lib/emails/triggers";
  *   - in `startMonthlyBilling`, for a returning family whose card is
  *     already on file.
  *
- * Switching on also CHARGES every open invoice on the subscription
- * (user decision, 2026-10-02: families who saved a card expected it to
- * pay what they owe). Stripe applies a new collection method only to
- * invoices created after the change, so open invoices are paid
- * explicitly and pending drafts are converted.
+ * Switching on also settles what's already open (user decision,
+ * 2026-10-03): anything PAST DUE is charged right away, and invoices
+ * not yet due are charged on their due date by the daily sweep. Stripe
+ * applies a new collection method only to invoices created after the
+ * change, so those open (emailed) invoices are charged explicitly, and
+ * pending drafts are converted. (On 10/2 the rule was "charge
+ * everything open now", and the first sweep on 10/3 charged 17
+ * October invoices up to two weeks early. Don't bring that back.)
  *
  * The payment method stays on the customer
  * (`invoice_settings.default_payment_method`) and is never set as a
@@ -63,8 +70,11 @@ export interface AutopayStatus {
   /** The saved card or bank autopay charges (or would charge), e.g.
    *  "Visa ending in 4242". Null when none is saved. */
   paymentMethodLabel: string | null;
-  /** What's owed on open invoices right now. Switching on charges it. */
+  /** What's owed on open invoices right now. */
   openBalanceCents: number;
+  /** The past-due part of it, which switching on charges at once. The
+   *  rest is charged on each invoice's due date. */
+  pastDueCents: number;
 }
 
 export interface AutopayCharge {
@@ -72,10 +82,18 @@ export interface AutopayCharge {
   amountCents: number;
   /** Unix ms, or null when the invoice has none. */
   dueDate: number | null;
-  /** "processing": a bank payment that takes a few business days. */
-  outcome: "paid" | "processing" | "failed";
+  /** "processing": a bank payment that takes a few business days.
+   *  "scheduled": not due yet, so the daily sweep charges it on its due
+   *  date. */
+  outcome: "paid" | "processing" | "failed" | "scheduled";
   /** Stripe's message when the charge failed. */
   error?: string;
+}
+
+/** Due now: an invoice with no due date, or one whose due date has
+ *  come. Not-yet-due invoices wait for the sweep on their due date. */
+function isDue(invoice: Stripe.Invoice, nowMs = Date.now()): boolean {
+  return !invoice.due_date || invoice.due_date * 1000 <= nowMs;
 }
 
 export type EnableAutopayResult =
@@ -149,9 +167,33 @@ function errorMessage(err: unknown): string {
 interface AutopayContext {
   subscription: Stripe.Subscription;
   customer: Stripe.Customer;
-  /** Subscription override first, then the customer default: the same
-   *  order Stripe charges in. */
+  /** Subscription override first, then the customer default (the order
+   *  Stripe charges in), then the newest card or bank saved on the
+   *  customer. */
   paymentMethod: Stripe.PaymentMethod | null;
+  /** The payment method is saved but isn't a default yet, so switching
+   *  on makes it the customer's default first. */
+  paymentMethodNeedsDefault: boolean;
+}
+
+/** Saved payment method types autopay will charge off-session. */
+const CHARGEABLE_TYPES = new Set(["card", "us_bank_account", "link"]);
+
+/** The newest card, bank account or Link saved on the customer, such as
+ *  the one Stripe kept when the family paid an invoice. Null when none
+ *  is saved. */
+async function newestSavedPaymentMethod(
+  customerId: string
+): Promise<Stripe.PaymentMethod | null> {
+  const saved = await getStripeClient().customers.listPaymentMethods(
+    customerId,
+    { limit: 20 }
+  );
+  return (
+    saved.data
+      .filter((pm) => CHARGEABLE_TYPES.has(pm.type))
+      .sort((a, b) => b.created - a.created)[0] ?? null
+  );
 }
 
 /** The family's live subscription for the year, its customer, and the
@@ -188,12 +230,23 @@ async function loadAutopayContext(
   const customer = subscription.customer;
   if (typeof customer !== "object" || customer.deleted) return null;
 
+  const defaultMethod =
+    asPaymentMethod(subscription.default_payment_method) ??
+    asPaymentMethod(customer.invoice_settings?.default_payment_method);
+  if (defaultMethod) {
+    return {
+      subscription,
+      customer,
+      paymentMethod: defaultMethod,
+      paymentMethodNeedsDefault: false,
+    };
+  }
+  const saved = await newestSavedPaymentMethod(customer.id);
   return {
     subscription,
     customer,
-    paymentMethod:
-      asPaymentMethod(subscription.default_payment_method) ??
-      asPaymentMethod(customer.invoice_settings?.default_payment_method),
+    paymentMethod: saved,
+    paymentMethodNeedsDefault: saved !== null,
   };
 }
 
@@ -209,6 +262,7 @@ export async function getAutopayStatus(
       optedOut: false,
       paymentMethodLabel: null,
       openBalanceCents: 0,
+      pastDueCents: 0,
     };
   }
   const open = await getStripeClient().invoices.list({
@@ -216,15 +270,15 @@ export async function getAutopayStatus(
     status: "open",
     limit: 24,
   });
+  const owed = (invoices: Stripe.Invoice[]) =>
+    invoices.reduce((sum, inv) => sum + (inv.amount_remaining ?? 0), 0);
   return {
     available: true,
     enabled: ctx.subscription.collection_method === "charge_automatically",
     optedOut: ctx.customer.metadata?.[AUTOPAY_KEY] === "off",
     paymentMethodLabel: describePaymentMethod(ctx.paymentMethod),
-    openBalanceCents: open.data.reduce(
-      (sum, inv) => sum + (inv.amount_remaining ?? 0),
-      0
-    ),
+    openBalanceCents: owed(open.data),
+    pastDueCents: owed(open.data.filter((inv) => isDue(inv))),
   };
 }
 
@@ -248,8 +302,9 @@ function serialized<T>(key: string, run: () => Promise<T>): Promise<T> {
 }
 
 /** Turn autopay on for the family's subscription for the year, charge
- *  every open invoice to the saved payment method, and email the
- *  parents. `source: "default"` respects a family's earlier "off". */
+ *  whatever is past due to the saved payment method (the rest waits
+ *  for its due date), and email the parents. `source: "default"`
+ *  respects a family's earlier "off". */
 export function enableAutopay(args: {
   familyId: number;
   yearId: number;
@@ -280,13 +335,21 @@ async function enableAutopayInner({
   const stripe = getStripeClient();
   const label =
     describePaymentMethod(paymentMethod) ?? "your saved payment method";
-  if (customer.metadata?.[AUTOPAY_KEY] !== "on") {
+  if (
+    customer.metadata?.[AUTOPAY_KEY] !== "on" ||
+    ctx.paymentMethodNeedsDefault
+  ) {
     await stripe.customers.update(customer.id, {
       metadata: {
         [AUTOPAY_KEY]: "on",
         autopay_changed_at: new Date().toISOString(),
         autopay_changed_by: source,
       },
+      // A card saved from paying an invoice becomes the default that
+      // automatic charges (and the portal's card swaps) work through.
+      ...(ctx.paymentMethodNeedsDefault
+        ? { invoice_settings: { default_payment_method: paymentMethod.id } }
+        : {}),
     });
   }
   if (subscription.collection_method === "charge_automatically") {
@@ -326,7 +389,7 @@ async function enableAutopayInner({
 
   console.log(
     `[autopay] on for family ${familyId} year ${yearId} (${source}): ${label}; ` +
-      `${charges.length} open invoice(s) charged — ${charges.map((c) => `${c.invoiceId} ${c.outcome}`).join(", ") || "none"}`
+      `${charges.length} open invoice(s) — ${charges.map((c) => `${c.invoiceId} ${c.outcome}`).join(", ") || "none"}`
   );
   return { ok: true, changed: true, paymentMethodLabel: label, charges };
 }
@@ -397,9 +460,11 @@ async function convertDraftInvoices(
   }
 }
 
-/** Charge every open invoice on the subscription to `paymentMethodId`,
- *  oldest first. Idempotency keys make a retried or racing call return
- *  Stripe's first answer instead of charging twice. */
+/** Settle the subscription's open invoices at the switch, oldest first:
+ *  charge the ones already due to `paymentMethodId` and mark the rest
+ *  "scheduled" (the daily sweep charges each on its due date).
+ *  Idempotency keys make a retried or racing call return Stripe's first
+ *  answer instead of charging twice. */
 async function chargeOpenInvoices(
   subscriptionId: string,
   paymentMethodId: string
@@ -413,7 +478,16 @@ async function chargeOpenInvoices(
   const charges: AutopayCharge[] = [];
   for (const invoice of [...open.data].sort((a, b) => a.created - b.created)) {
     if (!invoice.id) continue;
-    charges.push(await chargeInvoice(invoice, paymentMethodId));
+    charges.push(
+      isDue(invoice)
+        ? await chargeInvoice(invoice, paymentMethodId)
+        : {
+            invoiceId: invoice.id,
+            amountCents: invoice.amount_remaining ?? invoice.amount_due ?? 0,
+            dueDate: invoice.due_date ? invoice.due_date * 1000 : null,
+            outcome: "scheduled",
+          }
+    );
   }
   return charges;
 }
@@ -451,18 +525,24 @@ export interface AutopaySweepResult {
   /** Invoices charged in this run (paid or processing). Today's
    *  reminders skip them; the mirror catches up from the webhook. */
   chargedInvoiceIds: Set<string>;
+  /** Billed subscriptions on autopay after this run. Their open invoices
+   *  are charged on the due date, so "payment due" texts skip them. */
+  autopaySubscriptionIds: Set<string>;
   errors: Array<{ familyId: number | null; error: string }>;
 }
 
 /**
  * The daily on-by-default pass (reminder cron), over the families the
  * school is billing this year:
- *   1. still on emailed invoices with a payment method saved and no
- *      "off" on file → switch on (which charges their open invoices
- *      and emails them), and
- *   2. already on autopay with an emailed invoice Stripe never tried to
- *      charge (a draft that finalized the old way) → charge it once.
- *      One Stripe already attempted is left to the past-due reminders.
+ *   1. still on emailed invoices with a payment method saved (a
+ *      default, or the card kept from paying an invoice) and no "off"
+ *      on file → switch on (which charges what's past due and emails
+ *      them), and
+ *   2. on autopay with an emailed invoice that has come due and that
+ *      Stripe never tried to charge → charge it, once. That's an
+ *      invoice left open at the switch because it wasn't due yet, or a
+ *      draft that finalized the old way. One Stripe already attempted
+ *      is left to the past-due reminders.
  */
 export async function runAutopaySweep({
   yearId,
@@ -475,6 +555,7 @@ export async function runAutopaySweep({
   const result: AutopaySweepResult = {
     switchedOn: [],
     chargedInvoiceIds: new Set(),
+    autopaySubscriptionIds: new Set(),
     errors: [],
   };
   if (subscriptionByFamily.size === 0) return result;
@@ -498,7 +579,13 @@ export async function runAutopaySweep({
       !sub.default_payment_method &&
       !customer.invoice_settings?.default_payment_method
     ) {
-      continue;
+      // No default. A card kept from paying an invoice still counts.
+      try {
+        if (!(await newestSavedPaymentMethod(customer.id))) continue;
+      } catch (err) {
+        result.errors.push({ familyId, error: errorMessage(err) });
+        continue;
+      }
     }
     candidates.push(familyId);
   }
@@ -512,7 +599,9 @@ export async function runAutopaySweep({
           charges: switched.charges,
         });
         for (const c of switched.charges) {
-          if (c.outcome !== "failed") result.chargedInvoiceIds.add(c.invoiceId);
+          if (c.outcome === "paid" || c.outcome === "processing") {
+            result.chargedInvoiceIds.add(c.invoiceId);
+          }
         }
       }
     } catch (err) {
@@ -528,6 +617,7 @@ export async function runAutopaySweep({
     expand: ["data.customer"],
   })) {
     if (!familyBySubscription.has(sub.id)) continue;
+    result.autopaySubscriptionIds.add(sub.id);
     const customer = typeof sub.customer === "object" && !sub.customer.deleted
       ? sub.customer
       : null;
@@ -546,10 +636,13 @@ export async function runAutopaySweep({
       const subId = extractInvoiceSubscriptionId(invoice);
       const pm = subId ? autopayMethod.get(subId) : undefined;
       if (!pm || !invoice.id || (invoice.attempt_count ?? 0) > 0) continue;
+      if (!isDue(invoice)) continue;
       const charge = await chargeInvoice(invoice, pm);
-      if (charge.outcome !== "failed") result.chargedInvoiceIds.add(charge.invoiceId);
+      if (charge.outcome === "paid" || charge.outcome === "processing") {
+        result.chargedInvoiceIds.add(charge.invoiceId);
+      }
       console.log(
-        `[autopay] charged leftover emailed invoice ${invoice.id} on autopay subscription ${subId}: ${charge.outcome}`
+        `[autopay] charged emailed invoice ${invoice.id} on its due date (autopay subscription ${subId}): ${charge.outcome}`
       );
     }
   } catch (err) {

@@ -1026,12 +1026,13 @@ export interface AutopayOnContext extends BaseContext {
   payment_method_label: string;
   /** When the next monthly invoice is charged (unix ms), or null. */
   next_charge_at: number | null;
-  /** Open invoices charged when autopay switched on. */
+  /** Invoices that were open when autopay switched on. */
   charges: Array<{
     amount_cents: number;
     /** Unix ms, printed as its UTC calendar date like Stripe does. */
     due_date: number | null;
-    outcome: "paid" | "processing" | "failed";
+    /** "scheduled": not due yet, charged automatically on its due date. */
+    outcome: "paid" | "processing" | "failed" | "scheduled";
     pay_url: string;
   }>;
   tuition_url: string;
@@ -1041,8 +1042,9 @@ export interface AutopayOnContext extends BaseContext {
  * Autopay confirmation, sent every time a family's tuition switches to
  * autopay (lib/autopay.ts): by the parent, by staff, or automatically
  * because a payment method is on file. It names the payment method and
- * the next charge, lists any open invoices the switch just charged, and
- * says where to turn it off.
+ * the next charge, lists what was already open (charged now if past
+ * due, otherwise the date it will be charged), and says where to turn
+ * it off.
  */
 export function autopayOn(ctx: AutopayOnContext): EmailContent {
   const money = (cents: number) =>
@@ -1062,11 +1064,15 @@ export function autopayOn(ctx: AutopayOnContext): EmailContent {
       day: "numeric",
       timeZone: "America/New_York",
     });
-  const outcomeLabel = {
-    paid: "Paid",
-    processing: "Processing (bank payments take a few business days)",
-    failed: "Didn't go through",
-  } as const;
+  const outcomeLabel = (c: AutopayOnContext["charges"][number]) =>
+    ({
+      paid: "Paid today",
+      processing: "Processing (bank payments take a few business days)",
+      failed: "Didn't go through",
+      scheduled: c.due_date
+        ? `Will be charged on ${dueDate(c.due_date)}`
+        : "Will be charged on its due date",
+    })[c.outcome];
 
   const opening = {
     parent: "Thanks for turning on autopay.",
@@ -1077,7 +1083,7 @@ export function autopayOn(ctx: AutopayOnContext): EmailContent {
   const how =
     `From now on, each monthly tuition and fees invoice for ${ctx.student_first_name} is charged to your ${ctx.payment_method_label} when it's issued.` +
     (ctx.next_charge_at ? ` The next one is on ${chargeDate(ctx.next_charge_at)}.` : "");
-  const chargedIntro = `We also charged the invoices that were already open on your account:`;
+  const chargedIntro = `Here's what was already open on your account:`;
   const failed = ctx.charges.filter((c) => c.outcome === "failed");
   const failedNote =
     failed.length > 0
@@ -1100,8 +1106,8 @@ export function autopayOn(ctx: AutopayOnContext): EmailContent {
         <td style="${cell}padding:8px 12px;font-weight:600;text-align:right;white-space:nowrap;">${escapeHtml(money(c.amount_cents))}</td>
         <td style="${cell}text-align:right;color:${c.outcome === "failed" ? "#b91c1c" : "#6b7280"};">${
           c.outcome === "failed"
-            ? `${escapeHtml(outcomeLabel.failed)} · <a href="${escapeAttr(c.pay_url)}" style="color:#0F2A4A;">Pay</a>`
-            : escapeHtml(outcomeLabel[c.outcome])
+            ? `${escapeHtml(outcomeLabel(c))} · <a href="${escapeAttr(c.pay_url)}" style="color:#0F2A4A;">Pay</a>`
+            : escapeHtml(outcomeLabel(c))
         }</td>
       </tr>`
           )
@@ -1133,7 +1139,7 @@ export function autopayOn(ctx: AutopayOnContext): EmailContent {
           chargedIntro,
           ...ctx.charges.map(
             (c) =>
-              `- ${money(c.amount_cents)}${c.due_date ? `, due ${dueDate(c.due_date)}` : ""}: ${outcomeLabel[c.outcome]}${c.outcome === "failed" ? `. Pay: ${c.pay_url}` : ""}`
+              `- ${money(c.amount_cents)}${c.due_date ? `, due ${dueDate(c.due_date)}` : ""}: ${outcomeLabel(c)}${c.outcome === "failed" ? `. Pay: ${c.pay_url}` : ""}`
           ),
         ]
       : []),

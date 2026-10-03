@@ -602,7 +602,8 @@ export function BillingCard({
           subscription state + actions instead of duplicating the
           history table that has its own deep-link button above. */}
 
-      {/* Autopay on/off confirmation. On charges the open balance. */}
+      {/* Autopay on/off confirmation. On charges what's past due now
+          and the rest on its due date. */}
       <AlertDialog
         open={confirmAutopay !== null}
         onOpenChange={(o) => !pending && !o && setConfirmAutopay(null)}
@@ -616,8 +617,12 @@ export function BillingCard({
               {confirmAutopay === "off"
                 ? "The family goes back to emailed invoices, due in 15 days. The choice is remembered, so autopay won't switch back on by itself."
                 : `Each monthly invoice will be charged to the family's ${autopay?.paymentMethodLabel ?? "saved payment method"} when it's issued.${
-                    autopay && autopay.openBalanceCents > 0
-                      ? ` Their open balance of $${(autopay.openBalanceCents / 100).toFixed(2)} is charged now.`
+                    autopay && autopay.pastDueCents > 0
+                      ? ` What's past due ($${(autopay.pastDueCents / 100).toFixed(2)}) is charged now.`
+                      : ""
+                  }${
+                    autopay && autopay.openBalanceCents > autopay.pastDueCents
+                      ? " Open invoices that aren't due yet are charged on their due dates."
                       : ""
                   } The family gets a confirmation email.`}
             </AlertDialogDescription>
@@ -754,8 +759,14 @@ function actionSuccessMessage(
       const charges = result?.charges ?? [];
       if (charges.length === 0) return "Autopay is on. Nothing was open to charge.";
       const usd = (cents: number) => `$${(cents / 100).toFixed(2)}`;
+      const said = {
+        paid: "paid",
+        processing: "processing",
+        failed: "didn't go through",
+        scheduled: "charges on its due date",
+      } as const;
       return `Autopay is on. Open invoices: ${charges
-        .map((c) => `${usd(c.amountCents)} ${c.outcome === "failed" ? "didn't go through" : c.outcome}`)
+        .map((c) => `${usd(c.amountCents)} ${said[c.outcome]}`)
         .join(", ")}.`;
     }
     case "autopay_off":

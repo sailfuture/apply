@@ -249,10 +249,12 @@ export async function GET(req: NextRequest) {
       }
 
       // Autopay is on by default: switch every billed family with a
-      // payment method saved (and no "off" on file), which charges what
-      // they already owe. Runs BEFORE the reminders so nobody is texted
-      // or emailed about an invoice this run just charged.
+      // payment method saved (and no "off" on file), which charges what's
+      // past due, and charge autopay families' invoices that come due
+      // today. Runs BEFORE the reminders so nobody is texted or emailed
+      // about an invoice this run just charged.
       const chargedToday = new Set<string>();
+      const onAutopay = new Set<string>();
       if (billingSubscriptions && billingSubscriptions.size > 0) {
         try {
           const sweep = await runAutopaySweep({
@@ -260,6 +262,7 @@ export async function GET(req: NextRequest) {
             subscriptionByFamily: billingSubscriptions,
           });
           for (const id of sweep.chargedInvoiceIds) chargedToday.add(id);
+          for (const id of sweep.autopaySubscriptionIds) onAutopay.add(id);
           result.autopay.switchedOn += sweep.switchedOn.length;
           result.autopay.invoicesCharged += sweep.chargedInvoiceIds.size;
           result.autopay.errors += sweep.errors.length;
@@ -321,7 +324,10 @@ export async function GET(req: NextRequest) {
           } else result.outstanding.failed += 1;
         } else if (
           tx.due_date != null &&
-          tx.due_date <= Date.now() + BILLING_UPCOMING_LEAD_DAYS * ONE_DAY_MS
+          tx.due_date <= Date.now() + BILLING_UPCOMING_LEAD_DAYS * ONE_DAY_MS &&
+          // Autopay charges it on the due date, so there's nothing for
+          // the family to pay.
+          !onAutopay.has(tx.stripe_subscription_id)
         ) {
           result.billingUpcoming.eligible += 1;
           const res = await sendBillingUpcomingSms(input);
@@ -494,12 +500,17 @@ async function alertAutopaySweep(
         s.charges.length === 0
           ? "nothing was open"
           : s.charges
-              .map(
-                (c) =>
-                  `${money(c.amountCents)} ${c.outcome === "failed" ? `FAILED (${c.error ?? "declined"})` : c.outcome}`
-              )
+              .map((c) => {
+                if (c.outcome === "failed") {
+                  return `${money(c.amountCents)} FAILED (${c.error ?? "declined"})`;
+                }
+                if (c.outcome === "scheduled") {
+                  return `${money(c.amountCents)} charges on its due date${c.dueDate ? ` (${new Date(c.dueDate).toISOString().slice(0, 10)})` : ""}`;
+                }
+                return `${money(c.amountCents)} ${c.outcome}`;
+              })
               .join(", ");
-      return `  - ${await familyAlertLabel(s.familyId)} — ${s.paymentMethodLabel}; charged: ${charged}`;
+      return `  - ${await familyAlertLabel(s.familyId)} — ${s.paymentMethodLabel}; open invoices: ${charged}`;
     })
   );
   const errors = await Promise.all(
@@ -516,7 +527,7 @@ async function alertAutopaySweep(
     [
       ...(n > 0
         ? [
-            `These families have a payment method saved in Stripe, so their ${yearName} tuition switched to autopay (on by default). Each was emailed a confirmation, and their open invoices were charged:`,
+            `These families have a payment method saved in Stripe, so their ${yearName} tuition switched to autopay (on by default). Each was emailed a confirmation. Anything past due was charged now; the rest charges on its due date:`,
             ...switched,
           ]
         : []),

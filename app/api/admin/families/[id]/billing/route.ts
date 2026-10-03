@@ -30,8 +30,9 @@ import {
  *     | "autopay_off" }`
  *     Runs the action and returns a refreshed snapshot. Errors
  *     surface as 4xx for caller-fixable issues, 502 for Stripe
- *     transport. `autopay_on` charges the family's open invoices
- *     (lib/autopay.ts) and returns what it charged as `autopayResult`.
+ *     transport. `autopay_on` charges the family's past-due invoices
+ *     now and schedules the rest for their due dates (lib/autopay.ts),
+ *     returning both as `autopayResult`.
  *
  * Both return `autopay` (lib/autopay.ts `AutopayStatus`) beside the
  * snapshot.

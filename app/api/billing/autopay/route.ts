@@ -20,8 +20,9 @@ import {
  *               default), then returns to the Tuition page with
  *               `?autopay=saved`, which posts "on".
  *     "on"    → switch to autopay with the saved payment method. This
- *               charges any open invoices: the page tells the parent
- *               the amount before they get here.
+ *               charges what's past due now and the rest on each
+ *               invoice's due date. The page tells the parent the
+ *               amount before they get here.
  *     "off"   → back to emailed invoices, remembered so the
  *               on-by-default sweep leaves the family alone.
  */
