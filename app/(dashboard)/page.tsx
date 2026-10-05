@@ -84,16 +84,46 @@ export default async function Page() {
   // Step 3 — pick the target school year. Upcoming year wins (it's the
   // one parents are most likely to be acting on); active year is the
   // fallback for the late-summer transition window.
+  //
+  // When BOTH years are open, the family's own choice wins: whichever
+  // of the two they have an application (or progress row) on. A family
+  // with nothing on either goes to the /apply chooser to pick — this
+  // used to silently file every new family under the upcoming year,
+  // including ones starting mid-year.
   let targetYearId: number | null = null;
+  let needsYearChoice = false;
   try {
     const years = await xano.schoolYears.getAll();
     const upcoming = years.find((y) => y.isNextYear);
     const active = years.find((y) => y.isActive);
     const target = upcoming ?? active;
     if (target) targetYearId = target.id;
+    if (upcoming && active) {
+      const [apps, upcomingProgress, activeProgress] = await Promise.all([
+        xano.applications.getByFamilyId(familyId),
+        xano.familyApplicationProgress
+          .getByFamilyAndYear(familyId, upcoming.id)
+          .catch(() => null),
+        xano.familyApplicationProgress
+          .getByFamilyAndYear(familyId, active.id)
+          .catch(() => null),
+      ]);
+      const appYears = new Set(
+        apps.map((a) => Number(a.registration_school_years_id))
+      );
+      if (appYears.has(upcoming.id) || upcomingProgress) {
+        targetYearId = upcoming.id;
+      } else if (appYears.has(active.id) || activeProgress) {
+        targetYearId = active.id;
+      } else {
+        needsYearChoice = true;
+      }
+    }
   } catch {
-    /* leave null; degenerate-state fallback below */
+    /* keep whatever resolved; degenerate-state fallback below */
   }
+  // Outside the try — redirect() throws to do its job.
+  if (needsYearChoice) redirect("/apply");
   // No target year resolved — either Xano's school-years lookup failed
   // or no year is flagged upcoming/active. Render an explicit message
   // instead of redirecting: this page used to bounce to /welcome here,

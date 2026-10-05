@@ -85,11 +85,12 @@ const RECRUITMENT_STAGE_FILTERS: Array<{
 
 const GRADES = [8, 9, 10, 11, 12] as const;
 
-/** Does a conversation belong on the enrolled page? Everything else —
- *  leads, ad-hoc numbers, families still in the funnel — is
- *  recruitment. */
+/** Does a conversation belong on the enrolled page? Any thread with
+ *  an enrolled family — including a lead thread whose parent has
+ *  since enrolled. Everything else (leads, ad-hoc numbers, families
+ *  still in the funnel) is recruitment. */
 function isEnrolledConversation(c: SmsConversation): boolean {
-  return c.contactType === "family" && c.stage === "enrolled";
+  return (c.enrolledFamilyId ?? 0) > 0;
 }
 
 /**
@@ -238,21 +239,21 @@ export function MessagesInbox({ mode }: { mode: InboxMode }) {
     if (mode === "enrolled") {
       if (crewFilter.length > 0) {
         list = list.filter((c) =>
-          (familyMeta.get(c.contactId)?.crews ?? []).some((cr) =>
+          (familyMeta.get(c.enrolledFamilyId ?? 0)?.crews ?? []).some((cr) =>
             crewFilter.includes(cr)
           )
         );
       }
       if (busStopFilter.length > 0) {
         list = list.filter((c) =>
-          (familyMeta.get(c.contactId)?.busStops ?? []).some((b) =>
+          (familyMeta.get(c.enrolledFamilyId ?? 0)?.busStops ?? []).some((b) =>
             busStopFilter.includes(b)
           )
         );
       }
       if (gradeFilter.length > 0) {
         list = list.filter((c) =>
-          (familyMeta.get(c.contactId)?.grades ?? []).some((g) =>
+          (familyMeta.get(c.enrolledFamilyId ?? 0)?.grades ?? []).some((g) =>
             gradeFilter.includes(g)
           )
         );

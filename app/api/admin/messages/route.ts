@@ -65,6 +65,13 @@ export interface SmsConversation {
    *  name — parent + student names for families, the student's name
    *  for lead contacts. Lowercased server-side. */
   searchText: string;
+  /** The enrolled family this thread belongs to, when there is one —
+   *  the family itself for family threads, or the family a lead
+   *  (inquiry / camp / visit / TASCO) converted into. Set only when
+   *  that family is enrolled; the inbox uses it to keep enrolled
+   *  parents off the Recruitment page and to join crew / bus / grade
+   *  on the enrolled page. */
+  enrolledFamilyId?: number;
 }
 
 function parseContactParams(req: NextRequest): {
@@ -153,9 +160,53 @@ async function handleGET(req: NextRequest) {
       const stageSets = withStages
         ? computeFamilyStageSets({ fap, srp })
         : null;
+      // "Enrolled" for the inbox split isn't only the selected year:
+      // a family confirmed for the current year who hasn't re-enrolled
+      // for next year is still an enrolled parent, and shouldn't land
+      // in Recruitment just because the admin is viewing next year.
+      // Union the selected year with the active + upcoming years.
+      const enrolledFamilies = new Set<number>(stageSets?.enrolled ?? []);
+      if (withStages) {
+        const years = await xano.schoolYears.getAll().catch(() => []);
+        const extraYearIds = years
+          .filter((y) => (y.isActive || y.isNextYear) && y.id !== yearId)
+          .map((y) => y.id);
+        const extraSrp = await Promise.all(
+          extraYearIds.map((id) =>
+            xano.studentRegistrationProgress.getByYear(id).catch(() => [])
+          )
+        );
+        for (const rows of extraSrp) {
+          const { enrolled } = computeFamilyStageSets({ fap: [], srp: rows });
+          for (const fid of enrolled) enrolledFamilies.add(fid);
+        }
+      }
+      // Leads that converted into a family — a camp or inquiry thread
+      // with a parent who's since enrolled belongs with that family.
+      const leadFamily = new Map<string, number>();
+      const linkLeads = (
+        type: SmsContactType,
+        rows: { id: number; registration_families_id?: number | null }[]
+      ) => {
+        for (const r of rows) {
+          const fid = Number(r.registration_families_id) || 0;
+          if (fid > 0) leadFamily.set(`${type}:${r.id}`, fid);
+        }
+      };
+      linkLeads("inquiry", inquiries);
+      linkLeads("camp", campRows);
+      linkLeads("visit", waivers);
+      linkLeads("tasco", tascoRows);
+      const enrolledFamilyFor = (
+        type: SmsContactType,
+        id: number
+      ): number | undefined => {
+        const fid = type === "family" ? id : leadFamily.get(`${type}:${id}`);
+        return fid && enrolledFamilies.has(fid) ? fid : undefined;
+      };
       const familyStage = (id: number): ConversationStage => {
         if (!stageSets) return "none";
-        if (stageSets.enrolled.has(id)) return "enrolled";
+        if (enrolledFamilies.has(id)) return "enrolled";
         if (stageSets.registration.has(id)) return "registration";
         if (stageSets.application.has(id)) return "application";
         return "none";
@@ -335,6 +386,7 @@ async function handleGET(req: NextRequest) {
           messageCount: count,
           needsReply: lastForReply?.direction === "inbound",
           searchText: searchFor(type, id),
+          enrolledFamilyId: enrolledFamilyFor(type, id),
         }))
         .sort((a, b) => b.lastAt - a.lastAt);
       return NextResponse.json({ conversations });

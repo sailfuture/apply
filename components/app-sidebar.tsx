@@ -27,7 +27,7 @@ import {
 } from "@hugeicons/core-free-icons"
 import Image from "next/image"
 import Link from "next/link"
-import { useRouter } from "next/navigation"
+import { usePathname, useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import useSWR from "swr"
 import { useFamily, useSchoolYears, useApplications, useScholarship } from "@/hooks/use-api"
@@ -54,11 +54,29 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { data: yearsData } = useSchoolYears()
   const { data: appsData } = useApplications()
 
+  // The year the family is working in: the one in the URL, else the
+  // current/upcoming year they have an application on, else the
+  // upcoming year. Families can apply for either year, so defaulting
+  // straight to next year would point a mid-year applicant's steps
+  // at the wrong application.
+  const pathname = usePathname()
   const targetYear = React.useMemo(() => {
     if (!yearsData) return null
     const years = yearsData as { id: number; isNextYear: boolean; isActive: boolean }[]
-    return years.find((y) => y.isNextYear) ?? years.find((y) => y.isActive) ?? null
-  }, [yearsData])
+    const urlYearId = Number(pathname.match(/\/apply\/year\/(\d+)/)?.[1])
+    const fromUrl = years.find((y) => y.id === urlYearId)
+    if (fromUrl) return fromUrl
+    const next = years.find((y) => y.isNextYear)
+    const active = years.find((y) => y.isActive)
+    const appYearIds = new Set(
+      ((appsData as { registration_school_years_id: number }[] | undefined) ?? []).map(
+        (a) => Number(a.registration_school_years_id)
+      )
+    )
+    if (next && appYearIds.has(next.id)) return next
+    if (active && appYearIds.has(active.id)) return active
+    return next ?? active ?? null
+  }, [yearsData, appsData, pathname])
 
   const targetYearId = targetYear?.id ?? null
   const familyId = familyData?.id ?? null

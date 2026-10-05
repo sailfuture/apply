@@ -64,12 +64,15 @@ export function GlobalHeader() {
       (yearsData as
         | { id: number; isNextYear?: boolean; isActive?: boolean }[]
         | undefined) ?? [];
-    const target =
-      years.find((y) => y.isNextYear) ?? years.find((y) => y.isActive) ?? null;
-    if (!target) return "/";
+    // Stay on the year in the URL — a family can be applying for the
+    // current year, not just the upcoming one.
+    const targetId =
+      yearId ??
+      (years.find((y) => y.isNextYear) ?? years.find((y) => y.isActive))?.id;
+    if (!targetId) return "/";
     return isAccepted
-      ? `/registration/year/${target.id}`
-      : `/apply/year/${target.id}`;
+      ? `/registration/year/${targetId}`
+      : `/apply/year/${targetId}`;
   })();
 
   // On the parent dashboard the logo stays on the dashboard for whichever

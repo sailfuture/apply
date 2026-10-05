@@ -47,57 +47,30 @@ function formatDate(date: string | null): string {
   });
 }
 
-function getYearTypeBadge(year: SchoolYear) {
-  if (year.isActive) {
-    return {
-      label: "Active",
-      className:
-        "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400",
-    };
-  }
-  if (year.isNextYear) {
-    return {
-      label: "Next Year",
-      className:
-        "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400",
-    };
-  }
-  if (year.isPast) {
-    return {
-      label: "Past",
-      className:
-        "bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-400",
-    };
-  }
-  return null;
-}
-
 export default function ApplyIndexPage() {
   const router = useRouter();
-  const [schoolYears, setSchoolYears] = useState<SchoolYear[]>([]);
   const [loading, setLoading] = useState(true);
-  const [isAccepted, setIsAccepted] = useState<boolean | null>(null);
-  // Years this family already has an application on — badged in the
-  // table so a mid-application family can spot theirs instantly.
+  // Families get exactly two choices: join the current school year
+  // (the one flagged Active) or apply for the upcoming one (flagged
+  // Next Year). Driven by the flags on School Years, so the labels
+  // roll over on their own when admin advances the year.
+  const [current, setCurrent] = useState<SchoolYear | null>(null);
+  const [upcoming, setUpcoming] = useState<SchoolYear | null>(null);
+  // Applications on any OTHER year (e.g. an unfinished prior cycle) —
+  // listed under the two choices so this page stays their way back.
+  const [otherYears, setOtherYears] = useState<SchoolYear[]>([]);
+  // Years this family already has an application on — badged so a
+  // mid-application family can spot theirs instantly.
   const [appYears, setAppYears] = useState<number[]>([]);
 
   const fetchData = useCallback(async () => {
     try {
-      const [familyRes, yearsRes, appsRes] = await Promise.all([
-        fetch("/api/families"),
+      const [yearsRes, appsRes] = await Promise.all([
         fetch("/api/school-years"),
         fetch("/api/applications"),
       ]);
 
-      let accepted = false;
-      if (familyRes.ok) {
-        const fam = await familyRes.json();
-        if (fam?.id) accepted = fam.isAccepted ?? false;
-      }
-      setIsAccepted(accepted);
-
-      // Which years this family already has applications for. Xano
-      // may return the year FK as a raw id or an expanded object.
+      // Xano may return the year FK as a raw id or an expanded object.
       const appYearIds = new Set<number>();
       if (appsRes.ok) {
         const apps = await appsRes.json();
@@ -115,31 +88,24 @@ export default function ApplyIndexPage() {
 
       if (yearsRes.ok) {
         const allYears: SchoolYear[] = await yearsRes.json();
+        const active = allYears.find((y) => y.isActive) ?? null;
+        const next = allYears.find((y) => y.isNextYear) ?? null;
+        const offered = new Set([active?.id, next?.id]);
+        const others = allYears.filter(
+          (y) => appYearIds.has(y.id) && !offered.has(y.id)
+        );
 
-        if (!accepted) {
-          const upcoming = allYears.find((y) => y.isNextYear);
-          const active = allYears.find((y) => y.isActive);
-          const target = upcoming ?? active;
-          // Auto-redirect only when it can't strand anyone: a family
-          // with an application on a DIFFERENT year (e.g. still
-          // finishing last cycle) must get the year table instead —
-          // this page is their only route back to that application.
-          const hasOtherYearApp = [...appYearIds].some(
-            (id) => id !== target?.id
-          );
-          if (target && !hasOtherYearApp) {
-            router.replace(`/apply/year/${target.id}`);
-            return;
-          }
+        // Only one year open and nothing else on file — there's no
+        // choice to make, so skip straight to it.
+        const only = active && next ? null : (active ?? next);
+        if (only && others.length === 0) {
+          router.replace(`/apply/year/${only.id}`);
+          return;
         }
 
-        const visible = allYears.filter((y) => !y.isFuture);
-        visible.sort((a, b) => {
-          const aStart = a.start_date ? new Date(a.start_date).getTime() : 0;
-          const bStart = b.start_date ? new Date(b.start_date).getTime() : 0;
-          return bStart - aStart;
-        });
-        setSchoolYears(visible);
+        setCurrent(active);
+        setUpcoming(next);
+        setOtherYears(others);
       }
     } catch (err) {
       console.error("Failed to fetch data:", err);
@@ -152,7 +118,7 @@ export default function ApplyIndexPage() {
     fetchData();
   }, [fetchData]);
 
-  if (loading || isAccepted === null) {
+  if (loading) {
     return (
       <>
         <header className="flex h-16 shrink-0 items-center gap-2">
@@ -198,7 +164,7 @@ export default function ApplyIndexPage() {
               </BreadcrumbItem>
               <BreadcrumbSeparator className="hidden md:block" />
               <BreadcrumbItem>
-                <BreadcrumbPage>School Years</BreadcrumbPage>
+                <BreadcrumbPage>Choose a School Year</BreadcrumbPage>
               </BreadcrumbItem>
             </BreadcrumbList>
           </Breadcrumb>
@@ -207,95 +173,121 @@ export default function ApplyIndexPage() {
 
       <div className="flex flex-1 flex-col gap-6 p-4 pt-0">
         <div>
-          <h1 className="text-2xl font-semibold">School Years</h1>
+          <h1 className="text-2xl font-semibold">
+            Which school year are you applying for?
+          </h1>
           <p className="text-muted-foreground text-sm">
-            Select a school year to view enrollment and application details.
+            Join us this school year, or get a head start on next year.
           </p>
         </div>
 
-        {schoolYears.length === 0 ? (
+        {!current && !upcoming ? (
           <div className="flex min-h-[40vh] items-center justify-center">
             <p className="text-muted-foreground">
-              No school years available. Please contact the school.
+              No school years are open right now. Please contact the school.
             </p>
           </div>
         ) : (
-          <div className="rounded-lg border">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b">
-                  <th className="text-muted-foreground px-4 py-3 text-left text-xs font-medium">
-                    School Year
-                  </th>
-                  <th className="text-muted-foreground hidden px-4 py-3 text-left text-xs font-medium sm:table-cell">
-                    Dates
-                  </th>
-                  <th className="text-muted-foreground hidden px-4 py-3 text-right text-xs font-medium md:table-cell">
-                    Tuition
-                  </th>
-                  <th className="text-muted-foreground hidden px-4 py-3 text-right text-xs font-medium lg:table-cell">
-                    Fees
-                  </th>
-                  <th className="text-muted-foreground hidden px-4 py-3 text-right text-xs font-medium lg:table-cell">
-                    Transport
-                  </th>
-                  <th className="text-muted-foreground px-4 py-3 text-left text-xs font-medium">
-                    Status
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                {schoolYears.map((year) => {
-                  const badge = getYearTypeBadge(year);
+          <div className="grid gap-4 md:grid-cols-2">
+            {current && (
+              <YearChoice
+                year={current}
+                heading={`Enroll for ${current.year_name}`}
+                blurb="Start during the current school year."
+                cta="Enroll this year"
+                hasApplication={appYears.includes(current.id)}
+                onSelect={() => router.push(`/apply/year/${current.id}`)}
+              />
+            )}
+            {upcoming && (
+              <YearChoice
+                year={upcoming}
+                heading={`Apply for ${upcoming.year_name}`}
+                blurb="Start at the beginning of next school year."
+                cta="Apply for next year"
+                hasApplication={appYears.includes(upcoming.id)}
+                onSelect={() => router.push(`/apply/year/${upcoming.id}`)}
+              />
+            )}
+          </div>
+        )}
 
-                  return (
-                    <tr
-                      key={year.id}
-                      onClick={() => router.push(`/apply/year/${year.id}`)}
-                      className="hover:bg-muted/50 cursor-pointer transition-colors"
-                    >
-                      <td className="px-4 py-3">
-                        <p className="text-sm font-medium">
-                          {year.year_name}
-                        </p>
-                      </td>
-                      <td className="text-muted-foreground hidden px-4 py-3 text-sm sm:table-cell">
-                        {formatDate(year.start_date)} &mdash;{" "}
-                        {formatDate(year.end_date)}
-                      </td>
-                      <td className="hidden px-4 py-3 text-right text-sm font-medium md:table-cell">
-                        {formatCurrency(year.tuition)}
-                      </td>
-                      <td className="text-muted-foreground hidden px-4 py-3 text-right text-sm lg:table-cell">
-                        {formatCurrency(year.annual_fees)}
-                      </td>
-                      <td className="text-muted-foreground hidden px-4 py-3 text-right text-sm lg:table-cell">
-                        {formatCurrency(year.transportation_fees)}
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className="flex flex-wrap items-center gap-1.5">
-                          {badge && (
-                            <span
-                              className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${badge.className}`}
-                            >
-                              {badge.label}
-                            </span>
-                          )}
-                          {appYears.includes(year.id) && (
-                            <span className="inline-flex rounded-full bg-indigo-100 px-2.5 py-0.5 text-xs font-medium text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-400">
-                              Your application
-                            </span>
-                          )}
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+        {otherYears.length > 0 && (
+          <div className="space-y-2">
+            <p className="text-muted-foreground text-sm">
+              You also have an application on file for:
+            </p>
+            <ul className="flex flex-wrap gap-2">
+              {otherYears.map((y) => (
+                <li key={y.id}>
+                  <button
+                    type="button"
+                    onClick={() => router.push(`/apply/year/${y.id}`)}
+                    className="hover:bg-muted/50 rounded-md border px-3 py-1.5 text-sm font-medium transition-colors"
+                  >
+                    {y.year_name}
+                  </button>
+                </li>
+              ))}
+            </ul>
           </div>
         )}
       </div>
     </>
+  );
+}
+
+function YearChoice({
+  year,
+  heading,
+  blurb,
+  cta,
+  hasApplication,
+  onSelect,
+}: {
+  year: SchoolYear;
+  heading: string;
+  blurb: string;
+  cta: string;
+  hasApplication: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className="hover:border-foreground/40 hover:bg-muted/30 flex flex-col gap-4 rounded-lg border p-5 text-left transition-colors"
+    >
+      <div className="space-y-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <h2 className="text-lg font-semibold">{heading}</h2>
+          {hasApplication && (
+            <span className="inline-flex rounded-full bg-indigo-100 px-2.5 py-0.5 text-xs font-medium text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-400">
+              Your application
+            </span>
+          )}
+        </div>
+        <p className="text-muted-foreground text-sm">{blurb}</p>
+      </div>
+      <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+        <div className="col-span-2">
+          <dt className="text-muted-foreground text-xs">Dates</dt>
+          <dd>
+            {formatDate(year.start_date)} &mdash; {formatDate(year.end_date)}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-muted-foreground text-xs">Tuition</dt>
+          <dd className="font-medium">{formatCurrency(year.tuition)}</dd>
+        </div>
+        <div>
+          <dt className="text-muted-foreground text-xs">Fees</dt>
+          <dd>{formatCurrency(year.annual_fees)}</dd>
+        </div>
+      </dl>
+      <span className="text-primary text-sm font-medium">
+        {hasApplication ? "Continue application" : cta} &rarr;
+      </span>
+    </button>
   );
 }
