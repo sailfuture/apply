@@ -311,6 +311,17 @@ export default function FamilyDetailPage() {
   const params = useParams();
   const searchParams = useSearchParams();
   const yearId = searchParams.get("yearId");
+  // Registration-side confirmation (same key the Decision card reads —
+  // SWR dedupes). Enrolled families don't get the Change year action.
+  const { data: regProgress } = useSWR<{
+    isRegistrationConfirmed?: boolean;
+  } | null>(
+    params.id && yearId
+      ? `/api/admin/registration-progress?familyId=${params.id}&yearId=${yearId}`
+      : null,
+    adminFetcher
+  );
+  const registrationConfirmed = regProgress?.isRegistrationConfirmed === true;
   const familyId = params.id;
 
   // Family + parents + students — pulled from the existing endpoint
@@ -736,9 +747,10 @@ export default function FamilyDetailPage() {
               defaultYearId={yearId ? Number(yearId) : null}
             />
             {/* Applied under the wrong year — move the whole family's
-                application. Pre-acceptance only; accepted families
-                move per student from the Enrolled page. */}
-            {yearId && progress && progress.isAccepted !== true ? (
+                paperwork. Applying and registering families only;
+                enrolled families move per student from the Enrolled
+                page, which keeps billing in step. */}
+            {yearId && progress && regProgress !== undefined && !registrationConfirmed ? (
               <MoveApplicationYearButton
                 familyId={Number(familyId)}
                 yearId={Number(yearId)}

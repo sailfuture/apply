@@ -114,12 +114,13 @@ export function StartingTermField({
 }
 
 /**
- * Header action: move a still-applying family's whole application
- * (every student, the progress row, the scholarship application) to a
- * different school year — for families who filed under the wrong one.
- * Hidden once the family is accepted; from then on moves go one
- * student at a time from the Enrolled page, which keeps billing in
- * step.
+ * Header action: move an applying or registering family's whole
+ * paperwork (applications, progress, scholarship, and once accepted
+ * their registration packets and payment setup) to a different school
+ * year — for families who filed under the wrong one. Hidden once the
+ * family is enrolled; from then on moves go one student at a time
+ * from the Enrolled page, which keeps billing in step. The server
+ * also refuses once billing has started.
  */
 export function MoveApplicationYearButton({
   familyId,
@@ -195,9 +196,10 @@ export function MoveApplicationYearButton({
             <DialogDescription>
               For a family who applied under the wrong school year. Every
               student&rsquo;s application, the family&rsquo;s progress and
-              their scholarship application move together. Starting terms
-              are cleared, since terms belong to a year — set them again
-              after the move.
+              scholarship application move together — plus registration
+              packets and payment setup if they&rsquo;re already
+              registering. Starting terms are cleared, since terms belong
+              to a year — set them again after the move.
             </DialogDescription>
           </DialogHeader>
           <Field>

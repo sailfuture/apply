@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
-import { xano } from "@/lib/xano";
+import { xano, activeStripeSubscriptionId } from "@/lib/xano";
 
 /**
- * Move a still-applying family's application to a different school
- * year.
+ * Move an applying or registering family's paperwork to a different
+ * school year.
  *
  *   POST /api/admin/families/[id]/application-year
  *   body: { fromYearId: number, toYearId: number }
@@ -18,12 +18,18 @@ import { xano } from "@/lib/xano";
  *     target year's pipeline
  *   - the family's scholarship row
  *   - each student's `registration_school_years_id` membership array
+ * and, for a family that's accepted and registering:
+ *   - each student's registration packet
+ *   - the family's registration progress row
+ *   - the family's payment setup row
  *
  * Starting terms are cleared on the moved applications — terms belong
  * to a school year, so the old pick can't carry over.
  *
- * Pre-acceptance only. Once a family is accepted they have packets and
- * possibly live billing; those moves go one student at a time through
+ * Not for enrolled families (registration confirmed) or any family
+ * whose billing has started — a live Stripe subscription or recorded
+ * payments for the year. Money records don't get re-filed
+ * automatically; enrolled students move one at a time through
  * /api/admin/students/[id]/paperwork-year, which keeps Stripe in step.
  */
 export async function POST(
@@ -59,14 +65,29 @@ export async function POST(
       );
     }
 
-    const [years, apps, sourceProgressAll, targetProgressAll, scholarships] =
-      await Promise.all([
-        xano.schoolYears.getAll().catch(() => []),
-        xano.applications.getByFamilyId(familyId),
-        xano.familyApplicationProgress.getByYear(fromYearId),
-        xano.familyApplicationProgress.getByYear(toYearId),
-        xano.scholarship.getAll().catch(() => []),
-      ]);
+    const [
+      years,
+      apps,
+      sourceProgressAll,
+      targetProgressAll,
+      scholarships,
+      sourceRegProgressAll,
+      targetRegProgressAll,
+      sourcePayment,
+      targetPayment,
+      sourceTransactions,
+    ] = await Promise.all([
+      xano.schoolYears.getAll().catch(() => []),
+      xano.applications.getByFamilyId(familyId),
+      xano.familyApplicationProgress.getByYear(fromYearId),
+      xano.familyApplicationProgress.getByYear(toYearId),
+      xano.scholarship.getAll().catch(() => []),
+      xano.studentRegistrationProgress.getByYear(fromYearId),
+      xano.studentRegistrationProgress.getByYear(toYearId),
+      xano.familyPayments.getByFamilyAndYearStrict(familyId, fromYearId),
+      xano.familyPayments.getByFamilyAndYearStrict(familyId, toYearId),
+      xano.paymentTransactions.getByFamilyAndYear(familyId, fromYearId),
+    ]);
     const yearName = (id: number) =>
       years.find((y) => Number(y.id) === id)?.year_name || `year #${id}`;
     if (!years.some((y) => Number(y.id) === toYearId)) {
@@ -106,15 +127,49 @@ export async function POST(
         { status: 404 }
       );
     }
-    if (sourceProgress.some((p) => p.isAccepted === true)) {
+    const sourceRegProgress = forFamily(sourceRegProgressAll).filter(
+      (r) => r.isArchived !== true
+    );
+    const targetRegProgress = forFamily(targetRegProgressAll).filter(
+      (r) => r.isArchived !== true
+    );
+    if (sourceRegProgress.some((r) => r.isRegistrationConfirmed === true)) {
       return NextResponse.json(
         {
           error:
-            "This family is already accepted. Move each student from their enrolled page instead, so billing and registration packets move with them.",
+            "This family is already enrolled. Move each student from their Enrolled page instead, so billing moves with them.",
         },
         { status: 409 }
       );
     }
+    if (
+      activeStripeSubscriptionId(sourcePayment?.stripe_subscription_id) ||
+      sourceTransactions.length > 0
+    ) {
+      return NextResponse.json(
+        {
+          error: `Billing has already started for this family in ${yearName(fromYearId)} (a live subscription or recorded payments), so their records can't be moved automatically. Sort out billing first, then move them.`,
+        },
+        { status: 409 }
+      );
+    }
+
+    // Registration packets for the students being moved — a
+    // registering family has one per student.
+    const studentIds = [
+      ...new Set(sourceApps.map((a) => Number(a.registration_students_id))),
+    ].filter((id) => id > 0);
+    const packetPairs = await Promise.all(
+      studentIds.map(async (sid) => ({
+        source: await xano.studentRegistration
+          .getByStudentAndYear(sid, fromYearId)
+          .catch(() => null),
+        target: await xano.studentRegistration
+          .getByStudentAndYear(sid, toYearId)
+          .catch(() => null),
+      }))
+    );
+    const sourcePackets = packetPairs.flatMap((p) => (p.source ? [p.source] : []));
 
     // Collision guards — never leave two competing applications for
     // one year. An empty, unsubmitted target progress row (the family
@@ -136,6 +191,30 @@ export async function POST(
         { status: 409 }
       );
     }
+    if (packetPairs.some((p) => p.source && p.target)) {
+      return NextResponse.json(
+        {
+          error: `A student in this family already has a registration packet for ${yearName(toYearId)}, and two packets for one year can't be merged. Delete one first.`,
+        },
+        { status: 409 }
+      );
+    }
+    if (sourceRegProgress.length > 0 && targetRegProgress.length > 0) {
+      return NextResponse.json(
+        {
+          error: `This family already has registration progress for ${yearName(toYearId)}. Archive it first.`,
+        },
+        { status: 409 }
+      );
+    }
+    if (sourcePayment && targetPayment) {
+      return NextResponse.json(
+        {
+          error: `This family already has a payment setup for ${yearName(toYearId)}, and the two can't be merged. Remove one first.`,
+        },
+        { status: 409 }
+      );
+    }
     if (sourceScholarships.length > 0 && targetScholarships.length > 0) {
       return NextResponse.json(
         {
@@ -146,8 +225,8 @@ export async function POST(
     }
 
     // Sequential and reported honestly: a failure midway says exactly
-    // what already moved so admin can re-run (every step is idempotent
-    // against already-moved rows) or fix by hand.
+    // what already moved. A re-run would trip the collision guards on
+    // the rows that made it across, so the rest is finished by hand.
     const moved: string[] = [];
     try {
       for (const p of targetProgress) {
@@ -175,6 +254,24 @@ export async function POST(
         });
       }
       if (sourceScholarships.length) moved.push("scholarship application");
+      for (const packet of sourcePackets) {
+        await xano.studentRegistration.update(packet.id, {
+          registration_school_years_id: toYearId,
+        });
+      }
+      if (sourcePackets.length) moved.push(`${sourcePackets.length} registration packet(s)`);
+      for (const r of sourceRegProgress) {
+        await xano.studentRegistrationProgress.update(r.id, {
+          registration_school_years_id: toYearId,
+        });
+      }
+      if (sourceRegProgress.length) moved.push("registration progress");
+      if (sourcePayment) {
+        await xano.familyPayments.update(sourcePayment.id, {
+          registration_school_years_id: toYearId,
+        });
+        moved.push("payment setup");
+      }
     } catch (err) {
       console.error(
         `[/api/admin/families/${familyId}/application-year] move failed partway:`,
@@ -182,7 +279,7 @@ export async function POST(
       );
       return NextResponse.json(
         {
-          error: `The move failed partway through${moved.length ? ` (already moved: ${moved.join(", ")})` : ""}. Re-run the move to finish the rest.`,
+          error: `The move failed partway through${moved.length ? ` (already moved: ${moved.join(", ")})` : ""}. The rest is still on ${yearName(fromYearId)} and needs moving by hand — note this message before closing it.`,
         },
         { status: 502 }
       );
@@ -190,9 +287,6 @@ export async function POST(
 
     // Student membership arrays — a convenience index, not the source
     // of truth, so a failed write logs instead of failing the move.
-    const studentIds = [
-      ...new Set(sourceApps.map((a) => Number(a.registration_students_id))),
-    ].filter((id) => id > 0);
     await Promise.all(
       studentIds.map(async (sid) => {
         try {
@@ -220,6 +314,9 @@ export async function POST(
       movedApplications: sourceApps.length,
       movedProgress: sourceProgress.length,
       movedScholarships: sourceScholarships.length,
+      movedPackets: sourcePackets.length,
+      movedRegistrationProgress: sourceRegProgress.length,
+      movedPayment: sourcePayment ? 1 : 0,
     });
   } catch (err) {
     return handleAdminError(err);
