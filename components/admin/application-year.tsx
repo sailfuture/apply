@@ -28,6 +28,26 @@ interface AdminYear {
   year_name: string;
   isActive?: boolean;
   isNextYear?: boolean;
+  isFuture?: boolean;
+  isPast?: boolean;
+}
+
+function yearLabel(y: AdminYear): string {
+  if (y.isActive) return "current";
+  if (y.isNextYear) return "upcoming";
+  if (y.isFuture) return "future";
+  if (y.isPast) return "past";
+  return "";
+}
+
+/** Current first, then upcoming, future, past — the likely
+ *  destinations at the top. */
+function yearRank(y: AdminYear): number {
+  if (y.isActive) return 0;
+  if (y.isNextYear) return 1;
+  if (y.isFuture) return 2;
+  if (y.isPast) return 4;
+  return 3;
 }
 
 interface AdminTerm {
@@ -134,15 +154,17 @@ export function MoveApplicationYearButton({
   const [open, setOpen] = useState(false);
   const [target, setTarget] = useState("");
   const [moving, setMoving] = useState(false);
-  const { data } = useSWR<AdminYear[]>(
+  const { data, error, isLoading } = useSWR<AdminYear[]>(
     open ? "/api/admin/school-years" : null,
     adminFetcher
   );
-  // Families pick between the current and upcoming year, so those are
-  // the only sensible destinations.
-  const options = (Array.isArray(data) ? data : []).filter(
-    (y) => (y.isActive || y.isNextYear) && y.id !== yearId
-  );
+  // Every year but the one they're on. This used to offer only the
+  // years flagged Active / Next Year, which left the dropdown empty
+  // (and unclickable) whenever the family was already on one of them
+  // and the other wasn't flagged.
+  const options = (Array.isArray(data) ? data : [])
+    .filter((y) => y.id !== yearId)
+    .sort((a, b) => yearRank(a) - yearRank(b));
   const targetName = options.find((y) => String(y.id) === target)?.year_name;
 
   async function runMove() {
@@ -204,17 +226,34 @@ export function MoveApplicationYearButton({
           </DialogHeader>
           <Field>
             <FieldLabel className="text-xs">Move to</FieldLabel>
-            <Select value={target} onValueChange={setTarget} disabled={moving}>
+            <Select
+              value={target}
+              onValueChange={setTarget}
+              disabled={moving || options.length === 0}
+            >
               <SelectTrigger className="w-full">
-                <SelectValue placeholder="Pick a school year…" />
+                <SelectValue
+                  placeholder={
+                    isLoading
+                      ? "Loading school years…"
+                      : error
+                        ? "Couldn’t load school years"
+                        : options.length === 0
+                          ? "No other school years set up"
+                          : "Pick a school year…"
+                  }
+                />
               </SelectTrigger>
               <SelectContent>
-                {options.map((y) => (
-                  <SelectItem key={y.id} value={String(y.id)}>
-                    {y.year_name}
-                    {y.isActive ? " (current)" : " (upcoming)"}
-                  </SelectItem>
-                ))}
+                {options.map((y) => {
+                  const label = yearLabel(y);
+                  return (
+                    <SelectItem key={y.id} value={String(y.id)}>
+                      {y.year_name}
+                      {label ? ` (${label})` : ""}
+                    </SelectItem>
+                  );
+                })}
               </SelectContent>
             </Select>
           </Field>
