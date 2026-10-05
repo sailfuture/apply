@@ -493,6 +493,14 @@ export interface XanoApplication {
   initial_screening_nwea_reading_date?: string | null;
   last_grade_completed: string;
   current_grade: string;
+  /** The term a mid-year applicant starts in — FK to
+   *  `registration_academic_terms` (which belongs to this row's school
+   *  year). 0/null/undefined = starts at the beginning of the year.
+   *  Asked only when a family applies for the current year; editable
+   *  by admin from the family page. Cleared whenever the application
+   *  moves to a different year. Optional because legacy rows predate
+   *  the column. */
+  registration_academic_terms_id?: number | null;
   // NOTE: there are deliberately NO decision flags here. isSubmitted /
   // isOffered / isAccepted / isDenied never existed as columns on
   // `registration_application` in Xano — writes were silently dropped

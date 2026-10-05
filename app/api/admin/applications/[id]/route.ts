@@ -84,6 +84,8 @@ export async function PATCH(
       // those instead.
       "last_grade_completed",
       "current_grade",
+      // Mid-year start term (0 = start of the year).
+      "registration_academic_terms_id",
       // Decision flags (isSubmitted / isOffered / isAccepted /
       // isDenied) are intentionally absent — those columns don't
       // exist on this table; the lifecycle is family-level.

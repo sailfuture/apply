@@ -182,6 +182,8 @@ export async function POST(
       for (const app of sourceApps) {
         await xano.applications.update(app.id, {
           registration_school_years_id: toYearId,
+          // Terms belong to a year — the old pick can't carry over.
+          registration_academic_terms_id: 0,
         });
         movedAppIds.push(app.id);
       }

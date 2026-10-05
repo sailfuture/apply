@@ -3,6 +3,31 @@ import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
 
 /**
+ * Terms for one school year, sorted by start date (undated last).
+ *
+ *   GET ?yearId=Y → XanoAcademicTerm[]
+ */
+export async function GET(req: NextRequest) {
+  try {
+    await requireAdmin();
+    const yearId = Number(req.nextUrl.searchParams.get("yearId"));
+    if (!Number.isFinite(yearId) || yearId <= 0) {
+      return NextResponse.json({ error: "yearId is required" }, { status: 400 });
+    }
+    const terms = await xano.academicTerms.getByYear(yearId);
+    return NextResponse.json(
+      terms.sort(
+        (a, b) =>
+          (a.start_date ?? "9999").localeCompare(b.start_date ?? "9999") ||
+          a.term_name.localeCompare(b.term_name)
+      )
+    );
+  } catch (err) {
+    return handleAdminError(err);
+  }
+}
+
+/**
  * Create an academic term for a school year.
  *
  *   POST { term_name, registration_school_years_id,

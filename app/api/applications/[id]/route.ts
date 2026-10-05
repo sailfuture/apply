@@ -59,6 +59,8 @@ const PARENT_FIELD_ALLOWLIST = [
   // Initial Testing step
   "nwea_testing_complete",
   "nwea_testing_scheduled",
+  // Mid-year start term (current-year applicants only)
+  "registration_academic_terms_id",
   // Financial Aid step — parent's SUFS tier pick
   "sufs_award_id",
 ] as const;

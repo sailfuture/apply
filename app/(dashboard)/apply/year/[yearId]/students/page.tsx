@@ -105,6 +105,8 @@ interface Application {
   describe_student_opportunities_for_growth: string;
   last_grade_completed: string;
   current_grade: string;
+  /** Mid-year start term; 0/null = start of the year. */
+  registration_academic_terms_id?: number | null;
   nwea_testing_complete: boolean;
   test_scores: Record<string, unknown> | null;
 }
@@ -126,6 +128,7 @@ const TRACKED_FIELDS: (keyof Application)[] = [
   "current_previous_school",
   "last_grade_completed",
   "current_grade",
+  "registration_academic_terms_id",
   "describe_student_strengths",
   "describe_student_opportunities_for_growth",
   "is_bus_transportation",
@@ -215,6 +218,13 @@ export default function StudentsStepPage() {
     Record<number, number>
   >({});
   const [yearName, setYearName] = useState("");
+  // Terms for this year, populated only when it's the CURRENT school
+  // year — a family joining mid-year picks which term their student
+  // starts. Next-year applicants start at the beginning, so it's not
+  // asked. Optional, never blocks completion.
+  const [startTerms, setStartTerms] = useState<
+    { id: number; term_name: string; start_date: string | null }[]
+  >([]);
   const [loading, setLoading] = useState(true);
   const [addingStudentId, setAddingStudentId] = useState<number | null>(null);
   const [savedApplications, setSavedApplications] = useState<Application[]>([]);
@@ -323,6 +333,12 @@ export default function StudentsStepPage() {
         const years = await yearsRes.json();
         const found = years.find((y: { id: number }) => y.id === yearId);
         if (found) setYearName(found.year_name);
+        if (found?.isActive) {
+          fetch(`/api/academic-terms?yearId=${yearId}`)
+            .then((r) => (r.ok ? r.json() : []))
+            .then((t) => setStartTerms(Array.isArray(t) ? t : []))
+            .catch(() => setStartTerms([]));
+        }
       }
       let loadedStudents: Student[] = [];
       if (studentsRes.ok) {
@@ -1020,6 +1036,41 @@ export default function StudentsStepPage() {
                         />
                       </Field>
                     </div>
+                    {startTerms.length > 0 && (
+                      <div className="grid gap-4 grid-cols-1 sm:grid-cols-[2fr_1fr_1fr] mt-4">
+                        <Field>
+                          <FieldLabel className="text-xs">
+                            When would {student?.first_name || "your student"} like to start?
+                          </FieldLabel>
+                          <Select
+                            value={String(app.registration_academic_terms_id || "")}
+                            onValueChange={(v) =>
+                              setApplications((prev) =>
+                                prev.map((a) =>
+                                  a.id === app.id
+                                    ? { ...a, registration_academic_terms_id: Number(v) || 0 }
+                                    : a
+                                )
+                              )
+                            }
+                          >
+                            <SelectTrigger className="w-full">
+                              <SelectValue placeholder="Pick a starting term" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {startTerms.map((t) => (
+                                <SelectItem key={t.id} value={String(t.id)}>
+                                  {t.term_name}
+                                  {t.start_date
+                                    ? ` — starts ${new Date(t.start_date + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
+                                    : ""}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </Field>
+                      </div>
+                    )}
                     <div className="grid gap-4 sm:grid-cols-2 mt-4">
                       <Field>
                         <FieldLabel className="text-xs">

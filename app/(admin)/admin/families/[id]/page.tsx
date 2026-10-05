@@ -69,6 +69,10 @@ import { FamilyMessagesSheet } from "@/components/admin/family-messages-sheet";
 import { EmailParentButton } from "@/components/admin/email-parent-button";
 import { DocumentsToReviewBlock } from "@/components/admin/documents-to-review-block";
 import { LinkedLeadsButton } from "@/components/admin/linked-leads-button";
+import {
+  MoveApplicationYearButton,
+  StartingTermField,
+} from "@/components/admin/application-year";
 import { InviteStatusBadge, ResendInviteButton } from "@/components/invite-status";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { cn } from "@/lib/utils";
@@ -731,6 +735,16 @@ export default function FamilyDetailPage() {
               familyId={family.id}
               defaultYearId={yearId ? Number(yearId) : null}
             />
+            {/* Applied under the wrong year — move the whole family's
+                application. Pre-acceptance only; accepted families
+                move per student from the Enrolled page. */}
+            {yearId && progress && progress.isAccepted !== true ? (
+              <MoveApplicationYearButton
+                familyId={Number(familyId)}
+                yearId={Number(yearId)}
+                familyName={family.family_name}
+              />
+            ) : null}
             {/* Archive — far right, deliberately last. */}
             {yearId ? (
               <ArchiveApplicationButton
@@ -2804,6 +2818,14 @@ function StudentApplicationBlock({
                 value={app.current_previous_school}
                 required
               />
+              {yearId ? (
+                <StartingTermField
+                  appId={app.id}
+                  yearId={yearId}
+                  value={app.registration_academic_terms_id}
+                  onSaved={onChanged}
+                />
+              ) : null}
             </div>
           </SectionGroup>
 
