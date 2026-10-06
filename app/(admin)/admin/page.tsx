@@ -18,6 +18,7 @@ import {
 import { cn } from "@/lib/utils";
 import { StatsCard } from "@/components/admin/stats-card";
 import { DashboardSearch } from "@/components/admin/dashboard-search";
+import { DashboardYearApplications } from "@/components/admin/dashboard-year-applications";
 import { LeadSheet } from "@/components/admin/lead-sheet";
 import type { AllLeadRow } from "@/app/api/admin/all-leads/route";
 import {
@@ -52,6 +53,8 @@ const TREND_WINDOWS = [7, 14, 30, 60, 90];
  *   1. Stat tiles — the recruitment funnel: inquiries, inquiry →
  *      application conversions, campus tours, completed applications,
  *      students accepted, students enrolled.
+ *   1b. Applications for the current AND upcoming year, side by
+ *      side (independent of the year picker).
  *   2. Trends — new inquiries per day and roster size, over a
  *      selectable window (one control drives both charts so they stay
  *      directly comparable).
@@ -328,6 +331,11 @@ export default function AdminDashboardPage() {
           href={yearId ? `/admin/enrolled?yearId=${yearId}` : "/admin/enrolled"}
         />
       </div>
+
+      {/* Current vs upcoming year applications, side by side — families
+          apply for either, so recruitment runs on both at once. Not
+          tied to the year picker. */}
+      <DashboardYearApplications />
 
       {/* Trends. Two separate charts (never a dual axis): inquiries
           are per-day counts, the roster is a running total — different
