@@ -18,6 +18,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { defaultAdminYear, sortAdminYears } from "@/lib/school-year-default";
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
@@ -86,29 +87,16 @@ export function YearSelector() {
 
   // Sort: upcoming/next year first, then active, then future, then past.
   // Within each group, newer years (higher year_name string) come first.
-  const years = useMemo(() => {
-    if (!Array.isArray(yearsRaw)) return [];
-    const rank = (y: SchoolYear) => {
-      if (y.isNextYear) return 0;
-      if (y.isActive) return 1;
-      if (y.isFuture) return 2;
-      return 3; // past or unflagged
-    };
-    return [...yearsRaw].sort((a, b) => {
-      const r = rank(a) - rank(b);
-      if (r !== 0) return r;
-      return (b.year_name ?? "").localeCompare(a.year_name ?? "");
-    });
-  }, [yearsRaw]);
-
-  const defaultYear = useMemo(
-    () =>
-      years.find((y) => y.isNextYear) ??
-      years.find((y) => y.isActive) ??
-      years[0] ??
-      null,
-    [years]
+  // Both the order and the default live in lib/school-year-default.ts,
+  // shared with the server routes that answer before this component
+  // has injected the year (the Messages inbox feed) — the two must
+  // pick the same year or that page would re-fetch for another.
+  const years = useMemo(
+    () => (Array.isArray(yearsRaw) ? sortAdminYears(yearsRaw) : []),
+    [yearsRaw]
   );
+
+  const defaultYear = useMemo(() => defaultAdminYear(years), [years]);
 
   // Auto-select the default year on first load if the URL doesn't already
   // carry a `?yearId=`. Keeps the admin tool focused on the upcoming year

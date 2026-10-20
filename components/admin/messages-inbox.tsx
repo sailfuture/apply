@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { toast } from "sonner";
@@ -37,11 +37,13 @@ import { SmsNotificationToggle } from "@/components/admin/sms-notifications";
 import {
   useSmsReadStateWriter,
   useSmsViewedMap,
+  useUnreadMessagesFeed,
 } from "@/components/admin/messages-unread-badge";
 import type {
   ConversationStage,
   SmsConversation,
 } from "@/app/api/admin/messages/route";
+import { defaultAdminYear, type AdminYearLike } from "@/lib/school-year-default";
 import type {
   GroupAudienceResponse,
   GroupContact,
@@ -112,6 +114,45 @@ function isEnrolledConversation(c: SmsConversation): boolean {
  */
 const NAME_CACHE = new Map<string, string>();
 
+/** How far back the FIRST paint reads. Two weeks covers every thread
+ *  an admin is actively working; everything older arrives with the
+ *  full feed a moment later and slots in below. */
+const WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
+
+const convKey = (c: Pick<SmsConversation, "contactType" | "contactId">) =>
+  `${c.contactType}:${c.contactId}`;
+
+/**
+ * Window + full feed → one list, by contact key. The window is the
+ * fresher read (it polls every 20 s; the full feed every 2 min), so
+ * where both have a row the one with the newer `lastAt` wins — on a
+ * tie the full row, which carries the search haystack and the
+ * lifetime message count. Rows only the full feed knows about are
+ * older than the window start by construction, so the final sort by
+ * `lastAt` keeps every window row where it already was and appends
+ * the rest below; nothing jumps or disappears when the full feed
+ * lands.
+ */
+function mergeFeeds(
+  window: SmsConversation[],
+  full: SmsConversation[] | undefined
+): SmsConversation[] {
+  if (!full) return window;
+  const fullByKey = new Map(full.map((c) => [convKey(c), c]));
+  const merged: SmsConversation[] = window.map((w) => {
+    const key = convKey(w);
+    const f = fullByKey.get(key);
+    if (!f) return w;
+    fullByKey.delete(key);
+    const fresh = w.lastAt > f.lastAt ? w : f;
+    return fresh.searchText || !f.searchText
+      ? fresh
+      : { ...fresh, searchText: f.searchText };
+  });
+  for (const f of fullByKey.values()) merged.push(f);
+  return merged.sort((a, b) => b.lastAt - a.lastAt);
+}
+
 const CHIP_CLASS = (on: boolean) =>
   cn(
     "shrink-0 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors",
@@ -122,27 +163,117 @@ const CHIP_CLASS = (on: boolean) =>
 
 export function MessagesInbox({ mode }: { mode: InboxMode }) {
   const router = useRouter();
-  // yearId is LOAD-BEARING here, not just an annotation: the
+  // The year is LOAD-BEARING here, not just an annotation: the
   // enrolled/recruitment split and the cross-page ?open= redirect
-  // both classify on `stage`, and the API only computes family
-  // stages when ?yearId= is passed — without it every family reads
-  // stage "none" and an enrolled family's deep link would misroute
-  // to the recruitment page (and latch there, since the one-shot
-  // effect can't rerun). So unlike the pre-split page, the feed
-  // fetch WAITS for the YearSelector to inject the year; entry
-  // points without one (dashboard rows, PWA icon, notifications)
-  // show the loading state for the beat that takes.
+  // both classify on `stage`, which the API computes for ONE year —
+  // against the wrong year an enrolled family's deep link would
+  // misroute to the recruitment page (and latch there, since the
+  // one-shot effect can't rerun). The feed used to wait for the
+  // YearSelector to inject `?yearId=` before fetching at all; now the
+  // route defaults to the very year the selector would inject (the
+  // shared rule in lib/school-year-default.ts), so the first fetch
+  // goes out on first render, keyed WITHOUT a year. When the selector
+  // then writes that same year into the URL the key doesn't change
+  // and nothing refetches; only a different year (the admin switched)
+  // puts an explicit `yearId` in the key. A page that opened WITH a
+  // year in the URL keeps the explicit key throughout, so loading the
+  // year list can't flip it.
   const searchParams = useSearchParams();
-  const yearId = searchParams.get("yearId");
-  const { data, error, isLoading, mutate } = useSWR<{
+  const urlYearId = searchParams.get("yearId");
+  const { data: yearsRaw } = useSWR<AdminYearLike[]>(
+    // Same key as the YearSelector — one request, shared cache.
+    "/api/school-years",
+    adminFetcher
+  );
+  const defaultYearId = useMemo(
+    () =>
+      Array.isArray(yearsRaw) ? (defaultAdminYear(yearsRaw)?.id ?? null) : null,
+    [yearsRaw]
+  );
+  const [startedWithYear] = useState(() => urlYearId !== null);
+  const feedYear =
+    urlYearId !== null &&
+    (startedWithYear ||
+      (defaultYearId !== null && Number(urlYearId) !== defaultYearId))
+      ? urlYearId
+      : null;
+  // The year everything else on the page is scoped to — the URL's,
+  // else the default once the year list is in.
+  const yearId =
+    urlYearId ?? (defaultYearId !== null ? String(defaultYearId) : null);
+
+  // Two-stage feed. Stage 1, the WINDOW: the last two weeks of texts
+  // and calls — a few KB that Xano answers in a fraction of the time
+  // the whole log takes — paints the list. Stage 2, the FULL feed,
+  // starts once the window has answered (so the two aren't competing
+  // for Xano's parallel-request budget) and merges in underneath.
+  //
+  // Needs-reply threads must be on the first paint whatever their
+  // age, so the window reaches back to the oldest thread the unread
+  // endpoint (which the nav badge is already polling) says is waiting.
+  // The base start is fixed at mount: a key that moved with the clock
+  // would be a new request every render.
+  const [baseSince] = useState(() => Date.now() - WINDOW_MS);
+  const { data: unreadData } = useUnreadMessagesFeed();
+  const oldestUnreadAt = useMemo(() => {
+    let oldest = 0;
+    for (const c of unreadData?.conversations ?? []) {
+      if (c.lastAt > 0 && (oldest === 0 || c.lastAt < oldest)) oldest = c.lastAt;
+    }
+    return oldest;
+  }, [unreadData]);
+  const windowSince =
+    oldestUnreadAt > 0 && oldestUnreadAt < baseSince
+      ? oldestUnreadAt - 1
+      : baseSince;
+  const feedQuery = (extra?: { key: string; value: string }) => {
+    const params = new URLSearchParams();
+    if (feedYear !== null) params.set("yearId", feedYear);
+    if (extra) params.set(extra.key, extra.value);
+    const qs = params.toString();
+    return `/api/admin/messages${qs ? `?${qs}` : ""}`;
+  };
+  const {
+    data: windowData,
+    error: windowError,
+    isLoading: windowLoading,
+    mutate: mutateWindow,
+  } = useSWR<{ conversations: SmsConversation[] }>(
+    feedQuery({ key: "since", value: String(windowSince) }),
+    adminFetcher,
+    // keepPreviousData: when the window start moves (an older unread
+    // thread appears), the list keeps showing until the wider window
+    // lands rather than flashing the spinner.
+    { refreshInterval: 20_000, keepPreviousData: true }
+  );
+  const { data: fullData, mutate: mutateFull } = useSWR<{
     conversations: SmsConversation[];
   }>(
-    yearId ? `/api/admin/messages?yearId=${yearId}` : null,
+    windowData || windowError ? feedQuery() : null,
     adminFetcher,
-    { refreshInterval: 20_000 }
+    {
+      refreshInterval: 120_000,
+      revalidateOnFocus: true,
+      keepPreviousData: true,
+    }
+  );
+  const data = windowData ?? fullData;
+  const error = windowError;
+  const isLoading = windowLoading;
+  // Refresh after a send: the new text is inside the window, so that
+  // is the read that needs redoing — the full feed catches up on its
+  // own cycle, and the merge prefers the fresher row meanwhile.
+  const mutate = mutateWindow;
+  // Refresh everything: for backfills, which can land texts of any age.
+  const mutateAll = useCallback(
+    () => Promise.all([mutateWindow(), mutateFull()]),
+    [mutateWindow, mutateFull]
   );
   const conversations = useMemo(() => {
-    const raw = data?.conversations ?? [];
+    const raw = mergeFeeds(
+      windowData?.conversations ?? [],
+      fullData?.conversations
+    );
     return raw.map((c) => {
       const cacheKey = `${c.contactType}:${c.contactId}`;
       const isPlaceholder = /^(Family|Inquiry|Camp|Visit|TASCO) #\d+$/.test(
@@ -155,7 +286,7 @@ export function MessagesInbox({ mode }: { mode: InboxMode }) {
       const cached = NAME_CACHE.get(cacheKey);
       return cached ? { ...c, name: cached } : c;
     });
-  }, [data]);
+  }, [windowData, fullData]);
 
   // The page's slice of the feed — the OTHER page owns the rest.
   const scoped = useMemo(
@@ -171,8 +302,11 @@ export function MessagesInbox({ mode }: { mode: InboxMode }) {
   // Enrolled-page directory join: the conversation feed carries no
   // crew/bus/grade, so pull the group-audience directory (same
   // payload the composer uses — SWR dedupes) and key it by family id.
+  // Deferred until the window has painted the list: this is eleven
+  // more table reads for filter chips, and firing it alongside the
+  // window would hold the list up behind Xano's parallel-request cap.
   const { data: audienceData } = useSWR<GroupAudienceResponse>(
-    mode === "enrolled" && yearId
+    mode === "enrolled" && yearId && windowData
       ? `/api/admin/messages/group/audience?yearId=${yearId}`
       : null,
     adminFetcher
@@ -362,7 +496,7 @@ export function MessagesInbox({ mode }: { mode: InboxMode }) {
     if (!belongsHere) {
       const params = new URLSearchParams();
       params.set("open", openParam);
-      if (yearId) params.set("yearId", yearId);
+      if (urlYearId) params.set("yearId", urlYearId);
       router.replace(
         `${MODE_PATH[mode === "enrolled" ? "recruitment" : "enrolled"]}?${params.toString()}`
       );
@@ -382,7 +516,7 @@ export function MessagesInbox({ mode }: { mode: InboxMode }) {
       markViewed(match.contactType, match.contactId, match.lastAt);
     }, 0);
     return () => clearTimeout(t);
-  }, [openParam, conversations, mode, router, yearId]);
+  }, [openParam, conversations, mode, router, urlYearId]);
   // The open thread's payload — same SWR key as the thread component,
   // so this is a cache read, not a second request. Only the Quo link
   // is used here, for the header's "Open in Quo" button.
@@ -472,7 +606,7 @@ export function MessagesInbox({ mode }: { mode: InboxMode }) {
             toast.success(
               `Imported ${result.imported} text${result.imported === 1 ? "" : "s"} from Twilio.`
             );
-            void mutate();
+            void mutateAll();
           }
         })
         .catch(() => {
@@ -480,7 +614,7 @@ export function MessagesInbox({ mode }: { mode: InboxMode }) {
         });
     }, 4000);
     return () => clearTimeout(timer);
-  }, [mutate]);
+  }, [mutateAll]);
 
   // Render the list incrementally — newest conversations first (the
   // API sorts), a page at a time so a season's worth of contacts
@@ -718,17 +852,15 @@ export function MessagesInbox({ mode }: { mode: InboxMode }) {
               <p>Couldn&rsquo;t load conversations.</p>
               <button
                 type="button"
-                onClick={() => void mutate()}
+                onClick={() => void mutateAll()}
                 className="text-xs font-medium text-foreground underline underline-offset-2"
               >
                 Try again
               </button>
             </div>
-          ) : (!yearId || isLoading) && !data ? (
+          ) : isLoading && !data ? (
             // Centered in the pane (not hugging the top) with a label
-            // so the wait reads as "working", not "empty". Also the
-            // state while the YearSelector injects the default year —
-            // the feed deliberately doesn't fetch without one.
+            // so the wait reads as "working", not "empty".
             <div className="flex h-full flex-col items-center justify-center gap-2 p-6">
               <Loader2 className="size-5 animate-spin text-muted-foreground" />
               <p className="text-xs text-muted-foreground">
@@ -928,7 +1060,7 @@ export function MessagesInbox({ mode }: { mode: InboxMode }) {
                 onSent={() => mutate()}
               />
             </>
-          ) : (!yearId || isLoading) && !data ? (
+          ) : isLoading && !data ? (
             // Conversation list is still loading — an empty pane here
             // (the list's own spinner carries the state). Prompting
             // "select a conversation" before there's anything to
