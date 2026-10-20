@@ -1,4 +1,5 @@
-import { xano, type XanoCall } from "@/lib/xano";
+import { xano, type SmsMediaItem, type XanoCall } from "@/lib/xano";
+import { inboundBody, smsMedia } from "@/lib/sms/media";
 import {
   buildSmsDirectory,
   contactMessageKeys,
@@ -70,6 +71,10 @@ export interface QuoTextInput {
   direction: "incoming" | "outgoing";
   text: string;
   hasMedia: boolean;
+  /** Photos and files on the text, as Quo reported them — a signed
+   *  share.quo.com URL per item. Stored on the row so the admin
+   *  proxy route can serve them; the signed URL is never shown. */
+  media: SmsMediaItem[];
   status: string;
   /** ISO timestamp. */
   createdAt: string;
@@ -81,14 +86,58 @@ export interface QuoTextInput {
   quoLink?: string | null;
 }
 
+/** Quo's media entries (`{url, type}`) as stored items. Quo leaves
+ *  `type` blank on some entries; the URL's extension then says what
+ *  it is, so the bubble still knows to render an image. */
+export function quoMediaItems(raw: unknown): SmsMediaItem[] {
+  if (!Array.isArray(raw)) return [];
+  const out: SmsMediaItem[] = [];
+  for (const entry of raw) {
+    const m = entry && typeof entry === "object" ? (entry as Record<string, unknown>) : null;
+    const url = typeof m?.url === "string" ? m.url.trim() : "";
+    if (!url) continue;
+    const type =
+      (typeof m?.type === "string" && m.type.trim()) || typeFromUrl(url);
+    const name = typeof m?.name === "string" && m.name.trim() ? m.name.trim() : undefined;
+    out.push(name ? { type, url, name } : { type, url });
+  }
+  return out;
+}
+
+const EXT_TYPES: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  heic: "image/heic",
+  mp4: "video/mp4",
+  mov: "video/quicktime",
+  pdf: "application/pdf",
+  vcf: "text/vcard",
+};
+
+function typeFromUrl(url: string): string {
+  let pathname = url;
+  try {
+    pathname = new URL(url).pathname;
+  } catch {
+    // Not absolute — use the string as-is.
+  }
+  const ext = pathname.split(".").pop()?.toLowerCase() ?? "";
+  return EXT_TYPES[ext] ?? "application/octet-stream";
+}
+
 export function textFromQuoMessage(m: QuoMessage): QuoTextInput {
+  const media = quoMediaItems(m.media);
   return {
     id: m.id,
     conversationId: m.conversationId ?? null,
     phoneNumberId: m.phoneNumberId ?? null,
     direction: m.direction,
     text: m.text ?? "",
-    hasMedia: (m.media?.length ?? 0) > 0,
+    hasMedia: media.length > 0 || (m.media?.length ?? 0) > 0,
+    media,
     status: m.status,
     createdAt: m.createdAt,
     from: m.from,
@@ -152,6 +201,12 @@ export async function upsertQuoText(
     if (input.conversationId && !row.quo_conversation_id) {
       patch.quo_conversation_id = input.conversationId;
     }
+    // A row logged before the media column existed (or by a webhook
+    // event that carried none) gets the attachments once a delivery
+    // names them. Never replaces what a row already has.
+    if (input.media.length > 0 && smsMedia(row).length === 0) {
+      patch.media = input.media;
+    }
     // A staff text logged before its sender resolved (the user list
     // was unavailable) gets the name once it does. Never renames a row
     // Apply wrote itself: an automated text is "Automated follow-up",
@@ -179,9 +234,9 @@ export async function upsertQuoText(
     if (adopted) return adopted;
   }
   const contact = ctx.directory.get(normPhone(counterparty)) ?? null;
-  const body =
-    input.text.trim() ||
-    (input.hasMedia ? "(sent a photo or file)" : "(no text)");
+  // The words when there are any; a bare photo or file is logged with
+  // the placeholder (the bubble shows the attachment instead of it).
+  const body = inboundBody(input.text, input.hasMedia || input.media.length > 0);
   const created = await xano.smsMessages.create({
     ...contactMessageKeys(contact),
     registration_students_id: null,
@@ -203,6 +258,7 @@ export async function upsertQuoText(
     provider: "quo",
     quo_message_id: input.id,
     quo_conversation_id: input.conversationId,
+    media: input.media.length > 0 ? input.media : null,
     created_at: Date.parse(input.createdAt) || Date.now(),
   } as Parameters<typeof xano.smsMessages.create>[0]);
 
@@ -235,6 +291,9 @@ const ADOPT_WINDOW_MS = 6 * 3_600_000;
  * time is it; the stamps are authoritative and repair a wrong guess.
  */
 async function adoptApplyRow(input: QuoTextInput): Promise<IngestOutcome | null> {
+  // Apply only ever sends words; a text with an attachment was sent
+  // from the Quo app and has no waiting row to claim.
+  if (input.media.length > 0) return null;
   const sentAt = Date.parse(input.createdAt) || Date.now();
   const recent = await xano.smsMessages.getSinceStrict(sentAt - ADOPT_WINDOW_MS);
   const to = normPhone(input.to);

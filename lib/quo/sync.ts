@@ -102,7 +102,8 @@ async function run({ since, allDetails = false }: QuoSyncOptions): Promise<QuoSy
     }
     for (const participant of participants) {
       const messages = await listMessages(ctx.mainLineId, participant, { createdAfter: sinceIso });
-      // Oldest first so ids follow send order.
+      // Oldest first so ids follow send order. `textFromQuoMessage`
+      // carries the attachments (`m.media`) along with the words.
       for (const m of [...messages].reverse()) {
         count(result.texts, await upsertQuoText(textFromQuoMessage(m), ctx));
       }

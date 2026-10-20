@@ -1609,6 +1609,25 @@ export interface XanoSmsMessage {
    *  webhook and the sync dedupe on. Null for Twilio rows. */
   quo_message_id?: string | null;
   quo_conversation_id?: string | null;
+  /** Photos and files attached to the text (MMS). Each item is the
+   *  upstream content type and the provider's own URL for the bytes
+   *  (a signed share.quo.com link for Quo rows, a Twilio media URL
+   *  for Twilio rows) — never served to the browser directly: the
+   *  admin proxy route `/api/admin/messages/[id]/media/[index]`
+   *  re-fetches it server-side. `json` column added 2026-10-20;
+   *  rows from before then read as null, and Xano may echo an
+   *  empty string for a row written without it — read it through
+   *  `smsMedia()` in `lib/sms/media.ts`, never as an array directly. */
+  media?: SmsMediaItem[] | null;
+}
+
+/** One attachment on an `sms_messages` row — see `XanoSmsMessage.media`. */
+export interface SmsMediaItem {
+  /** MIME type as the provider reported it ("image/jpeg", …). */
+  type: string;
+  url: string;
+  /** Original filename when the provider gives one. */
+  name?: string;
 }
 
 export interface XanoInquiry {
@@ -6076,6 +6095,21 @@ export const xano = {
       return items
         .filter((m) => m.quo_message_id === id)
         .sort((a, b) => a.id - b.id);
+    },
+
+    /** One row by id, or null when it doesn't exist — the media proxy
+     *  route reads the row it is asked to serve. */
+    async getById(id: number): Promise<XanoSmsMessage | null> {
+      try {
+        const res = await xanoFetch(`${getBaseUrl()}/sms_messages/${id}`, {
+          cache: "no-store",
+        });
+        if (!res.ok) return null;
+        const row: XanoSmsMessage = await res.json();
+        return row && typeof row === "object" && row.id === id ? row : null;
+      } catch {
+        return null;
+      }
     },
 
     /** Look up a logged message by its Twilio SID — the status-callback

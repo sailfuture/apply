@@ -9,7 +9,9 @@ import {
 } from "@/lib/sms/contacts";
 import { answerStaffText, forwardReplyToMainLine } from "@/lib/sms/forward";
 import { isSchoolNumber } from "@/lib/school-phones";
+import { inboundBody } from "@/lib/sms/media";
 import { readTwilioWebhook, twiml } from "@/lib/twilio-webhook";
+import type { SmsMediaItem } from "@/lib/xano";
 
 /**
  * Twilio inbound webhook — one endpoint for two POST shapes Twilio
@@ -39,11 +41,17 @@ export async function POST(req: NextRequest) {
   const messageSid = params.MessageSid || params.SmsSid || "";
   const messageStatus = params.MessageStatus || params.SmsStatus || "";
   const from = params.From ?? "";
+  // MMS attachments: Twilio numbers them MediaUrl0..N-1 with a matching
+  // MediaContentType. The URL needs the account's basic auth to fetch,
+  // which the admin media proxy route supplies server-side.
+  const media = twilioMedia(params);
   // A photo with no words arrives with an empty Body — give it one, so
   // the log, the staff email and the Main Line copy all show something.
   const body =
     (params.Body ?? "").trim() ||
-    (Number(params.NumMedia || 0) > 0 ? "(sent a photo or file)" : "");
+    (media.length > 0 || Number(params.NumMedia || 0) > 0
+      ? inboundBody("", true)
+      : "");
 
   // --- Status callback -----------------------------------------------
   // No inbound body, but a delivery status for a SID we sent. Update the
@@ -156,7 +164,7 @@ export async function POST(req: NextRequest) {
           // echo-guard compares what comes back. Raw carrier text
           // routinely ends in a newline; storing it verbatim made the
           // guard false-positive and drop the row (Aug 2026 incident).
-          body: body.trim() || "(no text)",
+          body: inboundBody(body, media.length > 0),
           status: "received",
           twilio_message_sid: messageSid || null,
           template: null,
@@ -164,6 +172,7 @@ export async function POST(req: NextRequest) {
           author_email: null,
           author_name: null,
           segments: params.NumSegments ? Number(params.NumSegments) : null,
+          media: media.length > 0 ? media : null,
         })
         .catch((err) =>
           console.error("[twilio webhook] inbound log failed:", err)
@@ -234,6 +243,21 @@ export async function POST(req: NextRequest) {
   }
 
   return twiml();
+}
+
+/** The MediaUrlN / MediaContentTypeN pairs on an inbound MMS, in order. */
+function twilioMedia(params: Record<string, string | undefined>): SmsMediaItem[] {
+  const count = Math.max(0, Math.min(10, Number(params.NumMedia || 0) || 0));
+  const out: SmsMediaItem[] = [];
+  for (let i = 0; i < count; i++) {
+    const url = (params[`MediaUrl${i}`] ?? "").trim();
+    if (!url) continue;
+    out.push({
+      type: (params[`MediaContentType${i}`] ?? "").trim() || "application/octet-stream",
+      url,
+    });
+  }
+  return out;
 }
 
 /** "A" / "A and B" / "A, B, and C"; null for an empty list. */

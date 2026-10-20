@@ -75,6 +75,8 @@ import type {
   XanoTour,
   XanoCall,
 } from "@/lib/xano";
+import { MessageMedia } from "@/components/admin/message-media";
+import { isMediaOnlyBody, smsMedia } from "@/lib/sms/media";
 
 const fetcher = async (url: string): Promise<XanoAdminNote[]> => {
   const res = await fetch(url);
@@ -1246,6 +1248,8 @@ function SmsBubble({
   const failed = outbound && isFailedStatus(msg.status);
   const error = failed ? describeSmsError(msg.error_code) : null;
   const fromLabel = formatUSPhone(msg.from_number) || msg.from_number;
+  // A bare photo's placeholder body gives way to the photo.
+  const showBubble = !(smsMedia(msg).length > 0 && isMediaOnlyBody(msg.body));
   return (
     <Message align={outbound ? "end" : "start"}>
       <MessageContent>
@@ -1266,15 +1270,18 @@ function SmsBubble({
             ) : null}
           </MessageHeader>
         ) : null}
-        <Bubble
-          variant={
-            outbound ? (failed ? "destructive" : "default") : "secondary"
-          }
-        >
-          <BubbleContent className="whitespace-pre-wrap">
-            {msg.body}
-          </BubbleContent>
-        </Bubble>
+        {showBubble ? (
+          <Bubble
+            variant={
+              outbound ? (failed ? "destructive" : "default") : "secondary"
+            }
+          >
+            <BubbleContent className="whitespace-pre-wrap">
+              {msg.body}
+            </BubbleContent>
+          </Bubble>
+        ) : null}
+        <MessageMedia message={msg} align={outbound ? "end" : "start"} />
         <MessageFooter title={new Date(msg.created_at).toLocaleString()}>
           {outbound ? (
             <span className={cn(failed && "text-destructive")}>
