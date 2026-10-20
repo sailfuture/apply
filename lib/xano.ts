@@ -7520,6 +7520,30 @@ export const xano = {
       return oneRowPerCall(rows);
     },
 
+    /** Calls that started at or after `sinceMs`, newest first — the
+     *  needs-reply badge's window. The list endpoint's
+     *  `started_at_from` input does the cut server-side (verified
+     *  2026-10-20); the client-side filter is the usual guard. */
+    async getSince(sinceMs: number): Promise<XanoCall[]> {
+      try {
+        const res = await xanoFetch(
+          `${getBaseUrl()}/registration_calls?started_at_from=${Math.max(0, Math.floor(sinceMs))}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) return [];
+        const rows: XanoCall[] = await res.json();
+        return Array.isArray(rows)
+          ? oneRowPerCall(rows.filter((c) => (c.started_at || c.created_at) >= sinceMs)).sort(
+              (a, b) =>
+                (b.started_at || b.created_at) - (a.started_at || a.created_at) ||
+                b.id - a.id
+            )
+          : [];
+      } catch {
+        return [];
+      }
+    },
+
     /** One contact's calls, oldest first. Client-side filter stays
      *  load-bearing (an unwired input returns the whole table). */
     async getByContact(

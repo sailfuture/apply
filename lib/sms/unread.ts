@@ -8,9 +8,13 @@
  * update without the definition drifting from the server's.
  */
 
-/** One conversation whose newest message is inbound — i.e. a contact
- *  texted us and nobody has replied. */
+/** One conversation waiting on us: its newest message is an inbound
+ *  text nobody has replied to, or its newest call was missed or went
+ *  to voicemail. */
 export interface UnreadConversation {
+  /** What is waiting — a text, or a call (missed / voicemail). Absent
+   *  on payloads from before calls counted; read as "text". */
+  kind?: "text" | "call";
   /** `${contactType}:${contactId}` — the key every read-state map is
    *  keyed by. */
   key: string;

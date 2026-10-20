@@ -10,7 +10,7 @@ import {
 } from "@/lib/xano";
 import { sendSms } from "@/lib/sms/send";
 import {
-  adhocIdFromPhone,
+  callContactRef,
   counterpartyPhone,
   getContactRecipient,
   messageContactRef as messageContact,
@@ -21,7 +21,7 @@ import {
 } from "@/lib/sms/contacts";
 import { resolveMainLine } from "@/lib/quo";
 import { threadQuoUrl } from "@/lib/quo/links";
-import { callDuration, callLabel, callGist } from "@/lib/calls";
+import { callNeedsReply, callPreview } from "@/lib/calls";
 import { computeFamilyStageSets } from "@/lib/sms/stages";
 import { getFacultyByPhone } from "@/lib/sms/faculty";
 import { bumpLeadReachOut } from "@/lib/leads";
@@ -402,15 +402,21 @@ async function handleGET(req: NextRequest) {
           existing.lastCall = call;
         }
       }
-      // Needs-reply stays a question about TEXTS (same rule as the nav
-      // badge's unread endpoint, which never reads calls) — a missed
-      // call shows in the preview but doesn't light the dot.
+      // Needs-reply looks at the newest thing that counts — an inbound
+      // text, a non-follow-up outbound text, or a call — and lights
+      // when it's an unanswered inbound text, a missed call or a
+      // voicemail. Same rule as the nav badge's unread endpoint.
       const conversations: SmsConversation[] = [...byContact.values()]
         .map(({ type, id, last, lastForReply, lastCall, count }) => {
           const callAt = lastCall
             ? lastCall.started_at || lastCall.created_at
             : 0;
           const callIsNewest = !!lastCall && (!last || callAt > last.created_at);
+          const replyAt = lastForReply?.created_at ?? 0;
+          const needsReply =
+            lastCall && callAt > replyAt
+              ? callNeedsReply(lastCall)
+              : lastForReply?.direction === "inbound";
           return {
           contactType: type,
           contactId: id,
@@ -447,7 +453,7 @@ async function handleGET(req: NextRequest) {
             last.template.startsWith("group"),
           lastIsCall: callIsNewest,
           messageCount: count,
-          needsReply: lastForReply?.direction === "inbound",
+          needsReply,
           searchText: searchFor(type, id),
           enrolledFamilyId: enrolledFamilyFor(type, id),
           };
@@ -514,45 +520,6 @@ async function handleGET(req: NextRequest) {
   } catch (err) {
     return handleAdminError(err);
   }
-}
-
-/** Which contact a call belongs to — the calls table carries the same
- *  five FK columns as `sms_messages`, in the same precedence, and a
- *  call with none threads by the caller's number like an ad-hoc text. */
-function callContactRef(
-  c: XanoCall
-): { type: SmsContactType; id: number } | null {
-  if (c.registration_families_id) {
-    return { type: "family", id: c.registration_families_id };
-  }
-  if (c.registration_inquiry_id) {
-    return { type: "inquiry", id: c.registration_inquiry_id };
-  }
-  if (c.registration_summer_camp_id) {
-    return { type: "camp", id: c.registration_summer_camp_id };
-  }
-  if (c.website_liability_waiver_id) {
-    return { type: "visit", id: c.website_liability_waiver_id };
-  }
-  if (c.tasco_summer_visit_id) {
-    return { type: "tasco", id: c.tasco_summer_visit_id };
-  }
-  const adhocId = adhocIdFromPhone(c.counterparty);
-  return adhocId !== null ? { type: "adhoc", id: adhocId } : null;
-}
-
-/** One line for the conversation list: "Missed call", "Incoming
- *  call · 4 min", "Voicemail: <what they said>". */
-function callPreview(c: XanoCall): string {
-  const label = callLabel(c);
-  if (label === "Voicemail") {
-    const gist = callGist(c);
-    return gist ? `Voicemail: ${gist}` : "Voicemail";
-  }
-  const duration = callDuration(c.duration_seconds);
-  const gist = callGist(c);
-  const head = duration ? `${label} · ${duration}` : label;
-  return gist ? `${head} · ${gist}` : head;
 }
 
 export async function POST(req: NextRequest) {

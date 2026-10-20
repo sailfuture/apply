@@ -50,6 +50,29 @@ export function callGist(call: Pick<XanoCall, "summary" | "voicemail_transcript"
   return (call.voicemail_transcript ?? "").trim();
 }
 
+/** A call that is waiting on us: someone rang the Main Line and nobody
+ *  picked up, or they left a voicemail. An answered call, or one we
+ *  placed, is handled — same standing as an outbound text. */
+export function callNeedsReply(
+  call: Pick<XanoCall, "direction" | "status" | "has_voicemail"> & { answered_at?: number }
+): boolean {
+  if (call.direction === "outgoing") return false;
+  const label = callLabel(call);
+  return label === "Missed call" || label === "Voicemail";
+}
+
+/** One line for lists and notifications: "Missed call", "Incoming
+ *  call · 4 min", "Voicemail: <what they said>" — with Quo's summary
+ *  gist after a dot when there is one. */
+export function callPreview(call: XanoCall): string {
+  const label = callLabel(call);
+  const gist = callGist(call);
+  if (label === "Voicemail") return gist ? `Voicemail: ${gist}` : "Voicemail";
+  const duration = callDuration(call.duration_seconds);
+  const head = duration ? `${label} · ${duration}` : label;
+  return gist ? `${head} · ${gist}` : head;
+}
+
 export function callHasAudio(call: Pick<XanoCall, "recording_id" | "has_voicemail">): boolean {
   return Boolean(call.recording_id) || Boolean(call.has_voicemail);
 }

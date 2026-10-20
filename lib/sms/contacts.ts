@@ -1,5 +1,6 @@
 import {
   xano,
+  type XanoCall,
   type XanoFamily,
   type XanoInquiry,
   type XanoParent,
@@ -459,6 +460,30 @@ export function counterpartyPhone(m: XanoSmsMessage): string {
 export function messageContactRef(
   m: XanoSmsMessage
 ): { type: SmsContactType; id: number } | null {
+  return contactRefFromColumns(m, counterpartyPhone(m));
+}
+
+/** Which contact a phone call belongs to — the calls table carries
+ *  the same five FK columns as `sms_messages`, in the same precedence,
+ *  and a call with none threads by the caller's number like an ad-hoc
+ *  text. */
+export function callContactRef(
+  c: XanoCall
+): { type: SmsContactType; id: number } | null {
+  return contactRefFromColumns(c, normPhone(c.counterparty));
+}
+
+function contactRefFromColumns(
+  m: Pick<
+    XanoSmsMessage,
+    | "registration_families_id"
+    | "registration_inquiry_id"
+    | "registration_summer_camp_id"
+    | "website_liability_waiver_id"
+    | "tasco_summer_visit_id"
+  >,
+  counterparty: string
+): { type: SmsContactType; id: number } | null {
   if (m.registration_families_id) {
     return { type: "family", id: m.registration_families_id };
   }
@@ -474,7 +499,7 @@ export function messageContactRef(
   if (m.tasco_summer_visit_id) {
     return { type: "tasco", id: m.tasco_summer_visit_id };
   }
-  const adhocId = adhocIdFromPhone(counterpartyPhone(m));
+  const adhocId = adhocIdFromPhone(counterparty);
   if (adhocId !== null) {
     return { type: "adhoc", id: adhocId };
   }

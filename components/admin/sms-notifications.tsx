@@ -146,13 +146,18 @@ export function SmsNotificationWatcher() {
       stamps.push({ key: c.key, at: c.lastAt });
       if (now - c.lastAt > MAX_AGE_MS) continue;
       try {
-        const n = new Notification(`New text from ${c.name}`, {
-          body: c.preview || "Open the inbox to read it.",
-          // Tag by conversation so several texts from one parent
-          // collapse into a single notification instead of stacking.
-          tag: `sms-${c.key}`,
-          icon: "/favicon.ico",
-        });
+        const n = new Notification(
+          c.kind === "call"
+            ? `${c.preview.startsWith("Voicemail") ? "Voicemail" : "Missed call"} from ${c.name}`
+            : `New text from ${c.name}`,
+          {
+            body: c.preview || "Open the inbox to read it.",
+            // Tag by conversation so several texts from one parent
+            // collapse into a single notification instead of stacking.
+            tag: `sms-${c.key}`,
+            icon: "/favicon.ico",
+          }
+        );
         n.onclick = () => {
           window.focus();
           // Deep-link the exact thread — the inbox's cross-page

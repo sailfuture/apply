@@ -3,10 +3,13 @@ import { withServerTiming } from "@/lib/server-timing";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
 import {
+  callContactRef,
   counterpartyPhone,
   messageContactRef,
+  normPhone,
   phoneFromAdhocId,
 } from "@/lib/sms/contacts";
+import { callNeedsReply, callPreview } from "@/lib/calls";
 import { formatUSPhone } from "@/lib/phone";
 import { getSmsReadState } from "@/lib/sms/read-state";
 import { countUnread } from "@/lib/sms/unread";
@@ -51,7 +54,10 @@ const PREVIEW_CHARS = 120;
  * admin page and polls, while the feed additionally loads families,
  * inquiries, camp rows, waivers, TASCO rows and (with `?yearId=`) the
  * whole application/progress set just to label conversations. This one
- * touches `sms_messages` only — no names, no stages.
+ * touches `sms_messages` and `registration_calls` only — no names, no
+ * stages. A missed call or a voicemail counts the same as an
+ * unanswered inbound text (user decision, 2026-10-20); an answered
+ * call, or one we placed, settles the thread like an outbound text.
  *
  * Returns BOTH halves of "unread" in one payload: the threads whose
  * latest message is inbound, and this admin's own read state (which
@@ -68,10 +74,29 @@ async function handleGET() {
     // thread's latest message. Only the recent window is read — see
     // `FEED_LOOKBACK_MS`. The read state rides along in the same
     // payload — see `UnreadMessagesResponse.viewed`.
-    const [messages, readState] = await Promise.all([
-      xano.smsMessages.getSince(Date.now() - FEED_LOOKBACK_MS),
+    const since = Date.now() - FEED_LOOKBACK_MS;
+    const [messages, calls, readState] = await Promise.all([
+      xano.smsMessages.getSince(since),
+      xano.calls.getSince(since),
       getSmsReadState(),
     ]);
+    // Texts and calls as one newest-first stream of "things that
+    // count", so the first event seen per contact decides the thread.
+    // An automated follow-up isn't an answer: it's left out, so a
+    // reminder going out can't hide a question.
+    const events = [
+      ...messages
+        .filter(
+          (m) => !(m.direction === "outbound" && isFollowUpTemplate(m.template))
+        )
+        .map((m) => ({ at: m.created_at, contact: messageContactRef(m), msg: m, call: null })),
+      ...calls.map((c) => ({
+        at: c.started_at || c.created_at,
+        contact: callContactRef(c),
+        msg: null,
+        call: c,
+      })),
+    ].sort((a, b) => b.at - a.at);
     const seen = new Set<string>();
     const pending: Array<{
       key: string;
@@ -80,26 +105,32 @@ async function handleGET() {
       lastAt: number;
       preview: string;
       phone: string;
+      kind: "text" | "call";
     }> = [];
-    for (const m of messages) {
-      // An automated follow-up isn't an answer: look past it to the
-      // newest real message, so a reminder can't hide a question.
-      if (m.direction === "outbound" && isFollowUpTemplate(m.template)) {
-        continue;
-      }
-      const contact = messageContactRef(m);
-      if (!contact) continue;
-      const key = `${contact.type}:${contact.id}`;
+    for (const e of events) {
+      if (!e.contact) continue;
+      const key = `${e.contact.type}:${e.contact.id}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      if (m.direction === "inbound") {
+      if (e.msg && e.msg.direction === "inbound") {
         pending.push({
           key,
-          type: contact.type,
-          id: contact.id,
-          lastAt: m.created_at,
-          preview: (m.body ?? "").trim().slice(0, PREVIEW_CHARS),
-          phone: counterpartyPhone(m),
+          type: e.contact.type,
+          id: e.contact.id,
+          lastAt: e.at,
+          preview: (e.msg.body ?? "").trim().slice(0, PREVIEW_CHARS),
+          phone: counterpartyPhone(e.msg),
+          kind: "text",
+        });
+      } else if (e.call && callNeedsReply(e.call)) {
+        pending.push({
+          key,
+          type: e.contact.type,
+          id: e.contact.id,
+          lastAt: e.at,
+          preview: callPreview(e.call).slice(0, PREVIEW_CHARS),
+          phone: normPhone(e.call.counterparty),
+          kind: "call",
         });
       }
     }
@@ -163,6 +194,7 @@ async function handleGET() {
     const cutoff = Date.now() - BADGE_WINDOW_MS;
     const conversations: UnreadConversation[] = pending.map((p, i) => ({
       key: p.key,
+      kind: p.kind,
       lastAt: p.lastAt,
       name:
         names[i] ?? (formatUSPhone(p.phone) || p.phone || "Unknown number"),
