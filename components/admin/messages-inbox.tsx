@@ -6,6 +6,7 @@ import useSWR from "swr";
 import { toast } from "sonner";
 import {
   CheckCheck,
+  ExternalLink,
   Loader2,
   MessageSquareText,
   Search,
@@ -23,7 +24,12 @@ import type {
 import { cn } from "@/lib/utils";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { formatUSPhone } from "@/lib/phone";
-import { FamilyMessageThread } from "@/components/admin/family-message-thread";
+import {
+  FamilyMessageThread,
+  contactMessagesKey,
+  messagesFetcher,
+  type MessagesResponse,
+} from "@/components/admin/family-message-thread";
 import { GroupMessageDialog } from "@/components/admin/group-message-dialog";
 import { NewMessageDialog } from "@/components/admin/new-message-dialog";
 import { SmsNotificationToggle } from "@/components/admin/sms-notifications";
@@ -376,6 +382,15 @@ export function MessagesInbox({ mode }: { mode: InboxMode }) {
     }, 0);
     return () => clearTimeout(t);
   }, [openParam, conversations, mode, router, yearId]);
+  // The open thread's payload — same SWR key as the thread component,
+  // so this is a cache read, not a second request. Only the Quo link
+  // is used here, for the header's "Open in Quo" button.
+  const { data: activeThread } = useSWR<MessagesResponse>(
+    selected ? contactMessagesKey(selected.type, selected.id) : null,
+    messagesFetcher
+  );
+  const quoConversationUrl = activeThread?.quoConversationUrl ?? null;
+
   const active = selected
     ? (conversations.find(
         (c) =>
@@ -843,6 +858,27 @@ export function MessagesInbox({ mode }: { mode: InboxMode }) {
                   />
                 </p>
                 <div className="flex shrink-0 items-center gap-2">
+                  {/* The same conversation in Quo's web app — every
+                      call and text on the Main Line, with recordings
+                      — in a new tab. Only once the thread has
+                      something that came through Quo. */}
+                  {quoConversationUrl ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="bg-white"
+                      asChild
+                    >
+                      <a
+                        href={quoConversationUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        <ExternalLink className="size-3.5 mr-1.5" />
+                        Open in Quo
+                      </a>
+                    </Button>
+                  ) : null}
                   {/* Open the contact's profile IN PLACE — a family
                       details sheet, or the lead's full triage sheet —
                       no page navigation. Ad-hoc numbers have no

@@ -5,6 +5,7 @@ import {
   xano,
   LEAD_NOTE_SOURCES,
   type LeadNoteSource,
+  type XanoCall,
   type XanoSmsMessage,
 } from "@/lib/xano";
 import { sendSms } from "@/lib/sms/send";
@@ -12,10 +13,13 @@ import {
   counterpartyPhone,
   getContactRecipient,
   messageContactRef as messageContact,
+  normPhone,
   phoneFromAdhocId,
   resolvePrimaryParent,
   type SmsContactType,
 } from "@/lib/sms/contacts";
+import { resolveMainLine } from "@/lib/quo";
+import { threadQuoUrl } from "@/lib/quo/links";
 import { computeFamilyStageSets } from "@/lib/sms/stages";
 import { getFacultyByPhone } from "@/lib/sms/faculty";
 import { bumpLeadReachOut } from "@/lib/leads";
@@ -103,8 +107,8 @@ function parseContactParams(req: NextRequest): {
  * Admin SMS messages.
  *
  *  - `GET ?contactType=&contactId=` (or legacy `?familyId=`) — one
- *    contact's text thread + the recipient summary (who it goes to,
- *    opt-out state).
+ *    contact's text thread + their Main Line calls + the recipient
+ *    summary (who it goes to, opt-out state) + the thread's Quo link.
  *  - `GET` (no params) — the global inbox feed: one conversation per
  *    contact across families, inquiries, and summer-camp parents.
  *  - `POST { contactType?, contactId?, familyId?, body }` — send a
@@ -407,11 +411,46 @@ async function handleGET(req: NextRequest) {
               .sort((a, b) => a.created_at - b.created_at);
           })
         : xano.smsMessages.getByContact(contact.type, contact.id);
-    const [messages, recipient] = await Promise.all([
+    // Phone calls on the Main Line with this contact — they sit in the
+    // thread between the texts. Ad-hoc numbers have no FK column on
+    // the calls table either, so match on the counterparty number.
+    const callsPromise: Promise<XanoCall[]> =
+      contact.type === "adhoc"
+        ? xano.calls.getAll().then((all) => {
+            const phone = phoneFromAdhocId(contact.id);
+            return all
+              .filter(
+                (c) =>
+                  !c.registration_families_id &&
+                  !c.registration_inquiry_id &&
+                  !c.registration_summer_camp_id &&
+                  !c.website_liability_waiver_id &&
+                  !c.tasco_summer_visit_id &&
+                  normPhone(c.counterparty) === phone
+              )
+              .sort((a, b) => a.started_at - b.started_at || a.id - b.id);
+          })
+        : xano.calls.getByContact(contact.type, contact.id);
+    const [messages, recipient, calls, lineId] = await Promise.all([
       messagesPromise,
       getContactRecipient(contact.type, contact.id),
+      callsPromise,
+      // The Main Line's Quo id, for "Open in Quo" links. Best-effort:
+      // without the API key (or Quo down) the stored links still
+      // carry it, and a thread with neither simply has no button.
+      process.env.QUO_API_KEY
+        ? resolveMainLine()
+            .then((n) => n.id)
+            .catch(() => null)
+        : Promise.resolve(null),
     ]);
-    return NextResponse.json({ messages, recipient });
+    const quoConversationUrl = threadQuoUrl(messages, calls, lineId);
+    return NextResponse.json({
+      messages,
+      recipient,
+      calls,
+      quoConversationUrl,
+    });
   } catch (err) {
     return handleAdminError(err);
   }

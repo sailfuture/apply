@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import useSWR from "swr";
-import { MessageSquareText } from "lucide-react";
+import { ExternalLink, MessageSquareText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
@@ -51,6 +51,7 @@ export function FamilyMessagesSheet({
 
   const totalMessages = data?.messages.length ?? 0;
   const recipient = data?.recipient ?? null;
+  const quoConversationUrl = data?.quoConversationUrl ?? null;
   const subtitle = recipient
     ? recipient.phone
       ? `To ${recipient.name || "family"} · ${formatUSPhone(recipient.phone)}`
@@ -100,9 +101,23 @@ export function FamilyMessagesSheet({
           side="right"
           className="w-full sm:max-w-md flex flex-col p-0 gap-0"
         >
-          <SheetHeader className="border-b px-6 py-4">
-            <SheetTitle>Text messages</SheetTitle>
+          <SheetHeader className="border-b px-6 py-4 pr-12">
+            <SheetTitle>Messages &amp; calls</SheetTitle>
             <SheetDescription>{subtitle}</SheetDescription>
+            {/* Same thread in Quo's web app (recordings, every call
+                and text on the Main Line) — only once something on
+                it came through Quo. */}
+            {quoConversationUrl ? (
+              <a
+                href={quoConversationUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex w-fit items-center gap-1 text-xs font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground"
+              >
+                <ExternalLink className="size-3" aria-hidden="true" />
+                Open in Quo
+              </a>
+            ) : null}
           </SheetHeader>
           <FamilyMessageThread
             className="flex-1 min-h-0"

@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import useSWR from "swr";
 import { toast } from "sonner";
 import { Send, Loader2, Ban, RotateCw, TriangleAlert } from "lucide-react";
+import { CallMarker } from "@/components/admin/call-marker";
 import { describeSmsError, isFailedStatus } from "@/lib/sms/errors";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -24,7 +25,7 @@ import {
   MessageScrollerViewport,
 } from "@/components/ui/message-scroller";
 import { cn } from "@/lib/utils";
-import type { XanoSmsMessage } from "@/lib/xano";
+import type { XanoCall, XanoSmsMessage } from "@/lib/xano";
 
 /** Recipient summary the messages API returns alongside the thread —
  *  kept in sync with `FamilyRecipient` in `lib/sms/send.ts`. */
@@ -39,6 +40,13 @@ export interface MessageRecipient {
 export interface MessagesResponse {
   messages: XanoSmsMessage[];
   recipient: MessageRecipient | null;
+  /** This contact's phone calls on the Main Line (mirrored from Quo),
+   *  oldest first — rendered in the thread between the texts. Absent
+   *  on responses from before calls joined the thread. */
+  calls?: XanoCall[];
+  /** Deep link to this contact's conversation in the Quo web app —
+   *  null until something on the thread came through Quo. */
+  quoConversationUrl?: string | null;
 }
 
 export const messagesFetcher = async (
@@ -75,10 +83,11 @@ export function messagesKey(familyId: number): string {
 
 /**
  * The two-way SMS thread + composer for one contact — a family, an
- * inquiry, or a summer-camp parent. Self-fetches via SWR (keyed on the
- * contact) and fills its parent's height — so it drops into both the
- * per-family drawer (`FamilyMessagesSheet`) and the global inbox's
- * right pane. The parent supplies a height-constrained flex container;
+ * inquiry, or a summer-camp parent — with their Main Line phone calls
+ * (from Quo) interleaved by time as compact markers. Self-fetches via
+ * SWR (keyed on the contact) and fills its parent's height — so it
+ * drops into both the per-family drawer (`FamilyMessagesSheet`) and
+ * the global inbox's right pane. The parent supplies a height-constrained flex container;
  * this renders `[scrollable thread][pinned composer]`.
  *
  * Pass either `contact` (any type) or the legacy `familyId` prop.
@@ -121,6 +130,8 @@ export function FamilyMessageThread({
   );
 
   const messages = useMemo(() => data?.messages ?? [], [data]);
+  const calls = useMemo(() => data?.calls ?? [], [data]);
+  const quoConversationUrl = data?.quoConversationUrl ?? null;
   const recipient = data?.recipient ?? null;
 
   const [body, setBody] = useState("");
@@ -265,7 +276,10 @@ export function FamilyMessageThread({
     }
   }
 
-  const items = useMemo(() => buildThreadItems(messages), [messages]);
+  const items = useMemo(
+    () => buildThreadItems(messages, calls),
+    [messages, calls]
+  );
 
   return (
     <div className={cn("flex min-h-0 flex-col", className)}>
@@ -277,11 +291,11 @@ export function FamilyMessageThread({
               Loading message history…
             </p>
           </div>
-        ) : messages.length === 0 ? (
+        ) : messages.length === 0 && calls.length === 0 ? (
           <div className="flex h-full items-center justify-center px-8 text-center">
             <p className="text-sm text-muted-foreground">
-              No texts yet. Send the first message below — it&rsquo;ll
-              appear here as a thread.
+              No texts or calls yet. Send the first message below —
+              it&rsquo;ll appear here as a thread.
             </p>
           </div>
         ) : (
@@ -295,6 +309,13 @@ export function FamilyMessageThread({
                         <Marker variant="separator">
                           <MarkerContent>{item.label}</MarkerContent>
                         </Marker>
+                      </MessageScrollerItem>
+                    ) : item.type === "call" ? (
+                      <MessageScrollerItem key={item.id} messageId={item.id}>
+                        <CallMarker
+                          call={item.call}
+                          threadQuoUrl={quoConversationUrl}
+                        />
                       </MessageScrollerItem>
                     ) : (
                       <MessageScrollerItem
@@ -530,6 +551,7 @@ function MessageRow({
 
 type ThreadItem =
   | { type: "separator"; id: string; label: string }
+  | { type: "call"; id: string; call: XanoCall }
   | {
       type: "message";
       id: string;
@@ -551,28 +573,54 @@ function senderSignature(m: XanoSmsMessage): string {
   ].join("|");
 }
 
-/** Flatten the message list into render items, inserting a day
- *  separator whenever the calendar day changes. */
-function buildThreadItems(messages: XanoSmsMessage[]): ThreadItem[] {
+/** Flatten texts and calls into one time-ordered list of render
+ *  items, inserting a day separator whenever the calendar day changes.
+ *  A call sits between the bubbles as a marker and restarts the
+ *  sender run, so the next text after it names its sender again. */
+function buildThreadItems(
+  messages: XanoSmsMessage[],
+  calls: XanoCall[]
+): ThreadItem[] {
+  const entries: Array<
+    | { at: number; kind: "message"; msg: XanoSmsMessage }
+    | { at: number; kind: "call"; call: XanoCall }
+  > = [
+    ...messages.map((msg) => ({
+      at: msg.created_at,
+      kind: "message" as const,
+      msg,
+    })),
+    ...calls.map((call) => ({
+      at: call.started_at || call.created_at,
+      kind: "call" as const,
+      call,
+    })),
+  ].sort((a, b) => a.at - b.at);
+
   const out: ThreadItem[] = [];
   let lastDay = "";
   let prevSig: string | null = null;
-  for (const m of messages) {
-    const key = dayKey(m.created_at);
+  for (const e of entries) {
+    const key = dayKey(e.at);
     if (key !== lastDay) {
       out.push({
         type: "separator",
         id: `sep-${key}`,
-        label: dayLabel(m.created_at),
+        label: dayLabel(e.at),
       });
       lastDay = key;
       prevSig = null; // a day break restarts sender runs
     }
-    const sig = senderSignature(m);
+    if (e.kind === "call") {
+      out.push({ type: "call", id: `call-${e.call.id}`, call: e.call });
+      prevSig = null;
+      continue;
+    }
+    const sig = senderSignature(e.msg);
     out.push({
       type: "message",
-      id: `msg-${m.id}`,
-      msg: m,
+      id: `msg-${e.msg.id}`,
+      msg: e.msg,
       showHeader: sig !== prevSig,
     });
     prevSig = sig;

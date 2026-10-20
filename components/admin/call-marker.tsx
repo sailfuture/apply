@@ -1,9 +1,18 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronDown, Phone, PhoneIncoming, PhoneMissed, PhoneOutgoing, Voicemail } from "lucide-react";
+import {
+  ChevronDown,
+  ExternalLink,
+  Phone,
+  PhoneIncoming,
+  PhoneMissed,
+  PhoneOutgoing,
+  Voicemail,
+} from "lucide-react";
 import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/marker";
 import { callDuration, callHasAudio, callLabel, stringList } from "@/lib/calls";
+import { callQuoUrl } from "@/lib/quo/links";
 import { cn } from "@/lib/utils";
 import type { XanoCall } from "@/lib/xano";
 
@@ -12,10 +21,22 @@ import type { XanoCall } from "@/lib/xano";
  * · answered by Jane · 2:14 PM"), Quo's summary and next steps under
  * it, a voicemail's transcript, and a Play link that opens the
  * recording through the admin route (Quo's audio links expire, so
- * nothing is copied). Long transcripts stay behind a toggle.
+ * nothing is copied). Long transcripts stay behind a toggle. "Open in
+ * Quo" lands on the call inside Quo's own conversation view — or, for
+ * calls the sync imported without a link, on the contact's
+ * conversation (`threadQuoUrl`), which in Quo is the same thread.
  */
-export function CallMarker({ call }: { call: XanoCall }) {
+export function CallMarker({
+  call,
+  threadQuoUrl = null,
+}: {
+  call: XanoCall;
+  /** The contact's Quo conversation link, when the host knows it —
+   *  the fallback target for calls that carry no link of their own. */
+  threadQuoUrl?: string | null;
+}) {
   const [showTranscript, setShowTranscript] = useState(false);
+  const quoUrl = callQuoUrl(call, threadQuoUrl);
   const label = callLabel(call);
   const missed = label === "Missed call" || call.status === "no-answer";
   const Icon =
@@ -65,6 +86,21 @@ export function CallMarker({ call }: { call: XanoCall }) {
                 className="underline underline-offset-2 hover:text-foreground"
               >
                 Play
+              </a>
+            </>
+          ) : null}
+          {quoUrl ? (
+            <>
+              {" · "}
+              <a
+                href={quoUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-0.5 underline underline-offset-2 hover:text-foreground"
+                title="Open this call in Quo"
+              >
+                Open in Quo
+                <ExternalLink className="size-3" aria-hidden="true" />
               </a>
             </>
           ) : null}
