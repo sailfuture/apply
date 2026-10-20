@@ -1105,9 +1105,10 @@ export function GroupMessageDialog({
                 </span>
               </div>
             </div>
-          </div>
 
-          <DialogFooter className="shrink-0 sm:justify-between">
+            {/* When it goes out — under the message rather than in the
+                footer, same as the event reminder dialog, so the picker
+                has a row of its own and never crowds the buttons. */}
             <SendLaterField
               enabled={sendLater}
               onEnabledChange={(v) => {
@@ -1119,36 +1120,40 @@ export function GroupMessageDialog({
               disabled={sending}
               id="group-send-later"
             />
-            <div className="flex gap-2">
-              <Button variant="outline" onClick={() => setOpen(false)}>
-                Cancel
-              </Button>
-              <Button
-                onClick={() => setConfirmOpen(true)}
-                disabled={!canSend}
-                title="Shift+Enter in the message box also opens this"
-              >
-                {sending ? (
-                  <>
-                    <Loader2 className="size-3.5 mr-1.5 animate-spin" />
-                    {sendLater ? "Scheduling" : "Sending"}
-                  </>
-                ) : sendLater ? (
-                  <>
-                    <Clock className="size-3.5 mr-1.5" />
-                    {sendCount > 0 ? `Schedule for ${sendCount}` : "Schedule"}
-                  </>
-                ) : (
-                  <>
-                    <Send className="size-3.5 mr-1.5" />
-                    {sendCount > 0 ? `Send to ${sendCount}` : "Send"}
-                    <kbd className="ml-2 rounded border border-current/30 px-1 py-px font-sans text-[10px] font-normal opacity-70">
-                      Shift ⏎
-                    </kbd>
-                  </>
-                )}
-              </Button>
-            </div>
+          </div>
+
+          <DialogFooter className="shrink-0">
+            <Button variant="outline" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+            {/* Wide enough for either label, so switching between
+                "Send to N" and "Schedule for N" doesn't move Cancel. */}
+            <Button
+              className="sm:min-w-48"
+              onClick={() => setConfirmOpen(true)}
+              disabled={!canSend}
+              title="Shift+Enter in the message box also opens this"
+            >
+              {sending ? (
+                <>
+                  <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                  {sendLater ? "Scheduling" : "Sending"}
+                </>
+              ) : sendLater ? (
+                <>
+                  <Clock className="size-3.5 mr-1.5" />
+                  {sendCount > 0 ? `Schedule for ${sendCount}` : "Schedule"}
+                </>
+              ) : (
+                <>
+                  <Send className="size-3.5 mr-1.5" />
+                  {sendCount > 0 ? `Send to ${sendCount}` : "Send"}
+                  <kbd className="ml-2 rounded border border-current/30 px-1 py-px font-sans text-[10px] font-normal opacity-70">
+                    Shift ⏎
+                  </kbd>
+                </>
+              )}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
