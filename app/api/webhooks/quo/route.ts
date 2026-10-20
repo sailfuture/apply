@@ -6,6 +6,7 @@ import {
   applyCallTranscript,
   applyCallVoicemail,
   loadIngestContext,
+  quoMediaItems,
   upsertQuoCall,
   upsertQuoText,
   type QuoCallInput,
@@ -112,6 +113,7 @@ export async function POST(req: NextRequest) {
       const direction = resource.direction === "incoming" ? "incoming" : "outgoing";
       const sender = str(context.senderIdentifier) ?? "";
       const recipient = strArr(context.recipientIdentifiers)[0] ?? "";
+      const media = quoMediaItems(resource.media);
       outcome = await upsertQuoText(
         {
           id: str(resource.id) ?? "",
@@ -119,7 +121,8 @@ export async function POST(req: NextRequest) {
           phoneNumberId,
           direction,
           text: str(resource.text) ?? "",
-          hasMedia: Array.isArray(resource.media) && resource.media.length > 0,
+          hasMedia: media.length > 0 || (Array.isArray(resource.media) && resource.media.length > 0),
+          media,
           status: str(resource.status) ?? (direction === "incoming" ? "received" : "sent"),
           createdAt: str(resource.createdAt) ?? new Date().toISOString(),
           from: sender,
