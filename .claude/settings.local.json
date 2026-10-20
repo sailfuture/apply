@@ -9,7 +9,13 @@
       "Bash(find \"C:/Users/hunte/GitHub/apply/app/\\(admin\\)/\" -name \"*.tsx\" -o -name \"*.ts\")",
       "Bash(find \"C:/Users/hunte/GitHub/apply/app/\\(admin\\)/\" -name \"*.tsx\")",
       "Bash(npx tsc:*)",
-      "Bash(find \"C:\\\\Users\\\\hunte\\\\GitHub\\\\apply\\\\app\\\\\\(admin\\)\" -name \"*.tsx\")"
+      "Bash(find \"C:\\\\Users\\\\hunte\\\\GitHub\\\\apply\\\\app\\\\\\(admin\\)\" -name \"*.tsx\")",
+      "Bash(curl -s \"https://xsc3-mvx7-r86m.n7e.xano.io/api:2GcBXyoA/registration_calls\")",
+      "Bash(node -e \"let s='';process.stdin.on\\('data',d=>s+=d\\).on\\('end',\\(\\)=>{const r=JSON.parse\\(s\\);console.log\\('rows',r.length\\);const withLink=r.filter\\(c=>c.quo_link\\);console.log\\('with quo_link',withLink.length\\);console.log\\(withLink.slice\\(0,3\\).map\\(c=>\\({id:c.id,link:c.quo_link,conv:c.quo_conversation_id,fam:c.registration_families_id,inq:c.registration_inquiry_id,phone:c.phone_number}\\)\\)\\);console.log\\('no link sample',r.filter\\(c=>!c.quo_link\\).slice\\(0,2\\).map\\(c=>\\({id:c.id,conv:c.quo_conversation_id,call:c.quo_call_id}\\)\\)\\);}\\)\")",
+      "Bash(curl -s \"https://xsc3-mvx7-r86m.n7e.xano.io/api:2GcBXyoA/sms_messages\")",
+      "Bash(node -e \"let s='';process.stdin.on\\('data',d=>s+=d\\).on\\('end',\\(\\)=>{const r=JSON.parse\\(s\\);const q=r.filter\\(m=>m.provider==='quo'\\);console.log\\('quo rows',q.length,'with conv',q.filter\\(m=>m.quo_conversation_id\\).length\\);console.log\\(q.slice\\(0,3\\).map\\(m=>\\({id:m.id,conv:m.quo_conversation_id,msg:m.quo_message_id,fam:m.registration_families_id,keys:Object.keys\\(m\\).filter\\(k=>/quo|link/.test\\(k\\)\\)}\\)\\)\\);}\\)\")",
+      "PowerShell(pnpm exec tsc --noEmit -p tsconfig.json 2>&1)",
+      "PowerShell(pnpm exec eslint components/admin/email-notifications-card.tsx components/admin/email-preview-dialog.tsx components/admin/activity-log-sheet.tsx app/api/admin/email-preview/route.ts app/api/admin/activity/route.ts 2>&1)"
     ]
   }
 }
