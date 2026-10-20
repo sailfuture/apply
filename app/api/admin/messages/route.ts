@@ -6,11 +6,9 @@ import {
   LEAD_NOTE_SOURCES,
   type LeadNoteSource,
   type XanoCall,
-  type XanoSmsMessage,
 } from "@/lib/xano";
 import { sendSms } from "@/lib/sms/send";
 import {
-  callContactRef,
   counterpartyPhone,
   getContactRecipient,
   messageContactRef as messageContact,
@@ -21,69 +19,14 @@ import {
 } from "@/lib/sms/contacts";
 import { resolveMainLine } from "@/lib/quo";
 import { threadQuoUrl } from "@/lib/quo/links";
-import { callNeedsReply, callPreview } from "@/lib/calls";
-import { computeFamilyStageSets } from "@/lib/sms/stages";
-import { getFacultyByPhone } from "@/lib/sms/faculty";
+import { buildInboxFeed } from "@/lib/sms/inbox-feed";
 import { bumpLeadReachOut } from "@/lib/leads";
-import { isFollowUpTemplate } from "@/lib/nurture/templates";
 
-/** Where a conversation's contact sits in the pipeline — the inbox's
- *  filter chips. Family stages come from the shared bucketing in
- *  lib/sms/stages.ts (scoped to the `?yearId=` the inbox passes);
- *  "none" = a family with no activity for that year (and ad-hoc
- *  numbers, which have no pipeline position at all). */
-export type ConversationStage =
-  | "enrolled"
-  | "registration"
-  | "application"
-  | "inquiry"
-  | "camp"
-  | "visit"
-  | "tasco"
-  | "none";
-
-/** One row in the global inbox's conversation list — the latest text
- *  per contact plus a needs-reply flag. A contact is a family, an
- *  inquiry, or a summer-camp parent; threads are one continuous
- *  history per contact, never split by academic year (the stage
- *  annotation is year-scoped display context, not a thread filter). */
-export interface SmsConversation {
-  contactType: SmsContactType;
-  contactId: number;
-  /** Display name — family name, or the inquiry/camp parent's name. */
-  name: string;
-  /** The contact's phone (bare 10-digit), derived from the latest
-   *  message's counterparty number — shown beside the name in the
-   *  inbox. Empty when it can't be derived. */
-  phone: string;
-  stage: ConversationStage;
-  lastBody: string;
-  lastAt: number;
-  lastDirection: string;
-  /** True when the latest message was part of a group blast
-   *  (template `group:…`) — the list renders those distinctly. */
-  lastIsGroup: boolean;
-  /** True when the newest thing on the thread is a phone call rather
-   *  than a text — `lastBody` is then the call's one-line description
-   *  ("Missed call", "Incoming call · 4 min", "Voicemail: …"). */
-  lastIsCall: boolean;
-  /** Texts only — calls aren't counted. */
-  messageCount: number;
-  /** True when the most recent message is inbound (contact texted, no
-   *  reply yet) — drives the unread dot in the inbox. */
-  needsReply: boolean;
-  /** Everything the inbox search box should match beyond the display
-   *  name — parent + student names for families, the student's name
-   *  for lead contacts. Lowercased server-side. */
-  searchText: string;
-  /** The enrolled family this thread belongs to, when there is one —
-   *  the family itself for family threads, or the family a lead
-   *  (inquiry / camp / visit / TASCO) converted into. Set only when
-   *  that family is enrolled; the inbox uses it to keep enrolled
-   *  parents off the Recruitment page and to join crew / bus / grade
-   *  on the enrolled page. */
-  enrolledFamilyId?: number;
-}
+// The conversation-list types live with the builder in
+// lib/sms/inbox-feed.ts; re-exported so the inbox's
+// `import type { … } from "@/app/api/admin/messages/route"` keeps
+// resolving.
+export type { ConversationStage, SmsConversation } from "@/lib/sms/inbox-feed";
 
 function parseContactParams(req: NextRequest): {
   type: SmsContactType;
@@ -116,8 +59,9 @@ function parseContactParams(req: NextRequest): {
  *  - `GET ?contactType=&contactId=` (or legacy `?familyId=`) — one
  *    contact's text thread + their Main Line calls + the recipient
  *    summary (who it goes to, opt-out state) + the thread's Quo link.
- *  - `GET` (no params) — the global inbox feed: one conversation per
- *    contact across families, inquiries, and summer-camp parents.
+ *  - `GET ?yearId=[&since=]` (no contact params) — the global inbox
+ *    feed: one conversation per contact across families, inquiries,
+ *    and summer-camp parents; `since` narrows it to a recent window.
  *  - `POST { contactType?, contactId?, familyId?, body }` — send a
  *    manual text to the contact's phone and log it on their thread.
  */
@@ -127,339 +71,24 @@ async function handleGET(req: NextRequest) {
     const contact = parseContactParams(req);
 
     if (!contact) {
-      // Global inbox feed — group the flat message log into one
-      // conversation per contact, keyed on the newest message. When
-      // the page passes its `?yearId=`, family conversations also get
-      // a pipeline-stage annotation for the filter chips (extra
-      // fetches only run in that case).
-      const yearIdParam = req.nextUrl.searchParams.get("yearId");
-      const yearId = Number(yearIdParam);
-      const withStages = Number.isFinite(yearId) && yearId > 0;
-      const [
-        messages,
-        calls,
-        families,
-        inquiries,
-        campRows,
-        waivers,
-        tascoRows,
-        parents,
-        students,
-        fap,
-        srp,
-        facultyByPhone,
-      ] =
-        await Promise.all([
-          xano.smsMessages.getAll(),
-          // Main Line calls (mirrored from Quo) — a call is the newest
-          // thing on a thread as often as a text is, and a contact who
-          // has only ever called still belongs in the list.
-          xano.calls.getAll().catch(() => []),
-          xano.families.getAll().catch(() => []),
-          xano.inquiries.getAll().catch(() => []),
-          xano.summerCamp.getAll().catch(() => []),
-          xano.websiteWaivers.getAll().catch(() => []),
-          xano.tascoSummerVisits.getAll().catch(() => []),
-          xano.parents.getAll().catch(() => []),
-          xano.students.getAll().catch(() => []),
-          withStages
-            ? xano.familyApplicationProgress.getByYear(yearId).catch(() => [])
-            : Promise.resolve([]),
-          withStages
-            ? xano.studentRegistrationProgress
-                .getByYear(yearId)
-                .catch(() => [])
-            : Promise.resolve([]),
-          // Faculty are texted as ad-hoc numbers — name their threads.
-          getFacultyByPhone(),
-        ]);
-      const stageSets = withStages
-        ? computeFamilyStageSets({ fap, srp })
-        : null;
-      // "Enrolled" for the inbox split isn't only the selected year:
-      // a family confirmed for the current year who hasn't re-enrolled
-      // for next year is still an enrolled parent, and shouldn't land
-      // in Recruitment just because the admin is viewing next year.
-      // Union the selected year with the active + upcoming years.
-      const enrolledFamilies = new Set<number>(stageSets?.enrolled ?? []);
-      if (withStages) {
-        const years = await xano.schoolYears.getAll().catch(() => []);
-        const extraYearIds = years
-          .filter((y) => (y.isActive || y.isNextYear) && y.id !== yearId)
-          .map((y) => y.id);
-        const extraSrp = await Promise.all(
-          extraYearIds.map((id) =>
-            xano.studentRegistrationProgress.getByYear(id).catch(() => [])
-          )
-        );
-        for (const rows of extraSrp) {
-          const { enrolled } = computeFamilyStageSets({ fap: [], srp: rows });
-          for (const fid of enrolled) enrolledFamilies.add(fid);
-        }
-      }
-      // Leads that converted into a family — a camp or inquiry thread
-      // with a parent who's since enrolled belongs with that family.
-      const leadFamily = new Map<string, number>();
-      const linkLeads = (
-        type: SmsContactType,
-        rows: { id: number; registration_families_id?: number | null }[]
-      ) => {
-        for (const r of rows) {
-          const fid = Number(r.registration_families_id) || 0;
-          if (fid > 0) leadFamily.set(`${type}:${r.id}`, fid);
-        }
-      };
-      linkLeads("inquiry", inquiries);
-      linkLeads("camp", campRows);
-      linkLeads("visit", waivers);
-      linkLeads("tasco", tascoRows);
-      const enrolledFamilyFor = (
-        type: SmsContactType,
-        id: number
-      ): number | undefined => {
-        const fid = type === "family" ? id : leadFamily.get(`${type}:${id}`);
-        return fid && enrolledFamilies.has(fid) ? fid : undefined;
-      };
-      const familyStage = (id: number): ConversationStage => {
-        if (!stageSets) return "none";
-        if (enrolledFamilies.has(id)) return "enrolled";
-        if (stageSets.registration.has(id)) return "registration";
-        if (stageSets.application.has(id)) return "application";
-        return "none";
-      };
-      const familyName = new Map(
-        families.map((f) => [f.id, f.family_name])
-      );
-      const inquiryName = new Map(
-        inquiries.map((i) => [
-          i.id,
-          `${i.primary_first_name ?? ""} ${i.primary_last_name ?? ""}`.trim(),
-        ])
-      );
-      const campName = new Map(
-        campRows.map((c) => [
-          c.id,
-          `${c.primary_parent_first_name ?? ""} ${c.primary_parent_last_name ?? ""}`.trim(),
-        ])
-      );
-      const visitName = new Map(
-        waivers.map((w) => [w.id, (w.parent_name ?? "").trim()])
-      );
-      const tascoName = new Map(
-        tascoRows.map((t) => {
-          const student = (t.student_name ?? "").trim();
-          return [t.id, student ? `Parent of ${student}` : ""];
-        })
-      );
-      // Per-contact search haystack — the inbox search box matches on
-      // this in addition to the display name, so typing a STUDENT's or
-      // a parent's name finds the family conversation even though the
-      // list shows only the family name.
-      const familySearch = new Map<number, string>();
-      const parentById = new Map(parents.map((p) => [p.id, p]));
-      for (const f of families) {
-        const names = xano.families
-          .getParentIds(f)
-          .map((pid) => parentById.get(pid))
-          .filter((p) => p != null)
-          .map((p) => `${p.first_name ?? ""} ${p.last_name ?? ""}`.trim());
-        familySearch.set(f.id, names.join(" "));
-      }
-      for (const s of students) {
-        const fid = s.registration_families_id;
-        if (!fid) continue;
-        const name = `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim();
-        if (!name) continue;
-        familySearch.set(fid, `${familySearch.get(fid) ?? ""} ${name}`);
-      }
-      const inquirySearch = new Map(
-        inquiries.map((i) => [
-          i.id,
-          `${i.student_first_name ?? ""} ${i.student_last_name ?? ""}`.trim(),
-        ])
-      );
-      const campSearch = new Map(
-        campRows.map((c) => [
-          c.id,
-          `${c.student_first_name ?? ""} ${c.student_last_name ?? ""}`.trim(),
-        ])
-      );
-      const visitSearch = new Map(
-        waivers.map((w) => [w.id, (w.student_name ?? "").trim()])
-      );
-      const tascoSearch = new Map(
-        tascoRows.map((t) => [t.id, (t.student_name ?? "").trim()])
-      );
-      const searchFor = (type: SmsContactType, id: number): string => {
-        const extra =
-          type === "family"
-            ? familySearch.get(id)
-            : type === "inquiry"
-              ? inquirySearch.get(id)
-              : type === "camp"
-                ? campSearch.get(id)
-                : type === "visit"
-                  ? visitSearch.get(id)
-                  : type === "tasco"
-                    ? tascoSearch.get(id)
-                    : "";
-        return (extra ?? "").toLowerCase();
-      };
-
-      const nameFor = (type: SmsContactType, id: number): string => {
-        // Ad-hoc threads have no record — the formatted number IS the
-        // name (the inbox shows it verbatim).
-        if (type === "adhoc") {
-          const phone = phoneFromAdhocId(id);
-          return facultyByPhone.get(phone)?.name || phone;
-        }
-        const raw =
-          type === "family"
-            ? familyName.get(id)
-            : type === "inquiry"
-              ? inquiryName.get(id)
-              : type === "camp"
-                ? campName.get(id)
-                : type === "tasco"
-                  ? tascoName.get(id)
-                  : visitName.get(id);
-        if (raw && raw.trim()) return raw.trim();
-        return type === "family"
-          ? `Family #${id}`
-          : type === "inquiry"
-            ? `Inquiry #${id}`
-            : type === "camp"
-              ? `Camp #${id}`
-              : type === "tasco"
-                ? `TASCO #${id}`
-                : `Visit #${id}`;
-      };
-
-      const byContact = new Map<
-        string,
-        {
-          type: SmsContactType;
-          id: number;
-          /** Newest text, or null on a thread that is calls only. */
-          last: XanoSmsMessage | null;
-          /** Newest message that isn't an automated follow-up — what
-           *  "needs a reply" is judged on, so a tour reminder going
-           *  out can't hide a parent's unanswered question. */
-          lastForReply: XanoSmsMessage | null;
-          /** Newest phone call with this contact. */
-          lastCall: XanoCall | null;
-          count: number;
-        }
-      >();
-      for (const m of messages) {
-        const c = messageContact(m);
-        if (!c) continue;
-        const key = `${c.type}:${c.id}`;
-        const counts = !(
-          m.direction === "outbound" && isFollowUpTemplate(m.template)
-        );
-        const existing = byContact.get(key);
-        if (!existing) {
-          byContact.set(key, {
-            ...c,
-            last: m,
-            lastForReply: counts ? m : null,
-            lastCall: null,
-            count: 1,
-          });
-        } else {
-          existing.count += 1;
-          if (!existing.last || m.created_at > existing.last.created_at) {
-            existing.last = m;
-          }
-          if (
-            counts &&
-            (!existing.lastForReply ||
-              m.created_at > existing.lastForReply.created_at)
-          ) {
-            existing.lastForReply = m;
-          }
-        }
-      }
-      for (const call of calls) {
-        const c = callContactRef(call);
-        if (!c) continue;
-        const key = `${c.type}:${c.id}`;
-        const at = call.started_at || call.created_at;
-        const existing = byContact.get(key);
-        if (!existing) {
-          byContact.set(key, {
-            ...c,
-            last: null,
-            lastForReply: null,
-            lastCall: call,
-            count: 0,
-          });
-        } else if (
-          !existing.lastCall ||
-          at > (existing.lastCall.started_at || existing.lastCall.created_at)
-        ) {
-          existing.lastCall = call;
-        }
-      }
-      // Needs-reply looks at the newest thing that counts — an inbound
-      // text, a non-follow-up outbound text, or a call — and lights
-      // when it's an unanswered inbound text, a missed call or a
-      // voicemail. Same rule as the nav badge's unread endpoint.
-      const conversations: SmsConversation[] = [...byContact.values()]
-        .map(({ type, id, last, lastForReply, lastCall, count }) => {
-          const callAt = lastCall
-            ? lastCall.started_at || lastCall.created_at
-            : 0;
-          const callIsNewest = !!lastCall && (!last || callAt > last.created_at);
-          const replyAt = lastForReply?.created_at ?? 0;
-          const needsReply =
-            lastCall && callAt > replyAt
-              ? callNeedsReply(lastCall)
-              : lastForReply?.direction === "inbound";
-          return {
-          contactType: type,
-          contactId: id,
-          name: nameFor(type, id),
-          phone: last
-            ? counterpartyPhone(last)
-            : normPhone(lastCall?.counterparty ?? ""),
-          stage:
-            type === "inquiry"
-              ? ("inquiry" as const)
-              : type === "camp"
-                ? ("camp" as const)
-                : type === "visit"
-                  ? ("visit" as const)
-                  : type === "tasco"
-                    ? ("tasco" as const)
-                    : type === "adhoc"
-                      ? ("none" as const)
-                      : familyStage(id),
-          lastBody:
-            callIsNewest && lastCall
-              ? callPreview(lastCall)
-              : (last?.body ?? ""),
-          lastAt: callIsNewest ? callAt : (last?.created_at ?? 0),
-          lastDirection:
-            callIsNewest && lastCall
-              ? lastCall.direction === "outgoing"
-                ? "outbound"
-                : "inbound"
-              : (last?.direction ?? ""),
-          lastIsGroup:
-            !callIsNewest &&
-            typeof last?.template === "string" &&
-            last.template.startsWith("group"),
-          lastIsCall: callIsNewest,
-          messageCount: count,
-          needsReply,
-          searchText: searchFor(type, id),
-          enrolledFamilyId: enrolledFamilyFor(type, id),
-          };
-        })
-        .sort((a, b) => b.lastAt - a.lastAt);
-      return NextResponse.json({ conversations });
+      // Global inbox feed — one conversation per contact, newest
+      // first. When the page passes its `?yearId=`, family
+      // conversations also get a pipeline-stage annotation for the
+      // filter chips (the stage reads only run in that case).
+      //
+      // `?since=<unix ms>` asks for the WINDOW: only texts and calls
+      // at or after that instant, with the parent/student search
+      // haystack skipped. The inbox paints from that first and swaps
+      // in the full feed (no `since`) when it lands — same shape, so
+      // the two merge by contact key. See lib/sms/inbox-feed.ts.
+      const yearId = Number(req.nextUrl.searchParams.get("yearId"));
+      const sinceParam = req.nextUrl.searchParams.get("since");
+      const since = sinceParam === null ? null : Number(sinceParam);
+      const feed = await buildInboxFeed({
+        yearId: Number.isFinite(yearId) && yearId > 0 ? yearId : 0,
+        since: since !== null && Number.isFinite(since) && since > 0 ? since : null,
+      });
+      return NextResponse.json({ conversations: feed.conversations });
     }
 
     // Ad-hoc threads have no FK column to query on — filter the full
