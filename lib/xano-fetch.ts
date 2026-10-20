@@ -56,6 +56,11 @@ const CACHED_TABLES = new Set<string>([
   "registration_school_years",
   "registration_email_notifications",
   "sms_messages",
+  // Main Line calls — read whole by the inbox feed (20 s poll) since
+  // calls joined the conversation list; 414 KB because of the
+  // transcripts. Writes go through lib (ingest/sync), which expires
+  // the tag.
+  "registration_calls",
   "registration_inquiry",
   "registration_tours",
   "school_calendar",
