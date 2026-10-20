@@ -3,7 +3,16 @@
 import { useState } from "react";
 import useSWR from "swr";
 import { toast } from "sonner";
-import { CheckCircle2, Loader2, Mail, RefreshCw, Send, XCircle } from "lucide-react";
+import {
+  CheckCircle2,
+  Eye,
+  Loader2,
+  Mail,
+  RefreshCw,
+  Send,
+  XCircle,
+} from "lucide-react";
+import { EmailPreviewDialog } from "@/components/admin/email-preview-dialog";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -106,6 +115,9 @@ export function EmailNotificationsCard({ familyId, yearId }: Props) {
               <th className="px-4 py-2 text-left text-xs font-medium text-muted-foreground">
                 Status
               </th>
+              <th className="px-4 py-2 text-right text-xs font-medium text-muted-foreground">
+                <span className="sr-only">View</span>
+              </th>
             </tr>
           </thead>
           <tbody className="divide-y">
@@ -127,6 +139,12 @@ function Row({
   onResent: () => void;
 }) {
   const [resendOpen, setResendOpen] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  // Previewable when we hold the body ourselves or Resend might still
+  // (older rows). Dry runs never left the building.
+  const canPreview =
+    row.status !== "dry_run" &&
+    Boolean((row.html ?? "").trim() || row.resend_id);
   const date = new Date(row.created_at);
   const dateStr = date.toLocaleString("en-US", {
     month: "short",
@@ -219,6 +237,37 @@ function Row({
           ) : null}
         </span>
       </td>
+      <td className="px-4 py-2 whitespace-nowrap text-right">
+        {canPreview ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2 text-xs"
+            title="View email"
+            onClick={() => setPreviewOpen(true)}
+          >
+            <Eye className="size-3.5 mr-1" aria-hidden="true" />
+            View
+          </Button>
+        ) : (
+          <span className="text-xs text-muted-foreground">—</span>
+        )}
+      </td>
+      <EmailPreviewDialog
+        preview={
+          previewOpen
+            ? {
+                notificationId: row.id,
+                resendId: row.resend_id ?? undefined,
+                subject: subject || label,
+                sentAt: row.created_at,
+                recipients: recipientList.length > 0 ? recipients : undefined,
+                cc: ccLine || undefined,
+              }
+            : null
+        }
+        onClose={() => setPreviewOpen(false)}
+      />
       {resendOpen ? (
         <ResendDialog
           row={row}

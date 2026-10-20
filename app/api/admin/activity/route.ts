@@ -225,7 +225,9 @@ export async function GET(req: NextRequest) {
         author: "SailFuture (automated)",
         status: e.status,
         // Lets the sheet's "View email" fetch the exact sent content
-        // from Resend via /api/admin/email-preview.
+        // via /api/admin/email-preview — stored HTML by audit row id,
+        // Resend by message id for older rows.
+        emailId: e.id,
         resendId: e.resend_id ?? undefined,
         // First-open stamp from the Resend webhook (open tracking) —
         // renders as "Viewed …" in the bubble footer.
@@ -698,7 +700,11 @@ export interface ActivityEvent {
   deliveryNote?: string;
   /** Texts only — this row was part of a group blast. */
   isGroup?: boolean;
-  /** Emails only — Resend message id for the full-content preview. */
+  /** Emails only — audit row id. The preview dialog prefers this:
+   *  the row keeps the exact HTML we sent, which never ages out. */
+  emailId?: number;
+  /** Emails only — Resend message id, the preview's fallback for rows
+   *  written before the stored-HTML column existed. */
   resendId?: string;
   /** Emails only — unix-ms of the FIRST open reported by Resend's
    *  open tracking (webhook-stamped). Absent = no open recorded,

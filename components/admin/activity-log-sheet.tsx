@@ -23,13 +23,6 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -67,7 +60,10 @@ import type {
   ActivityEvent,
   ActivityResponse,
 } from "@/app/api/admin/activity/route";
-import type { EmailPreviewResponse } from "@/app/api/admin/email-preview/route";
+import {
+  EmailPreviewDialog,
+  type EmailPreviewTarget,
+} from "@/components/admin/email-preview-dialog";
 
 /**
  * Unified account activity sheet — ONE chronological stream per
@@ -174,12 +170,12 @@ export function ActivityLogSheet({
     { refreshInterval: 30_000, revalidateOnFocus: false }
   );
 
-  // Email whose full sent content is being previewed (Resend id +
-  // the subject for the dialog title while it loads).
-  const [previewEmail, setPreviewEmail] = useState<{
-    resendId: string;
-    subject: string;
-  } | null>(null);
+  // Email whose full sent content is being previewed — the shared
+  // dialog keys off the audit row id (stored HTML) or, for older
+  // rows, the Resend message id.
+  const [previewEmail, setPreviewEmail] = useState<EmailPreviewTarget | null>(
+    null
+  );
 
   // Note pending deletion — set by the subtle Delete in a note
   // bubble's footer, confirmed via the warning modal below.
@@ -453,8 +449,8 @@ export function ActivityLogSheet({
                             <BubbleRow
                               event={item.event}
                               showHeader={item.showHeader}
-                              onPreviewEmail={(resendId, subject) =>
-                                setPreviewEmail({ resendId, subject })
+                              onPreviewEmail={(target) =>
+                                setPreviewEmail(target)
                               }
                               onDeleteNote={(noteId) =>
                                 setDeleteNoteId(noteId)
@@ -616,71 +612,6 @@ export function ActivityLogSheet({
   );
 }
 
-/* ── Email preview ────────────────────────────────────────────────── */
-
-/**
- * Full-content view of a sent email, fetched from Resend by message
- * id (our audit table only stores the subject). Rendered inside a
- * sandboxed iframe via `srcDoc` — no scripts, no outside navigation —
- * so template HTML displays exactly as the family received it
- * without executing anything.
- */
-function EmailPreviewDialog({
-  preview,
-  onClose,
-}: {
-  preview: { resendId: string; subject: string } | null;
-  onClose: () => void;
-}) {
-  const { data, error, isLoading } = useSWR<EmailPreviewResponse>(
-    preview ? `/api/admin/email-preview?id=${preview.resendId}` : null,
-    adminFetcher
-  );
-
-  return (
-    <Dialog open={preview !== null} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="sm:max-w-3xl">
-        <DialogHeader>
-          <DialogTitle className="text-base">
-            {data?.subject || preview?.subject || "Email"}
-          </DialogTitle>
-          <DialogDescription className="text-xs">
-            {data
-              ? `From ${data.from} · To ${data.to}${
-                  data.cc ? ` · Cc ${data.cc}` : ""
-                }`
-              : "Retrieving the sent email from Resend…"}
-          </DialogDescription>
-        </DialogHeader>
-        {isLoading ? (
-          <div className="flex h-[50vh] items-center justify-center">
-            <Loader2 className="size-5 animate-spin text-muted-foreground" />
-          </div>
-        ) : error || !data ? (
-          <div className="flex h-[30vh] items-center justify-center px-8 text-center">
-            <p className="text-sm text-muted-foreground">
-              {error instanceof Error
-                ? error.message
-                : "Couldn't retrieve this email from Resend."}
-            </p>
-          </div>
-        ) : data.html ? (
-          <iframe
-            title="Sent email preview"
-            srcDoc={data.html}
-            sandbox=""
-            className="h-[60vh] w-full rounded-md border bg-white"
-          />
-        ) : (
-          <pre className="h-[60vh] w-full overflow-auto rounded-md border bg-muted/20 p-4 text-sm whitespace-pre-wrap">
-            {data.text || "This email has no stored content."}
-          </pre>
-        )}
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 /* ── Stream rendering ─────────────────────────────────────────────── */
 
 /** System milestone — positive outcomes (accepted / confirmed /
@@ -757,7 +688,7 @@ function BubbleRow({
   /** False when the previous bubble carries the identical header
    *  (same author, kind, etc.) — the run shows it once. */
   showHeader: boolean;
-  onPreviewEmail: (resendId: string, subject: string) => void;
+  onPreviewEmail: (target: EmailPreviewTarget) => void;
   /** Only real admin notes (id `note-<n>`) are deletable — derived
    *  legacy notes in the stream aren't. */
   onDeleteNote: (noteId: number) => void;
@@ -840,14 +771,19 @@ function BubbleRow({
               &nbsp;·&nbsp;Delivery issue
             </span>
           ) : null}
-          {isEmail && event.resendId ? (
+          {isEmail && (event.emailId || event.resendId) ? (
             <>
               &nbsp;·&nbsp;
               <button
                 type="button"
                 className="underline underline-offset-2 hover:text-foreground"
                 onClick={() =>
-                  onPreviewEmail(event.resendId as string, event.body)
+                  onPreviewEmail({
+                    notificationId: event.emailId,
+                    resendId: event.resendId,
+                    subject: event.body,
+                    sentAt: event.ts,
+                  })
                 }
               >
                 View full email
