@@ -64,6 +64,8 @@ import {
   EmailPreviewDialog,
   type EmailPreviewTarget,
 } from "@/components/admin/email-preview-dialog";
+import { MessageMedia } from "@/components/admin/message-media";
+import { isMediaOnlyBody } from "@/lib/sms/media";
 
 /**
  * Unified account activity sheet — ONE chronological stream per
@@ -703,6 +705,7 @@ function BubbleRow({
     event.status === "failed" || event.status === "undelivered";
   const inbound = event.kind === "sms" && event.direction === "inbound";
   const align = inbound ? "start" : "end";
+  const smsMedia = event.kind === "sms" && (event.media?.length ?? 0) > 0;
   const variant = failed
     ? "destructive"
     : isNote || isEmail
@@ -741,11 +744,20 @@ function BubbleRow({
             ) : null}
           </MessageHeader>
         ) : null}
-        <Bubble variant={variant}>
-          <BubbleContent className="whitespace-pre-wrap">
-            {event.body}
-          </BubbleContent>
-        </Bubble>
+        {/* A bare photo's placeholder body gives way to the photo. */}
+        {smsMedia && isMediaOnlyBody(event.body) ? null : (
+          <Bubble variant={variant}>
+            <BubbleContent className="whitespace-pre-wrap">
+              {event.body}
+            </BubbleContent>
+          </Bubble>
+        )}
+        {event.kind === "sms" && event.smsId ? (
+          <MessageMedia
+            message={{ id: event.smsId, media: event.media ?? null }}
+            align={align}
+          />
+        ) : null}
         <MessageFooter title={new Date(event.ts).toLocaleString()}>
           {isEmail && failed ? (
             <span className="text-destructive">Failed&nbsp;·&nbsp;</span>

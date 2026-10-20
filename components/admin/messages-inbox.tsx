@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import {
   CheckCheck,
   ExternalLink,
+  ImageIcon,
   Loader2,
   MessageSquareText,
   Phone,
@@ -944,6 +945,15 @@ export function MessagesInbox({ mode }: { mode: InboxMode }) {
                         <Phone
                           className="size-3 shrink-0 text-muted-foreground"
                           aria-label="Phone call"
+                        />
+                      ) : null}
+                      {/* A photo or file on the newest text — the
+                          preview says "Photo" / "File" when the text
+                          had no words. */}
+                      {c.lastHasMedia ? (
+                        <ImageIcon
+                          className="size-3 shrink-0 text-muted-foreground"
+                          aria-label="Attachment"
                         />
                       ) : null}
                       <span

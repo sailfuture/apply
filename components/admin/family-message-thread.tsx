@@ -5,7 +5,9 @@ import useSWR from "swr";
 import { toast } from "sonner";
 import { Send, Loader2, Ban, RotateCw, TriangleAlert } from "lucide-react";
 import { CallMarker } from "@/components/admin/call-marker";
+import { MessageMedia } from "@/components/admin/message-media";
 import { describeSmsError, isFailedStatus } from "@/lib/sms/errors";
+import { isMediaOnlyBody, smsMedia } from "@/lib/sms/media";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
@@ -491,6 +493,10 @@ function MessageRow({
   const statusText = outbound ? (STATUS_LABEL[msg.status] ?? msg.status) : null;
   const failed = outbound && isFailedStatus(msg.status);
   const error = failed ? describeSmsError(msg.error_code) : null;
+  // A bare photo was logged with a placeholder body; the photo itself
+  // says it better, so the words bubble is skipped when it's just that.
+  const hasMedia = smsMedia(msg).length > 0;
+  const showBubble = !(hasMedia && isMediaOnlyBody(msg.body));
 
   return (
     <Message align={align}>
@@ -501,11 +507,14 @@ function MessageRow({
             {isGroup ? " · Group text" : ""}
           </MessageHeader>
         ) : null}
-        <Bubble variant={outbound ? outboundVariant(msg) : "secondary"}>
-          <BubbleContent className="whitespace-pre-wrap">
-            {msg.body}
-          </BubbleContent>
-        </Bubble>
+        {showBubble ? (
+          <Bubble variant={outbound ? outboundVariant(msg) : "secondary"}>
+            <BubbleContent className="whitespace-pre-wrap">
+              {msg.body}
+            </BubbleContent>
+          </Bubble>
+        ) : null}
+        <MessageMedia message={msg} align={align} />
         <MessageFooter title={new Date(msg.created_at).toLocaleString()}>
           {statusText ? <span>{statusText}&nbsp;·&nbsp;</span> : null}
           <span>{timeLabel(msg.created_at)}</span>

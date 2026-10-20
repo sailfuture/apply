@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
-import { xano, type XanoCall } from "@/lib/xano";
+import { xano, type SmsMediaItem, type XanoCall } from "@/lib/xano";
+import { smsMedia } from "@/lib/sms/media";
 import { callGist, callLabel } from "@/lib/calls";
 
 /**
@@ -184,6 +185,8 @@ export async function GET(req: NextRequest) {
         direction: m.direction === "outbound" ? "outbound" : "inbound",
         status: m.status,
         isGroup,
+        smsId: m.id,
+        media: smsMedia(m),
       });
     }
 
@@ -691,6 +694,11 @@ export interface ActivityEvent {
   author: string;
   /** Texts only. */
   direction?: "inbound" | "outbound";
+  /** Texts only — the `sms_messages` row id, so the sheet can load the
+   *  text's attachments through the admin media proxy route. */
+  smsId?: number;
+  /** Texts only — photos and files on the text (empty for none). */
+  media?: SmsMediaItem[];
   /** Texts: Twilio delivery status. Emails: sent | failed. */
   status?: string;
   /** Emails only — a delivery problem that did NOT fail the send,

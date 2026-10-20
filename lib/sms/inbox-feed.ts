@@ -16,6 +16,7 @@ import { computeFamilyStageSets } from "@/lib/sms/stages";
 import { getFacultyByPhone } from "@/lib/sms/faculty";
 import { isFollowUpTemplate } from "@/lib/nurture/templates";
 import { defaultAdminYear } from "@/lib/school-year-default";
+import { isMediaOnlyBody, mediaPreviewLabel, smsMedia } from "@/lib/sms/media";
 
 /**
  * The admin inbox's conversation list — one row per contact across
@@ -76,6 +77,10 @@ export interface SmsConversation {
    *  than a text — `lastBody` is then the call's one-line description
    *  ("Missed call", "Incoming call · 4 min", "Voicemail: …"). */
   lastIsCall: boolean;
+  /** True when the newest text carries a photo or file — the list
+   *  shows an attachment icon, and `lastBody` reads "Photo" / "File"
+   *  when the text had no words of its own. */
+  lastHasMedia: boolean;
   /** Texts only — calls aren't counted. In a WINDOW response this is
    *  the count inside the window, not the thread's lifetime total. */
   messageCount: number;
@@ -454,6 +459,7 @@ export async function buildInboxFeed(
       const callAt = lastCall?.at ?? 0;
       const callIsNewest = !!lastCall && (!last || callAt > last.created_at);
       const replyAt = lastForReply?.created_at ?? 0;
+      const lastMedia = last ? smsMedia(last) : [];
       const needsReply =
         lastCall && callAt > replyAt
           ? lastCall.needsReply
@@ -478,7 +484,11 @@ export async function buildInboxFeed(
                     ? ("none" as const)
                     : familyStage(id),
         lastBody:
-          callIsNewest && lastCall ? lastCall.preview : (last?.body ?? ""),
+          callIsNewest && lastCall
+            ? lastCall.preview
+            : lastMedia.length > 0 && isMediaOnlyBody(last?.body)
+              ? mediaPreviewLabel(lastMedia)
+              : (last?.body ?? ""),
         lastAt: callIsNewest ? callAt : (last?.created_at ?? 0),
         lastDirection:
           callIsNewest && lastCall
@@ -491,6 +501,7 @@ export async function buildInboxFeed(
           typeof last?.template === "string" &&
           last.template.startsWith("group"),
         lastIsCall: callIsNewest,
+        lastHasMedia: !callIsNewest && lastMedia.length > 0,
         messageCount: count,
         needsReply,
         searchText: searchFor(type, id),
