@@ -29,14 +29,26 @@ export function billingUpcomingSms(v: {
   amount: string;
   date: string;
   link: string;
+  /** Formatted total already past due on the account, when there is
+   *  one. The upcoming invoice isn't part of it. */
+  totalPastDue?: string;
 }): string {
-  return `SailFuture Academy: a tuition payment of ${v.amount} is due ${v.date}. View or pay here: ${v.link}`;
+  const balance = v.totalPastDue
+    ? ` Total past due on your account: ${v.totalPastDue}.`
+    : "";
+  return `SailFuture Academy: a tuition payment of ${v.amount} is due ${v.date}.${balance} View or pay here: ${v.link}`;
 }
 
 export function outstandingTuitionSms(v: {
   amount: string;
   date: string;
   link: string;
+  /** Formatted total past due on the account, when it's more than
+   *  this one invoice. Left out when this invoice IS the total. */
+  totalPastDue?: string;
 }): string {
-  return `SailFuture Academy: your tuition payment of ${v.amount} (due ${v.date}) is past due. Please pay here: ${v.link} — reply with any questions.`;
+  const balance = v.totalPastDue
+    ? ` Total past due on your account: ${v.totalPastDue}.`
+    : "";
+  return `SailFuture Academy: your tuition payment of ${v.amount} (due ${v.date}) is past due.${balance} Please pay here: ${v.link} — reply with any questions.`;
 }

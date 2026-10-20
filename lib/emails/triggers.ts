@@ -18,6 +18,7 @@ import { xano } from "@/lib/xano";
 import type { XanoFamily, XanoParent, XanoStudent } from "@/lib/xano";
 import {
   pastDueTemplateTag,
+  pastDueTotalsByFamily,
   pendingPastDueReminders,
   sentPastDueReminders,
   type FamilyPastDuePlan,
@@ -508,6 +509,17 @@ export async function sendAutopayPaymentFailedEmail(args: {
   }
   const ctx = await resolveFamilyContext(args.familyId, args.yearId);
   if (!ctx) return { ok: false, error: "context-failed" };
+  // What else is past due on the account, so the email can print the
+  // total beside the failed charge. This invoice is left out and the
+  // template adds it back: it failed minutes ago, so the whole-day
+  // totals wouldn't count it yet. Best effort: `[]` on a Xano
+  // failure, which only drops the total line.
+  const mirror = await xano.paymentTransactions.getAllByYear(args.yearId);
+  const otherPastDueCents =
+    pastDueTotalsByFamily(
+      mirror.filter((tx) => tx.stripe_invoice_id !== args.invoiceId),
+      Date.now()
+    ).get(args.familyId) ?? 0;
   return sendEmail({
     to: ctx.parentEmails,
     content: t.autopayPaymentFailed({
@@ -517,6 +529,7 @@ export async function sendAutopayPaymentFailedEmail(args: {
       amount_cents: args.amountCents,
       pay_url: payUrl(ctx.loginUrl, args.invoiceId),
       tuition_url: tuitionUrl(ctx.loginUrl, args.yearId),
+      other_past_due_cents: otherPastDueCents,
     }),
     tag,
     familyId: ctx.familyId,

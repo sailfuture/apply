@@ -7,7 +7,11 @@ import {
   sendBackToSchoolEmail,
   sendTuitionPastDueEmail,
 } from "@/lib/emails/triggers";
-import { planPastDueEmails } from "@/lib/billing-past-due";
+import {
+  planPastDueEmails,
+  pastDueBalance,
+  pastDueTotalsByFamily,
+} from "@/lib/billing-past-due";
 import { runAutopaySweep, type AutopaySweepResult } from "@/lib/autopay";
 import {
   sendBillingUpcomingSms,
@@ -291,6 +295,10 @@ export async function GET(req: NextRequest) {
       const reminderTxns = txns.filter(
         (t) => !chargedToday.has(t.stripe_invoice_id)
       );
+      // What each family owes past due across the year, so every text
+      // can say "Total past due on your account" beside the one
+      // invoice it's about.
+      const pastDueTotals = pastDueTotalsByFamily(reminderTxns, Date.now());
       for (const tx of reminderTxns) {
         const outstanding =
           Number(tx.amount_due_cents) - Number(tx.amount_paid_cents);
@@ -313,6 +321,13 @@ export async function GET(req: NextRequest) {
           payUrl: tx.hosted_invoice_url
             ? `${appBaseUrl}/pay/${tx.stripe_invoice_id}`
             : appBaseUrl,
+          // Past due on the family's OTHER invoices. The outstanding
+          // text adds this one back itself: the totals count whole
+          // days, so an invoice a few hours past due isn't in them yet
+          // even though its text goes out today.
+          otherPastDueCents:
+            (pastDueTotals.get(Number(tx.registration_families_id)) ?? 0) -
+            (pastDueBalance(tx, Date.now())?.owed ?? 0),
         };
 
         if (tx.due_date != null && tx.due_date < Date.now()) {

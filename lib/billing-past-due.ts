@@ -93,6 +93,47 @@ function calendarDaysBetween(dueMs: number, nowMs: number): number {
   return Math.floor(nowMs / ONE_DAY_MS) - Math.floor(dueMs / ONE_DAY_MS);
 }
 
+/** What an invoice still owes past its due date, or null when it isn't
+ *  past due: settled, written off, not yet due, or due today. Shared
+ *  by the past-due email planner and the account totals the billing
+ *  texts and autopay-failed email print. */
+export function pastDueBalance(
+  tx: XanoPaymentTransaction,
+  nowMs: number
+): { owed: number; due: number; daysPastDue: number } | null {
+  // `open` only: paid, void and refunded invoices are settled, and
+  // one staff marked uncollectible has been written off.
+  if (tx.status !== "open") return null;
+  const owed = Number(tx.amount_due_cents) - Number(tx.amount_paid_cents);
+  if (!(owed > 0)) return null;
+  // An autopay invoice has no due date. Stripe charges it when it's
+  // issued, so one still open has failed: count from then.
+  const due = Number(tx.due_date ?? tx.finalized_at);
+  if (!(due > 0) || !Number.isFinite(due)) return null;
+  // A day past due at least. The due-date text already covers day 0.
+  const daysPastDue = calendarDaysBetween(due, nowMs);
+  if (daysPastDue < 1) return null;
+  return { owed, due, daysPastDue };
+}
+
+/** Cents past due per family across the year's invoice mirror: what
+ *  "Total past due on your account" prints in the billing texts and
+ *  the autopay-failed email. Families with nothing past due are
+ *  absent. */
+export function pastDueTotalsByFamily(
+  txns: XanoPaymentTransaction[],
+  nowMs: number
+): Map<number, number> {
+  const totals = new Map<number, number>();
+  for (const tx of txns) {
+    const balance = pastDueBalance(tx, nowMs);
+    if (!balance) continue;
+    const familyId = Number(tx.registration_families_id);
+    totals.set(familyId, (totals.get(familyId) ?? 0) + balance.owed);
+  }
+  return totals;
+}
+
 export function planPastDueEmails({
   txns,
   isBillableFamily,
@@ -108,28 +149,18 @@ export function planPastDueEmails({
 }): FamilyPastDuePlan[] {
   const byFamily = new Map<number, PastDueInvoice[]>();
   for (const tx of txns) {
-    // `open` only: paid, void and refunded invoices are settled, and
-    // one staff marked uncollectible has been written off.
-    if (tx.status !== "open") continue;
-    const owed = Number(tx.amount_due_cents) - Number(tx.amount_paid_cents);
-    if (!(owed > 0)) continue;
-    // An autopay invoice has no due date. Stripe charges it when it's
-    // issued, so one still open has failed: count from then.
-    const due = Number(tx.due_date ?? tx.finalized_at);
-    if (!(due > 0) || !Number.isFinite(due)) continue;
-    // A day past due at least. The due-date text already covers day 0.
-    const daysPastDue = calendarDaysBetween(due, nowMs);
-    if (daysPastDue < 1) continue;
+    const balance = pastDueBalance(tx, nowMs);
+    if (!balance) continue;
     const familyId = Number(tx.registration_families_id);
     if (!isBillableFamily(familyId)) continue;
 
     const list = byFamily.get(familyId) ?? [];
     list.push({
       invoiceId: tx.stripe_invoice_id,
-      amountCents: owed,
-      dueDate: due,
-      daysPastDue,
-      stage: pastDueStage(daysPastDue),
+      amountCents: balance.owed,
+      dueDate: balance.due,
+      daysPastDue: balance.daysPastDue,
+      stage: pastDueStage(balance.daysPastDue),
       payUrl: payUrlFor(tx),
     });
     byFamily.set(familyId, list);

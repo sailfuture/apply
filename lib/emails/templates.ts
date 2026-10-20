@@ -1160,6 +1160,11 @@ export interface AutopayPaymentFailedContext extends BaseContext {
   /** Public pay link for the invoice. */
   pay_url: string;
   tuition_url: string;
+  /** Cents past due on the account's OTHER invoices for the year, this
+   *  one excluded. When there are any, the email adds "Total past due
+   *  on your account" (them plus this invoice); a family whose only
+   *  past-due invoice is this one isn't told the same number twice. */
+  other_past_due_cents?: number;
 }
 
 /**
@@ -1179,6 +1184,14 @@ export function autopayPaymentFailed(
   const subject = `Your ${money(ctx.amount_cents)} tuition payment didn't go through`;
   const preheader = `Autopay couldn't charge your saved payment method. You can pay online now.`;
   const intro = `We tried to charge your saved payment method for the ${money(ctx.amount_cents)} tuition and fees payment for ${ctx.student_first_name}, but it didn't go through.`;
+  // Only when other invoices are past due too; otherwise the intro's
+  // amount is the total.
+  const others = ctx.other_past_due_cents ?? 0;
+  const accountTotal = others + ctx.amount_cents;
+  const balance =
+    others > 0
+      ? `Total past due on your account: ${money(accountTotal)}. You can see and pay each invoice on the Tuition & Fees page.`
+      : null;
   // Plain-text version only; the HTML says "button" and links the page.
   const next = `You can pay it now at the link below. To keep autopay working, please update your payment method on the Tuition & Fees page of your family portal.`;
 
@@ -1187,6 +1200,9 @@ export function autopayPaymentFailed(
     body:
       p(`Hi ${ctx.parent_first_name},`) +
       p(intro) +
+      (balance
+        ? `<p style="margin:0 0 14px;"><strong>Total past due on your account: ${escapeHtml(money(accountTotal))}.</strong> You can see and pay each invoice on the <a href="${escapeAttr(ctx.tuition_url)}" style="color:#0F2A4A;">Tuition &amp; Fees page</a>.</p>`
+        : "") +
       `<p style="margin:0 0 14px;">You can pay it now with the button below. To keep autopay working, please update your payment method on the <a href="${escapeAttr(ctx.tuition_url)}" style="color:#0F2A4A;">Tuition &amp; Fees page</a> of your family portal.</p>` +
       p(`The SailFuture Academy team`),
     buttonHref: ctx.pay_url,
@@ -1197,6 +1213,7 @@ export function autopayPaymentFailed(
     `Hi ${ctx.parent_first_name},`,
     "",
     intro,
+    ...(balance ? ["", balance] : []),
     "",
     next,
     "",

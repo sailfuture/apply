@@ -167,6 +167,23 @@ export interface BillingSmsInput {
   dueDate: number | null;
   /** Stripe hosted-invoice URL to pay, falling back to the app login. */
   payUrl: string;
+  /** Cents past due on the family's OTHER open invoices for the year,
+   *  this one excluded (lib/billing-past-due.ts `pastDueTotalsByFamily`
+   *  less this invoice). When there are any, the text adds "Total past
+   *  due on your account"; a family whose only past-due invoice is
+   *  this one isn't told the same number twice. */
+  otherPastDueCents?: number;
+}
+
+/** The account total to print beside one invoice's amount, or
+ *  undefined when nothing else on the account is past due. */
+function accountTotalLine(
+  input: Pick<BillingSmsInput, "amountCents" | "otherPastDueCents">,
+  thisInvoicePastDue: boolean
+): string | undefined {
+  const others = input.otherPastDueCents ?? 0;
+  if (!(others > 0)) return undefined;
+  return formatUsd(others + (thisInvoicePastDue ? input.amountCents : 0));
 }
 
 /** SMS 5 — monthly billing upcoming. Fires from the cron when an open
@@ -186,6 +203,9 @@ export async function sendBillingUpcomingSms(
       amount: formatUsd(input.amountCents),
       date: formatDueDate(input.dueDate),
       link: input.payUrl,
+      // The upcoming invoice isn't past due, so any past-due total is
+      // news to the family.
+      totalPastDue: accountTotalLine(input, false),
     }),
   });
 }
@@ -207,6 +227,7 @@ export async function sendOutstandingTuitionSms(
       amount: formatUsd(input.amountCents),
       date: formatDueDate(input.dueDate),
       link: input.payUrl,
+      totalPastDue: accountTotalLine(input, true),
     }),
   });
 }
