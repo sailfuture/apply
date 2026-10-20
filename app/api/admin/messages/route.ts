@@ -18,6 +18,7 @@ import {
   type SmsContactType,
 } from "@/lib/sms/contacts";
 import { resolveMainLine } from "@/lib/quo";
+import { writeClosedConversation } from "@/lib/app-settings";
 import { threadQuoUrl } from "@/lib/quo/links";
 import { buildInboxFeed } from "@/lib/sms/inbox-feed";
 import { bumpLeadReachOut } from "@/lib/leads";
@@ -274,9 +275,40 @@ export async function POST(req: NextRequest) {
  */
 export async function PATCH(req: NextRequest) {
   try {
-    await requireAdmin();
+    const { admin } = await requireAdmin();
     const body = await req.json().catch(() => null);
     const contactId = Number(body?.contactId);
+
+    // Close / reopen — any contact type. Closing stamps "now"; the
+    // thread stays hidden until something newer than the stamp
+    // arrives (see `SmsConversation.closed`).
+    if (typeof body?.closed === "boolean") {
+      const rawType = body?.contactType;
+      const type: SmsContactType | null =
+        rawType === "family" ||
+        rawType === "inquiry" ||
+        rawType === "camp" ||
+        rawType === "visit" ||
+        rawType === "tasco" ||
+        rawType === "adhoc"
+          ? rawType
+          : null;
+      if (!type || !Number.isFinite(contactId) || contactId <= 0) {
+        return NextResponse.json(
+          { error: "contactType and contactId are required" },
+          { status: 400 }
+        );
+      }
+      const key = `${type}:${contactId}`;
+      const closedAt = body.closed ? Date.now() : 0;
+      const map = await writeClosedConversation(key, closedAt, admin.email);
+      return NextResponse.json({
+        ok: true,
+        closed: Boolean(map[key]),
+        closedAt: map[key] ?? 0,
+      });
+    }
+
     if (body?.contactType !== "family" || !Number.isFinite(contactId)) {
       return NextResponse.json(
         { error: "Opt-out state can only be changed for family contacts" },

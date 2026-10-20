@@ -5,6 +5,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { toast } from "sonner";
 import {
+  Archive,
+  ArchiveRestore,
   CheckCheck,
   ExternalLink,
   ImageIcon,
@@ -373,8 +375,18 @@ export function MessagesInbox({ mode }: { mode: InboxMode }) {
   // parent, and student names (via the API's searchText), the phone
   // in any format, and the latest message body.
   const [search, setSearch] = useState("");
+  // Closed threads live behind their own chip: the main list never
+  // shows them, the Closed view shows only them. A thread the contact
+  // has texted or called since its close is no longer closed (the
+  // server computes `closed` against the thread's newest activity),
+  // so it comes back to the main list by itself.
+  const [showClosed, setShowClosed] = useState(false);
+  const closedCount = useMemo(
+    () => scoped.filter((c) => c.closed).length,
+    [scoped]
+  );
   const filtered = useMemo(() => {
-    let list = scoped;
+    let list = scoped.filter((c) => c.closed === showClosed);
     if (mode === "recruitment" && stageFilter !== "all") {
       list = list.filter((c) => c.stage === stageFilter);
     }
@@ -413,6 +425,7 @@ export function MessagesInbox({ mode }: { mode: InboxMode }) {
     );
   }, [
     scoped,
+    showClosed,
     mode,
     stageFilter,
     crewFilter,
@@ -444,6 +457,7 @@ export function MessagesInbox({ mode }: { mode: InboxMode }) {
   }
   const isUnread = (c: SmsConversation) =>
     c.needsReply &&
+    !c.closed &&
     (viewedMap[`${c.contactType}:${c.contactId}`] ?? 0) < c.lastAt;
   // Stamp EVERY needs-reply thread viewed in one write — the escape
   // hatch for a backlog this admin has decided needs no answer (a
@@ -526,6 +540,52 @@ export function MessagesInbox({ mode }: { mode: InboxMode }) {
     messagesFetcher
   );
   const quoConversationUrl = activeThread?.quoConversationUrl ?? null;
+
+  // Close / reopen the open thread. Shared state (one settings row
+  // for all staff), so the list refetches rather than patching
+  // locally; closing also steps back to the list, since the thread
+  // is leaving it.
+  const [closing, setClosing] = useState(false);
+  const activeClosed = Boolean(
+    selected &&
+      conversations.find(
+        (c) => c.contactType === selected.type && c.contactId === selected.id
+      )?.closed
+  );
+  async function setClosed(
+    type: SmsConversation["contactType"],
+    id: number,
+    closed: boolean
+  ) {
+    if (closing) return;
+    setClosing(true);
+    try {
+      const res = await fetch("/api/admin/messages", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contactType: type, contactId: id, closed }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        throw new Error(err?.error ?? `Request failed (${res.status})`);
+      }
+      await mutateAll();
+      if (closed) {
+        setSelected(null);
+        setProfileOpen(false);
+        toast.success("Conversation closed. It comes back if they text or call.");
+      } else {
+        toast.success("Conversation reopened.");
+      }
+    } catch (err) {
+      console.error("[messages-inbox] close/reopen failed:", err);
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't update the conversation."
+      );
+    } finally {
+      setClosing(false);
+    }
+  }
 
   const active = selected
     ? (conversations.find(
@@ -799,6 +859,30 @@ export function MessagesInbox({ mode }: { mode: InboxMode }) {
               ) : null}
             </>
           )}
+          {/* Closed threads — off the main list, one chip away. The
+              count is this page's closed conversations. */}
+          {closedCount > 0 || showClosed ? (
+            <>
+              <span className="mx-1 h-4 w-px shrink-0 bg-border" aria-hidden />
+              <button
+                type="button"
+                aria-pressed={showClosed}
+                onClick={() => {
+                  setShowClosed((v) => !v);
+                  setVisibleCount(PAGE);
+                }}
+                className={CHIP_CLASS(showClosed)}
+                title={
+                  showClosed
+                    ? "Back to open conversations"
+                    : "Conversations staff have closed"
+                }
+              >
+                <Archive className="mr-1 inline size-3 align-[-2px]" aria-hidden />
+                Closed{closedCount > 0 ? ` (${closedCount})` : ""}
+              </button>
+            </>
+          ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {anyUnread ? (
@@ -1010,6 +1094,36 @@ export function MessagesInbox({ mode }: { mode: InboxMode }) {
                   />
                 </p>
                 <div className="flex shrink-0 items-center gap-2">
+                  {/* Close takes the thread off the list (for every
+                      admin) until the contact texts or calls again;
+                      Reopen brings it back by hand. */}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="bg-white"
+                    disabled={closing}
+                    onClick={() =>
+                      void setClosed(
+                        active.contactType,
+                        active.contactId,
+                        !activeClosed
+                      )
+                    }
+                    title={
+                      activeClosed
+                        ? "Put this conversation back on the list"
+                        : "Take this conversation off the list until they text or call again"
+                    }
+                  >
+                    {closing ? (
+                      <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                    ) : activeClosed ? (
+                      <ArchiveRestore className="size-3.5 mr-1.5" />
+                    ) : (
+                      <Archive className="size-3.5 mr-1.5" />
+                    )}
+                    {activeClosed ? "Reopen" : "Close"}
+                  </Button>
                   {/* The same conversation in Quo's web app — every
                       call and text on the Main Line, with recordings
                       — in a new tab. Only once the thread has

@@ -17,6 +17,7 @@ import { getFacultyByPhone } from "@/lib/sms/faculty";
 import { isFollowUpTemplate } from "@/lib/nurture/templates";
 import { defaultAdminYear } from "@/lib/school-year-default";
 import { isMediaOnlyBody, mediaPreviewLabel, smsMedia } from "@/lib/sms/media";
+import { readClosedConversations } from "@/lib/app-settings";
 
 /**
  * The admin inbox's conversation list — one row per contact across
@@ -85,8 +86,15 @@ export interface SmsConversation {
    *  the count inside the window, not the thread's lifetime total. */
   messageCount: number;
   /** True when the most recent message is inbound (contact texted, no
-   *  reply yet) — drives the unread dot in the inbox. */
+   *  reply yet) — drives the unread dot in the inbox. Never true on a
+   *  closed thread. */
   needsReply: boolean;
+  /** When staff closed this thread (unix ms), 0 when never. */
+  closedAt: number;
+  /** True while the close stamp is newer than everything on the
+   *  thread — the inbox lists hide these. A text or call after the
+   *  close reopens the thread without anyone touching it. */
+  closed: boolean;
   /** Everything the inbox search box should match beyond the display
    *  name — parent + student names for families, the student's name
    *  for lead contacts. Lowercased server-side. Empty for family rows
@@ -201,6 +209,7 @@ export async function buildInboxFeed(
     srp,
     extraSrp,
     facultyByPhone,
+    closedMap,
   ] = await Promise.all([
     isWindow ? xano.smsMessages.getSince(since) : xano.smsMessages.getAll(),
     // Main Line calls (mirrored from Quo) — a call is the newest
@@ -233,7 +242,9 @@ export async function buildInboxFeed(
       )
     ),
     // Faculty are texted as ad-hoc numbers — name their threads.
+    // (closedMap, the last entry, is appended below.)
     getFacultyByPhone(),
+    readClosedConversations(),
   ]);
 
   const stageSets = withStages ? computeFamilyStageSets({ fap, srp }) : null;
@@ -460,10 +471,14 @@ export async function buildInboxFeed(
       const callIsNewest = !!lastCall && (!last || callAt > last.created_at);
       const replyAt = lastForReply?.created_at ?? 0;
       const lastMedia = last ? smsMedia(last) : [];
+      const lastAt = callIsNewest ? callAt : (last?.created_at ?? 0);
+      const closedAt = closedMap[`${type}:${id}`] ?? 0;
+      const closed = closedAt > 0 && closedAt >= lastAt;
       const needsReply =
-        lastCall && callAt > replyAt
+        !closed &&
+        (lastCall && callAt > replyAt
           ? lastCall.needsReply
-          : lastForReply?.direction === "inbound";
+          : lastForReply?.direction === "inbound");
       return {
         contactType: type,
         contactId: id,
@@ -489,7 +504,7 @@ export async function buildInboxFeed(
             : lastMedia.length > 0 && isMediaOnlyBody(last?.body)
               ? mediaPreviewLabel(lastMedia)
               : (last?.body ?? ""),
-        lastAt: callIsNewest ? callAt : (last?.created_at ?? 0),
+        lastAt,
         lastDirection:
           callIsNewest && lastCall
             ? lastCall.direction === "outgoing"
@@ -504,6 +519,8 @@ export async function buildInboxFeed(
         lastHasMedia: !callIsNewest && lastMedia.length > 0,
         messageCount: count,
         needsReply,
+        closedAt,
+        closed,
         searchText: searchFor(type, id),
         enrolledFamilyId: enrolledFamilyFor(type, id),
       };

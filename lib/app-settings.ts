@@ -232,6 +232,59 @@ export async function writeDeliveryAlertState(
   return parseDeliveryAlert(row.value);
 }
 
+/* ── Closed conversations ────────────────────────────────────────── */
+
+/** `${contactType}:${contactId}` → when staff closed that thread
+ *  (unix ms). A thread is HIDDEN from the inbox lists while nothing
+ *  newer than its close stamp has arrived; a new text or call reopens
+ *  it on its own. Shared by all staff (one settings row), not
+ *  per-admin like the viewed stamps. */
+export type ClosedConversations = Record<string, number>;
+
+const CLOSED_SETTING = "sms_closed_conversations";
+
+function parseClosed(v: unknown): ClosedConversations {
+  const r = asRecord(asRecord(v).closed);
+  const out: ClosedConversations = {};
+  for (const [key, at] of Object.entries(r)) {
+    const ms = Number(at);
+    if (/^[a-z]+:\d+$/.test(key) && Number.isFinite(ms) && ms > 0) out[key] = ms;
+  }
+  return out;
+}
+
+/** Never throws — an unreadable row hides nothing. */
+export async function readClosedConversations(): Promise<ClosedConversations> {
+  try {
+    const rows = await xano.appSettings.getAllStrict();
+    return parseClosed(rowFor(rows, CLOSED_SETTING)?.value);
+  } catch (err) {
+    console.error("[app-settings] closed-conversations read failed:", err);
+    return {};
+  }
+}
+
+/** Close (`closedAt` > 0) or reopen (`closedAt` = 0) one thread. The
+ *  row's value always carries `version` beside the map, so an empty
+ *  map is still a non-empty value — Xano's PATCH drops empty inputs,
+ *  which would otherwise leave the last close in place forever. */
+export async function writeClosedConversation(
+  key: string,
+  closedAt: number,
+  updatedBy: string
+): Promise<ClosedConversations> {
+  const rows = await xano.appSettings.getAllStrict();
+  const existing = rowFor(rows, CLOSED_SETTING);
+  const closed = parseClosed(existing?.value);
+  if (closedAt > 0) closed[key] = Math.floor(closedAt);
+  else delete closed[key];
+  const value = { version: 1, closed };
+  const row = existing
+    ? await xano.appSettings.update(existing.id, { value, updated_by: updatedBy })
+    : await xano.appSettings.create({ name: CLOSED_SETTING, value, updated_by: updatedBy });
+  return parseClosed(row.value);
+}
+
 export async function writeForwardingSettings(
   patch: ReplyForwardingSettings,
   updatedBy: string

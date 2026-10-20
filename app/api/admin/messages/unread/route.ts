@@ -10,6 +10,7 @@ import {
   phoneFromAdhocId,
 } from "@/lib/sms/contacts";
 import { callNeedsReply, callPreview } from "@/lib/calls";
+import { readClosedConversations } from "@/lib/app-settings";
 import { formatUSPhone } from "@/lib/phone";
 import { getSmsReadState } from "@/lib/sms/read-state";
 import { countUnread } from "@/lib/sms/unread";
@@ -75,10 +76,11 @@ async function handleGET() {
     // `FEED_LOOKBACK_MS`. The read state rides along in the same
     // payload — see `UnreadMessagesResponse.viewed`.
     const since = Date.now() - FEED_LOOKBACK_MS;
-    const [messages, calls, readState] = await Promise.all([
+    const [messages, calls, readState, closedMap] = await Promise.all([
       xano.smsMessages.getSince(since),
       xano.calls.getSince(since),
       getSmsReadState(),
+      readClosedConversations(),
     ]);
     // Texts and calls as one newest-first stream of "things that
     // count", so the first event seen per contact decides the thread.
@@ -112,6 +114,9 @@ async function handleGET() {
       const key = `${e.contact.type}:${e.contact.id}`;
       if (seen.has(key)) continue;
       seen.add(key);
+      // Staff closed the thread and nothing has arrived since — it is
+      // off the inbox lists, so it must be off the badge too.
+      if ((closedMap[key] ?? 0) >= e.at) continue;
       if (e.msg && e.msg.direction === "inbound") {
         pending.push({
           key,
