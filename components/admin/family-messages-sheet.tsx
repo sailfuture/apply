@@ -2,7 +2,14 @@
 
 import { useState } from "react";
 import useSWR from "swr";
-import { ExternalLink, MessageSquareText } from "lucide-react";
+import {
+  Archive,
+  ArchiveRestore,
+  ExternalLink,
+  Loader2,
+  MessageSquareText,
+} from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
@@ -16,6 +23,7 @@ import {
   FamilyMessageThread,
   messagesFetcher,
   messagesKey,
+  requestConversationClosed,
   type MessagesResponse,
 } from "@/components/admin/family-message-thread";
 
@@ -44,10 +52,36 @@ export function FamilyMessagesSheet({
   // badge count + header subtitle; the thread reads the same cache.
   // Default focus revalidation keeps the badge fresh; the thread adds
   // its own poll interval while the sheet is open.
-  const { data } = useSWR<MessagesResponse>(
+  const { data, mutate } = useSWR<MessagesResponse>(
     messagesKey(familyId),
     messagesFetcher
   );
+  const closed = data?.closed === true;
+
+  // Close / reopen from the family record — same shared state the
+  // inbox pages use. The drawer stays open either way; only the
+  // label flips once the thread refetches.
+  const [closing, setClosing] = useState(false);
+  async function toggleClosed() {
+    if (closing || !data) return;
+    setClosing(true);
+    try {
+      await requestConversationClosed("family", familyId, !closed);
+      await mutate();
+      toast.success(
+        closed
+          ? "Conversation reopened."
+          : "Conversation closed. It comes back on the Messages page if they text or call."
+      );
+    } catch (err) {
+      console.error("[FamilyMessagesSheet] close/reopen failed:", err);
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't update the conversation."
+      );
+    } finally {
+      setClosing(false);
+    }
+  }
 
   const totalMessages = data?.messages.length ?? 0;
   const recipient = data?.recipient ?? null;
@@ -104,20 +138,46 @@ export function FamilyMessagesSheet({
           <SheetHeader className="border-b px-6 py-4 pr-12">
             <SheetTitle>Messages &amp; calls</SheetTitle>
             <SheetDescription>{subtitle}</SheetDescription>
-            {/* Same thread in Quo's web app (recordings, every call
-                and text on the Main Line) — only once something on
-                it came through Quo. */}
-            {quoConversationUrl ? (
-              <a
-                href={quoConversationUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex w-fit items-center gap-1 text-xs font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground"
-              >
-                <ExternalLink className="size-3" aria-hidden="true" />
-                Open in Quo
-              </a>
-            ) : null}
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+              {/* Same thread in Quo's web app (recordings, every
+                  call and text on the Main Line) — only once
+                  something on it came through Quo. */}
+              {quoConversationUrl ? (
+                <a
+                  href={quoConversationUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex w-fit items-center gap-1 text-xs font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                >
+                  <ExternalLink className="size-3" aria-hidden="true" />
+                  Open in Quo
+                </a>
+              ) : null}
+              {/* Close hides the thread from the Messages pages until
+                  the family texts or calls again; Reopen puts it back. */}
+              {data ? (
+                <button
+                  type="button"
+                  disabled={closing}
+                  onClick={() => void toggleClosed()}
+                  className="inline-flex w-fit items-center gap-1 text-xs font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground disabled:opacity-60"
+                  title={
+                    closed
+                      ? "Put this conversation back on the Messages page"
+                      : "Take this conversation off the Messages page until they text or call again"
+                  }
+                >
+                  {closing ? (
+                    <Loader2 className="size-3 animate-spin" aria-hidden="true" />
+                  ) : closed ? (
+                    <ArchiveRestore className="size-3" aria-hidden="true" />
+                  ) : (
+                    <Archive className="size-3" aria-hidden="true" />
+                  )}
+                  {closed ? "Reopen conversation" : "Close conversation"}
+                </button>
+              ) : null}
+            </div>
           </SheetHeader>
           <FamilyMessageThread
             className="flex-1 min-h-0"

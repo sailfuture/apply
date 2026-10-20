@@ -32,6 +32,7 @@ import {
   FamilyMessageThread,
   contactMessagesKey,
   messagesFetcher,
+  requestConversationClosed,
   type MessagesResponse,
 } from "@/components/admin/family-message-thread";
 import { GroupMessageDialog } from "@/components/admin/group-message-dialog";
@@ -560,15 +561,7 @@ export function MessagesInbox({ mode }: { mode: InboxMode }) {
     if (closing) return;
     setClosing(true);
     try {
-      const res = await fetch("/api/admin/messages", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contactType: type, contactId: id, closed }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => null);
-        throw new Error(err?.error ?? `Request failed (${res.status})`);
-      }
+      await requestConversationClosed(type, id, closed);
       await mutateAll();
       if (closed) {
         setSelected(null);

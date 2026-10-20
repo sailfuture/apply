@@ -18,7 +18,10 @@ import {
   type SmsContactType,
 } from "@/lib/sms/contacts";
 import { resolveMainLine } from "@/lib/quo";
-import { writeClosedConversation } from "@/lib/app-settings";
+import {
+  readClosedConversations,
+  writeClosedConversation,
+} from "@/lib/app-settings";
 import { threadQuoUrl } from "@/lib/quo/links";
 import { buildInboxFeed } from "@/lib/sms/inbox-feed";
 import { bumpLeadReachOut } from "@/lib/leads";
@@ -133,7 +136,7 @@ async function handleGET(req: NextRequest) {
               .sort((a, b) => a.started_at - b.started_at || a.id - b.id);
           })
         : xano.calls.getByContact(contact.type, contact.id);
-    const [messages, recipient, calls, lineId] = await Promise.all([
+    const [messages, recipient, calls, lineId, closedMap] = await Promise.all([
       messagesPromise,
       getContactRecipient(contact.type, contact.id),
       callsPromise,
@@ -145,13 +148,24 @@ async function handleGET(req: NextRequest) {
             .then((n) => n.id)
             .catch(() => null)
         : Promise.resolve(null),
+      readClosedConversations(),
     ]);
     const quoConversationUrl = threadQuoUrl(messages, calls, lineId);
+    // Same rule as the inbox feed: closed while the close stamp is
+    // newer than everything on the thread.
+    const closedAt = closedMap[`${contact.type}:${contact.id}`] ?? 0;
+    const lastAt = Math.max(
+      0,
+      ...messages.map((m) => m.created_at),
+      ...calls.map((c) => c.started_at || c.created_at)
+    );
     return NextResponse.json({
       messages,
       recipient,
       calls,
       quoConversationUrl,
+      closedAt,
+      closed: closedAt > 0 && closedAt >= lastAt,
     });
   } catch (err) {
     return handleAdminError(err);

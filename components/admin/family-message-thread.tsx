@@ -49,6 +49,32 @@ export interface MessagesResponse {
   /** Deep link to this contact's conversation in the Quo web app —
    *  null until something on the thread came through Quo. */
   quoConversationUrl?: string | null;
+  /** When staff closed this thread (unix ms), 0 when never. */
+  closedAt?: number;
+  /** True while the close stamp is newer than everything on the
+   *  thread — the inbox lists hide it. A new text or call clears it. */
+  closed?: boolean;
+}
+
+/** Close (hide from the inbox lists until the contact writes again)
+ *  or reopen one thread. Shared by every surface with a Close button;
+ *  callers refetch afterwards — the state is one settings row for all
+ *  staff, not something to patch locally. Throws with the server's
+ *  message on failure. */
+export async function requestConversationClosed(
+  type: ThreadContactType,
+  id: number,
+  closed: boolean
+): Promise<void> {
+  const res = await fetch("/api/admin/messages", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ contactType: type, contactId: id, closed }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => null);
+    throw new Error(err?.error ?? `Request failed (${res.status})`);
+  }
 }
 
 export const messagesFetcher = async (
