@@ -302,8 +302,11 @@ export function MessagesInbox({ mode }: { mode: InboxMode }) {
   // Enrolled-page directory join: the conversation feed carries no
   // crew/bus/grade, so pull the group-audience directory (same
   // payload the composer uses — SWR dedupes) and key it by family id.
+  // Deferred until the window has painted the list: this is eleven
+  // more table reads for filter chips, and firing it alongside the
+  // window would hold the list up behind Xano's parallel-request cap.
   const { data: audienceData } = useSWR<GroupAudienceResponse>(
-    mode === "enrolled" && yearId
+    mode === "enrolled" && yearId && windowData
       ? `/api/admin/messages/group/audience?yearId=${yearId}`
       : null,
     adminFetcher

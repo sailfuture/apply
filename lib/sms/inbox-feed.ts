@@ -107,6 +107,49 @@ export interface InboxFeedOptions {
   since?: number | null;
 }
 
+/** How far back the FULL feed reads calls. The list only ever shows
+ *  each contact's newest call, and a call is only the newest thing on
+ *  a thread for as long as nobody texts — three months is well past
+ *  that for anyone still in touch. (Calls have only been mirrored
+ *  since 2026-09-23, so today this is the whole table anyway.) */
+export const FULL_CALLS_LOOKBACK_MS = 90 * 24 * 60 * 60 * 1000;
+
+/** The few facts the list needs about a call. Built the moment the
+ *  rows arrive so the transcripts, summaries and next-steps JSON that
+ *  make `registration_calls` a 400 KB table are dropped before the
+ *  rest of the feed is assembled — none of it reaches the inbox list. */
+interface CallSummary {
+  id: number;
+  /** `started_at`, else `created_at`. */
+  at: number;
+  direction: string;
+  counterparty: string;
+  contact: { type: SmsContactType; id: number } | null;
+  /** `callPreview` — the list's one-line description. */
+  preview: string;
+  needsReply: boolean;
+}
+
+/** The full feed's call window start, snapped to the hour: the read
+ *  is cached by URL (lib/xano-fetch.ts), and a start that moved with
+ *  the clock would make every poll a cache miss. */
+function fullCallsSince(): number {
+  const HOUR = 60 * 60 * 1000;
+  return Math.floor((Date.now() - FULL_CALLS_LOOKBACK_MS) / HOUR) * HOUR;
+}
+
+function slimCalls(rows: XanoCall[]): CallSummary[] {
+  return rows.map((c) => ({
+    id: c.id,
+    at: c.started_at || c.created_at,
+    direction: c.direction,
+    counterparty: c.counterparty,
+    contact: callContactRef(c),
+    preview: callPreview(c),
+    needsReply: callNeedsReply(c),
+  }));
+}
+
 export interface InboxFeed {
   conversations: SmsConversation[];
   /** The year the stages were computed for (resolved when the caller
@@ -157,10 +200,12 @@ export async function buildInboxFeed(
     isWindow ? xano.smsMessages.getSince(since) : xano.smsMessages.getAll(),
     // Main Line calls (mirrored from Quo) — a call is the newest
     // thing on a thread as often as a text is, and a contact who
-    // has only ever called still belongs in the list.
-    isWindow
-      ? xano.calls.getSince(since).catch(() => [])
-      : xano.calls.getAll().catch(() => []),
+    // has only ever called still belongs in the list. Windowed in
+    // both stages (see FULL_CALLS_LOOKBACK_MS) and slimmed on arrival.
+    xano.calls
+      .getSince(since ?? fullCallsSince())
+      .then(slimCalls)
+      .catch((): CallSummary[] => []),
     // Name tables — all cached for 30 s, and the lead tables also
     // carry the lead → family link, so the window keeps them.
     xano.families.getAll().catch(() => []),
@@ -349,7 +394,7 @@ export async function buildInboxFeed(
        *  out can't hide a parent's unanswered question. */
       lastForReply: XanoSmsMessage | null;
       /** Newest phone call with this contact. */
-      lastCall: XanoCall | null;
+      lastCall: CallSummary | null;
       count: number;
     }
   >();
@@ -384,10 +429,9 @@ export async function buildInboxFeed(
     }
   }
   for (const call of calls) {
-    const c = callContactRef(call);
+    const c = call.contact;
     if (!c) continue;
     const key = `${c.type}:${c.id}`;
-    const at = call.started_at || call.created_at;
     const existing = byContact.get(key);
     if (!existing) {
       byContact.set(key, {
@@ -397,10 +441,7 @@ export async function buildInboxFeed(
         lastCall: call,
         count: 0,
       });
-    } else if (
-      !existing.lastCall ||
-      at > (existing.lastCall.started_at || existing.lastCall.created_at)
-    ) {
+    } else if (!existing.lastCall || call.at > existing.lastCall.at) {
       existing.lastCall = call;
     }
   }
@@ -410,12 +451,12 @@ export async function buildInboxFeed(
   // voicemail. Same rule as the nav badge's unread endpoint.
   const conversations: SmsConversation[] = [...byContact.values()]
     .map(({ type, id, last, lastForReply, lastCall, count }) => {
-      const callAt = lastCall ? lastCall.started_at || lastCall.created_at : 0;
+      const callAt = lastCall?.at ?? 0;
       const callIsNewest = !!lastCall && (!last || callAt > last.created_at);
       const replyAt = lastForReply?.created_at ?? 0;
       const needsReply =
         lastCall && callAt > replyAt
-          ? callNeedsReply(lastCall)
+          ? lastCall.needsReply
           : lastForReply?.direction === "inbound";
       return {
         contactType: type,
@@ -437,7 +478,7 @@ export async function buildInboxFeed(
                     ? ("none" as const)
                     : familyStage(id),
         lastBody:
-          callIsNewest && lastCall ? callPreview(lastCall) : (last?.body ?? ""),
+          callIsNewest && lastCall ? lastCall.preview : (last?.body ?? ""),
         lastAt: callIsNewest ? callAt : (last?.created_at ?? 0),
         lastDirection:
           callIsNewest && lastCall
