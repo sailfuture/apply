@@ -10,6 +10,7 @@ import {
 } from "@/lib/xano";
 import { sendSms } from "@/lib/sms/send";
 import {
+  adhocIdFromPhone,
   counterpartyPhone,
   getContactRecipient,
   messageContactRef as messageContact,
@@ -20,6 +21,7 @@ import {
 } from "@/lib/sms/contacts";
 import { resolveMainLine } from "@/lib/quo";
 import { threadQuoUrl } from "@/lib/quo/links";
+import { callDuration, callLabel, callGist } from "@/lib/calls";
 import { computeFamilyStageSets } from "@/lib/sms/stages";
 import { getFacultyByPhone } from "@/lib/sms/faculty";
 import { bumpLeadReachOut } from "@/lib/leads";
@@ -61,6 +63,11 @@ export interface SmsConversation {
   /** True when the latest message was part of a group blast
    *  (template `group:…`) — the list renders those distinctly. */
   lastIsGroup: boolean;
+  /** True when the newest thing on the thread is a phone call rather
+   *  than a text — `lastBody` is then the call's one-line description
+   *  ("Missed call", "Incoming call · 4 min", "Voicemail: …"). */
+  lastIsCall: boolean;
+  /** Texts only — calls aren't counted. */
   messageCount: number;
   /** True when the most recent message is inbound (contact texted, no
    *  reply yet) — drives the unread dot in the inbox. */
@@ -130,6 +137,7 @@ async function handleGET(req: NextRequest) {
       const withStages = Number.isFinite(yearId) && yearId > 0;
       const [
         messages,
+        calls,
         families,
         inquiries,
         campRows,
@@ -143,6 +151,10 @@ async function handleGET(req: NextRequest) {
       ] =
         await Promise.all([
           xano.smsMessages.getAll(),
+          // Main Line calls (mirrored from Quo) — a call is the newest
+          // thing on a thread as often as a text is, and a contact who
+          // has only ever called still belongs in the list.
+          xano.calls.getAll().catch(() => []),
           xano.families.getAll().catch(() => []),
           xano.inquiries.getAll().catch(() => []),
           xano.summerCamp.getAll().catch(() => []),
@@ -328,11 +340,14 @@ async function handleGET(req: NextRequest) {
         {
           type: SmsContactType;
           id: number;
-          last: XanoSmsMessage;
+          /** Newest text, or null on a thread that is calls only. */
+          last: XanoSmsMessage | null;
           /** Newest message that isn't an automated follow-up — what
            *  "needs a reply" is judged on, so a tour reminder going
            *  out can't hide a parent's unanswered question. */
           lastForReply: XanoSmsMessage | null;
+          /** Newest phone call with this contact. */
+          lastCall: XanoCall | null;
           count: number;
         }
       >();
@@ -349,11 +364,14 @@ async function handleGET(req: NextRequest) {
             ...c,
             last: m,
             lastForReply: counts ? m : null,
+            lastCall: null,
             count: 1,
           });
         } else {
           existing.count += 1;
-          if (m.created_at > existing.last.created_at) existing.last = m;
+          if (!existing.last || m.created_at > existing.last.created_at) {
+            existing.last = m;
+          }
           if (
             counts &&
             (!existing.lastForReply ||
@@ -363,12 +381,43 @@ async function handleGET(req: NextRequest) {
           }
         }
       }
+      for (const call of calls) {
+        const c = callContactRef(call);
+        if (!c) continue;
+        const key = `${c.type}:${c.id}`;
+        const at = call.started_at || call.created_at;
+        const existing = byContact.get(key);
+        if (!existing) {
+          byContact.set(key, {
+            ...c,
+            last: null,
+            lastForReply: null,
+            lastCall: call,
+            count: 0,
+          });
+        } else if (
+          !existing.lastCall ||
+          at > (existing.lastCall.started_at || existing.lastCall.created_at)
+        ) {
+          existing.lastCall = call;
+        }
+      }
+      // Needs-reply stays a question about TEXTS (same rule as the nav
+      // badge's unread endpoint, which never reads calls) — a missed
+      // call shows in the preview but doesn't light the dot.
       const conversations: SmsConversation[] = [...byContact.values()]
-        .map(({ type, id, last, lastForReply, count }) => ({
+        .map(({ type, id, last, lastForReply, lastCall, count }) => {
+          const callAt = lastCall
+            ? lastCall.started_at || lastCall.created_at
+            : 0;
+          const callIsNewest = !!lastCall && (!last || callAt > last.created_at);
+          return {
           contactType: type,
           contactId: id,
           name: nameFor(type, id),
-          phone: counterpartyPhone(last),
+          phone: last
+            ? counterpartyPhone(last)
+            : normPhone(lastCall?.counterparty ?? ""),
           stage:
             type === "inquiry"
               ? ("inquiry" as const)
@@ -381,17 +430,28 @@ async function handleGET(req: NextRequest) {
                     : type === "adhoc"
                       ? ("none" as const)
                       : familyStage(id),
-          lastBody: last.body,
-          lastAt: last.created_at,
-          lastDirection: last.direction,
+          lastBody:
+            callIsNewest && lastCall
+              ? callPreview(lastCall)
+              : (last?.body ?? ""),
+          lastAt: callIsNewest ? callAt : (last?.created_at ?? 0),
+          lastDirection:
+            callIsNewest && lastCall
+              ? lastCall.direction === "outgoing"
+                ? "outbound"
+                : "inbound"
+              : (last?.direction ?? ""),
           lastIsGroup:
-            typeof last.template === "string" &&
+            !callIsNewest &&
+            typeof last?.template === "string" &&
             last.template.startsWith("group"),
+          lastIsCall: callIsNewest,
           messageCount: count,
           needsReply: lastForReply?.direction === "inbound",
           searchText: searchFor(type, id),
           enrolledFamilyId: enrolledFamilyFor(type, id),
-        }))
+          };
+        })
         .sort((a, b) => b.lastAt - a.lastAt);
       return NextResponse.json({ conversations });
     }
@@ -454,6 +514,45 @@ async function handleGET(req: NextRequest) {
   } catch (err) {
     return handleAdminError(err);
   }
+}
+
+/** Which contact a call belongs to — the calls table carries the same
+ *  five FK columns as `sms_messages`, in the same precedence, and a
+ *  call with none threads by the caller's number like an ad-hoc text. */
+function callContactRef(
+  c: XanoCall
+): { type: SmsContactType; id: number } | null {
+  if (c.registration_families_id) {
+    return { type: "family", id: c.registration_families_id };
+  }
+  if (c.registration_inquiry_id) {
+    return { type: "inquiry", id: c.registration_inquiry_id };
+  }
+  if (c.registration_summer_camp_id) {
+    return { type: "camp", id: c.registration_summer_camp_id };
+  }
+  if (c.website_liability_waiver_id) {
+    return { type: "visit", id: c.website_liability_waiver_id };
+  }
+  if (c.tasco_summer_visit_id) {
+    return { type: "tasco", id: c.tasco_summer_visit_id };
+  }
+  const adhocId = adhocIdFromPhone(c.counterparty);
+  return adhocId !== null ? { type: "adhoc", id: adhocId } : null;
+}
+
+/** One line for the conversation list: "Missed call", "Incoming
+ *  call · 4 min", "Voicemail: <what they said>". */
+function callPreview(c: XanoCall): string {
+  const label = callLabel(c);
+  if (label === "Voicemail") {
+    const gist = callGist(c);
+    return gist ? `Voicemail: ${gist}` : "Voicemail";
+  }
+  const duration = callDuration(c.duration_seconds);
+  const gist = callGist(c);
+  const head = duration ? `${label} · ${duration}` : label;
+  return gist ? `${head} · ${gist}` : head;
 }
 
 export async function POST(req: NextRequest) {

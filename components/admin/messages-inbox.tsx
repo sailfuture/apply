@@ -9,6 +9,7 @@ import {
   ExternalLink,
   Loader2,
   MessageSquareText,
+  Phone,
   Search,
   UserRound,
   Users,
@@ -804,6 +805,15 @@ export function MessagesInbox({ mode }: { mode: InboxMode }) {
                           aria-label="Group message"
                         />
                       ) : null}
+                      {/* A phone call as the newest thing on the
+                          thread — the preview text already says what
+                          kind ("Missed call", "Voicemail: …"). */}
+                      {c.lastIsCall ? (
+                        <Phone
+                          className="size-3 shrink-0 text-muted-foreground"
+                          aria-label="Phone call"
+                        />
+                      ) : null}
                       <span
                         className={cn(
                           "truncate text-xs",
@@ -814,7 +824,7 @@ export function MessagesInbox({ mode }: { mode: InboxMode }) {
                       >
                         {c.lastIsGroup
                           ? "Group: "
-                          : c.lastDirection === "outbound"
+                          : c.lastDirection === "outbound" && !c.lastIsCall
                             ? "You: "
                             : ""}
                         {c.lastBody}
