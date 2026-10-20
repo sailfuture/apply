@@ -59,9 +59,10 @@ function parseContactParams(req: NextRequest): {
  *  - `GET ?contactType=&contactId=` (or legacy `?familyId=`) — one
  *    contact's text thread + their Main Line calls + the recipient
  *    summary (who it goes to, opt-out state) + the thread's Quo link.
- *  - `GET ?yearId=[&since=]` (no contact params) — the global inbox
+ *  - `GET [?yearId=][&since=]` (no contact params) — the global inbox
  *    feed: one conversation per contact across families, inquiries,
- *    and summer-camp parents; `since` narrows it to a recent window.
+ *    and summer-camp parents; `since` narrows it to a recent window,
+ *    and a missing `yearId` means the admin default year.
  *  - `POST { contactType?, contactId?, familyId?, body }` — send a
  *    manual text to the contact's phone and log it on their thread.
  */
@@ -72,9 +73,11 @@ async function handleGET(req: NextRequest) {
 
     if (!contact) {
       // Global inbox feed — one conversation per contact, newest
-      // first. When the page passes its `?yearId=`, family
-      // conversations also get a pipeline-stage annotation for the
-      // filter chips (the stage reads only run in that case).
+      // first, with a pipeline-stage annotation per family for the
+      // filter chips and the enrolled/recruitment split. The stages
+      // are scoped to `?yearId=`; without one the builder resolves
+      // the same default year the YearSelector injects, so the inbox
+      // can fetch on first render instead of waiting for the URL.
       //
       // `?since=<unix ms>` asks for the WINDOW: only texts and calls
       // at or after that instant, with the parent/student search
@@ -85,10 +88,13 @@ async function handleGET(req: NextRequest) {
       const sinceParam = req.nextUrl.searchParams.get("since");
       const since = sinceParam === null ? null : Number(sinceParam);
       const feed = await buildInboxFeed({
-        yearId: Number.isFinite(yearId) && yearId > 0 ? yearId : 0,
+        yearId: Number.isFinite(yearId) && yearId > 0 ? yearId : null,
         since: since !== null && Number.isFinite(since) && since > 0 ? since : null,
       });
-      return NextResponse.json({ conversations: feed.conversations });
+      return NextResponse.json({
+        conversations: feed.conversations,
+        yearId: feed.yearId,
+      });
     }
 
     // Ad-hoc threads have no FK column to query on — filter the full

@@ -15,6 +15,7 @@ import { callNeedsReply, callPreview } from "@/lib/calls";
 import { computeFamilyStageSets } from "@/lib/sms/stages";
 import { getFacultyByPhone } from "@/lib/sms/faculty";
 import { isFollowUpTemplate } from "@/lib/nurture/templates";
+import { defaultAdminYear } from "@/lib/school-year-default";
 
 /**
  * The admin inbox's conversation list — one row per contact across
@@ -96,9 +97,11 @@ export interface SmsConversation {
 }
 
 export interface InboxFeedOptions {
-  /** School year the family stages are computed for. 0 / NaN skips
-   *  the stage reads and every family reads stage "none". */
-  yearId: number;
+  /** School year the family stages are computed for. `null` resolves
+   *  the same default the YearSelector would inject into the URL
+   *  (lib/school-year-default.ts), so a page that fetches before the
+   *  selector has run gets the answer it would have asked for. */
+  yearId: number | null;
   /** Window start (unix ms). When set, only texts and calls at or
    *  after it are read and the search haystack is skipped. */
   since?: number | null;
@@ -106,27 +109,32 @@ export interface InboxFeedOptions {
 
 export interface InboxFeed {
   conversations: SmsConversation[];
+  /** The year the stages were computed for (resolved when the caller
+   *  passed null); 0 when no year could be resolved. */
+  yearId: number;
 }
 
 export async function buildInboxFeed(
   options: InboxFeedOptions
 ): Promise<InboxFeed> {
-  const { yearId } = options;
   const since =
     typeof options.since === "number" && Number.isFinite(options.since) && options.since > 0
       ? Math.floor(options.since)
       : null;
   const isWindow = since !== null;
-  const withStages = Number.isFinite(yearId) && yearId > 0;
 
   // The year list comes first because the stage reads below depend on
-  // it (the "enrolled" split unions the selected year with the live +
+  // it (the default year when the caller passed none, and the
+  // "enrolled" split, which unions the selected year with the live +
   // upcoming ones). It's a cached 3 KB table, so this round trip is
   // nearly free — and folding the dependent reads into ONE second
   // round beats the old shape of a third serial round for them.
-  const years = withStages
-    ? await xano.schoolYears.getAll().catch(() => [])
-    : [];
+  const years = await xano.schoolYears.getAll().catch(() => []);
+  const yearId =
+    options.yearId === null
+      ? (defaultAdminYear(years)?.id ?? 0)
+      : options.yearId;
+  const withStages = Number.isFinite(yearId) && yearId > 0;
   const extraYearIds = years
     .filter((y) => (y.isActive || y.isNextYear) && y.id !== yearId)
     .map((y) => y.id);
@@ -449,5 +457,5 @@ export async function buildInboxFeed(
       };
     })
     .sort((a, b) => b.lastAt - a.lastAt);
-  return { conversations };
+  return { conversations, yearId: withStages ? yearId : 0 };
 }
