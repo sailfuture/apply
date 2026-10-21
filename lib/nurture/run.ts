@@ -21,7 +21,7 @@ import {
  */
 export async function loadNurtureInput(
   now = Date.now()
-): Promise<NurtureInput & { forwardReplies: boolean }> {
+): Promise<NurtureInput & { forwardReplies: boolean; billingTexts: boolean }> {
   const [settings, messages, notes, inquiries, camps, visits, tascos, tours, calls] =
     await Promise.all([
       readAppSettings(),
@@ -40,6 +40,7 @@ export async function loadNurtureInput(
     now,
     settings: settings.nurture,
     forwardReplies: settings.forwarding.enabled,
+    billingTexts: settings.billingTexts.enabled,
     inquiries,
     camps,
     visits,

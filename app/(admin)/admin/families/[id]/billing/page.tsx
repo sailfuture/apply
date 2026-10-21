@@ -562,7 +562,9 @@ function ScheduleRow({
               // anyone holding the link can view and pay it, so admin
               // can open it and enter a card on the family's behalf.
               <a
-                href={inv.hostedInvoiceUrl}
+                // Through /pay, which fetches a fresh URL from Stripe: the
+                // stored one expires 30 days after the due date.
+                href={`/pay/${inv.stripeInvoiceId}`}
                 target="_blank"
                 rel="noreferrer"
                 className={ACTION_BADGE}

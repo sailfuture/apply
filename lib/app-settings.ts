@@ -26,6 +26,11 @@ export interface ReplyForwardingSettings {
   enabled: boolean;
 }
 
+/** Tuition due-soon and past-due texts (`lib/billing-texts.ts`). */
+export interface BillingTextSettings {
+  enabled: boolean;
+}
+
 /** A setting value the caller should fix (surfaced as a 400). */
 export class InvalidSettingError extends Error {}
 
@@ -80,6 +85,12 @@ function parseForwarding(v: unknown): ReplyForwardingSettings {
   return { enabled: r.enabled !== false };
 }
 
+/** On unless switched off: the texts were live before the switch. */
+function parseBillingTexts(v: unknown): BillingTextSettings {
+  const r = asRecord(v);
+  return { enabled: r.enabled !== false };
+}
+
 /** Lowest id wins if a race ever created two rows for one name. */
 function rowFor(rows: XanoAppSetting[], name: string) {
   return (
@@ -108,12 +119,14 @@ export async function readAppSettings(): Promise<{
   nurture: NurtureSettings;
   forwarding: ReplyForwardingSettings;
   sms: SmsSettings;
+  billingTexts: BillingTextSettings;
 }> {
   const rows = await xano.appSettings.getAllStrict();
   return {
     nurture: parseNurture(rowFor(rows, "nurture")?.value),
     forwarding: parseForwarding(rowFor(rows, "sms_forwarding")?.value),
     sms: parseSmsProvider(rowFor(rows, "sms_provider")?.value),
+    billingTexts: parseBillingTexts(rowFor(rows, "billing_texts")?.value),
   };
 }
 
@@ -291,4 +304,12 @@ export async function writeForwardingSettings(
 ): Promise<ReplyForwardingSettings> {
   const row = await upsert("sms_forwarding", { enabled: patch.enabled }, updatedBy);
   return parseForwarding(row.value);
+}
+
+export async function writeBillingTextSettings(
+  patch: BillingTextSettings,
+  updatedBy: string
+): Promise<BillingTextSettings> {
+  const row = await upsert("billing_texts", { enabled: patch.enabled }, updatedBy);
+  return parseBillingTexts(row.value);
 }

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import {
   InvalidSettingError,
+  writeBillingTextSettings,
   writeForwardingSettings,
   writeNurtureSettings,
   writeSmsProvider,
@@ -26,7 +27,8 @@ import * as tpl from "@/lib/nurture/templates";
  *        the cron runs: texts due on the next run, texts held (and
  *        why), what comes due over the next 48 hours, what went out
  *        in the last 14 days, and every template with sample names.
- * PATCH — { enabled?, senderName?, forwardReplies? }.
+ * PATCH — { enabled?, senderName?, forwardReplies?, billingTexts?,
+ *          smsProvider? }.
  */
 export const dynamic = "force-dynamic";
 
@@ -59,6 +61,8 @@ export interface NurtureRecentItem {
 export interface NurtureOverview {
   settings: { enabled: boolean; senderName: string; startedAt: number | null };
   forwardReplies: boolean;
+  /** Tuition due-soon / past-due texts (lib/billing-texts.ts). */
+  billingTexts: boolean;
   inWindow: boolean;
   due: NurturePreviewItem[];
   held: NurturePreviewItem[];
@@ -170,6 +174,7 @@ export async function GET() {
     const overview: NurtureOverview = {
       settings: input.settings,
       forwardReplies: input.forwardReplies,
+      billingTexts: input.billingTexts,
       inWindow: plan.inWindow,
       due: plan.items.filter((i) => i.state === "due").map((i) => toPreview(i)),
       held: plan.items.filter((i) => i.state === "held").map((i) => toPreview(i)),
@@ -214,6 +219,15 @@ export async function PATCH(req: NextRequest) {
         );
       }
       await writeForwardingSettings({ enabled: body.forwardReplies }, by);
+    }
+    if (body?.billingTexts !== undefined) {
+      if (typeof body.billingTexts !== "boolean") {
+        return NextResponse.json(
+          { error: "billingTexts must be true or false" },
+          { status: 400 }
+        );
+      }
+      await writeBillingTextSettings({ enabled: body.billingTexts }, by);
     }
     // Which number every text Apply sends goes out from — the phase 2
     // cutover switch (Phone system card on this page).

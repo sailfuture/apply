@@ -113,6 +113,7 @@ export default function FollowUpsPage() {
       ) : (
         <>
           <SettingsCard data={data} revalidate={() => mutate()} />
+          <TuitionTextsCard data={data} revalidate={() => mutate()} />
           <PhoneSystemCard />
 
           <PreviewTable
@@ -316,6 +317,69 @@ function SettingsCard({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+    </Card>
+  );
+}
+
+/**
+ * Tuition texts to the primary parent (lib/billing-texts.ts), sent by
+ * the daily reminder cron: due soon and 7, 14 and 21 days past due.
+ * Separate from the lead follow-ups above, and on by default.
+ */
+function TuitionTextsCard({
+  data,
+  revalidate,
+}: {
+  data: NurtureOverview;
+  revalidate: () => Promise<unknown>;
+}) {
+  const [saving, setSaving] = useState(false);
+
+  async function toggle(on: boolean) {
+    setSaving(true);
+    try {
+      await patchSettings({ billingTexts: on });
+      // Spinner holds until the refreshed settings have rendered.
+      await revalidate();
+      toast.success(on ? "Tuition texts are on." : "Tuition texts turned off.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't save");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card className="bg-white">
+      <CardHeader>
+        <CardTitle className="text-base">Tuition texts</CardTitle>
+        <CardDescription>
+          Texts to each billed family&rsquo;s primary parent about their
+          tuition invoices, with a link to pay the invoice and a link to
+          set up autopay. Residential families are never texted.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="flex items-start gap-3">
+          <Switch
+            id="billing-texts"
+            checked={data.billingTexts}
+            disabled={saving}
+            onCheckedChange={(v) => void toggle(v)}
+          />
+          <div className="space-y-0.5">
+            <Label htmlFor="billing-texts" className="font-medium">
+              Tuition reminders{" "}
+              {saving ? <Loader2 className="inline size-3.5 animate-spin" /> : null}
+            </Label>
+            <p className="text-sm text-muted-foreground">
+              {data.billingTexts
+                ? "On. Sent once a day at 10 AM Eastern: 3 days before an invoice is due (not to families on autopay), then 7, 14 and 21 days after it if it's still unpaid. Several late invoices share one text."
+                : "Off. No tuition texts are sent. The past-due emails still go out."}
+            </p>
+          </div>
+        </div>
+      </CardContent>
     </Card>
   );
 }

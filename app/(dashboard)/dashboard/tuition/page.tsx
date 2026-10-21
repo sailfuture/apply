@@ -51,6 +51,7 @@ import {
 } from "lucide-react";
 import { DashboardPageHeader } from "@/components/dashboard-page-header";
 import { cn } from "@/lib/utils";
+import { formatTimestampUs } from "@/lib/us-date";
 import type {
   ParentScheduleResponse,
   ParentScheduleSlot,
@@ -947,6 +948,20 @@ function AutopayPanel({ yearId }: { yearId: number }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
+  // Arrived from a billing text's autopay link (`/autopay`): the panel
+  // renders after its fetch, too late for the browser's own jump to
+  // `#autopay`, so scroll once it's there.
+  const scrolledToPanel = useRef(false);
+  const panelReady = Boolean(status?.available);
+  useEffect(() => {
+    if (!panelReady || scrolledToPanel.current) return;
+    if (window.location.hash !== "#autopay") return;
+    scrolledToPanel.current = true;
+    document
+      .getElementById("autopay")
+      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [panelReady]);
+
   if (error) {
     return (
       <p className="mt-4 text-xs text-muted-foreground">
@@ -970,7 +985,10 @@ function AutopayPanel({ yearId }: { yearId: number }) {
       : "";
 
   return (
-    <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border px-3 py-3">
+    <div
+      id="autopay"
+      className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border px-3 py-3"
+    >
       <div className="min-w-0">
         <p className="flex items-center gap-1.5 text-sm font-medium">
           {status.enabled ? (
@@ -1145,19 +1163,25 @@ function BillingScheduleCard({ slots }: { slots: ParentScheduleSlot[] }) {
         <CardTitle className="text-base">Monthly invoices</CardTitle>
       </CardHeader>
       <CardContent className="px-3 pb-3 bg-white">
-        {/* Three columns so the table fits a phone with no horizontal
-            scroll — month (with due date + amount tucked underneath),
-            paid/unpaid status, and the link to view or pay. */}
+        {/* Month | Due date | Amount | Status | Invoice. On a phone
+            the due date moves under the month so the row still fits
+            without a horizontal scroll. */}
         <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead className="text-[10px] text-muted-foreground w-[44%]">
+              <TableHead className="text-[10px] text-muted-foreground">
                 Month
               </TableHead>
-              <TableHead className="text-[10px] text-muted-foreground w-[28%]">
+              <TableHead className="hidden sm:table-cell text-[10px] text-muted-foreground">
+                Due date
+              </TableHead>
+              <TableHead className="text-[10px] text-muted-foreground text-right">
+                Amount
+              </TableHead>
+              <TableHead className="text-[10px] text-muted-foreground">
                 Status
               </TableHead>
-              <TableHead className="text-[10px] text-muted-foreground w-[28%] text-right">
+              <TableHead className="text-[10px] text-muted-foreground text-right">
                 Invoice
               </TableHead>
             </TableRow>
@@ -1175,34 +1199,35 @@ function BillingScheduleCard({ slots }: { slots: ParentScheduleSlot[] }) {
 
 function BillingScheduleRow({ slot }: { slot: ParentScheduleSlot }) {
   const inv = slot.invoice;
-  const dueLabel = inv?.dueDate ? formatBillingDate2(inv.dueDate) : null;
-  const sentLabel = inv?.finalizedAt
-    ? formatBillingDate2(inv.finalizedAt)
-    : null;
-  const amountDue = inv ? inv.amountDueCents / 100 : null;
-  // One compact sub-line under the month replaces the old Sent / Due /
-  // Amount columns.
-  const subParts = [
-    dueLabel ? `Due ${dueLabel}` : sentLabel ? `Sent ${sentLabel}` : null,
-    amountDue != null ? formatUsd(amountDue) : null,
-  ].filter(Boolean);
+  // An invoice's own due date, or (autopay: no due date) the day it
+  // was charged; for a month not invoiced yet, the projected one.
+  const dueMs = inv ? (inv.dueDate ?? inv.finalizedAt) : slot.scheduledDueDate;
+  const dueLabel = dueMs ? formatTimestampUs(dueMs) : "—";
+  const amountCents = inv ? inv.amountDueCents : slot.scheduledAmountCents;
+  const amountLabel = amountCents != null ? formatUsd(amountCents / 100) : "—";
   return (
     <TableRow className={cn(slot.status === "not_started" && "opacity-70")}>
       <TableCell className="font-medium whitespace-normal">
         {slot.monthLabel}
-        {subParts.length > 0 ? (
-          <span className="mt-0.5 block text-xs font-normal text-muted-foreground tabular-nums">
-            {subParts.join(" · ")}
+        {dueMs ? (
+          <span className="mt-0.5 block text-xs font-normal text-muted-foreground tabular-nums sm:hidden">
+            Due {dueLabel}
           </span>
         ) : null}
       </TableCell>
+      <TableCell className="hidden sm:table-cell tabular-nums">
+        {dueLabel}
+      </TableCell>
+      <TableCell className="text-right tabular-nums">{amountLabel}</TableCell>
       <TableCell>
         <ScheduleStatusPill status={slot.status} />
       </TableCell>
       <TableCell className="text-right">
         {inv?.hostedInvoiceUrl ? (
           <a
-            href={inv.hostedInvoiceUrl}
+            // Through /pay, which fetches a fresh URL from Stripe: the
+            // stored one expires 30 days after the due date.
+            href={`/pay/${inv.stripeInvoiceId}`}
             target="_blank"
             rel="noreferrer"
             className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
@@ -1303,12 +1328,4 @@ function formatBillingDate(iso: string): string {
   });
 }
 
-/** Format a unix-ms timestamp as a short date for the table cells. */
-function formatBillingDate2(ms: number): string {
-  return new Date(ms).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-}
 

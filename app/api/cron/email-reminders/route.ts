@@ -9,13 +9,14 @@ import {
 } from "@/lib/emails/triggers";
 import {
   planPastDueEmails,
-  pastDueBalance,
   pastDueTotalsByFamily,
 } from "@/lib/billing-past-due";
+import { planBillingTexts } from "@/lib/billing-texts";
+import { readAppSettings } from "@/lib/app-settings";
 import { runAutopaySweep, type AutopaySweepResult } from "@/lib/autopay";
 import {
   sendBillingUpcomingSms,
-  sendOutstandingTuitionSms,
+  sendPastDueTuitionSms,
 } from "@/lib/sms/triggers";
 import { activeStripeSubscriptionId } from "@/lib/xano";
 import { sendBillingAlert, familyAlertLabel } from "@/lib/billing-alerts";
@@ -34,6 +35,9 @@ import { getStripeClient } from "@/lib/stripe";
  *   - Past-due tuition — 7, 14 and 21 days after an open invoice's
  *     due date, to every parent on the family, with pay links (see
  *     lib/billing-past-due.ts).
+ *   - Tuition texts to the primary parent — due soon (3 days ahead)
+ *     and 7, 14 and 21 days past due, behind the Follow-ups switch
+ *     (see lib/billing-texts.ts).
  *
  * Authorization: Vercel Cron sends `Authorization: Bearer
  * $CRON_SECRET` when the `CRON_SECRET` env var is set. Other callers
@@ -91,11 +95,6 @@ const BACK_TO_SCHOOL_START_MONTH_INDEX = 7; // August (0-indexed)
 const BACK_TO_SCHOOL_START_DAY = 10;
 const BACK_TO_SCHOOL_END_DAY = 17;
 
-/** Lead time for the "monthly billing upcoming" SMS — fire when an open
- *  invoice's due date is within this many days. Past that (due date in
- *  the past) it becomes the "outstanding tuition" reminder instead. */
-const BILLING_UPCOMING_LEAD_DAYS = 3;
-
 export async function GET(req: NextRequest) {
   // Fails closed in production when CRON_SECRET is unset — this route
   // sends real emails/texts, so it must never be world-callable.
@@ -109,8 +108,11 @@ export async function GET(req: NextRequest) {
     backToSchool: { eligible: 0, sent: 0, failed: 0 },
     // `unverified`: held because the SMS log couldn't be read to tell
     // whether the text already went out. Tomorrow's run tries again.
+    // `off`: the Follow-ups switch for billing texts is off (or its
+    // setting couldn't be read, which holds them for the day).
+    billingTexts: "on" as "on" | "off" | "unreadable",
     billingUpcoming: { eligible: 0, sent: 0, failed: 0, unverified: 0 },
-    outstanding: { eligible: 0, sent: 0, failed: 0, unverified: 0 },
+    pastDueText: { eligible: 0, sent: 0, failed: 0, unverified: 0 },
     // Per family: `eligible` = had a 7/14/21-day reminder come due,
     // `deduped` = the email log shows it already went out.
     pastDueEmail: {
@@ -125,6 +127,21 @@ export async function GET(req: NextRequest) {
   };
 
   try {
+    // The billing-texts switch (Recruitment → Follow-ups). A settings
+    // read that fails holds the texts today rather than text families
+    // staff may have just switched off. Tomorrow's run catches up.
+    let billingTextsOn = false;
+    try {
+      billingTextsOn = (await readAppSettings()).billingTexts.enabled;
+      result.billingTexts = billingTextsOn ? "on" : "off";
+    } catch (err) {
+      result.billingTexts = "unreadable";
+      console.error(
+        "[cron/email-reminders] app settings unreadable — holding billing texts today:",
+        err
+      );
+    }
+
     const years = await xano.schoolYears.getAll();
     // Active + upcoming years are what families touch today. Skip
     // years flagged `isPast` — no point sending reminders for a year
@@ -229,7 +246,7 @@ export async function GET(req: NextRequest) {
       // live subscription: not residential (never tuition-billed). A
       // fully unenrolled family's leftover invoice is a staff call,
       // made in Stripe. Null when the family list can't be read, which
-      // skips autopay and the past-due emails today rather than act on
+      // skips autopay and the billing emails and texts today rather than act on
       // a residential family. Tomorrow's run catches up.
       let billingSubscriptions: Map<number, string> | null = null;
       try {
@@ -247,7 +264,7 @@ export async function GET(req: NextRequest) {
         }
       } catch (err) {
         console.error(
-          `[cron/email-reminders] family list unreadable — skipping autopay and past-due emails for year ${year.id}:`,
+          `[cron/email-reminders] family list unreadable — skipping autopay and billing emails + texts for year ${year.id}:`,
           err
         );
       }
@@ -281,75 +298,64 @@ export async function GET(req: NextRequest) {
         }
       }
 
-      // Billing SMS — reminders driven off the invoice mirror
-      // (`registration_payment_transactions`). For each still-open
-      // invoice with a balance: fire "upcoming" when the due date is
-      // within the lead window, or "outstanding" once it's past due.
-      // Both dedupe per-invoice via the SMS log (see lib/sms/triggers),
-      // so a daily run only texts each invoice once per state — and
-      // hold the text for the next run when the log can't be read.
-      // No-ops safely when Twilio isn't configured.
       const txns = await xano.paymentTransactions.getAllByYear(year.id);
       // The mirror learns about the sweep's charges from the webhook a
       // few seconds later, so leave those out of today's reminders.
       const reminderTxns = txns.filter(
         (t) => !chargedToday.has(t.stripe_invoice_id)
       );
-      // What each family owes past due across the year, so every text
-      // can say "Total past due on your account" beside the one
-      // invoice it's about.
-      const pastDueTotals = pastDueTotalsByFamily(reminderTxns, Date.now());
-      for (const tx of reminderTxns) {
-        const outstanding =
-          Number(tx.amount_due_cents) - Number(tx.amount_paid_cents);
-        const isOpen =
-          (tx.status === "open" || tx.status === "uncollectible") &&
-          outstanding > 0;
-        if (!isOpen) continue;
 
-        const input = {
-          familyId: tx.registration_families_id,
-          yearId: year.id,
-          invoiceId: tx.stripe_invoice_id,
-          amountCents: outstanding,
-          dueDate: tx.due_date,
+      // Billing texts to the primary parent (lib/billing-texts.ts):
+      // "due soon" 3 days ahead (not for autopay families) and 7, 14
+      // and 21 days past due, each with the invoice's pay link and the
+      // autopay link. Deduped per (invoice, stage) via the SMS log, and
+      // held for the next run when the log can't be read. Only the
+      // families in `billingSubscriptions`, so never residential.
+      if (billingTextsOn && billingSubscriptions) {
+        const billing = billingSubscriptions;
+        const planned = planBillingTexts({
+          txns: reminderTxns,
+          isBillableFamily: (id) => billing.has(id),
+          isOnAutopay: (subId) => onAutopay.has(subId),
+          // What each family owes past due across the year, so every
+          // text can say "Total past due on your account" beside the
+          // one invoice it's about.
+          pastDueTotals: pastDueTotalsByFamily(reminderTxns, Date.now()),
           // Branded short link (`/pay/<invoice>` → 302 to the hosted
           // invoice page) instead of the ~140-char invoice.stripe.com
-          // URL — half the length in the text, and it reads as us.
-          // Only when a hosted URL exists to land on; otherwise fall
-          // back to the app itself.
-          payUrl: tx.hosted_invoice_url
-            ? `${appBaseUrl}/pay/${tx.stripe_invoice_id}`
-            : appBaseUrl,
-          // Past due on the family's OTHER invoices. The outstanding
-          // text adds this one back itself: the totals count whole
-          // days, so an invoice a few hours past due isn't in them yet
-          // even though its text goes out today.
-          otherPastDueCents:
-            (pastDueTotals.get(Number(tx.registration_families_id)) ?? 0) -
-            (pastDueBalance(tx, Date.now())?.owed ?? 0),
-        };
-
-        if (tx.due_date != null && tx.due_date < Date.now()) {
-          result.outstanding.eligible += 1;
-          const res = await sendOutstandingTuitionSms(input);
-          if (res.ok) result.outstanding.sent += 1;
-          else if (res.skipped === "unverified") {
-            result.outstanding.unverified += 1;
-          } else result.outstanding.failed += 1;
-        } else if (
-          tx.due_date != null &&
-          tx.due_date <= Date.now() + BILLING_UPCOMING_LEAD_DAYS * ONE_DAY_MS &&
-          // Autopay charges it on the due date, so there's nothing for
-          // the family to pay.
-          !onAutopay.has(tx.stripe_subscription_id)
-        ) {
+          // URL. Only when a hosted URL exists to land on.
+          payUrlFor: (tx) =>
+            tx.hosted_invoice_url
+              ? `${appBaseUrl}/pay/${tx.stripe_invoice_id}`
+              : `${appBaseUrl}/dashboard/tuition`,
+          nowMs: Date.now(),
+        });
+        const autopayUrl = `${appBaseUrl}/autopay`;
+        for (const t of planned.upcoming) {
           result.billingUpcoming.eligible += 1;
-          const res = await sendBillingUpcomingSms(input);
+          const res = await sendBillingUpcomingSms({
+            familyId: t.familyId,
+            yearId: year.id,
+            invoiceId: t.invoiceId,
+            amountCents: t.amountCents,
+            dueDate: t.dueDate,
+            payUrl: t.payUrl,
+            autopayUrl,
+            otherPastDueCents: t.otherPastDueCents,
+          });
           if (res.ok) result.billingUpcoming.sent += 1;
           else if (res.skipped === "unverified") {
             result.billingUpcoming.unverified += 1;
           } else result.billingUpcoming.failed += 1;
+        }
+        // One text per family, however many invoices reached a stage.
+        for (const plan of planned.pastDue) {
+          result.pastDueText.eligible += 1;
+          const res = await sendPastDueTuitionSms(plan, year.id, autopayUrl);
+          if (res.ok) result.pastDueText.sent += 1;
+          else if (res.skipped === "unverified") {
+            result.pastDueText.unverified += 1;
+          } else result.pastDueText.failed += 1;
         }
       }
 

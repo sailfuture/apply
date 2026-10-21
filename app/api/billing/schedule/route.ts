@@ -70,20 +70,44 @@ export async function GET(req: NextRequest) {
   // put every invoice one month early).
   const txByMonthKey = indexTransactionsByMonth(transactions);
 
+  // Each family's subscription bills on its own day of the month, so a
+  // month that isn't invoiced yet takes its due date from the latest
+  // invoice, moved forward a month per slot. An autopay invoice has no
+  // due date: it's charged when issued, so that day stands in.
+  let latest: { slotIndex: number; dueMs: number } | null = null;
+  for (const slot of slots) {
+    const tx = txByMonthKey.get(monthKey(new Date(slot.periodStart)));
+    const dueMs = Number(tx?.due_date ?? tx?.finalized_at);
+    if (tx && dueMs > 0) latest = { slotIndex: slot.slotIndex, dueMs };
+  }
+
   const enrichedSlots = slots.map((slot) => {
     const k = monthKey(new Date(slot.periodStart));
     const tx = txByMonthKey.get(k) ?? null;
     if (!tx) {
+      // Still to come: after the latest invoice, or (nothing invoiced
+      // yet) not over. A month before a mid-year enrollee's first
+      // invoice was never billed, so it shows nothing.
+      const upcoming = latest
+        ? slot.slotIndex > latest.slotIndex
+        : slot.periodEndExclusive > Date.now();
       return {
         ...slot,
         status: "not_started" as const,
         invoice: null,
+        scheduledDueDate:
+          upcoming && latest
+            ? addMonthsUtc(latest.dueMs, slot.slotIndex - latest.slotIndex)
+            : null,
+        scheduledAmountCents: upcoming ? monthlyAmountCents : null,
       };
     }
     const status = stripeStatusToUi(tx.status);
     return {
       ...slot,
       status,
+      scheduledDueDate: null,
+      scheduledAmountCents: null,
       invoice: {
         stripeInvoiceId: tx.stripe_invoice_id,
         amountDueCents: tx.amount_due_cents,
@@ -154,6 +178,31 @@ export interface ParentScheduleSlot {
     paidAt: number | null;
     finalizedAt: number | null;
   } | null;
+  /** Not-yet-invoiced months only: when the invoice is expected to be
+   *  due (projected from the latest invoice's day of the month) and
+   *  the family's monthly total. Null when unknown or invoiced. */
+  scheduledDueDate: number | null;
+  scheduledAmountCents: number | null;
+}
+
+/** `ms` moved `months` calendar months later, same time of day, the
+ *  day clamped to the target month's length (Jan 31 → Feb 28). */
+function addMonthsUtc(ms: number, months: number): number {
+  const d = new Date(ms);
+  const target = new Date(
+    Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + months, 1)
+  );
+  const lastDay = new Date(
+    Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)
+  ).getUTCDate();
+  target.setUTCDate(Math.min(d.getUTCDate(), lastDay));
+  target.setUTCHours(
+    d.getUTCHours(),
+    d.getUTCMinutes(),
+    d.getUTCSeconds(),
+    d.getUTCMilliseconds()
+  );
+  return target.getTime();
 }
 
 // Slot/mapping helpers live in lib/billing-schedule.ts, shared with

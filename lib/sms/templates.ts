@@ -1,5 +1,5 @@
 /**
- * SMS copy for the six transactional / billing triggers. Kept terse
+ * SMS copy for the transactional / billing triggers. Kept terse
  * (one or two segments) and lead with "SailFuture Academy" so the text
  * is identifiable without a saved contact. Personalized with the
  * student name, and — for billing — the amount, due date, and pay link.
@@ -29,6 +29,8 @@ export function billingUpcomingSms(v: {
   amount: string;
   date: string;
   link: string;
+  /** Tuition page's Autopay panel (`/autopay`). */
+  autopayLink: string;
   /** Formatted total already past due on the account, when there is
    *  one. The upcoming invoice isn't part of it. */
   totalPastDue?: string;
@@ -36,13 +38,20 @@ export function billingUpcomingSms(v: {
   const balance = v.totalPastDue
     ? ` Total past due on your account: ${v.totalPastDue}.`
     : "";
-  return `SailFuture Academy: a tuition payment of ${v.amount} is due ${v.date}.${balance} View or pay here: ${v.link}`;
+  return `SailFuture Academy: a tuition payment of ${v.amount} is due ${v.date}.${balance} Pay here: ${v.link} Or set up autopay so it's paid automatically: ${v.autopayLink}`;
 }
 
-export function outstandingTuitionSms(v: {
+/** 7, 14 and 21 days past due. Plain ASCII on purpose: one character
+ *  outside the GSM set (an em dash, curly quote) makes the whole text
+ *  UCS-2, which more than doubles the segments it costs. */
+export function pastDueTuitionSms(v: {
   amount: string;
   date: string;
+  daysPastDue: number;
   link: string;
+  autopayLink: string;
+  /** The family is on autopay, so this invoice's charge failed. */
+  onAutopay: boolean;
   /** Formatted total past due on the account, when it's more than
    *  this one invoice. Left out when this invoice IS the total. */
   totalPastDue?: string;
@@ -50,5 +59,11 @@ export function outstandingTuitionSms(v: {
   const balance = v.totalPastDue
     ? ` Total past due on your account: ${v.totalPastDue}.`
     : "";
-  return `SailFuture Academy: your tuition payment of ${v.amount} (due ${v.date}) is past due.${balance} Please pay here: ${v.link} — reply with any questions.`;
+  const what = v.onAutopay
+    ? `we couldn't charge your card on file for your tuition payment of ${v.amount} (${v.date}). It is now ${v.daysPastDue} days past due.`
+    : `your tuition payment of ${v.amount} (due ${v.date}) is now ${v.daysPastDue} days past due.`;
+  const autopay = v.onAutopay
+    ? `Update your autopay card: ${v.autopayLink}`
+    : `Set up autopay: ${v.autopayLink}`;
+  return `SailFuture Academy: ${what}${balance} Pay here: ${v.link} ${autopay} Reply with any questions.`;
 }
