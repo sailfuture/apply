@@ -3,12 +3,27 @@
 import { useMemo, useState } from "react";
 import useSWR from "swr";
 import { toast } from "sonner";
-import { Send, Loader2, Ban, RotateCw, TriangleAlert } from "lucide-react";
+import {
+  Send,
+  Loader2,
+  Ban,
+  RotateCw,
+  TriangleAlert,
+  PhoneForwarded,
+} from "lucide-react";
 import { CallMarker } from "@/components/admin/call-marker";
 import { MessageMedia } from "@/components/admin/message-media";
 import { describeSmsError, isFailedStatus } from "@/lib/sms/errors";
 import { isMediaOnlyBody, smsMedia } from "@/lib/sms/media";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { formatUSPhone, toE164 } from "@/lib/phone";
 import { Textarea } from "@/components/ui/textarea";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/marker";
@@ -39,9 +54,18 @@ export interface MessageRecipient {
   optedOut: boolean;
 }
 
+/** Another parent on the family with a textable number — kept in sync
+ *  with `AltFamilyRecipient` in `lib/sms/contacts.ts`. */
+export interface AltMessageRecipient extends MessageRecipient {
+  relationship: string;
+}
+
 export interface MessagesResponse {
   messages: XanoSmsMessage[];
   recipient: MessageRecipient | null;
+  /** Family threads: the other parents a failed text can be resent
+   *  to. Empty for every other contact type. */
+  altRecipients?: AltMessageRecipient[];
   /** This contact's phone calls on the Main Line (mirrored from Quo),
    *  oldest first — rendered in the thread between the texts. Absent
    *  on responses from before calls joined the thread. */
@@ -161,6 +185,7 @@ export function FamilyMessageThread({
   const calls = useMemo(() => data?.calls ?? [], [data]);
   const quoConversationUrl = data?.quoConversationUrl ?? null;
   const recipient = data?.recipient ?? null;
+  const altRecipients = useMemo(() => data?.altRecipients ?? [], [data]);
 
   const [body, setBody] = useState("");
   const [sending, setSending] = useState(false);
@@ -170,8 +195,9 @@ export function FamilyMessageThread({
   // without threading ids through the row component.
   const [retryingBody, setRetryingBody] = useState<string | null>(null);
 
-  /** Re-send a failed message's text to the same contact. */
-  async function retrySend(text: string) {
+  /** Re-send a failed message's text — to the account holder, or to
+   *  another parent on the family when `parentId` is given. */
+  async function retrySend(text: string, parentId?: number | null) {
     if (retryingBody) return;
     setRetryingBody(text);
     try {
@@ -184,6 +210,7 @@ export function FamilyMessageThread({
           body: text,
           studentId: defaultStudentId ?? null,
           yearId: defaultYearId ?? null,
+          ...(parentId != null ? { parentId } : {}),
         }),
       });
       if (!res.ok) {
@@ -193,8 +220,12 @@ export function FamilyMessageThread({
       const sent = await res.json().catch(() => null);
       await mutate();
       onSent?.();
+      const to =
+        parentId != null
+          ? altRecipients.find((r) => r.parentId === parentId)?.name
+          : null;
       if (sent?.warning) toast.warning(sent.warning);
-      else toast.success("Text resent.");
+      else toast.success(to ? `Text resent to ${to}.` : "Text resent.");
     } catch (err) {
       console.error("Failed to resend text:", err);
       toast.error(
@@ -304,6 +335,19 @@ export function FamilyMessageThread({
     }
   }
 
+  /** The other parent on the far end of a text, when it isn't the
+   *  account holder: an outbound text names them in its footer (and
+   *  its Retry goes back to that number), a reply is headed with their
+   *  name. */
+  function altFor(m: XanoSmsMessage): AltMessageRecipient | null {
+    if (!altRecipients.length) return null;
+    const phone = toE164(
+      m.direction === "outbound" ? m.to_number : m.from_number
+    );
+    if (!phone || phone === recipient?.e164) return null;
+    return altRecipients.find((r) => r.e164 === phone) ?? null;
+  }
+
   const items = useMemo(
     () => buildThreadItems(messages, calls),
     [messages, calls]
@@ -355,7 +399,12 @@ export function FamilyMessageThread({
                           msg={item.msg}
                           showHeader={item.showHeader}
                           recipientName={recipient?.name}
-                          onRetry={(text) => void retrySend(text)}
+                          primary={recipient}
+                          sentToAlt={altFor(item.msg)}
+                          altRecipients={altRecipients}
+                          onRetry={(text, parentId) =>
+                            void retrySend(text, parentId)
+                          }
                           retrying={retryingBody === item.msg.body}
                         />
                       </MessageScrollerItem>
@@ -459,6 +508,9 @@ export function FamilyMessageThread({
   );
 }
 
+const RESEND_LINK_CLASS =
+  "inline-flex items-center gap-1 font-medium underline underline-offset-2 hover:text-destructive/80 disabled:opacity-60";
+
 /** Human status label for the message footer. */
 const STATUS_LABEL: Record<string, string> = {
   sending: "Sending…",
@@ -495,6 +547,9 @@ function MessageRow({
   msg,
   showHeader = true,
   recipientName,
+  primary = null,
+  sentToAlt = null,
+  altRecipients = [],
   onRetry,
   retrying,
 }: {
@@ -503,8 +558,18 @@ function MessageRow({
    *  shows the name once. */
   showHeader?: boolean;
   recipientName?: string;
-  /** Re-send this message's text to the same contact. */
-  onRetry?: (body: string) => void;
+  /** The account holder — a resend target when this text failed on
+   *  another parent's phone. */
+  primary?: MessageRecipient | null;
+  /** Set when this text went to (or a reply came from) another parent
+   *  on the family rather than the account holder. */
+  sentToAlt?: AltMessageRecipient | null;
+  /** The family's other parents — the "Send to another number" picker
+   *  on a failed text. */
+  altRecipients?: AltMessageRecipient[];
+  /** Re-send this message's text: no `parentId` = the account holder,
+   *  a `parentId` = that parent on the family. */
+  onRetry?: (body: string, parentId?: number | null) => void;
   retrying?: boolean;
 }) {
   const outbound = msg.direction === "outbound";
@@ -515,10 +580,39 @@ function MessageRow({
   );
   const sender = outbound
     ? msg.author_name || (automated ? "SailFuture (automated)" : "SailFuture")
-    : recipientName || "Family";
+    : sentToAlt?.name || recipientName || "Family";
   const statusText = outbound ? (STATUS_LABEL[msg.status] ?? msg.status) : null;
   const failed = outbound && isFailedStatus(msg.status);
   const error = failed ? describeSmsError(msg.error_code) : null;
+  const canRetry = error?.retryable !== false;
+  // Every other number on the family — the account holder too, when
+  // this text failed on someone else's phone.
+  const resendTargets = failed
+    ? [
+        ...(sentToAlt && primary?.e164
+          ? [
+              {
+                key: "primary",
+                parentId: null,
+                name: primary.name || "Account holder",
+                relationship: "Account holder",
+                phone: primary.phone,
+                optedOut: primary.optedOut,
+              },
+            ]
+          : []),
+        ...altRecipients
+          .filter((r) => r.parentId !== sentToAlt?.parentId)
+          .map((r) => ({
+            key: String(r.parentId),
+            parentId: r.parentId,
+            name: r.name || "Parent",
+            relationship: r.relationship,
+            phone: r.phone,
+            optedOut: r.optedOut,
+          })),
+      ]
+    : [];
   // A bare photo was logged with a placeholder body; the photo itself
   // says it better, so the words bubble is skipped when it's just that.
   const hasMedia = smsMedia(msg).length > 0;
@@ -543,6 +637,11 @@ function MessageRow({
         <MessageMedia message={msg} align={align} />
         <MessageFooter title={new Date(msg.created_at).toLocaleString()}>
           {statusText ? <span>{statusText}&nbsp;·&nbsp;</span> : null}
+          {outbound && sentToAlt ? (
+            <span>
+              To {sentToAlt.name || "another parent"}&nbsp;·&nbsp;
+            </span>
+          ) : null}
           <span>{timeLabel(msg.created_at)}</span>
         </MessageFooter>
         {/* A failed send gets its own red block rather than a footer
@@ -560,22 +659,63 @@ function MessageRow({
                 {error?.message ?? "The carrier rejected it."}
               </span>
             </p>
-            {/* Retry sends the same words again from whichever number
-                Apply texts from now (Follow-ups → Phone system). */}
-            {onRetry && error?.retryable !== false ? (
-              <button
-                type="button"
-                disabled={retrying}
-                onClick={() => onRetry(msg.body)}
-                className="mt-1.5 inline-flex items-center gap-1 font-medium underline underline-offset-2 hover:text-destructive/80 disabled:opacity-60"
-              >
-                {retrying ? (
-                  <Loader2 className="size-3 animate-spin" />
-                ) : (
-                  <RotateCw className="size-3" />
-                )}
-                {retrying ? "Resending…" : "Retry"}
-              </button>
+            {onRetry && (canRetry || resendTargets.length > 0) ? (
+              <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+                {/* Retry sends the same words again, to the same number,
+                    from whichever number Apply texts from now
+                    (Follow-ups → Phone system). */}
+                {canRetry ? (
+                  <button
+                    type="button"
+                    disabled={retrying}
+                    onClick={() => onRetry(msg.body, sentToAlt?.parentId)}
+                    className={RESEND_LINK_CLASS}
+                  >
+                    {retrying ? (
+                      <Loader2 className="size-3 animate-spin" />
+                    ) : (
+                      <RotateCw className="size-3" />
+                    )}
+                    {retrying ? "Resending…" : "Retry"}
+                  </button>
+                ) : null}
+                {resendTargets.length > 0 ? (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        type="button"
+                        disabled={retrying}
+                        className={RESEND_LINK_CLASS}
+                      >
+                        <PhoneForwarded className="size-3" />
+                        Send to another number
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="min-w-64">
+                      <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
+                        Send this text to
+                      </DropdownMenuLabel>
+                      {resendTargets.map((t) => (
+                        <DropdownMenuItem
+                          key={t.key}
+                          disabled={t.optedOut}
+                          onSelect={() => onRetry(msg.body, t.parentId)}
+                          className="flex-col items-start gap-0"
+                        >
+                          <span className="font-medium">
+                            {t.name}
+                            {t.relationship ? ` · ${t.relationship}` : ""}
+                          </span>
+                          <span className="text-xs text-muted-foreground">
+                            {formatUSPhone(t.phone)}
+                            {t.optedOut ? " · Opted out of texts" : ""}
+                          </span>
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                ) : null}
+              </div>
             ) : null}
           </div>
         ) : null}
@@ -602,6 +742,8 @@ function senderSignature(m: XanoSmsMessage): string {
   const isGroup = Boolean(m.template?.startsWith("group"));
   return [
     m.direction,
+    // Replies from two parents on one family are separate runs.
+    m.direction === "inbound" ? (toE164(m.from_number) ?? "") : "",
     m.author_name ?? "",
     m.template && m.template !== "manual" ? "auto" : "",
     isGroup ? "group" : "",

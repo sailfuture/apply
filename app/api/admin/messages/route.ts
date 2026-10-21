@@ -6,11 +6,14 @@ import {
   LEAD_NOTE_SOURCES,
   type LeadNoteSource,
   type XanoCall,
+  type XanoParent,
 } from "@/lib/xano";
 import { sendSms } from "@/lib/sms/send";
 import {
   counterpartyPhone,
+  findFamilyParent,
   getContactRecipient,
+  getFamilyAltRecipients,
   messageContactRef as messageContact,
   normPhone,
   phoneFromAdhocId,
@@ -67,8 +70,11 @@ function parseContactParams(req: NextRequest): {
  *    feed: one conversation per contact across families, inquiries,
  *    and summer-camp parents; `since` narrows it to a recent window,
  *    and a missing `yearId` means the admin default year.
- *  - `POST { contactType?, contactId?, familyId?, body }` — send a
- *    manual text to the contact's phone and log it on their thread.
+ *  - `POST { contactType?, contactId?, familyId?, body, parentId? }` —
+ *    send a manual text to the contact's phone and log it on their
+ *    thread. `parentId` (families only) aims it at another parent on
+ *    the family instead of the account holder — still logged on the
+ *    family thread.
  */
 async function handleGET(req: NextRequest) {
   try {
@@ -136,20 +142,26 @@ async function handleGET(req: NextRequest) {
               .sort((a, b) => a.started_at - b.started_at || a.id - b.id);
           })
         : xano.calls.getByContact(contact.type, contact.id);
-    const [messages, recipient, calls, lineId, closedMap] = await Promise.all([
-      messagesPromise,
-      getContactRecipient(contact.type, contact.id),
-      callsPromise,
-      // The Main Line's Quo id, for "Open in Quo" links. Best-effort:
-      // without the API key (or Quo down) the stored links still
-      // carry it, and a thread with neither simply has no button.
-      process.env.QUO_API_KEY
-        ? resolveMainLine()
-            .then((n) => n.id)
-            .catch(() => null)
-        : Promise.resolve(null),
-      readClosedConversations(),
-    ]);
+    const [messages, recipient, altRecipients, calls, lineId, closedMap] =
+      await Promise.all([
+        messagesPromise,
+        getContactRecipient(contact.type, contact.id),
+        // The family's other parents' phones — where a failed text can be
+        // resent. Families only; every other contact is one person.
+        contact.type === "family"
+          ? getFamilyAltRecipients(contact.id)
+          : Promise.resolve([]),
+        callsPromise,
+        // The Main Line's Quo id, for "Open in Quo" links. Best-effort:
+        // without the API key (or Quo down) the stored links still
+        // carry it, and a thread with neither simply has no button.
+        process.env.QUO_API_KEY
+          ? resolveMainLine()
+              .then((n) => n.id)
+              .catch(() => null)
+          : Promise.resolve(null),
+        readClosedConversations(),
+      ]);
     const quoConversationUrl = threadQuoUrl(messages, calls, lineId);
     // Same rule as the inbox feed: closed while the close stamp is
     // newer than everything on the thread.
@@ -162,6 +174,7 @@ async function handleGET(req: NextRequest) {
     return NextResponse.json({
       messages,
       recipient,
+      altRecipients,
       calls,
       quoConversationUrl,
       closedAt,
@@ -209,8 +222,33 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // "Send to another number": a specific parent on the family rather
+    // than the account holder. The parent must belong to this family —
+    // the id comes from the browser — and their own opt-out flag gates
+    // the send (sendSms reads it off the parent we hand it).
+    const rawParentId = body?.parentId;
+    let parent: XanoParent | null = null;
+    if (rawParentId != null) {
+      const parentId = Number(rawParentId);
+      if (contactType !== "family" || !Number.isFinite(parentId)) {
+        return NextResponse.json(
+          { error: "parentId only applies to family contacts" },
+          { status: 400 }
+        );
+      }
+      parent = await findFamilyParent(contactId, parentId);
+      if (!parent) {
+        return NextResponse.json(
+          { error: "That parent isn't on this family." },
+          { status: 404 }
+        );
+      }
+    }
+
     const result = await sendSms({
       contact: { type: contactType, id: contactId },
+      parent,
+      to: parent ? parent.phone : null,
       body: text,
       template: "manual",
       studentId: body?.studentId ?? null,

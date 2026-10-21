@@ -124,19 +124,25 @@ export async function resolvePrimaryParent(
   familyId: number
 ): Promise<XanoParent | null> {
   try {
-    const family = await xano.families.getById(familyId);
-    if (!family) return null;
-    const ids = xano.families.getParentIds(family);
-    if (!ids.length) return null;
-    const parents = (
-      await Promise.all(
-        ids.map((id) => xano.parents.getById(id).catch(() => null))
-      )
-    ).filter((p): p is XanoParent => p != null);
-    return pickAccountHolderParent(parents);
+    return pickAccountHolderParent(await loadFamilyParents(familyId));
   } catch {
     return null;
   }
+}
+
+/** Every parent row linked to a family. Throws when the family read
+ *  fails; a parent row that won't load is skipped. */
+export async function loadFamilyParents(
+  familyId: number
+): Promise<XanoParent[]> {
+  const family = await xano.families.getById(familyId);
+  if (!family) return [];
+  const ids = xano.families.getParentIds(family);
+  return (
+    await Promise.all(
+      ids.map((id) => xano.parents.getById(id).catch(() => null))
+    )
+  ).filter((p): p is XanoParent => p != null);
 }
 
 export interface FamilyRecipient {
@@ -156,6 +162,10 @@ export async function getFamilyRecipient(
 ): Promise<FamilyRecipient | null> {
   const parent = await resolvePrimaryParent(familyId);
   if (!parent) return null;
+  return parentRecipient(parent);
+}
+
+function parentRecipient(parent: XanoParent): FamilyRecipient {
   return {
     parentId: parent.id,
     name: `${parent.first_name ?? ""} ${parent.last_name ?? ""}`.trim(),
@@ -163,6 +173,52 @@ export async function getFamilyRecipient(
     e164: toE164(parent.phone),
     optedOut: Boolean(parent.sms_opted_out_at),
   };
+}
+
+export interface AltFamilyRecipient extends FamilyRecipient {
+  /** "Father", "Grandmother"… as entered on the parent row. */
+  relationship: string;
+}
+
+/**
+ * The family's OTHER parents with a textable number — where staff can
+ * resend a text that failed on the account holder's phone. Skips the
+ * account holder, rows without a valid number, and any number that's
+ * the same as the account holder's (a resend there would fail the
+ * same way). Opted-out parents stay listed so the picker can say why
+ * they're unavailable.
+ */
+export async function getFamilyAltRecipients(
+  familyId: number
+): Promise<AltFamilyRecipient[]> {
+  try {
+    const parents = await loadFamilyParents(familyId);
+    const primary = pickAccountHolderParent(parents);
+    const primaryPhone = normPhone(primary?.phone);
+    const seen = new Set<string>();
+    const out: AltFamilyRecipient[] = [];
+    for (const p of [...parents].sort((a, b) => a.id - b.id)) {
+      if (p.id === primary?.id) continue;
+      const r = parentRecipient(p);
+      const key = normPhone(p.phone);
+      if (!r.e164 || key === primaryPhone || seen.has(key)) continue;
+      seen.add(key);
+      out.push({ ...r, relationship: (p.relationship ?? "").trim() });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/** The family's parent row with this id, or null when it isn't linked
+ *  to the family — the guard for a send aimed at a specific parent. */
+export async function findFamilyParent(
+  familyId: number,
+  parentId: number
+): Promise<XanoParent | null> {
+  const parents = await loadFamilyParents(familyId);
+  return parents.find((p) => p.id === parentId) ?? null;
 }
 
 /* ───────────────────────── Contact directory ───────────────────────── */
