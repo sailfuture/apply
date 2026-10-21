@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { toast } from "sonner";
@@ -1819,6 +1819,13 @@ function fmtMedDate(iso: string): string {
   });
 }
 
+/** "Aug 24 – Oct 9, 2026"; both years shown when the range spans two. */
+function fmtTermRange(start: string, end: string): string {
+  return start.slice(0, 4) === end.slice(0, 4)
+    ? `${fmtShortDate(start)} – ${fmtMedDate(end)}`
+    : `${fmtMedDate(start)} – ${fmtMedDate(end)}`;
+}
+
 /**
  * Large overlay for managing the year's academic terms and seasons as
  * tables. Add/Edit open their own small modal (TermEditDialog /
@@ -1923,20 +1930,59 @@ function TermsSeasonsDialog({
     return m;
   }, [days]);
 
-  const termNameById = useMemo(
-    () => new Map(terms.map((t) => [t.id, t.term_name])),
-    [terms]
-  );
+  /** Seasons grouped under their linked term, terms in calendar order
+   *  and seasons by first date (undated last). Terms with no seasons
+   *  are left out; seasons with no (or a deleted) term close the list
+   *  as "Unassigned". */
+  const seasonGroups = useMemo(() => {
+    const byStart = (a: XanoAcademicSeason, b: XanoAcademicSeason) => {
+      const sa = seasonInfo.get(a.id)?.start ?? "9999";
+      const sb = seasonInfo.get(b.id)?.start ?? "9999";
+      return sa.localeCompare(sb) || a.id - b.id;
+    };
+    const termIds = new Set(terms.map((t) => t.id));
+    const groups = [...terms]
+      .sort((a, b) =>
+        (a.start_date || "9999").localeCompare(b.start_date || "9999")
+      )
+      .map((t) => ({
+        key: `term:${t.id}`,
+        label: t.term_name,
+        start: t.start_date,
+        end: t.end_date,
+        seasons: seasons
+          .filter((s) => s.registration_academic_terms_id === t.id)
+          .sort(byStart),
+      }))
+      .filter((g) => g.seasons.length > 0);
+    const unassigned = seasons
+      .filter((s) => !termIds.has(s.registration_academic_terms_id))
+      .sort(byStart);
+    if (unassigned.length) {
+      groups.push({
+        key: "unassigned",
+        label: "Unassigned",
+        start: "",
+        end: "",
+        seasons: unassigned,
+      });
+    }
+    return groups;
+  }, [terms, seasons, seasonInfo]);
 
   /** Whatever is wrong with the year's season chain right now — a
-   *  season split in two, a stretch belonging to nobody, a boundary
-   *  with no shared changeover date. Empty (and silent) when the
-   *  chain is continuous. */
+   *  season split in two, a stretch belonging to nobody inside a term,
+   *  a boundary with no shared changeover date. Empty (and silent)
+   *  when the chain is continuous. */
   const chainIssues = useMemo(() => {
     const nameById = new Map(seasons.map((s) => [s.id, s.name]));
+    const termById = new Map(
+      seasons.map((s) => [s.id, s.registration_academic_terms_id])
+    );
     return checkSeasonChain(
       days,
-      (id) => nameById.get(id) ?? `Season #${id}`
+      (id) => nameById.get(id) ?? `Season #${id}`,
+      (id) => termById.get(id) ?? 0
     );
   }, [days, seasons]);
 
@@ -2161,7 +2207,6 @@ function TermsSeasonsDialog({
                   <TableHeader>
                     <TableRow>
                       <TableHead>Season</TableHead>
-                      <TableHead>Linked term</TableHead>
                       <TableHead>Dates</TableHead>
                       <TableHead className="text-right">
                         School days
@@ -2175,78 +2220,95 @@ function TermsSeasonsDialog({
                     {seasons.length === 0 ? (
                       <TableRow>
                         <TableCell
-                          colSpan={5}
+                          colSpan={4}
                           className="py-6 text-center text-sm text-muted-foreground"
                         >
                           No seasons for this school year yet.
                         </TableCell>
                       </TableRow>
                     ) : (
-                      seasons.map((s) => {
-                        const info = seasonInfo.get(s.id);
-                        return (
-                          <TableRow key={s.id}>
-                            <TableCell className="font-medium">
-                              {s.name}
+                      seasonGroups.map((g) => (
+                        <Fragment key={g.key}>
+                          <TableRow className="bg-muted/40 hover:bg-muted/40">
+                            <TableCell colSpan={2} className="py-2">
+                              <span className="font-semibold">{g.label}</span>
+                              <span className="ml-2 text-xs text-muted-foreground tabular-nums">
+                                {g.start && g.end
+                                  ? `${fmtTermRange(g.start, g.end)} · `
+                                  : ""}
+                                {g.seasons.length}{" "}
+                                {g.seasons.length === 1 ? "season" : "seasons"}
+                              </span>
                             </TableCell>
-                            <TableCell>
-                              {s.registration_academic_terms_id > 0
-                                ? (termNameById.get(
-                                    s.registration_academic_terms_id
-                                  ) ?? "Missing term")
-                                : "—"}
+                            <TableCell className="py-2 text-right font-semibold tabular-nums">
+                              {g.seasons.reduce(
+                                (n, s) =>
+                                  n + (seasonInfo.get(s.id)?.school ?? 0),
+                                0
+                              )}
                             </TableCell>
-                            <TableCell className="tabular-nums">
-                              {info
-                                ? `${fmtMedDate(info.start)} – ${fmtMedDate(info.end)}`
-                                : "No dates set"}
-                              {info && (info.sharedStart || info.sharedEnd) ? (
-                                <div className="text-[11px] text-muted-foreground">
-                                  {[
-                                    info.sharedStart
-                                      ? `${fmtShortDate(info.start)} from ${fmtMinutes(info.startHandoff) || "mid-day"}`
-                                      : "",
-                                    info.sharedEnd
-                                      ? `${fmtShortDate(info.end)} until ${fmtMinutes(info.endHandoff) || "mid-day"}`
-                                      : "",
-                                  ]
-                                    .filter(Boolean)
-                                    .join(" · ")}
-                                </div>
-                              ) : null}
-                            </TableCell>
-                            <TableCell className="text-right tabular-nums">
-                              {info?.school ?? 0}
-                            </TableCell>
-                            <TableCell>
-                              <div className="flex justify-end gap-1">
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="size-7 p-0"
-                                  onClick={() =>
-                                    setSeasonEdit({ existing: s })
-                                  }
-                                  aria-label={`Edit ${s.name}`}
-                                >
-                                  <Pencil className="size-3.5" />
-                                </Button>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="size-7 p-0 text-red-600 hover:text-red-700"
-                                  onClick={() =>
-                                    setDeleteSeasonTarget(s)
-                                  }
-                                  aria-label={`Delete ${s.name}`}
-                                >
-                                  <Trash2 className="size-3.5" />
-                                </Button>
-                              </div>
-                            </TableCell>
+                            <TableCell className="py-2" />
                           </TableRow>
-                        );
-                      })
+                        {g.seasons.map((s) => {
+                          const info = seasonInfo.get(s.id);
+                          return (
+                            <TableRow key={s.id}>
+                              <TableCell className="pl-6 font-medium">
+                                {s.name}
+                              </TableCell>
+                              <TableCell className="tabular-nums">
+                                {info
+                                  ? `${fmtMedDate(info.start)} – ${fmtMedDate(info.end)}`
+                                  : "No dates set"}
+                                {info && (info.sharedStart || info.sharedEnd) ? (
+                                  <div className="text-[11px] text-muted-foreground">
+                                    {[
+                                      info.sharedStart
+                                        ? `${fmtShortDate(info.start)} from ${fmtMinutes(info.startHandoff) || "mid-day"}`
+                                        : "",
+                                      info.sharedEnd
+                                        ? `${fmtShortDate(info.end)} until ${fmtMinutes(info.endHandoff) || "mid-day"}`
+                                        : "",
+                                    ]
+                                      .filter(Boolean)
+                                      .join(" · ")}
+                                  </div>
+                                ) : null}
+                              </TableCell>
+                              <TableCell className="text-right tabular-nums">
+                                {info?.school ?? 0}
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex justify-end gap-1">
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="size-7 p-0"
+                                    onClick={() =>
+                                      setSeasonEdit({ existing: s })
+                                    }
+                                    aria-label={`Edit ${s.name}`}
+                                  >
+                                    <Pencil className="size-3.5" />
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="size-7 p-0 text-red-600 hover:text-red-700"
+                                    onClick={() =>
+                                      setDeleteSeasonTarget(s)
+                                    }
+                                    aria-label={`Delete ${s.name}`}
+                                  >
+                                    <Trash2 className="size-3.5" />
+                                  </Button>
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                        </Fragment>
+                      ))
                     )}
                   </TableBody>
                 </Table>
@@ -2635,6 +2697,11 @@ function SeasonEditDialog({
     () => new Map(seasons.map((s) => [s.id, s.name])),
     [seasons]
   );
+  const seasonTermById = useMemo(
+    () =>
+      new Map(seasons.map((s) => [s.id, s.registration_academic_terms_id])),
+    [seasons]
+  );
   const { start: shareStartWith, end: shareEndWith } = useMemo(
     () =>
       changeoverPartners({
@@ -2679,6 +2746,8 @@ function SeasonEditDialog({
               id === previewId
                 ? name.trim() || "This season"
                 : (seasonNameById.get(id) ?? `Season #${id}`),
+            termOf: (id) =>
+              id === previewId ? Number(termId) : (seasonTermById.get(id) ?? 0),
           }),
     [
       days,
@@ -2690,6 +2759,8 @@ function SeasonEditDialog({
       rangeInvalid,
       name,
       seasonNameById,
+      termId,
+      seasonTermById,
     ]
   );
   const blocked = preview?.blocked === true;

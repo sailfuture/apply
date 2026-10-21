@@ -338,6 +338,8 @@ export interface SeasonIssue {
 
 /** id -> display name, for readable messages. */
 export type SeasonNamer = (id: number) => string;
+/** A season's linked term id (0 = none). */
+export type SeasonTermOf = (id: number) => number;
 
 const MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split(" ");
 
@@ -405,11 +407,13 @@ function detailedSpans(days: XanoSchoolCalendarDay[]): DetailedSpan[] {
  * Warnings: unassigned days between neighbours, a boundary where the
  * next season starts the day after instead of sharing the date, a
  * shared date whose halves run in the wrong order, an afternoon with
- * no morning.
+ * no morning. With `termOf`, neighbours linked to different terms
+ * aren't checked for gaps or hard cuts — that boundary is a term break.
  */
 export function checkSeasonChain(
   days: XanoSchoolCalendarDay[],
-  nameOf: SeasonNamer
+  nameOf: SeasonNamer,
+  termOf?: SeasonTermOf
 ): SeasonIssue[] {
   const sorted = [...days].sort((a, b) => a.date.localeCompare(b.date));
   const indexOf = new Map(sorted.map((d, i) => [d.date, i]));
@@ -474,6 +478,12 @@ export function checkSeasonChain(
       }
       continue;
     }
+
+    // Neighbours in different terms sit either side of a term break —
+    // the days between them belong to no season on purpose.
+    const prevTerm = termOf?.(prev.id) ?? 0;
+    const curTerm = termOf?.(cur.id) ?? 0;
+    if (prevTerm && curTerm && prevTerm !== curTerm) continue;
 
     const from = (indexOf.get(prev.end) ?? -1) + 1;
     const to = indexOf.get(cur.start) ?? 0;
@@ -548,6 +558,7 @@ export function previewSeasonSave({
   handoffStart = 0,
   handoffEnd = 0,
   nameOf,
+  termOf,
 }: {
   days: XanoSchoolCalendarDay[];
   seasonId: number;
@@ -556,6 +567,7 @@ export function previewSeasonSave({
   handoffStart?: number;
   handoffEnd?: number;
   nameOf: SeasonNamer;
+  termOf?: SeasonTermOf;
 }): SeasonSavePreview {
   const plan = planSeasonDays({
     days,
@@ -566,8 +578,10 @@ export function previewSeasonSave({
     handoffEnd,
   });
   const after = applyPlan(days, plan);
-  const known = new Set(checkSeasonChain(days, nameOf).map((i) => i.key));
-  const introduced = checkSeasonChain(after, nameOf).filter(
+  const known = new Set(
+    checkSeasonChain(days, nameOf, termOf).map((i) => i.key)
+  );
+  const introduced = checkSeasonChain(after, nameOf, termOf).filter(
     (i) => !known.has(i.key)
   );
 
