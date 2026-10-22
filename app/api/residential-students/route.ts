@@ -4,6 +4,7 @@ import { xano } from "@/lib/xano";
 import { sendEmail } from "@/lib/emails/send";
 import { residentialStudentAdded } from "@/lib/emails/templates";
 import { parseResidentialHouse } from "@/lib/residential";
+import { markStudentEnrolled } from "@/lib/student-enrolled";
 
 /**
  * Create a brand-new student for a residential / foster family and open
@@ -30,6 +31,10 @@ import { parseResidentialHouse } from "@/lib/residential";
  *     `isAccepted` latches must stay untouched. The application is
  *     auto-accepted at submit; admin's per-student gate is confirming
  *     the completed packet (`registrationConfirmed`).
+ *   - The student is flagged `isEnrolled` immediately, so they appear
+ *     on the admin enrolled roster from the moment they're added. That
+ *     is a student-row flag only; the family-level rollups above read
+ *     packets, not it, so the family's dashboard is unaffected.
  *
  * Body: { first_name, last_name, date_of_birth?, gender?, ethnicity?,
  *         residential_house?, yearId }
@@ -193,7 +198,29 @@ export async function POST(req: NextRequest) {
     enrollment_agreement_pdf_url: "",
   });
 
-  // 3. Notify staff. Foster placements arrive mid-year with no
+  // 3. Enroll the student now. Residential families skip admissions
+  //    review, so there's no decision left to wait on: without this the
+  //    placement has an active application but no `isEnrolled`, and the
+  //    enrolled roster (which renders only enrolled / archived rows)
+  //    shows them nowhere until staff verify a packet the parent may
+  //    not have filled in yet. The packet itself stays unconfirmed —
+  //    the parent still completes it and staff still verify it — so
+  //    this only moves when the student appears, not the packet audit.
+  //    No email or text: the staff alert below is the only notice.
+  //    Best-effort: a failure leaves the student exactly where they
+  //    were before this step existed (the packet verify enrolls them),
+  //    and failing the request would make the parent retry and create
+  //    a duplicate student.
+  try {
+    await markStudentEnrolled(student.id);
+  } catch (err) {
+    console.error(
+      `[/api/residential-students] could not enroll student ${student.id}:`,
+      err
+    );
+  }
+
+  // 4. Notify staff. Foster placements arrive mid-year with no
   //    admissions queue to surface them, so without this the new
   //    student sits unnoticed until someone opens the roster.
   //    Best-effort: the student and application are already created,
