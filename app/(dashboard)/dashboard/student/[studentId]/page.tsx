@@ -249,6 +249,33 @@ export default function StudentDetailPage() {
     );
   }, [yearId, yearsData]);
 
+  const dashboardHref = yearId ? `/dashboard?yearId=${yearId}` : "/dashboard";
+
+  // The roster has loaded and this id isn't on it: a stale or mistyped
+  // link, or a student admin has since removed from the family. The
+  // `!student` term in the gate below used to hold the skeleton forever
+  // for that, so say so and point back at the dashboard instead.
+  if (Array.isArray(studentsData) && !student) {
+    return (
+      <div className="flex flex-1 flex-col gap-6 p-4 sm:p-6 mx-auto w-full max-w-4xl">
+        <DashboardPageHeader
+          backHref={dashboardHref}
+          backLabel="Back to Dashboard"
+          breadcrumb={[
+            { label: "Dashboard", href: dashboardHref },
+            ...(yearName ? [{ label: yearName, href: dashboardHref }] : []),
+            { label: "Student" },
+          ]}
+          title="Student not found"
+        />
+        <div className="rounded-xl border bg-white px-6 py-12 text-center text-sm text-muted-foreground">
+          We couldn&rsquo;t find this student on your family&rsquo;s roster.
+          The link may be out of date, or the student may have been removed.
+        </div>
+      </div>
+    );
+  }
+
   // Skeleton the whole page until the student record, the year's
   // application row, AND the registration packet have all loaded. Gating
   // on all three — rather than rendering each section the moment its own
@@ -285,8 +312,6 @@ export default function StudentDetailPage() {
   if (loading) {
     return <StudentDetailSkeleton />;
   }
-
-  const dashboardHref = yearId ? `/dashboard?yearId=${yearId}` : "/dashboard";
 
   const requiredDocs = DOC_LABELS.filter((d) => d.required);
   const optionalDocs = DOC_LABELS.filter((d) => !d.required);
