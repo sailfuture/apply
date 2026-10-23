@@ -4,7 +4,7 @@ import { useParams, usePathname, useRouter } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
 import { useApplicationSteps, type StepStatus } from "@/hooks/use-application-steps";
 import { useStudents } from "@/hooks/use-api";
-import useSWR from "swr";
+import useSWR, { useSWRConfig } from "swr";
 import { useFamilyProgress } from "@/hooks/use-family-progress";
 import { useStudentRegistrationProgress } from "@/hooks/use-student-registration-progress";
 import { PreSubmitReviewModal, type SectionStatus } from "@/components/pre-submit-review-modal";
@@ -12,6 +12,7 @@ import { EnrolledFamilyDashboard } from "@/components/enrolled-family-dashboard"
 import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
 import { ArrowRight, Clock, CheckCircle2, Lock } from "lucide-react";
 import { LoadingScreen } from "@/components/loading-screen";
+import { ServiceUnavailable } from "@/components/service-unavailable";
 import Image from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -475,10 +476,11 @@ export default function YearOverviewPage() {
   const { user } = useUser();
   const firstName = user?.firstName ?? "";
 
-  const { steps, registrationSteps, registrationCompletedCount, allRegistrationSectionsComplete, allComplete, loading, stage, schoolYear, yearApps, family } =
+  const { steps, registrationSteps, registrationCompletedCount, allRegistrationSectionsComplete, allComplete, loading, stage, schoolYear, yearApps, family, error: stepsError } =
     useApplicationSteps(yearId);
-  const { data: students } = useStudents();
+  const { data: students, error: studentsError } = useStudents();
   const studentsLoading = students === undefined;
+  const { mutate: swrMutate } = useSWRConfig();
   const yearName = schoolYear?.year_name ?? "next year";
 
   // URL policy by lifecycle phase:
@@ -497,6 +499,7 @@ export default function YearOverviewPage() {
   const {
     progress,
     loading: familyProgressLoading,
+    error: familyProgressError,
     submit: submitFamilyApplication,
     unsubmit: unsubmitFamilyApplication,
   } = useFamilyProgress(yearId);
@@ -515,11 +518,14 @@ export default function YearOverviewPage() {
   // `registrationConfirmed: true` on that student's packet row. Once every
   // student's packet is confirmed, the enrolled-family dashboard takes
   // over the page.
-  const { progress: regProgress, loading: regProgressLoading } =
-    useStudentRegistrationProgress(yearId);
+  const {
+    progress: regProgress,
+    loading: regProgressLoading,
+    error: regProgressError,
+  } = useStudentRegistrationProgress(yearId);
   const isRegistrationSubmitted = !!regProgress?.isSubmitted;
 
-  const { data: yearPackets } = useSWR<
+  const { data: yearPackets, error: yearPacketsError } = useSWR<
     { id: number; registrationConfirmed?: boolean; registration_students_id: number }[]
   >(
     isRegistrationSubmitted
@@ -757,31 +763,53 @@ export default function YearOverviewPage() {
     studentsLoading ||
     yearPacketsPending;
 
-  // Stage-transition guard. SWR's polling fires each hook independently
-  // and resolves them at slightly different times; between hook A
-  // committing new data and hook B committing new data, the page can
-  // briefly render with mixed-stage data (e.g. useApplications updated
-  // but useFamilyProgress hasn't). That intermediate render is the
-  // "flashed wrong page" the parent saw after admin revoked
-  // acceptance. We track the previously-committed stage; when it
-  // diverges from the freshly-computed stage we hold the spinner for
-  // one render cycle so the URL effect (below) has a chance to fire
-  // before any view tries to render the new stage on the wrong path.
-  const prevStageRef = useRef(stage);
-  const stageJustChanged =
-    !initialDataLoading && prevStageRef.current !== stage;
-  useEffect(() => {
-    prevStageRef.current = stage;
-  }, [stage]);
+  // NOTE: there used to be a "stage just changed" guard here that held
+  // the spinner for one render whenever `stage` differed from a ref of
+  // the previously-rendered stage, with an effect writing the ref. A
+  // ref write never schedules a render, so when the progress row was
+  // the LAST fetch to land (it's the slowest route — it creates the
+  // row on first access) and the family was past the apply stage, the
+  // page rendered the spinner, the effect caught the ref up, and
+  // nothing re-rendered: every other hook already held settled data.
+  // The parent sat on "Almost there..." until they reloaded. The guard
+  // is also redundant now — `stage` derives from a single row, so no
+  // mixed-stage render exists, and `willRedirect` below already covers
+  // every transition that needs a URL change.
 
   const willRedirect =
     !initialDataLoading &&
     ((stage === "accepted" && onApplyPath) ||
       (stage !== "accepted" && onRegistrationPath));
 
+  // A fetch this page can't render without has exhausted SWR's retry
+  // budget (`errorRetryCount` in <SWRProvider>). Every gate above keys
+  // on "no data yet", which is also exactly what a failed request
+  // leaves behind — so one 5xx from any of these endpoints used to park
+  // the parent on the spinner until they reloaded by hand. Only an error
+  // with NO data behind it counts: a background revalidation that fails
+  // while the page is already showing data keeps the page as-is.
+  // "Try again" refetches every parent-API key in place.
+  const blockingError =
+    stepsError ||
+    (students === undefined && studentsError) ||
+    (progress === null && familyProgressError) ||
+    (regProgress === null && regProgressError) ||
+    (yearPacketsPending && yearPacketsError);
+  if (blockingError) {
+    return (
+      <ServiceUnavailable
+        onRetry={() =>
+          swrMutate(
+            (key) => typeof key === "string" && key.startsWith("/api/")
+          )
+        }
+      />
+    );
+  }
+
   // `family === null` → the no-family effect above is about to replace
   // the URL with /welcome; keep the spinner up through that hop.
-  if (initialDataLoading || willRedirect || stageJustChanged || family === null) {
+  if (initialDataLoading || willRedirect || family === null) {
     return (
       <div className="flex min-h-[calc(100vh-7.5rem)] items-center justify-center px-4 bg-gray-50 dark:bg-background">
         <LoadingScreen />

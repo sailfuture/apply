@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { AnimatePresence, motion } from "motion/react";
+import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 
@@ -31,6 +32,18 @@ const STORAGE_KEY = "loading-screen-session";
  * resetting to "Loading..." on a navigation that comes minutes later.
  */
 const HEARTBEAT_STALE_MS = 1500;
+
+/**
+ * How long one continuous loading sequence (shared across the
+ * back-to-back loaders via sessionStorage, so the sign-in chain counts
+ * as one) may run before the screen admits it and offers a reload.
+ * The message sequence settles on "Almost there..." at ~7s; a healthy
+ * cold sign-in is done well before this. Past it, the parent is far
+ * more likely to be stuck — a fetch that gave up, a wedged client
+ * navigation — than waiting on real work, and a reload is exactly what
+ * fixes those. Until this existed the spinner gave them no hint.
+ */
+const SLOW_AFTER_MS = 12000;
 
 /** No-op subscribe for the client-detection probe in LoadingScreen. The
  *  "are we on the client yet" signal flips exactly once and never again,
@@ -74,11 +87,37 @@ function computeIndex(elapsedMs: number, intervalMs: number, count: number) {
   return Math.min(Math.floor(elapsedMs / intervalMs), count - 1);
 }
 
+/** Milliseconds the current loading sequence has been running, per the
+ *  sessionStorage session (0 on the server, or when the last loader's
+ *  heartbeat is stale enough to count as a fresh sequence). */
+function sessionElapsedMs(): number {
+  if (typeof window === "undefined") return 0;
+  const now = Date.now();
+  const session = readSession();
+  if (!session || now - session.lastTick > HEARTBEAT_STALE_MS) return 0;
+  return now - session.startedAt;
+}
+
+/** Full reload, after dropping the shared sequence so the fresh page
+ *  starts at "Loading..." instead of inheriting a 12s-old clock (and
+ *  the reload offer with it) when the document comes back quickly. */
+function reloadPage() {
+  try {
+    sessionStorage.removeItem(STORAGE_KEY);
+  } catch {
+    /* ignore */
+  }
+  window.location.reload();
+}
+
 interface LoadingScreenProps {
   messages?: string[];
   intervalMs?: number;
   className?: string;
   spinnerClassName?: string;
+  /** Milliseconds of continuous loading before the "taking longer than
+   *  usual" note + Reload button appear. `null` disables them. */
+  slowAfterMs?: number | null;
 }
 
 /**
@@ -97,6 +136,7 @@ export function LoadingScreen({
   intervalMs = 2200,
   className,
   spinnerClassName,
+  slowAfterMs = SLOW_AFTER_MS,
 }: LoadingScreenProps) {
   // Defer the text to the client for hydration safety: sessionStorage
   // isn't readable on the server, so the index there is always 0 and
@@ -111,16 +151,15 @@ export function LoadingScreen({
     () => true,
     () => false,
   );
-  const [index, setIndex] = useState(() => {
-    if (typeof window === "undefined") return 0;
-    const now = Date.now();
-    const session = readSession();
-    const startedAt =
-      !session || now - session.lastTick > HEARTBEAT_STALE_MS
-        ? now
-        : session.startedAt;
-    return computeIndex(now - startedAt, intervalMs, messages.length);
-  });
+  const [index, setIndex] = useState(() =>
+    computeIndex(sessionElapsedMs(), intervalMs, messages.length),
+  );
+  // Whether the sequence has run long enough to offer a reload. Seeded
+  // from the shared clock like `index`, so a loader that mounts late in
+  // an already-long sequence shows the offer at once.
+  const [slow, setSlow] = useState(
+    () => slowAfterMs !== null && sessionElapsedMs() >= slowAfterMs,
+  );
 
   useEffect(() => {
     // Record this mount in sessionStorage so a sibling LoadingScreen
@@ -151,12 +190,9 @@ export function LoadingScreen({
     const advanceId = setInterval(() => {
       const session = readSession();
       const startedAt = session?.startedAt ?? Date.now();
-      const next = computeIndex(
-        Date.now() - startedAt,
-        intervalMs,
-        messages.length,
-      );
-      setIndex(next);
+      const elapsed = Date.now() - startedAt;
+      setIndex(computeIndex(elapsed, intervalMs, messages.length));
+      if (slowAfterMs !== null) setSlow(elapsed >= slowAfterMs);
       writeSession({ startedAt, lastTick: Date.now() });
     }, Math.min(intervalMs, 500));
 
@@ -164,12 +200,15 @@ export function LoadingScreen({
       clearInterval(heartbeatId);
       clearInterval(advanceId);
     };
-  }, [hydrated, intervalMs, messages.length]);
+  }, [hydrated, intervalMs, messages.length, slowAfterMs]);
 
   return (
+    // `relative` anchors the slow-load note below the spinner + text
+    // without pushing them: the note is absolutely positioned under the
+    // block, so the spinner stays exactly where it was when it appears.
     <div
       className={cn(
-        "flex flex-col items-center justify-center gap-4",
+        "relative flex flex-col items-center justify-center gap-4",
         className,
       )}
       role="status"
@@ -204,6 +243,31 @@ export function LoadingScreen({
           </AnimatePresence>
         )}
       </div>
+      {hydrated && slow && (
+        // The escape hatch for a spinner that never resolves. Whatever
+        // wedged the page — a fetch that exhausted its retries without
+        // reaching an error state, a client navigation that lost its
+        // result — a full document load starts over from a clean
+        // slate, which is what parents were doing by hand.
+        <motion.div
+          initial={{ opacity: 0, y: 4 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.35, ease: "easeOut" }}
+          className="absolute top-full mt-3 flex w-max flex-col items-center gap-2 text-center"
+        >
+          <p className="text-xs text-muted-foreground">
+            This is taking longer than usual.
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={reloadPage}
+          >
+            Reload page
+          </Button>
+        </motion.div>
+      )}
     </div>
   );
 }

@@ -78,10 +78,31 @@ export async function getFamilyAuth(): Promise<FamilyAuth | null> {
   }
 
   noteAuthMode("clerk");
-  const user = await currentUser();
+  const user = await currentUserWithRetry();
   if (!user) return null;
   return {
     userId,
     familyId: toFamilyId(user.publicMetadata.registration_families_id),
   };
+}
+
+/**
+ * `currentUser()` is a Clerk Backend API round trip. On a parent's
+ * first sign-in — before the family-id claim is in their session
+ * token — every API route the landing page fans out to takes this
+ * path at the same moment, so one transient Clerk failure (timeout,
+ * 429, 5xx) used to 500 a route, and the page waiting on it sat on
+ * its spinner. One retry after a short pause absorbs the blip. A
+ * second failure still throws: the route must fail loudly (the client
+ * shows its error card) rather than answer "no family" and send a
+ * real family to /welcome.
+ */
+async function currentUserWithRetry() {
+  try {
+    return await currentUser();
+  } catch (err) {
+    console.warn("[family-auth] currentUser() failed, retrying once:", err);
+    await new Promise((r) => setTimeout(r, 300));
+    return currentUser();
+  }
 }

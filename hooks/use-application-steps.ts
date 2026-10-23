@@ -36,18 +36,22 @@ function getStatus(complete: boolean, started: boolean): StepStatus {
 export function useApplicationSteps(yearId: number) {
   const base = `/apply/year/${yearId}`;
 
-  const { data: familyData } = useFamily();
-  const { data: yearsData } = useSchoolYears();
-  const { data: appsData } = useApplications();
+  const { data: familyData, error: familyError } = useFamily();
+  const { data: yearsData, error: yearsError } = useSchoolYears();
+  const { data: appsData, error: appsError } = useApplications();
   const familyId = familyData?.id ?? null;
-  const { data: scholarshipData, isLoading: scholarshipLoading } = useScholarship(familyId, yearId);
+  const {
+    data: scholarshipData,
+    isLoading: scholarshipLoading,
+    error: scholarshipError,
+  } = useScholarship(familyId, yearId);
 
   // Progress bridge rows — explicit "section completed" bools take priority
   // over the derived field checks below. When a user clicks "Complete X",
   // the corresponding bool flips and the sidenav turns green immediately.
   // Two bridge rows because the application and post-acceptance registration
   // stages are tracked in separate tables.
-  const { data: progressData } = useSWR<{
+  const { data: progressData, error: progressError } = useSWR<{
     family_completed?: boolean;
     students_completed?: boolean;
     financial_aid_completed?: boolean;
@@ -68,7 +72,7 @@ export function useApplicationSteps(yearId: number) {
     fetcher,
     { revalidateOnFocus: false, dedupingInterval: 10000 }
   );
-  const { data: regProgressData } = useSWR<{
+  const { data: regProgressData, error: regProgressError } = useSWR<{
     isTuition?: boolean;
     isEnrollment?: boolean;
     isRegistration?: boolean;
@@ -92,6 +96,22 @@ export function useApplicationSteps(yearId: number) {
     familyData === undefined ||
     yearsData === undefined ||
     appsData === undefined;
+
+  // The first fetch that has exhausted SWR's retry budget with nothing
+  // to show. `loading` alone can't tell "still fetching" from "gave up"
+  // — both leave `data` undefined — so a page that gates only on
+  // `loading` spins forever once a request fails for good. Pages check
+  // this first and render <ServiceUnavailable /> instead. A failed
+  // background revalidation that still has stale data behind it is
+  // deliberately NOT reported here; the page keeps rendering it.
+  const error: unknown =
+    (familyData === undefined && familyError) ||
+    (yearsData === undefined && yearsError) ||
+    (appsData === undefined && appsError) ||
+    (progressData === undefined && progressError) ||
+    (regProgressData === undefined && regProgressError) ||
+    (scholarshipData === undefined && scholarshipError) ||
+    undefined;
 
   const schoolYear = useMemo(() => {
     if (!yearsData) return null;
@@ -347,6 +367,10 @@ export function useApplicationSteps(yearId: number) {
     allComplete,
     loading,
     stepsLoading: !!stepsLoading,
+    /** Set once one of the underlying fetches has given up with no data
+     *  to show — pages must render an error state rather than keep the
+     *  spinner up, because `loading` stays true in that case. */
+    error,
     schoolYear,
     yearApps,
     stage,

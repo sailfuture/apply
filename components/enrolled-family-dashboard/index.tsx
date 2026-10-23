@@ -9,6 +9,7 @@ import { useFamily, useStudents, useApplications, useSchoolYears, mutateFamily }
 import { Button } from "@/components/ui/button";
 import { InviteStatusBadge, ResendInviteButton } from "@/components/invite-status";
 import { LoadingScreen } from "@/components/loading-screen";
+import { ServiceUnavailable } from "@/components/service-unavailable";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   Select,
@@ -137,15 +138,17 @@ export function EnrolledFamilyDashboard({
   const { user } = useUser();
   const firstName = user?.firstName ?? "";
 
-  const { data: familyData } = useFamily();
-  const { data: studentsData } = useStudents();
-  const { data: applicationsData } = useApplications();
-  const { data: yearsData } = useSchoolYears();
-  const { data: emergencyContacts } = useSWR<EmergencyContact[]>(
-    "/api/emergency-contacts",
-    fetcher,
-    { revalidateOnFocus: false, dedupingInterval: 10000 }
-  );
+  const { data: familyData, error: familyError } = useFamily();
+  const { data: studentsData, error: studentsError } = useStudents();
+  const { data: applicationsData, error: applicationsError } =
+    useApplications();
+  const { data: yearsData, error: yearsError } = useSchoolYears();
+  const { data: emergencyContacts, error: contactsError } = useSWR<
+    EmergencyContact[]
+  >("/api/emergency-contacts", fetcher, {
+    revalidateOnFocus: false,
+    dedupingInterval: 10000,
+  });
   // Unread badge for the Notifications card — entries newer than the
   // family's read watermark (server stamp, mirrored in localStorage).
   // Same SWR key as the notifications page, so opening the page (which
@@ -445,6 +448,30 @@ export function EnrolledFamilyDashboard({
     !applicationsData ||
     !yearsData ||
     emergencyContacts === undefined;
+
+  // Same shape as the year-overview page: a gate keyed on "no data yet"
+  // can't tell a slow fetch from one that gave up, so a single failed
+  // endpoint used to leave this spinner up until the parent reloaded.
+  // Only an error with NO data behind it counts — a failed background
+  // revalidation keeps the (stale) dashboard on screen instead.
+  const blockingError =
+    loading &&
+    ((!familyData && familyError) ||
+      (!studentsData && studentsError) ||
+      (!applicationsData && applicationsError) ||
+      (!yearsData && yearsError) ||
+      (emergencyContacts === undefined && contactsError));
+  if (blockingError) {
+    return (
+      <ServiceUnavailable
+        onRetry={() =>
+          swrMutate(
+            (key) => typeof key === "string" && key.startsWith("/api/")
+          )
+        }
+      />
+    );
+  }
 
   // Continue the shared spinner sequence rather than swapping to a gray
   // skeleton. This component is the final hop of the post-sign-in chain
