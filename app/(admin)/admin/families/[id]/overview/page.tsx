@@ -737,8 +737,17 @@ export default function FamilyOverviewPage() {
                   const meta = STATUS_META[status];
                   return (
                     <TableRow key={ap.id}>
+                      {/* The year is the row's title — a second
+                          way into that year's application, since the
+                          small Open link at the far right is easy to
+                          miss. Same target as Open. */}
                       <TableCell className="font-medium whitespace-nowrap">
-                        {yearLabel(yid)}
+                        <Link
+                          href={`/admin/families/${family.id}?yearId=${yid}`}
+                          className="underline-offset-4 hover:underline"
+                        >
+                          {yearLabel(yid)}
+                        </Link>
                       </TableCell>
                       <TableCell className="text-muted-foreground">
                         {ap.type ?? "New Application"}
@@ -828,8 +837,14 @@ export default function FamilyOverviewPage() {
                   const done = sections.filter(Boolean).length;
                   return (
                     <TableRow key={rp.id}>
+                      {/* Same target as the row's Open link. */}
                       <TableCell className="font-medium whitespace-nowrap">
-                        {yearLabel(yid)}
+                        <Link
+                          href={`/admin/registrations/${family.id}?yearId=${yid}`}
+                          className="underline-offset-4 hover:underline"
+                        >
+                          {yearLabel(yid)}
+                        </Link>
                       </TableCell>
                       <TableCell className="text-muted-foreground tabular-nums">
                         {done} / 4

@@ -23,3 +23,34 @@ export function sortYearsOldestFirst<
     });
   });
 }
+
+/**
+ * Which years a lead list shows. "working" is the list admissions is
+ * actually working: leads tagged for the top bar's year PLUS the
+ * untagged ones — a year is only ever set by hand, so an untagged
+ * lead is still unsorted, not uninteresting. Families tagged for
+ * another year (looking a couple of years down the line) drop out of
+ * that view without being marked not interested. "any" shows every
+ * lead; a number picks one year, 0 = only the untagged leads.
+ */
+export type LeadYearView = "working" | "any" | number;
+
+/** Does a lead tagged `yearId` (0 = untagged) belong in `view`? The
+ *  working view also admits every lead while the top bar's year
+ *  hasn't landed in the URL yet, so a list never flashes empty. */
+export function matchesLeadYearView(
+  yearId: number,
+  view: LeadYearView,
+  workingYearId: number
+): boolean {
+  if (view === "any") return true;
+  if (view === "working") {
+    return yearId === 0 || workingYearId === 0 || yearId === workingYearId;
+  }
+  return yearId === view;
+}
+
+/** Parses a year-view picker's string value back into a view. */
+export function parseLeadYearView(value: string): LeadYearView {
+  return value === "working" || value === "any" ? value : Number(value) || 0;
+}

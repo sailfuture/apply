@@ -45,7 +45,12 @@ import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { StarRating } from "@/components/admin/star-rating";
 import { adminFetcher } from "@/lib/admin-fetcher";
-import { sortYearsOldestFirst } from "@/lib/school-years";
+import {
+  matchesLeadYearView,
+  parseLeadYearView,
+  sortYearsOldestFirst,
+  type LeadYearView,
+} from "@/lib/school-years";
 import { cn } from "@/lib/utils";
 import type {
   AllLeadRow,
@@ -197,9 +202,12 @@ export default function AllLeadsPage() {
   const [tourFilter, setTourFilter] = useState<
     "completed" | "scheduled" | "none" | null
   >(null);
-  // null = no year filter; 0 = only leads with no year assigned;
-  // any other id = that school year.
-  const [yearFilter, setYearFilter] = useState<number | null>(null);
+  // Which years the board shows — the working list (top bar's year +
+  // untagged) by default; see LeadYearView. The top bar's year is
+  // injected into the URL by the YearSelector (0 until it lands).
+  const [yearView, setYearView] = useState<LeadYearView>("working");
+  const searchParams = useSearchParams();
+  const workingYearId = Number(searchParams.get("yearId")) || 0;
   const [selected, setSelected] = useState<AllLeadRow | null>(null);
   const [matching, setMatching] = useState(false);
 
@@ -213,6 +221,8 @@ export default function AllLeadsPage() {
     () => sortYearsOldestFirst(Array.isArray(yearData) ? yearData : []),
     [yearData]
   );
+  const workingYearName =
+    schoolYears.find((y) => y.id === workingYearId)?.year_name ?? "";
 
   const visible = useMemo(
     () =>
@@ -231,14 +241,30 @@ export default function AllLeadsPage() {
             return false;
           }
         }
-        // 0 matches the unassigned leads — the bucket to work
-        // through, since a year is only ever set by hand.
-        if (yearFilter !== null && r.school_year_id !== yearFilter) {
-          return false;
-        }
-        return true;
+        return matchesLeadYearView(r.school_year_id, yearView, workingYearId);
       }),
-    [rows, sourceFilter, minRating, followUpFilter, tourFilter, yearFilter]
+    [
+      rows,
+      sourceFilter,
+      minRating,
+      followUpFilter,
+      tourFilter,
+      yearView,
+      workingYearId,
+    ]
+  );
+
+  // How many leads the working view hides because they're tagged for
+  // some other year — surfaced on the picker so nobody wonders where
+  // a family went.
+  const otherYears = useMemo(
+    () =>
+      yearView === "working"
+        ? rows.filter(
+            (r) => !matchesLeadYearView(r.school_year_id, yearView, workingYearId)
+          ).length
+        : 0,
+    [rows, yearView, workingYearId]
   );
 
   // Split the filtered rows into the funnel group cards. A real
@@ -314,7 +340,6 @@ export default function AllLeadsPage() {
   // Deep link: `?open=<source>-<id>` opens that lead's triage sheet
   // once the rows load — the Messages inbox's "View lead" button
   // lands here. Consumed once so closing the sheet doesn't reopen it.
-  const searchParams = useSearchParams();
   const openedFromUrl = useRef(false);
   useEffect(() => {
     if (openedFromUrl.current || rows.length === 0) return;
@@ -1031,30 +1056,48 @@ export default function AllLeadsPage() {
                 size="sm"
                 className={cn(
                   FILTER_TRIGGER_CLASS,
-                  yearFilter !== null && "border-foreground"
+                  yearView !== "working" && "border-foreground"
                 )}
-                title="Filter by the academic year the family is asking about"
+                title={
+                  otherYears > 0
+                    ? `${otherYears} lead${otherYears === 1 ? "" : "s"} tagged for other years hidden`
+                    : "Filter by the academic year the family is asking about"
+                }
               >
                 <span className="min-w-0 truncate">
-                  {yearFilter === null
-                    ? "Year"
-                    : yearFilter === 0
-                      ? "No year set"
-                      : (schoolYears.find((y) => y.id === yearFilter)
-                          ?.year_name ?? "Year")}
+                  {yearView === "working"
+                    ? workingYearName
+                      ? `${workingYearName} + no year`
+                      : "This year + no year"
+                    : yearView === "any"
+                      ? "Any year"
+                      : yearView === 0
+                        ? "No year set"
+                        : (schoolYears.find((y) => y.id === yearView)
+                            ?.year_name ?? "Year")}
                 </span>
+                {otherYears > 0 && yearView === "working" ? (
+                  <span className="ml-1 shrink-0 text-muted-foreground">
+                    (+{otherYears})
+                  </span>
+                ) : null}
                 <ChevronDown className="ml-1 size-3.5 shrink-0 opacity-50" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-48">
               <DropdownMenuLabel>Interested in</DropdownMenuLabel>
               <DropdownMenuRadioGroup
-                value={yearFilter === null ? "any" : String(yearFilter)}
-                onValueChange={(v) =>
-                  setYearFilter(v === "any" ? null : Number(v))
-                }
+                value={String(yearView)}
+                onValueChange={(v) => setYearView(parseLeadYearView(v))}
               >
-                <DropdownMenuRadioItem value="any">Any</DropdownMenuRadioItem>
+                {/* The working list: the top bar's year plus every
+                    still-untagged lead. */}
+                <DropdownMenuRadioItem value="working">
+                  {workingYearName
+                    ? `${workingYearName} + no year set`
+                    : "This year + no year set"}
+                </DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="any">Any year</DropdownMenuRadioItem>
                 {schoolYears.map((y) => (
                   <DropdownMenuRadioItem key={y.id} value={String(y.id)}>
                     {y.year_name}

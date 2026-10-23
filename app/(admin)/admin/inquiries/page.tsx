@@ -47,7 +47,12 @@ import { Switch } from "@/components/ui/switch";
 import { LeadSheet } from "@/components/admin/lead-sheet";
 import { StarRating } from "@/components/admin/star-rating";
 import { adminFetcher } from "@/lib/admin-fetcher";
-import { sortYearsOldestFirst } from "@/lib/school-years";
+import {
+  matchesLeadYearView,
+  parseLeadYearView,
+  sortYearsOldestFirst,
+  type LeadYearView,
+} from "@/lib/school-years";
 import { cn } from "@/lib/utils";
 
 /**
@@ -242,8 +247,17 @@ export default function InquiriesPage() {
   const searchParams = useSearchParams();
   const deepLinkId = Number(searchParams.get("inquiryId")) || 0;
   const consumedDeepLink = useRef(0);
-  // null = any year; 0 = only the untagged ones (the working bucket).
-  const [yearFilter, setYearFilter] = useState<number | null>(null);
+  // Which years the list shows. "working" (the default) is the list
+  // admissions is actually working: inquiries tagged for the year in
+  // the top bar PLUS the untagged ones — a year is only ever set by
+  // hand, so an untagged row is still unsorted, not uninteresting.
+  // Families tagged for another year (looking a couple of years down
+  // the line) drop out of that view without being marked ✕. "any"
+  // shows everything; a number picks one year, 0 = only the untagged.
+  const [yearView, setYearView] = useState<LeadYearView>("working");
+  // The top bar's year — injected into the URL by the YearSelector;
+  // 0 for the beat before that injection lands.
+  const workingYearId = Number(searchParams.get("yearId")) || 0;
   const { data: yearData } = useSWR<SchoolYearOption[]>(
     "/api/admin/school-years",
     adminFetcher,
@@ -253,6 +267,8 @@ export default function InquiriesPage() {
     () => sortYearsOldestFirst(Array.isArray(yearData) ? yearData : []),
     [yearData]
   );
+  const workingYearName =
+    schoolYears.find((y) => y.id === workingYearId)?.year_name ?? "";
 
   const [filter, setFilter] = useState<InquiryFilter>("all");
   // Per-row pending state so the toggle UI is responsive while the
@@ -312,12 +328,20 @@ export default function InquiriesPage() {
     const converted: Inquiry[] = [];
     const notInterested: Inquiry[] = [];
     const archived: Inquiry[] = [];
-    // 0 selects the still-untagged inquiries — the bucket to work
-    // through, since the year is only ever set by hand.
-    const yearMatched =
-      yearFilter === null
-        ? rows
-        : rows.filter((r) => yearIdOf(r) === yearFilter);
+    const yearMatched = rows.filter((r) =>
+      matchesLeadYearView(yearIdOf(r), yearView, workingYearId)
+    );
+    // How many non-archived inquiries the working view is hiding
+    // because they're tagged for some other year — surfaced next to
+    // the picker so nobody wonders where a family went.
+    const otherYears =
+      yearView === "working"
+        ? rows.filter(
+            (r) =>
+              r.status !== "archived" &&
+              !matchesLeadYearView(yearIdOf(r), yearView, workingYearId)
+          ).length
+        : 0;
     for (const r of yearMatched) {
       // Terminal statuses win over the follow-up split — a converted
       // or declined family leaves the working pipeline regardless of
@@ -344,8 +368,15 @@ export default function InquiriesPage() {
           (Number(b.created_at) || 0) - (Number(a.created_at) || 0)
       );
     }
-    return { followedUp, notFollowedUp, converted, notInterested, archived };
-  }, [rows, yearFilter]);
+    return {
+      followedUp,
+      notFollowedUp,
+      converted,
+      notInterested,
+      archived,
+      otherYears,
+    };
+  }, [rows, yearView, workingYearId]);
 
   const visibleGroups = useMemo(() => {
     if (filter === "all") {
@@ -997,18 +1028,31 @@ export default function InquiriesPage() {
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {/* Which year the family is asking about. "No year set" is
-              the working bucket — everything still untagged. */}
+          {groups.otherYears > 0 ? (
+            <button
+              type="button"
+              className="text-xs text-muted-foreground underline-offset-2 hover:underline"
+              title="Show every year"
+              onClick={() => setYearView("any")}
+            >
+              {groups.otherYears} for other years hidden
+            </button>
+          ) : null}
+          {/* Which year the family is asking about. The default pairs
+              the top bar's year with the untagged rows — the list to
+              work through — so families eyeing a later year stay out
+              of the way without being marked ✕. */}
           <Select
-            value={yearFilter === null ? "any" : String(yearFilter)}
-            onValueChange={(v) =>
-              setYearFilter(v === "any" ? null : Number(v))
-            }
+            value={String(yearView)}
+            onValueChange={(v) => setYearView(parseLeadYearView(v))}
           >
-            <SelectTrigger className="w-[170px] bg-white">
+            <SelectTrigger className="w-[210px] bg-white">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
+              <SelectItem value="working">
+                {workingYearName ? `${workingYearName} + no year set` : "This year + no year set"}
+              </SelectItem>
               <SelectItem value="any">Any year</SelectItem>
               {schoolYears.map((y) => (
                 <SelectItem key={y.id} value={String(y.id)}>
