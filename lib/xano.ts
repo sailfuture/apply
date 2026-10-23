@@ -393,6 +393,12 @@ export interface XanoStudent {
   toddle_student_id?: string;
   /** Unix-ms timestamp of the last successful Toddle sync. */
   toddle_synced_at?: number | null;
+  /** Fingerprint of everything the last fully successful Toddle sync
+   *  pushed (profile, photo, family + emergency contacts, crew) — see
+   *  `syncFingerprint` in lib/toddle-sync.ts. "Sync All to Toddle"
+   *  skips a student whose fingerprint still matches. Empty until the
+   *  first full sync after the column was added (2026-10-22). */
+  toddle_sync_hash?: string | null;
 
   /** School year (registration_school_years id) the student FIRST
    *  enrolled in — drives the two-digit suffix on the generated

@@ -75,6 +75,9 @@ export function ToddleSyncAllDialog({
   // default and reset per dialog: a roster-wide delete is the one
   // action here nothing can undo.
   const [prune, setPrune] = useState(false);
+  // Off = changes-only: students with nothing new are left alone, so
+  // a routine run stays under Toddle's rate limit.
+  const [syncEveryone, setSyncEveryone] = useState(false);
   const [linkingId, setLinkingId] = useState<number | null>(null);
 
   useEffect(() => {
@@ -146,7 +149,11 @@ export function ToddleSyncAllDialog({
       const res = await fetch("/api/admin/students/toddle-sync-all", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ allowCreateStudentIds, pruneContacts: prune }),
+        body: JSON.stringify({
+          allowCreateStudentIds,
+          pruneContacts: prune,
+          syncEveryone,
+        }),
       });
       const data = await res.json().catch(() => null);
       if (!res.ok) {
@@ -161,6 +168,8 @@ export function ToddleSyncAllDialog({
             (live.totals.created > 0 ? ` (${live.totals.created} created)` : "") +
             "."
         );
+      } else if (live.totals.failed === 0 && live.totals.skipped === 0) {
+        toast.success("Toddle is already up to date — nothing to sync.");
       }
       if (live.totals.skipped > 0) {
         toast.warning(
@@ -193,6 +202,7 @@ export function ToddleSyncAllDialog({
         if (!next) {
           setResult(null);
           setPrune(false);
+          setSyncEveryone(false);
           // Decisions are answers about a specific preview. Reopening
           // re-reads Toddle, so carrying stale ones over would let a
           // "create anyway" outlive the situation that justified it.
@@ -234,14 +244,16 @@ export function ToddleSyncAllDialog({
         <DialogHeader>
           <DialogTitle>Sync All to Toddle</DialogTitle>
           <DialogDescription>
-            Runs the full Toddle sync for every enrolled student — profile
-            fields, school email, enrollment date, home address, photo,
-            family members with their contact info, emergency contacts
-            (contact cards only, no Toddle logins), and crew class
-            placement. Existing Toddle students are matched and updated,
-            never duplicated, so this is safe to re-run. Contact cards
-            in Toddle that match nobody here are listed in the results
-            and left alone unless you ask for them to be deleted.
+            Sends Toddle every enrolled student who has something new
+            since their last sync — profile fields, school email,
+            enrollment date, home address, photo, family members with
+            their contact info, emergency contacts (contact cards only,
+            no Toddle logins), and crew class placement. Students with
+            no changes are left alone. Existing Toddle students are
+            matched and updated, never duplicated, so this is safe to
+            re-run. Contact cards in Toddle that match nobody here are
+            listed in the results and left alone unless you ask for
+            them to be deleted.
           </DialogDescription>
         </DialogHeader>
 
@@ -249,8 +261,9 @@ export function ToddleSyncAllDialog({
           {running ? (
             <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
               <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-              Syncing every enrolled student — this can take a couple of
-              minutes…
+              {syncEveryone
+                ? "Syncing every enrolled student — this can take a couple of minutes…"
+                : "Syncing students with changes…"}
             </div>
           ) : result ? (
             <>
@@ -474,6 +487,21 @@ export function ToddleSyncAllDialog({
                 of these cards would cost one Toddle read per student
                 and trip the rate limit — so the honest framing is "run
                 once to see the list, then decide". */}
+            {!result ? (
+              <label className="flex items-start gap-2 text-xs text-muted-foreground">
+                <Checkbox
+                  checked={syncEveryone}
+                  onCheckedChange={(v) => setSyncEveryone(v === true)}
+                  disabled={running || loadingReadiness}
+                  className="mt-0.5"
+                />
+                <span>
+                  Sync every student, even ones with no changes. Slower,
+                  and can hit Toddle&rsquo;s rate limit; use it to undo
+                  edits made directly in Toddle.
+                </span>
+              </label>
+            ) : null}
             {!result ? (
               <label className="flex items-start gap-2 text-xs text-muted-foreground">
                 <Checkbox
@@ -1004,7 +1032,7 @@ function ResultRow({ row }: { row: BulkToddleSyncRow }) {
           }
         : row.action === "unchanged"
           ? {
-              label: "No change",
+              label: row.not_pushed ? "Up to date" : "No change",
               className: "bg-muted text-muted-foreground border-border",
             }
           : {

@@ -237,6 +237,11 @@ export async function POST(req: Request) {
     // have been real guardians missing from the portal.
     const pruneContacts: "duplicates" | undefined =
       body?.pruneContacts === true ? "duplicates" : undefined;
+    // Changes-only by default: a student whose portal record hasn't
+    // moved since their last full sync, and whose Toddle profile and
+    // crew class still agree, costs no Toddle calls. Pushing all ~80
+    // students every time is what tripped Toddle's rate limit.
+    const syncEveryone = body?.syncEveryone === true;
 
     const students = await xano.students.getAll();
     const enrolled = students
@@ -262,11 +267,13 @@ export async function POST(req: Request) {
           const outcome = await syncStudentToToddle(s, undefined, shared, {
             allowCreate: allowCreate.has(s.id),
             ...(pruneContacts ? { pruneContacts } : {}),
+            skipIfUnchanged: !syncEveryone,
           });
           rows[index] = {
             student_id: s.id,
             student_name: name,
             action: outcome.action,
+            not_pushed: outcome.notPushed === true,
             matched_by: outcome.matchedBy,
             changed_fields: outcome.changedFields,
             source_id_blocked: outcome.sourceIdBlocked === true,
@@ -300,6 +307,7 @@ export async function POST(req: Request) {
             student_id: s.id,
             student_name: name,
             action: duplicate ? "skipped" : "failed",
+            not_pushed: false,
             matched_by: null,
             changed_fields: [],
             source_id_blocked: false,
@@ -331,9 +339,13 @@ export async function POST(req: Request) {
       skipped: 0,
       failed: 0,
     };
-    for (const row of rows) totals[row.action] += 1;
+    let notPushed = 0;
+    for (const row of rows) {
+      totals[row.action] += 1;
+      if (row.not_pushed) notPushed += 1;
+    }
 
-    return NextResponse.json({ totals, rows });
+    return NextResponse.json({ totals, rows, notPushed, syncEveryone });
   } catch (err) {
     return handleAdminError(err);
   }
@@ -349,6 +361,9 @@ export interface BulkToddleSyncRow {
    *  Toddle neither matched nor accepted this student; `error` says
    *  why. */
   action: "created" | "updated" | "unchanged" | "skipped" | "failed";
+  /** `unchanged` without a push: a changes-only run found nothing new
+   *  for this student and made no Toddle calls. */
+  not_pushed: boolean;
   /** How Toddle found the existing record: `stored` (the id we saved),
    *  `sourceId`, `email` (the school address, unique in Toddle), or
    *  `name`. The last two mean the Toddle record was NOT carrying our
@@ -401,4 +416,8 @@ export interface BulkToddleSyncResponse {
     failed: number;
   };
   rows: BulkToddleSyncRow[];
+  /** Of `totals.unchanged`, how many were left alone without a push. */
+  notPushed: number;
+  /** False = a changes-only run. */
+  syncEveryone: boolean;
 }

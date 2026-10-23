@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { stripNameSuffix } from "@/lib/name-suffix";
 import { xano } from "@/lib/xano";
 import type {
@@ -21,6 +22,8 @@ import {
   getCourseStudentIds,
   getAllStudents,
   getStudentsBySourceIds,
+  getYearGroups,
+  resolveYearGroupId,
   archiveStudent,
   unarchiveStudent,
   isToddleConfigured,
@@ -44,6 +47,7 @@ import type {
   ToddleStudent,
   ToddleSyncFields,
   ToddleUpsertResult,
+  ToddleYearGroup,
 } from "@/lib/toddle";
 
 /**
@@ -92,6 +96,9 @@ export interface ToddleSyncShared {
    *  which matters: Toddle rate-limits, and a per-student read on a
    *  75-student run would trip it. */
   toddleStudentBySource?: Map<string, ToddleStudent>;
+  /** Org year groups, fetched once, so the changes-only check can
+   *  compare grades without a Toddle call per student. */
+  yearGroups?: ToddleYearGroup[];
 }
 
 export async function buildToddleSyncShared(opts?: {
@@ -122,13 +129,15 @@ export async function buildToddleSyncShared(opts?: {
     }
     shared.emergencyPreloaded = true;
 
-    const [toddleParents, courses, roster] = await Promise.all([
+    const [toddleParents, courses, roster, yearGroups] = await Promise.all([
       getParents(),
       getCourses(),
       getAllStudents(),
+      getYearGroups().catch(() => undefined),
     ]);
     shared.toddleParents = toddleParents;
     shared.courses = courses;
+    shared.yearGroups = yearGroups;
     const ours = roster.filter(
       (s) => (s.sourceId ?? "").startsWith("sfa-") && !s.isArchived
     );
@@ -400,7 +409,79 @@ export function buildFamilyMemberInputs(
   return memberInputs;
 }
 
+/* ─────────────────────── Changes-only bulk runs ─────────────────── */
+
+/**
+ * Fingerprint of everything one sync pushes for a student: the profile
+ * fields, the photo, every family + emergency contact, and the crew.
+ * Built from the same pure helpers the sync sends from, so any edit in
+ * the portal that would change what reaches Toddle changes the hash.
+ * Stored on the student row after a fully successful sync.
+ */
+export function syncFingerprint(input: {
+  fields: ToddleSyncFields;
+  memberInputs: ToddleFamilyMemberInput[];
+  photoUrl: string | null;
+  crewName: string;
+}): string {
+  const payload = JSON.stringify({
+    v: 1,
+    fields: input.fields,
+    members: input.memberInputs,
+    photo: input.photoUrl ?? "",
+    crew: input.crewName,
+  });
+  return createHash("sha256").update(payload).digest("hex");
+}
+
+/**
+ * Whether Toddle's side still matches what we last pushed, judged only
+ * from lists the bulk run already holds (roster, year groups, crew-class
+ * rosters) — no extra Toddle calls. Catches edits made directly in
+ * Toddle to the profile or the crew class. Contact cards can't be
+ * checked without a read per student, so edits made to those in Toddle
+ * are only corrected on a "sync everyone" run or a single-student sync.
+ */
+async function toddleSideMatches(
+  existing: ToddleStudent,
+  fields: ToddleSyncFields,
+  crewName: string,
+  shared: ToddleSyncShared
+): Promise<boolean> {
+  let yearGroupId: string | undefined;
+  if (fields.gradeLevel) {
+    if (!shared.yearGroups) return false;
+    yearGroupId = await resolveYearGroupId(
+      fields.gradeLevel,
+      shared.yearGroups
+    ).catch(() => undefined);
+  }
+  const body = toStudentBody(fields);
+  const diff = diffStudentFields(
+    existing,
+    yearGroupId ? { ...body, yearGroupId } : body
+  );
+  if (!diff.compared || diff.changedFields.length > 0) return false;
+
+  if (!crewName) return true;
+  if (!shared.courses || !shared.courseRosters) return false;
+  const titleOf = (c: ToddleCourse) => (c.title ?? c.name ?? "").trim();
+  const id = String(existing.id);
+  const want = crewName.toLowerCase();
+  for (const course of shared.courses) {
+    if (course.isArchived || !/^crew\b/i.test(titleOf(course))) continue;
+    const roster = shared.courseRosters.get(course.id);
+    if (!roster) return false;
+    const isTarget = titleOf(course).toLowerCase() === want;
+    if (roster.includes(id) !== isTarget) return false;
+  }
+  return true;
+}
+
 export interface ToddleStudentSyncOutcome extends ToddleUpsertResult {
+  /** True when a changes-only run found nothing to send and made no
+   *  Toddle calls for this student (`action` is then "unchanged"). */
+  notPushed?: boolean;
   persisted: boolean;
   photo: "synced" | "none" | "failed";
   familyMembers: ToddleFamilyMemberResult[];
@@ -430,6 +511,10 @@ export async function syncStudentToToddle(
      *  what would go. "duplicates" is the safe scope for a bulk run;
      *  "all" needs someone to have read the individual cards. */
     pruneContacts?: "duplicates" | "all";
+    /** Bulk runs: send nothing when the fingerprint stored by the last
+     *  full sync still matches and Toddle's profile + crew class agree
+     *  (see `toddleSideMatches`). */
+    skipIfUnchanged?: boolean;
   }
 ): Promise<ToddleStudentSyncOutcome> {
   const id = student.id;
@@ -510,14 +595,55 @@ export async function syncStudentToToddle(
         .catch(() => null)) ?? null;
   }
 
+  const fields = buildToddleSyncFields({
+    student,
+    packet,
+    primaryParent,
+    enrollmentYear,
+    gradeLevelHint,
+  });
+  const photoUrl = resolvePhotoUrl(student.student_photo);
+  const memberInputs = buildFamilyMemberInputs(
+    familyParents,
+    emergencyContacts
+  );
+  const crewName = (packet?.crew_assignment ?? "").trim();
+  const fingerprint = syncFingerprint({
+    fields,
+    memberInputs,
+    photoUrl,
+    crewName,
+  });
+
+  // Nothing changed since the last full sync, on either side we can
+  // see: report it and spend no Toddle calls. Only the record we
+  // stored is trusted, so a re-matched or archived profile still syncs.
+  if (
+    opts?.skipIfUnchanged &&
+    student.toddle_sync_hash === fingerprint &&
+    existing &&
+    !existing.isArchived &&
+    String(existing.id) === student.toddle_student_id &&
+    (await toddleSideMatches(existing, fields, crewName, shared))
+  ) {
+    return {
+      action: "unchanged",
+      toddleId: String(existing.id),
+      matchedBy: "stored",
+      changedFields: [],
+      compared: true,
+      notPushed: true,
+      persisted: true,
+      photo: "none",
+      familyMembers: [],
+      orphanContacts: [],
+      removedContacts: [],
+      crew: null,
+    };
+  }
+
   const result = await upsertStudent(
-    buildToddleSyncFields({
-      student,
-      packet,
-      primaryParent,
-      enrollmentYear,
-      gradeLevelHint,
-    }),
+    fields,
     knownToddleId || undefined,
     existing,
     { allowCreate: opts?.allowCreate }
@@ -527,7 +653,6 @@ export async function syncStudentToToddle(
   // on the Xano row) onto the Toddle profile. Best-effort: a photo
   // failure never fails the sync — the record itself already landed.
   let photo: "synced" | "none" | "failed" = "none";
-  const photoUrl = resolvePhotoUrl(student.student_photo);
   if (photoUrl) {
     try {
       const base64Image = await fetchImageAsBase64(photoUrl);
@@ -544,15 +669,11 @@ export async function syncStudentToToddle(
 
   // Per-member outcomes come back for reporting; a failure on any one
   // of them never fails the student's own sync.
-  const memberInputs = buildFamilyMemberInputs(
-    familyParents,
-    emergencyContacts
-  );
-
   let familyMembers: ToddleFamilyMemberResult[] = [];
   let orphanContacts: ToddleOrphanContact[] = [];
   let removedContacts: ToddleOrphanContact[] = [];
   let pruneSkipped: string | undefined;
+  let familyThrew = false;
   try {
     // Leftover cards are always reported and only deleted on request
     // — they are as often a contact the PORTAL is missing as one
@@ -566,6 +687,7 @@ export async function syncStudentToToddle(
     removedContacts = family.removed;
     pruneSkipped = family.pruneSkipped;
   } catch (err) {
+    familyThrew = true;
     console.error(
       `[toddle-sync] family member sync failed for student ${id}:`,
       err
@@ -574,7 +696,6 @@ export async function syncStudentToToddle(
 
   // Crew → membership in the matching "Crew …" Toddle class (adds to
   // the right one, pulls out of a stale one on crew moves).
-  const crewName = (packet?.crew_assignment ?? "").trim();
   const crew = crewName
     ? await syncCrewClass(result.toddleId, crewName, {
         courses: shared.courses,
@@ -586,11 +707,25 @@ export async function syncStudentToToddle(
   // is a direct update. Best-effort: if the columns haven't been
   // added in Xano yet the write is a no-op / failure, and the
   // sourceId lookup still keeps syncs idempotent.
+  //
+  // The fingerprint is stored only when every part landed; anything
+  // that failed (photo, a contact, the crew class) leaves the old one,
+  // so the next changes-only run retries this student.
+  const fullySynced =
+    photo !== "failed" &&
+    !familyThrew &&
+    familyMembers.every(
+      (m) => m.account !== "failed" && m.contact !== "failed"
+    ) &&
+    (!crewName || /^(already in|added to)\b/.test(crew ?? ""));
   let persisted = false;
   try {
     await xano.students.updateOnAdminGroup(id, {
       toddle_student_id: result.toddleId,
       toddle_synced_at: Date.now(),
+      // "retry" rather than "": the PATCH drops empty text, so a cleared
+      // fingerprint has to be a value that can never match a hash.
+      toddle_sync_hash: fullySynced ? fingerprint : "retry",
     });
     persisted = true;
   } catch (err) {
