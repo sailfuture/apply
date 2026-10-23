@@ -6537,9 +6537,9 @@ function DecisionStudentRow({
     sufs_award_id: app?.sufs_award_id ? String(app.sufs_award_id) : "",
     opportunity_scholarship_award_amount:
       persistedAward == null ? "" : String(persistedAward),
-    // Editable mirror of the canonical `sufs_amount` — only rendered
-    // (and only committed) when the tier select is on "custom".
-    custom_sufs_amount:
+    // Editable mirror of the canonical `sufs_amount` — rendered (and
+    // committed) whenever a tier is picked.
+    sufs_amount_input:
       app?.sufs_amount == null ? "" : String(app.sufs_amount),
   });
 
@@ -6557,7 +6557,7 @@ function DecisionStudentRow({
       sufs_award_id: app?.sufs_award_id ? String(app.sufs_award_id) : "",
       opportunity_scholarship_award_amount:
         persistedAward == null ? "" : String(persistedAward),
-      custom_sufs_amount:
+      sufs_amount_input:
         app?.sufs_amount == null ? "" : String(app.sufs_amount),
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -6635,7 +6635,17 @@ function DecisionStudentRow({
         const errBody = await res.json().catch(() => null);
         throw new Error(errBody?.error ?? `Save failed (${res.status})`);
       }
-      onSaved();
+      // Keep the amount skeleton up until the refreshed row renders.
+      // A failed refresh isn't a failed save, so it stays out of the
+      // catch below.
+      try {
+        await onSaved();
+      } catch (err) {
+        console.error(
+          "[DecisionStudentRow.patchPerStudentBilling] refresh failed:",
+          err
+        );
+      }
     } catch (err) {
       console.error(
         "[DecisionStudentRow.patchPerStudentBilling] failed:",
@@ -6658,10 +6668,10 @@ function DecisionStudentRow({
   const stagedRemaining = stagedAmount(
     draft.opportunity_scholarship_award_amount
   );
-  // The SUFS amount is only typed on the "custom" tier — every other
-  // tier's amount is read-only, override or not.
+  // The SUFS amount is typed on any tier (a published tier just seeds
+  // it); with no tier there's no award to price.
   const stagedSufs =
-    sufsType === "custom" ? stagedAmount(draft.custom_sufs_amount) : null;
+    sufsType !== "" ? stagedAmount(draft.sufs_amount_input) : null;
   const remainingStaged =
     stagedRemaining != null &&
     stagedRemaining !== (app?.remaining_opportunity_amount ?? null);
@@ -6674,8 +6684,8 @@ function DecisionStudentRow({
     overriding &&
     ((draft.opportunity_scholarship_award_amount !== "" &&
       stagedRemaining == null) ||
-      (sufsType === "custom" &&
-        draft.custom_sufs_amount !== "" &&
+      (sufsType !== "" &&
+        draft.sufs_amount_input !== "" &&
         stagedSufs == null));
 
   function cancelOverride() {
@@ -6685,7 +6695,7 @@ function DecisionStudentRow({
       ...d,
       opportunity_scholarship_award_amount:
         persistedAward == null ? "" : String(persistedAward),
-      custom_sufs_amount:
+      sufs_amount_input:
         app?.sufs_amount == null ? "" : String(app.sufs_amount),
     }));
     setAmountsUnlocked(false);
@@ -7011,7 +7021,7 @@ function DecisionStudentRow({
                       // changes when admin commits a typed value.
                       setDraft((d) => ({
                         ...d,
-                        custom_sufs_amount:
+                        sufs_amount_input:
                           app.sufs_amount == null
                             ? ""
                             : String(app.sufs_amount),
@@ -7027,6 +7037,13 @@ function DecisionStudentRow({
                     // rule; it needs this write to exist at all.
                     if (amountsLocked) return;
                     const nextAmount = sufsAmountFor(nextType, schoolYear);
+                    // Re-seed the amount input with the tier's
+                    // figure — the draft only reseeds on a student
+                    // change, so it would otherwise keep the old one.
+                    setDraft((d) => ({
+                      ...d,
+                      sufs_amount_input: nextType ? String(nextAmount) : "",
+                    }));
                     void patchPerStudentBilling({
                       sufsAwardAmount: nextAmount,
                     });
@@ -7065,36 +7082,41 @@ function DecisionStudentRow({
                   // new stored `sufs_amount`, so the admin never sees
                   // the prior value flash through.
                   <Skeleton className="h-9 w-full rounded-md" />
-                ) : sufsType === "custom" ? (
-                  // Custom tier → the amount is admin-typed rather
-                  // than derived from the school-year columns. Same
-                  // commit convention as "Remaining Amount Family
-                  // Pays" below: blank = no change, onBlur diffs
-                  // against the persisted `sufs_amount` and writes
-                  // through `/by-student` (which re-derives the
-                  // billing columns + re-prices Stripe when live).
+                ) : sufsType !== "" ? (
+                  // Editable on every tier: a published tier seeds the
+                  // amount from the school-year columns, but SUFS
+                  // awards don't always match them, and "custom" has
+                  // no seed at all. Same commit convention as
+                  // "Remaining Amount Family Pays" below: blank = no
+                  // change, onBlur diffs against the persisted
+                  // `sufs_amount` and writes through `/by-student`
+                  // (which re-derives the billing columns). SUFS
+                  // doesn't feed `monthly_amount`, so this moves the
+                  // Opportunity Scholarship coverage, not the bill.
                   <div className="relative">
                     <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground pointer-events-none">
                       $
                     </span>
                     <Input
-                      value={draft.custom_sufs_amount}
+                      value={draft.sufs_amount_input}
                       type="number"
                       inputMode="decimal"
                       min={0}
-                      placeholder="0"
+                      // Legacy rows with no stored amount show the
+                      // tier's figure as a hint until one is saved.
+                      placeholder={String(sufsAmount)}
                       disabled={amountsReadOnly}
                       onChange={(e) =>
                         setDraft((d) => ({
                           ...d,
-                          custom_sufs_amount: e.target.value,
+                          sufs_amount_input: e.target.value,
                         }))
                       }
                       onBlur={() => {
                         // Override edits are staged — they save from
                         // the review dialog, not on blur.
                         if (overriding) return;
-                        const raw = draft.custom_sufs_amount;
+                        const raw = draft.sufs_amount_input;
                         // Blank input = "no change" rather than an
                         // implicit $0 — tabbing through shouldn't
                         // overwrite a persisted award.
@@ -7111,7 +7133,7 @@ function DecisionStudentRow({
                   </div>
                 ) : (
                   <Input
-                    value={sufsType ? formatCurrencyZero(sufsAmount) : "—"}
+                    value="—"
                     disabled
                     readOnly
                     onChange={() => {}}
