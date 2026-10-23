@@ -54,6 +54,8 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Trash2, FileUp, X, Loader2, CheckCircle2, Plus, ExternalLink, HelpCircle, Pencil } from "lucide-react";
 import { GlobalSaveStatusPill } from "@/components/save-status-pill";
 import { useFamilyProgress } from "@/hooks/use-family-progress";
+import { apiFetch } from "@/hooks/use-api";
+import { ServiceUnavailable } from "@/components/service-unavailable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useSWRConfig } from "swr";
 import {
@@ -226,6 +228,12 @@ export default function StudentsStepPage() {
     { id: number; term_name: string; start_date: string | null }[]
   >([]);
   const [loading, setLoading] = useState(true);
+  // Set only when the FIRST load fails. A refetch that fails after the
+  // roster is on screen (after adding a student, say) keeps the data —
+  // same rule as the SWR-driven pages: only an error with nothing
+  // behind it blocks the page.
+  const [loadFailed, setLoadFailed] = useState(false);
+  const loadedOnceRef = useRef(false);
   const [addingStudentId, setAddingStudentId] = useState<number | null>(null);
   const [savedApplications, setSavedApplications] = useState<Application[]>([]);
   const [pendingNavPath, setPendingNavPath] = useState<string | null>(null);
@@ -311,14 +319,23 @@ export default function StudentsStepPage() {
 
   const fetchData = useCallback(async () => {
     try {
+      // `apiFetch` retries a 401 once after refreshing the Clerk token
+      // (a cold load can race that refresh). Any other non-2xx from the
+      // four core endpoints used to be skipped silently, which rendered
+      // an empty roster — it now throws so the catch below can decide
+      // whether to block the page. Bus stops stay best-effort: the page
+      // works without the stop dropdown.
       const [familyRes, yearsRes, studentsRes, appsRes, busRes] =
         await Promise.all([
-          fetch("/api/families"),
-          fetch("/api/school-years"),
-          fetch("/api/students"),
-          fetch("/api/applications"),
-          fetch("/api/bus-stops"),
+          apiFetch("/api/families"),
+          apiFetch("/api/school-years"),
+          apiFetch("/api/students"),
+          apiFetch("/api/applications"),
+          apiFetch("/api/bus-stops"),
         ]);
+      for (const res of [familyRes, yearsRes, studentsRes, appsRes]) {
+        if (!res.ok) throw new Error(`API error ${res.status}`);
+      }
       if (familyRes.ok) {
         // `/api/families` returns `null` (not an empty object) when the
         // family record can't be loaded — JSON.parse keeps that as
@@ -378,8 +395,11 @@ export default function StudentsStepPage() {
         // completed ones. Users can manually collapse via the chevron.
       }
       if (busRes.ok) setBusStops(await busRes.json());
+      loadedOnceRef.current = true;
+      setLoadFailed(false);
     } catch (err) {
       console.error("Failed to fetch:", err);
+      if (!loadedOnceRef.current) setLoadFailed(true);
     } finally {
       setLoading(false);
     }
@@ -831,6 +851,26 @@ export default function StudentsStepPage() {
   const showPendingSkeleton =
     !!pendingNewStudent &&
     !enrolled.some((e) => e.student.id === pendingNewStudent.id);
+
+  // The first load gave up (`apiFetch` threw, or an endpoint answered
+  // non-2xx) with nothing on screen to keep. Render the retry card
+  // instead of an empty roster; "Try again" re-runs this page's load
+  // and refetches every parent-API SWR key (the progress row behind
+  // the Complete button lives there).
+  if (loadFailed) {
+    return (
+      <ServiceUnavailable
+        onRetry={() => {
+          setLoadFailed(false);
+          setLoading(true);
+          void fetchData();
+          void mutate(
+            (key) => typeof key === "string" && key.startsWith("/api/")
+          );
+        }}
+      />
+    );
+  }
 
   if (loading) {
     return (

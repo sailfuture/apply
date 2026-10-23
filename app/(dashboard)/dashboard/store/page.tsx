@@ -7,7 +7,7 @@
 
 import { useMemo } from "react";
 import { useSearchParams } from "next/navigation";
-import useSWR from "swr";
+import useSWR, { useSWRConfig } from "swr";
 import { useUser } from "@clerk/nextjs";
 import {
   CheckCircle2,
@@ -28,6 +28,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { apiFetcher, useFamily } from "@/hooks/use-api";
+import { ServiceUnavailable } from "@/components/service-unavailable";
 import { formatPriceCents, storeCheckoutUrl } from "@/lib/store";
 
 interface StoreItem {
@@ -81,16 +82,18 @@ export default function StorePage() {
   const dashboardHref = yearId ? `/dashboard?yearId=${yearId}` : "/dashboard";
 
   const { user } = useUser();
-  const { data: familyData } = useFamily();
+  const { data: familyData, error: familyError } = useFamily();
+  const { mutate: swrMutate } = useSWRConfig();
   const familyId =
     (familyData as { id?: number } | null | undefined)?.id ?? null;
   const email = user?.primaryEmailAddress?.emailAddress ?? null;
 
-  const { data: items } = useSWR<StoreItem[]>("/api/store/items", apiFetcher, {
-    revalidateOnFocus: false,
-    dedupingInterval: 30000,
-  });
-  const { data: orders } = useSWR<StoreOrder[]>(
+  const { data: items, error: itemsError } = useSWR<StoreItem[]>(
+    "/api/store/items",
+    apiFetcher,
+    { revalidateOnFocus: false, dedupingInterval: 30000 }
+  );
+  const { data: orders, error: ordersError } = useSWR<StoreOrder[]>(
     "/api/store/orders",
     apiFetcher,
     { revalidateOnFocus: true, dedupingInterval: 10000 }
@@ -110,6 +113,29 @@ export default function StorePage() {
   }, [orders]);
 
   const loading = !items || !orders || !familyData;
+
+  // A fetch this page can't render without has exhausted SWR's retry
+  // budget with nothing cached. `loading` keys on "no data yet", which
+  // is also what a failed request leaves behind, so one 5xx used to
+  // park the parent on the skeleton for good. Only an error with NO
+  // data behind it blocks — a failed background revalidation keeps the
+  // page on screen. "Try again" refetches every parent-API key in place.
+  const blockingError =
+    loading &&
+    ((!items && itemsError) ||
+      (!orders && ordersError) ||
+      (!familyData && familyError));
+  if (blockingError) {
+    return (
+      <ServiceUnavailable
+        onRetry={() =>
+          swrMutate(
+            (key) => typeof key === "string" && key.startsWith("/api/")
+          )
+        }
+      />
+    );
+  }
 
   return (
     <div className="flex flex-1 flex-col gap-6 p-4 sm:p-6 mx-auto w-full max-w-4xl">

@@ -3,11 +3,13 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useParams } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
+import { useSWRConfig } from "swr";
 import { useApplicationFlow } from "@/contexts/application-flow-context";
 import { useApplications, useFamily } from "@/hooks/use-api";
 import { useStudentRegistrationProgress } from "@/hooks/use-student-registration-progress";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ServiceUnavailable } from "@/components/service-unavailable";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -34,11 +36,13 @@ export default function EnrollmentSigningPage() {
   // section-complete latch all live here.
   const {
     progress: regProgress,
+    error: regProgressError,
     patchProgress: patchRegProgress,
     refresh: refreshRegProgress,
   } = useStudentRegistrationProgress(yearId);
-  const { data: familyData } = useFamily();
-  const { data: appsData } = useApplications();
+  const { data: familyData, error: familyError } = useFamily();
+  const { data: appsData, error: appsError } = useApplications();
+  const { mutate: swrMutate } = useSWRConfig();
 
   const [pdfLoaded, setPdfLoaded] = useState(false);
   const [signingLoading, setSigningLoading] = useState(false);
@@ -309,6 +313,30 @@ export default function EnrollmentSigningPage() {
   // constraint on this page collapses it to a cramped mobile-like view —
   // so we let this page use a wider container than the rest of the flow.
   const pageShell = "flex flex-1 flex-col gap-6 p-6 pb-0 mx-auto w-full max-w-6xl";
+
+  // A fetch this page can't render without has exhausted SWR's retry
+  // budget with nothing cached. `loading` keys on "no data yet", which
+  // is also what a failed request leaves behind, so one 5xx used to
+  // park the parent on the skeleton — and this is where acceptance
+  // emails deep-link to. Only an error with NO data behind it blocks;
+  // a failed background revalidation keeps the page on screen. "Try
+  // again" refetches every parent-API key in place.
+  const blockingError =
+    loading &&
+    ((!appsData && appsError) ||
+      (!familyData && familyError) ||
+      (regProgress === null && regProgressError));
+  if (blockingError) {
+    return (
+      <ServiceUnavailable
+        onRetry={() =>
+          swrMutate(
+            (key) => typeof key === "string" && key.startsWith("/api/")
+          )
+        }
+      />
+    );
+  }
 
   if (loading) {
     return (

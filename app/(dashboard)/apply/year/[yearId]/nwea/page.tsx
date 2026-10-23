@@ -19,6 +19,9 @@ import { useRef } from "react";
 import { toast } from "sonner";
 import { GlobalSaveStatusPill } from "@/components/save-status-pill";
 import { useFamilyProgress } from "@/hooks/use-family-progress";
+import { apiFetch } from "@/hooks/use-api";
+import { useSWRConfig } from "swr";
+import { ServiceUnavailable } from "@/components/service-unavailable";
 import { cn } from "@/lib/utils";
 
 interface Student {
@@ -55,6 +58,7 @@ export default function InitialTestingStepPage() {
 
   const { setPageTitle, updateSaveOptions, trackAutosave, registerSaveHandler, unregisterSaveHandler } = useApplicationFlow();
   const { progress, setSection: setProgressSection } = useFamilyProgress(yearId);
+  const { mutate: swrMutate } = useSWRConfig();
   const testingLocked = !!progress?.testing_completed;
 
   // Re-enrollment families skip Initial Testing — their NWEA scores
@@ -73,24 +77,35 @@ export default function InitialTestingStepPage() {
   const [students, setStudents] = useState<Student[]>([]);
   const [applications, setApplications] = useState<Application[]>([]);
   const [loading, setLoading] = useState(true);
+  // Set only when the FIRST load fails; a later failure keeps what is
+  // on screen (same rule as the SWR-driven pages).
+  const [loadFailed, setLoadFailed] = useState(false);
+  const loadedOnceRef = useRef(false);
   const [savingAppId, setSavingAppId] = useState<number | null>(null);
   const [scheduleDialogOpen, setScheduleDialogOpen] = useState(false);
 
   const fetchData = useCallback(async () => {
     try {
+      // `apiFetch` retries a 401 once after refreshing the Clerk token.
+      // Any other non-2xx used to be skipped silently, which rendered
+      // "No students enrolled" — it now throws so the catch below can
+      // decide whether to block the page.
       const [studentsRes, appsRes] = await Promise.all([
-        fetch("/api/students"),
-        fetch("/api/applications"),
+        apiFetch("/api/students"),
+        apiFetch("/api/applications"),
       ]);
-      if (studentsRes.ok) setStudents(await studentsRes.json());
-      if (appsRes.ok) {
-        const allApps: Application[] = await appsRes.json();
-        setApplications(
-          allApps.filter((a) => a.registration_school_years_id === yearId)
-        );
-      }
+      if (!studentsRes.ok) throw new Error(`API error ${studentsRes.status}`);
+      if (!appsRes.ok) throw new Error(`API error ${appsRes.status}`);
+      setStudents(await studentsRes.json());
+      const allApps: Application[] = await appsRes.json();
+      setApplications(
+        allApps.filter((a) => a.registration_school_years_id === yearId)
+      );
+      loadedOnceRef.current = true;
+      setLoadFailed(false);
     } catch (err) {
       console.error("Failed to fetch:", err);
+      if (!loadedOnceRef.current) setLoadFailed(true);
     } finally {
       setLoading(false);
     }
@@ -204,6 +219,25 @@ export default function InitialTestingStepPage() {
       student: students.find((s) => s.id === app.registration_students_id),
     }))
     .filter((x): x is { app: Application; student: Student } => !!x.student);
+
+  // The first load gave up (`apiFetch` threw, or an endpoint answered
+  // non-2xx) with nothing on screen to keep. Render the retry card
+  // instead of "No students enrolled"; "Try again" re-runs this page's
+  // load and refetches every parent-API SWR key.
+  if (loadFailed) {
+    return (
+      <ServiceUnavailable
+        onRetry={() => {
+          setLoadFailed(false);
+          setLoading(true);
+          void fetchData();
+          void swrMutate(
+            (key) => typeof key === "string" && key.startsWith("/api/")
+          );
+        }}
+      />
+    );
+  }
 
   if (loading) {
     return (

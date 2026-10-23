@@ -14,7 +14,9 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ServiceUnavailable } from "@/components/service-unavailable";
 import { NweaBookingDialog } from "@/components/nwea-booking-dialog";
+import { apiFetch } from "@/hooks/use-api";
 import { ArrowLeft, ArrowRight, Calendar, ExternalLink } from "lucide-react";
 import { ResidentialPacketForm } from "./residential-packet-form";
 
@@ -75,6 +77,11 @@ export default function AddStudentRegistrationPage() {
 
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
+  // The load threw, or an endpoint answered non-2xx other than the 404
+  // that means "not found". Rendered as the retry card; bumping
+  // `loadAttempt` re-runs the load effect below.
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [app, setApp] = useState<AppRow | null>(null);
   const [student, setStudent] = useState<StudentRow | null>(null);
   const [busStops, setBusStops] = useState<BusStop[]>([]);
@@ -100,15 +107,20 @@ export default function AddStudentRegistrationPage() {
     let cancelled = false;
     (async () => {
       try {
+        // `apiFetch` retries a 401 once after refreshing the Clerk
+        // token (a cold load can race that refresh).
         const [appRes, studentsRes, busRes] = await Promise.all([
-          fetch(`/api/applications/${appId}`),
-          fetch(`/api/students`),
-          fetch(`/api/bus-stops`),
+          apiFetch(`/api/applications/${appId}`),
+          apiFetch(`/api/students`),
+          apiFetch(`/api/bus-stops`),
         ]);
-        if (!appRes.ok) {
+        if (appRes.status === 404) {
           if (!cancelled) setNotFound(true);
           return;
         }
+        // Any other non-2xx is an outage, not a missing row — the catch
+        // below renders the retry card instead of "not found".
+        if (!appRes.ok) throw new Error(`API error ${appRes.status}`);
         const appData = await appRes.json();
         // Only residential additions belong in this flow. A normal
         // application landing here is a mistake — bounce to the
@@ -152,7 +164,7 @@ export default function AddStudentRegistrationPage() {
         // — the create path resolves an existing packet rather than
         // duplicating it.
         try {
-          const pktRes = await fetch(
+          const pktRes = await apiFetch(
             `/api/student-registration?studentId=${Number(
               appData.registration_students_id
             )}`
@@ -170,7 +182,7 @@ export default function AddStudentRegistrationPage() {
         }
       } catch (err) {
         console.error("Failed to load registration:", err);
-        if (!cancelled) setNotFound(true);
+        if (!cancelled) setLoadFailed(true);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -178,7 +190,7 @@ export default function AddStudentRegistrationPage() {
     return () => {
       cancelled = true;
     };
-  }, [appId, router]);
+  }, [appId, router, loadAttempt]);
 
   function setField<K extends keyof AppRow>(key: K, value: AppRow[K]) {
     setApp((prev) => (prev ? { ...prev, [key]: value } : prev));
@@ -278,6 +290,18 @@ export default function AddStudentRegistrationPage() {
           ))}
         </div>
       </div>
+    );
+  }
+
+  if (loadFailed) {
+    return (
+      <ServiceUnavailable
+        onRetry={() => {
+          setLoadFailed(false);
+          setLoading(true);
+          setLoadAttempt((n) => n + 1);
+        }}
+      />
     );
   }
 

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useParams } from "next/navigation";
+import { useSWRConfig } from "swr";
 import { useApplicationFlow } from "@/contexts/application-flow-context";
 import { useApplications, useFamily, mutateApplications } from "@/hooks/use-api";
 import { usePandaDocSigning } from "@/hooks/use-pandadoc-signing";
@@ -15,6 +16,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ServiceUnavailable } from "@/components/service-unavailable";
 import { Loader2 } from "lucide-react";
 
 export default function AgreementPage() {
@@ -34,7 +36,8 @@ export default function AgreementPage() {
   }, [setPageTitle, unregisterSaveHandler, registerSaveHandler]);
 
   const { data: familyData, mutate: mutateFamily } = useFamily();
-  const { data: appsData, mutate: mutateApps } = useApplications();
+  const { data: appsData, error: appsError, mutate: mutateApps } = useApplications();
+  const { mutate: swrMutate } = useSWRConfig();
 
   const applications = useMemo(() => {
     if (!appsData) return [];
@@ -97,6 +100,25 @@ export default function AgreementPage() {
     if (!app.enrollment_agreement_pandadoc_id) return null;
     return `/api/pandadoc/download?documentId=${app.enrollment_agreement_pandadoc_id}&applicationId=${app.id}&yearId=${app.registration_school_years_id}`;
   }, [isCompleted, applications]);
+
+  // Applications are the only thing this page waits on, and `undefined`
+  // is also what a fetch that exhausted SWR's retry budget leaves
+  // behind — so one failed request used to park the parent on the
+  // skeleton for good. Only an error with NO data behind it blocks; a
+  // failed background revalidation keeps the page on screen. "Try
+  // again" refetches every parent-API key in place.
+  const blockingError = !appsData && appsError;
+  if (blockingError) {
+    return (
+      <ServiceUnavailable
+        onRetry={() =>
+          swrMutate(
+            (key) => typeof key === "string" && key.startsWith("/api/")
+          )
+        }
+      />
+    );
+  }
 
   if (loading) {
     return (

@@ -44,6 +44,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { GlobalSaveStatusPill } from "@/components/save-status-pill";
 import { useFamilyProgress } from "@/hooks/use-family-progress";
+import { apiFetch } from "@/hooks/use-api";
+import { ServiceUnavailable } from "@/components/service-unavailable";
 import { toast } from "sonner";
 import {
   Empty,
@@ -389,6 +391,11 @@ export default function ScholarshipPage() {
   const [scholarship, setScholarship] = useState<Scholarship | null>(null);
   const [familyId, setFamilyId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
+  // Set only when the FIRST load fails; a later failure keeps the form
+  // on screen (same rule as the SWR-driven pages: only an error with
+  // nothing behind it blocks the page).
+  const [loadFailed, setLoadFailed] = useState(false);
+  const loadedOnceRef = useRef(false);
 
   // SUFS (Step Up For Students) — per-student Award ID, stored on each yearly application
   const [sufsStudents, setSufsStudents] = useState<SufsStudent[]>([]);
@@ -610,18 +617,30 @@ export default function ScholarshipPage() {
 
   const loadData = useCallback(async () => {
     try {
-      const familyRes = await fetch("/api/families");
-      if (!familyRes.ok) return;
+      // `apiFetch` retries a 401 once after refreshing the Clerk token
+      // (a cold load can race that refresh). Any other non-2xx used to
+      // be skipped silently, which rendered an empty, saveable form —
+      // it now throws so the catch below can decide whether to block
+      // the page.
+      const familyRes = await apiFetch("/api/families");
+      if (!familyRes.ok) throw new Error(`API error ${familyRes.status}`);
       const familyData = await familyRes.json();
-      if (!familyData?.id) return;
+      if (!familyData?.id) {
+        // Settled with no family: not a failure, the page renders empty.
+        loadedOnceRef.current = true;
+        return;
+      }
       setFamilyId(familyData.id);
 
       const [yearRes, scholarshipRes, studentsRes, appsRes] = await Promise.all([
-        fetch("/api/school-years"),
-        fetch(`/api/scholarship?familyId=${familyData.id}&yearId=${yearId}`),
-        fetch("/api/students"),
-        fetch("/api/applications"),
+        apiFetch("/api/school-years"),
+        apiFetch(`/api/scholarship?familyId=${familyData.id}&yearId=${yearId}`),
+        apiFetch("/api/students"),
+        apiFetch("/api/applications"),
       ]);
+      for (const res of [yearRes, scholarshipRes, studentsRes, appsRes]) {
+        if (!res.ok) throw new Error(`API error ${res.status}`);
+      }
 
       if (studentsRes.ok) {
         setSufsStudents(await studentsRes.json());
@@ -639,7 +658,8 @@ export default function ScholarshipPage() {
       if (scholarshipRes.ok) {
         const data: Scholarship | null = await scholarshipRes.json();
         if (data) {
-          const fullRes = await fetch(`/api/scholarship/${data.id}`);
+          const fullRes = await apiFetch(`/api/scholarship/${data.id}`);
+          if (!fullRes.ok) throw new Error(`API error ${fullRes.status}`);
           if (fullRes.ok) {
             const resp: FullScholarshipResponse = await fullRes.json();
             const s = resp?.opportunity_scholarship;
@@ -649,6 +669,7 @@ export default function ScholarshipPage() {
             // Bail rather than crashing with
             // `Cannot read properties of undefined (reading 'household_adults')`.
             if (!s) {
+              loadedOnceRef.current = true;
               setLoading(false);
               return;
             }
@@ -729,8 +750,11 @@ export default function ScholarshipPage() {
           }
         }
       }
+      loadedOnceRef.current = true;
+      setLoadFailed(false);
     } catch (err) {
       console.error("Failed to load:", err);
+      if (!loadedOnceRef.current) setLoadFailed(true);
     } finally {
       setLoading(false);
     }
@@ -1370,6 +1394,26 @@ export default function ScholarshipPage() {
     setSignatureMeta(null);
     setSignatureLocalUrl(null);
     sigRestoredRef.current = false;
+  }
+
+  // The first load gave up (`apiFetch` threw, or an endpoint answered
+  // non-2xx) with nothing on screen to keep. Render the retry card
+  // instead of an empty form that could overwrite saved answers; "Try
+  // again" re-runs this page's load and refetches every parent-API SWR
+  // key (the progress row behind the Complete button lives there).
+  if (loadFailed) {
+    return (
+      <ServiceUnavailable
+        onRetry={() => {
+          setLoadFailed(false);
+          setLoading(true);
+          void loadData();
+          void mutate(
+            (key) => typeof key === "string" && key.startsWith("/api/")
+          );
+        }}
+      />
+    );
   }
 
   if (loading) {

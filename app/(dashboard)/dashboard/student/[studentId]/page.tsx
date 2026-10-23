@@ -4,9 +4,10 @@ import { useParams, useSearchParams } from "next/navigation";
 import { useMemo, useRef, useState } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import { toast } from "sonner";
-import { useStudents, useApplications, useSchoolYears, mutateStudents } from "@/hooks/use-api";
+import { useStudents, useApplications, useSchoolYears, mutateStudents, apiFetcher } from "@/hooks/use-api";
 import { convertHeicToJpeg } from "@/lib/heic";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ServiceUnavailable } from "@/components/service-unavailable";
 import { Button } from "@/components/ui/button";
 import {
   AlertCircle,
@@ -29,8 +30,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 interface FileMetadata {
   path?: string;
@@ -211,8 +210,8 @@ export default function StudentDetailPage() {
   const yearId = yearIdParam ? Number(yearIdParam) : null;
 
   const { mutate: swrMutate } = useSWRConfig();
-  const { data: studentsData } = useStudents();
-  const { data: applicationsData } = useApplications();
+  const { data: studentsData, error: studentsError } = useStudents();
+  const { data: applicationsData, error: applicationsError } = useApplications();
 
   // The student object lives in the family-wide students cache.
   const student: Student | undefined = useMemo(() => {
@@ -232,9 +231,11 @@ export default function StudentDetailPage() {
   }, [applicationsData, studentId, yearId]);
 
   // Packet row — fetched separately because it isn't in any global SWR cache.
-  const { data: packet } = useSWR<RegistrationPacket | null>(
+  // `apiFetcher` throws on a non-2xx, so a failed fetch surfaces as
+  // `packetError` instead of caching the error body as the packet.
+  const { data: packet, error: packetError } = useSWR<RegistrationPacket | null>(
     studentId ? `/api/student-registration?studentId=${studentId}` : null,
-    fetcher
+    apiFetcher
   );
 
   // School year name for breadcrumb context.
@@ -257,6 +258,30 @@ export default function StudentDetailPage() {
   // students with no packet, so this still resolves for them.
   const loading =
     !studentsData || !applicationsData || packet === undefined || !student;
+
+  // A fetch this page can't render without has exhausted SWR's retry
+  // budget with nothing cached. `loading` keys on "no data yet", which
+  // is also what a failed request leaves behind, so one 5xx used to
+  // park the parent on the skeleton for good. Only an error with NO
+  // data behind it blocks — a failed background revalidation keeps the
+  // page on screen. "Try again" refetches every parent-API key in place.
+  const blockingError =
+    loading &&
+    ((!studentsData && studentsError) ||
+      (!applicationsData && applicationsError) ||
+      (packet === undefined && packetError));
+  if (blockingError) {
+    return (
+      <ServiceUnavailable
+        onRetry={() =>
+          swrMutate(
+            (key) => typeof key === "string" && key.startsWith("/api/")
+          )
+        }
+      />
+    );
+  }
+
   if (loading) {
     return <StudentDetailSkeleton />;
   }

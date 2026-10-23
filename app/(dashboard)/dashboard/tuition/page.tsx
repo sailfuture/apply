@@ -12,6 +12,7 @@ import {
   useScholarship,
 } from "@/hooks/use-api";
 import { Button } from "@/components/ui/button";
+import { ServiceUnavailable } from "@/components/service-unavailable";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -153,10 +154,11 @@ export default function DashboardTuitionPage() {
   const yearIdParam = searchParams.get("yearId");
   const requestedYearId = yearIdParam ? Number(yearIdParam) : null;
 
-  const { data: students } = useStudents();
-  const { data: applications } = useApplications();
-  const { data: yearsData } = useSchoolYears();
+  const { data: students, error: studentsError } = useStudents();
+  const { data: applications, error: applicationsError } = useApplications();
+  const { data: yearsData, error: yearsError } = useSchoolYears();
   const { data: familyData } = useFamily();
+  const { mutate: swrMutate } = useSWRConfig();
   // Per-student tuition math (monthly_amount, sufs_amount,
   // opportunity_award_amount, etc.) lives on the application row —
   // the `applications` data above already carries it. Single
@@ -316,6 +318,30 @@ export default function DashboardTuitionPage() {
   const monthlyTotal = sumStudentMonthly(studentRows);
 
   const loading = !students || !applications || !yearsData;
+
+  // A fetch this page can't render without has exhausted SWR's retry
+  // budget with nothing cached. `loading` keys on "no data yet", which
+  // is also what a failed request leaves behind, so one 5xx used to
+  // park the parent on the breakdown skeleton for good. Only an error
+  // with NO data behind it blocks — a failed background revalidation
+  // keeps the page on screen. "Try again" refetches every parent-API
+  // key in place.
+  const blockingError =
+    loading &&
+    ((!students && studentsError) ||
+      (!applications && applicationsError) ||
+      (!yearsData && yearsError));
+  if (blockingError) {
+    return (
+      <ServiceUnavailable
+        onRetry={() =>
+          swrMutate(
+            (key) => typeof key === "string" && key.startsWith("/api/")
+          )
+        }
+      />
+    );
+  }
 
   return (
     <div className="flex flex-1 flex-col gap-6 p-4 sm:p-6 mx-auto w-full max-w-4xl">

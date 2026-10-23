@@ -45,6 +45,8 @@ import { useSWRConfig } from "swr";
 import { GlobalSaveStatusPill } from "@/components/save-status-pill";
 import { SmsConsentFields } from "@/components/sms-consent-fields";
 import { useFamilyProgress } from "@/hooks/use-family-progress";
+import { apiFetch } from "@/hooks/use-api";
+import { ServiceUnavailable } from "@/components/service-unavailable";
 import { hasAffirmativeSmsConsent } from "@/lib/sms/consent";
 import { US_STATES } from "@/lib/us-states";
 
@@ -96,6 +98,12 @@ export default function FamilyStepPage() {
   const [familyName, setFamilyName] = useState("");
   const [yearName, setYearName] = useState("");
   const [loading, setLoading] = useState(true);
+  // Set only when the FIRST load fails. A refetch that fails after the
+  // family is on screen (after an invite, say) keeps the data — same
+  // rule as the SWR-driven pages: only an error with nothing behind it
+  // blocks the page.
+  const [loadFailed, setLoadFailed] = useState(false);
+  const loadedOnceRef = useRef(false);
 
   const [inviteSheetOpen, setInviteSheetOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
@@ -121,22 +129,27 @@ export default function FamilyStepPage() {
 
   const fetchData = useCallback(async () => {
     try {
+      // `apiFetch` retries a 401 once after refreshing the Clerk token
+      // (a cold load can race that refresh). Any other non-2xx used to
+      // be skipped silently, which rendered an empty family — it now
+      // throws so the catch below can decide whether to block the page.
       const [familyRes, yearsRes] = await Promise.all([
-        fetch("/api/families"),
-        fetch("/api/school-years"),
+        apiFetch("/api/families"),
+        apiFetch("/api/school-years"),
       ]);
-      if (familyRes.ok) {
-        const fam = await familyRes.json();
-        setParents(fam.parents ?? []);
-        if (fam.family_name) setFamilyName(fam.family_name);
-      }
-      if (yearsRes.ok) {
-        const years: SchoolYear[] = await yearsRes.json();
-        const found = years.find((y) => y.id === Number(yearId));
-        if (found) setYearName(found.year_name);
-      }
+      if (!familyRes.ok) throw new Error(`API error ${familyRes.status}`);
+      if (!yearsRes.ok) throw new Error(`API error ${yearsRes.status}`);
+      const fam = await familyRes.json();
+      setParents(fam?.parents ?? []);
+      if (fam?.family_name) setFamilyName(fam.family_name);
+      const years: SchoolYear[] = await yearsRes.json();
+      const found = years.find((y) => y.id === Number(yearId));
+      if (found) setYearName(found.year_name);
+      loadedOnceRef.current = true;
+      setLoadFailed(false);
     } catch (err) {
       console.error("Failed to fetch:", err);
+      if (!loadedOnceRef.current) setLoadFailed(true);
     } finally {
       setLoading(false);
     }
@@ -414,6 +427,26 @@ export default function FamilyStepPage() {
     } finally {
       setInviting(false);
     }
+  }
+
+  // The first load gave up (`apiFetch` threw, or an endpoint answered
+  // non-2xx) with nothing on screen to keep. Render the retry card
+  // instead of an empty family; "Try again" re-runs this page's load
+  // and refetches every parent-API SWR key (the progress row behind
+  // the Complete button lives there).
+  if (loadFailed) {
+    return (
+      <ServiceUnavailable
+        onRetry={() => {
+          setLoadFailed(false);
+          setLoading(true);
+          void fetchData();
+          void mutate(
+            (key) => typeof key === "string" && key.startsWith("/api/")
+          );
+        }}
+      />
+    );
   }
 
   if (loading) {

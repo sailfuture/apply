@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useParams } from "next/navigation";
 import { useApplicationFlow } from "@/contexts/application-flow-context";
-import { useApplications, useStudents, mutateApplications, mutateStudents } from "@/hooks/use-api";
+import { useApplications, useStudents, mutateApplications, mutateStudents, apiFetch } from "@/hooks/use-api";
 import { useSWRConfig } from "swr";
 import { useFamilyProgress } from "@/hooks/use-family-progress";
 import { useStudentRegistrationProgress } from "@/hooks/use-student-registration-progress";
@@ -23,6 +23,7 @@ import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
 import { InviteStatusBadge, ResendInviteButton } from "@/components/invite-status";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ServiceUnavailable } from "@/components/service-unavailable";
 import {
   Select,
   SelectContent,
@@ -732,8 +733,8 @@ export default function RegistrationPage() {
 
   // SWR hooks
   const { mutate: swrMutate } = useSWRConfig();
-  const { data: studentsData } = useStudents();
-  const { data: applicationsData } = useApplications();
+  const { data: studentsData, error: studentsError } = useStudents();
+  const { data: applicationsData, error: applicationsError } = useApplications();
   // Pull the current registration_type_id off the family application progress
   // row. Every new student_registration row is stamped with this so the
   // packet is scoped to (student, year, type).
@@ -753,6 +754,12 @@ export default function RegistrationPage() {
   const [emergencyContacts, setEmergencyContacts] = useState<EmergencyContact[]>([]);
   const [registrations, setRegistrations] = useState<Record<number, StudentRegistration>>({});
   const [loading, setLoading] = useState(true);
+  // Set only when the FIRST load fails. A refetch that fails after the
+  // packet is on screen (after an invite, say) keeps the data — same
+  // rule as the SWR hooks above: only an error with nothing behind it
+  // blocks the page.
+  const [loadFailed, setLoadFailed] = useState(false);
+  const loadedOnceRef = useRef(false);
   const [saving, setSaving] = useState(false);
   const [pendingDeleteContact, setPendingDeleteContact] = useState<{ id: number; name: string } | null>(null);
   const [pendingRemoveStudent, setPendingRemoveStudent] = useState<{ id: number; name: string } | null>(null);
@@ -1097,14 +1104,21 @@ export default function RegistrationPage() {
 
   const fetchData = useCallback(async () => {
     try {
+      // `apiFetch` retries a 401 once after refreshing the Clerk token
+      // (a cold load can race that refresh). Any other non-2xx used to
+      // be skipped silently, which rendered a packet with no parents or
+      // contacts — it now throws so the catch below can decide whether
+      // to block the page.
       const [familyRes, ecRes] = await Promise.all([
-        fetch("/api/families"),
-        fetch("/api/emergency-contacts"),
+        apiFetch("/api/families"),
+        apiFetch("/api/emergency-contacts"),
       ]);
+      if (!familyRes.ok) throw new Error(`API error ${familyRes.status}`);
+      if (!ecRes.ok) throw new Error(`API error ${ecRes.status}`);
 
       if (familyRes.ok) {
         const fam = await familyRes.json();
-        setParents(fam.parents ?? []);
+        setParents(fam?.parents ?? []);
       }
 
       if (ecRes.ok) {
@@ -1129,8 +1143,11 @@ export default function RegistrationPage() {
         }
         setEmergencyContacts(contacts);
       }
+      loadedOnceRef.current = true;
+      setLoadFailed(false);
     } catch (err) {
       console.error("Failed to fetch registration data:", err);
+      if (!loadedOnceRef.current) setLoadFailed(true);
     } finally {
       setLoading(false);
     }
@@ -1753,6 +1770,32 @@ export default function RegistrationPage() {
       });
     }
   }, [loading, studentsData, applicationsData, completedCards, totalCards, registrationLocked, updateSaveOptions]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // A fetch this page can't render without has given up: a SWR hook
+  // (students / applications) exhausted its retry budget with nothing
+  // cached — which leaves `data` undefined, exactly what the gate below
+  // reads as "still loading" — or this page's own first load threw.
+  // Only an error with NO data behind it counts; a failed background
+  // revalidation keeps the page on screen. "Try again" re-runs the load
+  // and refetches every parent-API SWR key in place.
+  const blockingError =
+    loadFailed ||
+    (!studentsData && studentsError) ||
+    (!applicationsData && applicationsError);
+  if (blockingError) {
+    return (
+      <ServiceUnavailable
+        onRetry={() => {
+          setLoadFailed(false);
+          setLoading(true);
+          void fetchData();
+          void swrMutate(
+            (key) => typeof key === "string" && key.startsWith("/api/")
+          );
+        }}
+      />
+    );
+  }
 
   if (loading || !studentsData || !applicationsData) {
     return (

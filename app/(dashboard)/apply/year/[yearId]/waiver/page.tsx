@@ -2,17 +2,16 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
-import useSWR from "swr";
+import useSWR, { useSWRConfig } from "swr";
 import { useParams } from "next/navigation";
 import { useApplicationFlow } from "@/contexts/application-flow-context";
-import { useApplications, useFamily, mutateApplications } from "@/hooks/use-api";
+import {
+  apiFetcher,
+  useApplications,
+  useFamily,
+  mutateApplications,
+} from "@/hooks/use-api";
 import { usePandaDocSigning } from "@/hooks/use-pandadoc-signing";
-
-// Local fetcher for the per-student packets — they hold the waiver
-// state that used to live on the application row. We could lift this
-// into `use-api` but the only caller right now is this page (and the
-// admin pages, which fetch packets through the admin endpoint).
-const packetsFetcher = (url: string) => fetch(url).then((r) => r.json());
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -23,6 +22,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ServiceUnavailable } from "@/components/service-unavailable";
 import { Loader2 } from "lucide-react";
 
 export default function WaiverPage() {
@@ -42,12 +42,19 @@ export default function WaiverPage() {
   }, [setPageTitle, unregisterSaveHandler, registerSaveHandler]);
 
   const { data: familyData, mutate: mutateFamily } = useFamily();
-  const { data: appsData, mutate: mutateApps } = useApplications();
+  const { data: appsData, error: appsError, mutate: mutateApps } = useApplications();
+  const { mutate: swrMutate } = useSWRConfig();
 
   // Packets carry waiver state now (moved off the application row).
   // Fetched per-year so the hook can join the first application's
-  // student to its packet.
-  const { data: packetsData, mutate: mutatePackets } = useSWR<
+  // student to its packet. `apiFetcher` throws on a non-2xx, so a
+  // failed fetch surfaces as `packetsError` instead of caching the
+  // error body as if it were the packet list.
+  const {
+    data: packetsData,
+    error: packetsError,
+    mutate: mutatePackets,
+  } = useSWR<
     | {
         id: number;
         registration_students_id: number;
@@ -58,7 +65,7 @@ export default function WaiverPage() {
     | null
   >(
     yearId ? `/api/student-registration?yearId=${yearId}` : null,
-    packetsFetcher,
+    apiFetcher,
     { revalidateOnFocus: false }
   );
 
@@ -154,6 +161,26 @@ export default function WaiverPage() {
     if (!packet?.liability_waiver_pandadoc_id) return null;
     return `/api/pandadoc/download?documentId=${packet.liability_waiver_pandadoc_id}&applicationId=${app.id}&yearId=${app.registration_school_years_id}`;
   }, [isCompleted, applications, packets]);
+
+  // Applications gate the skeleton and packets gate the auto-sign effect
+  // above; either one exhausting SWR's retry budget with nothing cached
+  // used to leave the parent on the skeleton or on "Preparing your
+  // liability waiver..." for good. Only an error with NO data behind it
+  // blocks — a failed background revalidation keeps the page on screen.
+  // "Try again" refetches every parent-API key in place.
+  const blockingError =
+    (!appsData && appsError) || (packetsData === undefined && packetsError);
+  if (blockingError) {
+    return (
+      <ServiceUnavailable
+        onRetry={() =>
+          swrMutate(
+            (key) => typeof key === "string" && key.startsWith("/api/")
+          )
+        }
+      />
+    );
+  }
 
   if (loading) {
     return (

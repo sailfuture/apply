@@ -2,9 +2,10 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import useSWR from "swr";
+import useSWR, { useSWRConfig } from "swr";
 import { Bell, Loader2, Mail } from "lucide-react";
 import { DashboardPageHeader } from "@/components/dashboard-page-header";
+import { ServiceUnavailable } from "@/components/service-unavailable";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -70,11 +71,12 @@ export default function NotificationsPage() {
     ? `/dashboard?yearId=${yearIdParam}`
     : "/dashboard";
 
-  const { data, mutate } = useSWR<ParentNotificationsResponse>(
+  const { data, error, mutate } = useSWR<ParentNotificationsResponse>(
     "/api/notifications",
     apiFetcher,
     { revalidateOnFocus: true, dedupingInterval: 10000 }
   );
+  const { mutate: swrMutate } = useSWRConfig();
 
   const [filter, setFilter] = useState<Filter>("all");
   const [emailView, setEmailView] = useState<ParentNotificationEntry | null>(
@@ -144,6 +146,25 @@ export default function NotificationsPage() {
   }, [data, filter]);
 
   const loading = !data;
+
+  // The feed is the only thing this page waits on, and `undefined` is
+  // also what a fetch that exhausted SWR's retry budget leaves behind —
+  // so one failed request used to park the parent on the skeleton for
+  // good. Only an error with NO data behind it blocks; a failed
+  // background revalidation keeps the feed on screen. "Try again"
+  // refetches every parent-API key in place.
+  const blockingError = loading && error;
+  if (blockingError) {
+    return (
+      <ServiceUnavailable
+        onRetry={() =>
+          swrMutate(
+            (key) => typeof key === "string" && key.startsWith("/api/")
+          )
+        }
+      />
+    );
+  }
 
   return (
     <div className="flex flex-1 flex-col gap-6 p-4 sm:p-6 mx-auto w-full max-w-4xl">

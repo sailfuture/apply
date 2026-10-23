@@ -3,6 +3,7 @@
 import { Fragment, useEffect, useState, useRef, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
+import { useSWRConfig } from "swr";
 import { toast } from "sonner";
 import { useApplicationFlow } from "@/contexts/application-flow-context";
 import { useStudentRegistrationProgress } from "@/hooks/use-student-registration-progress";
@@ -14,6 +15,7 @@ import {
   useScholarship,
 } from "@/hooks/use-api";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ServiceUnavailable } from "@/components/service-unavailable";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field, FieldLabel } from "@/components/ui/field";
@@ -104,12 +106,14 @@ export default function TuitionPage() {
   // lands on `signature_data`.
   const {
     progress: regProgress,
+    error: regProgressError,
     setSection: setRegSection,
     patchProgress: patchRegProgress,
   } = useStudentRegistrationProgress(yearId);
-  const { data: students } = useStudents();
-  const { data: applications } = useApplications();
-  const { data: yearsData } = useSchoolYears();
+  const { data: students, error: studentsError } = useStudents();
+  const { data: applications, error: applicationsError } = useApplications();
+  const { data: yearsData, error: yearsError } = useSchoolYears();
+  const { mutate: swrMutate } = useSWRConfig();
   // Per-student billing math lives on the application row now —
   // the `applications` data above already carries it. Packet table
   // no longer holds tuition columns.
@@ -435,6 +439,33 @@ export default function TuitionPage() {
     }
   }
   handleSubmitRef.current = handleSubmitReview;
+
+  // A fetch this page can't work without has exhausted SWR's retry
+  // budget (`errorRetryCount` in <SWRProvider>) with nothing cached.
+  // `loading` keys on "no data yet", which is also what a failed request
+  // leaves behind, so one 5xx used to park the parent on the skeleton.
+  // The progress row counts too: the page renders without it, but the
+  // Complete button never arms (the effect above waits on the row).
+  // Only an error with NO data behind it blocks — a failed background
+  // revalidation keeps the page on screen. "Try again" refetches every
+  // parent-API key in place.
+  const blockingError =
+    (loading &&
+      ((!students && studentsError) ||
+        (!applications && applicationsError) ||
+        (!yearsData && yearsError))) ||
+    (regProgress === null && regProgressError);
+  if (blockingError) {
+    return (
+      <ServiceUnavailable
+        onRetry={() =>
+          swrMutate(
+            (key) => typeof key === "string" && key.startsWith("/api/")
+          )
+        }
+      />
+    );
+  }
 
   if (loading) {
     return (

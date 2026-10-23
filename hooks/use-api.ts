@@ -42,14 +42,23 @@ async function refreshSessionToken(): Promise<void> {
   }
 }
 
-/** Shared parent-side fetcher: throws on !ok, and retries a 401 once
- *  after refreshing the Clerk session token (see comment above). */
-export const apiFetcher = async (url: string) => {
+/** `fetch` for parent-side GETs that retries a 401 once after refreshing
+ *  the Clerk session token (see comment above). Resolves with the
+ *  Response, ok or not — pages that read the body themselves use this
+ *  and decide what a non-2xx means. */
+export async function apiFetch(url: string): Promise<Response> {
   let res = await fetch(url);
   if (res.status === 401) {
     await refreshSessionToken();
     res = await fetch(url);
   }
+  return res;
+}
+
+/** Shared parent-side SWR fetcher: `apiFetch`, then throws on !ok so
+ *  SWR treats any non-2xx as an error and retries it. */
+export const apiFetcher = async (url: string) => {
+  const res = await apiFetch(url);
   if (!res.ok) throw new Error(`API error ${res.status}`);
   return res.json();
 };

@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import useSWR from "swr";
+import useSWR, { useSWRConfig } from "swr";
 import {
   CalendarDays,
   CalendarPlus,
@@ -13,6 +13,7 @@ import {
   MapPin,
 } from "lucide-react";
 import { apiFetcher, useApplications, useSchoolYears } from "@/hooks/use-api";
+import { ServiceUnavailable } from "@/components/service-unavailable";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -120,8 +121,9 @@ export default function ParentCalendarPage() {
   const yearIdParam = searchParams.get("yearId");
   const requestedYearId = yearIdParam ? Number(yearIdParam) : null;
 
-  const { data: applications } = useApplications();
-  const { data: yearsData } = useSchoolYears();
+  const { data: applications, error: applicationsError } = useApplications();
+  const { data: yearsData, error: yearsError } = useSchoolYears();
+  const { mutate: swrMutate } = useSWRConfig();
 
   // Same defensive fallback as the Tuition page: without ?yearId, pick
   // the most recent year this family has any application for.
@@ -269,6 +271,27 @@ export default function ParentCalendarPage() {
 
   const dashboardHref = yearId ? `/dashboard?yearId=${yearId}` : "/dashboard";
   const loading = !applications || !yearsData || (yearId !== null && !data && !error);
+
+  // The calendar fetch already renders its own inline error below, but
+  // applications and years gate the skeleton on "no data yet" — which is
+  // also what a fetch that exhausted SWR's retry budget leaves behind,
+  // so one 5xx on either used to park the parent on the skeleton for
+  // good. Only an error with NO data behind it blocks; a failed
+  // background revalidation keeps the page on screen. "Try again"
+  // refetches every parent-API key in place.
+  const blockingError =
+    (!applications && applicationsError) || (!yearsData && yearsError);
+  if (blockingError) {
+    return (
+      <ServiceUnavailable
+        onRetry={() =>
+          swrMutate(
+            (key) => typeof key === "string" && key.startsWith("/api/")
+          )
+        }
+      />
+    );
+  }
 
   return (
     <div className="flex flex-1 flex-col gap-6 p-4 sm:p-6 mx-auto w-full max-w-5xl">

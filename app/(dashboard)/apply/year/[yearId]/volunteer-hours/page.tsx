@@ -5,12 +5,14 @@ import { useParams } from "next/navigation";
 import { toast } from "sonner";
 import SignatureCanvas from "react-signature-canvas";
 import { CheckCircle2, Loader2 } from "lucide-react";
+import { useSWRConfig } from "swr";
 import { useApplicationFlow } from "@/contexts/application-flow-context";
 import { useStudentRegistrationProgress } from "@/hooks/use-student-registration-progress";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ServiceUnavailable } from "@/components/service-unavailable";
 import { GlobalSaveStatusPill } from "@/components/save-status-pill";
 
 /**
@@ -37,9 +39,11 @@ export default function VolunteerHoursPage() {
   } = useApplicationFlow();
   const {
     progress: regProgress,
+    error: regProgressError,
     setSection: setRegSection,
     patchProgress: patchRegProgress,
   } = useStudentRegistrationProgress(yearId);
+  const { mutate: swrMutate } = useSWRConfig();
 
   const [submitting, setSubmitting] = useState(false);
   const [signatureMeta, setSignatureMeta] = useState<Record<string, unknown> | null>(null);
@@ -195,6 +199,24 @@ export default function VolunteerHoursPage() {
   handleSubmitRef.current = handleAcknowledge;
 
   const loading = regProgress === null;
+
+  // The progress row is the only thing this page waits on, and `null`
+  // is also what a fetch that exhausted SWR's retry budget leaves
+  // behind — so one failed request used to park the parent on the
+  // skeleton for good. Render the retry card instead; "Try again"
+  // refetches every parent-API key in place.
+  const blockingError = loading && regProgressError;
+  if (blockingError) {
+    return (
+      <ServiceUnavailable
+        onRetry={() =>
+          swrMutate(
+            (key) => typeof key === "string" && key.startsWith("/api/")
+          )
+        }
+      />
+    );
+  }
 
   if (loading) {
     return (

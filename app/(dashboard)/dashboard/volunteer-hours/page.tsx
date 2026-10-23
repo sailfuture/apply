@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import useSWR from "swr";
+import useSWR, { useSWRConfig } from "swr";
 import { toast } from "sonner";
 import {
   CalendarDays,
@@ -36,6 +36,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useApplications, useSchoolYears, apiFetcher } from "@/hooks/use-api";
+import { ServiceUnavailable } from "@/components/service-unavailable";
 import { cn } from "@/lib/utils";
 import {
   eventColor,
@@ -116,7 +117,8 @@ export default function VolunteerHoursPage() {
   // Defensive fallback if the parent lands here without `?yearId` (the
   // dashboard normally propagates it via URL, but stale links can drop
   // it). Picks the most recent year the family has an application for.
-  const { data: applications } = useApplications();
+  const { data: applications, error: applicationsError } = useApplications();
+  const { mutate: swrMutate } = useSWRConfig();
   const yearId = useMemo<number | null>(() => {
     if (yearIdParam) {
       const n = Number(yearIdParam);
@@ -139,7 +141,7 @@ export default function VolunteerHoursPage() {
     : "/dashboard";
 
   // Look up the year name so we can show it in the breadcrumb + title.
-  const { data: yearsData } = useSchoolYears();
+  const { data: yearsData, error: yearsError } = useSchoolYears();
   const yearName = useMemo(() => {
     if (!yearId || !yearsData) return null;
     const found = (yearsData as { id: number; year_name: string }[]).find(
@@ -151,7 +153,11 @@ export default function VolunteerHoursPage() {
   // Volunteer-hours entries for the year on screen. The route is
   // year-scoped — the Xano query behind it filters on family AND
   // year — so there's nothing to ask for until `yearId` resolves.
-  const { data: entriesData, isLoading: entriesLoading } = useSWR<
+  const {
+    data: entriesData,
+    error: entriesError,
+    isLoading: entriesLoading,
+  } = useSWR<
     VolunteerHoursEntry[]
   >(yearId ? `/api/volunteer-hours?yearId=${yearId}` : null, fetcher, {
     revalidateOnFocus: false,
@@ -195,6 +201,29 @@ export default function VolunteerHoursPage() {
   // at a family that has plenty.
   const yearResolving = !yearIdParam && applications === undefined;
   const loading = yearResolving || entriesLoading || !yearsData;
+
+  // A fetch this page can't render without has exhausted SWR's retry
+  // budget with nothing cached. Applications and years leave `loading`
+  // stuck on the skeleton; the entries fetch is worse — SWR drops
+  // `isLoading` once it gives up, so the page rendered "0 hours" at a
+  // family that has plenty. Only an error with NO data behind it blocks
+  // — a failed background revalidation keeps the page on screen. "Try
+  // again" refetches every parent-API key in place.
+  const blockingError =
+    (yearResolving && applicationsError) ||
+    (!yearsData && yearsError) ||
+    (entriesData === undefined && entriesError);
+  if (blockingError) {
+    return (
+      <ServiceUnavailable
+        onRetry={() =>
+          swrMutate(
+            (key) => typeof key === "string" && key.startsWith("/api/")
+          )
+        }
+      />
+    );
+  }
 
   return (
     <div className="flex flex-1 flex-col gap-6 p-4 sm:p-6 mx-auto w-full max-w-4xl">
