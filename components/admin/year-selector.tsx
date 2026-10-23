@@ -18,7 +18,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { defaultAdminYear, sortAdminYears } from "@/lib/school-year-default";
+import { resolveAdminYear, sortAdminYears } from "@/lib/school-year-default";
+import {
+  readRememberedAdminYearId,
+  rememberAdminYear,
+  useRememberedAdminYearId,
+} from "@/lib/admin-year-memory";
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
@@ -96,18 +101,34 @@ export function YearSelector() {
     [yearsRaw]
   );
 
-  const defaultYear = useMemo(() => defaultAdminYear(years), [years]);
+  // The year a URL without `?yearId=` resolves to: the one this
+  // browser last worked in, else the default rule (upcoming year).
+  const rememberedYearId = useRememberedAdminYearId();
+  const defaultYear = useMemo(
+    () => resolveAdminYear(years, rememberedYearId),
+    [years, rememberedYearId]
+  );
 
-  // Auto-select the default year on first load if the URL doesn't already
-  // carry a `?yearId=`. Keeps the admin tool focused on the upcoming year
-  // by default per spec.
+  // Fill in the year when the URL doesn't carry one (a link, bookmark
+  // or typed URL that dropped it). The cookie is read here rather than
+  // through the hook so a hydration render can't inject the default
+  // over the remembered year.
   useEffect(() => {
-    if (!currentYearId && defaultYear) {
-      const params = new URLSearchParams(searchParams.toString());
-      params.set("yearId", String(defaultYear.id));
-      router.replace(`${pathname}?${params.toString()}`);
-    }
-  }, [currentYearId, defaultYear, pathname, router, searchParams]);
+    if (currentYearId || years.length === 0) return;
+    const year = resolveAdminYear(years, readRememberedAdminYearId());
+    if (!year) return;
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("yearId", String(year.id));
+    router.replace(`${pathname}?${params.toString()}`);
+  }, [currentYearId, years, pathname, router, searchParams]);
+
+  // Remember whatever real year is in view — picked here, switched by
+  // the past-year banner, or opened from a link that names one — so
+  // the next URL without a year stays on it.
+  useEffect(() => {
+    const id = Number(currentYearId);
+    if (years.some((y) => y.id === id)) rememberAdminYear(id);
+  }, [currentYearId, years]);
 
   if (isLoading) {
     return <Skeleton className="h-9 w-full" />;
@@ -120,6 +141,7 @@ export function YearSelector() {
   function handleChange(value: string) {
     if (value === (currentYearId ?? String(defaultYear?.id ?? ""))) return;
     const picked = years.find((y) => String(y.id) === value);
+    if (picked) rememberAdminYear(picked.id);
     switchStartedAt.current = Date.now();
     setSwitchingTo(picked?.year_name || "the selected year");
     const params = new URLSearchParams(searchParams.toString());

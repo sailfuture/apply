@@ -15,7 +15,7 @@ import { callNeedsReply, callPreview } from "@/lib/calls";
 import { computeFamilyStageSets } from "@/lib/sms/stages";
 import { getFacultyByPhone } from "@/lib/sms/faculty";
 import { isFollowUpTemplate } from "@/lib/nurture/templates";
-import { defaultAdminYear } from "@/lib/school-year-default";
+import { resolveAdminYear } from "@/lib/school-year-default";
 import { isMediaOnlyBody, mediaPreviewLabel, smsMedia } from "@/lib/sms/media";
 import { readClosedConversations } from "@/lib/app-settings";
 
@@ -115,6 +115,10 @@ export interface InboxFeedOptions {
    *  (lib/school-year-default.ts), so a page that fetches before the
    *  selector has run gets the answer it would have asked for. */
   yearId: number | null;
+  /** The year the admin's browser last worked in (its ADMIN_YEAR_COOKIE),
+   *  preferred over the default when `yearId` is null — the same pick
+   *  the selector makes. */
+  rememberedYearId?: number | null;
   /** Window start (unix ms). When set, only texts and calls at or
    *  after it are read and the search haystack is skipped. */
   since?: number | null;
@@ -188,7 +192,7 @@ export async function buildInboxFeed(
   const years = await xano.schoolYears.getAll().catch(() => []);
   const yearId =
     options.yearId === null
-      ? (defaultAdminYear(years)?.id ?? 0)
+      ? (resolveAdminYear(years, options.rememberedYearId ?? null)?.id ?? 0)
       : options.yearId;
   const withStages = Number.isFinite(yearId) && yearId > 0;
   const extraYearIds = years

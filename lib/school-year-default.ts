@@ -1,6 +1,8 @@
 /**
  * Which school year an admin page shows when the URL carries no
- * `?yearId=` — ONE rule shared by the YearSelector (which injects it
+ * `?yearId=` — the year this browser last worked in (remembered in
+ * the ADMIN_YEAR_COOKIE cookie, see lib/admin-year-memory.ts), else
+ * the default rule below. ONE rule shared by the YearSelector (which injects it
  * into the URL) and the server routes that need to answer before that
  * injection has happened (the Messages inbox feed). If the two ever
  * disagreed, the inbox would classify a family against one year and
@@ -47,4 +49,26 @@ export function defaultAdminYear<T extends AdminYearLike>(
     sorted[0] ??
     null
   );
+}
+
+/** Cookie holding the year this browser last worked in. A cookie (not
+ *  localStorage) so the server routes that resolve a missing
+ *  `?yearId=` can honor it too. */
+export const ADMIN_YEAR_COOKIE = "sfa_admin_year";
+
+/** Parses the cookie value; null for a missing or malformed one. */
+export function parseAdminYearId(value: string | null | undefined): number | null {
+  const id = Number(value);
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+
+/** The year to show when the URL names none: the remembered one while
+ *  it still exists, else `defaultAdminYear`. */
+export function resolveAdminYear<T extends AdminYearLike>(
+  years: T[],
+  rememberedId: number | null
+): T | null {
+  const remembered =
+    rememberedId !== null ? years.find((y) => y.id === rememberedId) : undefined;
+  return remembered ?? defaultAdminYear(years);
 }

@@ -27,6 +27,7 @@ import {
 } from "@/lib/app-settings";
 import { threadQuoUrl } from "@/lib/quo/links";
 import { buildInboxFeed } from "@/lib/sms/inbox-feed";
+import { ADMIN_YEAR_COOKIE, parseAdminYearId } from "@/lib/school-year-default";
 import { bumpLeadReachOut } from "@/lib/leads";
 
 // The conversation-list types live with the builder in
@@ -69,7 +70,8 @@ function parseContactParams(req: NextRequest): {
  *  - `GET [?yearId=][&since=]` (no contact params) — the global inbox
  *    feed: one conversation per contact across families, inquiries,
  *    and summer-camp parents; `since` narrows it to a recent window,
- *    and a missing `yearId` means the admin default year.
+ *    and a missing `yearId` means the year the admin last worked in
+ *    (cookie), else the default year.
  *  - `POST { contactType?, contactId?, familyId?, body, parentId? }` —
  *    send a manual text to the contact's phone and log it on their
  *    thread. `parentId` (families only) aims it at another parent on
@@ -99,6 +101,9 @@ async function handleGET(req: NextRequest) {
       const since = sinceParam === null ? null : Number(sinceParam);
       const feed = await buildInboxFeed({
         yearId: Number.isFinite(yearId) && yearId > 0 ? yearId : null,
+        rememberedYearId: parseAdminYearId(
+          req.cookies.get(ADMIN_YEAR_COOKIE)?.value
+        ),
         since: since !== null && Number.isFinite(since) && since > 0 ? since : null,
       });
       return NextResponse.json({

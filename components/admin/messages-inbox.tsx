@@ -47,7 +47,8 @@ import type {
   ConversationStage,
   SmsConversation,
 } from "@/app/api/admin/messages/route";
-import { defaultAdminYear, type AdminYearLike } from "@/lib/school-year-default";
+import { resolveAdminYear, type AdminYearLike } from "@/lib/school-year-default";
+import { useRememberedAdminYearId } from "@/lib/admin-year-memory";
 import type {
   GroupAudienceResponse,
   GroupContact,
@@ -175,7 +176,8 @@ export function MessagesInbox({ mode }: { mode: InboxMode }) {
   // one-shot effect can't rerun). The feed used to wait for the
   // YearSelector to inject `?yearId=` before fetching at all; now the
   // route defaults to the very year the selector would inject (the
-  // shared rule in lib/school-year-default.ts), so the first fetch
+  // shared rule in lib/school-year-default.ts — the remembered year
+  // from the same cookie, else the default), so the first fetch
   // goes out on first render, keyed WITHOUT a year. When the selector
   // then writes that same year into the URL the key doesn't change
   // and nothing refetches; only a different year (the admin switched)
@@ -189,10 +191,13 @@ export function MessagesInbox({ mode }: { mode: InboxMode }) {
     "/api/school-years",
     adminFetcher
   );
+  const rememberedYearId = useRememberedAdminYearId();
   const defaultYearId = useMemo(
     () =>
-      Array.isArray(yearsRaw) ? (defaultAdminYear(yearsRaw)?.id ?? null) : null,
-    [yearsRaw]
+      Array.isArray(yearsRaw)
+        ? (resolveAdminYear(yearsRaw, rememberedYearId)?.id ?? null)
+        : null,
+    [yearsRaw, rememberedYearId]
   );
   const [startedWithYear] = useState(() => urlYearId !== null);
   const feedYear =
