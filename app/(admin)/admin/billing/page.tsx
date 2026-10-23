@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { toast } from "sonner";
 import {
+  Activity,
   ChevronRight,
   CreditCard,
   Download,
@@ -103,6 +104,10 @@ export default function AdminBillingPage() {
   const [billingActivityFamily, setBillingActivityFamily] = useState<
     number | null
   >(null);
+  // Activity-icon sheet — the family's FULL stream (notes, texts,
+  // calls, every stamp), same button Registrations and Enrolled carry,
+  // so billing questions can be answered without leaving the list.
+  const [activityFamily, setActivityFamily] = useState<number | null>(null);
   async function handleExport() {
     if (rows.length === 0 || exporting) return;
     setExporting(true);
@@ -307,6 +312,18 @@ export default function AdminBillingPage() {
         />
       ) : null}
 
+      {/* Activity-icon sheet — the whole family stream, unfiltered. */}
+      {activityFamily && yearId ? (
+        <ActivityLogSheet
+          familyId={activityFamily}
+          yearId={Number(yearId)}
+          open
+          onOpenChange={(o) => {
+            if (!o) setActivityFamily(null);
+          }}
+        />
+      ) : null}
+
       {error ? (
         <div className="rounded-lg border border-border bg-muted/30 p-4 text-sm text-muted-foreground">
           Failed to load billing list:{" "}
@@ -372,6 +389,7 @@ export default function AdminBillingPage() {
                   `/admin/families/${row.family_id}/billing?yearId=${row.year_id}`
                 )
               }
+              onOpenActivity={(row) => setActivityFamily(row.family_id)}
             />
           ) : null}
 
@@ -386,6 +404,7 @@ export default function AdminBillingPage() {
               onRowClick={(row) =>
                 setBillingActivityFamily(row.family_id)
               }
+              onOpenActivity={(row) => setActivityFamily(row.family_id)}
             />
           ) : null}
         </>
@@ -469,9 +488,12 @@ function NotStartedTable({
   rows,
   onRowClick,
   onStarted,
+  onOpenActivity,
 }: {
   rows: NotStartedRow[];
   onRowClick: (row: NotStartedRow) => void;
+  /** Activity-icon click — opens the family's full activity sheet. */
+  onOpenActivity: (row: NotStartedRow) => void;
   /** Revalidate the list once a subscription exists — the family
    *  moves out of this table and into the subscriptions one. */
   onStarted: () => void | Promise<unknown>;
@@ -627,6 +649,16 @@ function NotStartedTable({
                     )}
                     Start billing
                   </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="ml-1.5 size-7 bg-white p-0 align-middle"
+                    aria-label={`Activity for ${row.family_name}`}
+                    title="Activity"
+                    onClick={() => onOpenActivity(row)}
+                  >
+                    <Activity className="size-3.5 text-muted-foreground" />
+                  </Button>
                   <ChevronRight className="ml-1 size-4 text-muted-foreground inline" />
                 </TableCell>
               </TableRow>
@@ -691,12 +723,15 @@ function BillingTable({
   rows,
   onRowClick,
   onOpenFamily,
+  onOpenActivity,
 }: {
   rows: BillingRow[];
   /** History-icon click — opens the billing-scoped activity sheet. */
   onRowClick: (row: BillingRow) => void;
   /** Row click — navigates to the family's billing schedule page. */
   onOpenFamily: (row: BillingRow) => void;
+  /** Activity-icon click — opens the family's full activity sheet. */
+  onOpenActivity: (row: BillingRow) => void;
 }) {
   const [search, setSearch] = useState("");
   const visible = useMemo(() => {
@@ -801,6 +836,7 @@ function BillingTable({
             group={group}
             onRowClick={onRowClick}
             onOpenFamily={onOpenFamily}
+            onOpenActivity={onOpenActivity}
           />
         ))
       )}
@@ -815,12 +851,15 @@ function BillingGroupCard({
   group,
   onRowClick,
   onOpenFamily,
+  onOpenActivity,
 }: {
   group: BillingGroup;
   /** History-icon click — opens the billing-scoped activity sheet. */
   onRowClick: (row: BillingRow) => void;
   /** Row click — navigates to the family's billing schedule page. */
   onOpenFamily: (row: BillingRow) => void;
+  /** Activity-icon click — opens the family's full activity sheet. */
+  onOpenActivity: (row: BillingRow) => void;
 }) {
   return (
     <Card
@@ -863,7 +902,7 @@ function BillingGroupCard({
               <TableHead className="text-[10px] text-muted-foreground w-[16%]">
                 Family
               </TableHead>
-              <TableHead className="text-[10px] text-muted-foreground w-[16%]">
+              <TableHead className="text-[10px] text-muted-foreground w-[14%]">
                 Primary Contact
               </TableHead>
               <TableHead className="text-[10px] text-muted-foreground w-[10%]">
@@ -884,7 +923,7 @@ function BillingGroupCard({
               <TableHead className="text-[10px] text-muted-foreground w-[10%] text-right">
                 Next Invoice
               </TableHead>
-              <TableHead className="text-[10px] text-muted-foreground w-[6%] text-right" />
+              <TableHead className="text-[10px] text-muted-foreground w-[8%] text-right" />
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -951,7 +990,20 @@ function BillingGroupCard({
                   >
                     <History className="size-3.5" aria-hidden="true" />
                   </button>
-                  <ChevronRight className="size-4 text-muted-foreground inline align-middle" />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="ml-1 size-7 bg-white p-0 align-middle"
+                    aria-label={`Activity for ${row.family_name}`}
+                    title="Activity"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onOpenActivity(row);
+                    }}
+                  >
+                    <Activity className="size-3.5 text-muted-foreground" />
+                  </Button>
+                  <ChevronRight className="ml-1 size-4 text-muted-foreground inline align-middle" />
                 </TableCell>
               </TableRow>
             ))}
