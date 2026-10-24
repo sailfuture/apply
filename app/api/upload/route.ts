@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
+import { xanoFetch } from "@/lib/xano-fetch";
 
 /**
  * Resolve the Xano upload endpoint. We accept the URL via the explicit
@@ -64,7 +65,7 @@ export async function POST(req: NextRequest) {
   const xanoForm = new FormData();
   xanoForm.append("content", blob, filename);
 
-  const res = await fetch(uploadUrl, {
+  const res = await xanoFetch(uploadUrl, {
     method: "POST",
     body: xanoForm,
   });

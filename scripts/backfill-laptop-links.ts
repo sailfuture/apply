@@ -59,6 +59,7 @@ import type {
   XanoOpsStudent,
   XanoStudent,
 } from "../lib/xano";
+import { xanoFetch } from "../lib/xano-fetch";
 
 function loadEnv(): void {
   const envPath = path.join(process.cwd(), ".env.local");
@@ -73,7 +74,7 @@ function loadEnv(): void {
 }
 
 async function getJson<T>(url: string): Promise<T> {
-  const res = await fetch(url, { cache: "no-store" });
+  const res = await xanoFetch(url, { cache: "no-store" }, { fresh: true });
   if (!res.ok) throw new Error(`GET ${url} → ${res.status} ${await res.text()}`);
   return res.json() as Promise<T>;
 }

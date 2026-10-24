@@ -20,6 +20,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import type { SmsMediaItem, XanoSmsMessage } from "../lib/xano";
+import { xanoFetch } from "../lib/xano-fetch";
 
 function loadEnv() {
   const envPath = path.join(process.cwd(), ".env.local");
@@ -43,7 +44,7 @@ async function request(url: string, init?: RequestInit): Promise<Response> {
   for (let attempt = 0; attempt < 3; attempt++) {
     if (attempt > 0) await new Promise((r) => setTimeout(r, 500 * attempt));
     try {
-      const res = await fetch(url, { cache: "no-store", ...init });
+      const res = await xanoFetch(url, { cache: "no-store", ...init }, { fresh: true });
       if (res.ok || (res.status < 500 && res.status !== 429)) return res;
       last = res;
     } catch (err) {

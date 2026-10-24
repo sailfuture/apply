@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { withServerTiming } from "@/lib/server-timing";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
+import { xanoFetch } from "@/lib/xano-fetch";
 import type {
   XanoApplication,
   XanoEmergencyContact,
@@ -218,9 +219,10 @@ async function fetchFamilyApplicationProgress(
 ): Promise<XanoFamilyApplicationProgress[]> {
   try {
     const base = process.env.XANO_API_BASE_URL ?? "";
-    const res = await fetch(
+    const res = await xanoFetch(
       `${base}/registration_family_application_progress?registration_families_id=${familyId}`,
-      { cache: "no-store" }
+      { cache: "no-store" },
+      { fresh: true }
     );
     if (!res.ok) return [];
     const results = await res.json();
@@ -245,9 +247,10 @@ async function fetchStudentRegistrationProgress(
 ): Promise<XanoStudentRegistrationProgress[]> {
   try {
     const base = process.env.XANO_API_BASE_URL ?? "";
-    const res = await fetch(
+    const res = await xanoFetch(
       `${base}/registration_student_registration_progress?registration_families_id=${familyId}`,
-      { cache: "no-store" }
+      { cache: "no-store" },
+      { fresh: true }
     );
     if (!res.ok) return [];
     const results = await res.json();

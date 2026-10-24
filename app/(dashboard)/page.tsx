@@ -1,6 +1,7 @@
 import { auth, clerkClient, currentUser } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
 import { xano, ensureParentRecord } from "@/lib/xano";
+import { xanoFetch } from "@/lib/xano-fetch";
 import { getAdminForEmail } from "@/lib/admin-auth";
 import {
   emailFromClaims,
@@ -177,7 +178,7 @@ export default async function Page() {
     xano.studentRegistrationProgress
       .getByFamilyAndYear(familyId, targetYearId)
       .catch(() => null),
-    fetch(packetsUrl, { cache: "no-store" })
+    xanoFetch(packetsUrl, { cache: "no-store" }, { fresh: true })
       .then(async (res) => {
         type Packet = {
           registrationConfirmed?: boolean;

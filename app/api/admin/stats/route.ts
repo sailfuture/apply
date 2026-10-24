@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { withServerTiming } from "@/lib/server-timing";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
+import { xanoFetch } from "@/lib/xano-fetch";
 import { leadConvertedFamilyId } from "@/lib/lead-conversion";
 
 const BASE = process.env.XANO_API_BASE_URL;
@@ -34,15 +35,21 @@ async function handleGET(req: NextRequest) {
       progressResult,
     ] = await Promise.allSettled([
       xano.applications.getAll(),
-      fetch(`${BASE}/registration_inquiry`, { cache: "no-store" }).then((r) =>
-        r.ok ? r.json() : []
-      ),
-      fetch(`${BASE}/registration_student_registration`, { cache: "no-store" }).then(
-        (r) => (r.ok ? r.json() : [])
-      ),
-      fetch(`${BASE}/registration_students`, { cache: "no-store" }).then((r) =>
-        r.ok ? r.json() : []
-      ),
+      xanoFetch(
+        `${BASE}/registration_inquiry`,
+        { cache: "no-store" },
+        { fresh: true }
+      ).then((r) => (r.ok ? r.json() : [])),
+      xanoFetch(
+        `${BASE}/registration_student_registration`,
+        { cache: "no-store" },
+        { fresh: true }
+      ).then((r) => (r.ok ? r.json() : [])),
+      xanoFetch(
+        `${BASE}/registration_students`,
+        { cache: "no-store" },
+        { fresh: true }
+      ).then((r) => (r.ok ? r.json() : [])),
       xano.tours.getAll(),
       // Family-level application pipeline — the same rows the
       // /admin/applications page buckets, so the dashboard's Apps

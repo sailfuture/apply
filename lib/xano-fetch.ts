@@ -1,7 +1,8 @@
 /**
- * The one door every Xano request in lib/xano.ts goes through.
+ * The one door every Xano request in lib/xano.ts goes through (and
+ * the handful of routes and scripts that build their own Xano URLs).
  *
- * Two jobs:
+ * Three jobs:
  *
  *   1. CACHE the reads that were making every admin page re-download
  *      the database. Measured 2026-09-17: the admin list routes pull
@@ -18,6 +19,17 @@
  *
  *   2. ACCOUNT for every call (table, method, duration) into the
  *      per-request store so `withServerTiming` can report it.
+ *
+ *   3. AUTHENTICATE to the "SFA Registration" API group (`2GcBXyoA`,
+ *      what `XANO_API_BASE_URL` and `XANO_UPLOAD_URL` point at). As of
+ *      the 2026-10-22 audit every endpoint in it was open to anyone;
+ *      Xano is getting a guard that wants `Authorization: Bearer
+ *      <SFA_REGISTRATION_API_KEY>`, so every request to that group
+ *      carries `XANO_API_KEY` (same value; server-only, never
+ *      `NEXT_PUBLIC_`). Only that group, and only on the host those env
+ *      vars name: the Toddle (`fJsHVIeC`) and ops (`jzQ2liPL`) groups,
+ *      vault file URLs and every other host never see the key. Until
+ *      the guard is on, Xano ignores the header.
  *
  * This module has NO imports on purpose. lib/xano.ts reaches browser
  * bundles through a couple of shared helper modules, and Turbopack
@@ -130,6 +142,34 @@ export function isCachedTable(table: string | null): table is string {
   return table !== null && CACHED_TABLES.has(table);
 }
 
+const REGISTRATION_GROUP = "/api:2GcBXyoA";
+
+function originOf(url: string | undefined): string | null {
+  try {
+    return url ? new URL(url.trim()).origin : null;
+  } catch {
+    return null;
+  }
+}
+
+/** True when `url` is in the registration group on the Xano host the
+ *  env names — the only requests that get `XANO_API_KEY`. */
+export function isRegistrationGroupUrl(url: string): boolean {
+  let target: URL;
+  try {
+    target = new URL(url);
+  } catch {
+    return false;
+  }
+  const inGroup =
+    target.pathname === REGISTRATION_GROUP ||
+    target.pathname.startsWith(`${REGISTRATION_GROUP}/`);
+  if (!inGroup) return false;
+  return [process.env.XANO_API_BASE_URL, process.env.XANO_UPLOAD_URL]
+    .map(originOf)
+    .includes(target.origin);
+}
+
 export interface XanoFetchOptions {
   /** Read straight from Xano even when the table is cached. For the
    *  reads that decide a WRITE — "is this SID already logged?" — where
@@ -141,8 +181,8 @@ export interface XanoFetchOptions {
 }
 
 /**
- * Drop-in for `fetch` inside lib/xano.ts. Same signature, same
- * Response; only the caching + accounting differ.
+ * Drop-in for `fetch` for any Xano URL. Same signature, same
+ * Response; only the caching, accounting and registration key differ.
  */
 export async function xanoFetch(
   input: string | URL | Request,
@@ -177,6 +217,18 @@ export async function xanoFetch(
         tags: [cacheTagFor(table)],
       },
     };
+  }
+
+  // An Authorization header doesn't stop the Data Cache here: Next only
+  // skips caching an authorized fetch when it has no explicit
+  // revalidate, and the cached reads above always set one.
+  const key = process.env.XANO_API_KEY;
+  if (key && isRegistrationGroupUrl(url)) {
+    const headers = new Headers(
+      finalInit?.headers ?? (input instanceof Request ? input.headers : undefined)
+    );
+    headers.set("Authorization", `Bearer ${key}`);
+    finalInit = { ...finalInit, headers };
   }
 
   const started = performance.now();

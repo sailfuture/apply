@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { xano } from "@/lib/xano";
+import { xanoFetch } from "@/lib/xano-fetch";
 import {
   denyScholarshipFamilyAccess,
   scholarshipFamilyId,
@@ -41,9 +42,10 @@ export async function GET(req: NextRequest) {
     );
 
   try {
-    const res = await fetch(
+    const res = await xanoFetch(
       `${process.env.XANO_API_BASE_URL}/registration_opportunity_scholarship?registration_families_id=${familyId}`,
-      { cache: "no-store" }
+      { cache: "no-store" },
+      { fresh: true }
     );
     if (!res.ok) {
       // Fallback to full scan
