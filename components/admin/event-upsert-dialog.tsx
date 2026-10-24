@@ -533,11 +533,11 @@ export function LocationInput({
 }
 
 /**
- * Create/edit dialog for one school-calendar event. Create mode picks
- * a date (resolved to its `school_calendar` day row); edit mode locks
- * the date — the events API deliberately doesn't allow moving an
- * event between days (volunteer-hour entries FK the event id, so a
- * move-by-recreate would strand them).
+ * Create/edit dialog for one school-calendar event. Both modes pick a
+ * date, resolved to its `school_calendar` day row. Editing the date
+ * moves the event (same id, so RSVPs, needs claims and volunteer-hour
+ * credits follow it); the route refuses a day outside the event's
+ * school year, and the date clamp here only offers this year's days.
  */
 export function EventUpsertDialog({
   days,
@@ -716,10 +716,13 @@ export function EventUpsertDialog({
   async function save() {
     const trimmed = title.trim();
     if (!trimmed || saving) return;
-    if (!existing && !day) return;
+    if (!day) return;
     setSaving(true);
     try {
-      const timeDate = existing?.date ?? date;
+      // Times are wall-clock on the event's day, so a date change
+      // re-anchors them to the new day.
+      const timeDate = date;
+      const moved = Boolean(existing) && date !== existing!.date;
       const payload = {
         title: trimmed,
         location: location.trim(),
@@ -782,9 +785,9 @@ export function EventUpsertDialog({
           method: existing ? "PATCH" : "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(
-            existing
+            existing && !moved
               ? payload
-              : { ...payload, school_calendar_id: day!.id }
+              : { ...payload, school_calendar_id: day.id }
           ),
         }
       );
@@ -844,21 +847,20 @@ export function EventUpsertDialog({
             <Label className="text-xs">Event date</Label>
             <Input
               type="date"
-              value={existing?.date ?? date}
+              value={date}
               min={minDate}
               max={maxDate}
-              disabled={Boolean(existing)}
               onChange={(e) => setDate(e.target.value)}
             />
-            {existing ? (
-              <p className="text-[11px] text-muted-foreground">
-                Events can&rsquo;t move between days — delete and
-                recreate to change the date.
-              </p>
-            ) : date && !day ? (
+            {date && !day ? (
               <p className="text-xs text-red-600">
                 That date isn&rsquo;t part of this school year&rsquo;s
                 calendar.
+              </p>
+            ) : existing && date !== existing.date ? (
+              <p className="text-[11px] text-muted-foreground">
+                Saving moves this event to the new date. RSVPs, needs
+                and volunteer-hour credits stay with it.
               </p>
             ) : null}
           </div>
@@ -1154,7 +1156,7 @@ export function EventUpsertDialog({
               !itemsReady ||
               !needIssues.ok ||
               !title.trim() ||
-              (!existing && !day)
+              !day
             }
           >
             {saving ? (

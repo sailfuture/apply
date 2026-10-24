@@ -14,10 +14,11 @@ import { xano } from "@/lib/xano";
 /**
  * Admin PATCH / DELETE for one school-calendar event.
  *
- * PATCH allowlists the content fields; `school_calendar_id` is
- * deliberately NOT editable — moving an event to another day is a
- * delete + re-create so a typo'd id can't strand it on a day in a
- * different year.
+ * PATCH allowlists the content fields. `school_calendar_id` moves the
+ * event to another day: the target must be a real day row in the
+ * SAME school year as the day it's on now, so a typo'd id can't
+ * strand it in a different year. Moving keeps the event id, so RSVPs,
+ * needs claims and volunteer-hour credits stay attached.
  *
  * Both verbs mirror the change onto the shared school Google Calendar
  * best-effort — a Google failure attaches `warning` to an otherwise
@@ -82,6 +83,50 @@ export async function PATCH(
       // color in place. Readers trim before comparing.
       patch.color = coerceColor(body.color) || " ";
     }
+    // Day move. Resolved against the day table rather than trusted:
+    // the new day has to exist and share the current day's school
+    // year (one year's calendar page lists only its own days, so a
+    // cross-year id can only be a bug or a forged request).
+    let days: Awaited<ReturnType<typeof xano.schoolCalendar.getAll>> | null =
+      null;
+    if ("school_calendar_id" in body) {
+      const targetId = Number(body.school_calendar_id);
+      if (!Number.isFinite(targetId) || targetId <= 0) {
+        return NextResponse.json(
+          { error: "Invalid school_calendar_id" },
+          { status: 400 }
+        );
+      }
+      const current = (await xano.schoolCalendarEvents.getAll()).find(
+        (e) => e.id === id
+      );
+      if (!current) {
+        return NextResponse.json(
+          { error: "Event not found" },
+          { status: 404 }
+        );
+      }
+      if (targetId !== Number(current.school_calendar_id)) {
+        days = await xano.schoolCalendar.getAll();
+        const from = days.find(
+          (d) => d.id === Number(current.school_calendar_id)
+        );
+        const to = days.find((d) => d.id === targetId);
+        if (!to) {
+          return NextResponse.json(
+            { error: "That date isn't on the school calendar" },
+            { status: 400 }
+          );
+        }
+        if (from && Number(from.schoolyears_id) !== Number(to.schoolyears_id)) {
+          return NextResponse.json(
+            { error: "Events can't move to a different school year" },
+            { status: 400 }
+          );
+        }
+        patch.school_calendar_id = targetId;
+      }
+    }
 
     // `items` lives in its own table, so a body carrying only that is
     // still a valid edit — check for it before rejecting as empty.
@@ -110,9 +155,9 @@ export async function PATCH(
       ? await syncEventItems(id, parseEventItemsInput(body.items))
       : null;
 
-    const day = (await xano.schoolCalendar.getAll().catch(() => [])).find(
-      (d) => d.id === Number(updated.school_calendar_id)
-    );
+    const day = (
+      days ?? (await xano.schoolCalendar.getAll().catch(() => []))
+    ).find((d) => d.id === Number(updated.school_calendar_id));
     const sync = await pushSchoolEventToGoogle(updated, day?.date);
     return NextResponse.json({
       ...updated,
