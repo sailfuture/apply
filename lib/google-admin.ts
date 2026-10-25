@@ -521,6 +521,10 @@ export interface WorkspaceUser {
   orgUnitPath: string;
   /** True until the student signs in and sets their own password. */
   changePasswordAtNextLogin: boolean;
+  /** True when the account already has a profile photo — whether this
+   *  app set it or the student did. Google only includes
+   *  `thumbnailPhotoUrl` on users that have one. */
+  hasPhoto: boolean;
 }
 
 function toWorkspaceUser(u: Record<string, unknown>): WorkspaceUser {
@@ -531,6 +535,8 @@ function toWorkspaceUser(u: Record<string, unknown>): WorkspaceUser {
     suspended: u.suspended === true,
     orgUnitPath: String(u.orgUnitPath ?? ""),
     changePasswordAtNextLogin: u.changePasswordAtNextLogin === true,
+    hasPhoto:
+      typeof u.thumbnailPhotoUrl === "string" && u.thumbnailPhotoUrl.length > 0,
   };
 }
 

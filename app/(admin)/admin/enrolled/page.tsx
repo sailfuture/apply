@@ -50,6 +50,7 @@ import { formatUSPhone } from "@/lib/phone";
 import { EnrolledExportDialog } from "@/components/admin/enrolled-export-dialog";
 import { ExportScholarshipPdfButton } from "@/components/admin/export-scholarship-pdf-button";
 import { SchoolAccountBackfillDialog } from "@/components/admin/school-account-backfill-dialog";
+import { GooglePhotoSyncDialog } from "@/components/admin/google-photo-sync-dialog";
 import { SyncToddleButton } from "@/components/admin/sync-toddle-button";
 import { ToddleSyncAllDialog } from "@/components/admin/toddle-sync-all-dialog";
 import type { EnrolledStudentRow } from "@/app/api/admin/enrolled/route";
@@ -684,6 +685,10 @@ export default function EnrolledStudentsPage() {
                 covers every enrolled student), but it lives here next
                 to Export since this is the enrolled-roster home. */}
             <SchoolAccountBackfillDialog />
+            {/* Bulk Google profile-photo push — the catch-up for
+                headshots saved before the per-save sync existed. Dry
+                run on open, one confirm to push. */}
+            <GooglePhotoSyncDialog />
             {/* Bulk Toddle push — the per-student Sync to Toddle,
                 run across the whole enrolled roster. */}
             <ToddleSyncAllDialog
