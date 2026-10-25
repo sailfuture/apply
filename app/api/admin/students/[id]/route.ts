@@ -7,6 +7,10 @@ import { removeStripeItemsForArchivedStudent } from "@/lib/per-student-billing";
 import { reconcileFamilySubscriptionItems } from "@/lib/billing";
 import { sendBillingAlert } from "@/lib/billing-alerts";
 import { setToddleArchiveState } from "@/lib/toddle-sync";
+import {
+  syncStudentPhotoToGoogle,
+  type GooglePhotoSync,
+} from "@/lib/google-student-photo";
 
 /**
  * Document-confirm pairs — each entry maps the confirm bool to its
@@ -443,7 +447,34 @@ export async function PATCH(
       });
     }
 
-    return NextResponse.json(updated);
+    // Student Photo saves also set (or clear) the student's Google
+    // Workspace profile photo, so the headshot admin uploads here is
+    // what Gmail / Meet / the Chromebook sign-in screen show. Awaited
+    // rather than run via `after()` because the card reports the
+    // outcome in its toast — a silent background push would leave
+    // admin guessing whether Google took it. Best-effort by contract:
+    // the helper never throws, and a Google failure can't fail a save
+    // that already landed in Xano. The default-group CRUD response
+    // doesn't carry the admin-added `school_email` column, so re-read
+    // the row when it's missing.
+    let googlePhoto: GooglePhotoSync | null = null;
+    if ("student_photo" in patch) {
+      const email =
+        typeof updated.school_email === "string"
+          ? updated.school_email
+          : ((await xano.students.getById(id).catch(() => null))?.school_email ??
+            "");
+      const photo = patch.student_photo;
+      googlePhoto = await syncStudentPhotoToGoogle({
+        studentId: id,
+        email,
+        photo: photo && typeof photo === "object" ? photo : null,
+      });
+    }
+
+    return NextResponse.json(
+      googlePhoto ? { ...updated, google_photo: googlePhoto } : updated
+    );
   } catch (err) {
     return handleAdminError(err);
   }

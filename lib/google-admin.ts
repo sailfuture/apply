@@ -50,8 +50,10 @@ import { stripNameSuffix } from "@/lib/name-suffix";
  * as the calendar layer.
  *
  * This module also creates student Workspace accounts for the School
- * Account card (see `createWorkspaceUser`), which is why the user
- * scope is in the list.
+ * Account card (see `createWorkspaceUser`) and sets / clears their
+ * profile photo from the admin-uploaded student headshot (see
+ * `setWorkspaceUserPhoto`), which is why the user scope is in the
+ * list.
  */
 
 const SCOPES = [
@@ -608,4 +610,59 @@ export async function moveWorkspaceUserToOu(
   );
   if (!res.ok) await fail(res, "Workspace user move");
   return toWorkspaceUser(await res.json());
+}
+
+function userPhotoUrl(email: string): string {
+  return `${DIRECTORY_BASE}/users/${encodeURIComponent(
+    email.trim().toLowerCase()
+  )}/photos/thumbnail`;
+}
+
+/**
+ * Set the account's profile photo — the picture Gmail, Meet, Classroom
+ * and the Chromebook sign-in screen show for the student.
+ *
+ *   PUT users/{email}/photos/thumbnail  { photoData }
+ *
+ * `photoData` is "web-safe" base64. Google's own admin tooling sends
+ * RFC 4648 base64url (`+`→`-`, `/`→`_`, `=` padding kept), so that goes
+ * first; the reference doc instead spells padding as `*`, so a 400 on
+ * the first attempt is retried in that form before giving up. No
+ * mimeType is sent — Google sniffs the bytes, and the documented
+ * values ("JPEG", "PNG", …) aren't real MIME strings. Whatever the
+ * input size, Google stores its own downsized square thumbnail, so the
+ * card's ~1000px compressed upload is plenty.
+ */
+export async function setWorkspaceUserPhoto(
+  email: string,
+  image: Buffer
+): Promise<void> {
+  const url = userPhotoUrl(email);
+  const webSafe = image
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
+  let res = await googleFetch(url, {
+    method: "PUT",
+    body: JSON.stringify({ photoData: webSafe }),
+  });
+  if (res.status === 400) {
+    res = await googleFetch(url, {
+      method: "PUT",
+      body: JSON.stringify({ photoData: webSafe.replace(/=/g, "*") }),
+    });
+  }
+  if (!res.ok) await fail(res, "Workspace user photo update");
+}
+
+/**
+ * Remove the account's profile photo (back to Google's initial-letter
+ * avatar). A 404 means there was no photo to remove, which is the
+ * state we wanted — callers confirm the ACCOUNT exists first, so a 404
+ * here is never "no such user".
+ */
+export async function deleteWorkspaceUserPhoto(email: string): Promise<void> {
+  const res = await googleFetch(userPhotoUrl(email), { method: "DELETE" });
+  if (res.status === 404) return;
+  if (!res.ok) await fail(res, "Workspace user photo delete");
 }

@@ -104,6 +104,7 @@ import type { AdminEnrolledStudentResponse } from "@/app/api/admin/enrolled/[id]
 import type { AdminFamilyOverviewResponse } from "@/app/api/admin/family-overview/[id]/route";
 import type { XanoBusStop } from "@/lib/xano";
 import type { StudentGoogleAccountStatus } from "@/app/api/admin/students/[id]/google-account/route";
+import type { GooglePhotoSync } from "@/lib/google-student-photo";
 import { SendLiabilityWaiverButton } from "@/components/admin/send-liability-waiver-button";
 import { WaiverSignatureCheck } from "@/components/admin/waiver-signature-check";
 
@@ -573,7 +574,38 @@ function BackLink({
  * browser, uploaded to Xano's image endpoint (`/upload/image`), and
  * the returned metadata is stored on the student row's `student_photo`
  * image column. Rendered as a round avatar with Replace / Remove.
+ *
+ * The save also mirrors the photo onto the student's Google Workspace
+ * account (set on upload/replace, cleared on remove) — the PATCH
+ * response's `google_photo` says how that went, and the toast repeats
+ * it, because a photo that reached Xano but not Gmail is the kind of
+ * half-success nobody notices until a parent asks.
  */
+
+/** Toast for a Student Photo save. The Xano write is already done;
+ *  the Google outcome decides the second clause. Skips are silent
+ *  except the actionable ones (no school email / no account yet). */
+function toastPhotoSaved(saved: string, sync: GooglePhotoSync | undefined) {
+  if (!sync) {
+    toast.success(saved);
+    return;
+  }
+  if (sync.status === "failed") {
+    toast.warning(`${saved} The Google profile photo didn't update: ${sync.detail}`);
+    return;
+  }
+  if (sync.status === "skipped") {
+    toast.success(saved, {
+      description:
+        sync.reason === "no_email" || sync.reason === "no_account"
+          ? sync.detail
+          : undefined,
+    });
+    return;
+  }
+  toast.success(saved, { description: sync.detail });
+}
+
 function StudentPhotoCard({
   student,
   onChanged,
@@ -616,11 +648,11 @@ function StudentPhotoCard({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ student_photo: metadata }),
       });
+      const saved = await patchRes.json().catch(() => null);
       if (!patchRes.ok) {
-        const body = await patchRes.json().catch(() => null);
-        throw new Error(body?.error ?? `Save failed (${patchRes.status})`);
+        throw new Error(saved?.error ?? `Save failed (${patchRes.status})`);
       }
-      toast.success("Student photo updated.");
+      toastPhotoSaved("Student photo updated.", saved?.google_photo);
       await onChanged();
     } catch (err) {
       console.error("[StudentPhotoCard.handleFile]", err);
@@ -638,11 +670,11 @@ function StudentPhotoCard({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ student_photo: null }),
       });
+      const saved = await res.json().catch(() => null);
       if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        throw new Error(body?.error ?? `Remove failed (${res.status})`);
+        throw new Error(saved?.error ?? `Remove failed (${res.status})`);
       }
-      toast.success("Student photo removed.");
+      toastPhotoSaved("Student photo removed.", saved?.google_photo);
       await onChanged();
     } catch (err) {
       console.error("[StudentPhotoCard.handleRemove]", err);
@@ -1527,12 +1559,23 @@ function CreateGoogleAccountRow({
       if (!res.ok) {
         throw new Error(payload?.error ?? `Failed (${res.status})`);
       }
+      // The route also pushes any student photo already on file onto
+      // the new account; say whether that landed, since a missing
+      // Gmail picture is otherwise found by the student, not admin.
+      const photo: GooglePhotoSync | undefined = payload?.photo;
+      const photoNote =
+        photo?.status === "synced"
+          ? " The student photo is set as their profile picture."
+          : photo?.status === "failed"
+            ? ` The student photo couldn't be set: ${photo.detail}`
+            : "";
       toast.success(
         `Google account created for ${email}` +
           (payload?.orgUnitPath ? ` in ${payload.orgUnitPath}` : "") +
           (payload?.signInRestricted === false
             ? " — but the sign-in restriction couldn't be applied."
-            : ".")
+            : ".") +
+          photoNote
       );
       setConfirming(false);
       void mutate();

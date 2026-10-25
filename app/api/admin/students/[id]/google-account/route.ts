@@ -15,6 +15,10 @@ import {
   studentOuPath,
   studentOuPathFor,
 } from "@/lib/google-admin";
+import {
+  syncStudentPhotoToGoogle,
+  type GooglePhotoSync,
+} from "@/lib/google-student-photo";
 import type { XanoStudent } from "@/lib/xano";
 
 /**
@@ -238,11 +242,25 @@ export async function POST(
       orgUnitPath,
     });
 
+    // A headshot uploaded on the Student Photo card BEFORE the account
+    // existed had nowhere to go; now it does. Best-effort like the
+    // sign-in policy — the account is already created, so the result
+    // is reported, never thrown. No photo on file → nothing to push.
+    const photo: GooglePhotoSync = student.student_photo
+      ? await syncStudentPhotoToGoogle({
+          studentId: id,
+          email,
+          photo: student.student_photo,
+          accountExists: true,
+        })
+      : { status: "skipped", detail: "No student photo on file." };
+
     return NextResponse.json({
       ok: true,
       email: created.primaryEmail,
       orgUnitPath: created.orgUnitPath,
       signInRestricted: await armSignInRestriction(ou.orgUnitId, email),
+      photo,
     });
   } catch (err) {
     // Google's own message is the useful part here (weak password,

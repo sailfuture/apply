@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { stripNameSuffix } from "@/lib/name-suffix";
+import { fetchImageAsBase64, resolvePhotoUrl } from "@/lib/student-photo";
 import { xano } from "@/lib/xano";
 import type {
   XanoEmergencyContact,
@@ -776,43 +777,7 @@ export async function setToddleArchiveState(
   return `unarchived Toddle student ${toddleId}`;
 }
 
-/** Pick a fetchable URL out of the Xano image-metadata blob on
- *  `student_photo` — `url` when present, else the public Xano base +
- *  `path`. Mirrors the client-side `resolveFileUrl` on the enrolled
- *  detail page. */
-export function resolvePhotoUrl(photo: object | null | undefined): string | null {
-  if (!photo || typeof photo !== "object") return null;
-  const url = (photo as { url?: unknown }).url;
-  if (typeof url === "string" && url.length > 0) return url;
-  const path = (photo as { path?: unknown }).path;
-  if (typeof path === "string" && path.length > 0) {
-    const base =
-      process.env.NEXT_PUBLIC_XANO_BASE ??
-      "https://xsc3-mvx7-r86m.n7e.xano.io";
-    return `${base}${path}`;
-  }
-  return null;
-}
-
-/** Download an image and return it as a raw base64 string (no
- *  data-URI prefix — Toddle's profileImageUpload takes the bare
- *  encoded bytes). Caps at 8MB so a mis-uploaded original can't
- *  blow up the request. */
-async function fetchImageAsBase64(url: string): Promise<string> {
-  const res = await fetch(url, { cache: "no-store" });
-  if (!res.ok) {
-    throw new Error(`photo fetch failed (${res.status})`);
-  }
-  const contentType = res.headers.get("content-type") ?? "";
-  if (contentType && !contentType.startsWith("image/")) {
-    throw new Error(`photo URL returned non-image content (${contentType})`);
-  }
-  const buffer = Buffer.from(await res.arrayBuffer());
-  const MAX_BYTES = 8 * 1024 * 1024;
-  if (buffer.byteLength > MAX_BYTES) {
-    throw new Error(
-      `photo too large to push (${Math.round(buffer.byteLength / 1024 / 1024)}MB > 8MB)`
-    );
-  }
-  return buffer.toString("base64");
-}
+// The photo-URL resolver and image download used above live in
+// lib/student-photo.ts, shared with the Google Workspace profile-photo
+// sync. Re-exported so existing importers of this module keep working.
+export { resolvePhotoUrl };
