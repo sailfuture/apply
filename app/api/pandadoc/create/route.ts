@@ -1,7 +1,11 @@
 import { auth, currentUser } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
 import type { User } from "@clerk/nextjs/server";
-import { xano } from "@/lib/xano";
+import {
+  xano,
+  type XanoStudentRegistration,
+  type XanoStudentRegistrationProgress,
+} from "@/lib/xano";
 import {
   createDocumentFromTemplate,
   sendDocument,
@@ -19,12 +23,28 @@ import {
 // template can't be killed mid-flight and orphan an envelope.
 export const maxDuration = 60;
 
-type DocType = "liability_waiver" | "enrollment_agreement";
+/** `addition_enrollment_agreement` — a mid-year sibling's own enrollment
+ *  agreement (see `lib/midyear-additions.ts`). Same PandaDoc template as
+ *  the family's, but one envelope per added student, stored on that
+ *  student's packet (`addition_enrollment_agreement_*`) instead of the
+ *  family progress row the family already signed on. */
+type DocType =
+  | "liability_waiver"
+  | "enrollment_agreement"
+  | "addition_enrollment_agreement";
+const DOC_TYPES: DocType[] = [
+  "liability_waiver",
+  "enrollment_agreement",
+  "addition_enrollment_agreement",
+];
 
 interface CreateResult {
   status: number;
   body: Record<string, unknown>;
 }
+
+/** A mid-year sibling with no packet yet — admissions hasn't accepted them. */
+class NotAcceptedError extends Error {}
 
 /**
  * In-flight guard per (family, type, application). Two tabs open on
@@ -53,9 +73,9 @@ export async function POST(req: NextRequest) {
   }
 
   const { type, applicationId, yearId } = await req.json();
-  if (!type || !["liability_waiver", "enrollment_agreement"].includes(type)) {
+  if (!type || !DOC_TYPES.includes(type)) {
     return NextResponse.json(
-      { error: "type must be 'liability_waiver' or 'enrollment_agreement'" },
+      { error: `type must be one of: ${DOC_TYPES.join(", ")}` },
       { status: 400 }
     );
   }
@@ -117,32 +137,78 @@ async function doCreate(
     };
   }
 
-  // These three lookups only depend on `application`, so run them
-  // together instead of the previous four-deep waterfall:
-  //   - the target row this doc type lives on (packet for the waiver,
-  //     family progress row for the agreement) — resolved-or-created
-  //   - the family (for the doc name + tokens)
-  //   - the student (for the doc name + fields)
-  const [targetRow, family, student] = await Promise.all([
-    type === "liability_waiver"
-      ? xano.studentRegistration.resolve(
+  // A mid-year sibling's packet IS their acceptance, so for them the
+  // packet must already exist — resolving (creating) it here would let
+  // a parent skip admissions review by starting a document.
+  const isSibling = application.is_midyear_addition === true;
+  if (type === "addition_enrollment_agreement" && !isSibling) {
+    return {
+      status: 400,
+      body: { error: "Not a mid-year addition" },
+    };
+  }
+  const packetForType = (): ReturnType<typeof xano.studentRegistration.resolve> =>
+    isSibling
+      ? xano.studentRegistration
+          .getByStudentAndYear(
+            application.registration_students_id,
+            application.registration_school_years_id
+          )
+          .then((p) => {
+            if (!p) throw new NotAcceptedError();
+            return p;
+          })
+      : xano.studentRegistration.resolve(
           application.registration_students_id,
           application.registration_school_years_id
-        )
-      : xano.studentRegistrationProgress.resolve(
-          familyId,
-          application.registration_school_years_id
-        ),
-    xano.families.getById(familyId),
-    xano.students.getById(application.registration_students_id),
-  ]);
-  const packetRow = type === "liability_waiver" ? targetRow : null;
-  const progressRow = type === "enrollment_agreement" ? targetRow : null;
+        );
+
+  // These three lookups only depend on `application`, so run them
+  // together instead of the previous four-deep waterfall:
+  //   - the target row this doc type lives on (packet for the waiver
+  //     and a sibling's agreement, family progress row for the family
+  //     agreement) — resolved-or-created
+  //   - the family (for the doc name + tokens)
+  //   - the student (for the doc name + fields)
+  let targetRow: Awaited<ReturnType<typeof packetForType>> | XanoStudentRegistrationProgress;
+  let family: Awaited<ReturnType<typeof xano.families.getById>>;
+  let student: Awaited<ReturnType<typeof xano.students.getById>>;
+  try {
+    [targetRow, family, student] = await Promise.all([
+      type === "enrollment_agreement"
+        ? xano.studentRegistrationProgress.resolve(
+            familyId,
+            application.registration_school_years_id
+          )
+        : packetForType(),
+      xano.families.getById(familyId),
+      xano.students.getById(application.registration_students_id),
+    ]);
+  } catch (err) {
+    if (err instanceof NotAcceptedError) {
+      return {
+        status: 409,
+        body: { error: "This student's registration opens once admissions accepts them." },
+      };
+    }
+    throw err;
+  }
+  const packetRow =
+    type === "enrollment_agreement"
+      ? null
+      : (targetRow as XanoStudentRegistration);
+  const progressRow =
+    type === "enrollment_agreement"
+      ? (targetRow as XanoStudentRegistrationProgress)
+      : null;
+  const additionRow = type === "addition_enrollment_agreement" ? packetRow : null;
 
   const pandadocIdField =
     type === "liability_waiver"
       ? "liability_waiver_pandadoc_id"
-      : "enrollment_agreement_pandadoc_id";
+      : type === "addition_enrollment_agreement"
+        ? "addition_enrollment_agreement_pandadoc_id"
+        : "enrollment_agreement_pandadoc_id";
   const existingDocId = (targetRow as unknown as Record<string, unknown>)[
     pandadocIdField
   ] as string | null;
@@ -154,7 +220,9 @@ async function doCreate(
   const expectedDocName =
     type === "liability_waiver"
       ? `Liability Waiver – ${student.first_name} ${student.last_name}`
-      : `Enrollment Agreement – ${family.family_name}`;
+      : type === "addition_enrollment_agreement"
+        ? `Enrollment Agreement – ${student.first_name} ${student.last_name}`
+        : `Enrollment Agreement – ${family.family_name}`;
 
   // Sync a locally-known row to "completed" — used when PandaDoc says
   // the envelope is already signed but our row hasn't caught up. This
@@ -177,6 +245,13 @@ async function doCreate(
         .update(packetRow.id, {
           liability_waiver_status: "completed",
           liability_waiver_pdf_url: pdfUrl,
+        })
+        .catch(() => {});
+    } else if (additionRow) {
+      await xano.studentRegistration
+        .update(additionRow.id, {
+          addition_enrollment_agreement_status: "completed",
+          addition_enrollment_agreement_pdf_url: pdfUrl,
         })
         .catch(() => {});
     }
@@ -204,6 +279,15 @@ async function doCreate(
           liability_waiver_status: "",
           liability_waiver_sent_at: null,
           liability_waiver_pdf_url: "",
+        })
+        .catch(() => {});
+    } else if (additionRow) {
+      // Non-empty sentinel status: Xano's PATCH drops empty strings, so
+      // "" would leave a stale "sent" behind. The fresh create below
+      // overwrites the id.
+      await xano.studentRegistration
+        .update(additionRow.id, {
+          addition_enrollment_agreement_status: "void",
         })
         .catch(() => {});
     }
@@ -284,14 +368,16 @@ async function doCreate(
   }
 
   // ── Fresh create ──────────────────────────────────────────────────
-  const templateId = getTemplateId(type);
+  const templateType =
+    type === "liability_waiver" ? "liability_waiver" : "enrollment_agreement";
+  const templateId = getTemplateId(templateType);
   const doc = await createDocumentFromTemplate({
     templateId,
     name: expectedDocName,
     recipientEmail,
     recipientFirstName,
     recipientLastName,
-    role: getTemplateRole(type),
+    role: getTemplateRole(templateType),
     // Echoed on every webhook event — lets /api/webhooks/pandadoc map
     // a completion straight to the owning Xano row.
     metadata: {
@@ -357,6 +443,15 @@ async function doCreate(
       .catch((err) =>
         console.error("[pandadoc/create] early id persist failed:", err)
       );
+  } else if (additionRow) {
+    await xano.studentRegistration
+      .update(additionRow.id, {
+        addition_enrollment_agreement_pandadoc_id: doc.id,
+        addition_enrollment_agreement_status: "draft",
+      })
+      .catch((err) =>
+        console.error("[pandadoc/create] early id persist failed:", err)
+      );
   }
 
   await waitForDocumentStatus(doc.id, "document.draft");
@@ -374,6 +469,11 @@ async function doCreate(
     await xano.studentRegistration.update(packetRow.id, {
       liability_waiver_status: "sent",
       liability_waiver_sent_at: new Date().toISOString(),
+    });
+  } else if (additionRow) {
+    await xano.studentRegistration.update(additionRow.id, {
+      addition_enrollment_agreement_status: "sent",
+      addition_enrollment_agreement_sent_at: new Date().toISOString(),
     });
   }
 

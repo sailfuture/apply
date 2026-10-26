@@ -233,6 +233,7 @@ export async function GET(
           // application — surfaced so the Request-records dialog can
           // pre-fill the recipient school (matches the enrolled page).
           student_previous_school: app.current_previous_school ?? "",
+          is_midyear_addition: app.is_midyear_addition === true,
           packet,
           // Evergreen document uploads live on the *student* row as
           // arrays of file blobs (not on the per-year packet — those
@@ -540,6 +541,9 @@ export interface AdminFamilyRegistrationStudentRow {
    *  Pre-fills the Request-records dialog; empty for residential /
    *  re-application rows that seed it blank. */
   student_previous_school: string;
+  /** Sibling added mid-year (see `lib/midyear-additions.ts`) — their
+   *  packet is confirmed on its own, after the family's section. */
+  is_midyear_addition: boolean;
   /** Full packet object; null when the parent hasn't started one yet. */
   packet: XanoStudentRegistration | null;
   /** Evergreen document arrays from the student row (not the packet).

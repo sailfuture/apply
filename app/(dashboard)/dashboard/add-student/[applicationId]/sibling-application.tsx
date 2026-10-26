@@ -3,7 +3,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { ArrowLeft, ArrowRight, CheckCircle2, Clock, Loader2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, CheckCircle2, Clock, Loader2, Undo2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -23,7 +23,8 @@ import {
   useApplicationFlow,
 } from "@/contexts/application-flow-context";
 import { mutateApplications } from "@/hooks/use-api";
-import { additionStage } from "@/lib/midyear-additions";
+import { additionStage, isReturnedAddition } from "@/lib/midyear-additions";
+import { SiblingRegistration, type SiblingBillingFields } from "./sibling-registration";
 import { formatTimestampUs } from "@/lib/us-date";
 import {
   NweaTestingCard,
@@ -50,7 +51,9 @@ import {
  * Once submitted the page is read-only until admin accepts the student.
  */
 
-export interface SiblingApp extends StudentApplicationFields {
+export interface SiblingApp
+  extends StudentApplicationFields,
+    SiblingBillingFields {
   id: number;
   registration_students_id: number;
   registration_school_years_id: number;
@@ -207,7 +210,26 @@ export function SiblingApplication({
 
   const stage = additionStage(app, hasPacket);
 
-  if (stage !== "application") {
+  if (stage === "registration") {
+    return (
+      <PageShell>
+        <div>
+          <BackToDashboard />
+          <h1 className="text-2xl font-semibold mt-4">
+            Register {studentName}
+          </h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            {studentName} has been accepted. Sign their tuition, enrollment
+            agreement and liability waiver, then complete and submit their
+            registration packet.
+          </p>
+        </div>
+        <SiblingRegistration app={app} studentName={studentName} />
+      </PageShell>
+    );
+  }
+
+  if (stage === "review") {
     return (
       <PageShell>
         <div>
@@ -216,35 +238,19 @@ export function SiblingApplication({
         </div>
         <Card className="overflow-hidden gap-0 py-0">
           <CardContent className="flex items-start gap-3 py-5 bg-white dark:bg-background">
-            {stage === "review" ? (
-              <>
-                <Clock className="size-5 text-amber-500 shrink-0 mt-0.5" />
-                <div className="space-y-1">
-                  <p className="font-medium">In admissions review</p>
-                  <p className="text-sm text-muted-foreground">
-                    You submitted {studentName}&rsquo;s application
-                    {app.addition_submitted_at
-                      ? ` on ${formatTimestampUs(app.addition_submitted_at)}`
-                      : ""}
-                    . Our admissions team is reviewing it and will email you
-                    with next steps. Your other students stay enrolled in the
-                    meantime.
-                  </p>
-                </div>
-              </>
-            ) : (
-              <>
-                <CheckCircle2 className="size-5 text-green-600 shrink-0 mt-0.5" />
-                <div className="space-y-1">
-                  <p className="font-medium">Accepted</p>
-                  <p className="text-sm text-muted-foreground">
-                    {studentName} has been accepted. Their registration and
-                    tuition paperwork will open here — we&rsquo;ll email you
-                    when it&rsquo;s ready.
-                  </p>
-                </div>
-              </>
-            )}
+            <Clock className="size-5 text-amber-500 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <p className="font-medium">In admissions review</p>
+              <p className="text-sm text-muted-foreground">
+                You submitted {studentName}&rsquo;s application
+                {app.addition_submitted_at
+                  ? ` on ${formatTimestampUs(app.addition_submitted_at)}`
+                  : ""}
+                . Our admissions team is reviewing it and will email you
+                with next steps. Your other students stay enrolled in the
+                meantime.
+              </p>
+            </div>
           </CardContent>
         </Card>
       </PageShell>
@@ -262,6 +268,17 @@ export function SiblingApplication({
           enrolled while it&rsquo;s reviewed.
         </p>
       </div>
+
+      {isReturnedAddition(app) ? (
+        <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <Undo2 className="size-4 shrink-0 mt-0.5" />
+          <span>
+            Our admissions team sent this application back for a few
+            changes — check your email for their note, update it, and submit
+            it again.
+          </span>
+        </div>
+      ) : null}
 
       <ol className="grid gap-2 sm:grid-cols-3">
         {STEPS.map((s, i) => {

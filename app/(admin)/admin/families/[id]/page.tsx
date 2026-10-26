@@ -83,6 +83,10 @@ import {
   sumStudentMonthly,
 } from "@/lib/student-receipt";
 import type { PerStudentBillingPreview } from "@/app/api/admin/student-registration/by-student/route";
+import {
+  MidYearAdditionPanel,
+  useMidYearAdditionPacket,
+} from "@/components/admin/midyear-addition-panel";
 import type {
   XanoApplication,
   XanoAdminFamilyDetail,
@@ -2588,6 +2592,12 @@ function StudentApplicationBlock({
                 No application row for this year.
               </p>
             ) : null}
+            {app?.is_midyear_addition === true && !editing ? (
+              <p className="mt-1 text-xs text-sky-800">
+                Added mid-year — accepted on its own from Scholarship
+                Determination.
+              </p>
+            ) : null}
           </div>
           <div className="flex items-center gap-2 shrink-0">
             {editing ? (
@@ -4991,6 +5001,22 @@ function DecisionCard({
                 const app = apps.find(
                   (a) => Number(a.registration_students_id) === student.id
                 );
+                // A sibling added after the family was accepted gets
+                // its own decision panel + row (accepted = has packet).
+                if (app?.is_midyear_addition === true) {
+                  return (
+                    <MidYearAdditionEntry
+                      key={student.id}
+                      student={student}
+                      app={app}
+                      familyId={familyId}
+                      yearId={yearId}
+                      schoolYear={schoolYear}
+                      allDocsConfirmed={allDocsConfirmed}
+                      onChanged={onChanged}
+                    />
+                  );
+                }
                 return (
                   <DecisionStudentRow
                     key={student.id}
@@ -6409,6 +6435,58 @@ function ScholarshipReviewBlock({
  * change. The "Confirm" button stays as a one-click toggle for the
  * `sufs_confirmed` flag.
  */
+/**
+ * Determination row for a sibling added mid-year (`is_midyear_addition`)
+ * plus their own Accept / Return panel. Judged on its own: the family's
+ * acceptance and Scholarship section verify predate this student, so the
+ * row stays editable — with its Confirm / Undo — until the student
+ * themselves is accepted (their packet exists).
+ */
+function MidYearAdditionEntry({
+  student,
+  app,
+  familyId,
+  yearId,
+  schoolYear,
+  allDocsConfirmed,
+  onChanged,
+}: {
+  student: Student;
+  app: XanoApplication;
+  familyId: number;
+  yearId: number;
+  schoolYear: XanoSchoolYear | null;
+  allDocsConfirmed: boolean;
+  onChanged: () => void | Promise<unknown>;
+}) {
+  const { packet } = useMidYearAdditionPacket(app.id);
+  const studentName =
+    `${student.first_name ?? ""} ${student.last_name ?? ""}`.trim() ||
+    `Student #${student.id}`;
+  return (
+    <div className="space-y-2">
+      <MidYearAdditionPanel
+        app={app}
+        studentName={studentName}
+        familyId={familyId}
+        yearId={yearId}
+        onChanged={onChanged}
+      />
+      <DecisionStudentRow
+        student={student}
+        app={app}
+        schoolYear={schoolYear}
+        onSaved={onChanged}
+        approveCtx={{
+          accepted: !!packet,
+          allDocsConfirmed,
+          scholarshipSectionVerified: false,
+        }}
+      />
+    </div>
+  );
+}
+
 function DecisionStudentRow({
   student,
   app,

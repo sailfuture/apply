@@ -89,6 +89,29 @@ export async function POST(req: NextRequest) {
 
   // Xano types medicaid_number as a number; coerce empty strings to 0
   // otherwise Xano rejects the whole payload and the client swallows the 4xx.
+  // A mid-year sibling's packet IS their acceptance (see
+  // `lib/midyear-additions.ts`) — only admissions creates it, via
+  // `/api/admin/student-additions`. A parent POST here would skip review.
+  const additionApps = await xano.applications.getByFamilyId(familyId);
+  const isPendingSibling = additionApps.some(
+    (a) =>
+      a.is_midyear_addition === true &&
+      Number(a.registration_students_id) === Number(body.registration_students_id) &&
+      Number(a.registration_school_years_id) === schoolYearId
+  );
+  if (isPendingSibling) {
+    const existing = await xano.studentRegistration.getByStudentAndYear(
+      Number(body.registration_students_id),
+      schoolYearId
+    );
+    if (!existing) {
+      return NextResponse.json(
+        { error: "This student's registration opens once admissions accepts them." },
+        { status: 403 }
+      );
+    }
+  }
+
   const medicaidNumber = Number(body.medicaid_number);
 
   // Pull the current student so we can append the newly-created packet

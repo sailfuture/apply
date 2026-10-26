@@ -93,6 +93,26 @@ export async function sendApplicationReceivedSms(
   });
 }
 
+/** Mid-year sibling accepted — beside `sendAdditionAcceptedEmail`. Its
+ *  own template name so the family's earlier `accepted` text doesn't
+ *  dedupe it; the route only calls this when it creates the packet. */
+export async function sendAdditionAcceptedSms(
+  familyId: number,
+  yearId: number,
+  studentFirstName: string,
+  registrationUrl: string
+): Promise<SendSmsResult> {
+  return sendSms({
+    familyId,
+    yearId,
+    template: "addition_accepted",
+    body: tpl.acceptedSms({
+      student: studentFirstName.trim() || "your student",
+      link: registrationUrl,
+    }),
+  });
+}
+
 /** SMS 2 — accepted, complete registration. Beside
  *  `sendAcceptanceEmail` in PATCH /api/admin/family-progress. */
 export async function sendAcceptanceSms(

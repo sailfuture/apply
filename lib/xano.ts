@@ -2369,6 +2369,21 @@ export interface XanoStudentRegistration {
   liability_waiver_status: string;
   liability_waiver_sent_at: string | null;
   liability_waiver_pdf_url: string;
+  /** Mid-year sibling additions only (see `lib/midyear-additions.ts`).
+   *  The family-level tuition signature + enrollment agreement live on
+   *  the progress row and were signed before this student existed, so
+   *  an added student signs their own on their packet. */
+  addition_tuition_signature?: string | null;
+  addition_tuition_signed_name?: string | null;
+  /** Unix ms the parent signed this student's tuition (0 = not yet). */
+  addition_tuition_signed_at?: number | null;
+  addition_enrollment_agreement_pandadoc_id?: string | null;
+  addition_enrollment_agreement_status?: string | null;
+  addition_enrollment_agreement_sent_at?: string | null;
+  addition_enrollment_agreement_pdf_url?: string | null;
+  /** Unix ms the parent submitted this student's registration for admin
+   *  confirmation (0 = not yet). */
+  addition_registration_submitted_at?: number | null;
   /** Admin-set flag — flips true when the admissions team has reviewed
    *  and confirmed this student's registration. The enrolled-family
    *  dashboard only unlocks once every student on the family for a given

@@ -894,7 +894,16 @@ export default function FamilyRegistrationDetailPage() {
             title="Registration Packet"
             status={sectionStatus.registration.completed ? "complete" : "in_progress"}
             editHref={regSectionHref("registration")}
-            suppressVerifiedMute={isResidential}
+            // Residential placements and mid-year siblings are
+            // confirmed one packet at a time after the family's section
+            // is verified, so keep the card readable for them.
+            suppressVerifiedMute={
+              isResidential ||
+              students.some(
+                (s) =>
+                  s.is_midyear_addition && s.packet?.registrationConfirmed !== true
+              )
+            }
             notes={{
               familyId: Number(family?.id ?? familyId),
               yearId: Number(yearId),

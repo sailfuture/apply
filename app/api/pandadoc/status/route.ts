@@ -18,6 +18,7 @@ export async function GET(req: NextRequest) {
   const type = req.nextUrl.searchParams.get("type") as
     | "liability_waiver"
     | "enrollment_agreement"
+    | "addition_enrollment_agreement"
     | null;
   // Optional — when present, the ownership lookup below uses the
   // server-side-filtered by-family query instead of a full-table scan.
@@ -85,8 +86,49 @@ export async function GET(req: NextRequest) {
         yearId
       );
 
-      if (application) {
-        if (type === "liability_waiver") {
+      if (application && type === "addition_enrollment_agreement") {
+        // A mid-year sibling's own agreement, on their packet. Read, not
+        // resolve: the packet exists only once admissions accepts them.
+        const packetRow = await xano.studentRegistration.getByStudentAndYear(
+          application.registration_students_id,
+          application.registration_school_years_id
+        );
+        if (
+          application.is_midyear_addition === true &&
+          packetRow &&
+          packetRow.addition_enrollment_agreement_pandadoc_id === documentId &&
+          packetRow.addition_enrollment_agreement_status !== normalizedStatus
+        ) {
+          const wantCompleted = normalizedStatus === "completed";
+          await xano.studentRegistration.update(packetRow.id, {
+            addition_enrollment_agreement_status: normalizedStatus,
+            ...(wantCompleted
+              ? { addition_enrollment_agreement_pdf_url: getDocumentDownloadUrl(documentId) }
+              : {}),
+          });
+        }
+      } else if (application) {
+        if (type === "liability_waiver" && application.is_midyear_addition === true) {
+          // Same rule for a sibling's waiver: never create their packet
+          // from a status poll.
+          const packetRow = await xano.studentRegistration.getByStudentAndYear(
+            application.registration_students_id,
+            application.registration_school_years_id
+          );
+          if (
+            packetRow &&
+            packetRow.liability_waiver_pandadoc_id === documentId &&
+            packetRow.liability_waiver_status !== normalizedStatus
+          ) {
+            await xano.studentRegistration.update(packetRow.id, {
+              liability_waiver_status: normalizedStatus,
+              liability_waiver_pdf_url:
+                normalizedStatus === "completed"
+                  ? getDocumentDownloadUrl(documentId)
+                  : "",
+            });
+          }
+        } else if (type === "liability_waiver") {
           // Per-student — write to the packet
           // (`registration_student_registration`). Resolved-or-created
           // so a status callback for a doc the parent kicked off

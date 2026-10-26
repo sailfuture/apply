@@ -1,9 +1,22 @@
 import { getFamilyAuth } from "@/lib/family-auth";
 import { NextRequest, NextResponse } from "next/server";
-import { xano } from "@/lib/xano";
+import {
+  xano,
+  type XanoApplication,
+  type XanoStudentRegistration,
+} from "@/lib/xano";
 import { sendEmail } from "@/lib/emails/send";
 import { studentAdditionSubmitted } from "@/lib/emails/templates";
-import { sendAdditionReceivedEmail } from "@/lib/emails/triggers";
+import {
+  sendAdditionReceivedEmail,
+  sendAdditionRegistrationReceivedEmail,
+} from "@/lib/emails/triggers";
+import {
+  additionAgreementSigned,
+  additionRegistrationSubmitted,
+  additionTuitionSigned,
+  additionWaiverSigned,
+} from "@/lib/midyear-additions";
 
 /**
  * Step transitions for a mid-year sibling addition (see
@@ -75,6 +88,11 @@ export async function PATCH(
       addition_financial_aid_completed: body.financialAidCompleted,
     });
     return NextResponse.json(updated, { status: 200 });
+  }
+
+  // ── Registration stage (after admissions accepted the student) ──────
+  if (body?.tuitionSignature || body?.submitRegistration === true) {
+    return registrationStep(app, familyId, body);
   }
 
   if (body?.submit !== true) {
@@ -153,4 +171,154 @@ export async function PATCH(
   }
 
   return NextResponse.json(updated, { status: 200 });
+}
+
+/**
+ * The accepted sibling's registration, all on their packet (it exists
+ * once admissions accepts — never created here):
+ *
+ *   { tuitionSignature: { signature: string, name: string } }
+ *     Signs this student's tuition + scholarship amounts. `signature` is
+ *     the uploaded signature image's metadata (JSON), like the family's
+ *     `signature_data`. Once signed it stays signed.
+ *
+ *   { submitRegistration: true }
+ *     The packet form saved and the parent submits: requires the tuition
+ *     signature, the student's enrollment agreement and liability waiver
+ *     (both PandaDoc-completed) and the packet's required answers.
+ *     Stamps `addition_registration_submitted_at` and emails the parents
+ *     + admissions, who confirm the packet on the Registrations page.
+ */
+async function registrationStep(
+  app: XanoApplication,
+  familyId: number,
+  body: {
+    tuitionSignature?: { signature?: unknown; name?: unknown };
+    submitRegistration?: boolean;
+  }
+) {
+  const studentId = Number(app.registration_students_id);
+  const yearId = Number(app.registration_school_years_id);
+  const packet = await xano.studentRegistration.getByStudentAndYear(
+    studentId,
+    yearId
+  );
+  if (!packet) {
+    return NextResponse.json(
+      { error: "This student's registration opens once admissions accepts them." },
+      { status: 409 }
+    );
+  }
+  if (packet.registrationConfirmed === true) {
+    return NextResponse.json(
+      { error: "This student's registration is already confirmed." },
+      { status: 409 }
+    );
+  }
+
+  if (body.tuitionSignature) {
+    if (additionTuitionSigned(packet)) {
+      return NextResponse.json({ ok: true, alreadySigned: true }, { status: 200 });
+    }
+    const signature =
+      typeof body.tuitionSignature.signature === "string"
+        ? body.tuitionSignature.signature.trim()
+        : "";
+    const name =
+      typeof body.tuitionSignature.name === "string"
+        ? body.tuitionSignature.name.trim().slice(0, 200)
+        : "";
+    if (!signature || !name) {
+      return NextResponse.json(
+        { error: "Please sign and type your full name." },
+        { status: 400 }
+      );
+    }
+    if (app.confirmed_scholarship !== true) {
+      return NextResponse.json(
+        { error: "This student's tuition isn't final yet. Please check back soon." },
+        { status: 409 }
+      );
+    }
+    await xano.studentRegistration.update(packet.id, {
+      addition_tuition_signature: signature,
+      addition_tuition_signed_name: name,
+      addition_tuition_signed_at: Date.now(),
+    });
+    return NextResponse.json({ ok: true }, { status: 200 });
+  }
+
+  // submitRegistration
+  if (additionRegistrationSubmitted(packet)) {
+    return NextResponse.json({ ok: true, alreadySubmitted: true }, { status: 200 });
+  }
+  const missing: string[] = [];
+  if (!additionTuitionSigned(packet)) missing.push("tuition signature");
+  if (!additionAgreementSigned(packet)) missing.push("enrollment agreement");
+  if (!additionWaiverSigned(packet)) missing.push("liability waiver");
+  const packetFields: (keyof XanoStudentRegistration)[] = [
+    "shirt_size",
+    "pant_size",
+    "swim_level",
+    "allergies",
+    "dietary_restrictions",
+    "prescription_medications",
+    "health_conditions",
+    "permission_for_acetaminophen",
+    "other_adults_approved_for_pickup",
+    "prohibited_adults",
+  ];
+  if (packetFields.some((f) => !String(packet[f] ?? "").trim())) {
+    missing.push("registration packet");
+  }
+  if (missing.length > 0) {
+    return NextResponse.json(
+      { error: `Please complete: ${missing.join(", ")}.` },
+      { status: 400 }
+    );
+  }
+  await xano.studentRegistration.update(packet.id, {
+    addition_registration_submitted_at: Date.now(),
+  });
+
+  try {
+    const [student, family, schoolYear] = await Promise.all([
+      xano.students.getById(studentId),
+      xano.families.getById(familyId),
+      xano.schoolYears.getById(yearId).catch(() => null),
+    ]);
+    const appBase = (
+      process.env.NEXT_PUBLIC_APP_URL ?? "https://apply.sailfutureacademy.org"
+    ).replace(/\/$/, "");
+    await Promise.all([
+      sendAdditionRegistrationReceivedEmail(
+        familyId,
+        yearId,
+        student.first_name ?? ""
+      ),
+      sendEmail({
+        to: [process.env.ADMISSIONS_ALERTS_EMAIL ?? "admissions@sailfuture.org"],
+        cc: ["dean@sailfuture.org"],
+        content: studentAdditionSubmitted({
+          stage: "registration",
+          student_name:
+            `${student.first_name ?? ""} ${student.last_name ?? ""}`.trim(),
+          student_dob: student.date_of_birth ?? null,
+          incoming_grade: app.current_grade ?? "",
+          family_name: family.family_name?.trim() || `Family #${familyId}`,
+          year_name: schoolYear?.year_name?.trim() || `Year ${yearId}`,
+          family_url: `${appBase}/admin/registrations/${familyId}?yearId=${yearId}`,
+        }),
+        tag: "student-addition-registration-submitted",
+        familyId,
+        yearId,
+      }),
+    ]);
+  } catch (err) {
+    console.error(
+      `[/api/student-additions/${app.id}] registration notifications failed:`,
+      err
+    );
+  }
+  return NextResponse.json({ ok: true }, { status: 200 });
 }

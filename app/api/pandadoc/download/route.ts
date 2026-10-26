@@ -91,6 +91,12 @@ export async function GET(req: NextRequest) {
       if (packet?.liability_waiver_pandadoc_id === documentId) {
         owns = true;
         signed = packet.liability_waiver_status === "completed";
+      } else if (
+        packet?.addition_enrollment_agreement_pandadoc_id === documentId
+      ) {
+        // A mid-year sibling's own enrollment agreement.
+        owns = true;
+        signed = packet.addition_enrollment_agreement_status === "completed";
       }
     } catch {
       // Ignore — leaves `owns = false` and we fall through to 404.

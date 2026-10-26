@@ -202,6 +202,79 @@ export async function sendAdditionReceivedEmail(
   });
 }
 
+/** Mid-year sibling accepted (`POST /api/admin/student-additions/[id]`
+ *  action "accept"). Same welcome email as a family acceptance, named
+ *  for the one student and linked straight to their registration. No
+ *  once-per-family-year dedupe: the family already got `accepted`
+ *  this year, and the route only calls this when it creates the packet. */
+export async function sendAdditionAcceptedEmail(
+  familyId: number,
+  yearId: number,
+  studentFirstName: string,
+  registrationUrl: string
+): Promise<SendResult> {
+  const ctx = await resolveFamilyContext(familyId, yearId);
+  if (!ctx) return { ok: false, error: "context-failed" };
+  return sendEmail({
+    to: ctx.parentEmails,
+    content: t.accepted({
+      parent_first_name: ctx.primaryParentFirstName,
+      student_first_name: studentFirstName.trim() || "your student",
+      login_url: registrationUrl,
+    }),
+    tag: "addition-accepted",
+    familyId: ctx.familyId,
+    yearId: ctx.yearId,
+  });
+}
+
+/** Mid-year sibling sent back to the parents for changes. */
+export async function sendAdditionReturnedEmail(
+  familyId: number,
+  yearId: number,
+  studentFirstName: string,
+  applicationUrl: string,
+  message: string
+): Promise<SendResult> {
+  const ctx = await resolveFamilyContext(familyId, yearId);
+  if (!ctx) return { ok: false, error: "context-failed" };
+  return sendEmail({
+    to: ctx.parentEmails,
+    content: t.studentAdditionReturned({
+      parent_first_name: ctx.primaryParentFirstName,
+      student_first_name: studentFirstName.trim() || "your student",
+      login_url: applicationUrl,
+      message,
+    }),
+    tag: "addition-returned",
+    familyId: ctx.familyId,
+    yearId: ctx.yearId,
+  });
+}
+
+/** Mid-year sibling's registration submitted by the parent (tuition,
+ *  enrollment agreement, packet) — the family-level
+ *  `registration-received` already went out for the original students. */
+export async function sendAdditionRegistrationReceivedEmail(
+  familyId: number,
+  yearId: number,
+  studentFirstName: string
+): Promise<SendResult> {
+  const ctx = await resolveFamilyContext(familyId, yearId);
+  if (!ctx) return { ok: false, error: "context-failed" };
+  return sendEmail({
+    to: ctx.parentEmails,
+    content: t.registrationReceived({
+      parent_first_name: ctx.primaryParentFirstName,
+      student_first_name: studentFirstName.trim() || "your student",
+      login_url: ctx.loginUrl,
+    }),
+    tag: "addition-registration-received",
+    familyId: ctx.familyId,
+    yearId: ctx.yearId,
+  });
+}
+
 /** Email 2: admin accepted the family. Fires from PATCH
  *  /api/admin/family-progress when `isAccepted` transitions
  *  false→true.

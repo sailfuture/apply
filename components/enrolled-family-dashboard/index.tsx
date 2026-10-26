@@ -48,7 +48,11 @@ import { EditContactSheet } from "./edit-contact-sheet";
 import { AddParentSheet } from "./add-parent-sheet";
 import { AddEmergencyContactSheet } from "./add-emergency-contact-sheet";
 import { AddStudentSheet } from "./add-student-sheet";
-import { additionStage, isMidYearAddition } from "@/lib/midyear-additions";
+import {
+  additionStage,
+  isMidYearAddition,
+  isReturnedAddition,
+} from "@/lib/midyear-additions";
 import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
 
 type Parent = {
@@ -110,7 +114,9 @@ function pendingAdditionCopy(
   if (app.is_midyear_addition === true) {
     switch (additionStage(app, hasPacket)) {
       case "application":
-        return { status: "Application in progress", action: "Continue application" };
+        return isReturnedAddition(app)
+          ? { status: "Returned for changes", action: "Update application" }
+          : { status: "Application in progress", action: "Continue application" };
       case "review":
         return { status: "In admissions review", action: "View application" };
       case "registration":

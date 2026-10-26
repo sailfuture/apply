@@ -95,7 +95,9 @@ async function handleEvent(ev: WebhookEvent): Promise<void> {
   const familyId = Number(meta.family_id);
   const studentId = Number(meta.student_id);
   if (
-    (docType !== "liability_waiver" && docType !== "enrollment_agreement") ||
+    (docType !== "liability_waiver" &&
+      docType !== "enrollment_agreement" &&
+      docType !== "addition_enrollment_agreement") ||
     !Number.isFinite(yearId)
   ) {
     return;
@@ -133,6 +135,28 @@ async function handleEvent(ev: WebhookEvent): Promise<void> {
       await xano.studentRegistration.update(packet.id, {
         liability_waiver_status: normalizedStatus,
         liability_waiver_pdf_url: pdfUrl,
+      });
+    }
+    return;
+  }
+
+  // A mid-year sibling's own agreement — on their packet. Never resolve
+  // (create) the packet here: it only exists once admissions accepts.
+  if (docType === "addition_enrollment_agreement") {
+    if (!Number.isFinite(studentId)) return;
+    const packet = await xano.studentRegistration.getByStudentAndYear(
+      studentId,
+      yearId
+    );
+    if (!packet || packet.addition_enrollment_agreement_pandadoc_id !== documentId) {
+      return;
+    }
+    // Status is what every reader keys on; the PDF url is only written
+    // on completion (Xano's PATCH can't clear it anyway).
+    if (packet.addition_enrollment_agreement_status !== normalizedStatus) {
+      await xano.studentRegistration.update(packet.id, {
+        addition_enrollment_agreement_status: normalizedStatus,
+        ...(wantCompleted ? { addition_enrollment_agreement_pdf_url: pdfUrl } : {}),
       });
     }
     return;

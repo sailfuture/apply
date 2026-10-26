@@ -308,6 +308,8 @@ export function ResidentialPacketForm({
   registrationTypeId,
   studentName,
   onSubmitted,
+  onSubmit,
+  alreadySubmitted = false,
 }: {
   studentId: number;
   yearId: number;
@@ -316,6 +318,12 @@ export function ResidentialPacketForm({
   /** Optional — called after a successful submit (e.g. to revalidate
    *  dashboard caches). The form manages its own post-submit view. */
   onSubmitted?: () => void;
+  /** Optional server step after the packet saves (a mid-year sibling
+   *  records the submit and checks its tuition + signatures). Throw to
+   *  keep the parent on the form; the error's message is shown. */
+  onSubmit?: () => Promise<void>;
+  /** Start on the "in review" view (the submit was recorded earlier). */
+  alreadySubmitted?: boolean;
 }) {
   const [loading, setLoading] = useState(true);
   const [packet, setPacket] = useState<Packet | null>(null);
@@ -336,7 +344,7 @@ export function ResidentialPacketForm({
   const [savedStudentPhone, setSavedStudentPhone] = useState("");
   const [saving, setSaving] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
+  const [submitted, setSubmitted] = useState(alreadySubmitted);
   const [showValidation, setShowValidation] = useState(false);
 
   const loadDocsFromStudent = useCallback((row: StudentDocsRow | undefined) => {
@@ -486,6 +494,16 @@ export function ResidentialPacketForm({
     try {
       await persistStudentPhone();
       if (!(await savePacket())) throw new Error("save failed");
+      if (onSubmit) {
+        try {
+          await onSubmit();
+        } catch (err) {
+          toast.error(
+            err instanceof Error ? err.message : "Couldn't submit. Please try again."
+          );
+          return;
+        }
+      }
       toast.success("Registration packet submitted for review.");
       setSubmitted(true);
       onSubmitted?.();

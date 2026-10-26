@@ -839,13 +839,23 @@ export interface StudentAdditionSubmittedContext {
   year_name: string;
   /** Deep link to the family's admin application page. */
   family_url: string;
+  /** Which hand-off this alert is for. "application" (default): ready
+   *  for admissions review. "registration": the accepted student's
+   *  tuition, enrollment agreement and packet are done and wait on the
+   *  admin's registration confirmation. */
+  stage?: "application" | "registration";
 }
 
 export function studentAdditionSubmitted(
   ctx: StudentAdditionSubmittedContext
 ): EmailContent {
-  const subject = `New student application: ${ctx.student_name}`;
-  const preheader = `${ctx.family_name} added ${ctx.student_name} for ${ctx.year_name}.`;
+  const registration = ctx.stage === "registration";
+  const subject = registration
+    ? `Registration ready to confirm: ${ctx.student_name}`
+    : `New student application: ${ctx.student_name}`;
+  const preheader = registration
+    ? `${ctx.family_name} finished ${ctx.student_name}'s registration for ${ctx.year_name}.`
+    : `${ctx.family_name} added ${ctx.student_name} for ${ctx.year_name}.`;
 
   const row = (label: string, value: string) =>
     `<tr>
@@ -861,20 +871,26 @@ export function studentAdditionSubmitted(
     row("School year", ctx.year_name),
   ].join("");
 
-  const summary = `${ctx.family_name} is already enrolled and added a new student from their family dashboard. The student's application, financial aid, and NWEA scheduling are complete and ready for admissions review. The rest of the family stays enrolled while this student is reviewed.`;
+  const summary = registration
+    ? `${ctx.family_name} finished registration for the student they added mid-year: tuition is signed, the enrollment agreement and liability waiver are signed, and the registration packet is complete. Confirm the packet to enroll the student.`
+    : `${ctx.family_name} is already enrolled and added a new student from their family dashboard. The student's application, financial aid, and NWEA scheduling are complete and ready for admissions review. The rest of the family stays enrolled while this student is reviewed.`;
+  const heading = registration
+    ? "Mid-year student registration complete"
+    : "New student added mid-year";
+  const buttonLabel = registration ? "Open registration" : "Open family application";
 
   const html = layout({
     preheader,
     body:
-      `<h2 style="margin:0 0 16px;font-size:18px;">New student added mid-year</h2>` +
+      `<h2 style="margin:0 0 16px;font-size:18px;">${heading}</h2>` +
       p(escapeHtml(summary)) +
       `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 16px;">${detailRows}</table>`,
     buttonHref: ctx.family_url,
-    buttonLabel: "Open family application",
+    buttonLabel,
   });
 
   const text = [
-    `New student added mid-year`,
+    heading,
     "",
     `Student: ${ctx.student_name}`,
     ctx.student_dob ? `Date of birth: ${formatDob(ctx.student_dob)}` : "",
@@ -884,11 +900,57 @@ export function studentAdditionSubmitted(
     "",
     summary,
     "",
-    `Open family application: ${ctx.family_url}`,
+    `${buttonLabel}: ${ctx.family_url}`,
   ]
     .filter((line) => line !== "")
     .join("\n");
 
+  return { subject, html, text };
+}
+
+/* ─────────────────────── Mid-year sibling returned ──────────────────────── */
+/* Admissions sent a mid-year sibling's application back to the parents
+   for changes (parent-facing). */
+
+export interface StudentAdditionReturnedContext extends BaseContext {
+  /** Admin's note on what to change; left out of the email when empty. */
+  message: string;
+}
+
+export function studentAdditionReturned(
+  ctx: StudentAdditionReturnedContext
+): EmailContent {
+  const subject = `Updates needed on ${ctx.student_first_name}'s application`;
+  const preheader = `Our admissions team sent ${ctx.student_first_name}'s application back for a few changes.`;
+  const note = ctx.message.trim();
+  const intro = `Our admissions team reviewed ${ctx.student_first_name}'s application and sent it back so you can make a few updates. Open it from your family dashboard, make the changes, and submit it again.`;
+  const html = layout({
+    preheader,
+    body:
+      p(`Hi ${ctx.parent_first_name},`) +
+      p(intro) +
+      (note
+        ? p(`<strong>Note from admissions:</strong> ${escapeHtml(note)}`)
+        : "") +
+      p(
+        `If you have questions, email ${SUPPORT_EMAIL} or call ${SUPPORT_PHONE}.`
+      ) +
+      p(`The admissions team`),
+    buttonHref: ctx.login_url,
+    buttonLabel: "Open application",
+  });
+  const text = [
+    `Hi ${ctx.parent_first_name},`,
+    "",
+    intro,
+    "",
+    ...(note ? [`Note from admissions: ${note}`, ""] : []),
+    `Open application: ${ctx.login_url}`,
+    "",
+    `If you have questions, email ${SUPPORT_EMAIL} or call ${SUPPORT_PHONE}.`,
+    "",
+    `The admissions team`,
+  ].join("\n");
   return { subject, html, text };
 }
 

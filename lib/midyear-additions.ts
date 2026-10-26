@@ -74,3 +74,45 @@ export function additionStage(
   if ((app.addition_submitted_at ?? 0) > 0) return "review";
   return "application";
 }
+
+/**
+ * `addition_submitted_at` sentinel for "admissions sent it back".
+ * Xano's PATCH ignores empty inputs and 0 means "never submitted", so a
+ * return writes -1; the parent's next submit stamps a real time again.
+ */
+export const ADDITION_RETURNED = -1;
+
+/** Admissions sent this application back and the parent hasn't
+ *  resubmitted yet. Still in the "application" stage. */
+export function isReturnedAddition(app: {
+  addition_submitted_at?: number | null;
+}) {
+  return (app.addition_submitted_at ?? 0) < 0;
+}
+
+/** The parent's half of a sibling's registration, all on the packet. */
+export interface AdditionRegistrationState {
+  addition_tuition_signed_at?: number | null;
+  addition_enrollment_agreement_status?: string | null;
+  liability_waiver_status?: string | null;
+  addition_registration_submitted_at?: number | null;
+  registrationConfirmed?: boolean | null;
+}
+
+export function additionTuitionSigned(p: AdditionRegistrationState | null | undefined) {
+  return (p?.addition_tuition_signed_at ?? 0) > 0;
+}
+
+export function additionAgreementSigned(p: AdditionRegistrationState | null | undefined) {
+  return p?.addition_enrollment_agreement_status === "completed";
+}
+
+export function additionWaiverSigned(p: AdditionRegistrationState | null | undefined) {
+  return p?.liability_waiver_status === "completed";
+}
+
+export function additionRegistrationSubmitted(
+  p: AdditionRegistrationState | null | undefined
+) {
+  return (p?.addition_registration_submitted_at ?? 0) > 0;
+}

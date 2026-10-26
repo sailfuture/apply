@@ -396,7 +396,11 @@ export async function PATCH(req: NextRequest) {
           const activeApps = apps.filter(
             (a) =>
               Number(a.registration_school_years_id) === yearId &&
-              a.isActive !== false
+              a.isActive !== false &&
+              // A mid-year sibling gets its packet from its own accept
+              // (/api/admin/student-additions) — re-saving the family
+              // row must never accept them as a side effect.
+              a.is_midyear_addition !== true
           );
           await Promise.allSettled(
             activeApps.map(async (app) => {

@@ -44,7 +44,22 @@ export async function PATCH(
     "previous_crew_assignment",
     "crew_assignment_change",
   ];
-  for (const f of ADMIN_ONLY_FIELDS) {
+  // Mid-year sibling registration state (see `lib/midyear-additions.ts`)
+  // is written only by `/api/student-additions/[applicationId]` and the
+  // PandaDoc routes. The same spread-the-packet saves would otherwise
+  // carry a stale copy back — e.g. an agreement status of "sent" loaded
+  // before the parent signed, overwriting "completed".
+  const ADDITION_FIELDS = [
+    "addition_tuition_signature",
+    "addition_tuition_signed_name",
+    "addition_tuition_signed_at",
+    "addition_enrollment_agreement_pandadoc_id",
+    "addition_enrollment_agreement_status",
+    "addition_enrollment_agreement_sent_at",
+    "addition_enrollment_agreement_pdf_url",
+    "addition_registration_submitted_at",
+  ];
+  for (const f of [...ADMIN_ONLY_FIELDS, ...ADDITION_FIELDS]) {
     if (f in body) delete body[f];
   }
 
