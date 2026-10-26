@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import type Stripe from "stripe";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
-import { xano, STRIPE_SUB_CANCELED_PREFIX } from "@/lib/xano";
+import {
+  xano,
+  STRIPE_SUB_CANCELED_PREFIX,
+  collapseDuplicateInvoiceRows,
+} from "@/lib/xano";
 import type { XanoPaymentTransaction } from "@/lib/xano";
 import { getStripeClient } from "@/lib/stripe";
 
@@ -201,10 +205,12 @@ async function upsertInvoiceRow({
   // the per-subscription error list) rather than coerce to null,
   // which would create a duplicate mirror row for this invoice.
   // Fetched BEFORE the payload so the paid-amount floor guard below
-  // can read the existing row.
-  const existing = await xano.paymentTransactions.findByStripeIdStrict(
+  // can read the existing row. Every row for the invoice is written
+  // below, so a re-sync also heals a duplicate left `open`.
+  const rows = await xano.paymentTransactions.findAllByStripeIdStrict(
     invoice.id
   );
+  const existing = collapseDuplicateInvoiceRows(rows)[0] ?? null;
 
   // Out-of-band (check/cash) payments report `amount_paid` 0 — money
   // Stripe never touched. The payments list (expanded on the fetch)
@@ -287,8 +293,10 @@ async function upsertInvoiceRow({
     last_synced_at: now,
   };
 
-  if (existing) {
-    await xano.paymentTransactions.update(existing.id, payload);
+  if (rows.length > 0) {
+    for (const row of rows) {
+      await xano.paymentTransactions.update(row.id, payload);
+    }
   } else {
     await xano.paymentTransactions.create(payload);
   }

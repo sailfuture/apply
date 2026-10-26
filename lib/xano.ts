@@ -723,8 +723,10 @@ export interface XanoFamilyPayment {
  * Stripe at the cycle boundary — so a year's worth fills in slowly,
  * not all 12 at once.
  *
- * Uniqueness: enforce `stripe_invoice_id` unique in Xano so the
- * webhook can re-deliver without creating duplicate rows.
+ * Uniqueness: `stripe_invoice_id` is NOT unique in Xano, and
+ * concurrent webhook deliveries have inserted duplicates. Readers
+ * collapse them (`collapseDuplicateInvoiceRows`); writers update
+ * every row for the invoice.
  */
 export interface XanoPaymentTransaction {
   id: number;
@@ -735,8 +737,7 @@ export interface XanoPaymentTransaction {
    *  Denormalized so the per-family schedule view can join cheaply. */
   registration_families_payment_id: number;
   /** Stripe's invoice id (`in_...`) — natural key for upserts from
-   *  the webhook handler. Unique constraint expected at the Xano
-   *  layer so re-delivered events PATCH instead of duplicate-insert. */
+   *  the webhook handler. Not unique in Xano: see the note above. */
   stripe_invoice_id: string;
   /** Denormalized from the subscription so we can filter by sub
    *  without an extra join. Matches the value on the parent
@@ -776,6 +777,84 @@ export interface XanoPaymentTransaction {
    *  carries it). Webhook/backfill sync payloads deliberately omit
    *  this key so re-syncs never clobber it. */
   payment_method?: string | null;
+}
+
+/**
+ * Rank invoice statuses: higher = further along the lifecycle. The
+ * webhook's monotonic-upsert guard uses it so a late or redelivered
+ * event carrying a LOWER-ranked status can't regress the mirrored row
+ * (the classic case is a retried `invoice.finalized`, status `open`
+ * and amount_paid 0, arriving after `invoice.paid`). The mirror
+ * readers use it to pick which of an invoice's duplicate rows wins.
+ */
+export const INVOICE_STATUS_RANK: Record<string, number> = {
+  draft: 0,
+  open: 1,
+  uncollectible: 2,
+  paid: 3,
+  void: 3,
+  // OUR terminal status, not Stripe's — Stripe leaves a refunded
+  // invoice `paid` forever, so `charge.refunded` stamps this and no
+  // invoice event may ever regress it (a redelivered `invoice.paid`
+  // would otherwise flip the row back to Complete and resurrect the
+  // pre-refund paid amount).
+  refunded: 4,
+};
+
+/** True when `a` is further along than `b`: higher status, then more
+ *  collected, then the older row. */
+function isMoreAdvanced(
+  a: XanoPaymentTransaction,
+  b: XanoPaymentTransaction
+): boolean {
+  const rank = (r: XanoPaymentTransaction) =>
+    INVOICE_STATUS_RANK[r.status] ?? 1;
+  if (rank(a) !== rank(b)) return rank(a) > rank(b);
+  const paid = (r: XanoPaymentTransaction) => Number(r.amount_paid_cents) || 0;
+  if (paid(a) !== paid(b)) return paid(a) > paid(b);
+  return a.id < b.id;
+}
+
+/**
+ * One row per Stripe invoice, keeping the most advanced. Xano has no
+ * unique index on `stripe_invoice_id`, and Stripe fires
+ * `invoice.created`, `.finalized` and `.paid` within milliseconds of
+ * each other for an autopay charge, so two concurrent webhook
+ * deliveries can each find no row and each insert one. Updates then
+ * land on only one of them, and the other sits `open` forever: a
+ * paid invoice kept drawing past-due emails (family 101, October
+ * 2026). Every reader goes through this, so a duplicate can't
+ * double-count or resurrect a settled invoice.
+ *
+ * The racing inserts also split the timestamps (one row gets
+ * `finalized_at`, the other doesn't), so blanks on the winner are
+ * filled from its siblings: an autopay invoice's past-due count runs
+ * from `finalized_at`.
+ */
+export function collapseDuplicateInvoiceRows(
+  rows: XanoPaymentTransaction[]
+): XanoPaymentTransaction[] {
+  const groups = new Map<string, XanoPaymentTransaction[]>();
+  for (const row of rows) {
+    const group = groups.get(row.stripe_invoice_id);
+    if (group) group.push(row);
+    else groups.set(row.stripe_invoice_id, [row]);
+  }
+  return [...groups.values()].map((group) => {
+    if (group.length === 1) return group[0];
+    const winner = group.reduce((a, b) => (isMoreAdvanced(b, a) ? b : a));
+    const fill = <K extends keyof XanoPaymentTransaction>(key: K) =>
+      winner[key] || group.find((r) => r[key])?.[key] || winner[key];
+    return {
+      ...winner,
+      due_date: fill("due_date"),
+      finalized_at: fill("finalized_at"),
+      paid_at: fill("paid_at"),
+      hosted_invoice_url: fill("hosted_invoice_url"),
+      invoice_pdf_url: fill("invoice_pdf_url"),
+      payment_method: fill("payment_method"),
+    };
+  });
 }
 
 /** Audit row written by `lib/emails/send.ts` after every Resend API
@@ -4595,6 +4674,19 @@ export const xano = {
     async findByStripeIdStrict(
       stripeInvoiceId: string
     ): Promise<XanoPaymentTransaction | null> {
+      const rows = await this.findAllByStripeIdStrict(stripeInvoiceId);
+      return collapseDuplicateInvoiceRows(rows)[0] ?? null;
+    },
+
+    /**
+     * Every mirror row for an invoice, duplicates included (see
+     * `collapseDuplicateInvoiceRows`). Writers update all of them so
+     * a stray duplicate can't stay `open` after the invoice is paid.
+     * Throws like `findByStripeIdStrict`.
+     */
+    async findAllByStripeIdStrict(
+      stripeInvoiceId: string
+    ): Promise<XanoPaymentTransaction[]> {
       const res = await xanoFetch(
         `${getBaseUrl()}/registration_payment_transactions?stripe_invoice_id=${encodeURIComponent(stripeInvoiceId)}`,
         { cache: "no-store" }
@@ -4606,10 +4698,9 @@ export const xano = {
       }
       const results = await res.json();
       const items = Array.isArray(results) ? results : [results];
-      const match = (items as XanoPaymentTransaction[]).find(
-        (r) => r.stripe_invoice_id === stripeInvoiceId
+      return (items as XanoPaymentTransaction[]).filter(
+        (r) => r?.stripe_invoice_id === stripeInvoiceId
       );
-      return match ?? null;
     },
 
     /**
@@ -4630,10 +4721,12 @@ export const xano = {
         if (!res.ok) return [];
         const results = await res.json();
         if (!Array.isArray(results)) return [];
-        return (results as XanoPaymentTransaction[]).filter(
-          (r) =>
-            Number(r.registration_families_id) === familyId &&
-            Number(r.registration_school_years_id) === yearId
+        return collapseDuplicateInvoiceRows(
+          (results as XanoPaymentTransaction[]).filter(
+            (r) =>
+              Number(r.registration_families_id) === familyId &&
+              Number(r.registration_school_years_id) === yearId
+          )
         );
       } catch (err) {
         console.error(
@@ -4661,8 +4754,10 @@ export const xano = {
         if (!res.ok) return [];
         const results = await res.json();
         if (!Array.isArray(results)) return [];
-        return (results as XanoPaymentTransaction[]).filter(
-          (r) => Number(r.registration_school_years_id) === yearId
+        return collapseDuplicateInvoiceRows(
+          (results as XanoPaymentTransaction[]).filter(
+            (r) => Number(r.registration_school_years_id) === yearId
+          )
         );
       } catch (err) {
         console.error(

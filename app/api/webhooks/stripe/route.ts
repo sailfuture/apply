@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import type Stripe from "stripe";
-import { xano, STRIPE_SUB_CANCELED_PREFIX, activeStripeSubscriptionId } from "@/lib/xano";
+import {
+  xano,
+  STRIPE_SUB_CANCELED_PREFIX,
+  activeStripeSubscriptionId,
+  collapseDuplicateInvoiceRows,
+  INVOICE_STATUS_RANK,
+} from "@/lib/xano";
 import type { XanoPaymentTransaction } from "@/lib/xano";
 import {
   getStripeClient,
@@ -279,28 +285,6 @@ async function handleSubscriptionDeleted(
 
 /* ─────────────────────── Invoice mirror ─────────────────────── */
 
-/**
- * Rank invoice statuses for the monotonic-upsert guard. Higher rank =
- * further along the lifecycle. A late or redelivered event carrying a
- * LOWER-ranked status must not regress the mirrored row — the classic
- * case is a retried `invoice.finalized` (status `open`, amount_paid 0)
- * arriving after `invoice.paid` and flipping a paid invoice back to
- * open on every admin surface.
- */
-const STATUS_RANK: Record<string, number> = {
-  draft: 0,
-  open: 1,
-  uncollectible: 2,
-  paid: 3,
-  void: 3,
-  // OUR terminal status, not Stripe's — Stripe leaves a refunded
-  // invoice `paid` forever, so `charge.refunded` stamps this and no
-  // invoice event may ever regress it (a redelivered `invoice.paid`
-  // would otherwise flip the row back to Complete and resurrect the
-  // pre-refund paid amount).
-  refunded: 4,
-};
-
 async function upsertInvoiceFromEvent(
   eventType: string,
   invoice: Stripe.Invoice
@@ -342,10 +326,14 @@ async function upsertInvoiceFromEvent(
 
   // Strict lookup: a transient failure here must throw (→ Stripe
   // retry), because null means "never seen → CREATE" and a swallowed
-  // error would duplicate the mirror row for this invoice.
-  const existing = await xano.paymentTransactions.findByStripeIdStrict(
+  // error would duplicate the mirror row for this invoice. Every row
+  // is written below, so a duplicate left by two concurrent
+  // deliveries both inserting heals on the next event; the most
+  // advanced one drives the regression guard.
+  const rows = await xano.paymentTransactions.findAllByStripeIdStrict(
     invoice.id
   );
+  const existing = collapseDuplicateInvoiceRows(rows)[0] ?? null;
 
   // Preserve `finalized_at` on subsequent events — only the
   // `invoice.finalized` event should stamp it, but other events
@@ -359,8 +347,10 @@ async function upsertInvoiceFromEvent(
   // the status, paid timestamp, or paid amount of a row that's
   // already further along. Non-lifecycle fields (URLs, due date,
   // last_synced_at) still refresh.
-  const incomingRank = STATUS_RANK[status] ?? 1;
-  const existingRank = existing ? (STATUS_RANK[existing.status] ?? 1) : -1;
+  const incomingRank = INVOICE_STATUS_RANK[status] ?? 1;
+  const existingRank = existing
+    ? (INVOICE_STATUS_RANK[existing.status] ?? 1)
+    : -1;
   const regressed = existing !== null && incomingRank < existingRank;
 
   // Out-of-band (check/cash) payments report `amount_paid` 0 — money
@@ -439,8 +429,10 @@ async function upsertInvoiceFromEvent(
     last_synced_at: now,
   };
 
-  if (existing) {
-    await xano.paymentTransactions.update(existing.id, payload);
+  if (rows.length > 0) {
+    for (const row of rows) {
+      await xano.paymentTransactions.update(row.id, payload);
+    }
   } else {
     await xano.paymentTransactions.create(payload);
   }
@@ -604,10 +596,10 @@ async function handleChargeRefunded(charge: Stripe.Charge): Promise<void> {
   // Strict lookup — transient failure throws (→ retry); a genuine
   // null means the invoice was never mirrored (not a tuition
   // invoice), a permanent skip.
-  const existing = await xano.paymentTransactions.findByStripeIdStrict(
+  const rows = await xano.paymentTransactions.findAllByStripeIdStrict(
     invoiceId
   );
-  if (!existing) {
+  if (rows.length === 0) {
     console.log(
       `[/api/webhooks/stripe] charge.refunded for ${charge.id}: invoice ${invoiceId} isn't in the mirror — skipping.`
     );
@@ -621,11 +613,13 @@ async function handleChargeRefunded(charge: Stripe.Charge): Promise<void> {
   const refundedCents = charge.amount_refunded ?? 0;
   const capturedCents = charge.amount_captured ?? charge.amount ?? 0;
   const netPaidCents = Math.max(capturedCents - refundedCents, 0);
-  await xano.paymentTransactions.update(existing.id, {
-    amount_paid_cents: netPaidCents,
-    ...(charge.refunded ? { status: "refunded" } : {}),
-    last_synced_at: Date.now(),
-  });
+  for (const row of rows) {
+    await xano.paymentTransactions.update(row.id, {
+      amount_paid_cents: netPaidCents,
+      ...(charge.refunded ? { status: "refunded" } : {}),
+      last_synced_at: Date.now(),
+    });
+  }
 }
 
 /**
