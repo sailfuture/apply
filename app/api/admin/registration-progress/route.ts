@@ -467,6 +467,11 @@ async function cascadeIsEnrolledTrue(
   for (const a of apps) {
     if (Number(a.registration_school_years_id) !== yearId) continue;
     if (a.isActive === false) continue;
+    // A sibling added mid-year is enrolled by their own packet
+    // confirm (`/api/admin/student-registration/[id]`), never by the
+    // family confirm — re-confirming the family must not enroll a
+    // student admin hasn't accepted yet.
+    if (a.is_midyear_addition === true) continue;
     studentsWithApp.add(Number(a.registration_students_id));
   }
   const targets = all.filter(

@@ -13,6 +13,7 @@ import {
 } from "@/lib/stripe";
 import { sendBillingAlert } from "@/lib/billing-alerts";
 import { enableAutopay } from "@/lib/autopay";
+import { isPendingMidYearAddition } from "@/lib/midyear-additions";
 
 /**
  * Server-side billing orchestration. Called from two places:
@@ -150,12 +151,26 @@ async function startMonthlyBillingInner({
   // student id for deterministic Stripe Price creation order so
   // Dashboard scans line up across families with the same student
   // order.
+  //
+  // A pending mid-year addition (student added after the family
+  // enrolled, packet not yet admin-confirmed) isn't billable yet —
+  // admin may have saved their tuition while reviewing them, and
+  // billing must wait for the packet confirm.
+  const confirmedStudentIds = new Set(
+    yearPackets
+      .filter((p) => p.registrationConfirmed === true)
+      .map((p) => Number(p.registration_students_id))
+  );
   const activeApps = apps
     .filter(
       (app) =>
         Number(app.registration_school_years_id) === yearId &&
         app.isActive !== false &&
-        familyStudentById.has(Number(app.registration_students_id))
+        familyStudentById.has(Number(app.registration_students_id)) &&
+        !isPendingMidYearAddition(
+          app,
+          confirmedStudentIds.has(Number(app.registration_students_id))
+        )
     )
     .sort(
       (a, b) =>
@@ -597,14 +612,22 @@ async function reconcileFamilySubscriptionItemsInner(
   const familyStudentById = new Map(
     students.filter((s) => !s.isArchived).map((s) => [s.id, s])
   );
+  const packetByStudent = new Map(
+    yearPackets.map((p) => [Number(p.registration_students_id), p])
+  );
+  // Pending mid-year additions wait for their packet confirm — same
+  // rule as `startMonthlyBilling` (and no "missing tuition" alert for
+  // a student who isn't accepted yet).
   const activeApps = apps.filter(
     (app) =>
       Number(app.registration_school_years_id) === yearId &&
       app.isActive !== false &&
-      familyStudentById.has(Number(app.registration_students_id))
-  );
-  const packetByStudent = new Map(
-    yearPackets.map((p) => [Number(p.registration_students_id), p])
+      familyStudentById.has(Number(app.registration_students_id)) &&
+      !isPendingMidYearAddition(
+        app,
+        packetByStudent.get(Number(app.registration_students_id))
+          ?.registrationConfirmed === true
+      )
   );
 
   // A pending cancel with active students means the family is being

@@ -6,7 +6,6 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field, FieldLabel } from "@/components/ui/field";
-import { Switch } from "@/components/ui/switch";
 import {
   Card,
   CardContent,
@@ -17,12 +16,26 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ServiceUnavailable } from "@/components/service-unavailable";
 import { NweaBookingDialog } from "@/components/nwea-booking-dialog";
 import { apiFetch } from "@/hooks/use-api";
-import { ArrowLeft, ArrowRight, Calendar, ExternalLink } from "lucide-react";
+import { ArrowLeft, ArrowRight, ExternalLink } from "lucide-react";
+import { isMidYearAddition } from "@/lib/midyear-additions";
 import { ResidentialPacketForm } from "./residential-packet-form";
+import { SiblingApplication } from "./sibling-application";
+import {
+  NweaTestingCard,
+  StudentDetailsCard,
+  type BusStop,
+  type SetField,
+} from "./student-application-cards";
 
 const STEP_UP_URL = "https://www.stepupforstudents.org/scholarships/logins/";
 
 /**
+ * Per-student mid-year flow for a student added from the enrolled-family
+ * dashboard's "Add Student". Sibling additions (`is_midyear_addition`)
+ * render `SiblingApplication` — application, admissions review, then
+ * registration for that one student. Everything below describes the
+ * residential / foster placement flow.
+ *
  * Per-student mid-year registration flow for residential / foster
  * families. Reached from the enrolled-family dashboard's "Create New
  * Registration" button, which creates the student + a marked
@@ -56,6 +69,9 @@ interface AppRow {
   nwea_testing_scheduled?: boolean;
   nwea_testing_complete?: boolean;
   is_residential_addition?: boolean;
+  is_midyear_addition?: boolean;
+  addition_financial_aid_completed?: boolean;
+  addition_submitted_at?: number | null;
 }
 
 interface StudentRow {
@@ -64,11 +80,6 @@ interface StudentRow {
   last_name: string;
 }
 
-interface BusStop {
-  id: number;
-  name: string;
-  address: string;
-}
 
 export default function AddStudentRegistrationPage() {
   const params = useParams();
@@ -122,10 +133,10 @@ export default function AddStudentRegistrationPage() {
         // below renders the retry card instead of "not found".
         if (!appRes.ok) throw new Error(`API error ${appRes.status}`);
         const appData = await appRes.json();
-        // Only residential additions belong in this flow. A normal
+        // Only mid-year additions belong in this flow. A normal
         // application landing here is a mistake — bounce to the
         // dashboard rather than letting the parent edit it out of band.
-        if (appData?.is_residential_addition !== true) {
+        if (!isMidYearAddition(appData)) {
           if (!cancelled) {
             router.replace("/dashboard");
           }
@@ -195,6 +206,9 @@ export default function AddStudentRegistrationPage() {
   function setField<K extends keyof AppRow>(key: K, value: AppRow[K]) {
     setApp((prev) => (prev ? { ...prev, [key]: value } : prev));
   }
+  // The shared cards edit a subset of the row.
+  const setCardField: SetField = (key, value) =>
+    setApp((prev) => (prev ? { ...prev, [key]: value } : prev));
 
   const isComplete = useMemo(() => {
     if (!app) return false;
@@ -316,6 +330,19 @@ export default function AddStudentRegistrationPage() {
     );
   }
 
+  // A sibling added by a non-residential family goes through the full
+  // application → admissions review path for this one student.
+  if (app.is_midyear_addition === true) {
+    return (
+      <SiblingApplication
+        initialApp={app}
+        studentName={studentName}
+        busStops={busStops}
+        hasPacket={hasPacket}
+      />
+    );
+  }
+
   // Packet open — the parent completes this student's registration.
   // Driven by `showPacket` (set on create, or by Continue below) rather
   // than an application flag, so it survives a reload.
@@ -341,10 +368,6 @@ export default function AddStudentRegistrationPage() {
     );
   }
 
-  const nweaScheduled = !!(
-    app.nwea_testing_scheduled || app.nwea_testing_complete
-  );
-
   return (
     <div className="flex flex-1 flex-col gap-6 p-6 mx-auto w-full max-w-4xl">
       <div>
@@ -359,122 +382,7 @@ export default function AddStudentRegistrationPage() {
         </p>
       </div>
 
-      <Card className="overflow-hidden gap-0 py-0">
-        <CardHeader className="py-3 !pb-3 border-b">
-          <CardTitle className="text-base">Student Details</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-6 py-5 bg-white dark:bg-background">
-          <div className="grid gap-4 grid-cols-1 sm:grid-cols-[2fr_1fr_1fr]">
-            <Field>
-              <FieldLabel className="text-xs">
-                Current / Previous School
-              </FieldLabel>
-              <Input
-                className={!app.current_previous_school ? "border-2 border-red-400" : ""}
-                placeholder="School name"
-                value={app.current_previous_school}
-                onChange={(e) => setField("current_previous_school", e.target.value)}
-              />
-            </Field>
-            <Field>
-              <FieldLabel className="text-xs">Current Grade</FieldLabel>
-              <Input
-                className={!app.last_grade_completed ? "border-2 border-red-400" : ""}
-                placeholder="e.g. 7th"
-                value={app.last_grade_completed}
-                onChange={(e) => setField("last_grade_completed", e.target.value)}
-              />
-            </Field>
-            <Field>
-              <FieldLabel className="text-xs">Incoming Grade</FieldLabel>
-              <Input
-                className={!app.current_grade ? "border-2 border-red-400" : ""}
-                placeholder="e.g. 8th"
-                value={app.current_grade}
-                onChange={(e) => setField("current_grade", e.target.value)}
-              />
-            </Field>
-          </div>
-
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Field>
-              <FieldLabel className="text-xs">
-                Describe Student Strengths
-              </FieldLabel>
-              <textarea
-                className={`flex min-h-[80px] w-full rounded-md border bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${
-                  !app.describe_student_strengths
-                    ? "border-2 border-red-400"
-                    : "border-input"
-                }`}
-                placeholder="Student's strengths..."
-                value={app.describe_student_strengths}
-                onChange={(e) =>
-                  setField("describe_student_strengths", e.target.value)
-                }
-              />
-            </Field>
-            <Field>
-              <FieldLabel className="text-xs">
-                Describe Student Opportunities for Growth
-              </FieldLabel>
-              <textarea
-                className={`flex min-h-[80px] w-full rounded-md border bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${
-                  !app.describe_student_opportunities_for_growth
-                    ? "border-2 border-red-400"
-                    : "border-input"
-                }`}
-                placeholder="Areas for growth..."
-                value={app.describe_student_opportunities_for_growth}
-                onChange={(e) =>
-                  setField(
-                    "describe_student_opportunities_for_growth",
-                    e.target.value
-                  )
-                }
-              />
-            </Field>
-          </div>
-
-          <section className="border-t pt-5">
-            <div className="flex items-center justify-between gap-3">
-              <h3 className="text-sm font-medium">Transportation</h3>
-              <Switch
-                checked={app.is_bus_transportation}
-                onCheckedChange={(v) => {
-                  setField("is_bus_transportation", v);
-                  if (!v) setField("bus_stop", "");
-                }}
-                aria-label="Bus transportation"
-              />
-            </div>
-            {app.is_bus_transportation ? (
-              <div className="mt-4">
-                <Field>
-                  <FieldLabel className="text-xs">
-                    Bus Stop <span className="text-red-400">*</span>
-                  </FieldLabel>
-                  <select
-                    className={`flex h-9 w-full items-center justify-between rounded-md border bg-background px-3 py-1 text-sm shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                      !app.bus_stop ? "border-red-400" : "border-input"
-                    }`}
-                    value={app.bus_stop}
-                    onChange={(e) => setField("bus_stop", e.target.value)}
-                  >
-                    <option value="">Select a bus stop</option>
-                    {busStops.map((s) => (
-                      <option key={s.id} value={s.name}>
-                        {s.name}
-                        {s.address ? ` — ${s.address}` : ""}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-              </div>
-            ) : null}
-          </section>
-        </CardContent>
-      </Card>
+      <StudentDetailsCard app={app} setField={setCardField} busStops={busStops} />
 
       {/* Step Up For Students (SUFS) — capture the per-student Award ID.
           The Opportunity Scholarship is intentionally skipped for these
@@ -530,53 +438,11 @@ export default function AddStudentRegistrationPage() {
 
       {/* Initial Testing (NWEA) — standard scheduling flow: book a slot via
           the Google Calendar dialog, then confirm. */}
-      <Card className="overflow-hidden gap-0 py-0">
-        <CardHeader className="py-3 !pb-3 border-b">
-          <CardTitle className="text-base">Initial Testing (NWEA)</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4 py-5 bg-white dark:bg-background">
-          <p className="text-sm text-muted-foreground">
-            All applying students complete an NWEA screening in Reading and Math
-            at SailFuture Academy (about 60&ndash;90 minutes total). Schedule a
-            time, then confirm below.
-          </p>
-          <Button
-            type="button"
-            className={`w-full ${
-              nweaScheduled
-                ? "bg-muted text-muted-foreground hover:bg-muted cursor-default"
-                : ""
-            }`}
-            disabled={nweaScheduled}
-            onClick={() => setScheduleDialogOpen(true)}
-          >
-            <Calendar className="size-4 mr-1.5 shrink-0" />
-            {nweaScheduled
-              ? "NWEA Testing Scheduled"
-              : "Click to Schedule NWEA Testing"}
-          </Button>
-          <label
-            className={`flex items-start gap-3 cursor-pointer rounded-md border px-4 py-3 transition-colors ${
-              nweaScheduled ? "border-input" : "border-2 border-red-400"
-            }`}
-          >
-            <input
-              type="checkbox"
-              className="size-5 mt-0.5 cursor-pointer rounded accent-primary"
-              checked={nweaScheduled}
-              onChange={(e) => {
-                const v = e.target.checked;
-                setField("nwea_testing_scheduled", v);
-                setField("nwea_testing_complete", v);
-              }}
-            />
-            <span className="text-sm font-medium">
-              Yes, I&rsquo;ve scheduled NWEA testing for my child at SailFuture
-              Academy.
-            </span>
-          </label>
-        </CardContent>
-      </Card>
+      <NweaTestingCard
+        app={app}
+        setField={setCardField}
+        onSchedule={() => setScheduleDialogOpen(true)}
+      />
 
       <div className="flex items-center justify-end gap-3">
         <Button variant="outline" onClick={handleSave} disabled={saving || submitting}>

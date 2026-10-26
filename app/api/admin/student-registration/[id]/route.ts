@@ -3,6 +3,7 @@ import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
 import type { XanoStudentRegistration } from "@/lib/xano";
 import { markStudentEnrolled } from "@/lib/student-enrolled";
+import { isPendingMidYearAddition } from "@/lib/midyear-additions";
 
 /**
  * Admin-only PATCH for one `registration_student_registration` packet.
@@ -347,10 +348,12 @@ async function cascadeFamilyRegistrationCompleted(
   // year-scoped fetch yet (cache races, etc.); slot it in by hand.
   packetByStudent.set(studentId, packet);
 
+  // A pending mid-year addition doesn't hold the rest of the family
+  // back — it's tracked on its own until its packet is confirmed.
   const allConfirmed = activeApps.every((app) => {
     const sId = Number(app.registration_students_id);
-    const p = packetByStudent.get(sId);
-    return p?.registrationConfirmed === true;
+    const confirmed = packetByStudent.get(sId)?.registrationConfirmed === true;
+    return confirmed || isPendingMidYearAddition(app, confirmed);
   });
   if (!allConfirmed) return;
 

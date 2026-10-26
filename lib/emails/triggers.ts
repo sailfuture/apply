@@ -178,6 +178,30 @@ export async function sendApplicationReceivedEmail(
   });
 }
 
+/** Email 1b: an enrolled family submitted a student they added
+ *  mid-year. Same "we received your application" message as Email 1,
+ *  named for just that student — the rest of the family is already
+ *  enrolled. Fires from PATCH /api/student-additions/[applicationId]. */
+export async function sendAdditionReceivedEmail(
+  familyId: number,
+  yearId: number,
+  studentFirstName: string
+): Promise<SendResult> {
+  const ctx = await resolveFamilyContext(familyId, yearId);
+  if (!ctx) return { ok: false, error: "context-failed" };
+  return sendEmail({
+    to: ctx.parentEmails,
+    content: t.applicationReceived({
+      parent_first_name: ctx.primaryParentFirstName,
+      student_first_name: studentFirstName.trim() || "your student",
+      login_url: ctx.loginUrl,
+    }),
+    tag: "addition-application-received",
+    familyId: ctx.familyId,
+    yearId: ctx.yearId,
+  });
+}
+
 /** Email 2: admin accepted the family. Fires from PATCH
  *  /api/admin/family-progress when `isAccepted` transitions
  *  false→true.

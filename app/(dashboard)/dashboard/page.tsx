@@ -7,6 +7,7 @@ import { apiFetcher, useApplications, useSchoolYears } from "@/hooks/use-api";
 import { EnrolledFamilyDashboard } from "@/components/enrolled-family-dashboard";
 import { ServiceUnavailable } from "@/components/service-unavailable";
 import { LoadingScreen } from "@/components/loading-screen";
+import { midYearAdditionStudentIds } from "@/lib/midyear-additions";
 
 // Shared fetcher: throws on !ok (a 401/503 must not masquerade as
 // data here — the resolver treats responses as typed rows) and
@@ -40,6 +41,7 @@ interface Application {
   registration_school_years_id: number;
   registration_students_id?: number;
   is_residential_addition?: boolean;
+  is_midyear_addition?: boolean;
 }
 
 /** Per-year status for the dashboard year picker.
@@ -154,24 +156,20 @@ export default function EnrolledHomePage() {
           const packets = (packetsRes as YearPacket[] | null) ?? [];
           const applyProgress = applyRes as ApplyProgressForYear | null;
           const submitted = !!progress?.isSubmitted;
-          // Exclude not-yet-confirmed residential / foster mid-year
-          // additions from the "everyone confirmed?" rollup so a fresh
-          // addition can't drop the family out of "enrolled" mode. The
-          // residential marker lives on the application row; match packets
-          // back to it by student id.
-          const residentialAddStudentIds = new Set(
-            ((appsData as Application[] | undefined) ?? [])
-              .filter(
-                (a) =>
-                  a.registration_school_years_id === yid &&
-                  a.is_residential_addition === true
-              )
-              .map((a) => Number(a.registration_students_id))
+          // Exclude not-yet-confirmed mid-year additions (residential
+          // placements and siblings) from the "everyone confirmed?"
+          // rollup so a fresh addition can't drop the family out of
+          // "enrolled" mode. The marker lives on the application row;
+          // match packets back to it by student id.
+          const additionStudentIds = midYearAdditionStudentIds(
+            ((appsData as Application[] | undefined) ?? []).filter(
+              (a) => a.registration_school_years_id === yid
+            )
           );
           const countedPackets = packets.filter(
             (p) =>
               !(
-                residentialAddStudentIds.has(
+                additionStudentIds.has(
                   Number(p.registration_students_id)
                 ) && p.registrationConfirmed !== true
               )

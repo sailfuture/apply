@@ -29,6 +29,11 @@ interface Props {
   /** School year the new student is being registered for — the year the
    *  dashboard is currently scoped to. */
   yearId: number;
+  /** Residential / foster family (`is_residential`): the placement goes
+   *  straight to its registration packet and needs a residential home.
+   *  Everyone else starts the new student's application, which goes to
+   *  admissions review. */
+  residential: boolean;
 }
 
 const blankForm = {
@@ -41,16 +46,18 @@ const blankForm = {
 };
 
 /**
- * "Create New Registration" sheet for residential / foster families.
- * Collects a new student's identity, then POSTs to
- * `/api/residential-students` (which creates the student + a marked
- * mid-year application) and routes the parent into the per-student
- * registration flow at `/dashboard/add-student/[applicationId]`.
+ * "Add Student" sheet on the enrolled-family dashboard. Collects a new
+ * student's identity, then POSTs to the family's mid-year endpoint —
+ * `/api/residential-students` for residential / foster families,
+ * `/api/student-additions` for everyone else — which creates the
+ * student + a marked application, and routes the parent into that
+ * student's flow at `/dashboard/add-student/[applicationId]`.
  */
-export function AddResidentialStudentSheet({
+export function AddStudentSheet({
   open,
   onOpenChange,
   yearId,
+  residential,
 }: Props) {
   const router = useRouter();
   const [form, setForm] = useState(blankForm);
@@ -72,26 +79,29 @@ export function AddResidentialStudentSheet({
     // Belt-and-braces alongside the Select's `required`: Radix renders
     // its own hidden control for native validation, so a friendly
     // message here beats relying on the browser bubble finding it.
-    if (!form.residential_house) {
+    if (residential && !form.residential_house) {
       setError("Please choose which residential home this student lives in.");
       return;
     }
     setSubmitting(true);
     setError("");
     try {
-      const res = await fetch("/api/residential-students", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          first_name: form.first_name,
-          last_name: form.last_name,
-          date_of_birth: form.date_of_birth || null,
-          gender: form.gender,
-          ethnicity: form.ethnicity,
-          residential_house: form.residential_house,
-          yearId,
-        }),
-      });
+      const res = await fetch(
+        residential ? "/api/residential-students" : "/api/student-additions",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            first_name: form.first_name,
+            last_name: form.last_name,
+            date_of_birth: form.date_of_birth || null,
+            gender: form.gender,
+            ethnicity: form.ethnicity,
+            ...(residential ? { residential_house: form.residential_house } : {}),
+            yearId,
+          }),
+        }
+      );
       const data = await res.json().catch(() => null);
       if (!res.ok) {
         throw new Error(data?.error ?? `Failed to create student (${res.status})`);
@@ -104,7 +114,7 @@ export function AddResidentialStudentSheet({
       // comes back from the packet page to a students list that
       // predates their new student, the join finds nothing, the
       // pending row disappears, and the only affordance left is
-      // "Create New Registration" — which makes a SECOND student.
+      // "Add Student" — which makes a SECOND student.
       await Promise.all([mutateStudents(), mutateApplications()]);
       onOpenChange(false);
       reset();
@@ -132,10 +142,11 @@ export function AddResidentialStudentSheet({
     >
       <SheetContent className="flex flex-col p-0 gap-0">
         <SheetHeader className="px-6 py-4 border-b shrink-0">
-          <SheetTitle>Create New Registration</SheetTitle>
+          <SheetTitle>Add Student</SheetTitle>
           <SheetDescription>
-            Add a new student to your family. You&rsquo;ll complete their
-            details and create their registration packet on the next step.
+            {residential
+              ? "Add a new student to your family. You’ll complete their details and create their registration packet on the next step."
+              : "Add a new student to your family. Next you’ll complete their application — student details, financial aid, and NWEA testing — for our admissions team to review."}
           </SheetDescription>
         </SheetHeader>
         <form onSubmit={handleSubmit} className="flex flex-col flex-1 min-h-0">
@@ -170,6 +181,7 @@ export function AddResidentialStudentSheet({
                 because it drives who is responsible for the student day
                 to day; admin can still change it later on the student's
                 Placement card if a placement moves. */}
+            {residential ? (
             <Field>
               <FieldLabel>Residential Home</FieldLabel>
               <Select
@@ -189,6 +201,7 @@ export function AddResidentialStudentSheet({
                 </SelectContent>
               </Select>
             </Field>
+            ) : null}
             <Field>
               <FieldLabel>Gender</FieldLabel>
               <Select
@@ -256,7 +269,11 @@ export function AddResidentialStudentSheet({
               Cancel
             </Button>
             <Button type="submit" className="w-full" disabled={submitting}>
-              {submitting ? "Creating…" : "Continue to Registration"}
+              {submitting
+                ? "Creating…"
+                : residential
+                  ? "Continue to Registration"
+                  : "Continue to Application"}
             </Button>
           </div>
         </form>

@@ -822,6 +822,76 @@ export function residentialStudentAdded(
   return { subject, html, text };
 }
 
+/* ─────────────────────── Mid-year sibling submitted ─────────────────────── */
+/* An enrolled family added a student mid-year and submitted them for
+   admissions review (staff alert). */
+
+export interface StudentAdditionSubmittedContext {
+  /** New student's full name. */
+  student_name: string;
+  /** "YYYY-MM-DD" or null when the family skipped it. */
+  student_dob: string | null;
+  /** Grade the student is entering, as the parent typed it. */
+  incoming_grade: string;
+  /** The enrolled family that added them. */
+  family_name: string;
+  /** School year label the application was opened against. */
+  year_name: string;
+  /** Deep link to the family's admin application page. */
+  family_url: string;
+}
+
+export function studentAdditionSubmitted(
+  ctx: StudentAdditionSubmittedContext
+): EmailContent {
+  const subject = `New student application: ${ctx.student_name}`;
+  const preheader = `${ctx.family_name} added ${ctx.student_name} for ${ctx.year_name}.`;
+
+  const row = (label: string, value: string) =>
+    `<tr>
+      <td style="padding:6px 12px 6px 0;font-size:14px;color:#6b7280;white-space:nowrap;vertical-align:top;">${escapeHtml(label)}</td>
+      <td style="padding:6px 0;font-size:14px;color:#111827;word-break:break-word;">${escapeHtml(value)}</td>
+    </tr>`;
+
+  const detailRows = [
+    row("Student", ctx.student_name),
+    ctx.student_dob ? row("Date of birth", formatDob(ctx.student_dob)) : "",
+    ctx.incoming_grade ? row("Incoming grade", ctx.incoming_grade) : "",
+    row("Family", ctx.family_name),
+    row("School year", ctx.year_name),
+  ].join("");
+
+  const summary = `${ctx.family_name} is already enrolled and added a new student from their family dashboard. The student's application, financial aid, and NWEA scheduling are complete and ready for admissions review. The rest of the family stays enrolled while this student is reviewed.`;
+
+  const html = layout({
+    preheader,
+    body:
+      `<h2 style="margin:0 0 16px;font-size:18px;">New student added mid-year</h2>` +
+      p(escapeHtml(summary)) +
+      `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 16px;">${detailRows}</table>`,
+    buttonHref: ctx.family_url,
+    buttonLabel: "Open family application",
+  });
+
+  const text = [
+    `New student added mid-year`,
+    "",
+    `Student: ${ctx.student_name}`,
+    ctx.student_dob ? `Date of birth: ${formatDob(ctx.student_dob)}` : "",
+    ctx.incoming_grade ? `Incoming grade: ${ctx.incoming_grade}` : "",
+    `Family: ${ctx.family_name}`,
+    `School year: ${ctx.year_name}`,
+    "",
+    summary,
+    "",
+    `Open family application: ${ctx.family_url}`,
+  ]
+    .filter((line) => line !== "")
+    .join("\n");
+
+  return { subject, html, text };
+}
+
 export interface BillingAmountChangedContext extends BaseContext {
   /** School year label, e.g. "2026-2027". */
   year_name: string;

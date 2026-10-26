@@ -529,6 +529,20 @@ export interface XanoApplication {
    *  rest of the family out of their enrolled dashboard. Optional
    *  because legacy rows pre-date the column; treat missing as `false`. */
   is_residential_addition?: boolean;
+  /** Marks a sibling added mid-year by an already-enrolled
+   *  (non-residential) family through the dashboard's "Add Student".
+   *  Unlike a residential addition this student goes through
+   *  admissions review + tuition, one student at a time — see
+   *  `lib/midyear-additions.ts`. Optional: missing = `false`. */
+  is_midyear_addition?: boolean;
+  /** Mid-year addition: the parent completed the Financial Aid step
+   *  for this student (the family-level `financial_aid_completed`
+   *  flag stays untouched — flipping it would clear the admin
+   *  verifies for the whole family). */
+  addition_financial_aid_completed?: boolean;
+  /** Mid-year addition: unix ms the parent submitted this student for
+   *  admissions review. 0 / missing = not submitted yet. */
+  addition_submitted_at?: number | null;
   /**
    * Family's annual out-of-pocket toward tuition for this student.
    * The Opportunity Scholarship covers everything between SUFS and

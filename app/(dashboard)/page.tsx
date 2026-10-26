@@ -2,6 +2,7 @@ import { auth, clerkClient, currentUser } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
 import { xano, ensureParentRecord } from "@/lib/xano";
 import { xanoFetch } from "@/lib/xano-fetch";
+import { midYearAdditionStudentIds } from "@/lib/midyear-additions";
 import { getAdminForEmail } from "@/lib/admin-auth";
 import {
   emailFromClaims,
@@ -216,21 +217,17 @@ export default async function Page() {
   const isRegistrationConfirmed =
     regProgress?.isRegistrationConfirmed === true;
   const isRegistrationSubmitted = regProgress?.isSubmitted === true;
-  // Residential / foster mid-year additions get their own application +
-  // packet. Until admin confirms that student's packet, exclude it from
+  // Mid-year additions (residential placements and siblings) get their
+  // own application + packet. Until admin confirms that student's packet, exclude it from
   // the family-level "everyone confirmed?" rollup — otherwise a fresh,
   // unconfirmed addition would bounce the already-enrolled family out of
   // their dashboard (this gate requires EVERY packet confirmed). The
   // marker lives on the application row; packets join back via student id.
-  const residentialAddStudentIds = new Set(
-    yearApps
-      .filter((a) => a.is_residential_addition === true)
-      .map((a) => Number(a.registration_students_id))
-  );
+  const additionStudentIds = midYearAdditionStudentIds(yearApps);
   const countedPackets = yearPackets.filter(
     (p) =>
       !(
-        residentialAddStudentIds.has(Number(p.registration_students_id)) &&
+        additionStudentIds.has(Number(p.registration_students_id)) &&
         p.registrationConfirmed !== true
       )
   );
