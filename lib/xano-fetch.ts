@@ -2,7 +2,7 @@
  * The one door every Xano request in lib/xano.ts goes through (and
  * the handful of routes and scripts that build their own Xano URLs).
  *
- * Three jobs:
+ * Four jobs:
  *
  *   1. CACHE the reads that were making every admin page re-download
  *      the database. Measured 2026-09-17: the admin list routes pull
@@ -10,17 +10,31 @@
  *      applications 196 KB / 0.8 s, sms_messages 729 KB / 3.3 s …),
  *      every time, because every fetch was `cache: "no-store"`. GETs
  *      against the tables below now go through the Next Data Cache
- *      with a short TTL and a per-table tag; every write to a table
- *      made through this door expires that tag immediately
+ *      with a per-table TTL and tag; every write to a table made
+ *      through this door expires that tag immediately
  *      (`revalidateTag` with `expire: 0` — read-your-own-writes), so
- *      an admin who edits a row and refetches the list sees the change. The residual
- *      staleness is edits made OUTSIDE this app (directly in the Xano
- *      UI), which show up within `XANO_CACHE_TTL_SECONDS`.
+ *      an admin who edits a row and refetches the list sees the change.
+ *      Past its TTL an entry is still served while Next refreshes it in
+ *      the background (stale-while-revalidate), so the TTL mostly sets
+ *      how often a busy page re-reads Xano. The residual staleness is
+ *      edits made OUTSIDE this app (the website's forms, the Xano UI),
+ *      which show up within that table's TTL — see `cacheTtlFor`.
  *
- *   2. ACCOUNT for every call (table, method, duration) into the
+ *   2. TIME OUT reads instead of hanging. Xano shares one instance
+ *      with the student dashboard and Passage Logs; in school hours it
+ *      queues requests (2026-10-26: a 6-row table took up to 3.5 s,
+ *      list reads up to 92 s, a few 502s), and with no timeout a stuck
+ *      read kept a page spinning until the function died. GETs now
+ *      give up after `READ_TIMEOUT_MS` and are retried once on a
+ *      timeout, network error or 429 / 502 / 503 / 504, so a page
+ *      either loads or shows its retry card. Writes are never retried
+ *      or timed out here — a write Xano finished after we gave up
+ *      would be repeated.
+ *
+ *   3. ACCOUNT for every call (table, method, duration) into the
  *      per-request store so `withServerTiming` can report it.
  *
- *   3. AUTHENTICATE to the "SFA Registration" API group (`2GcBXyoA`,
+ *   4. AUTHENTICATE to the "SFA Registration" API group (`2GcBXyoA`,
  *      what `XANO_API_BASE_URL` and `XANO_UPLOAD_URL` point at). As of
  *      the 2026-10-22 audit every endpoint in it was open to anyone;
  *      Xano is getting a guard that wants `Authorization: Bearer
@@ -48,7 +62,22 @@
  * only when every write to it goes through lib/xano.ts.
  */
 
+/** TTL for tables something outside this app also writes. */
 export const XANO_CACHE_TTL_SECONDS = 30;
+
+/** TTL for tables only this app writes — every write expires the tag,
+ *  so a long TTL costs nothing but staleness for direct Xano UI edits. */
+export const XANO_LONG_CACHE_TTL_SECONDS = 300;
+
+/** Per-attempt budget for a GET. Xano's normal answer is 0.2–2 s. */
+const READ_TIMEOUT_MS = 12_000;
+
+/** Pause before the one retry, so it doesn't land in the same queue
+ *  spike. */
+const READ_RETRY_DELAY_MS = 400;
+
+/** Statuses worth one more try: Xano overloaded / restarting. */
+const RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
 
 /** Calls slower than this get a warning line even on un-timed routes. */
 const SLOW_CALL_MS = 1500;
@@ -89,6 +118,32 @@ const CACHED_TABLES = new Set<string>([
   "tasco_summer_visit",
   "website_liability_waiver",
 ]);
+
+/**
+ * Cached tables something OUTSIDE this app writes, which keep the
+ * short TTL so those rows appear within 30 s: the website's inquiry,
+ * camp, TASCO and waiver forms, its welcome texts (logged straight to
+ * `sms_messages`), tour bookings, and the message/call feeds the inbox
+ * polls. Every other cached table is written only through this door
+ * (writes in Xano's request history, 2026-10-26) and gets
+ * `XANO_LONG_CACHE_TTL_SECONDS`.
+ */
+const SHORT_TTL_TABLES = new Set<string>([
+  "sms_messages",
+  "registration_calls",
+  "registration_inquiry",
+  "registration_tours",
+  "registration_email_notifications",
+  "registration_summer_camp",
+  "tasco_summer_visit",
+  "website_liability_waiver",
+]);
+
+export function cacheTtlFor(table: string): number {
+  return SHORT_TTL_TABLES.has(table)
+    ? XANO_CACHE_TTL_SECONDS
+    : XANO_LONG_CACHE_TTL_SECONDS;
+}
 
 export interface XanoCall {
   /** Table path segment ("registration_students"), or "other" for
@@ -181,6 +236,19 @@ export interface XanoFetchOptions {
 }
 
 /**
+ * `init` plus a `READ_TIMEOUT_MS` abort, merged with any signal the
+ * caller passed. Where `AbortSignal.any` is missing (older browsers)
+ * a caller's own signal wins and the read runs untimed.
+ */
+function withReadTimeout(init: RequestInit | undefined): RequestInit {
+  const timeout = AbortSignal.timeout(READ_TIMEOUT_MS);
+  const own = init?.signal;
+  if (!own) return { ...init, signal: timeout };
+  if (typeof AbortSignal.any !== "function") return init ?? {};
+  return { ...init, signal: AbortSignal.any([own, timeout]) };
+}
+
+/**
  * Drop-in for `fetch` for any Xano URL. Same signature, same
  * Response; only the caching, accounting and registration key differ.
  */
@@ -213,7 +281,7 @@ export async function xanoFetch(
       ...rest,
       next: {
         ...rest.next,
-        revalidate: XANO_CACHE_TTL_SECONDS,
+        revalidate: cacheTtlFor(table),
         tags: [cacheTagFor(table)],
       },
     };
@@ -231,12 +299,31 @@ export async function xanoFetch(
     finalInit = { ...finalInit, headers };
   }
 
+  const isRead = method === "GET" || method === "HEAD";
   const started = performance.now();
   let status = 0;
+  let attempts = 0;
   try {
-    const res = await fetch(input, finalInit);
-    status = res.status;
-    return res;
+    if (!isRead) {
+      attempts = 1;
+      const res = await fetch(input, finalInit);
+      status = res.status;
+      return res;
+    }
+    for (;;) {
+      attempts += 1;
+      const last = attempts >= 2;
+      try {
+        const res = await fetch(input, withReadTimeout(finalInit));
+        status = res.status;
+        if (last || !RETRYABLE_STATUSES.has(res.status)) return res;
+        await res.body?.cancel().catch(() => {});
+      } catch (err) {
+        // The caller cancelled — not ours to retry.
+        if (finalInit?.signal?.aborted || last) throw err;
+      }
+      await new Promise((r) => setTimeout(r, READ_RETRY_DELAY_MS));
+    }
   } finally {
     const ms = performance.now() - started;
     hooks()?.record({
@@ -246,9 +333,10 @@ export async function xanoFetch(
       status,
       cached: cacheable && ms < 60,
     });
-    if (ms > SLOW_CALL_MS) {
+    if (ms > SLOW_CALL_MS || attempts > 1) {
       console.warn(
-        `[xano] slow ${method} ${table ?? url} took ${ms.toFixed(0)}ms`
+        `[xano] slow ${method} ${table ?? url} took ${ms.toFixed(0)}ms` +
+          (attempts > 1 ? ` over ${attempts} attempts (status ${status || "none"})` : "")
       );
     }
     // A write to a cached table expires it whether or not Xano
