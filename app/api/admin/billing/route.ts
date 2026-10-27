@@ -3,6 +3,10 @@ import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano, activeStripeSubscriptionId } from "@/lib/xano";
 import { parseAnchorDate, buildMonthSlots } from "@/lib/billing-schedule";
 import { getNextInvoiceTiming, getStripeClient } from "@/lib/stripe";
+import {
+  isMidYearAddition,
+  isPendingMidYearAddition,
+} from "@/lib/midyear-additions";
 
 /**
  * Admin Billing list — one row per family with a Stripe subscription
@@ -169,9 +173,30 @@ export async function GET(req: NextRequest) {
     // was unenrolled has nobody left to bill, so the Not-started queue
     // below must skip it.
     const billableFamilies = new Set<number>();
+    // Mid-year additions aren't billed until admin confirms their
+    // packet (`startMonthlyBilling` skips them), so they stay out of
+    // these totals until then. Packet reads only for the rare
+    // addition rows.
+    const pendingAdditionStudentIds = new Set<number>();
+    await Promise.all(
+      yearApps
+        .filter((a) => a.isActive !== false && isMidYearAddition(a))
+        .map(async (a) => {
+          const sid = Number(a.registration_students_id);
+          const packet = await xano.studentRegistration
+            .getByStudentAndYear(sid, yearId)
+            .catch(() => null);
+          if (isPendingMidYearAddition(a, packet?.registrationConfirmed === true)) {
+            pendingAdditionStudentIds.add(sid);
+          }
+        })
+    );
     for (const app of yearApps) {
       if (app.isActive === false) continue;
       if (archivedStudentIds.has(Number(app.registration_students_id))) {
+        continue;
+      }
+      if (pendingAdditionStudentIds.has(Number(app.registration_students_id))) {
         continue;
       }
       const fid = Number(app.registration_families_id);

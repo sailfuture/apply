@@ -1,9 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
+import type { AdminUser } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
 import type { XanoStudentRegistration } from "@/lib/xano";
 import { markStudentEnrolled } from "@/lib/student-enrolled";
 import { isPendingMidYearAddition } from "@/lib/midyear-additions";
+import {
+  addMidYearAdditionToBilling,
+  type MidYearBillingOutcome,
+} from "@/lib/billing";
 
 /**
  * Admin-only PATCH for one `registration_student_registration` packet.
@@ -208,6 +213,7 @@ export async function PATCH(
     // — every caller (admin, parent, PandaDoc) gets it for free, so
     // we don't add it to the patch here.
     const updated = await xano.studentRegistration.update(id, patch);
+    let midYearBilling: MidYearBillingOutcome | null = null;
 
     // Cascade: when admin verifies a packet (registrationConfirmed
     // flips to true), check whether every active student in the
@@ -259,9 +265,23 @@ export async function PATCH(
           err
         );
       }
+
+      // Cascade 3: a mid-year addition joins the family's monthly
+      // billing. The family's subscription was built from the students
+      // enrolled at the time, and nothing else ever adds the sibling —
+      // confirming their packet is the moment they become billable.
+      // Best-effort: the helper alerts staff on failure itself.
+      try {
+        midYearBilling = await cascadeMidYearAdditionBilling(updated, admin);
+      } catch (err) {
+        console.error(
+          "[/api/admin/student-registration/[id]] cascade to mid-year billing failed:",
+          err
+        );
+      }
     }
 
-    return NextResponse.json(updated);
+    return NextResponse.json({ ...updated, midYearBilling });
   } catch (err) {
     return handleAdminError(err);
   }
@@ -372,3 +392,137 @@ async function cascadeFamilyRegistrationCompleted(
   }
 }
 
+/**
+ * Billing side of confirming a mid-year addition's packet: add the
+ * student to the family's live subscription (next invoice carries every
+ * student) and fold their bus cost into the family's
+ * `transportation_total` snapshot. No-op (returns null) for every
+ * other packet. Writes a billing note on the family timeline.
+ */
+async function cascadeMidYearAdditionBilling(
+  packet: XanoStudentRegistration,
+  admin: AdminUser
+): Promise<MidYearBillingOutcome | null> {
+  const studentId = Number(packet.registration_students_id);
+  const yearId = Number(packet.registration_school_years_id);
+  if (!studentId || !yearId) return null;
+  const familyId = Number(
+    packet._registration_students_2?.registration_families_id ??
+      (await xano.students.getById(studentId)).registration_families_id
+  );
+  if (!familyId) return null;
+
+  const apps = await xano.applications.getByFamilyId(familyId);
+  const yearApps = apps.filter(
+    (a) =>
+      Number(a.registration_school_years_id) === yearId &&
+      a.isActive !== false
+  );
+  const app = yearApps.find(
+    (a) => Number(a.registration_students_id) === studentId
+  );
+  // Sibling additions only — residential (foster) additions carry no
+  // tuition and never bill.
+  if (!app || app.is_midyear_addition !== true) return null;
+
+  const outcome = await addMidYearAdditionToBilling({
+    familyId,
+    yearId,
+    studentId,
+    monthlyAmount: app.monthly_amount,
+  });
+
+  let transportLine: string | null = null;
+  try {
+    transportLine = await addToTransportationTotal(
+      familyId,
+      yearId,
+      app,
+      yearApps
+    );
+  } catch (err) {
+    console.error(
+      `[cascadeMidYearAdditionBilling] transportation_total update failed (family ${familyId}, year ${yearId}):`,
+      err
+    );
+  }
+
+  const student =
+    packet._registration_students_2 ??
+    (await xano.students.getById(studentId).catch(() => null));
+  const name =
+    `${student?.first_name ?? ""} ${student?.last_name ?? ""}`.trim() ||
+    `Student #${studentId}`;
+  const money = (n: number) =>
+    `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const billingLine =
+    outcome.status === "added"
+      ? `Added ${name} (added mid-year) to the family's monthly billing at ${money(outcome.monthlyAmount)}/mo, starting with the next invoice.`
+      : outcome.status === "already_billed"
+        ? `${name} (added mid-year) was already on the family's monthly billing.`
+        : outcome.status === "no_subscription"
+          ? `${name} (added mid-year) is confirmed, but the family has no live subscription for this year — start monthly billing from the Billing card.`
+          : outcome.status === "no_amount"
+            ? `${name} (added mid-year) is confirmed but has no monthly tuition set, so they were NOT added to billing.`
+            : `Adding ${name} (added mid-year) to monthly billing FAILED: ${outcome.error}`;
+  try {
+    await xano.adminNotes.create({
+      registration_families_id: familyId,
+      registration_students_id: studentId,
+      registration_school_years_id: yearId,
+      registration_student_registration_progress_id: null,
+      registration_family_application_progress_id: null,
+      author_email: admin.email,
+      author_name: admin.name,
+      body: [billingLine, transportLine].filter(Boolean).join("\n"),
+      category: "other",
+      is_pinned: false,
+      section: "billing",
+      is_shared_with_parent: false,
+    });
+  } catch (err) {
+    console.error(
+      `[cascadeMidYearAdditionBilling] billing note failed (family ${familyId}):`,
+      err
+    );
+  }
+  return outcome;
+}
+
+/**
+ * Add a mid-year addition's bus cost to the family's
+ * `transportation_total` snapshot (taken at family acceptance, before
+ * this student existed). Only when the snapshot still equals the
+ * derived sum of the other students — a value admin typed in by hand
+ * or a SNAP waiver (null) is left alone. Idempotent: a re-confirm finds
+ * the total already includes the student. Returns a note line, or null
+ * when nothing changed.
+ */
+async function addToTransportationTotal(
+  familyId: number,
+  yearId: number,
+  app: Awaited<ReturnType<typeof xano.applications.getByFamilyId>>[number],
+  yearApps: Awaited<ReturnType<typeof xano.applications.getByFamilyId>>
+): Promise<string | null> {
+  const busCost = (a: typeof app) =>
+    a.is_bus_transportation === true && typeof a.transportation_cost === "number"
+      ? a.transportation_cost
+      : 0;
+  const added = busCost(app);
+  if (added <= 0) return null;
+  const payment = await xano.familyPayments.getByFamilyAndYear(
+    familyId,
+    yearId
+  );
+  const stored = payment?.transportation_total;
+  if (!payment || typeof stored !== "number") return null;
+  const withStudent = yearApps.reduce((sum, a) => sum + busCost(a), 0);
+  if (Math.abs(stored - withStudent) < 0.005) return null;
+  if (Math.abs(stored - (withStudent - added)) >= 0.005) {
+    return `Transportation total left at $${stored} (set by hand) — add this student's $${added} bus cost if it should include them.`;
+  }
+  await xano.familyPayments.update(payment.id, {
+    transportation_total: withStudent,
+  });
+  return `Transportation total updated $${stored} → $${withStudent} for their bus cost.`;
+}

@@ -722,3 +722,94 @@ async function ensureFamilyPaymentRow(
   });
   return created.id;
 }
+
+/** What confirming a mid-year addition's packet did to the family's
+ *  monthly billing. Returned to the admin confirm so the toast can say
+ *  whether the new student is now on the subscription. */
+export type MidYearBillingOutcome =
+  | { status: "added"; monthlyAmount: number }
+  | { status: "already_billed"; monthlyAmount: number }
+  /** No live subscription for the year (e.g. a fully covered family
+   *  that was never billed) — admin starts billing from the Billing
+   *  card, which picks up every confirmed student. */
+  | { status: "no_subscription" }
+  /** No `monthly_amount` on the student's application — the
+   *  reconcile has already alerted staff. */
+  | { status: "no_amount" }
+  | { status: "failed"; error: string };
+
+/**
+ * Put a just-confirmed mid-year addition (see `lib/midyear-additions.ts`)
+ * on the family's live subscription, next to the students already
+ * enrolled. Rides the same reconcile as un-archive / reactivate:
+ * `addStudentItemToSubscription` adds the item with no proration, so
+ * the next invoice carries every student — the same "starts on the
+ * next bill" rule as any late enrollee. Never throws.
+ */
+export async function addMidYearAdditionToBilling(args: {
+  familyId: number;
+  yearId: number;
+  studentId: number;
+  monthlyAmount: number | null | undefined;
+}): Promise<MidYearBillingOutcome> {
+  const { familyId, yearId, studentId } = args;
+  const monthly = args.monthlyAmount;
+  const studentHasItem = (sub: Stripe.Subscription) =>
+    sub.items.data.some((i) => Number(i.metadata?.student_id) === studentId);
+  try {
+    const payment = await xano.familyPayments.getByFamilyAndYearStrict(
+      familyId,
+      yearId
+    );
+    const liveSubId = activeStripeSubscriptionId(
+      payment?.stripe_subscription_id
+    );
+    if (!liveSubId) return { status: "no_subscription" };
+    let before: Awaited<ReturnType<typeof getBillingSnapshot>>;
+    try {
+      before = await getBillingSnapshot(liveSubId);
+    } catch (err) {
+      const code = (err as { code?: string; statusCode?: number }) ?? {};
+      if (code.code === "resource_missing" || code.statusCode === 404) {
+        return { status: "no_subscription" };
+      }
+      throw err;
+    }
+    if (before.subscription.status === "canceled") {
+      return { status: "no_subscription" };
+    }
+    if (studentHasItem(before.subscription)) {
+      return { status: "already_billed", monthlyAmount: monthly ?? 0 };
+    }
+    if (typeof monthly !== "number" || monthly <= 0) {
+      // Still run the reconcile: it emails staff about the unpriced
+      // student so they don't sit silently unbilled.
+      await reconcileFamilySubscriptionItems(familyId, yearId);
+      return { status: "no_amount" };
+    }
+    await reconcileFamilySubscriptionItems(familyId, yearId);
+    const after = await getBillingSnapshot(liveSubId);
+    if (!studentHasItem(after.subscription)) {
+      throw new Error(
+        "The reconcile finished but the student still has no subscription item."
+      );
+    }
+    return { status: "added", monthlyAmount: monthly };
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    console.error(
+      `[addMidYearAdditionToBilling] family ${familyId}, year ${yearId}, student ${studentId}:`,
+      err
+    );
+    await sendBillingAlert(
+      "Mid-year student NOT added to billing",
+      [
+        `Admissions confirmed this mid-year student's registration, but adding them to the family's monthly subscription failed — Stripe is still billing only the students enrolled before them.`,
+        `To retry, clear and re-verify the student's packet on the family's Registrations page (it adds only the missing student), or add the item in the Stripe Dashboard.`,
+        `Error: ${error}`,
+      ],
+      { familyId, yearId, studentIds: [studentId] }
+    );
+    return { status: "failed", error };
+  }
+}

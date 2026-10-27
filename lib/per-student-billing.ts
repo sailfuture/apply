@@ -11,6 +11,10 @@ import {
   updateStudentItemAmount,
 } from "@/lib/stripe";
 import { sendBillingAlert } from "@/lib/billing-alerts";
+import {
+  isMidYearAddition,
+  isPendingMidYearAddition,
+} from "@/lib/midyear-additions";
 
 /**
  * Last-resort fallback for the per-student annual fee when the
@@ -419,12 +423,36 @@ export async function fetchActiveFamilyApplications(
     xano.students.getByFamilyId(familyId),
     xano.applications.getByFamilyId(familyId),
   ]);
-  return filterActiveFamilyApplications({
+  const active = filterActiveFamilyApplications({
     familyId,
     yearId,
     students,
     apps,
   });
+  // A mid-year addition isn't billed until admin confirms their packet
+  // (`startMonthlyBilling` skips them too), so the schedule's monthly
+  // total leaves them out until then — admin may have priced them
+  // during review. Packet reads only for the rare addition rows.
+  const additions = active.filter((a) => isMidYearAddition(a));
+  if (additions.length === 0) return active;
+  const confirmed = new Set<number>();
+  await Promise.all(
+    additions.map(async (a) => {
+      const sid = Number(a.registration_students_id);
+      const packet = await xano.studentRegistration.getByStudentAndYear(
+        sid,
+        yearId
+      );
+      if (packet?.registrationConfirmed === true) confirmed.add(sid);
+    })
+  );
+  return active.filter(
+    (a) =>
+      !isPendingMidYearAddition(
+        a,
+        confirmed.has(Number(a.registration_students_id))
+      )
+  );
 }
 
 /**

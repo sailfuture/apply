@@ -114,6 +114,7 @@ function liveSubscriptionId(v: string | null | undefined): string | null {
   return v;
 }
 import { sumFamilyBillingTotals } from "@/lib/per-student-billing";
+import type { MidYearBillingOutcome } from "@/lib/billing";
 
 const xanoBase =
   process.env.NEXT_PUBLIC_XANO_BASE ?? "https://xsc3-mvx7-r86m.n7e.xano.io";
@@ -2356,11 +2357,37 @@ function StudentPacketBlock({
         const errBody = await res.json().catch(() => null);
         throw new Error(errBody?.error ?? `Update failed (${res.status})`);
       }
-      toast.success(
-        next
-          ? `${row.student_full_name} verified.`
-          : `${row.student_full_name} verification cleared.`
-      );
+      // A mid-year addition's confirm also puts them on the family's
+      // subscription — say what happened to billing.
+      const resBody = (await res.json().catch(() => null)) as {
+        midYearBilling?: MidYearBillingOutcome | null;
+      } | null;
+      const billing = next ? resBody?.midYearBilling ?? null : null;
+      const name = row.student_full_name;
+      if (!billing) {
+        toast.success(
+          next ? `${name} verified.` : `${name} verification cleared.`
+        );
+      } else if (
+        billing.status === "added" ||
+        billing.status === "already_billed"
+      ) {
+        toast.success(
+          `${name} verified and on the family's monthly billing ($${billing.monthlyAmount.toFixed(2)}/mo from the next invoice).`
+        );
+      } else if (billing.status === "no_subscription") {
+        toast.warning(
+          `${name} verified. This family has no monthly subscription for the year — start billing from the family's Billing card.`
+        );
+      } else if (billing.status === "no_amount") {
+        toast.warning(
+          `${name} verified, but they have no monthly tuition set, so they weren't added to billing.`
+        );
+      } else {
+        toast.error(
+          `${name} verified, but adding them to monthly billing failed. Staff were emailed; clear and re-verify to retry.`
+        );
+      }
       onChanged();
     } catch (err) {
       console.error("[StudentPacketBlock.toggleVerified]", err);
