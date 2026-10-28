@@ -148,10 +148,33 @@ export async function GET(req: NextRequest) {
     // that's already wrapped.
     const activeYears = years.filter((y) => y.isPast !== true);
 
-    for (const year of activeYears) {
-      const progresses = await xano.familyApplicationProgress.getByYear(
-        year.id
-      );
+    // Draft-reminder context, read once for every open year: which
+    // families have a student on each year (an actual start), and
+    // which have a submitted application still awaiting a decision.
+    const yearData = await Promise.all(
+      activeYears.map(async (year) => ({
+        year,
+        progresses: await xano.familyApplicationProgress.getByYear(year.id),
+        apps: await xano.applications.getByYear(year.id),
+      }))
+    );
+    const startedYears = new Set<string>();
+    const pendingYearsByFamily = new Map<number, Set<number>>();
+    for (const { year, progresses, apps } of yearData) {
+      for (const a of apps) {
+        startedYears.add(`${Number(a.registration_families_id)}:${year.id}`);
+      }
+      for (const p of progresses) {
+        if (p.is_archived === true || p.isSubmitted !== true) continue;
+        if (p.isAccepted === true) continue;
+        const fid = Number(p.registration_families_id);
+        const set = pendingYearsByFamily.get(fid) ?? new Set<number>();
+        set.add(year.id);
+        pendingYearsByFamily.set(fid, set);
+      }
+    }
+
+    for (const { year, progresses } of yearData) {
 
       for (const p of progresses) {
         // Archived rows are out of consideration for all three
@@ -160,7 +183,18 @@ export async function GET(req: NextRequest) {
         if (p.is_archived === true) continue;
 
         // Email 5 — draft reminder.
-        if (isEligibleForDraftReminder(p)) {
+        // Skip a draft with no student on it (opened, never started)
+        // and a draft beside a submitted application on another year
+        // that's still awaiting a decision — that family already
+        // applied, and "finish your application" talked the Hull
+        // family into a duplicate year (2026-10-09).
+        const fid = Number(p.registration_families_id);
+        const draftWorthReminding =
+          startedYears.has(`${fid}:${year.id}`) &&
+          ![...(pendingYearsByFamily.get(fid) ?? [])].some(
+            (y) => y !== year.id
+          );
+        if (draftWorthReminding && isEligibleForDraftReminder(p)) {
           result.draft.eligible += 1;
           const res = await sendDraftReminderEmail(
             p.registration_families_id,

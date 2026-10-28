@@ -13,6 +13,16 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { LoadingScreen } from "@/components/loading-screen";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 interface SchoolYear {
   id: number;
@@ -62,6 +72,11 @@ export default function ApplyIndexPage() {
   // Years this family already has an application on — badged so a
   // mid-application family can spot theirs instantly.
   const [appYears, setAppYears] = useState<number[]>([]);
+  // Of those, the years already submitted — a family that applied for
+  // one year is asked before starting a second (the Hull family
+  // submitted both 2026-2027 and 2027-2028 without meaning to).
+  const [submittedYears, setSubmittedYears] = useState<number[]>([]);
+  const [confirmYear, setConfirmYear] = useState<SchoolYear | null>(null);
 
   const fetchData = useCallback(async () => {
     try {
@@ -85,6 +100,17 @@ export default function ApplyIndexPage() {
         }
       }
       setAppYears([...appYearIds]);
+      const submitted = await Promise.all(
+        [...appYearIds].map(async (yid) => {
+          const res = await fetch(`/api/family-progress?yearId=${yid}`).catch(
+            () => null
+          );
+          if (!res?.ok) return null;
+          const row = await res.json().catch(() => null);
+          return row?.isSubmitted === true ? yid : null;
+        })
+      );
+      setSubmittedYears(submitted.filter((y): y is number => y !== null));
 
       if (yearsRes.ok) {
         const allYears: SchoolYear[] = await yearsRes.json();
@@ -117,6 +143,23 @@ export default function ApplyIndexPage() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // Starting a year with nothing on it while another year's
+  // application is submitted → confirm first.
+  function choose(year: SchoolYear) {
+    if (!appYears.includes(year.id) && submittedYears.length > 0) {
+      setConfirmYear(year);
+      return;
+    }
+    router.push(`/apply/year/${year.id}`);
+  }
+  const submittedYearNames = submittedYears
+    .map(
+      (id) =>
+        [current, upcoming, ...otherYears].find((y) => y?.id === id)
+          ?.year_name ?? null
+    )
+    .filter((n): n is string => !!n);
 
   if (loading) {
     return (
@@ -196,7 +239,8 @@ export default function ApplyIndexPage() {
                 blurb="Start during the current school year."
                 cta="Enroll this year"
                 hasApplication={appYears.includes(current.id)}
-                onSelect={() => router.push(`/apply/year/${current.id}`)}
+                submitted={submittedYears.includes(current.id)}
+                onSelect={() => choose(current)}
               />
             )}
             {upcoming && (
@@ -206,7 +250,8 @@ export default function ApplyIndexPage() {
                 blurb="Start at the beginning of next school year."
                 cta="Apply for next year"
                 hasApplication={appYears.includes(upcoming.id)}
-                onSelect={() => router.push(`/apply/year/${upcoming.id}`)}
+                submitted={submittedYears.includes(upcoming.id)}
+                onSelect={() => choose(upcoming)}
               />
             )}
           </div>
@@ -233,6 +278,36 @@ export default function ApplyIndexPage() {
           </div>
         )}
       </div>
+
+      <AlertDialog
+        open={confirmYear !== null}
+        onOpenChange={(open) => {
+          if (!open) setConfirmYear(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              You already applied for {submittedYearNames.join(" and ")}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Starting {confirmYear?.year_name} creates a second, separate
+              application. If you meant to switch years, please contact the
+              school instead and we&apos;ll move your application for you.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Go back</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (confirmYear) router.push(`/apply/year/${confirmYear.id}`);
+              }}
+            >
+              Start {confirmYear?.year_name} application
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }
@@ -243,6 +318,7 @@ function YearChoice({
   blurb,
   cta,
   hasApplication,
+  submitted,
   onSelect,
 }: {
   year: SchoolYear;
@@ -250,6 +326,7 @@ function YearChoice({
   blurb: string;
   cta: string;
   hasApplication: boolean;
+  submitted: boolean;
   onSelect: () => void;
 }) {
   return (
@@ -261,11 +338,15 @@ function YearChoice({
       <div className="space-y-1">
         <div className="flex flex-wrap items-center gap-2">
           <h2 className="text-lg font-semibold">{heading}</h2>
-          {hasApplication && (
+          {submitted ? (
+            <span className="inline-flex rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400">
+              Submitted
+            </span>
+          ) : hasApplication ? (
             <span className="inline-flex rounded-full bg-indigo-100 px-2.5 py-0.5 text-xs font-medium text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-400">
               Your application
             </span>
-          )}
+          ) : null}
         </div>
         <p className="text-muted-foreground text-sm">{blurb}</p>
       </div>
@@ -286,7 +367,12 @@ function YearChoice({
         </div>
       </dl>
       <span className="text-primary text-sm font-medium">
-        {hasApplication ? "Continue application" : cta} &rarr;
+        {submitted
+          ? "View application"
+          : hasApplication
+            ? "Continue application"
+            : cta}{" "}
+        &rarr;
       </span>
     </button>
   );

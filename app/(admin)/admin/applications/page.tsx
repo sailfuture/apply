@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import useSWR from "swr";
 import { Activity, CheckCircle2, Circle, ChevronRight } from "lucide-react";
@@ -22,6 +22,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import { adminFetcher } from "@/lib/admin-fetcher";
 import { cn } from "@/lib/utils";
 
@@ -53,6 +55,23 @@ interface AppProgressRow {
   is_archived: boolean;
   reason_for_archive: string | null;
   [key: string]: unknown;
+}
+
+/** Remembers the "Include <other year>" switch per browser. */
+const INCLUDE_OTHER_KEY = "applications:include-other-year";
+const includeOtherListeners = new Set<() => void>();
+function subscribeIncludeOther(listener: () => void) {
+  includeOtherListeners.add(listener);
+  return () => {
+    includeOtherListeners.delete(listener);
+  };
+}
+function readIncludeOther(): boolean {
+  try {
+    return localStorage.getItem(INCLUDE_OTHER_KEY) === "1";
+  } catch {
+    return false;
+  }
 }
 
 type ProgressFilter =
@@ -105,12 +124,63 @@ export default function ApplicationsPage() {
   // ONE search box filters every card on the page (user request —
   // per-card search boxes are gone).
   const [search, setSearch] = useState("");
-  const [activityFamily, setActivityFamily] = useState<number | null>(null);
+  const [activity, setActivity] = useState<{
+    familyId: number;
+    yearId: number;
+  } | null>(null);
 
-  const { data, isLoading, error } = useSWR<AppProgressRow[]>(
-    yearId ? `/api/admin/applications?yearId=${yearId}` : null,
+  // The year beside this one — next year while viewing the current
+  // year, the current year while viewing next year — so a family
+  // applying for both (or for the wrong one) sits in one list.
+  const { data: years } = useSWR<
+    { id: number; year_name: string; isActive?: boolean; isNextYear?: boolean }[]
+  >("/api/admin/school-years", adminFetcher);
+  const otherYear = useMemo(() => {
+    if (!yearId || !Array.isArray(years)) return null;
+    const viewing = years.find((y) => y.id === Number(yearId));
+    const other = viewing?.isNextYear
+      ? years.find((y) => y.isActive)
+      : years.find((y) => y.isNextYear);
+    return other && other.id !== Number(yearId) ? other : null;
+  }, [years, yearId]);
+  const includeOther = useSyncExternalStore(
+    subscribeIncludeOther,
+    readIncludeOther,
+    () => false
+  );
+  function toggleIncludeOther(on: boolean) {
+    try {
+      localStorage.setItem(INCLUDE_OTHER_KEY, on ? "1" : "0");
+    } catch {}
+    includeOtherListeners.forEach((l) => l());
+  }
+  const showOther = includeOther && otherYear !== null;
+
+  const { data: mainData, isLoading: mainLoading, error: mainError } =
+    useSWR<AppProgressRow[]>(
+      yearId ? `/api/admin/applications?yearId=${yearId}` : null,
+      adminFetcher
+    );
+  const {
+    data: otherData,
+    isLoading: otherLoading,
+    error: otherError,
+  } = useSWR<AppProgressRow[]>(
+    showOther ? `/api/admin/applications?yearId=${otherYear.id}` : null,
     adminFetcher
   );
+  const isLoading = mainLoading || (showOther && otherLoading);
+  const error = mainError ?? (showOther ? otherError : undefined);
+  const data = useMemo(
+    () => [
+      ...(Array.isArray(mainData) ? mainData : []),
+      ...(showOther && Array.isArray(otherData) ? otherData : []),
+    ],
+    [mainData, otherData, showOther]
+  );
+  const yearNameOf = (id: number) =>
+    (Array.isArray(years) ? years : []).find((y) => y.id === id)?.year_name ??
+    "—";
   // Latest note/text per family — the "Primary Contact" email column
   // was replaced with this (user request).
   const { data: latestData } = useSWR<{ byFamily: LatestActivityMap }>(
@@ -119,7 +189,7 @@ export default function ApplicationsPage() {
   );
   const latestByFamily = latestData?.byFamily ?? {};
 
-  const all = useMemo(() => (Array.isArray(data) ? data : []), [data]);
+  const all = data;
 
   const groups = useMemo(() => {
     const accepted: AppProgressRow[] = [];
@@ -185,7 +255,7 @@ export default function ApplicationsPage() {
       header: "Family",
       sortable: true,
       searchable: true,
-      width: "w-[22%]",
+      width: showOther ? "w-[20%]" : "w-[22%]",
       // Name click = full application page; the ROW click opens the
       // activity sheet, so this stops propagation.
       render: (row) => (
@@ -208,7 +278,7 @@ export default function ApplicationsPage() {
       header: "Students",
       sortable: true,
       searchable: true,
-      width: "w-[24%]",
+      width: showOther ? "w-[20%]" : "w-[24%]",
       render: (row) => (
         <span className="inline-flex items-center gap-2 min-w-0 max-w-full">
           <span className="text-xs tabular-nums text-muted-foreground shrink-0">
@@ -220,11 +290,25 @@ export default function ApplicationsPage() {
         </span>
       ),
     },
+    ...(showOther
+      ? [
+          {
+            key: "year_id",
+            header: "Year",
+            sortable: true,
+            width: "w-[10%]",
+            accessor: (row: AppProgressRow) => yearNameOf(row.year_id),
+            render: (row: AppProgressRow) => (
+              <span className="block truncate">{yearNameOf(row.year_id)}</span>
+            ),
+          } satisfies ColumnDef<AppProgressRow>,
+        ]
+      : []),
     {
       key: "latest_activity",
       header: "Latest Activity",
       searchable: true,
-      width: "w-[20%]",
+      width: showOther ? "w-[16%]" : "w-[20%]",
       accessor: (row) =>
         latestByFamily[String(row.family_id)]?.body ?? "",
       render: (row) => {
@@ -292,7 +376,7 @@ export default function ApplicationsPage() {
           aria-label={`Activity for ${row.family_name}`}
           onClick={(e) => {
             e.stopPropagation();
-            setActivityFamily(row.family_id);
+            setActivity({ familyId: row.family_id, yearId: row.year_id });
           }}
         >
           <Activity className="size-3.5 text-muted-foreground" />
@@ -316,7 +400,8 @@ export default function ApplicationsPage() {
         <h1 className="text-2xl font-bold">Applications</h1>
         <p className="text-sm text-muted-foreground">
           One row per family per academic year — both new applications
-          and re-applications. Click any section to open it for review
+          and re-applications. Switch on the year beside this one to
+          see both years in one list. Click any section to open it for review
           or editing.
         </p>
       </div>
@@ -355,6 +440,18 @@ export default function ApplicationsPage() {
             ))}
           </SelectContent>
         </Select>
+        {otherYear ? (
+          <div className="flex h-9 shrink-0 items-center gap-2 rounded-md border bg-white px-3">
+            <Switch
+              id="include-other-year"
+              checked={includeOther}
+              onCheckedChange={toggleIncludeOther}
+            />
+            <Label htmlFor="include-other-year" className="text-sm font-normal">
+              Include {otherYear.year_name}
+            </Label>
+          </div>
+        ) : null}
       </div>
 
       {error ? (
@@ -382,7 +479,9 @@ export default function ApplicationsPage() {
             isLoading={isLoading}
             error={error}
             columns={columns}
-            onRowClick={(row) => setActivityFamily(row.family_id)}
+            onRowClick={(row) =>
+              setActivity({ familyId: row.family_id, yearId: row.year_id })
+            }
             search={search}
           />
           <ApplicationsGroup
@@ -393,7 +492,9 @@ export default function ApplicationsPage() {
             isLoading={isLoading}
             error={error}
             columns={columns}
-            onRowClick={(row) => setActivityFamily(row.family_id)}
+            onRowClick={(row) =>
+              setActivity({ familyId: row.family_id, yearId: row.year_id })
+            }
             search={search}
           />
           <ApplicationsGroup
@@ -404,7 +505,9 @@ export default function ApplicationsPage() {
             isLoading={isLoading}
             error={error}
             columns={columns}
-            onRowClick={(row) => setActivityFamily(row.family_id)}
+            onRowClick={(row) =>
+              setActivity({ familyId: row.family_id, yearId: row.year_id })
+            }
             search={search}
           />
           {/* Accepted — the family-progress route auto-flips
@@ -420,7 +523,9 @@ export default function ApplicationsPage() {
             isLoading={isLoading}
             error={error}
             columns={columns}
-            onRowClick={(row) => setActivityFamily(row.family_id)}
+            onRowClick={(row) =>
+              setActivity({ familyId: row.family_id, yearId: row.year_id })
+            }
             search={search}
           />
           <ApplicationsGroup
@@ -431,7 +536,9 @@ export default function ApplicationsPage() {
             isLoading={isLoading}
             error={error}
             columns={columns}
-            onRowClick={(row) => setActivityFamily(row.family_id)}
+            onRowClick={(row) =>
+              setActivity({ familyId: row.family_id, yearId: row.year_id })
+            }
             search={search}
           />
         </div>
@@ -439,13 +546,13 @@ export default function ApplicationsPage() {
 
       {/* Shared controlled Activity sheet — one instance for every
           row's trigger. */}
-      {activityFamily && yearId ? (
+      {activity ? (
         <ActivityLogSheet
-          familyId={activityFamily}
-          yearId={Number(yearId)}
+          familyId={activity.familyId}
+          yearId={activity.yearId}
           open
           onOpenChange={(o) => {
-            if (!o) setActivityFamily(null);
+            if (!o) setActivity(null);
           }}
         />
       ) : null}

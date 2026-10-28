@@ -54,8 +54,44 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "yearId must be a number" }, { status: 400 });
   }
 
-  const row = await resolveProgress(familyId, yearId);
-  return NextResponse.json(row, { status: 200 });
+  const existing = await xano.familyApplicationProgress.getByFamilyAndYear(
+    familyId,
+    yearId
+  );
+  if (existing) return NextResponse.json(existing, { status: 200 });
+
+  // Only save a draft once the family has a student on this year.
+  // Creating one on every read meant opening a year (the "Which
+  // school year?" page, the enrolled dashboard's next-year card) left
+  // an empty draft behind, and the draft reminder then told the
+  // family to "finish" an application they never started — the Hull
+  // family submitted a duplicate year that way (2026-10-09). Until
+  // then, answer with an unsaved stand-in; the first PATCH (any
+  // section marked complete) creates the real row.
+  const apps = await xano.applications.getByFamilyId(familyId);
+  if (apps.some((a) => Number(a.registration_school_years_id) === yearId)) {
+    const row = await resolveProgress(familyId, yearId);
+    return NextResponse.json(row, { status: 200 });
+  }
+  return NextResponse.json(unsavedProgress(familyId, yearId), { status: 200 });
+}
+
+/** Same shape as a fresh row, never written — `id: 0` marks it. */
+function unsavedProgress(familyId: number, yearId: number) {
+  return {
+    id: 0,
+    created_at: Date.now(),
+    registration_families_id: familyId,
+    registration_school_years_id: yearId,
+    family_completed: false,
+    students_completed: false,
+    financial_aid_completed: false,
+    testing_completed: false,
+    last_edited: null,
+    submitted_at: null,
+    isSubmitted: false,
+    isAccepted: false,
+  };
 }
 
 export async function PATCH(req: NextRequest) {
