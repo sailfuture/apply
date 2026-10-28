@@ -20,9 +20,11 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { resolveAdminYear, sortAdminYears } from "@/lib/school-year-default";
 import {
+  isFamilyRecordPath,
   readRememberedAdminYearId,
   rememberAdminYear,
   useRememberedAdminYearId,
+  useWorkingYearId,
 } from "@/lib/admin-year-memory";
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
@@ -62,6 +64,9 @@ export function YearSelector() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const currentYearId = searchParams.get("yearId");
+  // What the menu shows: the working year, which on a family record
+  // is the remembered one rather than that application's year.
+  const workingYearId = useWorkingYearId(pathname, currentYearId);
 
   // Full-screen "switching year" overlay (user request): a year
   // change swaps the data under EVERY widget on the page, and
@@ -130,7 +135,7 @@ export function YearSelector() {
   // year (user request). Picking a year in this menu there still
   // does (`handleChange`).
   useEffect(() => {
-    if (pathname.startsWith("/admin/families/")) return;
+    if (isFamilyRecordPath(pathname)) return;
     const id = Number(currentYearId);
     if (years.some((y) => y.id === id)) rememberAdminYear(id);
   }, [currentYearId, years, pathname]);
@@ -144,7 +149,7 @@ export function YearSelector() {
   }
 
   function handleChange(value: string) {
-    if (value === (currentYearId ?? String(defaultYear?.id ?? ""))) return;
+    if (value === (workingYearId ?? String(defaultYear?.id ?? ""))) return;
     const picked = years.find((y) => String(y.id) === value);
     if (picked) rememberAdminYear(picked.id);
     switchStartedAt.current = Date.now();
@@ -159,7 +164,7 @@ export function YearSelector() {
   return (
     <>
       <Select
-        value={currentYearId ?? String(defaultYear?.id ?? "")}
+        value={workingYearId ?? String(defaultYear?.id ?? "")}
         onValueChange={handleChange}
       >
         <SelectTrigger className="w-full bg-white">

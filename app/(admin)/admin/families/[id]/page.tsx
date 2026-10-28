@@ -665,6 +665,22 @@ export default function FamilyDetailPage() {
                     · {yearMeta.year_name}
                   </span>
                 ) : null}
+                {/* The top bar stays on the admin's working year, so an
+                    application for another year says so here. */}
+                {yearMeta && !yearMeta.isActive ? (
+                  <span
+                    className={cn(
+                      "ml-3 inline-flex translate-y-[-2px] items-center rounded-full px-2.5 py-0.5 align-middle text-xs font-medium",
+                      yearMeta.isNextYear || yearMeta.isFuture
+                        ? "bg-blue-100 text-blue-800"
+                        : "bg-slate-100 text-slate-700"
+                    )}
+                  >
+                    {yearMeta.isNextYear || yearMeta.isFuture
+                      ? `Applying for ${yearMeta.year_name}`
+                      : `${yearMeta.year_name} application`}
+                  </span>
+                ) : null}
               </h1>
             </div>
             {yearId ? (

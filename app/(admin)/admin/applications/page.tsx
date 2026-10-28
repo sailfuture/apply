@@ -66,11 +66,13 @@ function subscribeIncludeOther(listener: () => void) {
     includeOtherListeners.delete(listener);
   };
 }
+/** On unless this browser switched it off — families applying for
+ *  next year belong in the current year's list (user request). */
 function readIncludeOther(): boolean {
   try {
-    return localStorage.getItem(INCLUDE_OTHER_KEY) === "1";
+    return localStorage.getItem(INCLUDE_OTHER_KEY) !== "0";
   } catch {
-    return false;
+    return true;
   }
 }
 
@@ -146,7 +148,7 @@ export default function ApplicationsPage() {
   const includeOther = useSyncExternalStore(
     subscribeIncludeOther,
     readIncludeOther,
-    () => false
+    () => true
   );
   function toggleIncludeOther(on: boolean) {
     try {

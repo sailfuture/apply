@@ -19,6 +19,7 @@ import {
 } from "@/components/admin/messages-unread-badge";
 import { SmsNotificationWatcher } from "@/components/admin/sms-notifications";
 import { cn } from "@/lib/utils";
+import { useWorkingYearId } from "@/lib/admin-year-memory";
 
 interface AdminUser {
   id: string;
@@ -160,7 +161,10 @@ const NAV_ITEMS: NavItem[] = [
 export function AdminTopNav({ admin }: { admin: AdminUser | null }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const yearId = searchParams.get("yearId");
+  // Menu links carry the WORKING year — on a family record that's the
+  // admin's remembered year, not the application's, so the menu never
+  // pivots into another year.
+  const yearId = useWorkingYearId(pathname, searchParams.get("yearId"));
   // Texts waiting on a reply — badged on Parent Engagement / Messages.
   // Suppressed while ON the Messages page: the admin is already
   // looking at the inbox, so the count is noise there.

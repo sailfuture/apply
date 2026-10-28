@@ -48,3 +48,25 @@ function subscribe(onChange: () => void) {
 export function useRememberedAdminYearId(): number | null {
   return useSyncExternalStore(subscribe, readRememberedAdminYearId, () => null);
 }
+
+/** True on a family record — its `?yearId=` is that application's
+ *  year, not the year the admin is working in. */
+export function isFamilyRecordPath(pathname: string): boolean {
+  return pathname.startsWith("/admin/families/");
+}
+
+/**
+ * The admin's working year as a string id: the URL's `?yearId=`
+ * everywhere except a family record, where it's the remembered year
+ * (a 2027-2028 family opened from the 2026-2027 list keeps the top
+ * bar and the menu links on 2026-2027 — user request). Null when
+ * neither is known; the YearSelector then fills in the default.
+ */
+export function useWorkingYearId(
+  pathname: string,
+  urlYearId: string | null
+): string | null {
+  const remembered = useRememberedAdminYearId();
+  if (!isFamilyRecordPath(pathname)) return urlYearId;
+  return remembered !== null ? String(remembered) : null;
+}
