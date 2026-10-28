@@ -83,6 +83,14 @@ async function handleGET(req: NextRequest) {
     await requireAdmin();
     const contact = parseContactParams(req);
 
+    // A thread request whose id didn't parse (`contactId=undefined`
+    // from a page rendering without its record) is a bad request —
+    // not a cue to build the whole inbox feed.
+    const sp = req.nextUrl.searchParams;
+    if (!contact && (sp.has("contactId") || sp.has("familyId") || sp.has("contactType"))) {
+      return NextResponse.json({ error: "Invalid contact" }, { status: 400 });
+    }
+
     if (!contact) {
       // Global inbox feed — one conversation per contact, newest
       // first, with a pipeline-stage annotation per family for the

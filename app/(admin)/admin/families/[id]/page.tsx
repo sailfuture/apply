@@ -75,6 +75,7 @@ import {
 } from "@/components/admin/application-year";
 import { InviteStatusBadge, ResendInviteButton } from "@/components/invite-status";
 import { adminFetcher } from "@/lib/admin-fetcher";
+import { ServiceUnavailable } from "@/components/service-unavailable";
 import { cn } from "@/lib/utils";
 import { formatDob } from "@/lib/dob";
 import { formatNoteTimestamp } from "@/lib/format-note-time";
@@ -97,8 +98,6 @@ import type {
   XanoScholarshipVehicle,
   XanoSchoolYear,
 } from "@/lib/xano";
-
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 interface Parent {
   id: number;
@@ -332,11 +331,19 @@ export default function FamilyDetailPage() {
   // because it expands those relations to full objects (parent contact
   // info, student names + DOB). The new admin_family_application
   // endpoint returns family parents/students as IDs only.
-  const { data: family, isLoading, mutate: refreshFamily } =
-    useSWR<FamilyResponse>(
-      familyId ? `/api/admin/families/${familyId}` : null,
-      fetcher
-    );
+  // Throwing fetcher: a non-throwing one handed the page `{ error }`
+  // as the family when Xano was down (2026-10-28), so it rendered
+  // with `family.id` undefined and the Messages button pulled the
+  // whole inbox feed instead of this family's thread.
+  const {
+    data: family,
+    error: familyError,
+    isLoading,
+    mutate: refreshFamily,
+  } = useSWR<FamilyResponse>(
+    familyId ? `/api/admin/families/${familyId}` : null,
+    adminFetcher
+  );
 
   // Per-year applications + scholarship — single fetch via the new
   // `admin_family_application` Xano query. Only fires when we have both
@@ -540,6 +547,10 @@ export default function FamilyDetailPage() {
       : null,
     adminFetcher
   );
+
+  if (!family && familyError) {
+    return <ServiceUnavailable onRetry={() => refreshFamily()} />;
+  }
 
   if (isLoading || !family) {
     return (

@@ -83,7 +83,7 @@ export function FamilyMessagesSheet({
     }
   }
 
-  const totalMessages = data?.messages.length ?? 0;
+  const totalMessages = data?.messages?.length ?? 0;
   const recipient = data?.recipient ?? null;
   const quoConversationUrl = data?.quoConversationUrl ?? null;
   const subtitle = recipient
