@@ -480,9 +480,10 @@ export default function FamilyDetailPage() {
     }
   }
 
-  const backHref = yearId
-    ? `/admin/applications?yearId=${yearId}`
-    : "/admin/applications";
+  // Back to the admin's working year (the top-bar menu fills it in),
+  // not this application's — a next-year family opened from the
+  // current year's list returns to that list.
+  const backHref = "/admin/applications";
 
   // (The per-section editor route `/admin/families/[id]/[section]`
   // is no longer used — admin edits live inline on each SectionShell
@@ -5865,7 +5866,7 @@ function ArchiveApplicationButton({
       // drops out of the active queues and surfaces in the dedicated
       // "Archived" card on that page, so there's nothing left to do
       // on the family detail page itself.
-      router.push(`/admin/applications?yearId=${yearId}`);
+      router.push("/admin/applications");
     } catch (err) {
       console.error("[ArchiveApplicationButton.runArchive] failed:", err);
       toast.error(err instanceof Error ? err.message : "Couldn't archive.");

@@ -124,11 +124,16 @@ export function YearSelector() {
 
   // Remember whatever real year is in view — picked here, switched by
   // the past-year banner, or opened from a link that names one — so
-  // the next URL without a year stays on it.
+  // the next URL without a year stays on it. Except a family record:
+  // its year is that application's, and opening a 2027-2028 family
+  // from the current year's list mustn't move the admin's working
+  // year (user request). Picking a year in this menu there still
+  // does (`handleChange`).
   useEffect(() => {
+    if (pathname.startsWith("/admin/families/")) return;
     const id = Number(currentYearId);
     if (years.some((y) => y.id === id)) rememberAdminYear(id);
-  }, [currentYearId, years]);
+  }, [currentYearId, years, pathname]);
 
   if (isLoading) {
     return <Skeleton className="h-9 w-full" />;
