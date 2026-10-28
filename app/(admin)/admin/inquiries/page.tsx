@@ -352,20 +352,13 @@ export default function InquiriesPage() {
       else if (r.isFollowedUp) followedUp.push(r);
       else notFollowedUp.push(r);
     }
-    // Order every section by MOST RECENT ACTIVITY — the later of the
-    // last contact and the sign-up date — so conversations in flight
-    // and brand-new inquiries both sit at the top. Sorting on last
-    // contact alone would bury every inquiry nobody has called yet
-    // (their `last_reach_out` is 0) below the handful that have been.
-    // Same rule All Leads uses. The Last contact and Added headers
-    // still re-sort on either column alone.
-    const activity = (r: Inquiry) =>
-      Math.max(lastContactAt(r), Number(r.created_at) || 0);
+    // Order every section by when the inquiry was submitted, newest
+    // first (user request, 2026-10-28) — not by the latest note or
+    // call, which reshuffled the list every time someone logged
+    // contact. The Last contact header still re-sorts on contact.
     for (const list of [followedUp, notFollowedUp, converted, notInterested, archived]) {
       list.sort(
-        (a, b) =>
-          activity(b) - activity(a) ||
-          (Number(b.created_at) || 0) - (Number(a.created_at) || 0)
+        (a, b) => (Number(b.created_at) || 0) - (Number(a.created_at) || 0)
       );
     }
     return {
