@@ -582,9 +582,11 @@ function BackLink({
  * half-success nobody notices until a parent asks.
  */
 
-/** Toast for a Student Photo save. The Xano write is already done;
- *  the Google outcome decides the second clause. Skips are silent
- *  except the actionable ones (no school email / no account yet). */
+/** Toast for a save that may have pushed the student photo to Google:
+ *  a Student Photo upload/remove, or a School Account save with a new
+ *  email. The Xano write is already done; the Google outcome decides
+ *  the second clause. Skips are silent except the actionable ones (no
+ *  school email / no account yet). */
 function toastPhotoSaved(saved: string, sync: GooglePhotoSync | undefined) {
   if (!sync) {
     toast.success(saved);
@@ -1167,11 +1169,13 @@ function SchoolAccountCard({
           school_password: password,
         }),
       });
+      const saved = await res.json().catch(() => null);
       if (!res.ok) {
-        const errBody = await res.json().catch(() => null);
-        throw new Error(errBody?.error ?? `Save failed (${res.status})`);
+        throw new Error(saved?.error ?? `Save failed (${res.status})`);
       }
-      toast.success("School account saved.");
+      // A new email also pushes the stored student photo to that
+      // Google account; the route reports how it went.
+      toastPhotoSaved("School account saved.", saved?.google_photo);
       setEditing(false);
       await onChanged();
     } catch (err) {

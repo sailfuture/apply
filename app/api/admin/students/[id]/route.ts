@@ -285,6 +285,16 @@ export async function PATCH(
     // logging a meaningless timestamp bump.
     (patch as Record<string, unknown>).last_edited_time = now;
 
+    // Snapshot the row when the school email is being written without a
+    // photo change, so the photo push below can tell a NEW address
+    // (push the stored photo to that account) from a re-save of the
+    // same one (leave Google alone). Best-effort: a failed read just
+    // skips the push.
+    let priorForEmail: XanoStudent | null = null;
+    if ("school_email" in patch && !("student_photo" in patch)) {
+      priorForEmail = await xano.students.getById(id).catch(() => null);
+    }
+
     // Snapshot prior `isArchived` so we can detect a false → true
     // transition AFTER the write lands and trigger the Stripe-item
     // cleanup cascade below. Best-effort lookup — if the prior read
@@ -470,6 +480,25 @@ export async function PATCH(
         email,
         photo: photo && typeof photo === "object" ? photo : null,
       });
+    } else if (priorForEmail) {
+      // A school email saved for the first time, or changed, points the
+      // student at a Google account that may already exist (made by
+      // hand, or before the address was recorded here). Give that
+      // account the photo already on file instead of waiting for a
+      // re-upload. Only ever SETS: no stored photo means no call, so a
+      // School Account save can never wipe a Google photo. A missing
+      // account comes back as a "skipped" the card mentions; account
+      // creation pushes the photo once the account exists.
+      const next = String(patch.school_email ?? "").trim().toLowerCase();
+      const prev = (priorForEmail.school_email ?? "").trim().toLowerCase();
+      const storedPhoto = priorForEmail.student_photo;
+      if (next && next !== prev && storedPhoto) {
+        googlePhoto = await syncStudentPhotoToGoogle({
+          studentId: id,
+          email: next,
+          photo: storedPhoto,
+        });
+      }
     }
 
     return NextResponse.json(
