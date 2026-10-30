@@ -61,6 +61,19 @@ const DEFAULT_LIMIT = 25;
 const MAX_LIMIT = 100;
 const BODY_CHARS = 140;
 
+/** How far back "recent activity" looks. A lead whose newest note,
+ *  text or call is older than this no longer appears on the card —
+ *  it has gone quiet, which is the card's own definition of inactive.
+ *  Before 2026-10-30 this route read the WHOLE notes (249 KB), texts
+ *  (1.17 MB) and calls (469 KB) tables to show 25 rows. */
+const LOOKBACK_MS = 90 * 24 * 60 * 60 * 1000;
+
+/** The `since` the three windowed reads send is rounded down to the
+ *  hour so their Data Cache keys (the URL) stay stable between
+ *  requests — same reason as `SINCE_BUCKET_MS` on the unread badge
+ *  route. An hour's slop on a 90-day window changes nothing shown. */
+const SINCE_BUCKET_MS = 60 * 60 * 1000;
+
 /** Long-form labels for the note categories still present on rows;
  *  the composer only writes "other" and "sms" now, but historical
  *  notes carry the retired call/email/in-person values. */
@@ -82,16 +95,20 @@ async function handleGET(req: NextRequest) {
         ? Math.min(limitParam, MAX_LIMIT)
         : DEFAULT_LIMIT;
 
+    const since =
+      Math.floor((Date.now() - LOOKBACK_MS) / SINCE_BUCKET_MS) *
+      SINCE_BUCKET_MS;
     const [notesRes, msgsRes, inqRes, campRes, visitRes, tascoRes, callsRes] =
       await Promise.allSettled([
-        xano.adminNotes.getAllLeadNotes(),
-        xano.smsMessages.getAll(),
+        // Only the window — each of these cuts server-side.
+        xano.adminNotes.getLeadNotesSince(since),
+        xano.smsMessages.getSince(since),
         xano.inquiries.getAll(),
         xano.summerCamp.getAll(),
         xano.websiteWaivers.getAll(),
         xano.tascoSummerVisits.getAll(),
         // Phone calls on the Quo Main Line.
-        xano.calls.getAll(),
+        xano.calls.getSince(since),
       ]);
     const val = <T,>(r: PromiseSettledResult<T[]>, label: string): T[] => {
       if (r.status === "fulfilled") return r.value;

@@ -3540,19 +3540,19 @@ export const xano = {
       // as "the family's first student", like the waiver flow) would
       // behave inconsistently across reloads.
       //
-      // DEFENSIVE CLIENT-SIDE FILTER (load-bearing): the Xano query
-      // input `registration_families_id` on `/registration_application`
-      // is currently NOT wired up — Xano returns the entire table
-      // regardless of the value. Without the post-fetch filter, every
-      // family would receive every other family's applications (PII
-      // leak), and surfaces that index `applications[0]` as "this
-      // family's first app" (waiver flow, enrollment-signing page,
-      // students list) would pick whichever app happens to come first
-      // in the unfiltered set — almost certainly the wrong family's.
-      // Every other `getByFamilyId` / `getByFamilyAndYear` in this file
-      // already filters client-side for the same reason; this one was
-      // the lone exception and the cause of cross-family pollution on
-      // the enrollment-signing flow. `toIdOrNull` handles the case
+      // DEFENSIVE CLIENT-SIDE FILTER (load-bearing): the list
+      // endpoint's `registration_families_id` input IS honored now
+      // (verified 2026-10-30: 35 KB for one family vs 231 KB whole),
+      // but it was silently ignored for months, and if it ever
+      // regresses Xano returns the entire table rather than erroring.
+      // Without the post-fetch filter, every family would receive
+      // every other family's applications (PII leak), and surfaces
+      // that index `applications[0]` as "this family's first app"
+      // (waiver flow, enrollment-signing page, students list) would
+      // pick whichever app happens to come first in the unfiltered
+      // set — almost certainly the wrong family's. That was the cause
+      // of cross-family pollution on the enrollment-signing flow.
+      // `toIdOrNull` handles the case
       // where Xano returns `registration_families_id` as an expanded
       // relation object (e.g. `{ id: 60, ... }`) rather than a scalar.
       try {
@@ -3627,9 +3627,10 @@ export const xano = {
      * — the FAST path that avoids `getByFamilyId`'s full-table
      * download. Hits the same `registration_application_by_family`
      * custom query as `getActiveByFamilyAndYearWithDetails` (whose
-     * filter inputs Xano actually applies, unlike the auto-CRUD
-     * `?registration_families_id=` input on the default group, which
-     * Xano silently ignores), and narrows the return to the base
+     * filter inputs Xano applies — the list endpoint's
+     * `?registration_families_id=` input is honored too since
+     * 2026-10-30, but this view is also `isActive`-scoped), and
+     * narrows the return to the base
      * `XanoApplication` shape for callers that only need the row
      * (ownership checks), not the joined student/family/year details.
      *
@@ -3642,9 +3643,11 @@ export const xano = {
      * Every application row for one school year, via the list
      * endpoint's server-side `registration_school_years_id` filter —
      * so year-scoped admin lists stop downloading every year's rows
-     * (the whole table measured 196 KB / 0.8 s on 2026-09-17). The
-     * client-side filter is belt-and-braces against the endpoint
-     * ignoring the input. Degrades to [] like the other year readers.
+     * (the whole table measured 196 KB / 0.8 s on 2026-09-17; the
+     * filter verified honored 2026-10-30 — 8 KB for a 4-app year vs
+     * 231 KB whole). The client-side filter is belt-and-braces
+     * against the endpoint ignoring the input. Degrades to [] like
+     * the other year readers.
      */
     async getByYear(yearId: number): Promise<XanoApplication[]> {
       try {
@@ -5947,9 +5950,11 @@ export const xano = {
      * the family/progress scopes), so a lead timeline can never bleed
      * into another's.
      *
-     * The client-side re-filter is load-bearing, same as everywhere
-     * else in this file: a Xano query input that isn't wired returns
-     * the whole table rather than erroring.
+     * The list endpoint applies the FK input server-side since
+     * 2026-10-30 (before that every lead sheet downloaded all 249 KB
+     * of notes). The client-side re-filter stays load-bearing, same
+     * as everywhere else in this file: a Xano query input that isn't
+     * wired returns the whole table rather than erroring.
      */
     async getByLead(
       source: LeadNoteSource,
@@ -6005,6 +6010,39 @@ export const xano = {
                 const v = n[LEAD_NOTE_COLUMN[s]];
                 return v != null && v !== 0;
               })
+            )
+          : [];
+      } catch {
+        return [];
+      }
+    },
+
+    /** `getAllLeadNotes` cut to notes created at or after `sinceMs`,
+     *  for the surfaces that only show RECENT lead activity. The list
+     *  endpoint's `created_at_from` input does the cut server-side
+     *  (added + verified 2026-10-30: the whole table was 397 rows /
+     *  249 KB, the last 90 days 195 rows / 125 KB); the client-side
+     *  filters are the usual guard.
+     *  Pass a clock-stable value (hour-bucketed, like the unread
+     *  badge's `SINCE_BUCKET_MS`) — the Data Cache keys on the URL, so
+     *  a millisecond-fresh `since` would miss on every request. */
+    async getLeadNotesSince(sinceMs: number): Promise<XanoAdminNote[]> {
+      const since = Math.max(0, Math.floor(sinceMs));
+      try {
+        const res = await xanoFetch(
+          `${getBaseUrl()}/registration_admin_notes?created_at_from=${since}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) return [];
+        const items: XanoAdminNote[] = await res.json();
+        return Array.isArray(items)
+          ? items.filter(
+              (n) =>
+                Number(n.created_at) >= since &&
+                LEAD_NOTE_SOURCES.some((s) => {
+                  const v = n[LEAD_NOTE_COLUMN[s]];
+                  return v != null && v !== 0;
+                })
             )
           : [];
       } catch {
