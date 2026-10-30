@@ -105,8 +105,9 @@ export async function POST(req: NextRequest) {
   try {
     // Scan-and-match by resend_id — the audit table is small (one row
     // per send) and has no by-resend-id query endpoint.
-    const rows = await xano.emailNotifications.getAll();
-    const row = rows.find((r) => r.resend_id === emailId);
+    // One filtered read per event — see `getByResendId` for why this
+    // is no longer `getAll().find(...)`.
+    const row = await xano.emailNotifications.getByResendId(emailId);
     if (!row) return NextResponse.json({ ok: true, unmatched: true });
 
     if (type === "email.opened") {

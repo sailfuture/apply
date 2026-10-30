@@ -4887,6 +4887,43 @@ export const xano = {
       }
     },
 
+    /** The one row Resend's email id names, or null when nothing was
+     *  logged under it. For the Resend webhook, which used to answer
+     *  "which row is this event about?" by downloading the whole log
+     *  (581 rows / 1.95 MB on 2026-10-30, too big for the Data Cache,
+     *  2.9–6 s per event, 97 of 709 events a day timing out) — the
+     *  list endpoint's `resend_id` input now does the lookup
+     *  server-side (verified: 432 bytes for one id). Read fresh, since the
+     *  caller writes `opened_at` / `status` from what it finds; the
+     *  client-side match is the usual guard. Transport and Xano
+     *  failures THROW so the webhook answers 500 and Resend retries,
+     *  instead of a swallowed error reading as "unmatched". */
+    async getByResendId(
+      resendId: string
+    ): Promise<XanoEmailNotification | null> {
+      const id = resendId.trim();
+      if (!id) return null;
+      const params = new URLSearchParams({ resend_id: id });
+      const res = await xanoFetch(
+        `${getBaseUrl()}/registration_email_notifications?${params.toString()}`,
+        { cache: "no-store" },
+        { fresh: true }
+      );
+      if (!res.ok) {
+        throw new Error(
+          `Xano error ${res.status} looking up email ${id}: ${await res.text()}`
+        );
+      }
+      const rows: unknown = await res.json();
+      if (!Array.isArray(rows)) {
+        throw new Error(`Unexpected email lookup response for ${id} (not a list)`);
+      }
+      return (
+        (rows as XanoEmailNotification[]).find((r) => r.resend_id === id) ??
+        null
+      );
+    },
+
     /** Every audit row — bulk consumers (records-request tags on the
      *  registrations list) filter by template in code. */
     async getAll(): Promise<XanoEmailNotification[]> {
