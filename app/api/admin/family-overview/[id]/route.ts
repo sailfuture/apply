@@ -213,7 +213,13 @@ async function handleGET(
  *  by-family helper today, so we hit the table's CRUD endpoint with
  *  the FK as a query param. Same defensive-filter pattern used in
  *  `emergencyContacts.getByFamilyId` since some Xano environments
- *  don't honor query-param filtering and return the full table. */
+ *  don't honor query-param filtering and return the full table.
+ *
+ *  Served from the Data Cache (the progress tables are cached since
+ *  2026-10-30; every write through lib expires the tag). This read
+ *  only displays — the apply flow's `resolve` keeps its fresh read.
+ *  Until then these two were the route's only uncached calls and
+ *  carried ~2.6 s of its 2.7 s of Xano time on the 10/30 HAR. */
 async function fetchFamilyApplicationProgress(
   familyId: number
 ): Promise<XanoFamilyApplicationProgress[]> {
@@ -221,8 +227,7 @@ async function fetchFamilyApplicationProgress(
     const base = process.env.XANO_API_BASE_URL ?? "";
     const res = await xanoFetch(
       `${base}/registration_family_application_progress?registration_families_id=${familyId}`,
-      { cache: "no-store" },
-      { fresh: true }
+      { cache: "no-store" }
     );
     if (!res.ok) return [];
     const results = await res.json();
@@ -249,8 +254,7 @@ async function fetchStudentRegistrationProgress(
     const base = process.env.XANO_API_BASE_URL ?? "";
     const res = await xanoFetch(
       `${base}/registration_student_registration_progress?registration_families_id=${familyId}`,
-      { cache: "no-store" },
-      { fresh: true }
+      { cache: "no-store" }
     );
     if (!res.ok) return [];
     const results = await res.json();

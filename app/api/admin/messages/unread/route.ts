@@ -47,6 +47,17 @@ const FEED_LOOKBACK_MS = 60 * 24 * 60 * 60 * 1000;
 const NAME_LOOKUP_CAP = 10;
 const PREVIEW_CHARS = 120;
 
+/** The window's start is rounded down to this, so every poll from
+ *  every admin tab asks Xano for the SAME URL. `getSince` reads are
+ *  Data-Cached by URL (sms_messages and registration_calls are cached
+ *  tables, 30 s TTL): a `since` derived from `Date.now()` to the
+ *  millisecond was a new cache key on every request, which is why the
+ *  10/30 HAR showed this route pulling 805 KB of texts and 469 KB of
+ *  calls straight from Xano on each poll — "5 calls, 2 cached" with
+ *  1.5 s of Xano time for a badge. An hour's slop on a 60-day window
+ *  changes nothing the badge shows (it only counts the last 7 days). */
+const SINCE_BUCKET_MS = 60 * 60 * 1000;
+
 /**
  * Needs-reply conversations for the nav badge.
  *
@@ -75,7 +86,9 @@ async function handleGET() {
     // thread's latest message. Only the recent window is read — see
     // `FEED_LOOKBACK_MS`. The read state rides along in the same
     // payload — see `UnreadMessagesResponse.viewed`.
-    const since = Date.now() - FEED_LOOKBACK_MS;
+    const since =
+      Math.floor((Date.now() - FEED_LOOKBACK_MS) / SINCE_BUCKET_MS) *
+      SINCE_BUCKET_MS;
     const [messages, calls, readState, closedMap] = await Promise.all([
       xano.smsMessages.getSince(since),
       xano.calls.getSince(since),

@@ -1,3 +1,4 @@
+import { withServerTiming } from "@/lib/server-timing";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { NextResponse } from "next/server";
 import { xano } from "@/lib/xano";
@@ -6,7 +7,7 @@ import { xano } from "@/lib/xano";
  *  the `isNotAttending` archive flag and shows full student detail in
  *  a sheet; the only write action is the attendance toggle on the
  *  sibling `[id]` PATCH route. */
-export async function GET() {
+async function handleGET() {
   try {
     await requireAdmin();
     const rows = await xano.summerCamp.getAll();
@@ -15,3 +16,5 @@ export async function GET() {
     return handleAdminError(err);
   }
 }
+
+export const GET = withServerTiming(handleGET);

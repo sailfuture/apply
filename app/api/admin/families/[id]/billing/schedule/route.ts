@@ -1,3 +1,4 @@
+import { withServerTiming } from "@/lib/server-timing";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano, activeStripeSubscriptionId } from "@/lib/xano";
@@ -49,7 +50,7 @@ import { getNextInvoiceTiming } from "@/lib/stripe";
  *     }>
  *   }
  */
-export async function GET(
+async function handleGET(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
@@ -290,3 +291,5 @@ export interface ScheduleSlot {
 
 // Slot/mapping helpers live in lib/billing-schedule.ts, shared with
 // the parent schedule route so the two surfaces can't drift.
+
+export const GET = withServerTiming(handleGET);

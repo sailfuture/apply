@@ -1,3 +1,4 @@
+import { withServerTiming } from "@/lib/server-timing";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano, toIdOrNull } from "@/lib/xano";
@@ -20,7 +21,7 @@ import { xano, toIdOrNull } from "@/lib/xano";
  * Joins mirror /api/admin/applications: each Xano call is isolated so
  * a single hiccup degrades labels/counts instead of 500ing the route.
  */
-export async function GET(req: NextRequest) {
+async function handleGET(req: NextRequest) {
   try {
     await requireAdmin();
     const yearIdParam = req.nextUrl.searchParams.get("yearId");
@@ -288,3 +289,5 @@ export interface PipelineFamilyRow {
   is_archived: boolean;
   reason_for_archive: string | null;
 }
+
+export const GET = withServerTiming(handleGET);

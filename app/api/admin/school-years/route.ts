@@ -1,3 +1,4 @@
+import { withServerTiming } from "@/lib/server-timing";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano, type XanoSchoolYear } from "@/lib/xano";
@@ -70,7 +71,7 @@ function buildPayload(
   return out as Partial<Omit<XanoSchoolYear, "id" | "created_at">>;
 }
 
-export async function GET() {
+async function handleGET() {
   try {
     await requireAdmin();
     const years = await xano.schoolYears.getAll();
@@ -113,3 +114,5 @@ export async function POST(req: NextRequest) {
     return handleAdminError(err);
   }
 }
+
+export const GET = withServerTiming(handleGET);

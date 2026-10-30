@@ -8,7 +8,7 @@
  *
  * Exits 1 if any case fails.
  */
-import { xanoFetch } from "../lib/xano-fetch";
+import { cacheTtlFor, xanoFetch } from "../lib/xano-fetch";
 
 const HOST = "https://xsc3-mvx7-r86m.n7e.xano.io";
 const KEY = "check-key-123";
@@ -41,7 +41,7 @@ const cases: Case[] = [
     keyed: true,
     also: (init) =>
       (init as { next?: { revalidate?: number } } | undefined)?.next
-        ?.revalidate === 30
+        ?.revalidate === cacheTtlFor("registration_students")
         ? null
         : "Data Cache revalidate was dropped",
   },

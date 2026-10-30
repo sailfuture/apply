@@ -184,6 +184,12 @@ export function AdminTopNav({ admin }: { admin: AdminUser | null }) {
         : base,
     [yearId]
   );
+  // Hold off prefetching until the year is known. Every menu link is
+  // rendered once before `yearId` resolves and again with it, and
+  // Next prefetched both hrefs — the 10/30 HAR showed each admin page
+  // open issuing a second, year-less prefetch of every menu target
+  // (a dozen function invocations per page that nobody navigates to).
+  const prefetch = yearId ? undefined : false;
 
   return (
     // `fixed` (not `sticky`) — when Radix opens a Select / Dialog,
@@ -211,6 +217,7 @@ export function AdminTopNav({ admin }: { admin: AdminUser | null }) {
         {/* Logo → /admin */}
         <Link
           href={buildHref("/admin")}
+          prefetch={prefetch}
           className="flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-full border-2 border-gray-200 shadow-sm transition-opacity hover:opacity-80"
           aria-label="Admin home"
         >
@@ -265,6 +272,7 @@ export function AdminTopNav({ admin }: { admin: AdminUser | null }) {
                         <DropdownMenuItem key={child.href} asChild>
                           <Link
                             href={buildHref(child.href)}
+                            prefetch={prefetch}
                             className={cn(
                               // nowrap: long titles ("Liability Waiver
                               // Visits") widen the menu instead of
@@ -294,6 +302,7 @@ export function AdminTopNav({ admin }: { admin: AdminUser | null }) {
               <Link
                 key={item.href}
                 href={buildHref(item.href)}
+                prefetch={prefetch}
                 className={pill(active)}
               >
                 {item.title}

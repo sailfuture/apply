@@ -1,3 +1,4 @@
+import { withServerTiming } from "@/lib/server-timing";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import {
@@ -72,7 +73,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   other: "Note",
 };
 
-export async function GET(req: NextRequest) {
+async function handleGET(req: NextRequest) {
   try {
     await requireAdmin();
     const limitParam = Number(req.nextUrl.searchParams.get("limit"));
@@ -247,3 +248,5 @@ export async function GET(req: NextRequest) {
     return handleAdminError(err);
   }
 }
+
+export const GET = withServerTiming(handleGET);

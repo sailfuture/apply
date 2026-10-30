@@ -1,4 +1,5 @@
 import { auth, currentUser } from "@clerk/nextjs/server";
+import { revalidateTag } from "next/cache";
 import { noteAuthMode } from "@/lib/xano-runtime";
 import { NextResponse } from "next/server";
 import { emailFromClaims } from "@/lib/family-auth";
@@ -22,6 +23,15 @@ const ADMIN_API_BASE =
   "https://xsc3-mvx7-r86m.n7e.xano.io/api:fJsHVIeC";
 
 const ADMIN_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+/** Per-attempt cap on the admin-list fetch. Every admin route waits
+ *  on this before it can read anything, so it must fail fast: the
+ *  2026-10-30 traces showed the untimed version (3 tries + backoff)
+ *  holding five routes for ~1.2 s and then 500-ing all of them. */
+const ADMIN_FETCH_TIMEOUT_MS = 4_000;
+
+/** Next Data Cache tag for the list — see `loadAdmins`. */
+const ADMIN_LIST_TAG = "admin-list";
 
 export interface AdminUser {
   /** Stable identifier — falls back to email when teacherId is empty. */
@@ -52,22 +62,33 @@ let cache: AdminCache | null = null;
 let inflight: Promise<AdminCache> | null = null;
 
 async function loadAdmins(): Promise<AdminCache> {
-  // Retry + stale fallback. Admin pages fan out 10–25 API calls at
-  // once and EVERY one runs through this list — so a single transient
-  // Xano failure here used to 500 a whole page's worth of routes
-  // simultaneously. Retry transient failures, and if the fetch still
-  // can't complete, serve the expired in-process cache rather than
-  // failing: a staff roster that's minutes stale is strictly better
-  // than an admin surface that's down.
+  // Admin pages fan out 10–25 API calls at once and EVERY one runs
+  // through this list, so a failure here takes a whole page down at
+  // once. Three layers keep it up:
+  //
+  //   1. The Next Data Cache (`revalidate` = the TTL, tagged). On
+  //      Vercel that cache is shared across function instances, so a
+  //      freshly started instance's first request is a cache read,
+  //      not a Xano round trip — the module-level copy below is per
+  //      instance and starts empty on every cold start, which is
+  //      exactly when the old `cache: "no-store"` fetch had nothing to
+  //      fall back on. A failed background refresh keeps serving the
+  //      last good copy.
+  //   2. A hard per-attempt timeout, so a queueing Xano can't hold
+  //      every admin route for seconds before failing them.
+  //   3. The expired in-process copy, served when the fetch still
+  //      can't complete: a staff roster that's minutes stale is
+  //      strictly better than an admin surface that's down.
   let res: Response | null = null;
   let lastErr: unknown = null;
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < 2; attempt++) {
     if (attempt > 0) {
-      await new Promise((r) => setTimeout(r, 250 * attempt));
+      await new Promise((r) => setTimeout(r, 250));
     }
     try {
       res = await fetch(`${ADMIN_API_BASE}/teachers_by_admin`, {
-        cache: "no-store",
+        signal: AbortSignal.timeout(ADMIN_FETCH_TIMEOUT_MS),
+        next: { revalidate: ADMIN_TTL_MS / 1000, tags: [ADMIN_LIST_TAG] },
       });
       if (res.ok) break;
       lastErr = new Error(`Failed to load admin list (${res.status})`);
@@ -126,9 +147,23 @@ async function getAdminCache(): Promise<AdminCache> {
 }
 
 /** Force a refetch of the admin list (e.g. for a "Refresh admins" admin
- *  action). Drops the in-memory cache so the next caller pulls fresh. */
+ *  action). Drops both the in-memory copy and the Data Cache entry so
+ *  the next caller pulls fresh. */
 export function invalidateAdminCache() {
   cache = null;
+  try {
+    revalidateTag(ADMIN_LIST_TAG, { expire: 0 });
+  } catch {
+    // Outside a request scope (scripts) nothing is cached.
+  }
+}
+
+/** Every active admin, from the same cached list `requireAdmin`
+ *  checks against — one fetch, one TTL, for every surface that lists
+ *  staff. */
+export async function getAdminList(): Promise<AdminUser[]> {
+  const c = await getAdminCache();
+  return [...c.byEmail.values()];
 }
 
 /** True if the given email matches an active admin in the Xano list. */

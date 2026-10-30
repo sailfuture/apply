@@ -1,7 +1,8 @@
+import { withServerTiming } from "@/lib/server-timing";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { NextResponse } from "next/server";
 
-export async function GET() {
+async function handleGET() {
   try {
     const { admin } = await requireAdmin();
     return NextResponse.json(admin);
@@ -9,3 +10,5 @@ export async function GET() {
     return handleAdminError(err);
   }
 }
+
+export const GET = withServerTiming(handleGET);

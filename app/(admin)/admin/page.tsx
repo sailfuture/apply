@@ -114,7 +114,11 @@ export default function AdminDashboardPage() {
     isLoading: statsLoading,
     error: statsError,
   } = useSWR<StatsResponse>(
-    yearId ? `/api/admin/stats?yearId=${yearId}` : `/api/admin/stats`,
+    // Wait for the year. The selector injects `?yearId=` a beat after
+    // mount, and fetching without it first meant the heaviest route on
+    // the site ran twice per dashboard open (once with no year, once
+    // with). Same for the trend series below.
+    yearId ? `/api/admin/stats?yearId=${yearId}` : null,
     fetcher
   );
 
@@ -132,9 +136,9 @@ export default function AdminDashboardPage() {
   // inquiries have no year column so they're global.
   const { data: trends, isLoading: trendsLoading } =
     useSWR<DashboardTrendsResponse>(
-      `/api/admin/dashboard-trends?days=${windowDays}${
-        yearId ? `&yearId=${yearId}` : ""
-      }`,
+      yearId
+        ? `/api/admin/dashboard-trends?days=${windowDays}&yearId=${yearId}`
+        : null,
       fetcher,
       { keepPreviousData: true }
     );
@@ -153,12 +157,14 @@ export default function AdminDashboardPage() {
       { refreshInterval: 60_000 }
     );
 
-  // Latest inquiry submissions for the Recent-inquiries table — same
-  // feed the Inquiries page uses; archived rows (parked duplicates)
-  // excluded, newest first.
+  // Latest inquiry submissions for the Recent-inquiries table — the
+  // inquiries route's slim `?recent=` mode: the eight newest
+  // non-archived rows, without the parent and notes scans the full
+  // Inquiries page needs. The filter/sort/slice below is kept as a
+  // guard for the shape.
   const { data: inquiriesData, isLoading: inquiriesLoading } = useSWR<
     RecentInquiryRow[]
-  >("/api/admin/inquiries", fetcher, { refreshInterval: 60_000 });
+  >("/api/admin/inquiries?recent=8", fetcher, { refreshInterval: 60_000 });
   const recentInquiries = useMemo(
     () =>
       (Array.isArray(inquiriesData) ? inquiriesData : [])
@@ -186,7 +192,7 @@ export default function AdminDashboardPage() {
   // Loading skeleton only on the first paint — once stats land we
   // render the chrome + per-card error states. Returning the
   // skeleton on every error would lock the page in a loading state.
-  if (statsLoading && !stats && !statsError) {
+  if ((statsLoading || !yearId) && !stats && !statsError) {
     return (
       <div className="space-y-6 p-6">
         <Skeleton className="h-8 w-48" />

@@ -1,3 +1,4 @@
+import { withServerTiming } from "@/lib/server-timing";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano, activeStripeSubscriptionId } from "@/lib/xano";
@@ -35,7 +36,7 @@ import {
  * hiccup degrades gracefully (empty list rather than 500 on the
  * whole page).
  */
-export async function GET(req: NextRequest) {
+async function handleGET(req: NextRequest) {
   try {
     await requireAdmin();
     const yearIdParam = req.nextUrl.searchParams.get("yearId");
@@ -583,3 +584,5 @@ export interface BillingRow {
    *  drives the tooltip wording on the Next Invoice cell. */
   next_invoice_exact?: boolean;
 }
+
+export const GET = withServerTiming(handleGET);

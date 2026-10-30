@@ -1,3 +1,4 @@
+import { withServerTiming } from "@/lib/server-timing";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
@@ -44,7 +45,7 @@ import type {
  *   `/admin/families/[id]` URL shape so the dynamic segment is the
  *   thing humans navigate to)
  */
-export async function GET(
+async function handleGET(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
@@ -687,3 +688,5 @@ function hydrateFileConfirms(
     };
   });
 }
+
+export const GET = withServerTiming(handleGET);

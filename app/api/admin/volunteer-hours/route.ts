@@ -1,3 +1,4 @@
+import { withServerTiming } from "@/lib/server-timing";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
@@ -53,7 +54,7 @@ export interface AdminVolunteerHoursResponse {
  *     are added). Admin-created entries default to approved, stamped
  *     with the admin's name + time.
  */
-export async function GET(req: NextRequest) {
+async function handleGET(req: NextRequest) {
   try {
     await requireAdmin();
     const yearId = Number(req.nextUrl.searchParams.get("yearId"));
@@ -255,3 +256,5 @@ export async function POST(req: NextRequest) {
     return handleAdminError(err);
   }
 }
+
+export const GET = withServerTiming(handleGET);

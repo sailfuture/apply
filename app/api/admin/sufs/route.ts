@@ -1,3 +1,4 @@
+import { withServerTiming } from "@/lib/server-timing";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
@@ -35,7 +36,7 @@ import { computeFamilyStageSets } from "@/lib/sms/stages";
  * each one is needed. Every fetch is wrapped in `Promise.allSettled`
  * so one Xano hiccup degrades a column instead of 500-ing the page.
  */
-export async function GET(req: NextRequest) {
+async function handleGET(req: NextRequest) {
   try {
     await requireAdmin();
     const yearIdParam = req.nextUrl.searchParams.get("yearId");
@@ -393,3 +394,5 @@ export interface SufsStudentRow {
   sufs_q4_payment_confirmed: number | null;
   sufs_q4_payment_confirmed_by: string;
 }
+
+export const GET = withServerTiming(handleGET);

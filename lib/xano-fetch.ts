@@ -54,12 +54,12 @@
  * browser or a plain tsx script the hooks are simply absent and this
  * degrades to a plain fetch.
  *
- * Tables deliberately NOT cached: the two progress tables (their
- * fetch-or-create `resolve` paths are race-guarded on fresh reads),
- * payments + transactions (billing invariants), event RSVPs / item
- * claims (capacity checks must not oversell), store orders (webhook
- * mirror), admin notes, and anything not listed. Add a table here
- * only when every write to it goes through lib/xano.ts.
+ * Tables deliberately NOT cached: payments + transactions (billing
+ * invariants), event RSVPs / item claims (capacity checks must not
+ * oversell), store orders (webhook mirror), and anything not listed.
+ * The two progress tables ARE cached for their list reads, but their
+ * fetch-or-create `resolve` paths read with `fresh: true`. Add a
+ * table here only when every write to it goes through lib/xano.ts.
  */
 
 /** TTL for tables something outside this app also writes. */
@@ -117,7 +117,35 @@ const CACHED_TABLES = new Set<string>([
   "registration_summer_camp",
   "tasco_summer_visit",
   "website_liability_waiver",
+  // The two progress tables and their per-year query views. Every
+  // write goes through lib/xano.ts (expires the tag); the reads that
+  // DECIDE a write — `resolve`'s pre/post-create matches and
+  // `getByFamilyAndYear` — pass `fresh: true`, so only the list reads
+  // the admin pages fan out (pipeline, applications, registrations,
+  // all-leads, stats, dashboard search) are served from the cache.
+  "registration_family_application_progress",
+  "registration_family_application_progress_by_year",
+  "registration_student_registration_progress",
+  "registration_student_registration_progress_by_year",
+  // Admin notes — 249 KB read whole by inquiries, all-leads and
+  // lead-activity for "last note" columns. The website's admin-notes
+  // CRUD also writes it, hence the short TTL.
+  "registration_admin_notes",
 ]);
+
+/**
+ * Cached query views that read a base table: a write to the base
+ * table must expire them too, or the Registrations list would show
+ * the pre-edit row for up to the TTL after an admin accepts a family.
+ */
+const DERIVED_VIEWS: Record<string, readonly string[]> = {
+  registration_family_application_progress: [
+    "registration_family_application_progress_by_year",
+  ],
+  registration_student_registration_progress: [
+    "registration_student_registration_progress_by_year",
+  ],
+};
 
 /**
  * Cached tables something OUTSIDE this app writes, which keep the
@@ -137,6 +165,7 @@ const SHORT_TTL_TABLES = new Set<string>([
   "registration_summer_camp",
   "tasco_summer_visit",
   "website_liability_waiver",
+  "registration_admin_notes",
 ]);
 
 export function cacheTtlFor(table: string): number {
@@ -342,6 +371,9 @@ export async function xanoFetch(
     // A write to a cached table expires it whether or not Xano
     // accepted the write — a spurious expiry costs one re-read; a
     // missed one shows a stale list for up to the TTL.
-    if (method !== "GET" && isCachedTable(table)) hooks()?.expire(table);
+    if (method !== "GET" && isCachedTable(table)) {
+      hooks()?.expire(table);
+      for (const view of DERIVED_VIEWS[table] ?? []) hooks()?.expire(view);
+    }
   }
 }

@@ -1,3 +1,4 @@
+import { withServerTiming } from "@/lib/server-timing";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
@@ -65,7 +66,7 @@ export interface AdminEventsResponse {
  * Days and events are required. Everything else degrades to empty, so
  * the page still lists events when a sign-up table is unreachable.
  */
-export async function GET(req: NextRequest) {
+async function handleGET(req: NextRequest) {
   try {
     await requireAdmin();
     const yearId = Number(req.nextUrl.searchParams.get("yearId"));
@@ -264,3 +265,5 @@ export async function GET(req: NextRequest) {
     return handleAdminError(err);
   }
 }
+
+export const GET = withServerTiming(handleGET);

@@ -1,3 +1,4 @@
+import { withServerTiming } from "@/lib/server-timing";
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano, type XanoSchoolYear } from "@/lib/xano";
@@ -71,7 +72,7 @@ function deriveAcademicYear(ts: number, years: XanoSchoolYear[]): string {
   return `${y}-${y + 1}`;
 }
 
-export async function GET(req: NextRequest) {
+async function handleGET(req: NextRequest) {
   try {
     await requireAdmin();
     const [waivers, years] = await Promise.all([
@@ -117,3 +118,5 @@ export async function GET(req: NextRequest) {
     return handleAdminError(err);
   }
 }
+
+export const GET = withServerTiming(handleGET);

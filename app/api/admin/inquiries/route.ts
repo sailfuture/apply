@@ -1,6 +1,10 @@
+import { withServerTiming } from "@/lib/server-timing";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { xano } from "@/lib/xano";
+
+/** Largest `?recent=` slice — the dashboard asks for 8. */
+const MAX_RECENT = 50;
 
 /**
  * Admin list of registration inquiries, annotated with a computed
@@ -11,9 +15,33 @@ import { xano } from "@/lib/xano";
  * addresses, parents who apply under a different email). Admin
  * confirms by explicitly marking the inquiry converted.
  */
-export async function GET() {
+async function handleGET(req: NextRequest) {
   try {
     await requireAdmin();
+
+    // `?recent=N` — the dashboard's Recent-inquiries card. It shows
+    // eight names, so it gets the eight newest non-archived rows from
+    // the (cached) inquiry table alone, without the parents and
+    // admin-notes scans the full list needs for its badge and
+    // last-note columns. That card polls every minute from every
+    // open dashboard; the full annotated list was the single
+    // heaviest thing the dashboard requested.
+    const recentParam = Number(req.nextUrl.searchParams.get("recent"));
+    if (Number.isFinite(recentParam) && recentParam > 0) {
+      const inquiries = await xano.inquiries.getAll();
+      const recent = inquiries
+        .filter((i) => (i.status ?? "").trim() !== "archived")
+        .sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0))
+        .slice(0, Math.min(recentParam, MAX_RECENT))
+        .map((i) => ({
+          ...i,
+          hasParentAccount: false,
+          last_note: null,
+          last_note_at: null,
+        }));
+      return NextResponse.json(recent);
+    }
+
     const [inquiries, parentEmails, inquiryNotes] = await Promise.all([
       xano.inquiries.getAll(),
       // Suggestion-only data — if the parents fetch fails, ship the
@@ -67,3 +95,5 @@ export async function GET() {
     return handleAdminError(err);
   }
 }
+
+export const GET = withServerTiming(handleGET);

@@ -6483,7 +6483,8 @@ export const xano = {
       try {
         const res = await xanoFetch(
           `${getBaseUrl()}/registration_family_application_progress?registration_families_id=${familyId}&registration_school_years_id=${yearId}`,
-          { cache: "no-store" }
+          { cache: "no-store" },
+          { fresh: true }
         );
         if (!res.ok) return [];
         const results = await res.json();
@@ -6569,7 +6570,8 @@ export const xano = {
       try {
         const res = await xanoFetch(
           `${getBaseUrl()}/registration_family_application_progress?registration_families_id=${familyId}&registration_school_years_id=${yearId}`,
-          { cache: "no-store" }
+          { cache: "no-store" },
+          { fresh: true }
         );
         if (!res.ok) return null;
         const results = await res.json();
@@ -6811,7 +6813,8 @@ export const xano = {
       try {
         const res = await xanoFetch(
           `${getBaseUrl()}/registration_student_registration_progress?registration_families_id=${familyId}&registration_school_years_id=${yearId}`,
-          { cache: "no-store" }
+          { cache: "no-store" },
+          { fresh: true }
         );
         if (!res.ok) return [];
         const results = await res.json();
@@ -6902,7 +6905,8 @@ export const xano = {
       try {
         const res = await xanoFetch(
           `${getBaseUrl()}/registration_student_registration_progress?registration_families_id=${familyId}&registration_school_years_id=${yearId}`,
-          { cache: "no-store" }
+          { cache: "no-store" },
+          { fresh: true }
         );
         if (!res.ok) return null;
         const results = await res.json();

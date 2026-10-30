@@ -2,16 +2,21 @@ import { NextRequest, NextResponse } from "next/server";
 import { withServerTiming } from "@/lib/server-timing";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import { xano } from "@/lib/xano";
-import { xanoFetch } from "@/lib/xano-fetch";
 import { leadConvertedFamilyId } from "@/lib/lead-conversion";
-
-const BASE = process.env.XANO_API_BASE_URL;
 
 /**
  * Counts dashboard backing route. Reads basic Xano tables via parallel
  * fetches; each call is isolated with `Promise.allSettled` so a single
  * failed read can't 500 the whole dashboard. Failures log to the server
  * console with the underlying error.
+ *
+ * Every read goes through the lib accessors so it hits the Data Cache
+ * like the list pages do. Until 2026-10-30 three of them read straight
+ * from Xano on every dashboard open (`fresh: true`, inherited from the
+ * raw `fetch` calls they replaced) — 700 KB of tables per load, and
+ * 12.9 s of Xano time per request in the traces. Counts a few minutes
+ * stale are fine for a dashboard; writes through lib expire the tags
+ * anyway.
  *
  * Application counts come from the basic `registration_application`
  * list (filtered by year client-side) instead of the enriched
@@ -35,21 +40,9 @@ async function handleGET(req: NextRequest) {
       progressResult,
     ] = await Promise.allSettled([
       xano.applications.getAll(),
-      xanoFetch(
-        `${BASE}/registration_inquiry`,
-        { cache: "no-store" },
-        { fresh: true }
-      ).then((r) => (r.ok ? r.json() : [])),
-      xanoFetch(
-        `${BASE}/registration_student_registration`,
-        { cache: "no-store" },
-        { fresh: true }
-      ).then((r) => (r.ok ? r.json() : [])),
-      xanoFetch(
-        `${BASE}/registration_students`,
-        { cache: "no-store" },
-        { fresh: true }
-      ).then((r) => (r.ok ? r.json() : [])),
+      xano.inquiries.getAll(),
+      xano.studentRegistration.getAll(),
+      xano.students.getAll(),
       xano.tours.getAll(),
       // Family-level application pipeline — the same rows the
       // /admin/applications page buckets, so the dashboard's Apps
@@ -109,9 +102,13 @@ async function handleGET(req: NextRequest) {
     const tours = (
       toursResult.status === "fulfilled" ? toursResult.value : []
     ).filter((t) => Number(t.scheduled_at) > 0);
+    // `is_submitted` is not a column on `registration_student_registration`
+    // (checked live 2026-10-30: 0 of 100 rows carry it), so the
+    // `completed` count below has always read 0; kept as-is so the
+    // response shape doesn't change under the dashboard.
     const registrations =
       registrationsResult.status === "fulfilled"
-        ? (registrationsResult.value as { is_submitted: boolean }[])
+        ? (registrationsResult.value as unknown as { is_submitted?: boolean }[])
         : [];
     // Students for enrollment / withdrawal counts. We need the full
     // row shape (isEnrolled / isArchived) so the dashboard tiles can
