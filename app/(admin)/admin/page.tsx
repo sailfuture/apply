@@ -27,7 +27,6 @@ import {
 } from "@/components/admin/trend-charts";
 import {
   LeadActivityCard,
-  UnreadMessagesCard,
 } from "@/components/admin/dashboard-cards";
 import {
   Card,
@@ -38,7 +37,6 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { adminFetcher as fetcher } from "@/lib/admin-fetcher";
 import type { DashboardTrendsResponse } from "@/app/api/admin/dashboard-trends/route";
-import { useUnreadMessagesFeed } from "@/components/admin/messages-unread-badge";
 import type { LeadActivityResponse } from "@/app/api/admin/lead-activity/route";
 
 /** Chart window options — mirrors TREND_WINDOW_OPTIONS on the trends
@@ -58,10 +56,13 @@ const TREND_WINDOWS = [7, 14, 30, 60, 90];
  *   2. Trends — new inquiries per day and roster size, over a
  *      selectable window (one control drives both charts so they stay
  *      directly comparable).
- *   3. "Needs a reply" — text threads whose newest message is
- *      inbound.
- *   4. "Recent lead activity" — notes + texts across every
- *      recruitment lead, newest first.
+ *   3. "Recent lead activity" — notes + texts across every
+ *      recruitment lead, newest first, five rows a page.
+ *
+ * The "Needs a reply" card came off on 2026-10-30 (user request): the
+ * nav badge and the Messages inbox already carry that list, and the
+ * card was a second subscriber to the badge's feed on the heaviest
+ * page in the app.
  *
  * The old "Ready for Action" and "Enrolled Students" tables were
  * dropped from here (2026-08-04): both duplicate their own list pages,
@@ -143,12 +144,6 @@ export default function AdminDashboardPage() {
       { keepPreviousData: true }
     );
 
-  // Threads whose newest message is inbound — what needs a reply.
-  // Shared hook, not a local useSWR: the card's "already viewed"
-  // grouping reads this admin's view stamps out of the SAME payload,
-  // so the card, the nav badge and the inbox can't disagree.
-  const { data: unread, isLoading: unreadLoading } = useUnreadMessagesFeed();
-
   // Newest notes + texts across every recruitment lead.
   const { data: activity, isLoading: activityLoading, mutate: mutateActivity } =
     useSWR<LeadActivityResponse>(
@@ -189,10 +184,14 @@ export default function AdminDashboardPage() {
     );
   }, [yearIdNum, schoolYears]);
 
-  // Loading skeleton only on the first paint — once stats land we
-  // render the chrome + per-card error states. Returning the
-  // skeleton on every error would lock the page in a loading state.
-  if ((statsLoading || !yearId) && !stats && !statsError) {
+  // Full-page skeleton only until the year selector has injected the
+  // year. After that the page mounts at once and every card loads on
+  // its own: the applications cards, the activity card and the
+  // trend charts used to sit behind the stats tiles' spinner, so a
+  // slow stats call (8 s on the 10/30 HAR) held every other fetch on
+  // the page back until it finished, then fired them all as a second
+  // wave.
+  if (!yearId && !stats && !statsError) {
     return (
       <div className="space-y-6 p-6">
         <Skeleton className="h-8 w-48" />
@@ -279,6 +278,13 @@ export default function AdminDashboardPage() {
           Inquiries / conversions / tours are global (no year column
           on those tables); the application and enrollment tiles scope
           to the year picker. */}
+      {statsLoading && !stats ? (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <Skeleton key={i} className="h-28 rounded-lg" />
+          ))}
+        </div>
+      ) : (
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         <StatsCard
           title="Inquiries"
@@ -337,6 +343,7 @@ export default function AdminDashboardPage() {
           href={yearId ? `/admin/enrolled?yearId=${yearId}` : "/admin/enrolled"}
         />
       </div>
+      )}
 
       {/* Current vs upcoming year applications, side by side — families
           apply for either, so recruitment runs on both at once. Not
@@ -424,14 +431,6 @@ export default function AdminDashboardPage() {
         onRowClick={(row) =>
           setSelectedLead({ source: "inquiry", id: row.id })
         }
-      />
-
-      {/* Unread messages — parents waiting on a reply. Replaces the
-          old action queues: this is what is actually time-sensitive,
-          and those queues already live on their own list pages. */}
-      <UnreadMessagesCard
-        rows={unread?.conversations ?? []}
-        loading={unreadLoading && !unread}
       />
 
       {/* Recent activity across every recruitment lead — notes and

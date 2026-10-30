@@ -131,6 +131,11 @@ const CACHED_TABLES = new Set<string>([
   // lead-activity for "last note" columns. The website's admin-notes
   // CRUD also writes it, hence the short TTL.
   "registration_admin_notes",
+  // App settings (follow-up switch, SMS provider, closed
+  // conversations…). Read by the unread badge on every poll from every
+  // admin tab; every write goes through lib/xano.ts. The reads that
+  // decide a write (`upsert`, the provider switch) stay strict/fresh.
+  "registration_app_settings",
 ]);
 
 /**
@@ -150,15 +155,17 @@ const DERIVED_VIEWS: Record<string, readonly string[]> = {
 /**
  * Cached tables something OUTSIDE this app writes, which keep the
  * short TTL so those rows appear within 30 s: the website's inquiry,
- * camp, TASCO and waiver forms, its welcome texts (logged straight to
- * `sms_messages`), tour bookings, and the message/call feeds the inbox
- * polls. Every other cached table is written only through this door
- * (writes in Xano's request history, 2026-10-26) and gets
- * `XANO_LONG_CACHE_TTL_SECONDS`.
+ * camp, TASCO and waiver forms, and tour bookings. Every other cached
+ * table is written only through this door (writes in Xano's request
+ * history, 2026-10-26) and gets `XANO_LONG_CACHE_TTL_SECONDS` — since
+ * 2026-10-30 that includes texts and calls: every inbound text and
+ * call reaches `sms_messages` / `registration_calls` through Apply's
+ * Quo webhook and sync (which expire the tag), so the inbox and badge
+ * still see them at once; the only outside writer is the website's
+ * welcome text, which may take up to the TTL to show. The two tables
+ * are 1.2 MB and 470 KB, re-read by every badge poll past the TTL.
  */
 const SHORT_TTL_TABLES = new Set<string>([
-  "sms_messages",
-  "registration_calls",
   "registration_inquiry",
   "registration_tours",
   "registration_email_notifications",

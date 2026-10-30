@@ -7660,6 +7660,22 @@ export const xano = {
    * settings" (callers fall back to their safe default instead).
    */
   appSettings: {
+    /** Every settings row, from the Data Cache — for readers that only
+     *  DISPLAY a setting (the unread badge's closed-conversation map).
+     *  Writers keep `getAllStrict`, which reads fresh and throws. */
+    async getAll(): Promise<XanoAppSetting[]> {
+      try {
+        const res = await fetchRetry(
+          `${getBaseUrl()}/registration_app_settings`
+        );
+        if (!res.ok) return [];
+        const rows = await res.json();
+        return Array.isArray(rows) ? rows : [];
+      } catch {
+        return [];
+      }
+    },
+
     async getAllStrict(): Promise<XanoAppSetting[]> {
       return fetchListStrict<XanoAppSetting>(
         `${getBaseUrl()}/registration_app_settings`,

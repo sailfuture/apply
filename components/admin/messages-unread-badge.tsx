@@ -46,6 +46,13 @@ export function useUnreadMessagesFeed() {
     // a badge is fine and keeps this off the hot path.
     refreshInterval: 60_000,
     revalidateOnFocus: true,
+    // One answer per minute is the contract: a consumer that mounts
+    // later (the dashboard's needs-reply card, after its skeleton)
+    // reads the badge's answer instead of asking again, and a tab
+    // regaining focus asks at most once a minute. The 10/30 HAR showed
+    // this 1–2 s route run twice per dashboard open.
+    dedupingInterval: 60_000,
+    focusThrottleInterval: 60_000,
     // A failed badge fetch should never surface as a page error.
     shouldRetryOnError: false,
     // Don't blank the badge while a revalidation is in flight — the

@@ -17,7 +17,23 @@ import { SWRConfig } from "swr";
  */
 export function SWRProvider({ children }: { children: React.ReactNode }) {
   return (
-    <SWRConfig value={{ errorRetryCount: 1, errorRetryInterval: 3000 }}>
+    <SWRConfig
+      value={{
+        errorRetryCount: 1,
+        errorRetryInterval: 3000,
+        // Several components on one page subscribe to the same key
+        // (`/api/admin/school-years` is read by the page, the year
+        // selector, the applications cards…). SWR's 2 s default let a
+        // component that mounted a few seconds later refetch it; ten
+        // seconds covers a page's staggered mounts. `mutate()` and the
+        // polling intervals are unaffected.
+        dedupingInterval: 10_000,
+        // Alt-tabbing back to the app refires every hook on the page;
+        // once per half-minute per key is plenty for an admin tool
+        // whose lists also poll.
+        focusThrottleInterval: 30_000,
+      }}
+    >
       {children}
     </SWRConfig>
   );

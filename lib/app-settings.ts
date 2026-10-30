@@ -266,10 +266,12 @@ function parseClosed(v: unknown): ClosedConversations {
   return out;
 }
 
-/** Never throws — an unreadable row hides nothing. */
+/** Never throws — an unreadable row hides nothing. Reads from the
+ *  cache: this runs on every badge poll from every admin tab, and
+ *  `writeClosedConversation` expires the table's tag. */
 export async function readClosedConversations(): Promise<ClosedConversations> {
   try {
-    const rows = await xano.appSettings.getAllStrict();
+    const rows = await xano.appSettings.getAll();
     return parseClosed(rowFor(rows, CLOSED_SETTING)?.value);
   } catch (err) {
     console.error("[app-settings] closed-conversations read failed:", err);
