@@ -1,7 +1,14 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
-import { Inbox, MessageSquareText, NotebookPen, Phone } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  MessageSquareText,
+  NotebookPen,
+  Phone,
+} from "lucide-react";
 import {
   Card,
   CardContent,
@@ -19,140 +26,15 @@ import {
 } from "@/components/ui/table";
 import { formatRelativeShort } from "@/lib/format-note-time";
 import { StarRating } from "@/components/admin/star-rating";
-import { useSmsViewedMap } from "@/components/admin/messages-unread-badge";
 import { cn } from "@/lib/utils";
-import type { UnreadMessagesResponse } from "@/app/api/admin/messages/unread/route";
 import type { LeadActivityResponse } from "@/app/api/admin/lead-activity/route";
 
 type ActivityRow = LeadActivityResponse["rows"][number];
 
-/* ──────────────────── Unread messages ──────────────────── */
-
-/**
- * Threads whose newest message is inbound — parents waiting on a
- * reply.
- *
- * Uses BOTH halves of "unread", exactly like the inbox list and the
- * nav badge: the server half (newest message is inbound) picks the
- * rows, and the per-browser viewed map decides blue ("Needs reply")
- * vs gray ("Viewed") — so this card, the badge count, and the inbox
- * dots can never disagree. Viewed-but-unanswered threads stay listed
- * (they're still outstanding work) but grayed and below the new ones.
- * Each row deep-links to its own thread via `?open=<key>`.
- */
-export function UnreadMessagesCard({
-  rows,
-  loading,
-}: {
-  rows: UnreadMessagesResponse["conversations"];
-  loading: boolean;
-}) {
-  const viewed = useSmsViewedMap();
-  const isUnviewed = (c: UnreadMessagesResponse["conversations"][number]) =>
-    (viewed[c.key] ?? 0) < c.lastAt;
-  const sorted = [...rows].sort((a, b) => {
-    const av = isUnviewed(a) ? 0 : 1;
-    const bv = isUnviewed(b) ? 0 : 1;
-    return av !== bv ? av - bv : b.lastAt - a.lastAt;
-  });
-  const unviewedCount = sorted.filter(isUnviewed).length;
-  const viewedCount = sorted.length - unviewedCount;
-  return (
-    <Card className="overflow-hidden bg-white py-0 gap-0">
-      <CardHeader className="py-4 border-b bg-white">
-        <div className="flex items-baseline justify-between gap-3">
-          <div className="flex items-baseline gap-3">
-            <CardTitle className="text-sm font-semibold text-muted-foreground">
-              Needs a Reply
-            </CardTitle>
-            {/* The headline number matches the nav badge (new only);
-                viewed-but-unanswered threads are counted separately so
-                the two surfaces never appear to disagree. */}
-            <span className="text-xs tabular-nums text-muted-foreground">
-              ({unviewedCount}
-              {viewedCount > 0 ? ` new · ${viewedCount} viewed` : ""})
-            </span>
-          </div>
-          <Link
-            href="/admin/messages"
-            className="text-xs text-primary hover:underline"
-          >
-            Open inbox
-          </Link>
-        </div>
-      </CardHeader>
-      <CardContent className="bg-white p-0">
-        {loading ? (
-          <div className="space-y-2 p-4">
-            {Array.from({ length: 3 }).map((_, i) => (
-              <Skeleton key={i} className="h-10 w-full rounded-md" />
-            ))}
-          </div>
-        ) : sorted.length === 0 ? (
-          <div className="px-6 py-10 text-center">
-            <Inbox className="mx-auto mb-2 size-6 text-muted-foreground/50" />
-            <p className="text-sm font-medium">Nothing waiting on you</p>
-            <p className="mx-auto mt-1 max-w-md text-xs text-muted-foreground">
-              Every text thread has been answered. New replies show up
-              here.
-            </p>
-          </div>
-        ) : (
-          <ul className="divide-y">
-            {sorted.map((c) => {
-              const unviewedRow = isUnviewed(c);
-              return (
-                <li key={c.key}>
-                  <Link
-                    href={`/admin/messages?open=${encodeURIComponent(c.key)}`}
-                    className="flex items-start gap-3 px-4 py-3 transition-colors hover:bg-muted/50"
-                  >
-                    {/* Same dot vocabulary as the inbox list: blue =
-                        needs reply, gray = viewed but unanswered. */}
-                    <span
-                      className={cn(
-                        "mt-1.5 size-2 shrink-0 rounded-full",
-                        unviewedRow ? "bg-blue-500" : "bg-slate-300"
-                      )}
-                      aria-label={unviewedRow ? "Needs reply" : "Viewed"}
-                    />
-                    <span className="min-w-0 flex-1">
-                      <span className="flex items-baseline justify-between gap-2">
-                        <span
-                          className={cn(
-                            "truncate text-sm",
-                            unviewedRow
-                              ? "font-medium"
-                              : "text-muted-foreground"
-                          )}
-                        >
-                          {c.name}
-                        </span>
-                        <span className="flex shrink-0 items-baseline gap-2">
-                          {!unviewedRow ? (
-                            <span className="text-[10px] text-muted-foreground">
-                              Viewed
-                            </span>
-                          ) : null}
-                          <span className="text-[10px] tabular-nums text-muted-foreground">
-                            {formatRelativeShort(c.lastAt)}
-                          </span>
-                        </span>
-                      </span>
-                      <span className="mt-0.5 block truncate text-xs text-muted-foreground">
-                        {c.preview || "(no message text)"}
-                      </span>
-                    </span>
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
+/** Rows per page on the activity card. Five keeps the card to one
+ *  screen-height block under the charts; the pager walks the rest of
+ *  the 25 the route returns. */
+const ACTIVITY_PAGE_SIZE = 5;
 
 /* ──────────────────── Lead activity ──────────────────── */
 
@@ -182,6 +64,10 @@ function activityIcon(kind: ActivityRow["kind"]) {
  * something happening lately", and by absence, who has gone quiet.
  * Clicking a row deep-links to that lead's triage sheet on All Leads,
  * where the full activity history lives.
+ *
+ * Paged five at a time, client-side over the rows already fetched: the
+ * pager costs no request, and a refresh that shortens the list clamps
+ * the page back into range rather than showing an empty one.
  */
 export function LeadActivityCard({
   rows,
@@ -194,6 +80,11 @@ export function LeadActivityCard({
   loading: boolean;
   onRowClick: (row: ActivityRow) => void;
 }) {
+  const [page, setPage] = useState(0);
+  const pageCount = Math.max(1, Math.ceil(rows.length / ACTIVITY_PAGE_SIZE));
+  const current = Math.min(page, pageCount - 1);
+  const first = current * ACTIVITY_PAGE_SIZE;
+  const visible = rows.slice(first, first + ACTIVITY_PAGE_SIZE);
   return (
     <Card className="overflow-hidden bg-white py-0 gap-0">
       <CardHeader className="py-4 border-b bg-white">
@@ -251,7 +142,7 @@ export function LeadActivityCard({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rows.map((r) => (
+              {visible.map((r) => (
                 <TableRow
                   key={r.key}
                   onClick={() => onRowClick(r)}
@@ -297,6 +188,37 @@ export function LeadActivityCard({
             </TableBody>
           </Table>
         )}
+        {!loading && rows.length > ACTIVITY_PAGE_SIZE ? (
+          <div className="flex items-center justify-between border-t px-2 pt-2 text-xs tabular-nums text-muted-foreground">
+            <span>
+              {first + 1}–{first + visible.length} of {rows.length}
+              {truncated ? "+" : ""}
+            </span>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                aria-label="Previous page"
+                disabled={current === 0}
+                onClick={() => setPage(current - 1)}
+                className="rounded-md border p-1 hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <ChevronLeft className="size-3.5" />
+              </button>
+              <span className="px-1">
+                {current + 1} / {pageCount}
+              </span>
+              <button
+                type="button"
+                aria-label="Next page"
+                disabled={current >= pageCount - 1}
+                onClick={() => setPage(current + 1)}
+                className="rounded-md border p-1 hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <ChevronRight className="size-3.5" />
+              </button>
+            </div>
+          </div>
+        ) : null}
       </CardContent>
     </Card>
   );

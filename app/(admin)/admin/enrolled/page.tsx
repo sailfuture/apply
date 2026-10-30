@@ -664,23 +664,24 @@ export default function EnrolledStudentsPage() {
         </div>
       </div>
 
-      {/* Search + export — one full-width row under the header,
-          spanning the same width as the roster cards below. The
-          search filters both cards. */}
+      {/* Search on its own full-width row under the header, then the
+          bulk actions + exports on the row below (user request,
+          2026-10-30: six buttons were squeezing the search box to a
+          stub). The search filters both roster cards. */}
       {yearId ? (
         <>
-          <div className="flex items-center gap-2">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground/60" />
-              <Input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search enrolled students…"
-                type="search"
-                autoComplete="off"
-                className="pl-9 bg-white"
-              />
-            </div>
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground/60" />
+            <Input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search enrolled students…"
+              type="search"
+              autoComplete="off"
+              className="pl-9 bg-white"
+            />
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
             {/* Bulk school-account backfill — year-independent (it
                 covers every enrolled student), but it lives here next
                 to Export since this is the enrolled-roster home. */}
