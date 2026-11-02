@@ -72,11 +72,14 @@ function parseContactParams(req: NextRequest): {
  *    and summer-camp parents; `since` narrows it to a recent window,
  *    and a missing `yearId` means the year the admin last worked in
  *    (cookie), else the default year.
- *  - `POST { contactType?, contactId?, familyId?, body, parentId? }` —
+ *  - `POST { contactType?, contactId?, familyId?, body, parentId?,
+ *    onBehalfOfLead? }` —
  *    send a manual text to the contact's phone and log it on their
  *    thread. `parentId` (families only) aims it at another parent on
  *    the family instead of the account holder — still logged on the
- *    family thread.
+ *    family thread. `onBehalfOfLead` (`{ source, id }`) names the
+ *    recruitment lead a family-thread text was sent FROM (a converted
+ *    lead's sheet) so that lead's `last_reach_out` is bumped too.
  */
 async function handleGET(req: NextRequest) {
   try {
@@ -300,6 +303,23 @@ export async function POST(req: NextRequest) {
     // Best-effort: bumpLeadReachOut logs and swallows its own errors.
     if (LEAD_NOTE_SOURCES.includes(contactType as LeadNoteSource)) {
       await bumpLeadReachOut(contactType as LeadNoteSource, contactId);
+    }
+    // A text sent from a converted lead's sheet goes on the FAMILY
+    // thread (family wins the contact match), but it's still that
+    // lead being worked — the sheet names the lead so its "Last
+    // contacted" moves too. Only the stamp; the message row stays
+    // attributed to the family.
+    const behalf = body?.onBehalfOfLead;
+    const behalfSource = behalf?.source as LeadNoteSource | undefined;
+    const behalfId = Number(behalf?.id);
+    if (
+      behalfSource &&
+      LEAD_NOTE_SOURCES.includes(behalfSource) &&
+      Number.isInteger(behalfId) &&
+      behalfId > 0 &&
+      !(behalfSource === contactType && behalfId === contactId)
+    ) {
+      await bumpLeadReachOut(behalfSource, behalfId);
     }
 
     // Sent-but-unlogged: the text went out (so this is still a 201),

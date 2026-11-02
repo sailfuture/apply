@@ -1545,11 +1545,19 @@ export function LeadTriageSheet({
             Activity log
           </p>
           <div className="min-h-0 flex-1">
-            <InquiryNotes scope={scope} variant="timeline" />
+            <InquiryNotes
+              scope={scope}
+              variant="timeline"
+              familyId={conversion?.family_id ?? 0}
+            />
           </div>
         </div>
         <div className="shrink-0 border-t bg-muted/20 px-4 py-3">
-          <InquiryNoteComposer scope={scope} onNoteAdded={onChanged} />
+          <InquiryNoteComposer
+            scope={scope}
+            familyId={conversion?.family_id ?? 0}
+            onNoteAdded={onChanged}
+          />
         </div>
       </SheetContent>
     </Sheet>

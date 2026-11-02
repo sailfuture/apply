@@ -29,11 +29,16 @@ import type { XanoCall } from "@/lib/xano";
 export function CallMarker({
   call,
   threadQuoUrl = null,
+  tag,
 }: {
   call: XanoCall;
   /** The contact's Quo conversation link, when the host knows it —
    *  the fallback target for calls that carry no link of their own. */
   threadQuoUrl?: string | null;
+  /** Small label after the call type naming which thread the call
+   *  belongs to — a lead's log tags its converted family's calls
+   *  "Family". */
+  tag?: string;
 }) {
   const [showTranscript, setShowTranscript] = useState(false);
   const quoUrl = callQuoUrl(call, threadQuoUrl);
@@ -70,6 +75,11 @@ export function CallMarker({
           <span className={cn("font-medium", missed ? "text-destructive" : "text-foreground/80")}>
             {label}
           </span>
+          {tag ? (
+            <span className="ml-1.5 rounded border border-border bg-muted px-1 align-middle text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              {tag}
+            </span>
+          ) : null}
           {callDuration(call.duration_seconds) ? <> · {callDuration(call.duration_seconds)}</> : null}
           {call.staff_name ? (
             <> · {call.direction === "outgoing" ? "by" : "answered by"} {call.staff_name}</>

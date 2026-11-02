@@ -136,7 +136,14 @@ const COMPOSE_CATEGORIES = [
 async function postLeadEntry(
   scope: LeadNoteScope,
   category: string,
-  text: string
+  text: string,
+  /** The registration family this lead converted into (0 = none).
+   *  Texts go to the FAMILY thread when set: once a parent's number
+   *  matches a family, every text attributes there anyway (family
+   *  wins the contact match), so sending as the lead would start a
+   *  second thread for the same person. The lead's `last_reach_out`
+   *  is still bumped, via `onBehalfOfLead`. */
+  familyId = 0
 ): Promise<{ warning?: string }> {
   const isSms = category === "sms";
   const res = await fetch(
@@ -146,7 +153,14 @@ async function postLeadEntry(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(
         isSms
-          ? { contactType: scope.source, contactId: scope.id, body: text }
+          ? familyId > 0
+            ? {
+                contactType: "family",
+                contactId: familyId,
+                body: text,
+                onBehalfOfLead: { source: scope.source, id: scope.id },
+              }
+            : { contactType: scope.source, contactId: scope.id, body: text }
           : {
               leadSource: scope.source,
               leadId: scope.id,
@@ -235,6 +249,12 @@ interface Props {
   /** Any recruitment lead (inquiry / camp / visit / TASCO). Takes
    *  precedence over `inquiryId`. */
   scope?: LeadNoteScope;
+  /** The registration family this lead converted into (its
+   *  Conversion link; 0/undefined = not linked). When set, the
+   *  family's texts and calls are merged into this timeline with a
+   *  "Family" tag, and the SMS composer sends on the family thread —
+   *  see `postLeadEntry`. */
+  familyId?: number;
   /** Optional callback fired after a successful note add — the parent
    *  Sheet uses this to revalidate the lead list so `last_reach_out`
    *  (bumped server-side on POST) reflects in the table immediately. */
@@ -275,6 +295,7 @@ interface Props {
 export function InquiryNotes({
   inquiryId,
   scope,
+  familyId,
   onNoteAdded,
   variant = "panel",
 }: Props) {
@@ -282,6 +303,7 @@ export function InquiryNotes({
     source: "inquiry",
     id: inquiryId ?? 0,
   };
+  const linkedFamilyId = familyId && familyId > 0 ? familyId : 0;
   const swrKey = leadNotesKey(leadScope);
   const { data, isLoading, mutate } = useSWR<XanoAdminNote[]>(swrKey, fetcher, {
     revalidateOnFocus: false,
@@ -297,6 +319,24 @@ export function InquiryNotes({
     { revalidateOnFocus: false }
   );
   const smsMessages = smsData?.messages ?? [];
+
+  // The converted family's thread (texts + calls), when this lead is
+  // linked to one. After conversion the parent's number matches the
+  // family, so new texts and calls land THERE, not on the lead — a
+  // converted lead's log went silent at exactly the point the
+  // conversation got real. Same SWR key as the family drawer and the
+  // Messages inbox, so a send anywhere refreshes all three. The two
+  // threads can't overlap: every row carries exactly one contact FK.
+  const familyKey = linkedFamilyId
+    ? contactMessagesKey("family", linkedFamilyId)
+    : null;
+  const { data: familyData, mutate: mutateFamily } = useSWR<MessagesResponse>(
+    familyKey,
+    messagesFetcher,
+    { revalidateOnFocus: false }
+  );
+  const familyMessages = familyData?.messages ?? [];
+  const familyCalls = familyData?.calls ?? [];
 
   // Campus tours for this lead, read from the tours table itself —
   // that way a booking shows in the log even if it predates this
@@ -333,8 +373,18 @@ export function InquiryNotes({
       .filter((n) => !isRedundantTourBookingNote(n))
       .map((note) => ({ kind: "note" as const, note })),
     ...smsMessages.map((msg) => ({ kind: "sms" as const, msg })),
+    ...familyMessages.map((msg) => ({
+      kind: "sms" as const,
+      msg,
+      family: true,
+    })),
     ...tours.map((tour) => ({ kind: "tour" as const, tour })),
     ...calls.map((call) => ({ kind: "call" as const, call })),
+    ...familyCalls.map((call) => ({
+      kind: "call" as const,
+      call,
+      family: true,
+    })),
   ].sort((a, b) => entryTs(a) - entryTs(b));
 
   const [body, setBody] = useState("");
@@ -351,12 +401,19 @@ export function InquiryNotes({
 
   /** Re-send a failed text to this lead. Goes through the same
    *  endpoint as a fresh send, so opt-out and phone checks re-run. */
-  async function retrySms(text: string) {
+  async function retrySms(text: string, viaFamily = false) {
     if (retryingBody) return;
     setRetryingBody(text);
     try {
-      const { warning } = await postLeadEntry(leadScope, "sms", text);
-      await mutateSms();
+      // A failed family-thread text is resent on the family thread;
+      // one from the lead's own (pre-conversion) thread stays there.
+      const { warning } = await postLeadEntry(
+        leadScope,
+        "sms",
+        text,
+        viaFamily ? linkedFamilyId : 0
+      );
+      await (viaFamily ? mutateFamily() : mutateSms());
       onNoteAdded?.();
       if (warning) toast.warning(warning);
       else toast.success("Text resent.");
@@ -376,9 +433,18 @@ export function InquiryNotes({
     setSaving(true);
     setSendError(null);
     try {
-      const { warning } = await postLeadEntry(leadScope, category, body.trim());
+      const { warning } = await postLeadEntry(
+        leadScope,
+        category,
+        body.trim(),
+        linkedFamilyId
+      );
       setBody("");
-      await (isSms ? mutateSms() : mutate());
+      await (isSms
+        ? linkedFamilyId
+          ? mutateFamily()
+          : mutateSms()
+        : mutate());
       onNoteAdded?.();
       if (warning) {
         setSendError(warning);
@@ -521,7 +587,7 @@ export function InquiryNotes({
       e.kind === "note"
         ? `note|${e.note.author_name}|${e.note.category ?? ""}|${e.note.is_pinned}`
         : e.kind === "sms"
-          ? `sms|${e.msg.direction}|${e.msg.from_number}`
+          ? `sms|${e.msg.direction}|${e.msg.from_number}|${e.family ? "family" : "lead"}`
           : e.kind === "call"
             ? `call|${e.call.id}`
             : // A tour marker breaks any run — the next bubble re-names
@@ -532,7 +598,9 @@ export function InquiryNotes({
     if (e.kind === "call") {
       rows.push({
         id: `call-${e.call.id}`,
-        node: <CallMarker call={e.call} />,
+        node: (
+          <CallMarker call={e.call} tag={e.family ? "Family" : undefined} />
+        ),
       });
     } else if (e.kind === "tour") {
       rows.push({
@@ -561,7 +629,8 @@ export function InquiryNotes({
           <SmsBubble
             msg={e.msg}
             showHeader={showHeader}
-            onRetry={(text) => void retrySms(text)}
+            tag={e.family ? "Family" : undefined}
+            onRetry={(text) => void retrySms(text, e.family)}
             retrying={retryingBody === e.msg.body}
           />
         ),
@@ -580,7 +649,9 @@ export function InquiryNotes({
       <Textarea
         placeholder={
           category === "sms"
-            ? "Write the text message — it will be sent to this lead's phone and logged in Messages."
+            ? linkedFamilyId
+              ? "Write the text message — it will be sent on the family's thread and logged in Messages."
+              : "Write the text message — it will be sent to this lead's phone and logged in Messages."
             : "Phone call summary, follow-up needed, parent context — write what the next admin should know."
         }
         value={body}
@@ -754,16 +825,21 @@ export function InquiryNotes({
 export function InquiryNoteComposer({
   inquiryId,
   scope,
+  familyId,
   onNoteAdded,
 }: {
   inquiryId?: number;
   scope?: LeadNoteScope;
+  /** Converted family (0/undefined = none) — texts go on its thread.
+   *  Pass the same value as the sibling `<InquiryNotes>`. */
+  familyId?: number;
   onNoteAdded?: () => void;
 }) {
   const leadScope: LeadNoteScope = scope ?? {
     source: "inquiry",
     id: inquiryId ?? 0,
   };
+  const linkedFamilyId = familyId && familyId > 0 ? familyId : 0;
   const swrKey = leadNotesKey(leadScope);
   const { mutate } = useSWR<XanoAdminNote[]>(swrKey, fetcher, {
     revalidateOnFocus: false,
@@ -785,10 +861,19 @@ export function InquiryNoteComposer({
     setSaving(true);
     setSendError(null);
     try {
-      const { warning } = await postLeadEntry(leadScope, category, body.trim());
+      const { warning } = await postLeadEntry(
+        leadScope,
+        category,
+        body.trim(),
+        linkedFamilyId
+      );
       setBody("");
       await (isSms
-        ? globalMutate(contactMessagesKey(leadScope.source, leadScope.id))
+        ? globalMutate(
+            linkedFamilyId
+              ? contactMessagesKey("family", linkedFamilyId)
+              : contactMessagesKey(leadScope.source, leadScope.id)
+          )
         : mutate());
       onNoteAdded?.();
       if (warning) {
@@ -821,7 +906,9 @@ export function InquiryNoteComposer({
       <Textarea
         placeholder={
           category === "sms"
-            ? "Write the text message — it will be sent to this lead's phone and logged in Messages."
+            ? linkedFamilyId
+              ? "Write the text message — it will be sent on the family's thread and logged in Messages."
+              : "Write the text message — it will be sent to this lead's phone and logged in Messages."
             : "Phone call summary, follow-up needed, parent context — write what the next admin should know."
         }
         value={body}
@@ -1011,9 +1098,11 @@ function formatCategory(c: string): string {
  *  text from the lead's SMS thread, or a campus tour. */
 type TimelineEntry =
   | { kind: "note"; note: XanoAdminNote }
-  | { kind: "sms"; msg: XanoSmsMessage }
+  /** `family` marks rows read from the converted family's thread
+   *  rather than the lead's own — rendered with a "Family" tag. */
+  | { kind: "sms"; msg: XanoSmsMessage; family?: boolean }
   | { kind: "tour"; tour: XanoTour }
-  | { kind: "call"; call: XanoCall };
+  | { kind: "call"; call: XanoCall; family?: boolean };
 
 function entryTs(e: TimelineEntry): number {
   if (e.kind === "note") return e.note.created_at;
@@ -1251,6 +1340,7 @@ const SMS_STATUS_LABEL: Record<string, string> = {
 function SmsBubble({
   msg,
   showHeader = true,
+  tag,
   onRetry,
   retrying,
 }: {
@@ -1258,6 +1348,9 @@ function SmsBubble({
   /** False when the previous entry is a text in the same direction
    *  from the same number — the run shows the header once. */
   showHeader?: boolean;
+  /** Small label in the header naming which thread the text belongs
+   *  to ("Family" for rows merged in from a converted family). */
+  tag?: string;
   onRetry?: (body: string) => void;
   retrying?: boolean;
 }) {
@@ -1276,6 +1369,11 @@ function SmsBubble({
                 value truncates (it's usually a phone, but legacy rows
                 can carry a long Twilio Messaging Service SID). */}
             <span className="shrink-0 whitespace-nowrap">Text message</span>
+            {tag ? (
+              <span className="ml-1.5 shrink-0 rounded border border-border bg-muted px-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                {tag}
+              </span>
+            ) : null}
             {fromLabel ? (
               <span
                 className="min-w-0 truncate whitespace-nowrap text-muted-foreground"
