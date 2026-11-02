@@ -170,7 +170,31 @@ const GROUP_DEFS = [
     description:
       "Family declined — the reason is on each lead's sheet, where Restore brings one back.",
   },
+  {
+    key: "archived",
+    title: "Archived",
+    dot: "bg-slate-400",
+    description:
+      "Duplicates, junk and test rows parked off the board. Only shown by the Status filter; Restore is on each lead's sheet.",
+  },
 ] as const;
+
+/** A lead with no contact for this long (and no newer sign-up) is
+ *  stale — the Contact filter's "Stale" bucket. */
+const STALE_AFTER_MS = 60 * 24 * 60 * 60 * 1000;
+
+/** Most recent thing that happened to a lead: the later of its last
+ *  logged contact and its sign-up. Shared by the group ordering and
+ *  the stale check. */
+function leadLastActivity(r: AllLeadRow): number {
+  return Math.max(r.last_reach_out, r.submitted_ts);
+}
+
+/** Module-level on purpose: the react-hooks/purity lint bans
+ *  `Date.now()` inside component bodies and memos, not helpers. */
+function isStaleLead(r: AllLeadRow): boolean {
+  return Date.now() - leadLastActivity(r) > STALE_AFTER_MS;
+}
 
 type GroupKey = (typeof GROUP_DEFS)[number]["key"];
 
@@ -184,7 +208,10 @@ type GroupKey = (typeof GROUP_DEFS)[number]["key"];
  */
 export default function AllLeadsPage() {
   const { data, isLoading, error, mutate } = useSWR<AllLeadRow[]>(
-    "/api/admin/all-leads",
+    // Archived rows ride along so the Status filter can show them;
+    // every other consumer of the feed keeps the default (no
+    // archived) and never sees them.
+    "/api/admin/all-leads?includeArchived=1",
     adminFetcher,
     { refreshInterval: 60_000 }
   );
@@ -201,6 +228,16 @@ export default function AllLeadsPage() {
   // "none" = leads with no tour on record at all.
   const [tourFilter, setTourFilter] = useState<
     "completed" | "scheduled" | "none" | null
+  >(null);
+  // "board" = everything except archived rows (the default);
+  // "archived" = only the parked rows, so they can be restored.
+  const [statusFilter, setStatusFilter] = useState<"board" | "archived">(
+    "board"
+  );
+  // null = no contact filter; "stale" = nothing in 60+ days;
+  // "never" = no contact logged at all.
+  const [contactFilter, setContactFilter] = useState<
+    "stale" | "never" | null
   >(null);
   // Which years the board shows — the working list (top bar's year +
   // untagged) by default; see LeadYearView. The top bar's year is
@@ -227,10 +264,16 @@ export default function AllLeadsPage() {
   const visible = useMemo(
     () =>
       rows.filter((r) => {
+        const isArchived = r.lead_status === "archived";
+        if (statusFilter === "archived" ? !isArchived : isArchived) {
+          return false;
+        }
         if (sourceFilter.length > 0 && !sourceFilter.includes(r.source)) {
           return false;
         }
         if (minRating > 0 && r.rating < minRating) return false;
+        if (contactFilter === "stale" && !isStaleLead(r)) return false;
+        if (contactFilter === "never" && r.last_reach_out > 0) return false;
         if (followUpFilter !== null && r.followed_up !== followUpFilter) {
           return false;
         }
@@ -245,6 +288,8 @@ export default function AllLeadsPage() {
       }),
     [
       rows,
+      statusFilter,
+      contactFilter,
       sourceFilter,
       minRating,
       followUpFilter,
@@ -280,14 +325,19 @@ export default function AllLeadsPage() {
       accepted: [],
       enrolled: [],
       notInterested: [],
+      archived: [],
     };
     for (const r of visible) {
+      // Archived outranks everything — it's an explicit "this row is
+      // not a lead" mark — then a real conversion link, then declined.
       const key: GroupKey =
-        r.funnel_stage !== ""
-          ? (r.funnel_stage as GroupKey)
-          : r.lead_status === "not_interested"
-            ? "notInterested"
-            : "active";
+        r.lead_status === "archived"
+          ? "archived"
+          : r.funnel_stage !== ""
+            ? (r.funnel_stage as GroupKey)
+            : r.lead_status === "not_interested"
+              ? "notInterested"
+              : "active";
       (out[key] ?? out.active).push(r);
     }
     // Every group orders by MOST RECENT ACTIVITY — the later of the
@@ -301,8 +351,7 @@ export default function AllLeadsPage() {
     // an hour ago sit side by side, which is what the queue is for.
     // Ties break on the newer sign-up. Clicking either column header
     // still re-sorts on that column alone.
-    const lastActivity = (r: AllLeadRow) =>
-      Math.max(r.last_reach_out, r.submitted_ts);
+    const lastActivity = leadLastActivity;
     for (const list of Object.values(out)) {
       list.sort(
         (a, b) =>
@@ -318,7 +367,11 @@ export default function AllLeadsPage() {
     let converted = 0;
     let toured = 0;
     let notInterested = 0;
+    let total = 0;
     for (const r of rows) {
+      // Archived rows aren't leads — they're off every count.
+      if (r.lead_status === "archived") continue;
+      total++;
       if (r.funnel_stage !== "") converted++;
       // COMPLETED tours only — a booking that was canceled, no-showed,
       // or is still upcoming isn't a tour that happened. `tour_status`
@@ -328,7 +381,7 @@ export default function AllLeadsPage() {
       if (r.tour_status === "completed") toured++;
       if (r.lead_status === "not_interested") notInterested++;
     }
-    return { total: rows.length, converted, toured, notInterested };
+    return { total, converted, toured, notInterested };
   }, [rows]);
 
   // Keep the open sheet's snapshot fresh after a rating/follow-up/note
@@ -1044,6 +1097,83 @@ export default function AllLeadsPage() {
                 </DropdownMenuRadioItem>
                 <DropdownMenuRadioItem value="none">
                   No tour
+                </DropdownMenuRadioItem>
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className={cn(
+                  FILTER_TRIGGER_CLASS,
+                  contactFilter !== null && "border-foreground"
+                )}
+                title="Filter by how recently anyone reached out"
+              >
+                <span className="min-w-0 truncate">
+                  {contactFilter === null
+                    ? "Contact"
+                    : contactFilter === "stale"
+                      ? "Stale (60+ days)"
+                      : "Never contacted"}
+                </span>
+                <ChevronDown className="ml-1 size-3.5 shrink-0 opacity-50" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-48">
+              <DropdownMenuLabel>Last contact</DropdownMenuLabel>
+              <DropdownMenuRadioGroup
+                value={contactFilter ?? "any"}
+                onValueChange={(v) =>
+                  setContactFilter(
+                    v === "any" ? null : (v as "stale" | "never")
+                  )
+                }
+              >
+                <DropdownMenuRadioItem value="any">Any</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="stale">
+                  Stale — nothing in 60+ days
+                </DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="never">
+                  Never contacted
+                </DropdownMenuRadioItem>
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className={cn(
+                  FILTER_TRIGGER_CLASS,
+                  statusFilter !== "board" && "border-foreground"
+                )}
+                title="Show the working board, or the archived rows parked off it"
+              >
+                <span className="min-w-0 truncate">
+                  {statusFilter === "board" ? "Status" : "Archived"}
+                </span>
+                <ChevronDown className="ml-1 size-3.5 shrink-0 opacity-50" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-48">
+              <DropdownMenuLabel>Status</DropdownMenuLabel>
+              <DropdownMenuRadioGroup
+                value={statusFilter}
+                onValueChange={(v) =>
+                  setStatusFilter(v === "archived" ? "archived" : "board")
+                }
+              >
+                <DropdownMenuRadioItem value="board">
+                  On the board
+                </DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="archived">
+                  Archived
                 </DropdownMenuRadioItem>
               </DropdownMenuRadioGroup>
             </DropdownMenuContent>

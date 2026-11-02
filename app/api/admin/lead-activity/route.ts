@@ -169,6 +169,20 @@ async function handleGET(req: NextRequest) {
     const ratingFor = (source: LeadNoteSource, id: number) =>
       ratings[source].get(id) ?? 0;
 
+    // Archived leads (duplicates / junk / tests) are off every board,
+    // so their activity — usually the twin of a live lead's — stays
+    // off the dashboard roster too.
+    const archived = new Set<string>();
+    const noteArchived = (source: LeadNoteSource, id: number, status: unknown) => {
+      if ((typeof status === "string" ? status : "").trim() === "archived") {
+        archived.add(`${source}-${id}`);
+      }
+    };
+    for (const i of inquiries) noteArchived("inquiry", i.id, i.status);
+    for (const c of camps) noteArchived("camp", c.id, c.status);
+    for (const w of visits) noteArchived("visit", w.id, w.status);
+    for (const t of tascos) noteArchived("tasco", t.id, t.status);
+
     const rows: LeadActivityRow[] = [];
 
     // Notes — one row per lead-scoped note.
@@ -252,6 +266,7 @@ async function handleGET(req: NextRequest) {
     const seen = new Set<string>();
     const latestPerLead = rows.filter((r) => {
       const leadKey = `${r.source}-${r.leadId}`;
+      if (archived.has(leadKey)) return false;
       if (seen.has(leadKey)) return false;
       seen.add(leadKey);
       return true;

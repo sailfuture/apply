@@ -27,8 +27,10 @@ import { writeLeadConversion } from "@/lib/lead-conversion";
  * where `school_year_id` is a statement of intent.
  *
  * `status` is the lead's lifecycle bucket: "not_interested" (family
- * declined — pair it with a `status_reason`) or "active" (restore;
- * "active" rather than "" because Xano drops empty inputs). Only the
+ * declined — pair it with a `status_reason`), "archived" (duplicate /
+ * junk / test row parked off every board, reason optional) or
+ * "active" (restore; "active" rather than "" because Xano drops
+ * empty inputs). Only the
  * inquiry table is guaranteed to have the columns — the other three
  * need them added in Xano, and the echo check below warns when a
  * write didn't land.
@@ -154,9 +156,13 @@ export async function PATCH(req: NextRequest) {
     // table missing the columns warns instead of silently no-oping.
     const statusPatch: Record<string, string> = {};
     if ("status" in body) {
-      if (body.status !== "active" && body.status !== "not_interested") {
+      if (
+        body.status !== "active" &&
+        body.status !== "not_interested" &&
+        body.status !== "archived"
+      ) {
         return NextResponse.json(
-          { error: 'status must be "active" or "not_interested"' },
+          { error: 'status must be "active", "not_interested" or "archived"' },
           { status: 400 }
         );
       }

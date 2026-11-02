@@ -14,6 +14,8 @@ import {
   ExternalLink,
   Loader2,
   Mail,
+  Archive,
+  CircleDot,
   Pencil,
   Phone,
   Undo2,
@@ -83,6 +85,7 @@ export function LeadTriageControls({
   isFollowedUp,
   lastReachOut,
   actions,
+  trailingActions,
   onChanged,
   className,
 }: {
@@ -97,6 +100,10 @@ export function LeadTriageControls({
    *  Hosts that don't (Summer Camp, Liability Waiver) get just the
    *  toggle. */
   actions?: React.ReactNode;
+  /** Controls docked at the END of the same row, after the auto-texts
+   *  switch — the sheet passes the lifecycle Status menu here so it
+   *  reads last: rate → follow up → tour → texts → status. */
+  trailingActions?: React.ReactNode;
   onChanged?: () => void;
   className?: string;
 }) {
@@ -229,6 +236,7 @@ export function LeadTriageControls({
         </Button>
         {actions}
         <NurturePauseButton scope={scope} onChanged={onChanged} />
+        {trailingActions}
       </div>
       <p
         className="text-xs text-muted-foreground"
@@ -608,14 +616,32 @@ const NOT_INTERESTED_REASONS = [
   "Other",
 ] as const;
 
+/** Why a row is being parked. Stored in `status_reason` like the
+ *  decline reasons, so the sheet can say "Archived — Duplicate". */
+const ARCHIVE_REASONS = [
+  "Duplicate",
+  "Junk / spam",
+  "Test entry",
+  "Other",
+] as const;
+
+type StatusEditorMode = "menu" | "decline" | "archive" | "custom";
+
 /**
- * Lifecycle status control — lets admin mark any lead "not
- * interested" with a reason (preset list, free text under "Other"),
- * or restore a declined lead back to the active pipeline. Writes
- * `status`/`status_reason` through `/api/admin/leads`; the route
- * echo-verifies, so a source table missing the columns comes back as
- * a warning toast naming what to add in Xano instead of silently
- * saving nothing.
+ * Lifecycle status control — a labelled Status menu on the triage
+ * row (it used to be an icon beside Edit inside the collapsed details
+ * block, where nobody found it). Three states, all written through
+ * `/api/admin/leads`:
+ *
+ *   - Active          — the working pipeline
+ *   - Not interested  — family declined; takes a reason (preset list,
+ *                       free text under "Other")
+ *   - Archived        — duplicate / junk / test row parked off every
+ *                       board (reversible alternative to Delete)
+ *
+ * The route echo-verifies, so a source table missing the columns
+ * comes back as a warning toast naming what to add in Xano instead of
+ * silently saving nothing.
  */
 function LeadStatusEditor({
   scope,
@@ -624,19 +650,30 @@ function LeadStatusEditor({
   onChanged,
 }: {
   scope: LeadNoteScope;
-  /** "" = active pipeline; "not_interested" = declined;
-   *  "converted" = legacy hand-marked win (treated as active here). */
+  /** "" = active pipeline; "not_interested" = declined; "archived" =
+   *  parked; "converted" = legacy hand-marked win (treated as active). */
   status: string;
   reason: string;
   /** Fired after a successful save with the status that was written
-   *  ("not_interested" or "") so the host can react to the specific
-   *  transition — the triage sheet closes itself on a decline. */
+   *  ("not_interested", "archived" or "active") so the host can react
+   *  to the specific transition — the triage sheet closes itself when
+   *  the lead leaves the board. */
   onChanged?: (savedStatus: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [mode, setMode] = useState<StatusEditorMode>("menu");
+  // Which status the free-text reason is for ("Other…" exists on both
+  // the decline and the archive lists).
+  const [customFor, setCustomFor] = useState<"not_interested" | "archived">(
+    "not_interested"
+  );
   const [customReason, setCustomReason] = useState("");
-  const [showCustom, setShowCustom] = useState(false);
+
+  function reset() {
+    setMode("menu");
+    setCustomReason("");
+  }
 
   async function save(patch: { status: string; status_reason?: string }) {
     setSaving(true);
@@ -651,12 +688,13 @@ function LeadStatusEditor({
       if (data?.warning) toast.warning(data.warning);
       else if (patch.status === "not_interested") {
         toast.success("Marked not interested.");
+      } else if (patch.status === "archived") {
+        toast.success("Lead archived — find it under the Archived filter.");
       } else {
         toast.success("Lead restored to the active pipeline.");
       }
       setOpen(false);
-      setShowCustom(false);
-      setCustomReason("");
+      reset();
       onChanged?.(patch.status);
     } catch (err) {
       console.error("[LeadStatusEditor.save]", err);
@@ -666,87 +704,128 @@ function LeadStatusEditor({
     }
   }
 
-  const declined = status === "not_interested";
+  const current =
+    status === "not_interested"
+      ? "declined"
+      : status === "archived"
+        ? "archived"
+        : "active";
+  const label =
+    current === "declined"
+      ? "Not interested"
+      : current === "archived"
+        ? "Archived"
+        : "Active";
+  const Icon =
+    current === "declined" ? UserX : current === "archived" ? Archive : CircleDot;
+
+  const reasonList = (
+    items: readonly string[],
+    target: "not_interested" | "archived"
+  ) => (
+    <div className="flex flex-col">
+      {items.map((r) =>
+        r === "Other" ? (
+          <button
+            key={r}
+            type="button"
+            disabled={saving}
+            className="rounded-sm px-2 py-1.5 text-left text-sm hover:bg-muted"
+            onClick={() => {
+              setCustomFor(target);
+              setMode("custom");
+            }}
+          >
+            Other…
+          </button>
+        ) : (
+          <button
+            key={r}
+            type="button"
+            disabled={saving}
+            className="rounded-sm px-2 py-1.5 text-left text-sm hover:bg-muted"
+            onClick={() => void save({ status: target, status_reason: r })}
+          >
+            {r}
+          </button>
+        )
+      )}
+      <button
+        type="button"
+        disabled={saving}
+        className="mt-1 rounded-sm border-t px-2 py-1.5 text-left text-xs text-muted-foreground hover:bg-muted"
+        onClick={() => setMode("menu")}
+      >
+        Back
+      </button>
+    </div>
+  );
+
+  const restoreButton = (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      className="h-7 w-full bg-white"
+      disabled={saving}
+      onClick={() => void save({ status: "active" })}
+      title="Put this lead back in the active pipeline"
+    >
+      {saving ? (
+        <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+      ) : (
+        <Undo2 className="size-3.5 mr-1.5" />
+      )}
+      Restore to active
+    </Button>
+  );
 
   return (
     <Popover
       open={open}
       onOpenChange={(o) => {
         setOpen(o);
-        if (!o) {
-          setShowCustom(false);
-          setCustomReason("");
-        }
+        if (!o) reset();
       }}
     >
-      {/* Icon-only so it sits beside Edit in the Lead details header
-          without competing with it. Red when the lead is declined —
-          that tint IS the status indicator, and the popover carries
-          the reason plus Restore. */}
+      {/* Labelled trigger: the tint IS the status indicator (red when
+          declined, slate when archived), and the caret says it opens
+          a menu. */}
       <PopoverTrigger asChild>
         <Button
           type="button"
           variant="outline"
-          size="icon"
-          aria-pressed={declined}
+          size="sm"
           className={cn(
-            "size-7",
-            declined
+            "h-8",
+            current === "declined"
               ? "border-red-200 bg-red-50 text-red-700 hover:bg-red-100 hover:text-red-800"
-              : "bg-white text-muted-foreground"
+              : current === "archived"
+                ? "border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200 hover:text-slate-800"
+                : "bg-white"
           )}
           disabled={saving}
           title={
-            declined
-              ? `Not interested${reason ? ` — ${reason}` : ""}`
-              : "Mark not interested"
+            current === "active"
+              ? "Lead status — mark not interested or archive"
+              : `${label}${reason ? ` — ${reason}` : ""}`
           }
         >
           {saving ? (
             <Loader2 className="size-3.5 animate-spin" />
           ) : (
-            <UserX className="size-3.5" />
+            <Icon className="size-3.5" />
           )}
-          <span className="sr-only">
-            {declined ? "Not interested" : "Mark not interested"}
-          </span>
+          {label}
+          <ChevronDown className="size-3 opacity-60" />
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-64 p-2" align="end">
-        {declined ? (
+        {mode === "custom" ? (
           <div className="space-y-2 p-1">
-            <div className="flex items-center gap-2">
-              <Badge className="bg-red-100 text-red-800 hover:bg-red-100 whitespace-nowrap">
-                Not interested
-              </Badge>
-            </div>
-            {reason ? (
-              <p className="text-xs text-muted-foreground">{reason}</p>
-            ) : null}
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-7 w-full bg-white"
-              disabled={saving}
-              onClick={() => void save({ status: "active" })}
-              title="Put this lead back in the active pipeline"
-            >
-              {saving ? (
-                <Loader2 className="size-3.5 mr-1.5 animate-spin" />
-              ) : (
-                <Undo2 className="size-3.5 mr-1.5" />
-              )}
-              Restore to active
-            </Button>
-          </div>
-        ) : (
-          <>
-        <p className="px-1 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-          Why not interested?
-        </p>
-        {showCustom ? (
-          <div className="space-y-2 p-1">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              {customFor === "archived" ? "Why archive?" : "Why not interested?"}
+            </p>
             <Input
               autoFocus
               value={customReason}
@@ -762,7 +841,7 @@ function LeadStatusEditor({
                 size="sm"
                 className="h-7 bg-white"
                 disabled={saving}
-                onClick={() => setShowCustom(false)}
+                onClick={() => setMode(customFor === "archived" ? "archive" : "decline")}
               >
                 Back
               </Button>
@@ -773,7 +852,7 @@ function LeadStatusEditor({
                 disabled={saving || !customReason.trim()}
                 onClick={() =>
                   void save({
-                    status: "not_interested",
+                    status: customFor,
                     status_reason: customReason.trim(),
                   })
                 }
@@ -782,36 +861,85 @@ function LeadStatusEditor({
               </Button>
             </div>
           </div>
-        ) : (
-          <div className="flex flex-col">
-            {NOT_INTERESTED_REASONS.map((r) =>
-              r === "Other" ? (
-                <button
-                  key={r}
-                  type="button"
-                  disabled={saving}
-                  className="rounded-sm px-2 py-1.5 text-left text-sm hover:bg-muted"
-                  onClick={() => setShowCustom(true)}
-                >
-                  Other…
-                </button>
-              ) : (
-                <button
-                  key={r}
-                  type="button"
-                  disabled={saving}
-                  className="rounded-sm px-2 py-1.5 text-left text-sm hover:bg-muted"
-                  onClick={() =>
-                    void save({ status: "not_interested", status_reason: r })
-                  }
-                >
-                  {r}
-                </button>
-              )
-            )}
-          </div>
-        )}
+        ) : mode === "decline" ? (
+          <>
+            <p className="px-1 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Why not interested?
+            </p>
+            {reasonList(NOT_INTERESTED_REASONS, "not_interested")}
           </>
+        ) : mode === "archive" ? (
+          <>
+            <p className="px-1 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Why archive?
+            </p>
+            {reasonList(ARCHIVE_REASONS, "archived")}
+          </>
+        ) : current === "active" ? (
+          <div className="flex flex-col">
+            <p className="px-1 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Change status
+            </p>
+            <button
+              type="button"
+              disabled={saving}
+              className="flex items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-muted"
+              onClick={() => setMode("decline")}
+            >
+              <UserX className="size-3.5 text-red-700" />
+              <span>
+                Not interested…
+                <span className="block text-xs text-muted-foreground">
+                  Family declined — pick a reason
+                </span>
+              </span>
+            </button>
+            <button
+              type="button"
+              disabled={saving}
+              className="flex items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-muted"
+              onClick={() => setMode("archive")}
+            >
+              <Archive className="size-3.5 text-slate-600" />
+              <span>
+                Archive…
+                <span className="block text-xs text-muted-foreground">
+                  Duplicate, junk or test — hidden from every board
+                </span>
+              </span>
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-2 p-1">
+            <Badge
+              className={cn(
+                "whitespace-nowrap",
+                current === "declined"
+                  ? "bg-red-100 text-red-800 hover:bg-red-100"
+                  : "bg-slate-200 text-slate-800 hover:bg-slate-200"
+              )}
+            >
+              {label}
+            </Badge>
+            {reason ? (
+              <p className="text-xs text-muted-foreground">{reason}</p>
+            ) : null}
+            {restoreButton}
+            {current === "declined" ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 w-full bg-white"
+                disabled={saving}
+                onClick={() => setMode("archive")}
+                title="Park this lead off every board (duplicate / junk / test)"
+              >
+                <Archive className="size-3.5 mr-1.5" />
+                Archive…
+              </Button>
+            ) : null}
+          </div>
         )}
       </PopoverContent>
     </Popover>
@@ -1348,9 +1476,10 @@ export function LeadTriageSheet({
    *  lead's link to the registration family it became, with manual
    *  link/unlink. */
   conversion?: LeadConversionInfo;
-  /** When provided ("", "not_interested", …), the sheet renders the
-   *  lifecycle control — mark not interested with a reason, or
-   *  restore. Omit to hide (hosts without the status data). */
+  /** When provided ("", "not_interested", "archived", …), the sheet
+   *  renders the Status menu on the triage row — not interested with
+   *  a reason, archive, or restore. Omit to hide (hosts without the
+   *  status data). */
   leadStatus?: string;
   statusReason?: string;
   /** Academic year the family is asking about (FK id; 0 = unset).
@@ -1444,6 +1573,32 @@ export function LeadTriageSheet({
                 onChanged={onChanged}
               />
             }
+            trailingActions={
+              leadStatus !== undefined ? (
+                <LeadStatusEditor
+                  key={`status-${scope.source}-${scope.id}`}
+                  scope={scope}
+                  status={leadStatus}
+                  reason={statusReason ?? ""}
+                  onChanged={(savedStatus) => {
+                    // Refresh the host's list first so the row
+                    // re-buckets (Not Interested / Archived / active
+                    // queue) behind the sheet…
+                    onChanged?.();
+                    // …then close the sheet when the lead leaves the
+                    // board — keeping its sheet open only hides the
+                    // move. Restores keep the sheet open for
+                    // follow-up edits.
+                    if (
+                      savedStatus === "not_interested" ||
+                      savedStatus === "archived"
+                    ) {
+                      onOpenChange(false);
+                    }
+                  }}
+                />
+              ) : null
+            }
           />
         </div>
 
@@ -1465,29 +1620,6 @@ export function LeadTriageSheet({
                 details={details}
                 hideTitle
                 extraFields={extraFields}
-                headerActions={
-                  leadStatus !== undefined ? (
-                    <LeadStatusEditor
-                      key={`status-${scope.source}-${scope.id}`}
-                      scope={scope}
-                      status={leadStatus}
-                      reason={statusReason ?? ""}
-                      onChanged={(savedStatus) => {
-                        // Refresh the host's list first so the row
-                        // re-buckets (Not Interested card / active
-                        // queue) behind the sheet…
-                        onChanged?.();
-                        // …then close the sheet on a decline — the
-                        // lead just left the active queue, so keeping
-                        // its sheet open only hides the move. Restores
-                        // keep the sheet open for follow-up edits.
-                        if (savedStatus === "not_interested") {
-                          onOpenChange(false);
-                        }
-                      }}
-                    />
-                  ) : null
-                }
                 onChanged={onChanged}
               />
             ) : null}

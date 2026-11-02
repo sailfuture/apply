@@ -77,12 +77,13 @@ export type AllLeadRow = {
   tour_at: number;
   /** Lifecycle bucket from the lead's own table: "" active pipeline,
    *  "not_interested" family declined (see `status_reason`),
-   *  "converted" legacy hand-marked win. Only inquiry is guaranteed
-   *  to have the columns; other sources read "" until they're added
-   *  in Xano. */
+   *  "archived" duplicate / junk / test row parked off the boards
+   *  (only returned with `?includeArchived=1`), "converted" legacy
+   *  hand-marked win. */
   lead_status: string;
-  /** Why the family declined — only meaningful when `lead_status`
-   *  is "not_interested" (restore leaves the old value in place). */
+  /** Why the family declined or the row was archived — only
+   *  meaningful when `lead_status` is "not_interested" / "archived"
+   *  (restore leaves the old value in place). */
   status_reason: string;
   /** Academic year this family is interested in — hand-assigned
    *  (never inferred from the submission date). 0 = unassigned, and
@@ -127,6 +128,12 @@ export type LeadFunnelStage =
  * open the full triage sheet for a linked lead without shipping the
  * entire lead table to render one row — and without a second
  * projection of the same data drifting out of sync with this one.
+ *
+ * `?includeArchived=1` keeps archived rows (duplicates / junk / tests
+ * parked from a lead's Status menu) in the result. Off by default so
+ * every other consumer — the lead sheets, the Messages inbox's lead
+ * lookup, the Tours tab's link picker — never sees them; only All
+ * Leads asks, for its Archived filter.
  */
 async function handleGET(req: NextRequest) {
   try {
@@ -287,12 +294,7 @@ async function handleGET(req: NextRequest) {
       "tour_status" | "tour_at" | "converted_family_name" | "funnel_stage"
     >;
     const bare: BareRow[] = [
-      // Archived inquiries (duplicates / junk parked from the
-      // Inquiries page) stay off the leads board entirely — restore
-      // them there if they turn out to be real.
-      ...inquiries
-        .filter((i) => (i.status ?? "").trim() !== "archived")
-        .map((i): BareRow => {
+      ...inquiries.map((i): BareRow => {
         const status = (i.status ?? "").trim();
         return {
           key: `inquiry-${i.id}`,
@@ -450,14 +452,20 @@ async function handleGET(req: NextRequest) {
       })
       .sort((a, b) => b.submitted_ts - a.submitted_ts);
 
+    const includeArchived =
+      req.nextUrl.searchParams.get("includeArchived") === "1";
+    const result = includeArchived
+      ? rows
+      : rows.filter((r) => r.lead_status !== "archived");
+
     const familyFilter = Number(req.nextUrl.searchParams.get("familyId"));
     if (Number.isFinite(familyFilter) && familyFilter > 0) {
       return NextResponse.json(
-        rows.filter((r) => r.converted_family_id === familyFilter)
+        result.filter((r) => r.converted_family_id === familyFilter)
       );
     }
 
-    return NextResponse.json(rows);
+    return NextResponse.json(result);
   } catch (err) {
     return handleAdminError(err);
   }
