@@ -238,6 +238,7 @@ export function tourNoteBody(
     | "rescheduled"
     | "completed"
     | "no_show"
+    | "reopened"
     | "canceled",
   tour: XanoTour,
   inviteSent: boolean
@@ -280,6 +281,10 @@ export function tourNoteBody(
       return `Campus tour completed (${when}).`;
     case "no_show":
       return `Campus tour no-show (was ${when}).`;
+    case "reopened":
+      // The completed / no-show line above it stays in the log; this
+      // one says it was undone rather than silently rewriting history.
+      return `Campus tour outcome undone — back to scheduled (${when}).`;
     case "canceled":
       return (
         `Campus tour canceled (was ${when}).` +

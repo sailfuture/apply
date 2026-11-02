@@ -14,6 +14,7 @@ import {
   NotebookPen,
   RotateCw,
   TriangleAlert,
+  Undo2,
   X,
 } from "lucide-react";
 import { describeSmsError, isFailedStatus } from "@/lib/sms/errors";
@@ -1026,7 +1027,7 @@ function entryTs(e: TimelineEntry): number {
 /** Outcomes recordable straight from the timeline. Deeper moves
  *  (reschedule, re-link, delete) stay on the Campus Tours page —
  *  these three are the ones that come up mid-conversation. */
-type TourMarkerAction = "complete" | "no_show" | "cancel";
+type TourMarkerAction = "complete" | "no_show" | "reopen" | "cancel";
 
 /** Compact inline action for a tour marker — sized to sit in a line
  *  of timeline text rather than read as a page-level button. Spins in
@@ -1133,6 +1134,22 @@ function TourMarker({ tour }: { tour: XanoTour }) {
             {state.label}
           </span>
           {author ? <> · {author}</> : null}
+          {/* A recorded outcome can be undone (back to scheduled) —
+              a mis-click on the icons below is one click from fixed.
+              Canceled is not undoable: the invite is gone, so that's
+              a rebook. */}
+          {tour.status === "completed" || tour.status === "no_show" ? (
+            <TourActionButton
+              icon={<Undo2 className="size-3" />}
+              label="Undo"
+              busy={pending === "reopen"}
+              disabled={pending !== null}
+              onClick={() =>
+                void runAction("reopen", "Tour is back to scheduled.")
+              }
+              title="Undo — put the tour back to scheduled"
+            />
+          ) : null}
           {/* Only offered while the outcome is still open — a
               completed, canceled, or no-showed tour has nothing left
               to record. */}

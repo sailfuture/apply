@@ -30,6 +30,9 @@ import { writeTourNote } from "@/lib/tour-notes";
  *
  *   - "complete" / "no_show" — outcome bookkeeping; the calendar
  *     event stays (it happened, or the slot was held).
+ *   - "reopen"     — undo of the two above: a completed / no-show tour
+ *     goes back to "scheduled" (nothing touches Google — the event
+ *     was never changed by the outcome).
  *   - "cancel"     — Google emails the cancellation, event id rolls
  *     to the `canceled:` sentinel (Xano can't null-clear).
  *   - "reschedule" — new `scheduled_at` (+ optional duration /
@@ -42,6 +45,7 @@ import { writeTourNote } from "@/lib/tour-notes";
 const ACTIONS = [
   "complete",
   "no_show",
+  "reopen",
   "cancel",
   "reschedule",
   "link",
@@ -159,6 +163,18 @@ export async function PATCH(
         status: action === "complete" ? "completed" : "no_show",
       });
       noteEvent = action === "complete" ? "completed" : "no_show";
+    } else if (action === "reopen") {
+      // Only an outcome can be undone. A canceled tour's Google event
+      // is gone (reopening would need a fresh invite — that's a
+      // rebook), and a scheduled one has nothing to undo.
+      if (existing.status !== "completed" && existing.status !== "no_show") {
+        return NextResponse.json(
+          { error: "Only a completed or no-show tour can be reopened." },
+          { status: 400 }
+        );
+      }
+      tour = await xano.tours.update(id, { status: "scheduled" });
+      noteEvent = "reopened";
     } else if (action === "cancel") {
       if (eventId && isGoogleCalendarConfigured()) {
         try {

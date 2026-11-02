@@ -10,6 +10,7 @@ import {
   CheckCircle2,
   Loader2,
   MapPin,
+  Undo2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -88,12 +89,12 @@ function tourShortDate(ms: number): string {
  * most recent tour decides. "bookable" covers no tour at all plus
  * canceled / no-show (both rebookable).
  */
-function resolveTourState(
-  tours: Array<{ status: string; scheduled_at: number }>
+function resolveTourState<T extends { status: string; scheduled_at: number }>(
+  tours: T[]
 ): {
   state: "scheduled" | "completed" | "past" | "bookable";
-  upcoming: { status: string; scheduled_at: number } | null;
-  latest: { status: string; scheduled_at: number } | null;
+  upcoming: T | null;
+  latest: T | null;
 } {
   const now = Date.now();
   const upcoming =
@@ -118,7 +119,9 @@ function resolveTourState(
  *
  *   - upcoming scheduled tour → blue, disabled ("Tour scheduled ·
  *     Aug 12"; reschedules happen on the Tours tab)
- *   - completed tour          → green, disabled
+ *   - completed tour          → green, disabled, with an Undo beside
+ *     it that puts the tour back to "scheduled" (a mis-click on
+ *     "Mark complete" shouldn't need the Tours tab to fix)
  *   - scheduled but the date passed unresolved → gray, disabled
  *     (mark completed / no-show on the Tours tab first)
  *   - no tour, canceled, or no-show → the normal clickable Book
@@ -149,6 +152,37 @@ export function LeadTourButton({
     { revalidateOnFocus: false }
   );
   const [open, setOpen] = useState(false);
+  const [undoing, setUndoing] = useState(false);
+
+  /** Undo a "completed" outcome: the tour goes back to scheduled and
+   *  the timeline gets an "outcome undone" line. Nothing reaches the
+   *  family — the calendar event was never touched by the outcome. */
+  async function undoCompleted(tourId: number) {
+    if (undoing) return;
+    setUndoing(true);
+    try {
+      const res = await fetch(`/api/admin/tours/${tourId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "reopen" }),
+      });
+      const result = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(result?.error ?? `Undo failed (${res.status})`);
+      }
+      if (result?.warning) toast.warning(result.warning);
+      else toast.success("Tour is back to scheduled.");
+      await mutate();
+      onChanged?.();
+    } catch (err) {
+      console.error("[LeadTourButton.undoCompleted]", err);
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't undo the tour outcome."
+      );
+    } finally {
+      setUndoing(false);
+    }
+  }
 
   // Don't render ANY state until the tour history has loaded — the
   // button used to flash clickable "Book campus tour" and then morph
@@ -180,23 +214,43 @@ export function LeadTourButton({
         ? "The scheduled date passed without being resolved — mark it completed or no-show on the Campus Visits → Tours tab, then rebook if needed."
         : "Reschedules and lifecycle changes live on the Campus Visits → Tours tab.";
     return (
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        disabled
-        title={hint}
-        className={cn("h-8", styles)}
-      >
-        {state === "scheduled" ? (
-          <CalendarCheck className="size-3.5" />
-        ) : state === "completed" ? (
-          <CheckCircle2 className="size-3.5" />
-        ) : (
-          <CalendarX2 className="size-3.5" />
-        )}
-        {label}
-      </Button>
+      <>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled
+          title={hint}
+          className={cn("h-8", styles)}
+        >
+          {state === "scheduled" ? (
+            <CalendarCheck className="size-3.5" />
+          ) : state === "completed" ? (
+            <CheckCircle2 className="size-3.5" />
+          ) : (
+            <CalendarX2 className="size-3.5" />
+          )}
+          {label}
+        </Button>
+        {state === "completed" && latest ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-8 px-2 text-muted-foreground"
+            disabled={undoing}
+            title="Undo — put the tour back to scheduled"
+            onClick={() => void undoCompleted(latest.id)}
+          >
+            {undoing ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <Undo2 className="size-3.5" />
+            )}
+            Undo
+          </Button>
+        ) : null}
+      </>
     );
   }
 

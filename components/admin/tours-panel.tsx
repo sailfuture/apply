@@ -15,6 +15,7 @@ import {
   RefreshCw,
   Search,
   Trash2,
+  Undo2,
   UserX,
 } from "lucide-react";
 import {
@@ -617,6 +618,20 @@ export function ToursPanel() {
                     Cancel tour
                   </DropdownMenuItem>
                 </>
+              ) : null}
+              {r.status === "completed" || r.status === "no_show" ? (
+                <DropdownMenuItem
+                  onClick={() =>
+                    void patchTour(
+                      r,
+                      { action: "reopen" },
+                      "Tour is back to scheduled."
+                    )
+                  }
+                >
+                  <Undo2 className="size-4" />
+                  Undo outcome
+                </DropdownMenuItem>
               ) : null}
               {/* Delete is offered on EVERY status — canceled rows
                   included; that's the whole point (cancel keeps the
