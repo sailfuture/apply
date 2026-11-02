@@ -76,6 +76,9 @@ const NAV_ITEMS: NavItem[] = [
       // Automated follow-up texts: switch, preview, and history.
       { title: "Follow-ups", href: "/admin/follow-ups" },
       { title: "Campus Tours", href: "/admin/campus-tours" },
+      // Outreach events staff attend (festivals, tabling, visits) and
+      // the hours they log there — not the parent-facing calendar.
+      { title: "Events", href: "/admin/recruitment-events" },
       { title: "Inquiries", href: "/admin/inquiries" },
       { title: "Summer Camp", href: "/admin/summer-camp" },
       { title: "Liability Waiver", href: "/admin/campus-visits" },

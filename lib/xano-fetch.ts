@@ -110,6 +110,8 @@ const CACHED_TABLES = new Set<string>([
   "registration_academic_seasons",
   "registration_bus",
   "registration_families_volunteer_hours",
+  // Recruitment events — small table, only Apply writes it.
+  "registration_recruitment_events",
   // Lead sources — read whole by every messaging + leads route for
   // contact-name resolution. The waiver list is only cacheable
   // because its endpoint stopped returning signature images

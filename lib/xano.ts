@@ -1,5 +1,6 @@
 import { getDocumentDownloadUrl as pandaDocDownloadUrl } from "@/lib/pandadoc";
 import { xanoFetch } from "@/lib/xano-fetch";
+import type { RecruitmentEventInput } from "@/lib/recruitment-events";
 
 const BASE_URL = process.env.XANO_API_BASE_URL;
 
@@ -4484,6 +4485,64 @@ export const xano = {
       });
       if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
       return res.json();
+    },
+  },
+
+  /**
+   * `registration_recruitment_events` — outreach events staff attend
+   * (Recruitment → Events). Raw rows; the route normalizes them with
+   * `normalizeRecruitmentEvent`. The table's PATCH endpoint has NO
+   * empty-value guard, so "" / false / 0 clear a column (unlike the
+   * generated CRUD endpoints — see lib/recruitment-events.ts).
+   */
+  recruitmentEvents: {
+    async getAll(): Promise<Record<string, unknown>[]> {
+      const res = await xanoFetch(
+        `${getBaseUrl()}/registration_recruitment_events`,
+        { cache: "no-store" }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      const rows = await res.json();
+      return Array.isArray(rows) ? rows : [];
+    },
+
+    async create(
+      data: Partial<RecruitmentEventInput>
+    ): Promise<Record<string, unknown>> {
+      const res = await xanoFetch(
+        `${getBaseUrl()}/registration_recruitment_events`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async update(
+      id: number,
+      data: Partial<RecruitmentEventInput>
+    ): Promise<Record<string, unknown>> {
+      const res = await xanoFetch(
+        `${getBaseUrl()}/registration_recruitment_events/${id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
+      return res.json();
+    },
+
+    async remove(id: number): Promise<void> {
+      const res = await xanoFetch(
+        `${getBaseUrl()}/registration_recruitment_events/${id}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok) throw new Error(`Xano error ${res.status}: ${await res.text()}`);
     },
   },
 
