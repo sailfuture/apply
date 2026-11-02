@@ -9,6 +9,8 @@ import {
   ArrowUpRight,
   ChevronDown,
   ChevronRight,
+  Copy,
+  Link2,
   Loader2,
   Wand2,
 } from "lucide-react";
@@ -17,6 +19,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DataTable, type ColumnDef } from "@/components/admin/data-table";
 import { LeadRowSheet } from "@/components/admin/lead-row-sheet";
+import { LeadDuplicatesDialog } from "@/components/admin/lead-duplicates-dialog";
 import {
   Card,
   CardContent,
@@ -247,6 +250,7 @@ export default function AllLeadsPage() {
   const workingYearId = Number(searchParams.get("yearId")) || 0;
   const [selected, setSelected] = useState<AllLeadRow | null>(null);
   const [matching, setMatching] = useState(false);
+  const [dupOpen, setDupOpen] = useState(false);
 
   // School years for the filter + the inline per-row picker.
   const { data: yearData } = useSWR<SchoolYearOption[]>(
@@ -264,6 +268,10 @@ export default function AllLeadsPage() {
   const visible = useMemo(
     () =>
       rows.filter((r) => {
+        // Duplicates folded under a primary ride inside that row
+        // (its "linked" chip, its sheet, its search text) — never as
+        // their own line.
+        if (r.linked_to) return false;
         const isArchived = r.lead_status === "archived";
         if (statusFilter === "archived" ? !isArchived : isArchived) {
           return false;
@@ -369,8 +377,9 @@ export default function AllLeadsPage() {
     let notInterested = 0;
     let total = 0;
     for (const r of rows) {
-      // Archived rows aren't leads — they're off every count.
-      if (r.lead_status === "archived") continue;
+      // Archived rows aren't leads, and a folded duplicate is the
+      // same lead as its primary — neither counts.
+      if (r.lead_status === "archived" || r.linked_to) continue;
       total++;
       if (r.funnel_stage !== "") converted++;
       // COMPLETED tours only — a booking that was canceled, no-showed,
@@ -584,8 +593,18 @@ export default function AllLeadsPage() {
         searchable: true,
         width: "w-[15%]",
         render: (r) => (
-          <span className="block truncate text-sm font-medium">
-            {r.student_name || "—"}
+          <span className="flex min-w-0 items-center gap-1.5 text-sm font-medium">
+            <span className="truncate">{r.student_name || "—"}</span>
+            {r.linked_leads.length > 0 ? (
+              <Badge
+                variant="outline"
+                className="shrink-0 gap-0.5 px-1 py-0 text-[10px] font-medium text-muted-foreground"
+                title={`Linked duplicates: ${r.linked_leads.map((l) => l.name).join(", ")}`}
+              >
+                <Link2 className="size-3" />
+                {r.linked_leads.length}
+              </Badge>
+            ) : null}
           </span>
         ),
       },
@@ -611,7 +630,10 @@ export default function AllLeadsPage() {
         // call / mail / copy actions), but searching by them must
         // keep working. Sorting still orders by parent name — the
         // name is the string's prefix.
-        accessor: (r) => `${r.parent_name} ${r.email} ${r.phone}`,
+        // Folded duplicates' names ride along too, so searching for
+        // the camp sign-up's spelling still finds the primary row.
+        accessor: (r) =>
+          `${r.parent_name} ${r.email} ${r.phone} ${r.linked_leads.map((l) => l.name).join(" ")}`,
         render: (r) => (
           <span className="block truncate text-sm">
             {r.parent_name || "—"}
@@ -909,6 +931,18 @@ export default function AllLeadsPage() {
               <Wand2 className="size-3.5 mr-1.5" />
             )}
             Run auto-match
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-9 shrink-0 bg-white"
+            disabled={rows.length === 0}
+            onClick={() => setDupOpen(true)}
+            title="Find leads that share a parent phone or email and link them as one"
+          >
+            <Copy className="size-3.5 mr-1.5" />
+            Find duplicates
           </Button>
         </div>
 
@@ -1269,6 +1303,13 @@ export default function AllLeadsPage() {
           ))}
         </div>
       )}
+
+      <LeadDuplicatesDialog
+        open={dupOpen}
+        onOpenChange={setDupOpen}
+        rows={rows}
+        onLinked={() => void mutate()}
+      />
 
       {/* Triage sheet — stars, follow-up, conversion link, and the
           comms log for the clicked lead, whichever source it came

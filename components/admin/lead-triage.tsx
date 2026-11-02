@@ -16,6 +16,8 @@ import {
   Mail,
   Archive,
   CircleDot,
+  Link2,
+  Link2Off,
   Pencil,
   Phone,
   Undo2,
@@ -49,6 +51,7 @@ import { adminFetcher } from "@/lib/admin-fetcher";
 import { sortYearsOldestFirst } from "@/lib/school-years";
 import { formatUSPhone } from "@/lib/phone";
 import { formatNoteTimestamp } from "@/lib/format-note-time";
+import type { LeadNoteSource } from "@/lib/xano";
 import {
   Sheet,
   SheetContent,
@@ -946,6 +949,263 @@ function LeadStatusEditor({
   );
 }
 
+/** Another lead record folded with this one — mirrors the feed's
+ *  `LeadLinkInfo`. */
+export interface LeadLinkInfo {
+  key: string;
+  source: LeadNoteSource;
+  id: number;
+  name: string;
+}
+
+/** A lead's duplicate links as the feed reports them. */
+export interface LeadLinksInfo {
+  /** The primary this lead is folded under; null when it stands on
+   *  its own (or IS a primary). */
+  linked_to: LeadLinkInfo | null;
+  /** Leads folded under this one. */
+  linked_leads: LeadLinkInfo[];
+}
+
+const LINK_SOURCE_LABEL: Record<LeadNoteSource, string> = {
+  inquiry: "Inquiry",
+  camp: "Camp",
+  visit: "Visit",
+  tasco: "TASCO",
+};
+
+/** Write a duplicate link: `linkTo` null unlinks `target`. */
+async function patchLeadLink(
+  target: LeadNoteScope,
+  linkTo: LeadNoteScope | null
+): Promise<string | undefined> {
+  const res = await fetch("/api/admin/leads", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      source: target.source,
+      id: target.id,
+      link_to: linkTo ? { source: linkTo.source, id: linkTo.id } : null,
+    }),
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(data?.error ?? `Save failed (${res.status})`);
+  return typeof data?.warning === "string" ? data.warning : undefined;
+}
+
+/** Slim feed row for the link picker. */
+interface LeadPickerRow {
+  key: string;
+  source: LeadNoteSource;
+  id: number;
+  student_name: string;
+  parent_name: string;
+  phone: string;
+  email: string;
+  lead_status: string;
+  linked_to: LeadLinkInfo | null;
+}
+
+/**
+ * Banner on a lead that's folded under another: says where its
+ * history now shows and offers the one move that applies here —
+ * Unlink. Sits above the triage row so nobody rates or texts a
+ * duplicate without knowing.
+ */
+function LinkedUnderBanner({
+  scope,
+  primary,
+  onChanged,
+}: {
+  scope: LeadNoteScope;
+  primary: LeadLinkInfo;
+  onChanged?: () => void;
+}) {
+  const [saving, setSaving] = useState(false);
+  async function unlink() {
+    setSaving(true);
+    try {
+      const warning = await patchLeadLink(scope, null);
+      if (warning) toast.warning(warning);
+      else toast.success("Lead unlinked — it stands on its own again.");
+      onChanged?.();
+    } catch (err) {
+      console.error("[LinkedUnderBanner.unlink]", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't unlink.");
+    } finally {
+      setSaving(false);
+    }
+  }
+  return (
+    <div className="flex shrink-0 items-center justify-between gap-2 border-b bg-amber-50 px-4 py-2 text-xs text-amber-900">
+      <span className="min-w-0">
+        <Link2 className="mr-1 inline size-3.5 align-text-bottom" />
+        Linked under <span className="font-medium">{primary.name}</span> (
+        {LINK_SOURCE_LABEL[primary.source]}). Its texts, calls, notes and
+        tours show on that lead.
+      </span>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="h-7 shrink-0 bg-white"
+        disabled={saving}
+        onClick={() => void unlink()}
+      >
+        {saving ? (
+          <Loader2 className="size-3.5 mr-1 animate-spin" />
+        ) : (
+          <Link2Off className="size-3.5 mr-1" />
+        )}
+        Unlink
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * Duplicate links, as a field in the details block: chips for the
+ * leads folded under this one (each with an unlink ✕) and a combobox
+ * to fold another in. Picking a lead makes THIS lead its primary —
+ * the picker is for "that other record is the same family".
+ */
+function LeadLinksEditor({
+  scope,
+  links,
+  onChanged,
+}: {
+  scope: LeadNoteScope;
+  links: LeadLinksInfo;
+  onChanged?: () => void;
+}) {
+  const [pickerOpen, setPickerOpen] = useState(false);
+  // Key of the lead whose link is being written (chip spinner).
+  const [saving, setSaving] = useState<string | null>(null);
+  const { data: leadRows, isLoading } = useSWR<LeadPickerRow[]>(
+    pickerOpen ? "/api/admin/all-leads" : null,
+    adminFetcher
+  );
+
+  async function setLink(target: LeadNoteScope, linkTo: LeadNoteScope | null) {
+    setSaving(`${target.source}-${target.id}`);
+    try {
+      const warning = await patchLeadLink(target, linkTo);
+      if (warning) toast.warning(warning);
+      else toast.success(linkTo ? "Leads linked." : "Lead unlinked.");
+      onChanged?.();
+    } catch (err) {
+      console.error("[LeadLinksEditor.setLink]", err);
+      toast.error(err instanceof Error ? err.message : "Couldn't save the link.");
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  const selfKey = `${scope.source}-${scope.id}`;
+  const already = new Set(links.linked_leads.map((l) => l.key));
+  const candidates = (leadRows ?? []).filter(
+    (r) =>
+      r.key !== selfKey &&
+      r.lead_status !== "archived" &&
+      !r.linked_to &&
+      !already.has(r.key)
+  );
+
+  return (
+    <div className="min-w-0">
+      <p className="mb-1 text-[11px] text-muted-foreground">Linked leads</p>
+      {links.linked_leads.length > 0 ? (
+        <div className="mb-1.5 flex flex-wrap gap-1.5">
+          {links.linked_leads.map((l) => (
+            <span
+              key={l.key}
+              className="inline-flex items-center gap-1 rounded-md border bg-white py-0.5 pl-2 pr-1 text-xs"
+            >
+              <Link2 className="size-3 text-muted-foreground" />
+              <span className="font-medium">{l.name}</span>
+              <span className="text-muted-foreground">
+                · {LINK_SOURCE_LABEL[l.source]}
+              </span>
+              <button
+                type="button"
+                className="ml-0.5 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+                title={`Unlink ${l.name}`}
+                disabled={saving !== null}
+                onClick={() =>
+                  void setLink({ source: l.source, id: l.id }, null)
+                }
+              >
+                {saving === l.key ? (
+                  <Loader2 className="size-3 animate-spin" />
+                ) : (
+                  <Link2Off className="size-3" />
+                )}
+                <span className="sr-only">Unlink</span>
+              </button>
+            </span>
+          ))}
+        </div>
+      ) : null}
+      <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
+        <PopoverTrigger asChild>
+          <Button
+            type="button"
+            variant="outline"
+            role="combobox"
+            aria-expanded={pickerOpen}
+            disabled={saving !== null}
+            className="h-8 w-full justify-between bg-white px-2 font-normal"
+          >
+            <span className="text-muted-foreground">
+              Link a duplicate lead…
+            </span>
+            <ChevronsUpDown className="ml-1 size-3.5 shrink-0 opacity-50" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent
+          className="w-(--radix-popover-trigger-width) min-w-72 p-0"
+          align="start"
+        >
+          <Command>
+            <CommandInput placeholder="Search student, parent, phone, or email…" />
+            <CommandList>
+              <CommandEmpty>
+                {isLoading ? "Loading leads…" : "No lead found."}
+              </CommandEmpty>
+              <CommandGroup>
+                {candidates.map((r) => (
+                  <CommandItem
+                    key={r.key}
+                    value={`${r.student_name} ${r.parent_name} ${r.phone} ${r.email} ${LINK_SOURCE_LABEL[r.source]} #${r.id}`}
+                    onSelect={() => {
+                      setPickerOpen(false);
+                      void setLink({ source: r.source, id: r.id }, scope);
+                    }}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium">
+                        {r.student_name || r.parent_name || `#${r.id}`}
+                        <span className="ml-1.5 text-xs font-normal text-muted-foreground">
+                          {LINK_SOURCE_LABEL[r.source]}
+                        </span>
+                      </p>
+                      <p className="truncate text-xs text-muted-foreground">
+                        {[r.parent_name, formatUSPhone(r.phone) || r.phone, r.email]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </p>
+                    </div>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            </CommandList>
+          </Command>
+        </PopoverContent>
+      </Popover>
+    </div>
+  );
+}
+
 /** The contact facts the triage sheet can edit. Source-agnostic —
  *  `/api/admin/leads` maps each onto the lead table's own columns. */
 export interface LeadEditableDetails {
@@ -1455,6 +1715,7 @@ export function LeadTriageSheet({
   leadStatus,
   statusReason,
   schoolYearId,
+  links,
   extraFields,
   extraContent,
   headerBadges,
@@ -1486,6 +1747,11 @@ export function LeadTriageSheet({
    *  When provided the sheet renders the year picker beside the
    *  conversion combobox. */
   schoolYearId?: number;
+  /** Duplicate-lead links from the feed. When provided: a banner on
+   *  a folded lead, a Linked leads field (chips + picker) in the
+   *  details block, and the folded leads' notes/tours merged into
+   *  the activity log. */
+  links?: LeadLinksInfo;
   /** Read-only facts a particular source carries that the shared
    *  details block doesn't — e.g. an inquiry's "About the student".
    *  Rendered directly under the Email row inside the details editor
@@ -1553,6 +1819,15 @@ export function LeadTriageSheet({
             </SheetDescription>
           ) : null}
         </SheetHeader>
+
+        {links?.linked_to ? (
+          <LinkedUnderBanner
+            key={`linked-${scope.source}-${scope.id}`}
+            scope={scope}
+            primary={links.linked_to}
+            onChanged={onChanged}
+          />
+        ) : null}
 
         <div className="shrink-0 space-y-3 border-b px-4 py-4">
           {/* Rating on its own row, then the two triage ACTIONS
@@ -1634,6 +1909,16 @@ export function LeadTriageSheet({
                 onChanged={onChanged}
               />
             ) : null}
+            {/* Duplicate links — a folded lead has no field of its
+                own (the banner up top covers it). */}
+            {links && !links.linked_to ? (
+              <LeadLinksEditor
+                key={`links-${scope.source}-${scope.id}`}
+                scope={scope}
+                links={links}
+                onChanged={onChanged}
+              />
+            ) : null}
             {/* Conversion reads as the last field of the details
                 block — one combobox under Opt-in. */}
             {conversion ? (
@@ -1681,6 +1966,10 @@ export function LeadTriageSheet({
               scope={scope}
               variant="timeline"
               familyId={conversion?.family_id ?? 0}
+              linkedScopes={links?.linked_leads.map((l) => ({
+                source: l.source,
+                id: l.id,
+              }))}
             />
           </div>
         </div>

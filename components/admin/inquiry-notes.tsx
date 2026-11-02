@@ -68,7 +68,11 @@ import {
 import type { ToursResponse } from "@/app/api/admin/tours/route";
 import type { CallsResponse } from "@/app/api/admin/calls/route";
 import { CallMarker } from "@/components/admin/call-marker";
-import { liveTourEventId } from "@/lib/xano";
+import {
+  LEAD_NOTE_COLUMN,
+  LEAD_NOTE_SOURCES,
+  liveTourEventId,
+} from "@/lib/xano";
 import type {
   LeadNoteSource,
   XanoAdminNote,
@@ -255,6 +259,12 @@ interface Props {
    *  "Family" tag, and the SMS composer sends on the family thread —
    *  see `postLeadEntry`. */
   familyId?: number;
+  /** Duplicate leads folded under this one (lib/lead-links.ts). Their
+   *  notes and tours are merged into this timeline with a source tag;
+   *  their texts and calls already arrive on this lead's thread (the
+   *  messages route folds them server-side) and are tagged the same
+   *  way from the row's own FK. */
+  linkedScopes?: LeadNoteScope[];
   /** Optional callback fired after a successful note add — the parent
    *  Sheet uses this to revalidate the lead list so `last_reach_out`
    *  (bumped server-side on POST) reflects in the table immediately. */
@@ -296,6 +306,7 @@ export function InquiryNotes({
   inquiryId,
   scope,
   familyId,
+  linkedScopes,
   onNoteAdded,
   variant = "panel",
 }: Props) {
@@ -338,6 +349,56 @@ export function InquiryNotes({
   const familyMessages = familyData?.messages ?? [];
   const familyCalls = familyData?.calls ?? [];
 
+  // Notes + tours of the duplicate leads folded under this one. One
+  // composite key (prefixed like a notes URL so the tour actions'
+  // `isTourAffectedKey` revalidation sweeps it too); the fetcher
+  // fans out per lead.
+  const linkedKey =
+    linkedScopes && linkedScopes.length > 0
+      ? `/api/admin/notes?linked=${linkedScopes.map((s) => `${s.source}-${s.id}`).join(",")}`
+      : null;
+  const { data: linkedData, mutate: mutateLinked } = useSWR(
+    linkedKey,
+    async () => {
+      const scopes = linkedScopes ?? [];
+      const [noteLists, tourLists] = await Promise.all([
+        Promise.all(scopes.map((s) => fetcher(leadNotesKey(s)))),
+        Promise.all(
+          scopes.map((s) => adminFetcher(leadToursKey(s)) as Promise<ToursResponse>)
+        ),
+      ]);
+      return {
+        notes: scopes.flatMap((s, i) =>
+          (noteLists[i] ?? []).map((note) => ({ note, from: s }))
+        ),
+        tours: scopes.flatMap((s, i) =>
+          (tourLists[i]?.tours ?? []).map((tour) => ({ tour, from: s }))
+        ),
+      };
+    },
+    { revalidateOnFocus: false }
+  );
+  const linkedNotes = linkedData?.notes ?? [];
+  const linkedTours = linkedData?.tours ?? [];
+  /** Tag for a row attributed to a different lead record than the
+   *  one this log belongs to — a folded duplicate's text or call. */
+  const leadTagFor = (
+    row: Pick<
+      XanoSmsMessage,
+      | "registration_inquiry_id"
+      | "registration_summer_camp_id"
+      | "website_liability_waiver_id"
+      | "tasco_summer_visit_id"
+    >
+  ): string | undefined => {
+    const src = leadSourceOfRow(row);
+    if (!src) return undefined;
+    const id = Number(row[LEAD_NOTE_COLUMN[src]]);
+    return src === leadScope.source && id === leadScope.id
+      ? undefined
+      : LEAD_TAG[src];
+  };
+
   // Campus tours for this lead, read from the tours table itself —
   // that way a booking shows in the log even if it predates this
   // feature or its note write was rejected (see the tour-notes
@@ -372,6 +433,14 @@ export function InquiryNotes({
       // pinning was an explicit admin choice.
       .filter((n) => !isRedundantTourBookingNote(n))
       .map((note) => ({ kind: "note" as const, note })),
+    ...linkedNotes
+      .filter(({ note }) => !note.is_pinned && !isRedundantTourBookingNote(note))
+      .map(({ note, from }) => ({ kind: "note" as const, note, from })),
+    ...linkedTours.map(({ tour, from }) => ({
+      kind: "tour" as const,
+      tour,
+      from,
+    })),
     ...smsMessages.map((msg) => ({ kind: "sms" as const, msg })),
     ...familyMessages.map((msg) => ({
       kind: "sms" as const,
@@ -481,6 +550,7 @@ export function InquiryNotes({
       });
       if (!res.ok) throw new Error(`Save failed (${res.status})`);
       await mutate();
+      void mutateLinked();
     } catch (err) {
       console.error("Failed to toggle pin:", err);
       toast.error("Couldn't update pin.");
@@ -496,6 +566,7 @@ export function InquiryNotes({
       const res = await fetch(`/api/admin/notes/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error(`Delete failed (${res.status})`);
       await mutate();
+      void mutateLinked();
       toast.success("Note removed.");
     } catch (err) {
       console.error("Failed to delete note:", err);
@@ -585,9 +656,9 @@ export function InquiryNotes({
     }
     const sig =
       e.kind === "note"
-        ? `note|${e.note.author_name}|${e.note.category ?? ""}|${e.note.is_pinned}`
+        ? `note|${e.note.author_name}|${e.note.category ?? ""}|${e.note.is_pinned}|${e.from?.source ?? ""}`
         : e.kind === "sms"
-          ? `sms|${e.msg.direction}|${e.msg.from_number}|${e.family ? "family" : "lead"}`
+          ? `sms|${e.msg.direction}|${e.msg.from_number}|${e.family ? "family" : (leadTagFor(e.msg) ?? "lead")}`
           : e.kind === "call"
             ? `call|${e.call.id}`
             : // A tour marker breaks any run — the next bubble re-names
@@ -599,13 +670,21 @@ export function InquiryNotes({
       rows.push({
         id: `call-${e.call.id}`,
         node: (
-          <CallMarker call={e.call} tag={e.family ? "Family" : undefined} />
+          <CallMarker
+            call={e.call}
+            tag={e.family ? "Family" : leadTagFor(e.call)}
+          />
         ),
       });
     } else if (e.kind === "tour") {
       rows.push({
         id: `tour-${e.tour.id}`,
-        node: <TourMarker tour={e.tour} />,
+        node: (
+          <TourMarker
+            tour={e.tour}
+            tag={e.from ? LEAD_TAG[e.from.source] : undefined}
+          />
+        ),
       });
     } else if (e.kind === "note") {
       rows.push({
@@ -615,9 +694,13 @@ export function InquiryNotes({
           <NoteBubble
             note={e.note}
             showHeader={showHeader}
+            tag={e.from ? LEAD_TAG[e.from.source] : undefined}
             onTogglePin={togglePin}
             onDelete={(id) => setPendingDelete(id)}
-            onEdited={() => mutate()}
+            onEdited={() => {
+              void mutate();
+              void mutateLinked();
+            }}
           />
         ),
       });
@@ -629,7 +712,7 @@ export function InquiryNotes({
           <SmsBubble
             msg={e.msg}
             showHeader={showHeader}
-            tag={e.family ? "Family" : undefined}
+            tag={e.family ? "Family" : leadTagFor(e.msg)}
             onRetry={(text) => void retrySms(text, e.family)}
             retrying={retryingBody === e.msg.body}
           />
@@ -961,6 +1044,7 @@ export function InquiryNoteComposer({
 function NoteBubble({
   note,
   showHeader = true,
+  tag,
   onTogglePin,
   onDelete,
   onEdited,
@@ -969,6 +1053,8 @@ function NoteBubble({
   /** False when the previous entry carries the identical header —
    *  the run shows the author once, chat-style. */
   showHeader?: boolean;
+  /** Source tag for a note merged in from a duplicate lead. */
+  tag?: string;
   onTogglePin: (n: XanoAdminNote) => void;
   onDelete: (id: number) => void;
   onEdited: () => void;
@@ -1007,6 +1093,11 @@ function NoteBubble({
         {showHeader ? (
           <MessageHeader>
             {note.author_name || "Admin"}
+            {tag ? (
+              <span className="ml-1.5 shrink-0 rounded border border-border bg-muted px-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                {tag}
+              </span>
+            ) : null}
             {note.category ? (
               <span className="text-muted-foreground">
                 {" "}
@@ -1097,12 +1188,39 @@ function formatCategory(c: string): string {
 /** One entry in the merged activity timeline — an admin note, a real
  *  text from the lead's SMS thread, or a campus tour. */
 type TimelineEntry =
-  | { kind: "note"; note: XanoAdminNote }
+  /** `from` names the duplicate lead a note/tour was read from (a
+   *  lead folded under this one) — rendered with a source tag. */
+  | { kind: "note"; note: XanoAdminNote; from?: LeadNoteScope }
   /** `family` marks rows read from the converted family's thread
    *  rather than the lead's own — rendered with a "Family" tag. */
   | { kind: "sms"; msg: XanoSmsMessage; family?: boolean }
-  | { kind: "tour"; tour: XanoTour }
+  | { kind: "tour"; tour: XanoTour; from?: LeadNoteScope }
   | { kind: "call"; call: XanoCall; family?: boolean };
+
+/** Source tag text for rows merged in from a duplicate lead. */
+const LEAD_TAG: Record<LeadNoteSource, string> = {
+  inquiry: "Inquiry",
+  camp: "Camp",
+  visit: "Visit",
+  tasco: "TASCO",
+};
+
+/** Which lead table a text/call row is attributed to, from its FK
+ *  columns (family rows return null — they're tagged separately). */
+function leadSourceOfRow(
+  row: Pick<
+    XanoSmsMessage,
+    | "registration_inquiry_id"
+    | "registration_summer_camp_id"
+    | "website_liability_waiver_id"
+    | "tasco_summer_visit_id"
+  >
+): LeadNoteSource | null {
+  for (const source of LEAD_NOTE_SOURCES) {
+    if (Number(row[LEAD_NOTE_COLUMN[source]]) > 0) return source;
+  }
+  return null;
+}
 
 function entryTs(e: TimelineEntry): number {
   if (e.kind === "note") return e.note.created_at;
@@ -1170,7 +1288,7 @@ function TourActionButton({
  *  shows here, including ones booked before this log existed and any
  *  whose note write failed. Always current: the status reflects the
  *  tour now, not what it was when it was booked. */
-function TourMarker({ tour }: { tour: XanoTour }) {
+function TourMarker({ tour, tag }: { tour: XanoTour; tag?: string }) {
   const { mutate: globalMutate } = useSWRConfig();
   // Which action is in flight, so only that button spins while the
   // others simply disable.
@@ -1216,6 +1334,11 @@ function TourMarker({ tour }: { tour: XanoTour }) {
         </MarkerIcon>
         <MarkerContent>
           <span className="font-medium text-foreground/80">Campus tour</span>
+          {tag ? (
+            <span className="ml-1.5 rounded border border-border bg-muted px-1 align-middle text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              {tag}
+            </span>
+          ) : null}
           {" — "}
           {tourWhenLabel(tour.scheduled_at, tour.duration_minutes)}
           {" · "}

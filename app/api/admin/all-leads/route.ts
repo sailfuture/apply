@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withServerTiming } from "@/lib/server-timing";
+import { buildLeadLinkIndex, leadRefKey } from "@/lib/lead-links";
 import { requireAdmin, handleAdminError } from "@/lib/admin-auth";
 import {
   xano,
@@ -36,6 +37,15 @@ export type LeadSource = "inquiry" | "camp" | "visit" | "tasco";
 
 // A `type` (not `interface`) so it satisfies DataTable's
 // `Record<string, unknown>` constraint.
+/** Another lead record folded with this one (lib/lead-links.ts). */
+export interface LeadLinkInfo {
+  key: string;
+  source: LeadSource;
+  id: number;
+  /** Student name, else parent name, else "Source #id". */
+  name: string;
+}
+
 export type AllLeadRow = {
   /** Stable key: `${source}-${id}`. */
   key: string;
@@ -105,6 +115,13 @@ export type AllLeadRow = {
    *  page-computed sets override these. Today only inquiry rows carry
    *  any ("How they heard about us" / "About the student"). */
   extra_fields: Array<{ label: string; value: string }>;
+  /** The primary this lead is folded under as a duplicate; null when
+   *  it stands on its own. Folded rows stay in the feed (their sheet
+   *  still opens) but the board hides them under the primary. */
+  linked_to: LeadLinkInfo | null;
+  /** Leads folded under this one. Conversion is a group fact: a
+   *  family link on any member is reported on every member. */
+  linked_leads: LeadLinkInfo[];
   /** Funnel stage DERIVED live from the linked family's application
    *  data (never stored — same philosophy as `deriveApplicationStatus`):
    *  "" not converted · "linked" family exists but no application row
@@ -291,7 +308,12 @@ async function handleGET(req: NextRequest) {
     // carry the raw conversion link, which is a per-source column.
     type BareRow = Omit<
       AllLeadRow,
-      "tour_status" | "tour_at" | "converted_family_name" | "funnel_stage"
+      | "tour_status"
+      | "tour_at"
+      | "converted_family_name"
+      | "funnel_stage"
+      | "linked_to"
+      | "linked_leads"
     >;
     const bare: BareRow[] = [
       ...inquiries.map((i): BareRow => {
@@ -448,9 +470,62 @@ async function handleGET(req: NextRequest) {
           // exists (or the joins blipped) — still worth showing as
           // further along than an untouched lead.
           funnel_stage: fid ? (stageByFamily.get(fid) ?? "linked") : "",
+          linked_to: null,
+          linked_leads: [],
         };
       })
       .sort((a, b) => b.submitted_ts - a.submitted_ts);
+
+    // Duplicate-lead links — who folds under whom, then conversion as
+    // a group fact (the inquiry converted, the camp row is the
+    // primary: both read as converted).
+    const linkIndex = buildLeadLinkIndex({
+      inquiries,
+      camps: campRows,
+      visits: waivers,
+      tascos: tascoRows,
+    });
+    const rowByKey = new Map(rows.map((r) => [r.key, r]));
+    const SOURCE_SHORT: Record<LeadSource, string> = {
+      inquiry: "Inquiry",
+      camp: "Camp",
+      visit: "Visit",
+      tasco: "TASCO",
+    };
+    const linkInfo = (r: AllLeadRow): LeadLinkInfo => ({
+      key: r.key,
+      source: r.source,
+      id: r.id,
+      name:
+        r.student_name || r.parent_name || `${SOURCE_SHORT[r.source]} #${r.id}`,
+    });
+    for (const r of rows) {
+      const primary = linkIndex.primaryOf.get(r.key);
+      const p = primary ? rowByKey.get(leadRefKey(primary)) : undefined;
+      r.linked_to = p ? linkInfo(p) : null;
+      r.linked_leads = (linkIndex.membersOf.get(r.key) ?? [])
+        .map((m) => rowByKey.get(leadRefKey(m)))
+        .filter((m): m is AllLeadRow => m !== undefined)
+        .map(linkInfo);
+    }
+    for (const r of rows) {
+      if (r.linked_leads.length === 0) continue;
+      const group = [
+        r,
+        ...r.linked_leads
+          .map((l) => rowByKey.get(l.key))
+          .filter((m): m is AllLeadRow => m !== undefined),
+      ];
+      const converted = group.find((g) => g.converted_family_id > 0);
+      if (!converted) continue;
+      for (const g of group) {
+        if (g.converted_family_id > 0) continue;
+        g.converted_family_id = converted.converted_family_id;
+        g.converted_family_name = converted.converted_family_name;
+        g.converted_at = converted.converted_at;
+        g.funnel_stage = converted.funnel_stage;
+      }
+    }
 
     const includeArchived =
       req.nextUrl.searchParams.get("includeArchived") === "1";

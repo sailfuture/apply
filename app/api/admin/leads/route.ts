@@ -8,6 +8,13 @@ import {
   type LeadContactFields,
 } from "@/lib/leads";
 import { writeLeadConversion } from "@/lib/lead-conversion";
+import {
+  leadRefKey,
+  loadLeadLinkIndex,
+  loadLeadLinkRows,
+  parseLeadRef,
+  resolvePrimary,
+} from "@/lib/lead-links";
 
 /**
  * Admin writes for any recruitment lead, routed to the lead's own
@@ -16,7 +23,12 @@ import { writeLeadConversion } from "@/lib/lead-conversion";
  *   PATCH { source, id, interest_level?, isFollowedUp?, opt_in?,
  *           student_name?, parent_name?, phone?, email?, grade?,
  *           school?, family_id?, status?, status_reason?,
- *           school_year_id?, camp_year_attended? }
+ *           school_year_id?, camp_year_attended?, link_to? }
+ *
+ * `link_to` folds this lead under another as a duplicate:
+ * `{ source, id }` links (always to that lead's PRIMARY, and this
+ * lead's own members follow it, so groups stay one level deep);
+ * `null` unlinks. See lib/lead-links.ts.
  *
  * `school_year_id` is the academic year the family is interested in
  * (FK to `registration_school_years`; 0 = unassigned). Hand-set from
@@ -179,6 +191,56 @@ export async function PATCH(req: NextRequest) {
     }
     Object.assign(patch, statusPatch);
 
+    // Duplicate-lead link. Resolved against the live index so a link
+    // to an already-linked lead lands on its primary, and a lead
+    // being folded under someone else takes its own members along.
+    const linkPatch: Record<string, string | number> = {};
+    if ("link_to" in body) {
+      const v = body.link_to;
+      if (v === null || v === 0) {
+        linkPatch.linked_to_id = 0;
+      } else {
+        const target = parseLeadRef(v);
+        if (!target) {
+          return NextResponse.json(
+            { error: "link_to must be { source, id } or null" },
+            { status: 400 }
+          );
+        }
+        if (target.source === source && target.id === id) {
+          return NextResponse.json(
+            { error: "A lead can't be linked to itself." },
+            { status: 400 }
+          );
+        }
+        const linkRows = await loadLeadLinkRows();
+        if (!linkRows.rowsOf(target.source).some((r) => r.id === target.id)) {
+          return NextResponse.json(
+            { error: "That lead doesn't exist." },
+            { status: 404 }
+          );
+        }
+        const index = await loadLeadLinkIndex();
+        const primary = resolvePrimary(index, target);
+        if (primary.source === source && primary.id === id) {
+          return NextResponse.json(
+            { error: "That lead is already linked under this one." },
+            { status: 400 }
+          );
+        }
+        linkPatch.linked_to_source = primary.source;
+        linkPatch.linked_to_id = primary.id;
+        const own = index.membersOf.get(leadRefKey({ source, id })) ?? [];
+        for (const m of own) {
+          await updateLead(m.source, m.id, {
+            linked_to_source: primary.source,
+            linked_to_id: primary.id,
+          });
+        }
+      }
+    }
+    Object.assign(patch, linkPatch);
+
     // Generic contact fields → the source table's own columns.
     const contactFields: LeadContactFields = {};
     for (const field of CONTACT_STRING_FIELDS) {
@@ -251,7 +313,12 @@ export async function PATCH(req: NextRequest) {
     // mis-wired column would report success while saving nothing.
     // Booleans compare as booleans; everything else through String()
     // (Xano stores some phones as numbers).
-    const verifyPatch = { ...contactPatch, ...statusPatch, ...yearPatch };
+    const verifyPatch = {
+      ...contactPatch,
+      ...statusPatch,
+      ...yearPatch,
+      ...linkPatch,
+    };
     const row = (updated ?? {}) as Record<string, unknown>;
     const dropped =
       updated == null

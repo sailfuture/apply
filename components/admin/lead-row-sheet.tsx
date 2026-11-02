@@ -70,6 +70,7 @@ export function LeadRowSheet({
       }}
       leadStatus={row.lead_status}
       statusReason={row.status_reason}
+      links={{ linked_to: row.linked_to, linked_leads: row.linked_leads }}
       extraFields={row.extra_fields}
       onChanged={onChanged}
     />

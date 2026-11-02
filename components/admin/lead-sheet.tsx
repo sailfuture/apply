@@ -153,6 +153,7 @@ export function LeadSheet({
       }}
       leadStatus={row.lead_status}
       statusReason={row.status_reason}
+      links={{ linked_to: row.linked_to, linked_leads: row.linked_leads }}
       schoolYearId={row.school_year_id}
       // Host-supplied fields win (source pages compute richer sets);
       // otherwise fall back to the feed's, so surfaces that open a

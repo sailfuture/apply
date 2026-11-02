@@ -12,6 +12,7 @@ import {
   type SmsContactType,
 } from "@/lib/sms/contacts";
 import { callNeedsReply, callPreview } from "@/lib/calls";
+import { buildLeadLinkIndex, resolvePrimary } from "@/lib/lead-links";
 import { computeFamilyStageSets } from "@/lib/sms/stages";
 import { getFacultyByPhone } from "@/lib/sms/faculty";
 import { isFollowUpTemplate } from "@/lib/nurture/templates";
@@ -279,6 +280,28 @@ export async function buildInboxFeed(
   linkLeads("camp", campRows);
   linkLeads("visit", waivers);
   linkLeads("tasco", tascoRows);
+
+  // Duplicate leads folded under a primary (lib/lead-links.ts) share
+  // the primary's conversation: their texts and calls count toward
+  // its row here, and the thread route merges them when opened.
+  const linkIndex = buildLeadLinkIndex({
+    inquiries,
+    camps: campRows,
+    visits: waivers,
+    tascos: tascoRows,
+  });
+  const foldLinked = <T extends { type: SmsContactType; id: number }>(
+    c: T | null
+  ): T | null => {
+    if (!c || c.type === "family" || c.type === "adhoc") return c;
+    const primary = resolvePrimary(linkIndex, {
+      source: c.type,
+      id: c.id,
+    });
+    return primary.id === c.id && primary.source === c.type
+      ? c
+      : { ...c, type: primary.source, id: primary.id };
+  };
   const enrolledFamilyFor = (
     type: SmsContactType,
     id: number
@@ -419,7 +442,7 @@ export async function buildInboxFeed(
     }
   >();
   for (const m of messages) {
-    const c = messageContact(m);
+    const c = foldLinked(messageContact(m));
     if (!c) continue;
     const key = `${c.type}:${c.id}`;
     const counts = !(
@@ -449,7 +472,7 @@ export async function buildInboxFeed(
     }
   }
   for (const call of calls) {
-    const c = call.contact;
+    const c = foldLinked(call.contact);
     if (!c) continue;
     const key = `${c.type}:${c.id}`;
     const existing = byContact.get(key);

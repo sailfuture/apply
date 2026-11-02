@@ -118,6 +118,10 @@ export interface NurtureLead {
   status: string;
   /** Linked applying family (0 = none) — i.e. they've applied. */
   familyId: number;
+  /** Primary lead this record is folded under as a duplicate (0 =
+   *  none). A folded lead never gets its own texts — the primary's
+   *  plan covers the family. */
+  linkedToId: number;
   lastReachOut: number;
   /** Texting consent on the lead's own form. Only an explicit "no"
    *  blocks tour texts (the same gate `sendSms` applies); inquiry
@@ -206,12 +210,14 @@ export function buildLeads(input: NurtureInput): Map<string, NurtureLead> {
     created_at: number;
     status?: string | null;
     registration_families_id?: unknown;
+    linked_to_id?: number | null;
     last_reach_out?: number | null;
   }) => ({
     id: row.id,
     createdAt: num(row.created_at),
     status: String(row.status ?? "").trim().toLowerCase(),
     familyId: leadConvertedFamilyId(row),
+    linkedToId: num(row.linked_to_id),
     lastReachOut: num(row.last_reach_out),
   });
 
@@ -472,7 +478,11 @@ interface Candidate {
 }
 
 function isStopped(lead: NurtureLead): boolean {
-  return lead.status === "not_interested" || lead.status === "archived";
+  return (
+    lead.status === "not_interested" ||
+    lead.status === "archived" ||
+    lead.linkedToId > 0
+  );
 }
 
 function hasApplied(lead: NurtureLead): boolean {

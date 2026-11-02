@@ -1766,6 +1766,10 @@ export interface XanoInquiry {
    *  empty inputs); consumers must only read it when
    *  `status === "not_interested"`. */
   status_reason?: string | null;
+  /** Duplicate-lead link: the primary this record is folded under
+   *  (see lib/lead-links.ts). `linked_to_id` 0 = not linked. */
+  linked_to_source?: string | null;
+  linked_to_id?: number | null;
   /** Admin's 1–5 gut-feel star rating of how interested the family
    *  seems. 0/undefined = not yet rated; clicking the current rating
    *  clears back to 0. Unlike empty strings/null, integer 0 IS
@@ -1841,6 +1845,10 @@ export interface XanoSummerCampInquiry {
    *  echo-verifies and warns when they don't. */
   status?: string | null;
   status_reason?: string | null;
+  /** Duplicate-lead link: the primary this record is folded under
+   *  (see lib/lead-links.ts). `linked_to_id` 0 = not linked. */
+  linked_to_source?: string | null;
+  linked_to_id?: number | null;
   student_first_name: string;
   student_last_name: string;
   gender: string;
@@ -1908,6 +1916,10 @@ export interface XanoWebsiteLiabilityWaiver {
   /** Lifecycle bucket + decline reason — see `XanoInquiry`. */
   status?: string | null;
   status_reason?: string | null;
+  /** Duplicate-lead link: the primary this record is folded under
+   *  (see lib/lead-links.ts). `linked_to_id` 0 = not linked. */
+  linked_to_source?: string | null;
+  linked_to_id?: number | null;
 }
 
 /** One TASCO summer-visit sign-up (`tasco_summer_visit`). Public form
@@ -1946,6 +1958,10 @@ export interface XanoTascoSummerVisit {
   /** Lifecycle bucket + decline reason — see `XanoInquiry`. */
   status?: string | null;
   status_reason?: string | null;
+  /** Duplicate-lead link: the primary this record is folded under
+   *  (see lib/lead-links.ts). `linked_to_id` 0 = not linked. */
+  linked_to_source?: string | null;
+  linked_to_id?: number | null;
 }
 
 /** Lookup table — distinguishes new applicants from returning enrollments. */

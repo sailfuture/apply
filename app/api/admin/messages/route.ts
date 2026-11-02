@@ -29,6 +29,7 @@ import { threadQuoUrl } from "@/lib/quo/links";
 import { buildInboxFeed } from "@/lib/sms/inbox-feed";
 import { ADMIN_YEAR_COOKIE, parseAdminYearId } from "@/lib/school-year-default";
 import { bumpLeadReachOut } from "@/lib/leads";
+import { linkedLeadMembers } from "@/lib/lead-links";
 
 // The conversation-list types live with the builder in
 // lib/sms/inbox-feed.ts; re-exported so the inbox's
@@ -123,6 +124,18 @@ async function handleGET(req: NextRequest) {
       });
     }
 
+    // A primary lead's thread also carries the texts and calls of the
+    // duplicate leads folded under it (lib/lead-links.ts), so one
+    // family's conversation reads as one thread however many records
+    // they signed up through. Families and ad-hoc numbers have no
+    // links.
+    const linkedMembers =
+      contact.type === "family" || contact.type === "adhoc"
+        ? []
+        : await linkedLeadMembers({
+            source: contact.type as LeadNoteSource,
+            id: contact.id,
+          });
     // Ad-hoc threads have no FK column to query on — filter the full
     // log down to no-contact rows whose counterparty is this number.
     const messagesPromise =
@@ -137,7 +150,18 @@ async function handleGET(req: NextRequest) {
               )
               .sort((a, b) => a.created_at - b.created_at);
           })
-        : xano.smsMessages.getByContact(contact.type, contact.id);
+        : linkedMembers.length === 0
+          ? xano.smsMessages.getByContact(contact.type, contact.id)
+          : Promise.all([
+              xano.smsMessages.getByContact(contact.type, contact.id),
+              ...linkedMembers.map((m) =>
+                xano.smsMessages.getByContact(m.source, m.id)
+              ),
+            ]).then((lists) =>
+              lists
+                .flat()
+                .sort((a, b) => a.created_at - b.created_at || a.id - b.id)
+            );
     // Phone calls on the Main Line with this contact — they sit in the
     // thread between the texts. Ad-hoc numbers have no FK column on
     // the calls table either, so match on the counterparty number.
@@ -157,7 +181,16 @@ async function handleGET(req: NextRequest) {
               )
               .sort((a, b) => a.started_at - b.started_at || a.id - b.id);
           })
-        : xano.calls.getByContact(contact.type, contact.id);
+        : linkedMembers.length === 0
+          ? xano.calls.getByContact(contact.type, contact.id)
+          : Promise.all([
+              xano.calls.getByContact(contact.type, contact.id),
+              ...linkedMembers.map((m) => xano.calls.getByContact(m.source, m.id)),
+            ]).then((lists) =>
+              lists
+                .flat()
+                .sort((a, b) => a.started_at - b.started_at || a.id - b.id)
+            );
     const [messages, recipient, altRecipients, calls, lineId, closedMap] =
       await Promise.all([
         messagesPromise,
